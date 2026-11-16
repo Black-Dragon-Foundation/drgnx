@@ -220,6 +220,7 @@ pub async fn serve(
         Params::HistoryTake(p) => answer(crate::history::branches::take(f, c, p).await),
         Params::HistoryRedo(p) => answer(crate::history::branches::redo(f, c, p).await),
         Params::HistoryOpHunks(p) => answer(crate::history::hunk::op_hunks(f, c, p).await),
+        Params::HistoryProvenance(p) => answer(crate::history::hunk::provenance(f, c, p).await),
         Params::HistoryRevertHunk(p) => answer(crate::history::hunk::revert_hunk(f, c, p).await),
         Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),
         Params::RunnersRemove(p) => answer(runners::methods::remove(f, c, p).await),

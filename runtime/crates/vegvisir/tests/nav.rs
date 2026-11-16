@@ -155,9 +155,10 @@ fn small(extra: &str) -> Model {
 #[test]
 fn missing_level_goes_to_the_lowest_ancestor() {
     let m = small("");
-    // the plans' layer collapsed: the agent's own parent has no place
+    // the plans' and tasks' layers collapsed: the agent's own parent has no place
     let mut v = view(376);
     v.collapsed.insert(3);
+    v.collapsed.insert(4);
     let l = layout(&m, &v, None);
     assert!(!l.at.contains_key(&id("plan:p")));
     let ids: BTreeSet<ItemId> = m.items().into_keys().collect();
@@ -176,8 +177,8 @@ fn then_is_the_last_sorted_up() {
     let m = small("");
     let l = layout(&m, &view(376), None);
     let links = nav::links(&m, &l, &placed(&l));
-    // up from the agent: the ask, the spec and the plan; the last by layer is the plan
-    assert_eq!(links[&id("agent:a")].then, Some(id("plan:p")));
+    // up from the agent: the ask, the spec, the plan and the task; the last by layer is the task
+    assert_eq!(links[&id("agent:a")].then, Some(id("task:t")));
     // a subagent's last is its agent
     assert_eq!(links[&id("agent:a/x1")].then, Some(id("agent:a")));
     // an agent with nothing above it
@@ -218,10 +219,10 @@ fn needs_you_lists_targets() {
     );
     let l = layout(&m, &view(376), None);
     let ids = placed(&l);
-    // the cards by id (k1's first shown item, k2's; k3 is about nothing shown: its card's id keeps its place, as its
-    // chip keeps it on the strip), then d: it needs you with no card (e has one)
+    // the cards by urgency (the questions k1 and k3, then the push k2; k3 is about nothing shown: its card's id keeps
+    // its place, as its chip keeps it on the strip), then d: it needs you with no card (e has one)
     assert_eq!(
         nav::needs_you(&m, &ids),
-        vec![id("agent:c"), id("agent:b"), id("k3"), id("agent:d")]
+        vec![id("agent:c"), id("k3"), id("agent:b"), id("agent:d")]
     );
 }

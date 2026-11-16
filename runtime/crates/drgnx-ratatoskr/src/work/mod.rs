@@ -2,6 +2,7 @@
 //! part 2; docs/develop/work-space.md).  The pure parts take no clock and do no I/O.
 //!
 //! - [`asks`]: the work a session does links to the user's message behind it (its current ask), in any turn.
+//! - [`changes`]: what the agents changed, grouped by task, then file, then hunk (the Changes place's model).
 //! - [`conclusions`]: the step each conclusion was recorded in, stamped by the hub, and the steps it rests on.
 //! - [`bases`]: where each worktree branched from (the interim diff base), and which branch is based on which.
 //! - [`detail`]: a step's detail by tool name.
@@ -17,6 +18,7 @@
 
 pub mod asks;
 pub mod bases;
+pub mod changes;
 pub mod conclusions;
 pub mod detail;
 pub mod edit_lines;

@@ -1,6 +1,7 @@
 //! The trail and the Timeline as rows (`vegvisir::trail`): what a new conclusion or step dirties, every order of
 //! their arrival, the env's time zone. Pure ([A], [D]).
 
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::Measure;
 use drgnx_rows::svg::Palette;
 use drgnx_rows::{Op, Row};
@@ -87,7 +88,7 @@ fn a_conclusion_dirties_only_its_steps() {
     // the step a conclusion rests on starts with its number in a circle (a badge), the others with room for one
     assert!(s2.text.contains(" 1 "), "{}", s2.text);
     assert!(
-        s2.runs.iter().any(|r| r.2 == "drgnx-work-step-number"),
+        s2.runs.iter().any(|r| r.2 == FaceId::WorkStepNumber.name()),
         "{s2:?}"
     );
 }
@@ -268,8 +269,8 @@ fn trail_rows_are_ui_text_with_lucide_icons_and_a_finding_card() {
     }
     let s = rows.iter().find(|r| r.key == "step:1").expect("the step");
     assert_eq!(s.images.len(), 1, "{s:?}");
-    assert!(faces(s).contains(&"drgnx-work-pane"), "{s:?}");
-    assert!(faces(s).contains(&"drgnx-work-meta"), "{s:?}");
+    assert!(faces(s).contains(&FaceId::WorkPane.name()), "{s:?}");
+    assert!(faces(s).contains(&FaceId::WorkMeta.name()), "{s:?}");
     let svg_of = |r: &Row| {
         images
             .iter()
@@ -280,9 +281,9 @@ fn trail_rows_are_ui_text_with_lucide_icons_and_a_finding_card() {
     assert!(svg_of(s).contains("stroke=\"#a2a5b2\""), "{}", svg_of(s));
     let top = rows.iter().find(|r| r.key == "conc:1:0").expect("the card");
     let bottom = rows.iter().find(|r| r.key == "conc:1:1").expect("the card");
-    assert!(faces(top).contains(&"drgnx-card-sel-top"), "{top:?}");
+    assert!(faces(top).contains(&FaceId::CardSelTop.name()), "{top:?}");
     assert!(
-        faces(bottom).contains(&"drgnx-card-sel-bottom"),
+        faces(bottom).contains(&FaceId::CardSelBottom.name()),
         "{bottom:?}"
     );
     assert_eq!(top.images.len(), 1, "{top:?}");
@@ -324,7 +325,7 @@ fn numbered_circles_and_the_new_tag() {
     let concs = vec![conclusion(1, 2, &[2]), conclusion(2, 5, &[4, 5])];
     let rows = trail::trail_rows(&steps, &concs, &env(&p), Zone(0));
     let row = |k: &str| rows.iter().find(|r| r.key == k).expect(k);
-    let badged = |r: &Row| r.runs.iter().any(|x| x.2 == "drgnx-work-step-number");
+    let badged = |r: &Row| r.runs.iter().any(|x| x.2 == FaceId::WorkStepNumber.name());
     assert!(badged(row("step:2")) && row("step:2").text.contains(" 1 "));
     assert!(badged(row("step:4")) && row("step:4").text.contains(" 2 "));
     assert!(!badged(row("step:1")) && !badged(row("step:3")));
@@ -343,7 +344,10 @@ fn numbered_circles_and_the_new_tag() {
     );
     // the tag is plain text in the card's ring: a box of its own would break the ring
     assert!(
-        row("conc:2:0").runs.iter().all(|r| r.2 != "drgnx-chip"),
+        row("conc:2:0")
+            .runs
+            .iter()
+            .all(|r| r.2 != FaceId::Chip.name()),
         "{:?}",
         row("conc:2:0")
     );
@@ -444,20 +448,20 @@ fn a_step_row_keeps_its_verb_and_colours_its_paths() {
             .collect::<Vec<_>>()
     };
     assert!(rows[0].text.contains(" read a/b.rs:1–9"), "{:?}", rows[0]);
-    assert!(face_of(&rows[0], "a/b.rs").contains(&"drgnx-accent".to_owned()));
+    assert!(face_of(&rows[0], "a/b.rs").contains(&FaceId::Accent.name().to_owned()));
     assert!(rows[0].text.contains("0.3 s"), "{:?}", rows[0]);
     assert!(rows[1].text.contains(" web Spec — x.org"), "{:?}", rows[1]);
-    assert!(face_of(&rows[1], "Spec").contains(&"drgnx-text-muted".to_owned()));
+    assert!(face_of(&rows[1], "Spec").contains(&FaceId::TextMuted.name().to_owned()));
     assert!(
         rows[2].text.contains(" thought: the end handler…"),
         "{:?}",
         rows[2]
     );
-    assert!(face_of(&rows[2], "thought").contains(&"drgnx-work-thought".to_owned()));
+    assert!(face_of(&rows[2], "thought").contains(&FaceId::WorkThought.name().to_owned()));
     assert!(rows[2].text.contains("6 s"), "{:?}", rows[2]);
     assert!(rows[3].text.contains(" edit s.rs +40 −3"), "{:?}", rows[3]);
-    assert!(face_of(&rows[3], "+40").contains(&"drgnx-work-plus".to_owned()));
-    assert!(face_of(&rows[3], "−3").contains(&"drgnx-work-minus".to_owned()));
+    assert!(face_of(&rows[3], "+40").contains(&FaceId::WorkPlus.name().to_owned()));
+    assert!(face_of(&rows[3], "−3").contains(&FaceId::WorkMinus.name().to_owned()));
     assert!(
         rows[4]
             .text
@@ -465,7 +469,7 @@ fn a_step_row_keeps_its_verb_and_colours_its_paths() {
         "{:?}",
         rows[4]
     );
-    assert!(face_of(&rows[4], "bin/t").contains(&"drgnx-accent".to_owned()));
+    assert!(face_of(&rows[4], "bin/t").contains(&FaceId::Accent.name().to_owned()));
 }
 
 /// [D] A finding's card keeps its keys line (`l light them · ↵ sources`) and its number is the filled circle.
@@ -480,7 +484,7 @@ fn a_finding_card_keeps_its_keys_and_a_filled_number() {
     );
     let top = rows.iter().find(|r| r.key == "conc:1:0").expect("the card");
     assert!(
-        top.runs.iter().any(|r| r.2 == "drgnx-chip-solid"),
+        top.runs.iter().any(|r| r.2 == FaceId::ChipSolid.name()),
         "{top:?}"
     );
     let sub = rows
@@ -493,7 +497,7 @@ fn a_finding_card_keeps_its_keys_and_a_filled_number() {
         "{sub:?}"
     );
     assert!(
-        sub.runs.iter().any(|r| r.2 == "drgnx-chip-quiet"),
+        sub.runs.iter().any(|r| r.2 == FaceId::ChipQuiet.name()),
         "{sub:?}"
     );
 }

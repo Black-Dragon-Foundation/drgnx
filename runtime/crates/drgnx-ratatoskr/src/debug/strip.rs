@@ -2,6 +2,7 @@
 //! 3 stops · 58 probe hits"), the lane of stops (numbered, one glyph per reason: a breakpoint, a step, an exception;
 //! the current one ringed) and one lane per probe with its values as a sparkline and the last value.
 
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{Row, RowBuilder};
 use serde_json::{Value, json};
 
@@ -37,10 +38,12 @@ pub fn sparkline(values: &[&str]) -> String {
 /// A stop's glyph and face by its reason.
 fn glyph(reason: &str) -> (&'static str, &'static str) {
     match reason {
-        "breakpoint" | "function breakpoint" | "data breakpoint" => ("●", "drgnx-debug-breakpoint"),
-        "exception" => ("▲", "drgnx-debug-exception"),
-        "step" | "goto" => ("·", "drgnx-debug-timeline-step"),
-        _ => ("○", "drgnx-debug-timeline-step"),
+        "breakpoint" | "function breakpoint" | "data breakpoint" => {
+            ("●", FaceId::DebugBreakpoint.name())
+        }
+        "exception" => ("▲", FaceId::DebugException.name()),
+        "step" | "goto" => ("·", FaceId::DebugTimelineStep.name()),
+        _ => ("○", FaceId::DebugTimelineStep.name()),
     }
 }
 
@@ -52,7 +55,7 @@ pub fn rows(view: &Value, from: usize, current: Option<u64>) -> Vec<Row> {
     let mut head = RowBuilder::new("head");
     head.push(
         &format!("Run {}", run["n"].as_u64().unwrap_or(0)),
-        Some("drgnx-debug-timeline-head"),
+        Some(FaceId::DebugTimelineHead.name()),
     );
     let mut facts = vec![
         format!("{total} stop{}", if total == 1 { "" } else { "s" }),
@@ -74,7 +77,7 @@ pub fn rows(view: &Value, from: usize, current: Option<u64>) -> Vec<Row> {
     }
     head.push(
         &format!(" · {}", facts.join(" · ")),
-        Some("drgnx-debug-timeline-dim"),
+        Some(FaceId::DebugTimelineDim.name()),
     );
     let mut out = vec![head.finish()];
 
@@ -88,19 +91,19 @@ pub fn rows(view: &Value, from: usize, current: Option<u64>) -> Vec<Row> {
         }
         let at = lane.pos();
         if ring {
-            lane.push("(", Some("drgnx-debug-timeline-current"));
+            lane.push("(", Some(FaceId::DebugTimelineCurrent.name()));
         }
         lane.push(g, Some(face));
         lane.push(
             &(from + k + 1).to_string(),
             Some(if ring {
-                "drgnx-debug-timeline-current"
+                FaceId::DebugTimelineCurrent.name()
             } else {
-                "drgnx-debug-timeline-dim"
+                FaceId::DebugTimelineDim.name()
             }),
         );
         if ring {
-            lane.push(")", Some("drgnx-debug-timeline-current"));
+            lane.push(")", Some(FaceId::DebugTimelineCurrent.name()));
         }
         let end = lane.pos();
         lane.prop(at, end, "drgnx-debug-stop", json!(index));
@@ -130,29 +133,29 @@ pub fn rows(view: &Value, from: usize, current: Option<u64>) -> Vec<Row> {
             .collect();
         let mut r = RowBuilder::new(format!("probe:{probe}"));
         let name_end = {
-            r.push("◉ ", Some("drgnx-debug-probe"));
+            r.push("◉ ", Some(FaceId::DebugProbe.name()));
             r.push(
                 l["expr"].as_str().unwrap_or(probe),
-                Some("drgnx-debug-timeline-head"),
+                Some(FaceId::DebugTimelineHead.name()),
             );
             r.pos()
         };
-        r.prop(0, name_end, "drgnx-debug-probe", json!(probe));
+        r.prop(0, name_end, FaceId::DebugProbe.name(), json!(probe));
         let spark = sparkline(&values);
         if !spark.is_empty() {
             r.push("  ", None);
-            r.push(&spark, Some("drgnx-debug-probe"));
+            r.push(&spark, Some(FaceId::DebugProbe.name()));
         }
         let last = values.last().copied().unwrap_or("no hits");
         let last: String = last.chars().take(60).collect();
-        r.push(&format!("  {last}"), Some("drgnx-debug-timeline-dim"));
+        r.push(&format!("  {last}"), Some(FaceId::DebugTimelineDim.name()));
         r.push(
             &format!(
                 "  {} hit{}",
                 values.len(),
                 if values.len() == 1 { "" } else { "s" }
             ),
-            Some("drgnx-debug-timeline-dim"),
+            Some(FaceId::DebugTimelineDim.name()),
         );
         out.push(r.finish());
     }

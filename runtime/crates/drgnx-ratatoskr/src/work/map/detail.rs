@@ -3,6 +3,7 @@
 //! model and sent as the rows of the view `VIEW/detail` beside the map's own. Pure: the model and the selection in,
 //! lines out; the rows are those lines, one per row.
 
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::{self, Measure};
 use drgnx_rows::{Row, RowBuilder};
 use serde_json::Value;
@@ -51,13 +52,17 @@ fn why(m: &Model, it: &Item) -> Vec<(&'static str, String)> {
                 "ask" => ("you", format!("“{}”", pi.label)),
                 "spec" => ("spec", pi.label),
                 "plan" => ("plan", pi.label),
+                "task" => ("task", pi.label),
                 _ => ("", pi.label),
             });
         }
         cur = p;
     }
     chain.reverse();
-    chain.extend(it.fields.task.clone().map(|t| ("task", t)));
+    // an agent whose task is no item (a run's task) still names it
+    if !chain.iter().any(|(k, _)| *k == "task") {
+        chain.extend(it.fields.task.clone().map(|t| ("task", t)));
+    }
     chain
 }
 
@@ -263,6 +268,59 @@ pub(crate) fn lines(m: &Model, sel: Option<&ItemId>, now: u64) -> Vec<Line> {
     out
 }
 
+/// The item the Detail shows before anything is selected: the subject of the most urgent thing that needs you
+/// (the strip's first chip), else the agent of the first task that is in progress, else none.
+pub(crate) fn default_item(m: &Model) -> Option<ItemId> {
+    let items = m.items();
+    let sent: std::collections::BTreeMap<ItemId, Item> = items.clone();
+    vegvisir::nav::strip_entries(&m.needs_you(), &sent)
+        .into_iter()
+        .map(|e| e.id)
+        .find(|id| items.contains_key(id))
+        .or_else(|| {
+            items
+                .values()
+                .filter(|it| it.kind == vegvisir::Kind::Task)
+                .filter(|it| {
+                    matches!(
+                        it.fields.task_state,
+                        Some(vegvisir::TaskState::Running | vegvisir::TaskState::NeedsYou)
+                    )
+                })
+                .find_map(|t| {
+                    m.edges()
+                        .into_iter()
+                        .find(|e| {
+                            e.from == t.id
+                                && items
+                                    .get(&e.to)
+                                    .is_some_and(|i| i.kind == vegvisir::Kind::Agent)
+                        })
+                        .map(|e| e.to)
+                })
+        })
+}
+
+/// `lines` for SEL, or for the default item (`default_item`) while nothing is selected, its head saying "Needs you
+/// most". Nothing selected on a map with no such item: one head line.
+pub(crate) fn lines_or_default(m: &Model, sel: Option<&ItemId>, now: u64) -> Vec<Line> {
+    if sel.is_some_and(|s| m.item(s).is_some()) {
+        return lines(m, sel, now);
+    }
+    match default_item(m) {
+        Some(d) => {
+            let mut out = lines(m, Some(&d), now);
+            // an agent's head is its badge row, then its subtitle: the words go on the subtitle; any other head is one line
+            let at = usize::from(out.first().is_some_and(|l| l.1.contains('\t')));
+            if let Some(l) = out.get_mut(at).filter(|l| l.0 == "head") {
+                l.1 = format!("Needs you most · {}", l.1);
+            }
+            out
+        }
+        None => lines(m, None, now),
+    }
+}
+
 /// An agent's head (work-space-dark.html `.det .hd`): its badge (its initial and its number), its name and its state
 /// tab-separated, then its task, how long it has run and what it cost.
 fn agent_head(it: &Item) -> Vec<(&'static str, String)> {
@@ -364,7 +422,7 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
 
 /// The face that gives the Detail's text its font (`drgnx-ui-text` under it): wrapped text is measured in the font the
 /// editor says it draws in.
-const PANE: &str = "drgnx-work-pane";
+const PANE: &str = FaceId::WorkPane.name();
 
 /// TEXT wrapped by word into lines of at most ROOM px, none cut and no continuation glyph (the mockup's subtitle
 /// is two lines at the tile's width).
@@ -425,9 +483,9 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                         };
                         let mut b = RowBuilder::new(key);
                         b.stop(pad);
-                        b.push(&line, Some("drgnx-text-muted"));
+                        b.push(&line, Some(FaceId::TextMuted.name()));
                         let end = b.pos();
-                        b.face(0, end, "drgnx-work-pane");
+                        b.face(0, end, FaceId::WorkPane.name());
                         b.finish()
                     })
                     .collect::<Vec<_>>();
@@ -447,21 +505,20 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                     b.face(
                         from,
                         to,
-                        &format!(
-                            "drgnx-work-who-{}",
-                            number.to_digit(10).unwrap_or(1).clamp(1, 6)
-                        ),
+                        FaceId::WORK_WHO[number.to_digit(10).unwrap_or(1).clamp(1, 6) as usize - 1]
+                            .name(),
                     );
                     b.push(" ", None)
-                        .push(parts.get(1).unwrap_or(&""), Some("drgnx-ui-heading"));
+                        .push(parts.get(1).unwrap_or(&""), Some(FaceId::UiHeading.name()));
                     if let Some(chip) = parts.get(2).filter(|c| !c.is_empty()) {
                         let width =
-                            fit::width_in(m, Some("drgnx-chip"), &format!(" {chip} ")).ceil();
+                            fit::width_in(m, Some(FaceId::Chip.name()), &format!(" {chip} "))
+                                .ceil();
                         b.stop(width_px.saturating_sub(width as u32 + pad));
                         let from = b.pos();
                         b.push(&format!(" {chip} "), None);
                         let to = b.pos();
-                        b.face(from, to, "drgnx-chip");
+                        b.face(from, to, FaceId::Chip.name());
                     }
                 }
                 ("actions", Some(_)) => {
@@ -470,59 +527,62 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                         if n > 0 {
                             b.push("  ", None);
                         }
-                        b.push(&format!(" {} ", pair[0]), Some("drgnx-button"))
+                        b.push(&format!(" {} ", pair[0]), Some(FaceId::Button.name()))
                             .push(" ", None)
                             .push(
                                 &format!(" {} ", pair.get(1).unwrap_or(&"")),
-                                Some("drgnx-keycap"),
+                                Some(FaceId::Keycap.name()),
                             );
                     }
                 }
                 ("touches", Some(("branch", value))) if value.contains(" · worktree ") => {
                     // the branch, then its worktree muted
                     let (name, rest) = value.split_once(" · worktree ").unwrap_or((value, ""));
-                    b.push("branch", Some("drgnx-text-muted")).stop(key_px);
-                    b.push(name, Some("drgnx-work-pane"))
-                        .push(&format!(" · worktree {rest}"), Some("drgnx-text-muted"));
+                    b.push("branch", Some(FaceId::TextMuted.name()))
+                        .stop(key_px);
+                    b.push(name, Some(FaceId::WorkPane.name())).push(
+                        &format!(" · worktree {rest}"),
+                        Some(FaceId::TextMuted.name()),
+                    );
                 }
                 ("touches", Some(("edits", value))) => {
                     // `NAME +P −M`: the file in the code font, its change in the added and removed colours
-                    b.push("edits", Some("drgnx-text-muted")).stop(key_px);
+                    b.push("edits", Some(FaceId::TextMuted.name())).stop(key_px);
                     let mut it = value.split(' ');
-                    b.push(it.next().unwrap_or(""), Some("drgnx-work-meta"));
+                    b.push(it.next().unwrap_or(""), Some(FaceId::WorkMeta.name()));
                     for w in it {
                         let face = if w.starts_with('+') {
-                            "drgnx-work-plus"
+                            FaceId::WorkPlus.name()
                         } else {
-                            "drgnx-work-minus"
+                            FaceId::WorkMinus.name()
                         };
                         b.push(" ", None).push(w, Some(face));
                     }
                 }
                 (s, Some((key, value))) => {
-                    b.push(key, Some("drgnx-text-muted")).stop(key_px);
+                    b.push(key, Some(FaceId::TextMuted.name())).stop(key_px);
                     let face = match (s, key) {
-                        ("why", _) => "drgnx-accent",
-                        (_, "overlap") => "drgnx-work-overlap",
-                        _ => "drgnx-work-pane",
+                        ("why", _) => FaceId::Accent.name(),
+                        (_, "overlap") => FaceId::WorkOverlap.name(),
+                        _ => FaceId::WorkPane.name(),
                     };
                     b.push(value, Some(face));
                 }
                 ("head", None) if i == 0 => {
-                    b.push(text, Some("drgnx-ui-heading"));
+                    b.push(text, Some(FaceId::UiHeading.name()));
                 }
                 ("head", None) => {
-                    b.push(text, Some("drgnx-text-muted"));
+                    b.push(text, Some(FaceId::TextMuted.name()));
                 }
                 (_, None) if !text.starts_with(' ') => {
-                    b.push(text, Some("drgnx-ui-heading"));
+                    b.push(text, Some(FaceId::UiHeading.name()));
                 }
                 (_, None) => {
                     b.push(text, None);
                 }
             }
             let end = b.pos();
-            b.face(0, end, "drgnx-work-pane");
+            b.face(0, end, FaceId::WorkPane.name());
             if let Some(id) = job {
                 b.prop(0, end, "drgnx-work-job", Value::String(id.clone()));
             }

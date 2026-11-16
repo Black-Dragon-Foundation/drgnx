@@ -17,7 +17,9 @@
 //!
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
+pub mod agents_side;
 pub mod buffers;
+pub mod changes;
 pub mod debug;
 pub mod explorer;
 pub mod extensions;
@@ -559,6 +561,16 @@ fn instance_id() -> u64 {
 /// A fixture view's labels: (key, text, px), each a row fitted to PX then a stop.
 pub type Label = (String, String, u32);
 
+/// What the kit's expansion (`drgnx_rows::kit`) reads of ENV's class: its scale, whether it is a terminal, its glyphs.
+pub fn kit_env(env: &ViewEnv) -> drgnx_rows::kit::KitEnv<'_> {
+    drgnx_rows::kit::KitEnv {
+        scale: env.scale,
+        tty: matches!(env.display, Display::Tty),
+        glyphs: &env.glyphs,
+        density: env.density,
+    }
+}
+
 /// A fixture view's rows, the images they may name, and its labels.
 pub type Fixture = (Vec<Row>, Vec<(ImageId, String)>, Vec<Label>);
 
@@ -617,6 +629,8 @@ pub struct Views {
     outlines: outline::Outlines,
     /// The Source Control views (`scm/subscribe`).
     scms: scm::Scms,
+    /// The Changes views (`changes/subscribe`): what the agents changed, by task.
+    changes: changes::Changes,
     /// The Run and Debug views (`debug/view`).
     pub debugs: debug::DebugViews,
     /// The agent panels' rows (`agent-panel/SESSION`).
@@ -642,6 +656,7 @@ impl Default for Views {
             buffers: buffers::Buffers::default(),
             outlines: outline::Outlines::default(),
             scms: scm::Scms::default(),
+            changes: changes::Changes::default(),
             debugs: debug::DebugViews::default(),
             panels: Arc::default(),
             front: OnceLock::new(),
@@ -681,6 +696,7 @@ impl Views {
             || self.buffers_build(f, key)
             || self.outline_build(f, key)
             || self.scm_build(f, key)
+            || self.changes_build(f, key)
             || self.debugs.env_build(f, key)
             || f.core.presence.here_build(f, key.0, &key.1)
             || f.notebooks.views.env_build(key.0, &key.1)
@@ -1018,6 +1034,7 @@ impl Views {
         self.buffers.gone(conn);
         self.outlines.gone(conn);
         self.scms.gone(conn);
+        self.changes.gone(conn);
         self.debugs.gone(conn);
         self.panels.gone(conn, None);
         lock(&self.sja).retain(|(c, _, _)| *c != conn);

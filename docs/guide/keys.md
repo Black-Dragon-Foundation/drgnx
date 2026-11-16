@@ -67,6 +67,7 @@ loaded, so there is never a session with Vim keys and no Vim editing:
 | Toggle Line Numbers | — | — | `SPC u l` |
 | Module Report | — | — | `SPC h m` |
 | Toggle Sidebar | `C-b` | `<f8>` | `SPC e` |
+| Open Previous Editor in Group (the group's editors, most recent first; again moves down, `C-S-<tab>` up) | `C-<tab>` | palette | palette |
 | Focus Explorer / Buffers | palette / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
 | View: Explorer / View: Search | `C-S-e` / `C-S-f` | palette / palette | palette / `SPC /` |
 | Replace in Files | `C-S-h` | `C-c s r` | `SPC s r` |
@@ -396,7 +397,7 @@ yours (`:mac "S-s-y"` in `keys.eld` binds `s-Y`).
 | Command | Linux | Mac |
 |---|---|---|
 | Toggle Terminal / New Terminal | ``C-` `` / ``C-S-` `` | Ctrl: ``C-` `` / ``C-S-` `` (Cmd+` is macOS' next window) |
-| Go to Recent / Back / Forward | `C-<tab>` / `M-<left>` / `M-<right>` | Ctrl: `C-<tab>` / `C--` / `C-_` (Ctrl+Shift+-) |
+| Open Previous Editor in Group / Back / Forward | `C-<tab>` / `M-<left>` / `M-<right>` | Ctrl: `C-<tab>` / `C--` / `C-_` (Ctrl+Shift+-) |
 | Next / Previous Tab | `C-<next>` / `C-<prior>` | `M-s-<right>` / `M-s-<left>` (Option+Cmd+→ / ←) |
 | Close Tab / Close Window | `C-w` / `C-q` | `s-w` / `s-W` (Shift+Cmd+W) |
 | Quit drgnx | — (File → Quit; `C-q` closes the window as in VS Code) | `s-q` (offers to save, then stops drgnx) |
@@ -557,7 +558,7 @@ until you take them away.
 The sheet says one thing for each key, and it is what `key-binding` answers: yours is the top layer of the resolver,
 so a key of yours (or a key under a command of yours, `C-k x` when `C-k` is yours) is one line, never a profile key
 shown winning while yours wins. A lambda or closure is printed as `a lambda`, never its body. A key a minor mode's map
-takes over in a buffer is not covered yet; the VS Code profile's `C-<tab>` (Go to Recent) is a key that works in every
+takes over in a buffer is not covered yet; the VS Code profile's `C-<tab>` (Open Previous Editor in Group) is a key that works in every
 mode, ahead of tab-bar-mode's own `C-<tab>` (`tab-next`, which the top line would otherwise give it).
 
 Keys you bound from the keyboard, `M-:` or `emacsclient --eval` stay for the session, as in any Emacs; they are never

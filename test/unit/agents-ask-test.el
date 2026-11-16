@@ -1,0 +1,101 @@
+;;; agents-ask-test.el --- Ask an Agent About This: the context, the send and the keys -*- lexical-binding: t -*-
+;; test-class: det
+;; test-pattern: pure
+;; No hub: the presence answer and `agents/send' are caught at `drgnx-hub-call' and `drgnx-agent-panel--ask'.
+(require 'ert)
+(require 'cl-lib)
+(require 'drgnx)
+(require 'drgnx-hub-client)
+(require 'drgnx-ai)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(drgnx-test-modules-preload '(tools/agent-panel))
+
+(defvar drgnx-agent-panel--context)
+(defvar drgnx-agent-panel--session)
+(defvar drgnx-agent-panel--snap)
+(declare-function drgnx-agents-ask-context "drgnx-agents-ask")
+(declare-function drgnx-agents-ask-about-this "drgnx-agents-ask")
+(declare-function drgnx-agents-ask--decode-c-i "drgnx-agents-ask")
+(declare-function drgnx-agent-panel-context-add "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-context-remove "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-composer--send-text "drgnx-agent-panel-composer")
+
+(ert-deftest drgnx-agents-ask/context-from-region-is-lines ()
+  (let ((file (make-temp-file "ask-ctx" nil ".txt" "a\nb\nc\nd\n")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert-file-contents file)
+          (setq buffer-file-name file)
+          (should (equal (list :file file) (drgnx-agents-ask-context)))
+          (goto-char (point-min)) (forward-line 1)
+          (set-mark (point)) (forward-line 2)
+          (activate-mark)
+          (should (equal (list :file file :lines '(2 . 3)) (drgnx-agents-ask-context)))
+          (setq buffer-file-name nil))
+      (delete-file file))))
+
+(ert-deftest drgnx-agents-ask/context-item-is-removable ()
+  (with-temp-buffer
+    (let ((item (list :file "/p/a.el")))
+      (drgnx-agent-panel-context-add item)
+      (drgnx-agent-panel-context-add item)
+      (should (equal (list item) drgnx-agent-panel--context))
+      (drgnx-agent-panel-context-remove item)
+      (should-not drgnx-agent-panel--context))))
+
+(ert-deftest drgnx-agents-ask/send-expands-context-to-at-refs ()
+  (let (sent)
+    (cl-letf (((symbol-function 'drgnx-agent-panel--ask)
+               (lambda (method params &rest _) (push (cons method params) sent))))
+      (with-temp-buffer
+        (setq-local drgnx-agent-panel--session "s1")
+        (setq-local drgnx-agent-panel--snap nil)
+        (drgnx-agent-panel-context-add (list :file "src/a.el" :lines '(3 . 9)))
+        (drgnx-agent-panel-context-add (list :item '("task" . "T1")))
+        (drgnx-agent-panel-composer--send-text "why is this slow?")
+        (should (equal "agents/send" (car (car sent))))
+        (should (equal "why is this slow? @src/a.el:3-9 @task:T1" (plist-get (cdr (car sent)) :text)))
+        (should-not drgnx-agent-panel--context)))))
+
+(ert-deftest drgnx-agents-ask/prefers-the-agent-on-this-file ()
+  (let (opened new-chat)
+    (cl-letf (((symbol-function 'drgnx-hub-call)
+               (lambda (_method _params callback &rest _)
+                 (funcall callback (list :entries (vector (list :session "s7" :line 4))) nil)))
+              ((symbol-function 'drgnx-agent-panel-open)
+               (lambda (session) (push session opened) (current-buffer)))
+              ((symbol-function 'drgnx-agent-panel--composer-of) (lambda (b) b))
+              ((symbol-function 'drgnx-agent-panel-new-chat) (lambda () (setq new-chat t) (current-buffer))))
+      (with-temp-buffer
+        (setq buffer-file-name "/p/a.el")
+        (drgnx-agents-ask-about-this)
+        (should (equal '("s7") opened))
+        (should-not new-chat)
+        (should (equal (list (list :file "/p/a.el")) drgnx-agent-panel--context))
+        (setq buffer-file-name nil)))
+    ;; no agent there: the new chat
+    (cl-letf (((symbol-function 'drgnx-hub-call)
+               (lambda (_method _params callback &rest _) (funcall callback (list :entries []) nil)))
+              ((symbol-function 'drgnx-agent-panel-open) (lambda (_) (error "no agent is here")))
+              ((symbol-function 'drgnx-agent-panel-new-chat) (lambda () (setq new-chat t) (current-buffer))))
+      (with-temp-buffer
+        (setq buffer-file-name "/p/b.el")
+        (drgnx-agents-ask-about-this)
+        (should new-chat)
+        (setq buffer-file-name nil)))))
+
+(ert-deftest drgnx-agents-ask/find-file-switches-nothing ()
+  (should-not (memq 'drgnx-agents-ask-about-this find-file-hook))
+  (should-not (seq-some (lambda (f) (and (symbolp f) (string-prefix-p "drgnx-agents-ask" (symbol-name f))))
+                        (append find-file-hook window-buffer-change-functions buffer-list-update-hook))))
+
+(ert-deftest drgnx-agents-ask/ctrl-i-does-not-take-tab ()
+  ;; a graphical frame: Ctrl+I reads as <C-i> (the command's key), the Tab key stays TAB; a terminal: nothing
+  (let ((input-decode-map (make-sparse-keymap)))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+      (drgnx-agents-ask--decode-c-i))
+    (should (equal [C-i] (lookup-key input-decode-map [?\C-i]))))
+  (let ((input-decode-map (make-sparse-keymap)))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) nil)))
+      (drgnx-agents-ask--decode-c-i))
+    (should-not (lookup-key input-decode-map [?\C-i]))))

@@ -24,6 +24,7 @@
 (require 'drgnx-color)
 (require 'drgnx-wb)
 (require 'drgnx-state)                  ; whether a view shows: the workbench state store
+(require 'drgnx-ui-kit)                 ; an action's keymap (`drgnx-ui-kit-action-map')
 
 (defvar drgnx-signal-errors)            ; drgnx-signal, when loaded
 (declare-function drgnx-gc-gap "drgnx-gc" ())
@@ -2189,6 +2190,9 @@ put on it, in STATE; returns TEXT."
         (put-text-property (nth 0 p) (nth 1 p) name
                            (if (eq name 'mouse-face) (and (stringp (nth 3 p)) (drgnx-view-patch--face (nth 3 p))) (nth 3 p))
                            text)
+        ;; a kit component's action: its kind's one keymap (`kit-activate' reads the property)
+        (when (eq name 'drgnx-action)
+          (put-text-property (nth 0 p) (nth 1 p) 'keymap (drgnx-ui-kit-action-map (car-safe (nth 3 p))) text))
         (when (eq name drgnx-view-patch-id-prop)        ; the rows that hold a node, for the class step
           (let ((ids (drgnx-view-patch-ids state)) (keys (drgnx-view-patch-keys state)))
             (unless (member key (gethash (nth 3 p) ids)) (push key (gethash (nth 3 p) ids)))
@@ -2196,7 +2200,10 @@ put on it, in STATE; returns TEXT."
     (dolist (stop stops)
       (put-text-property (car stop) (1+ (car stop)) 'display (drgnx-view-patch--stop state (cadr stop)) text))
     (dolist (sp (plist-get row :spaces))              ; a space of a size in device px (a card's progress bar)
-      (put-text-property (car sp) (1+ (car sp)) 'display `(space :width (,(nth 1 sp)) :height (,(nth 2 sp))) text))
+      ;; height 0 is the line's (a kit pad): a zero-height stretch is drawn as nothing and the text slides left
+      (put-text-property (car sp) (1+ (car sp)) 'display
+                         (if (eql (nth 2 sp) 0) `(space :width (,(nth 1 sp))) `(space :width (,(nth 1 sp)) :height (,(nth 2 sp))))
+                         text))
     (dolist (im (plist-get row :images))
       (let ((spec (gethash (nth 1 im) (drgnx-view-patch-images state))))
         (put-text-property (nth 0 im) (1+ (nth 0 im)) 'display (if (or (null spec) (eq spec :alt)) (nth 2 im) spec)

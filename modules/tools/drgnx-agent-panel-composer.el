@@ -37,6 +37,37 @@
 (declare-function drgnx-history-fork-here "drgnx-history-revert")
 (defvar drgnx-agent-panel--steps)
 
+;;;; Context: what the next message is about, as removable items
+
+(defvar-local drgnx-agent-panel--context nil
+  "What the next message is about, a list of removable items: (:file PATH), (:file PATH :lines (A . B)) or
+\(:item (KIND . ID)).  Send turns each into an `@' reference in the text and clears the list.")
+
+(defun drgnx-agent-panel-context-add (item)
+  "Add the context ITEM to this composer's list, once."
+  (unless (member item drgnx-agent-panel--context)
+    (setq drgnx-agent-panel--context (append drgnx-agent-panel--context (list item))))
+  drgnx-agent-panel--context)
+
+(defun drgnx-agent-panel-context-remove (item)
+  "Take the context ITEM out of this composer's list."
+  (setq drgnx-agent-panel--context (delete item drgnx-agent-panel--context)))
+
+(defun drgnx-agent-panel-context-ref (item)
+  "ITEM as the `@' reference the text carries: `@path', `@path:A-B' or `@KIND:ID'."
+  (cond ((plist-get item :item)
+         (let ((it (plist-get item :item))) (format "@%s:%s" (car it) (cdr it))))
+        ((plist-get item :lines)
+         (let ((l (plist-get item :lines)))
+           (format "@%s:%d-%d" (plist-get item :file) (car l) (cdr l))))
+        (t (format "@%s" (plist-get item :file)))))
+
+(defun drgnx-agent-panel-with-context (text)
+  "TEXT followed by the `@' references of this buffer's context items; the list is cleared."
+  (let ((refs (mapcar #'drgnx-agent-panel-context-ref drgnx-agent-panel--context)))
+    (setq drgnx-agent-panel--context nil)
+    (if refs (concat text (unless (string-empty-p text) " ") (mapconcat #'identity refs " ")) text)))
+
 (defconst drgnx-agent-panel-composer-max-files 2000 "How many files `@' completion looks through at most.")
 
 (defun drgnx-agent-panel-composer--queue ()
@@ -322,7 +353,9 @@ comes whatever buffer is current)."
 ;;;; Commands
 
 (defun drgnx-agent-panel-composer--send-text (text)
-  "Send TEXT to the session: the hub queues it while the agent works.  Never a cancel."
+  "Send TEXT to the session: the hub queues it while the agent works.  Never a cancel.  The context items go in as
+`@' references."
+  (setq text (drgnx-agent-panel-with-context text))
   (when (equal (format "%s" (plist-get drgnx-agent-panel--snap :mode)) "interrupt")
     (user-error "This agent's mode would cancel its turn for a message; change its mode first"))
   (let ((busy (equal (format "%s" (plist-get drgnx-agent-panel--snap :status)) "busy")))

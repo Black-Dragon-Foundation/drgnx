@@ -6,6 +6,7 @@ use super::group::{Ent, Layout};
 use super::run::{Found, Mark, match_id};
 use crate::search::context::Def;
 use crate::view::model::Doc;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{Row, RowBuilder};
 use hrafn::grep::{self, Match, Query};
 use serde_json::{Value, json};
@@ -59,12 +60,12 @@ fn header_at(root: &Path, file: &str, large: bool, depth: usize, show_dir: bool)
         .prop(p, p + 3, "drgnx-replace-box", json!(file));
     b.push(" ", None).push(&name, None);
     if show_dir && !dir.is_empty() {
-        b.push(&format!("  {dir}/"), Some("drgnx-replace-dim"));
+        b.push(&format!("  {dir}/"), Some(FaceId::ReplaceDim.name()));
     }
     if large {
         b.push(
             "  open in chunks: searched on disk",
-            Some("drgnx-replace-dim"),
+            Some(FaceId::ReplaceDim.name()),
         );
     }
     let end = b.pos();
@@ -415,24 +416,24 @@ pub(super) fn match_row(q: &Query, replace: &str, id: String, m: &Match, why: Op
             b.push(&part(&old[..pre]), None);
             let gone = &old[pre..old.len() - suf];
             if !gone.is_empty() {
-                b.push(&part(gone), Some("drgnx-replace-old"));
+                b.push(&part(gone), Some(FaceId::ReplaceOld.name()));
             }
             let added = &new[pre..new.len() - suf];
             if !added.is_empty() {
-                b.push(&part(added), Some("drgnx-replace-new"));
+                b.push(&part(added), Some(FaceId::ReplaceNew.name()));
             }
             b.push(&part(&old[old.len() - suf..]), None);
         }
         None => {
-            b.push(&flat(&m.text), Some("drgnx-replace-match"));
+            b.push(&flat(&m.text), Some(FaceId::ReplaceMatch.name()));
         }
     }
     b.push(&flat(&m.after), None);
     if let Some(why) = why {
-        b.push(&format!("  — {why}"), Some("drgnx-replace-dim"));
+        b.push(&format!("  — {why}"), Some(FaceId::ReplaceDim.name()));
     }
     let end = b.pos();
-    b.prop(0, end, "drgnx-replace-match", match_json(m));
+    b.prop(0, end, FaceId::ReplaceMatch.name(), match_json(m));
     b.prop(0, end, "drgnx-work-id", json!(id));
     b.finish()
 }
@@ -504,7 +505,7 @@ pub(super) fn with_chips(
         let end = from + chip.chars().count() as u32;
         text.push_str("  ");
         text.push_str(&chip);
-        runs.push((from, end, "drgnx-pill-agent".to_owned()));
+        runs.push((from, end, FaceId::PillAgent.name().to_owned()));
         props.push((from, end, "drgnx-search-agent".to_owned(), json!(a.face)));
     }
     if text.is_empty() {
@@ -590,11 +591,14 @@ fn span_row(id: String, m: &Match, more: u32, captures: &[(String, String)]) -> 
         .prop(at, at + 3, "drgnx-replace-box", match_json(m));
     b.push(" ", None)
         .push(&flat(m.before.trim_start()), None)
-        .push(&flat(&m.text), Some("drgnx-replace-match"))
+        .push(&flat(&m.text), Some(FaceId::ReplaceMatch.name()))
         .push(&flat(&m.after), None);
     if more > 0 {
         let s = if more == 1 { "" } else { "s" };
-        b.push(&format!("  +{more} line{s}"), Some("drgnx-replace-dim"));
+        b.push(
+            &format!("  +{more} line{s}"),
+            Some(FaceId::ReplaceDim.name()),
+        );
     }
     let end = b.pos();
     if !captures.is_empty() {
@@ -604,7 +608,7 @@ fn span_row(id: String, m: &Match, more: u32, captures: &[(String, String)]) -> 
             .collect();
         b.prop(0, end, "help-echo", json!(echo.join("\n")));
     }
-    b.prop(0, end, "drgnx-replace-match", match_json(m));
+    b.prop(0, end, FaceId::ReplaceMatch.name(), match_json(m));
     b.prop(0, end, "drgnx-work-id", json!(id));
     b.finish()
 }
@@ -622,14 +626,14 @@ fn marked_row(id: String, m: &Match, mark: &Mark) -> Row {
     match mark {
         Mark::Def { kind, sig } => {
             let at = b.pos();
-            b.push(kind_icon(kind), Some("drgnx-replace-kind"));
+            b.push(kind_icon(kind), Some(FaceId::ReplaceKind.name()));
             b.prop(at, b.pos(), "help-echo", json!(kind));
             b.push(" ", None);
             let sig = flat(sig);
             match sig.find(m.text.as_str()).filter(|_| !m.text.is_empty()) {
                 Some(i) => {
                     b.push(&sig[..i], None)
-                        .push(&m.text, Some("drgnx-replace-match"))
+                        .push(&m.text, Some(FaceId::ReplaceMatch.name()))
                         .push(&sig[i + m.text.len()..], None);
                 }
                 None => {
@@ -646,23 +650,23 @@ fn marked_row(id: String, m: &Match, mark: &Mark) -> Row {
             let at = b.pos();
             b.push(&cells, None);
             if filled > 0 {
-                b.face(at, at + filled as u32, "drgnx-replace-score");
+                b.face(at, at + filled as u32, FaceId::ReplaceScore.name());
             }
             b.prop(at, b.pos(), "help-echo", json!(format!("score {score:.2}")));
             b.push(" ", None)
-                .push(&flat(&m.text), Some("drgnx-replace-kind"))
+                .push(&flat(&m.text), Some(FaceId::ReplaceKind.name()))
                 .push(&flat(&m.after), None);
             if *moved {
-                b.push("  (moved)", Some("drgnx-replace-dim"));
+                b.push("  (moved)", Some(FaceId::ReplaceDim.name()));
             }
         }
         // drawn by `span_row`
         Mark::Span { .. } => {
-            b.push(&flat(&m.text), Some("drgnx-replace-match"));
+            b.push(&flat(&m.text), Some(FaceId::ReplaceMatch.name()));
         }
     }
     let end = b.pos();
-    b.prop(0, end, "drgnx-replace-match", match_json(m));
+    b.prop(0, end, FaceId::ReplaceMatch.name(), match_json(m));
     b.prop(0, end, "drgnx-work-id", json!(id));
     b.finish()
 }
@@ -671,7 +675,10 @@ fn marked_row(id: String, m: &Match, mark: &Mark) -> Row {
 /// Not a node: no tick, no `drgnx-work-id`, not a stop for Next Match.
 pub(super) fn label_row(run: u64, n: u32, d: &Def) -> Row {
     let mut b = RowBuilder::new(format!("c:{run}:{n}"));
-    b.push(&format!("  ƒ {}", flat(&d.name)), Some("drgnx-replace-ctx"));
+    b.push(
+        &format!("  ƒ {}", flat(&d.name)),
+        Some(FaceId::ReplaceCtx.name()),
+    );
     let end = b.pos();
     b.prop(0, end, "help-echo", json!(d.path.join(" › ")));
     b.finish()
@@ -696,15 +703,18 @@ fn ent_row(run: &Run, l: &Layout, at: usize) -> Row {
             b.push(&"  ".repeat(depth), None);
             // its fold chevron: a click folds or opens it (`search/fold`)
             let p = b.pos();
-            b.push(if d.folded { "▸" } else { "▾" }, Some("drgnx-replace-dim"))
-                .prop(p, p + 1, "drgnx-replace-fold", json!(d.id));
+            b.push(
+                if d.folded { "▸" } else { "▾" },
+                Some(FaceId::ReplaceDim.name()),
+            )
+            .prop(p, p + 1, "drgnx-replace-fold", json!(d.id));
             b.push(" ", None);
             let p = b.pos();
             b.push("[x]", None)
                 .prop(p, p + 3, "drgnx-replace-box", json!(d.id));
             b.push(" ", None)
-                .push(&format!("{}/", d.label), Some("drgnx-replace-folder"))
-                .push(&format!("  {}", d.n), Some("drgnx-replace-dim"));
+                .push(&format!("{}/", d.label), Some(FaceId::ReplaceFolder.name()))
+                .push(&format!("  {}", d.n), Some(FaceId::ReplaceDim.name()));
             let end = b.pos();
             b.prop(0, end, "drgnx-work-id", json!(d.id));
             b.finish()
@@ -732,17 +742,17 @@ fn ent_row(run: &Run, l: &Layout, at: usize) -> Row {
             match &s.name {
                 Some(name) => {
                     let p = b.pos();
-                    b.push(kind_icon(&s.kind), Some("drgnx-replace-kind"));
+                    b.push(kind_icon(&s.kind), Some(FaceId::ReplaceKind.name()));
                     b.prop(p, b.pos(), "help-echo", json!(s.kind));
                     b.push(" ", None)
-                        .push(&flat(name), Some("drgnx-replace-symbol"));
+                        .push(&flat(name), Some(FaceId::ReplaceSymbol.name()));
                 }
                 None => {
-                    b.push(TOP_LEVEL, Some("drgnx-replace-dim"));
+                    b.push(TOP_LEVEL, Some(FaceId::ReplaceDim.name()));
                 }
             }
             let name_end = b.pos();
-            b.push(&format!("  {}", s.n), Some("drgnx-replace-dim"));
+            b.push(&format!("  {}", s.n), Some(FaceId::ReplaceDim.name()));
             let end = b.pos();
             b.prop(0, end, "drgnx-work-id", json!(s.id));
             let (fi, f) = (s.file as usize, &run.files[s.file as usize]);
@@ -855,7 +865,7 @@ pub(super) fn rows_upto(run: &Run, limit: usize) -> Vec<Row> {
 /// The gap row: N rows between the first ones sent and the block (they come when it is in sight, `fill`).
 pub(super) fn gap_row(n: usize) -> Row {
     let mut b = RowBuilder::new(GAP.to_owned());
-    b.push(&format!("  ⋯ {n} more"), Some("drgnx-replace-dim"));
+    b.push(&format!("  ⋯ {n} more"), Some(FaceId::ReplaceDim.name()));
     b.finish()
 }
 

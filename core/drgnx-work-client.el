@@ -76,7 +76,7 @@ makes it stale).  Without a connection the view waits, keeping what it has."
                                             ((drgnx-work-client--view-shown view) 'live)
                                             (t 'hidden))))))
 
-(cl-defun drgnx-work-client-open (id workspace &key (width 226) density filters collapsed selected)
+(cl-defun drgnx-work-client-open (id workspace &key (width 226) density mode filters collapsed selected)
   "Open the view ID on WORKSPACE (a plist :id :roots) and ask the hub for it; returns ID.  WIDTH is the drawing width
 in units of 4 px.  The hub builds the view's rows and sends them as `view-patch' to the classes this Emacs sent a
 `view/env' for (the env's view is ID)."
@@ -84,7 +84,7 @@ in units of 4 px.  The hub builds the view's rows and sends them as `view-patch'
                :id id
                :params (append (list :workspace (list :id (plist-get workspace :id) :roots (plist-get workspace :roots))
                                      :width_units width)
-                               (and density (list :density density)) (and filters (list :filters filters))
+                               (and density (list :density density)) (and mode (list :mode mode)) (and filters (list :filters filters))
                                (and collapsed (list :collapsed collapsed)) (and selected (list :selected selected))))))
     (puthash id view drgnx-work-client--views)
     (condition-case nil (drgnx-work-client--subscribe view)

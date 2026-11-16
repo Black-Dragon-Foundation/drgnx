@@ -15,10 +15,12 @@ fn core_with_plan_and_spec() -> Core {
             title: "plan".into(),
             rank: 1,
             progress: None,
+            updated: 0,
         }),
         Event::Graph(GraphFact::Spec {
             id: "s1".into(),
             title: "spec".into(),
+            updated: 0,
         }),
         Event::Graph(GraphFact::Derives {
             plan: "p1".into(),

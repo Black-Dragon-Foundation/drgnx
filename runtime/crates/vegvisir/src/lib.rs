@@ -2,7 +2,7 @@
 //!
 //! The hub turns each of its sources (Urdr records, sessions and their steps, the edit history, the presence model,
 //! git refs, machines, cards, the clock) into a typed [`Event`] and steps a [`Core`] with it. The core keeps the
-//! map's [`Model`] (items in six fixed layers, the edges between them, overlaps, needs-you) and each view's state,
+//! map's [`Model`] (items in eight fixed layers, the edges between them, overlaps, needs-you) and each view's state,
 //! and returns [`Effect`]s: a delta for a shown view (a hidden one gets nothing), a relayout when the user changed or
 //! showed a view. It never does I/O and never reads a clock, so its tests run it in every order of its inputs.
 //!
@@ -13,6 +13,7 @@ mod chain;
 pub mod fixture;
 mod icons;
 pub mod layout;
+pub mod list;
 pub mod model;
 pub mod nav;
 mod overlap;
@@ -27,13 +28,17 @@ use serde::{Deserialize, Serialize};
 
 pub use chain::Chain;
 pub use model::{
-    CardFact, CardKind, GraphFact, Instant, Item, JobFact, MachineFact, Mode, Model, NeedsYou,
-    PresenceEntry, PresenceFact, RefFact, RunnerFact, SessionFact, State, StepFact,
+    CardFact, CardKind, GraphFact, Instant, Item, JobChip, JobFact, MachineFact, Mode, Model,
+    NeedsYou, PresenceEntry, PresenceFact, RefFact, RunnerFact, SessionFact, State, StepFact,
+    TaskState,
 };
 pub use overlap::Overlap;
-pub use view::{Density, Filters, ViewKey, ViewOp, ViewState};
+pub use view::{
+    Density, Filters, Group, MapMode, RECENT_DAYS, Show, ViewKey, ViewOp, ViewState, Visibility,
+    group, shown,
+};
 
-/// An item's stable id: `ask:N`, `spec:ID`, `plan:ID`, `agent:SID`, `agent:SID/TOOLID` (a subagent),
+/// An item's stable id: `ask:N`, `spec:ID`, `plan:ID`, `task:ID`, `agent:SID`, `agent:SID/TOOLID` (a subagent),
 /// `branch:REPO/NAME`, `file:REPO/PATH`, `machine:NAME`. Its prefix fixes its kind, so its layer never changes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -73,6 +78,7 @@ pub enum Kind {
     Ask,
     Spec,
     Plan,
+    Task,
     Agent,
     Subagent,
     Branch,
@@ -81,15 +87,17 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// 1 you asked, 2 specs, 3 plans, 4 agents, 5 branches and worktrees, 6 files and machines.
+    /// 1 you asked, 2 specs, 3 plans, 4 tasks, 5 agents, 6 branches and worktrees, 7 files, 8 machines (Runs on).
     pub fn layer(self) -> u8 {
         match self {
             Kind::Ask => 1,
             Kind::Spec => 2,
             Kind::Plan => 3,
-            Kind::Agent | Kind::Subagent => 4,
-            Kind::Branch => 5,
-            Kind::File | Kind::Machine => 6,
+            Kind::Task => 4,
+            Kind::Agent | Kind::Subagent => 5,
+            Kind::Branch => 6,
+            Kind::File => 7,
+            Kind::Machine => 8,
         }
     }
 
@@ -98,6 +106,7 @@ impl Kind {
             Kind::Ask => "ask",
             Kind::Spec => "spec",
             Kind::Plan => "plan",
+            Kind::Task => "task",
             Kind::Agent | Kind::Subagent => "agent",
             Kind::Branch => "branch",
             Kind::File => "file",
@@ -112,6 +121,7 @@ impl Kind {
             "ask" => Kind::Ask,
             "spec" => Kind::Spec,
             "plan" => Kind::Plan,
+            "task" => Kind::Task,
             "agent" if key.contains('/') => Kind::Subagent,
             "agent" => Kind::Agent,
             "branch" => Kind::Branch,
@@ -202,7 +212,7 @@ pub enum Event {
 pub struct Delta {
     /// Items new or changed that the view shows.
     pub changed: Vec<ItemId>,
-    /// Items the view showed that are gone or no longer shown (finished, without "show finished").
+    /// Items the view showed that are gone or no longer shown (finished, in Active).
     pub removed: Vec<ItemId>,
     /// The edge set changed.
     pub edges: bool,
@@ -269,7 +279,7 @@ impl Core {
                 }
                 let mut out = Vec::new();
                 for (key, v) in self.views.iter().filter(|(_, v)| v.shown) {
-                    let delta = self.model.delta_for(&change, v.state.filters.finished);
+                    let delta = self.model.delta_for(&change, &v.state.filters);
                     if !delta.is_empty() {
                         out.push(Effect::Delta {
                             view: key.clone(),

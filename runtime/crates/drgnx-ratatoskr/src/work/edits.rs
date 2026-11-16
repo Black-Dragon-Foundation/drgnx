@@ -228,11 +228,18 @@ pub async fn files(f: &Front, _: &Caller, p: EditedFiles) -> Result<EditedFilesL
 
 /// `work/hunks`.
 pub async fn hunks(f: &Front, _: &Caller, p: HunksParams) -> Result<Hunks, Error> {
-    let path = p.path.into_inner();
+    let diff = diff_of(f, p.session.as_str(), &p.path.into_inner()).await?;
+    Ok(Hunks { diff })
+}
+
+/// The unified diff of PATH (relative to SESSION's worktree) against the base: the session's own hunks in a tree it
+/// shares with you, else the whole file's.
+pub async fn diff_of(f: &Front, session: &str, path: &str) -> Result<String, Error> {
+    let path = path.to_owned();
     check_path(&path).map_err(fail)?;
-    let (hub, tree) = history_of(f, p.session.as_str())?;
-    let (sid, now) = (p.session.as_str().to_owned(), crate::clock::wall_secs());
-    let diff = crate::clock::blocking(move || {
+    let (hub, tree) = history_of(f, session)?;
+    let (sid, now) = (session.to_owned(), crate::clock::wall_secs());
+    crate::clock::blocking(move || {
         if hub.shared_with(&tree, &sid)? {
             hub.session_diff(&tree, &path, &sid, now)
         } else {
@@ -241,8 +248,7 @@ pub async fn hunks(f: &Front, _: &Caller, p: HunksParams) -> Result<Hunks, Error
     })
     .await
     .map_err(|e| fail(e.to_string()))?
-    .map_err(|e| fail(e.to_string()))?;
-    Ok(Hunks { diff })
+    .map_err(|e| fail(e.to_string()))
 }
 
 /// Where session SESSION's base is: the shadow repositories' root, its worktree and its base tree (read a file of it
