@@ -22,6 +22,7 @@
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-m11c1-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-m11c1-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-m11c1-ui-test--repo) nil t)
+(load (expand-file-name "test/fixtures/ui-hub-fixture" drgnx-m11c1-ui-test--repo) nil t)   ; the Search view's text search is the hub's
 (dolist (m '("tools/drgnx-replace" "tools/drgnx-agent-panel-list" "tools/drgnx-agent-panel" "tools/drgnx-layouts" "tools/drgnx-browser" "tools/drgnx-live"
              "tools/drgnx-shortcuts"))
   (load (expand-file-name (concat "modules/" m) drgnx-m11c1-ui-test--repo) nil t))
@@ -89,6 +90,7 @@
             (drgnx-git-test-write repo "src/needle.el" "(defun needle-check (input n)\n  \"The needle.\"\n  (> (length input) n))\n")
             (drgnx-git-test-write repo "README.md" "# Parser\n\nEvery step calls needle-check.\n")
             (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "Start")
+            (drgnx-ui-hub-start drgnx-m11c1-ui-test--repo)
             (with-selected-frame root
               (delete-other-windows)
               (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px drgnx-layouts-state
@@ -118,7 +120,8 @@
                 (should (drgnx-m11c1-ui-test--wait (lambda () (with-current-buffer view (not (drgnx-replace--busy-p))))))
                 (with-current-buffer view
                   (should (equal (widget-value (drgnx-replace--widget 'find)) "needle-check"))
-                  (should (= 14 (length drgnx-replace--matches))))   ; 12 steps, its definition, the README
+                  ;; the view is hub-fed: its rows are the hub's, and `search-run-done' counts them
+                  (should (= 14 (cdr drgnx-replace--hub-counts))))   ; 12 steps, its definition, the README
                 (with-current-buffer view (widget-value-set (drgnx-replace--widget 'replace) "needle-ok"))
                 (should (drgnx-m11c1-ui-test--wait (lambda () (with-current-buffer view (not (drgnx-replace--busy-p))))))
                 (redisplay t)
@@ -221,6 +224,7 @@
               (redisplay t)
               (drgnx-m11c1-ui-test--shot shots "m11c1-shortcuts-recorded.png")))
         (drgnx-keys--restore)
+        (drgnx-ui-hub-stop)
         (drgnx-replace-bar-close)
         (drgnx-wb-hide-sidebar)
         (ignore-errors (drgnx-wb-area-hide 'panel))
@@ -231,7 +235,7 @@
           (delete-other-windows)
           (set-window-margins nil 0 0)
           ;; the layouts put the editor chrome (tab line, breadcrumbs, mode line) on the window: later tests count lines
-          (dolist (p '(drgnx-tabs drgnx-layouts-pane tab-line-format header-line-format mode-line-format))
+          (dolist (p '(drgnx-tabs drgnx-tab-history drgnx-layouts-pane tab-line-format header-line-format mode-line-format))
             (set-window-parameter nil p nil))
           (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px drgnx-layouts-state
                                      drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
