@@ -17921,6 +17921,11 @@
                 "default": false,
                 "type": "boolean"
               },
+              "bundled": {
+                "default": false,
+                "description": "The packages drgnx itself provides and activates (the modules' `:packages`, rows `bundled:NAME`).",
+                "type": "boolean"
+              },
               "disabled": {
                 "default": false,
                 "description": "Modules that are off.",
@@ -18093,6 +18098,11 @@
           "ListSection": {
             "description": "One section of the list: a search, its header's title.",
             "properties": {
+              "collapsed": {
+                "default": false,
+                "description": "Show the header and its count only (a section the user has not opened).",
+                "type": "boolean"
+              },
               "minus_updates": {
                 "default": false,
                 "description": "Leave out the rows whose state is `update` (Installed: they wait in Updates).",
@@ -18123,6 +18133,7 @@
                 "$ref": "#/$defs/Filters",
                 "default": {
                   "builtin": false,
+                  "bundled": false,
                   "disabled": false,
                   "enabled": false,
                   "installed": false,
@@ -18321,6 +18332,17 @@
               },
               "state": {
                 "$ref": "#/$defs/ModuleState"
+              },
+              "summaries": {
+                "default": [],
+                "description": "`[name, summary]` pairs: a package's one-line description as the editor knows it (`package-desc-summary`).",
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
               }
             },
             "required": [
@@ -18718,6 +18740,11 @@
                 "default": false,
                 "type": "boolean"
               },
+              "bundled": {
+                "default": false,
+                "description": "The packages drgnx itself provides and activates (the modules' `:packages`, rows `bundled:NAME`).",
+                "type": "boolean"
+              },
               "disabled": {
                 "default": false,
                 "description": "Modules that are off.",
@@ -18837,6 +18864,7 @@
             "$ref": "#/$defs/Filters",
             "default": {
               "builtin": false,
+              "bundled": false,
               "disabled": false,
               "enabled": false,
               "installed": false,

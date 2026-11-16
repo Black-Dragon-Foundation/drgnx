@@ -57,6 +57,7 @@
     (extensions-dark)
     (extensions-light)
     (extensions-hc)
+    (extensions-builtin-open)
     (search-preview :mockup search-view)
     (search-sheet :mockup search-view :then "<escape>")
     (search-ask :mockup search-view :then "<escape>")

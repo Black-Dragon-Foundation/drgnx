@@ -56,7 +56,7 @@ Updates count."
             (should (equal (mapcar #'car calls) '("extensions/list")))
             (let ((p (nth 1 (car calls))))
               (should (equal (mapcar (lambda (s) (plist-get s :name)) (append (plist-get p :sections) nil))
-                             '("installed" "updates" "recommended" "plugins" "builtin")))
+                             '("installed" "updates" "recommended" "plugins" "bundled" "builtin")))
               (should (eql 200 (plist-get (plist-get (aref (plist-get p :sections) 0) :search) :limit))))
             (drgnx-view-model-event (list :view "extensions" :hub 7 :base 0 :version 1 :reset t
                                           :model drgnx-extensions-rows-test--model))

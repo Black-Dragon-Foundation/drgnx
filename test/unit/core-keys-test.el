@@ -1443,7 +1443,7 @@ The commands of modules that need no installed package are in it, the later stag
                               ;; the Extensions list: its open key and its own keys
                               extensions-open extensions-search extensions-details extensions-install extensions-update
                               extensions-update-all extensions-uninstall extensions-toggle-project extensions-refresh
-                              extensions-cancel extensions-show-log
+                              extensions-cancel extensions-show-log extensions-toggle-section extensions-disable-module
                               extensions-trust-install extensions-trust-cancel ; the trust card's own keys
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste

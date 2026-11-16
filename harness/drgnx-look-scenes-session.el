@@ -1374,6 +1374,23 @@ editor, the Explorer's rows beside it."
     (with-current-buffer drgnx-extensions-list-buffer-name (goto-char (point-min))))
   (drgnx-look-scene--answer))
 
+(defvar drgnx-extensions-list--opened)
+(declare-function drgnx-extensions-list--ask "drgnx-extensions-list")
+
+(defun drgnx-look-scene-extensions-builtin-open ()
+  "The Extensions list with its Built-in section opened (TAB on the header): the packages drgnx provides, each with the
+module that uses it."
+  (drgnx-look-scene--extensions 'drgnx-dark)
+  (drgnx-look-scene--try "built-in section"
+    (with-current-buffer drgnx-extensions-list-buffer-name
+      (setq drgnx-extensions-list--opened '(bundled))
+      (drgnx-extensions-list--ask)
+      (drgnx-look-scene--until 20 "built-in rows"
+                               (lambda () (save-excursion (goto-char (point-min)) (search-forward "drgnx module" nil t))))
+      (goto-char (point-min))
+      (when (search-forward "Built-in (" nil t) (beginning-of-line))))
+  (drgnx-look-scene--answer))
+
 (defun drgnx-look-scene-extensions-dark () (drgnx-look-scene--extensions 'drgnx-dark))
 (defun drgnx-look-scene-extensions-light () (drgnx-look-scene--extensions 'drgnx-light))
 (defun drgnx-look-scene-extensions-hc () (drgnx-look-scene--extensions 'drgnx-high-contrast))
