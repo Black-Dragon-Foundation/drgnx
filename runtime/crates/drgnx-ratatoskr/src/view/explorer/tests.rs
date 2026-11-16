@@ -647,3 +647,66 @@ fn a_revealed_file_keeps_the_tree_above_it() {
     assert_eq!(window_around(2000, 150, None, 1000), Some(1000 - 37)); // deeper: a quarter window above it
     assert_eq!(window_around(2000, 150, Some(980), 1000), None);
 }
+
+/// The user's Explorer, 2026-11-16 (second report): the org folder with drgnx/ and nidhogg/ open, far more than a
+/// window of entries, and a file 2000 entries down revealed.  The window's rows start with the root and every folder
+/// above its first entry (root → … → parent), then its entries: never a slice with nothing above it.
+#[test]
+fn a_deep_reveal_shows_the_folders_above_it_first() {
+    let mut d: HashMap<String, Vec<(String, bool)>> = HashMap::new();
+    let e = |n: &str, dir: bool| (n.to_owned(), dir);
+    d.insert(
+        "/org".into(),
+        vec![e("drgnx", true), e("nidhogg", true), e("notes.md", false)],
+    );
+    d.insert(
+        "/org/drgnx".into(),
+        vec![e("core", true), e("README.md", false)],
+    );
+    d.insert(
+        "/org/nidhogg".into(),
+        vec![e("src", true), e("README", false)],
+    );
+    d.insert(
+        "/org/drgnx/core".into(),
+        (0..1200).map(|i| (format!("c{i:04}.el"), false)).collect(),
+    );
+    d.insert(
+        "/org/nidhogg/src".into(),
+        (0..1500).map(|i| (format!("s{i:04}.c"), false)).collect(),
+    );
+    let expanded: HashSet<String> = [
+        "/org",
+        "/org/drgnx",
+        "/org/drgnx/core",
+        "/org/nidhogg",
+        "/org/nidhogg/src",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    let entries = list_tree(
+        &[PathBuf::from("/org")],
+        &expanded,
+        true,
+        &AtomicBool::new(false),
+        &mut |p| d.get(&*p.to_string_lossy()).cloned().unwrap_or_default(),
+    )
+    .unwrap();
+    let at = 2000;
+    assert!(entries[at].path.starts_with("/org/nidhogg/src/"));
+    let from = window_around(entries.len(), 150, None, at);
+    assert!(from.is_some_and(|f| f > 0));
+    let shown: Vec<&str> = window_shown(&entries, 150, from)
+        .iter()
+        .map(|e| e.path.as_str())
+        .collect();
+    assert_eq!(&shown[..3], ["/org", "/org/nidhogg", "/org/nidhogg/src"]);
+    assert_eq!(shown[3], entries[from.unwrap()].path);
+    assert!(shown.contains(&entries[at].path.as_str()));
+    let unique: HashSet<&str> = shown.iter().copied().collect();
+    assert_eq!(unique.len(), shown.len(), "a row twice: {shown:?}");
+    // from the root, nothing goes before the window's entries
+    assert_eq!(window_shown(&entries, 150, None)[0].path, "/org");
+    assert_eq!(window_shown(&entries, 150, None).len(), 150);
+}

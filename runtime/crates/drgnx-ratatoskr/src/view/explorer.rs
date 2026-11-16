@@ -393,6 +393,39 @@ pub fn window_around(len: usize, window: usize, from: Option<usize>, at: usize) 
     Some(if at < window { 0 } else { at - window / 4 })
 }
 
+/// The folders above entry FROM (root first: root → … → its parent), as indices into ENTRIES; none for the first.
+fn ancestors(entries: &[Entry], from: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let Some(first) = entries.get(from).filter(|_| from > 0) else {
+        return out;
+    };
+    // pre-order: each folder above the first entry comes before it
+    let mut parent = first.parent.as_deref();
+    for (i, e) in entries[..from].iter().enumerate().rev() {
+        if parent.is_none() {
+            break;
+        }
+        if Some(e.path.as_str()) == parent {
+            out.push(i);
+            parent = e.parent.as_deref();
+        }
+    }
+    out.reverse();
+    out
+}
+
+/// The entries the rows of a window of WINDOW entries from FROM show, in order: the folders above its first entry
+/// (root → … → parent: a window from the middle of the tree never shows a slice with nothing above it), then its
+/// entries.
+pub fn window_shown(entries: &[Entry], window: usize, from: Option<usize>) -> Vec<&Entry> {
+    let range = window_range(entries.len(), window, from);
+    ancestors(entries, range.start)
+        .into_iter()
+        .map(|i| &entries[i])
+        .chain(&entries[range])
+        .collect()
+}
+
 pub fn window_range(len: usize, window: usize, from: Option<usize>) -> std::ops::Range<usize> {
     let from = from.unwrap_or(0).min(len.saturating_sub(window));
     from..len.min(from + window)
@@ -422,18 +455,9 @@ pub(crate) fn explorer_doc_in(entries: &[Entry], window: usize, from: Option<usi
         d.nodes.insert(e.path.clone(), entry_node(e));
         order.push(e.path.clone());
     }
-    if let Some(first) = entries.get(from).filter(|_| from > 0) {
-        // pre-order: each folder above the first entry comes before it
-        let mut parent = first.parent.as_deref();
-        for e in entries[..from].iter().rev() {
-            if parent.is_none() {
-                break;
-            }
-            if Some(e.path.as_str()) == parent {
-                d.nodes.insert(e.path.clone(), entry_node(e));
-                parent = e.parent.as_deref();
-            }
-        }
+    for i in ancestors(entries, from) {
+        d.nodes
+            .insert(entries[i].path.clone(), entry_node(&entries[i]));
     }
     if from > 0 || entries.len() > from + order.len() {
         d.windows.insert("order".into(), (entries.len(), from));
@@ -647,14 +671,14 @@ fn entry_row(
 
 /// The rows of ENTRIES in LOOK with their DECOR, one per entry keyed by its path, and the icons they name (each
 /// once).
-pub fn explorer_rows(
-    entries: &[Entry],
+pub fn explorer_rows<'a>(
+    entries: impl IntoIterator<Item = &'a Entry>,
     decor: &Decor,
     look: &RowLook,
 ) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut images = BTreeMap::new();
     let rows = entries
-        .iter()
+        .into_iter()
         .map(|e| {
             let mark = decor.git.get(&e.path).copied();
             entry_row(e, mark, decor.here.get(&e.path), look, &mut images)
@@ -1081,9 +1105,13 @@ impl Views {
         shape: Shape,
         from: Option<usize>,
     ) {
-        let shown = &entries[window_range(entries.len(), shape.window, from)];
+        let shown = window_shown(entries, shape.window, from);
         self.publish_built(f, key, |env, _| {
-            explorer_rows(shown, decor, &RowLook::of(env, shape.indent, shape.roots))
+            explorer_rows(
+                shown.iter().copied(),
+                decor,
+                &RowLook::of(env, shape.indent, shape.roots),
+            )
         });
     }
 
