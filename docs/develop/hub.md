@@ -3807,8 +3807,10 @@ the map's `JobFact.why`; the Detail of a job's agent says "Runs on r1 Â· why: â€
 
 `machines/move {target, machine}` (user class only; `work/machines.rs`, `move_to`) answers `{moved, card?, said}`:
 
-- `session:ID`: the session's next jobs that name no machine are pinned to `machine` (`Queue::prefer`, kept in memory;
-  a job that machine can't take is placed as before). A running turn is not moved.
+- `session:ID`: the session's next jobs that name no machine are pinned to `machine` (`Queue::prefer`; a job that
+  machine can't take is placed as before). The choice is kept in `runtime.db` on the session's `asession` row
+  (column `machine`, migration 11; the row is upserted, so recording the session again keeps it) and comes back
+  after a hub restart with the queue's other state (`queue::kept`). A running turn is not moved.
 - `job:ID` of a waiting job: `Queue::move_job` pins it there (`by_user`) and the queue ticks; `moved: true`.
 - `job:ID` of a running job: nothing stops. The hub opens a `machine-move` card ("Restart make check on laptop? It
   stops the run on desk", choices `restart` and `keep`) and answers its id. Only the card's Restart moves it

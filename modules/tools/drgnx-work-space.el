@@ -673,7 +673,7 @@ windows; the commands."
                         :command #'drgnx-work-diff-reject-hunk :map 'drgnx-work-diff-mode-map
                         :doc "Reject the hunk at point; the review view decides hunks")
   (drgnx-command-define 'work-move-machine :category "Work" :title "Move to Another Machine"
-                        :command #'drgnx-work-move-machine :map 'drgnx-work-lens-map
+                        :command #'drgnx-work-move-machine :map 'drgnx-work-item-map
                         :doc "Move the selected job (or an agent's next jobs) to another machine; a running job is asked about on a card, never stopped here")
   (drgnx-command-define 'work-job-log :category "Work" :title "Show the Job's Live Log"
                         :command #'drgnx-work-job-log :map 'drgnx-work-detail-mode-map

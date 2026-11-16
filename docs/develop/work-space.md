@@ -733,7 +733,9 @@ row a Nidhogg with the layout leg. Unit: `drgnx-work-map-nav/motion-reads-the-ca
 the movement and opening commands (`work-left` and so on), `work-view-map` and `work-view-board` are bound in it. They
 act through `drgnx-work-lens-nav` (buffer-local): a view that is not the map sets it to a function of one direction, and
 `drgnx-work-map--move` and its siblings call it first. The selection always lives in the map buffer
-(`drgnx-work-lens--map` names it from the other views); `drgnx-work-lens-switch` carries it across.
+(`drgnx-work-lens--map` names it from the other views); `drgnx-work-lens-switch` carries it across. Its own parent is
+`drgnx-work-item-map`, the keys of a Work item wherever it shows, which is also the Detail's parent: Move to Another
+Machine (`work-move-machine`, `M`) is bound there, so the key is the same in every view and in the Detail.
 
 `modules/tools/drgnx-work-board.el` is the Board, drawn only from the hub's rows. Beside a map that is a hub-fed view
 `VIEW` it is the hub-fed view `VIEW/board` in the map's class: `drgnx-work-board-refresh` asks
