@@ -382,7 +382,11 @@ or (:kind same-key|prefix :native DESCRIPTION)."
                         (push (list :kind 'prefix :yours (cdr cell) :key k) out))))
                drgnx-keys--yours))
     (unless out
-      (when-let* ((m (and (boundp mapsym) (keymapp (symbol-value mapsym)) (symbol-value mapsym)))
+      ;; the global map as keys are read: the profile's keys over Emacs' (VS Code's C-k is a prefix there, not
+      ;; `kill-line', so C-k C-9 is free)
+      (when-let* ((m (if (and (eq mapsym 'global-map) (boundp 'drgnx-keys--global-map))
+                         drgnx-keys--global-map
+                       (and (boundp mapsym) (keymapp (symbol-value mapsym)) (symbol-value mapsym))))
                   (def (ignore-errors (keymap-lookup m key nil t))))
         (cond ((keymapp def) (push (list :kind 'prefix :native (format "the %s prefix" key)) out))
               ((numberp def)
