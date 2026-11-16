@@ -284,8 +284,12 @@ its window's edges).  Glitnir draws no ring over the frame's edge, so the dock's
 ring.  The store runs (`drgnx-state-mode', as the workbench has it).  Pattern D (read after
 `drgnx-test-wait-presented')."
   (skip-unless (drgnx-uitest-glitnir-p))
-  (let ((state-was (bound-and-true-p drgnx-state-mode)))
+  (let ((state-was (bound-and-true-p drgnx-state-mode)) (themes custom-enabled-themes))
     (drgnx-state-mode 1)
+    ;; the look's dark theme, whatever the session has (a session with none draws the default faces' colours, where
+    ;; the gap and the blend are within the tolerance and the premise fails)
+    (mapc #'disable-theme custom-enabled-themes)
+    (load-theme 'drgnx-dark t)
     (unwind-protect
         (drgnx-test-with-modules '(ui/look)
           (drgnx-card-panels-ui-test--with-explorer
@@ -323,7 +327,9 @@ ring.  The store runs (`drgnx-state-mode', as the workbench has it).  Pattern D 
                     (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel editor) blend)))
                 (when (window-live-p other) (delete-window other))
                 (drgnx-test-wait-presented)))))
-      (drgnx-state-mode (if state-was 1 -1)))))
+      (drgnx-state-mode (if state-was 1 -1))
+      (mapc #'disable-theme custom-enabled-themes)
+      (dolist (th (reverse themes)) (enable-theme th)))))
 
 (ert-deftest drgnx-ui-card-panels/four-themes-cards ()
   "The corner pixel of a card is the gap under each of the four test themes.  Pattern D (read after
