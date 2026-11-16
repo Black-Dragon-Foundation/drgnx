@@ -41,7 +41,9 @@ and composer with it.
   forecast is there. A step with no checkpoint to go back to refuses `R`. A step a revert undid is marked `↶ undone`; the rows reload by themselves when a revert, redo or take is applied.
   The checkpoints chip names how much of the conversation the agent's provider restores (message, turn or summary)
   when the hub reports it.
-- **A paired chat's edits:** a paired chat writes your own checkout, so it has no worktree base to diff against. Its
+- **Edits in your own checkout:** a paired chat, and any agent working in a folder you also work in (your checkout,
+  with your uncommitted and untracked files), has no worktree base of its own to diff against. Its edits are only what
+  it wrote: your own changes are never listed as its edits, and a hunk next to your lines shows yours as context. Its
   ledger (`L`) lists the hunks the edit history holds for that chat, one line each with the file and the lines; `D` on a
   line takes that one hunk back through the history's selective revert, keeping what you typed after it. A hunk you
   undid yourself (with undo) shows `undone by you`.

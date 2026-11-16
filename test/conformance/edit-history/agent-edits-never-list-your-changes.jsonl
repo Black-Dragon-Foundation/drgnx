@@ -1,0 +1,25 @@
+{"scenario": "edit-history/agent-edits-never-list-your-changes", "requires": ["v1", "test-hooks"], "doc": "S1-2 (UX audit 2026-11-16): an agent works in your checkout, which holds an uncommitted line of yours at the end of a.txt and an untracked NOTES.txt. Before the agent writes anything, work/files lists nothing; after it appends a line to a.txt, work/files lists a.txt alone with one line added, and work/hunks shows the agent's line added and yours only as context, so a Reject can never take your line back. Pattern B: work/files is polled until it settles."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && git init -q -b main && printf 'one\\ntwo\\n' > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init && printf 'mine\\n' >> a.txt && echo new > NOTES.txt"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say looking"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"class": "think", "turn_id": "t1"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "work/files", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"files": []}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "fs:write a.txt one\\ntwo\\nmine\\nagent\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"class": "think", "turn_id": "t2"}}}, "within_ms": 15000}
+{"do": "poll", "conn": "c", "json": {"id": 5, "method": "work/files", "params": {"session": "$sid"}}, "expect": {"id": 5, "result": {"files": [{"path": "a.txt", "plus": 1, "minus": 0, "untracked": false}]}}, "within_ms": 15000, "every_ms": 50}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "work/hunks", "params": {"session": "$sid", "path": "a.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"diff": "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,4 @@\n one\n two\n mine\n+agent\n"}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "work/hunks", "params": {"session": "$sid", "path": "NOTES.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"diff": ""}}, "within_ms": 15000}
