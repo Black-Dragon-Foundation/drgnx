@@ -60,7 +60,7 @@
 
 (defconst drgnx-extensions-list--flags
   '(("installed" . :installed) ("updates" . :updates) ("enabled" . :enabled) ("disabled" . :disabled)
-    ("builtin" . :builtin) ("plugins" . :plugins) ("unsigned" . :unsigned))
+    ("builtin" . :builtin) ("bundled" . :bundled) ("plugins" . :plugins) ("unsigned" . :unsigned))
   "Query words that are flags of the hub's search.")
 
 (defconst drgnx-extensions-list--valued
@@ -74,8 +74,8 @@
 
 (defun drgnx-extensions-parse-query (string)
   "STRING, what is typed in the search, as (:text S :filters PLIST :local WORDS :sort S :unknown TOKENS).
-Words that start with @ are filters (`@installed', `@updates', `@enabled', `@disabled', `@builtin', `@plugins',
-`@unsigned', `@archive:A', `@kind:K', `@keyword:W'), local ones the editor answers (`@recommended', `@this-project',
+Words that start with @ are filters (`@installed', `@updates', `@enabled', `@disabled', `@builtin', `@bundled',
+`@plugins', `@unsigned', `@archive:A', `@kind:K', `@keyword:W'), local ones the editor answers (`@recommended', `@this-project',
 `@failed', `@restart', `@generations') or `@sort:name|downloads|updated|installed'.  The other words are the text.  A
 word that starts with @ and is none of these is listed under :unknown, never an error."
   (let (text filters local sort unknown)
@@ -129,6 +129,8 @@ word that starts with @ and is none of these is listed under :unknown, never an 
   "The root of the project the list or a page was last opened from (a file buffer's), or nil: where `p' and a page's
 toggle turn a package off, and what @this-project reads.")
 
+(defvar drgnx-extensions-list--opened nil "The closed-by-default sections the user opened.")
+
 (defvar drgnx-extensions-list--limits nil "Alist SECTION → the rows the list asks of it (a page more at each end).")
 
 (defvar drgnx-extensions-list--chips (make-hash-table :test 'equal)
@@ -136,6 +138,7 @@ toggle turn a package off, and what @this-project reads.")
 
 (defun drgnx-extensions-list--reset ()
   "Forget every row, section, job state and query."
+  (setq drgnx-extensions-list--opened nil)
   (clrhash drgnx-extensions-list--jobs)
   (clrhash drgnx-extensions-list--asked)
   (maphash (lambda (_ ov) (delete-overlay ov)) drgnx-extensions-list--chips)
@@ -160,12 +163,16 @@ toggle turn a package off, and what @this-project reads.")
       (when (stringp (plist-get r k)) (setq r (plist-put r k (intern (plist-get r k))))))
     r))
 
-(defconst drgnx-extensions-list--sections-order '(installed updates recommended plugins builtin)
+(defconst drgnx-extensions-list--sections-order '(installed updates recommended plugins bundled builtin)
   "The sections of the list when nothing is typed, in order.")
+
+(defconst drgnx-extensions-list--closed-sections '(bundled builtin)
+  "The sections that show their header and count only, until `drgnx-extensions-toggle-section' opens them.")
+
 
 (defconst drgnx-extensions-list--titles
   '((installed . "Installed") (updates . "Updates") (recommended . "Recommended") (plugins . "Plugins")
-    (builtin . "Built-in") (search . "Search results") (generations . "Generations"))
+    (bundled . "Built-in") (builtin . "Emacs built-ins") (search . "Search results") (generations . "Generations"))
   "SECTION → the header's text.")
 
 ;;;; Asking the hub
@@ -218,7 +225,7 @@ global `drgnx-extensions-recommended'."
     (_ (append (list :query "")
                (list :filters
                      (pcase section
-                       ('installed '(:installed t)) ('updates '(:updates t)) ('plugins '(:plugins t)) ('builtin '(:builtin t))
+                       ('installed '(:installed t)) ('updates '(:updates t)) ('plugins '(:plugins t)) ('builtin '(:builtin t)) ('bundled '(:bundled t))
                        ('recommended (if (fboundp 'drgnx-extensions-recommend-version) ; the hub holds the set
                                          (list :recommended (drgnx-extensions-recommend-version))
                                        (list :ids (vconcat (drgnx-extensions-list--recommended-ids)))))))
@@ -494,7 +501,10 @@ typed, they are the list)."
                                  (list :name (symbol-name s) :title (cdr (assq s drgnx-extensions-list--titles))
                                        :search (plist-put params :limit (or (alist-get s drgnx-extensions-list--limits)
                                                                             drgnx-extensions-list--page))
-                                       :minus_updates (if (eq s 'installed) t :false))))
+                                       :minus_updates (if (eq s 'installed) t :false)
+                                       :collapsed (if (and (memq s drgnx-extensions-list--closed-sections)
+                                                           (not (memq s drgnx-extensions-list--opened)))
+                                                      t :false))))
                              sections))
           :dense (if (eq drgnx-extensions-list-density 'dense) t :false)
           :glyphs (vconcat (mapcar (lambda (k) (list :kind (symbol-name k) :gui (or (drgnx-face-glyph k) "")
@@ -682,8 +692,8 @@ delay is 0, design §13: results follow the key, M5)."
 
 (defun drgnx-extensions-search ()
   "Search the extensions; the list follows what you type.  Words after @ filter: @installed @updates @recommended
-@enabled @disabled @builtin @plugins @generations @this-project @failed @archive:A @kind:K @keyword:W @unsigned @restart
-@sort:name|downloads|updated|installed."
+@enabled @disabled @builtin @bundled @plugins @generations @this-project @failed @archive:A @kind:K @keyword:W
+@unsigned @restart @sort:name|downloads|updated|installed."
   (interactive)
   (drgnx-extensions-list--buffer)
   (let ((text (minibuffer-with-setup-hook #'drgnx-extensions-list--minibuffer-setup
@@ -783,6 +793,49 @@ update is compared with the installed copy before Apply."
         (goto-char (point-min))
         (special-mode)
         (pop-to-buffer (current-buffer))))))
+
+;;;; Sections that open and modules that go
+
+(defun drgnx-extensions-toggle-section ()
+  "Open or close the section whose header is at point (Built-in and Emacs built-ins start closed)."
+  (interactive)
+  (let* ((key (get-text-property (point) 'drgnx-work-id))
+         (name (and (stringp key) (string-prefix-p "section:" key) (intern (substring key 8)))))
+    (unless (and name (memq name drgnx-extensions-list--closed-sections))
+      (user-error "Put point on the Built-in header to open or close it"))
+    (setq drgnx-extensions-list--opened (if (memq name drgnx-extensions-list--opened)
+                                            (delq name (copy-sequence drgnx-extensions-list--opened))
+                                          (cons name drgnx-extensions-list--opened)))
+    (drgnx-extensions-list--ask)))
+
+(defun drgnx-extensions-list--modules-of (name)
+  "The running modules whose :packages name the package NAME (a string)."
+  (let (out)
+    (dolist (m drgnx-modules--table)
+      (when (and (drgnx-module-running-p (car m))
+                 (member name (mapcar (lambda (x) (format "%s" x)) (ensure-list (plist-get (cdr m) :packages)))))
+        (push (car m) out)))
+    (nreverse out)))
+
+(defun drgnx-extensions-disable-module ()
+  "Turn off the drgnx module that provides the built-in package at point.  Asks before it turns off the modules that
+need it too; a module that cannot stop while Emacs runs is written for the next start."
+  (interactive)
+  (let* ((id (drgnx-extensions-list--id-at-point))
+         (name (and (string-prefix-p "bundled:" id) (drgnx-extensions-list--name id)))
+         (mods (and name (drgnx-extensions-list--modules-of name))))
+    (unless name (user-error "%s is not a built-in package" (drgnx-extensions-list--name id)))
+    (unless mods (user-error "No module that is on provides %s" name))
+    (let ((module (if (cdr mods)
+                      (intern (completing-read "Disable module: " (mapcar #'symbol-name mods) nil t))
+                    (car mods))))
+      (when (eq module 'tools/extensions) (user-error "This list is the module tools/extensions: turn it off in Settings"))
+      (let ((deps (drgnx-modules-turn-off module)))
+        (when deps
+          (if (y-or-n-p (format "%s is needed by %s; turn them off too? " module (mapconcat #'symbol-name deps ", ")))
+              (drgnx-modules-turn-off module :dependents t)
+            (user-error "%s stays on" module))))
+      (message "Module %s is off" module))))
 
 (defun drgnx-extensions-list-project-root ()
   "The project the list was opened from (`drgnx-extensions-list--root'), or a `user-error' when there is none."

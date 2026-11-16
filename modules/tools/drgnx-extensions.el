@@ -111,13 +111,31 @@ when you ask (the Refresh command)."
   (pcase (plist-get (alist-get name drgnx-modules--report) :status)
     ('ok "on") ('failed "failed") ('missing-packages "needs-package") (_ "off")))
 
+(defvar package-alist)
+(defvar package-archive-contents)
+(declare-function package-desc-summary "package")
+
+(defun drgnx-extensions--package-summary (name)
+  "The one-line description of the package NAME (a string) as this Emacs knows it, or \"\".  Reads what is loaded; never
+refreshes an archive or asks."
+  (let* ((sym (intern name))
+         (desc (or (cadr (assq sym (bound-and-true-p package-alist)))
+                   (cadr (assq sym (bound-and-true-p package-archive-contents))))))
+    (or (and desc (ignore-errors (car (split-string (package-desc-summary desc) "\n")))) "")))
+
 (defun drgnx-extensions--module-rows ()
-  "The module table as `extensions/modules' takes it: a vector of (:name :doc :packages :flags :state)."
+  "The module table as `extensions/modules' takes it: a vector of (:name :doc :packages :flags :summaries :state),
+:summaries being [name summary] pairs."
   (vconcat
    (mapcar (lambda (m)
              (let ((spec (cdr m)) (names (lambda (xs) (vconcat (mapcar (lambda (x) (format "%s" x)) (ensure-list xs))))))
                (list :name (symbol-name (car m)) :doc (or (plist-get spec :doc) "")
                      :packages (funcall names (plist-get spec :packages)) :flags (funcall names (plist-get spec :flags))
+                     :summaries (vconcat
+                                 (delq nil (mapcar (lambda (p)
+                                                     (let* ((n (format "%s" p)) (sum (drgnx-extensions--package-summary n)))
+                                                       (and (not (string-empty-p sum)) (vector n sum))))
+                                                   (ensure-list (plist-get spec :packages)))))
                      :state (drgnx-extensions--module-state (car m)))))
            drgnx-modules--table)))
 
@@ -151,6 +169,10 @@ turned off or on (`drgnx-modules-after-teardown-functions').  Never waits or sig
                                           "Update every package that has an update" t)
                    (extensions-uninstall "Uninstall Extension" drgnx-extensions-uninstall
                                          "Remove the package on this line; a rollback brings it back" t)
+                   (extensions-toggle-section "Open or Close Extensions Section" drgnx-extensions-toggle-section
+                                              "Open or close the Built-in section at point" t)
+                   (extensions-disable-module "Disable Module of Built-in Package" drgnx-extensions-disable-module
+                                              "Turn off the drgnx module that provides the built-in package on this line" t)
                    (extensions-toggle-project "Turn Extension On or Off Here" drgnx-extensions-toggle-project
                                               "Turn the package on this line on or off in this project" t)
                    (extensions-refresh "Refresh Extensions" drgnx-extensions-refresh

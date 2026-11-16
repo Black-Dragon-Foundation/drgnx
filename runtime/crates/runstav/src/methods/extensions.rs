@@ -139,6 +139,9 @@ pub struct Filters {
     pub disabled: bool,
     #[serde(default)]
     pub builtin: bool,
+    /// The packages drgnx itself provides and activates (the modules' `:packages`, rows `bundled:NAME`).
+    #[serde(default)]
+    pub bundled: bool,
     #[serde(default)]
     pub plugins: bool,
     /// Language packs (`@packs`).
@@ -273,6 +276,9 @@ pub struct ModuleEntry {
     pub packages: Vec<String>,
     #[serde(default)]
     pub flags: Vec<String>,
+    /// `[name, summary]` pairs: a package's one-line description as the editor knows it (`package-desc-summary`).
+    #[serde(default)]
+    pub summaries: Vec<Vec<String>>,
     pub state: ModuleState,
 }
 
@@ -310,6 +316,9 @@ pub struct ListSection {
     /// Leave out the rows whose state is `update` (Installed: they wait in Updates).
     #[serde(default)]
     pub minus_updates: bool,
+    /// Show the header and its count only (a section the user has not opened).
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

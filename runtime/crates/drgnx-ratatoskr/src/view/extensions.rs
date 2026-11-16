@@ -27,6 +27,8 @@ pub struct Section {
     pub name: String,
     pub title: String,
     pub count: u32,
+    /// Only the header shows: the section is not open.
+    pub collapsed: bool,
     pub rows: Vec<w::Row>,
 }
 
@@ -88,7 +90,8 @@ pub fn build(p: &w::ListParams, found: Vec<(u32, Vec<w::Row>)>) -> (Built, Vec<w
                 name: s.name.clone(),
                 title: s.title.clone(),
                 count,
-                rows: shown,
+                collapsed: s.collapsed,
+                rows: if s.collapsed { Vec::new() } else { shown },
             });
         }
     }
@@ -219,6 +222,24 @@ fn spans(mut row: RowBuilder, id: &str) -> Row {
     row.finish()
 }
 
+/// The drgnx modules that use a bundled package, as its summary line says it (`drgnx module git, search`); empty for
+/// every other row.
+fn bundled_by(r: &w::Row) -> String {
+    let names: Vec<&str> = r
+        .why
+        .iter()
+        .filter_map(|y| match y {
+            w::Why::Module(m) => Some(m.as_str()),
+            _ => None,
+        })
+        .collect();
+    if r.source == "drgnx" && !names.is_empty() {
+        format!("drgnx module {}", names.join(", "))
+    } else {
+        String::new()
+    }
+}
+
 /// A header's face: a dock section's title, as the Explorer's (window-dark.html `.sec`).
 const HEADER: &str = "drgnx-wb-section";
 
@@ -254,11 +275,20 @@ pub fn rows(b: &Built, look: Look) -> (Vec<Row>, Vec<(ImageId, String)>) {
                     .push("restart to use", Some("drgnx-status-warn"));
             }
             out.push(spans(l, &r.id));
-            let words: Vec<&str> = [Some(r.summary.as_str()), Some(r.source.as_str()), trust(r)]
-                .into_iter()
-                .flatten()
-                .filter(|w| !w.is_empty())
-                .collect();
+            let modules = bundled_by(r);
+            let words: Vec<&str> = [
+                Some(r.summary.as_str()),
+                Some(if modules.is_empty() {
+                    r.source.as_str()
+                } else {
+                    modules.as_str()
+                }),
+                trust(r),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|w| !w.is_empty())
+            .collect();
             if !b.dense && !words.is_empty() {
                 let mut d = RowBuilder::new(format!("{}/2", r.id));
                 d.push(&format!("    {}", words.join(" · ")), Some("shadow"));
@@ -353,7 +383,7 @@ pub fn doc(b: &Built) -> Doc {
         }
         d.nodes.insert(
             sid.clone(),
-            json!({"id": sid, "kind": "section", "flags": 1,
+            json!({"id": sid, "kind": "section", "flags": u8::from(!s.collapsed),
                    "fields": [["label", s.title], ["section", s.name], ["count", s.count]]}),
         );
         order.push(sid.clone());

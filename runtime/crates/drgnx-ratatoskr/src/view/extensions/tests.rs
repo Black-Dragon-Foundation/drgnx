@@ -29,6 +29,7 @@ fn section(name: &str, minus_updates: bool) -> w::ListSection {
             limit: None,
         },
         minus_updates,
+        collapsed: false,
     }
 }
 
@@ -371,4 +372,31 @@ fn extensions_generations_end_the_list_with_their_gen() {
             .to_string()
             .contains(r#"["gen",4]"#)
     );
+}
+
+// pattern D
+#[test]
+fn a_collapsed_bundled_section_shows_its_header_and_count_and_no_rows() {
+    let mut p = params(false);
+    let mut bundled = section("bundled", false);
+    bundled.collapsed = true;
+    p.sections = vec![section("installed", true), bundled];
+    let mut one = row("bundled:magit", w::State::BuiltIn);
+    one.source = "drgnx".into();
+    one.why = vec![w::Why::Module("tools/git".into())];
+    let found = vec![
+        (1, vec![row("pkg:a", w::State::Installed)]),
+        (2, vec![one.clone(), row("bundled:dash", w::State::BuiltIn)]),
+    ];
+    let (built, _) = build(&p, found.clone());
+    let (lines, _) = rows(&built, Look::TTY);
+    let all: String = lines.iter().map(|r| format!("{}\n", r.text)).collect();
+    assert!(all.contains("BUNDLED (2)"), "{all}");
+    assert!(!all.contains("magit") && !all.contains("dash"), "{all}");
+    // opened, a bundled row names its module on the summary line
+    p.sections[1].collapsed = false;
+    let (built, _) = build(&p, found);
+    let (lines, _) = rows(&built, Look::TTY);
+    let all: String = lines.iter().map(|r| format!("{}\n", r.text)).collect();
+    assert!(all.contains("drgnx module tools/git"), "{all}");
 }
