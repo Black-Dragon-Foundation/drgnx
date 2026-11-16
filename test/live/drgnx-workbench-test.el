@@ -183,3 +183,43 @@ starts none by itself (DRGNX_NO_HUB_START), and the Outline's rows are the hub's
             (should (eq :false (plist-get after :selected)))))
       (drgnx-ui-stop (plist-get s :name))
       (delete-directory root t))))
+
+(ert-deftest drgnx-live/the-work-map-of-a-project-draws ()
+  ;; A daily install: the Work space opened on a git project and its map drew nothing.  The map of a project with no
+  ;; agents still draws its rows (the hub lays them out): the buffer has text within 20 s.
+  (let* ((root (make-temp-file "drgnx-wb" t))
+         (project (file-name-as-directory (expand-file-name "project" root)))
+         (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
+         (s (progn (make-directory project t)
+                   (write-region "first\n" nil (expand-file-name "alpha.txt" project) nil 'silent)
+                   (let ((default-directory project))
+                     (call-process "git" nil nil nil "init" "-q")
+                     (call-process "git" nil nil nil "-c" "user.name=t" "-c" "user.email=t@example.invalid"
+                                   "commit" "-q" "--allow-empty" "-m" "one"))
+                   (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x850") 30)))
+         (sess (drgnx-ui-own-session (plist-get s :name)))
+         (probe "(drgnx-uitest--json
+                   (let ((b (seq-find (lambda (b) (with-current-buffer b (derived-mode-p 'drgnx-work-map-mode))) (buffer-list))))
+                     (if (not b) (list :text \"\" :info \"no map buffer\")
+                       (with-current-buffer b
+                         (list :text (buffer-substring-no-properties (point-min) (min (point-max) 600))
+                               :info (format \"%S\" (list (buffer-name) (buffer-size)
+                                                          (and (boundp 'drgnx-view-patch) drgnx-view-patch t)
+                                                          (and (boundp 'drgnx-work-space--message) drgnx-work-space--message)
+                                                          (and (fboundp 'drgnx-work-map-rows-p) (drgnx-work-map-rows-p))
+                                                          (get-buffer-window b t))))))))"))
+    (unwind-protect
+        (progn
+          (drgnx-live-wb--hub sess)
+          (drgnx-ui-call sess (format "(progn (find-file %S) (drgnx-wb-focus-editor) (drgnx-work-space-open)
+                                             (drgnx-uitest--json (list :ok t)))"
+                                      (expand-file-name "alpha.txt" project)))
+          (drgnx-ui-measure sess nil)
+          (let ((after (drgnx-ui-call sess probe)) (deadline (+ (float-time) 20)))
+            (while (and (string-empty-p (string-trim (plist-get after :text))) (< (float-time) deadline))
+              (drgnx-ui--poll-pause 0.2)
+              (setq after (drgnx-ui-call sess probe)))
+            (ert-info ((format "map: %s; text: %S" (plist-get after :info) (plist-get after :text)))
+              (should-not (string-empty-p (string-trim (plist-get after :text)))))))
+      (drgnx-ui-stop (plist-get s :name))
+      (delete-directory root t))))
