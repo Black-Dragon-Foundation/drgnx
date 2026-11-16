@@ -184,6 +184,10 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             if let Some(f) = state_face(*state) {
                 b.face(start, end, f.name());
             }
+            // the row is the density's height (`:height (density tree-row)`), in device px; a terminal's is one line
+            if !env.tty && g.height > 0 {
+                b.height(1, px(g.height, env.scale));
+            }
             if let Some(a) = action {
                 let to = b.pos();
                 let mut v = vec![Value::String(a.kind.clone())];
@@ -270,7 +274,15 @@ mod tests {
             &c,
         )[0];
         assert_eq!(r.spaces, vec![(0, 53, 0), (2, 11, 0)]);
-        assert_eq!(r.runs, vec![(0, 3, FaceId::Selected.name().to_owned())]);
+        // the row's own face (the UI font) under the state's
+        assert_eq!(
+            r.runs,
+            vec![
+                (0, 3, FaceId::KitRow.name().to_owned()),
+                (0, 3, FaceId::Selected.name().to_owned())
+            ]
+        );
+        assert_eq!(r.height, Some(crate::RowHeight { lines: 1, unit: 46 }));
     }
 
     #[test]

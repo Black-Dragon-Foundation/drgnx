@@ -35,6 +35,7 @@
  drgnx-selected
  drgnx-selected-quiet
  drgnx-selected-inactive
+ drgnx-row-selected
  drgnx-selected-secondary
  drgnx-focus
  drgnx-status-attention
@@ -489,4 +490,5 @@
  drgnx-statusbar-hover
  drgnx-topline
  drgnx-topline-hover
- drgnx-topline-strong)
+ drgnx-topline-strong
+ drgnx-kit-row)

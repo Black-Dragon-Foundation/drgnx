@@ -587,6 +587,7 @@ look it describes.
 | `drgnx-selected`, `drgnx-selected-quiet` | `region`, `drgnx-surface-raised` | the selection, and the quiet fill of buttons and chips |
 | `drgnx-selected-secondary` | `drgnx-text-muted` | secondary text on the selected row of a list (the palette's and Quick Open's keycaps and annotations): muted, which keeps 4.5:1 on the selection where subtle does not; high contrast uses the selection's own text colour |
 | `drgnx-selected-inactive` | `drgnx-selected-quiet` | the selected row of a list without the focus (the sidebar's sections), at least 1.25:1 against the panel and above the hover; a theme derive colours gets it by moving the raised colour toward the text until it meets that |
+| `drgnx-row-selected` | `drgnx-selected-inactive` | the selected row of any list, tree or map (Explorer, hub views, the Work map, notebook outlines): the inactive selection, remapped to `drgnx-selected` while the list's window is the selected one; `drgnx-view-selected`, `drgnx-explorer-selected`, `drgnx-work-selected` and `drgnx-notebook-current-row` inherit it |
 | `drgnx-focus` | none (a box) | the keyboard focus ring; the theme sets its colour |
 | `drgnx-focus-line` | none | the focus colour as a foreground: a ring Glitnir draws round a box (Ask an Agent's instruction) |
 | `drgnx-pill-accent` | the caption role | a chosen choice pill: the accent on its tint, ringed in the accent |

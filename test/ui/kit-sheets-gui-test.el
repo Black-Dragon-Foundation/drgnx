@@ -46,13 +46,23 @@
   (drgnx-kit-catalogue--props id (cl-mapcar #'cons (mapcar #'car (plist-get (drgnx-ui-kit-component id) :variants)) variants)
                               state))
 
+(defun drgnx-kit-sheet--whole-p (pos)
+  "Non-nil when POS's line, its whole height, is inside the selected window's text area (a tall row at the window's
+foot shows only in part)."
+  (when-let* ((xy (posn-x-y (posn-at-point pos))))
+    (<= (+ (cdr xy) (save-excursion (goto-char pos) (line-pixel-height))) (window-body-height nil t))))
+
+(defvar drgnx-kit-sheet--edges nil
+  "Non-nil while a sheet also checks that hovered and selected cells have no edge (`drgnx-kit-sheet/state-table').")
+
 (defun drgnx-kit-sheet--check-cells (id variant scale)
   "Check every cell of the catalogue in the selected window, drawn for component ID at SCALE in theme VARIANT.
 Returns the number of cells checked."
   (let* ((frame (selected-frame)) (s (drgnx-uitest-device-scale frame))
          (cells (drgnx-kit-catalogue-cells)) (snap nil) (n 0))
     (pcase-dolist (`(,_ ,variants ,state ,beg ,end) cells)
-      (unless (and snap (pos-visible-in-window-p beg) (pos-visible-in-window-p end))
+      ;; the cell's whole line on screen (a tall row at the window's foot is only partly there)
+      (unless (and snap (drgnx-kit-sheet--whole-p beg) (drgnx-kit-sheet--whole-p end))
         (set-window-start nil (save-excursion (goto-char beg) (forward-line -1) (point)))
         (drgnx-test-wait-presented)
         (setq snap (drgnx-uitest-snapshot)))
@@ -71,6 +81,10 @@ Returns the number of cells checked."
               (text (round (* s (string-pixel-width (buffer-substring (1+ beg) (1- end)))))))
           (should (equal (list what 'width (+ pads text))
                          (list what 'width (- (drgnx-kit-sheet--x end s edges) (drgnx-kit-sheet--x beg s edges))))))
+        ;; (a') a row is its geometry's height (`:height (density tree-row)'), in device px
+        (when-let* ((h (plist-get (drgnx-ui-kit-geometry id variants) :height)) (h (drgnx-px h nil scale)))
+          (should (equal (list what 'height h)
+                         (list what 'height (round (* s (save-excursion (goto-char beg) (line-pixel-height))))))))
         ;; (b) the fill inside the start pad, halfway in (clear of a focus ring and of a rounded corner)
         (let* ((token (or (plist-get (drgnx-ui-kit-state state) :fill) 'editor))
                (x (+ (drgnx-kit-sheet--x beg s edges) (/ (aref (car spaces) 1) 2))))
@@ -87,6 +101,15 @@ Returns the number of cells checked."
             (when (< x (round (* s (nth 2 edges))))
               (should (equal (list what 'no-shadow (drgnx-kit-sheet--rgb (drgnx-look-token 'editor variant)))
                              (list what 'no-shadow (drgnx-uitest-pixel snap x y)))))))
+        ;; the state table's rows (§7.6): a hovered or selected cell has no edge, so its leftmost column and its top
+        ;; row are its fill (a 1 px ring would show there)
+        (when (and drgnx-kit-sheet--edges (memq state '(hover selected selected-inactive)))
+          (let* ((want (drgnx-kit-sheet--rgb (drgnx-look-token (plist-get (drgnx-ui-kit-state state) :fill) variant)))
+                 (x0 (drgnx-kit-sheet--x beg s edges))
+                 (top (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point beg)))))))
+                 (xm (+ x0 (/ (aref (car spaces) 1) 2))))
+            (should (equal (list what 'left-edge want) (list what 'left-edge (drgnx-uitest-pixel snap x0 y))))
+            (should (equal (list what 'top-edge want) (list what 'top-edge (drgnx-uitest-pixel snap xm top))))))
         (cl-incf n)))
     n))
 
@@ -105,6 +128,7 @@ picture goes to the evidence folder.  The caller skips a session with no graphic
               (let ((drgnx-look-density density))
                 (setq buf (drgnx-kit-catalogue-open id theme density scale))
                 (switch-to-buffer buf)
+                (setq-local cursor-type nil)       ; the cursor sits on a cell's first column, where the edges are read
                 (goto-char (point-min))
                 (drgnx-test-wait-presented)
                 ;; the picture first, so a failing sheet still leaves it
@@ -122,6 +146,12 @@ picture goes to the evidence folder.  The caller skips a session with no graphic
   "The row's sheet: 3 kinds x 7 states, each pad exact and each state's fill its token, in every theme and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'row))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/state-table ()
+  "The state table's rows in every theme and density: each state's fill, and no edge round a hovered or selected row."
+  (skip-unless (display-graphic-p))
+  (let ((drgnx-kit-sheet--edges t))
+    (drgnx-kit-sheet-check 'row)))
 
 (provide 'kit-sheets-gui-test)
 ;;; kit-sheets-gui-test.el ends here
