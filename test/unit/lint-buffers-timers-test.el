@@ -92,12 +92,14 @@ wall-clock timer (`drgnx-lint-bt--timer-start-p')."
   ;; hub's row patches in once it is up: it moves no window.  The draw of rows held in Sjá (`drgnx-view-sja--arm')
   ;; is a view's draw too: only the windows of its own buffer move.  The Buffers panel's send (`drgnx-buffers--queue')
   ;; coalesces a command's set changes into one `buffers/set' to the hub: it changes no buffer and moves no window.
+  ;; A broken rows store's start over (`drgnx-view-sja--broken', 30 s later) only asks the hub for a reset: it follows
+  ;; nothing and moves no window.
   '(("wb/drgnx-buffers.el" drgnx-buffers--queue)
     ("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events drgnx-explorer--rows-hold)
     ("wb/drgnx-monitors.el" drgnx-monitors--later)
     ("wb/drgnx-view.el" drgnx-view--arm drgnx-view--spend drgnx-view--draw-buffer drgnx-view-model--arm)
     ("wb/drgnx-view-nav.el" drgnx-view-nav--arm-notice)
-    ("wb/drgnx-view-sja.el" drgnx-view-sja--arm))
+    ("wb/drgnx-view-sja.el" drgnx-view-sja--arm drgnx-view-sja--broken))
   "Workbench definitions allowed to start a timer: (FILE NAME…).  Idle timers are not listed: they
 run after input, never in the middle of a follow.")
 
