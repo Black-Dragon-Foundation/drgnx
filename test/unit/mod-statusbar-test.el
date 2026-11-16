@@ -411,6 +411,24 @@ follow it when the fonts change."
         (drgnx-statusbar-test--in-buffer #'special-mode
           (should (string-match-p "A · B" (drgnx-statusbar-mode-line))))))))
 
+(ert-deftest drgnx-statusbar/a-special-buffer-keeps-the-global-items ()
+  ;; F24: on Magit, Settings or Extensions the bar was one word (the mode's name): the branch and the problems went.
+  ;; As VS Code, the items that are not about a file stay; the file's own (line, encoding...) do not.
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-define-segment 'branch :fn (lambda () "BR"))
+    (drgnx-statusbar-define-segment 'problems :fn (lambda () "PR"))
+    (drgnx-statusbar-define-segment 'mode :fn (lambda () "MO"))
+    (drgnx-statusbar-define-segment 'position :fn (lambda () "LN"))
+    (let ((drgnx-statusbar-other (default-value 'drgnx-statusbar-other))
+          (drgnx-statusbar-right '(position)))
+      (drgnx-statusbar-test--in-buffer #'special-mode
+        (let ((shown (drgnx-statusbar-mode-line)))
+          (should (stringp shown))
+          (should (string-match-p "MO" shown))
+          (should (string-match-p "BR" shown))
+          (should (string-match-p "PR" shown))
+          (should-not (string-match-p "LN" shown)))))))
+
 (ert-deftest drgnx-statusbar/an-untitled-buffer-gets-the-bar-in-any-language ()
   "New Untitled opens a buffer in `fundamental-mode' with no file: it is an editor all the same (VS Code bars it)."
   (drgnx-statusbar-test--with
