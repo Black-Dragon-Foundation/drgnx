@@ -150,6 +150,30 @@ pub struct TaskEffect {
     pub why: String,
 }
 
+/// `machines/move`: move a job, or a session's next jobs, to another machine.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MoveParams {
+    /// `job:ID` (a job of the queue) or `session:ID` (an agent: its next jobs).
+    pub target: String,
+    /// `local` (this machine) or a runner's name.
+    pub machine: String,
+}
+
+/// `machines/move`'s answer.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MoveResult {
+    /// The move is made: a waiting job waits for the machine named, or the session's next jobs go there. False when
+    /// it was already there, or when it runs and the user is asked first (`card`).
+    pub moved: bool,
+    /// The card asking whether to restart a job that runs (Restart / Keep), by id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<String>,
+    /// What happened, in words ("its next jobs go to laptop").
+    pub said: String,
+}
+
 /// What a conclusion rests on: a file with optional lines, or a page.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -728,6 +752,28 @@ pub const SLOTS_MAX: usize = 256;
 /// The longest a report may stand, in seconds.
 pub const TTL_MAX: f64 = 86_400.0;
 
+fn check_move(p: &MoveParams) -> Result<(), Error> {
+    let target = p.target.as_str();
+    let id = target
+        .strip_prefix("job:")
+        .or_else(|| target.strip_prefix("session:"));
+    if id.is_none_or(|id| id.is_empty() || id.len() > 128) {
+        return Err(invalid("target", "job:ID or session:ID"));
+    }
+    let name = p.machine.as_str();
+    if name.is_empty()
+        || name.len() > NAME_MAX
+        || name == "auto"
+        || name.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(invalid(
+            "machine",
+            "local or a runner's name, of 1 to 64 characters with no spaces",
+        ));
+    }
+    Ok(())
+}
+
 fn check_report(p: &MachineReport) -> Result<(), Error> {
     let name = p.machine.as_str();
     if name.is_empty()
@@ -776,6 +822,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "a machine's slots and who holds them, valid for ttl seconds (jobq reports; an agent may not)",
             check: check_report,
+        ),
+        method!(
+            "machines/move", MachinesMove(MoveParams) -> MoveResult,
+            classes: [User], writes: true,
+            doc: "move a job (job:ID) or an agent's next jobs (session:ID) to a machine: a waiting job is placed there; a running one is never stopped here, a card asks Restart or Keep; an unknown or untrusted machine is refused with why",
+            check: check_move,
         ),
         method!(
             "machines/list", MachinesList(Empty) -> MachinesList,

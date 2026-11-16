@@ -629,6 +629,7 @@ pub(crate) fn job_fact(row: &runstav::methods::exec::ExecRow, keys: Vec<String>)
             .timebox_s
             .map(|s| u32::try_from(s.div_ceil(60)).unwrap_or(u32::MAX)),
         keys,
+        why: row.placed_why.clone().filter(|_| running),
     }
 }
 

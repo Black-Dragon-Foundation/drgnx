@@ -206,6 +206,7 @@
   "job/unblock": ["user"],
   "matrix/check": ["user"],
   "machines/list": ["user"],
+  "machines/move": ["user"],
   "machines/report": ["user"],
   "matrix/get": ["user"],
   "mcp/attach": ["service"],

@@ -274,6 +274,7 @@ params! {
     RecordsConflict(exec::ById),
     RecordsResolve(records::ResolveParams),
     MachinesReport(work::MachineReport),
+    MachinesMove(work::MoveParams),
     MachinesList(Empty),
     WorkConclusions(work::ConclusionsParams),
     ReviewEffects(work::EffectsParams),

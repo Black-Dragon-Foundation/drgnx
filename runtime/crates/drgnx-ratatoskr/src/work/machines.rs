@@ -3,12 +3,16 @@
 //!
 //! [`Registry`] is pure: it takes the time as an argument. [`Machines`] holds one behind the hub's lock, and the
 //! handlers and [`run`] keep it current and send `machines-changed` when the list changed.
+//!
+//! Also `machines/move` ([`move_to`]): the user moves a job, or a session's next jobs, to another machine; a job that
+//! runs is never stopped here, a card asks first and only its Restart moves it ([`card_settled`]).
 
+use crate::agents::session::invalid;
 use crate::clock;
 use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Empty;
-use runstav::methods::work::{Machine, MachineReport, MachinesList, Slot};
+use runstav::methods::work::{Machine, MachineReport, MachinesList, MoveParams, MoveResult, Slot};
 use runstav::wire::Error;
 use serde_json::json;
 use vegvisir::{MachineFact, RunnerFact};
@@ -288,6 +292,110 @@ pub async fn run(f: Arc<Front>) {
     loop {
         clock::sleep(SWEEP).await;
         refresh(&f);
+    }
+}
+
+/// The kind of the card that asks whether to restart a running job on another machine.
+const MOVE_CARD: &str = "machine-move";
+
+/// The card that asks whether to restart job JOB (named NAME), which runs on ON, on TO: Restart or Keep.
+pub fn move_card(job: &str, name: &str, to: &str, on: &str) -> norn::write::cards::NewCard {
+    norn::write::cards::NewCard {
+        job: None,
+        task: None,
+        kind: Some(MOVE_CARD.into()),
+        title: Some(format!("Restart {name} on {to}? It stops the run on {on}")),
+        data: Some(json!({"job": job, "machine": to, "choices": ["restart", "keep"]})),
+    }
+}
+
+/// `machines/move`: a session's next jobs go to the machine; a waiting job is placed there; a running one is asked
+/// about on a card (nothing stops). A machine that can't take it, or a target the hub doesn't hold, is refused.
+pub async fn move_to(f: &Front, _: &Caller, p: MoveParams) -> Result<MoveResult, Error> {
+    use crate::runners::queue::{Machine as To, Moved};
+    let to = To::parse(Some(p.machine.as_str()));
+    let exec = &f.core.exec;
+    if let Some(sid) = p.target.strip_prefix("session:") {
+        f.core
+            .agents
+            .find(sid)
+            .map_err(|_| invalid("target", format!("no session {sid}")))?;
+        exec.prefer(sid, to).map_err(|e| invalid("machine", e))?;
+        return Ok(MoveResult {
+            moved: true,
+            card: None,
+            said: format!("its next jobs go to {}", p.machine),
+        });
+    }
+    let id = p.target.strip_prefix("job:").unwrap_or(&p.target);
+    let row = exec
+        .get(id)
+        .ok_or_else(|| invalid("target", format!("no job {id}")))?;
+    let moved = exec.move_job(id, to).map_err(|e| {
+        let at = if e.starts_with("no job") {
+            "target"
+        } else {
+            "machine"
+        };
+        invalid(at, e)
+    })?;
+    let to = p.machine;
+    Ok(match moved {
+        Moved::Requeued => MoveResult {
+            moved: true,
+            card: None,
+            said: format!("job {id} waits for {to}"),
+        },
+        Moved::Same => MoveResult {
+            moved: false,
+            card: None,
+            said: format!("job {id} is on {to} already"),
+        },
+        Moved::Running(on) => {
+            let name = row.name.clone().unwrap_or_else(|| row.argv.join(" "));
+            let card = move_card(id, &name, &to, &on);
+            let at = clock::wall_secs();
+            let made = f
+                .writer
+                .db
+                .write(
+                    urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "machines/move"),
+                    move |tx| norn::write::cards::card_create(tx, card, at),
+                )
+                .await
+                .map_err(|e| crate::agents::session::internal(e.to_string()))?;
+            f.writer.signals.wrote();
+            MoveResult {
+                moved: false,
+                card: Some(made.to_string()),
+                said: format!("{name} runs on {on}: the card asks whether to restart it on {to}"),
+            }
+        }
+    })
+}
+
+/// Card CARD was settled: a move card's Restart restarts its job on its machine (Keep leaves it running). What went
+/// wrong is the log's; the card is answered either way.
+pub async fn card_settled(f: &Front, card: i64) {
+    let Ok(Some(c)) = f
+        .writer
+        .db
+        .read(move |c| norn::read::cards::card(c, card))
+        .await
+    else {
+        return;
+    };
+    if c.kind.as_deref() != Some(MOVE_CARD) || c.choice.as_deref() != Some("restart") {
+        return;
+    }
+    let data = c.data.unwrap_or_default();
+    let (Some(job), Some(to)) = (data["job"].as_str(), data["machine"].as_str()) else {
+        return;
+    };
+    let to_m = crate::runners::queue::Machine::parse(Some(to));
+    match f.core.exec.restart_on(job, to_m).await {
+        Ok(now) => tracing::info!("job {job}: restarted on {to} as job {now}"),
+        Err(e) => tracing::warn!("job {job}: not restarted on {to}: {e}"),
     }
 }
 

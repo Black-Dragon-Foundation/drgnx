@@ -103,6 +103,37 @@ Press it again for what came since."
                           (display-buffer (current-buffer)))))
                     :deadline 10)))
 
+;;;; Moving work to another machine
+
+(declare-function drgnx-hub-call-sync "drgnx-hub-client" (method params &optional timeout))
+(declare-function drgnx-work-trail--agent-sid "drgnx-work-trail")
+
+(defun drgnx-work-move--target ()
+  "What `drgnx-work-move-machine' moves, as `machines/move' names it: the job on this row of a Detail's queue
+(\"job:ID\"), else the selected agent's session (\"session:ID\": its next jobs), the map's selection in a Detail."
+  (if-let* ((job (get-text-property (line-beginning-position) 'drgnx-work-job)))
+      (concat "job:" job)
+    (concat "session:"
+            (if (and (derived-mode-p 'drgnx-work-detail-mode) (buffer-live-p drgnx-work-detail--map))
+                (with-current-buffer drgnx-work-detail--map (drgnx-work-trail--agent-sid))
+              (drgnx-work-trail--agent-sid)))))
+
+(defun drgnx-work-move--machines ()
+  "The machines work can move to: this one (\"local\") and every runner the hub keeps."
+  (cons "local" (mapcar (lambda (r) (plist-get r :name))
+                        (append (plist-get (drgnx-hub-call-sync "runners/list" nil) :runners) nil))))
+
+(defun drgnx-work-move-machine (target machine)
+  "Move TARGET to MACHINE: the job on this row of a machine's queue, else the selected agent's next jobs.
+A job that waits is placed there; one that runs is not stopped, a card asks whether to restart it there.  The
+machine is asked for here, never from a hook."
+  (interactive
+   (let ((target (drgnx-work-move--target)))
+     (list target (completing-read (format "Move %s to: " target) (drgnx-work-move--machines) nil t))))
+  (drgnx-hub-call "machines/move" (list :target target :machine machine)
+                  (lambda (result err)
+                    (message "Work: %s" (or err (plist-get result :said))))))
+
 (declare-function drgnx-view-env-twin "drgnx-view-env" (class prefixes &optional setup))
 
 (defun drgnx-work-detail--twin (class)
