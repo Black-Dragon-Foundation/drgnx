@@ -23,6 +23,15 @@ pub enum Density {
     Roomy,
 }
 
+/// How the map is drawn: nested rows, or the graph of layers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MapMode {
+    #[default]
+    List,
+    Graph,
+}
+
 /// Which items the map shows (`.` cycles Active, Completed, All).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -150,9 +159,15 @@ pub struct ViewState {
     pub density: Density,
     #[serde(default)]
     pub filters: Filters,
-    /// Collapsed layers, 1–8.
+    /// Collapsed layers, 1–8 (Graph mode).
     #[serde(default)]
     pub collapsed: BTreeSet<u8>,
+    /// List or Graph.
+    #[serde(default)]
+    pub mode: MapMode,
+    /// The specs and plans the List has folded.
+    #[serde(default)]
+    pub list_collapsed: BTreeSet<ItemId>,
 }
 
 /// A view opened, changed, shown, hidden or closed.

@@ -13,6 +13,7 @@ mod chain;
 pub mod fixture;
 mod icons;
 pub mod layout;
+pub mod list;
 pub mod model;
 pub mod nav;
 mod overlap;
@@ -32,8 +33,8 @@ pub use model::{
 };
 pub use overlap::Overlap;
 pub use view::{
-    Density, Filters, Group, RECENT_DAYS, Show, ViewKey, ViewOp, ViewState, Visibility, group,
-    shown,
+    Density, Filters, Group, MapMode, RECENT_DAYS, Show, ViewKey, ViewOp, ViewState, Visibility,
+    group, shown,
 };
 
 /// An item's stable id: `ask:N`, `spec:ID`, `plan:ID`, `task:ID`, `agent:SID`, `agent:SID/TOOLID` (a subagent),

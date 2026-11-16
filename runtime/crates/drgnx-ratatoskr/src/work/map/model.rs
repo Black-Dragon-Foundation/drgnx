@@ -7,12 +7,13 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use vegvisir::layout::Layout;
 use vegvisir::model::Fields;
-use vegvisir::{EdgeKind, ItemId, Kind, Model, nav};
+use vegvisir::{EdgeKind, ItemId, Kind, Model, ViewState, nav};
 
 /// The map's descriptor: the scheme, the chain, what search matches, the lists, classes, flags and forms.
-fn descriptor() -> Value {
+fn descriptor(mode: vegvisir::MapMode) -> Value {
     json!({
         "scheme": "links",
+        "mode": word(&mode),
         "chain_kinds": ["came-from", "edits", "reads", "runs-on"],
         "match_fields": ["label", "task"],
         "lists": ["team", "needs-you", "outline", "plans"],
@@ -59,10 +60,20 @@ pub(crate) fn card_fields(f: &Fields) -> Vec<Value> {
 }
 
 /// The model of the items SENT of model M, laid out by L.
-pub(crate) fn doc(m: &Model, l: &Layout, sent: &BTreeSet<ItemId>) -> Doc {
-    let links = nav::links(m, l, sent);
+pub(crate) fn doc(m: &Model, l: &Layout, sent: &BTreeSet<ItemId>, state: &ViewState) -> Doc {
+    let mut links = nav::links(m, l, sent);
+    // List mode: the arrows walk the rows (up and down), and a row's parent is left
+    if state.mode == vegvisir::MapMode::List {
+        let entries = vegvisir::list::entries(m, state, m.minute());
+        for (id, k) in &mut links {
+            k.up = vegvisir::list::list_prev(&entries, id);
+            k.down = vegvisir::list::list_next(&entries, id);
+            k.left = vegvisir::list::list_parent(&entries, id);
+            k.right = None;
+        }
+    }
     let mut d = Doc {
-        descriptor: descriptor(),
+        descriptor: descriptor(state.mode),
         ..Doc::default()
     };
     // the agents each item overlaps (an agent's `overlaps` field: the ids, space-separated)

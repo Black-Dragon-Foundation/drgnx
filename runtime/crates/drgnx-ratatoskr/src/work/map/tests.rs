@@ -365,6 +365,14 @@ impl Measure for Cols {
     }
 }
 
+/// The state of a Graph-mode view: these tests read the graph's links and rows.
+fn graph_state() -> ViewState {
+    ViewState {
+        mode: vegvisir::MapMode::Graph,
+        ..ViewState::default()
+    }
+}
+
 /// Session I starts (no place: the "No plan" block).
 fn add_session(core: &mut Core, i: u64) {
     let snap: Snapshot =
@@ -396,7 +404,7 @@ fn core_with(n: u64) -> Core {
 fn rows_view(m: &vegvisir::Model, width: u32) -> View {
     let state = ViewState {
         width_units: width,
-        ..ViewState::default()
+        ..graph_state()
     };
     let l = layout::layout(m, &state, None);
     let sent = frame_items(m, &state, &l)
@@ -619,7 +627,7 @@ fn map_model_carries_links_rects_and_lists() {
     let v = &g.views[&key];
     let m = g.spaces["w"].core.model();
     let l = v.layout.as_ref().expect("laid out");
-    let d = model::doc(m, l, &v.sent);
+    let d = model::doc(m, l, &v.sent, &graph_state());
     assert_eq!(d.nodes.len(), v.sent.len());
     let a1 = &d.nodes["agent:s1"];
     let fields = a1["fields"].as_array().expect("fields");
@@ -736,11 +744,11 @@ fn chain_golden_matches_vegvisir() {
     let m = core.model();
     let state = vegvisir::ViewState {
         width_units: 376,
-        ..vegvisir::ViewState::default()
+        ..graph_state()
     };
     let l = vegvisir::layout::layout(m, &state, None);
     let sent: BTreeSet<ItemId> = l.at.keys().cloned().collect();
-    let d = model::doc(m, &l, &sent);
+    let d = model::doc(m, &l, &sent, &graph_state());
     let mut chains = serde_json::Map::new();
     for id in &sent {
         let c = m.chain(id);
@@ -807,7 +815,12 @@ fn map_model_carries_review_fields_overlaps_and_plans() {
         open: true,
     }));
     let v = rows_view(core.model(), 226);
-    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    let d = model::doc(
+        core.model(),
+        v.layout.as_ref().expect("laid out"),
+        &v.sent,
+        &graph_state(),
+    );
     let fields = d.nodes["agent:s1"]["fields"].as_array().expect("fields");
     assert!(
         fields.contains(&json!(["overlaps", "agent:s2"])),
@@ -819,7 +832,12 @@ fn map_model_carries_review_fields_overlaps_and_plans() {
         core.step(e);
     }
     let v = rows_view(core.model(), 376);
-    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    let d = model::doc(
+        core.model(),
+        v.layout.as_ref().expect("laid out"),
+        &v.sent,
+        &graph_state(),
+    );
     let shown: Vec<String> = v
         .sent
         .iter()
@@ -893,7 +911,12 @@ fn the_strip_and_the_needs_you_list_line_up() {
         at("  g5"),
     ];
     assert!(chips.is_sorted(), "{}", rows[0].text);
-    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    let d = model::doc(
+        core.model(),
+        v.layout.as_ref().expect("laid out"),
+        &v.sent,
+        &graph_state(),
+    );
     assert_eq!(
         d.lists["needs-you"],
         vec!["c0", "agent:s2", "agent:s3", "agent:s4", "agent:s1"]
@@ -948,7 +971,12 @@ fn open_huddle_is_on_the_strip_and_the_needs_you_list() {
         "{}",
         rows[0].text
     );
-    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    let d = model::doc(
+        core.model(),
+        v.layout.as_ref().expect("laid out"),
+        &v.sent,
+        &graph_state(),
+    );
     assert_eq!(d.lists["needs-you"], vec!["agent:s1"]);
     assert!(
         core.model().items().values().all(|it| !it.needs_you),
@@ -1537,12 +1565,12 @@ fn a_plan_task_with_a_live_agent_is_a_task_item_linked_both_ways() {
         m,
         &ViewState {
             width_units: 226,
-            ..ViewState::default()
+            ..graph_state()
         },
         None,
     );
     let sent: BTreeSet<ItemId> = m.items().into_keys().collect();
-    let doc = model::doc(m, &l, &sent);
+    let doc = model::doc(m, &l, &sent, &graph_state());
     let node = &doc.nodes["task:t"];
     assert!(
         node["fields"]
@@ -1612,4 +1640,43 @@ async fn a_task_without_a_plan_sits_under_no_plan() {
         vegvisir::Event::Graph(vegvisir::GraphFact::Plan { id, title, .. })
             if id == "no-plan" && title == "No plan"
     )));
+}
+
+/// [D] A map opens in List mode: the model's descriptor says `list`, and the arrows walk the rows.
+#[test]
+fn the_list_is_the_default_mode() {
+    let mut core = Core::new();
+    graph_fact(&mut core, "p", "t");
+    let m = core.model();
+    let state = ViewState::default();
+    assert_eq!(state.mode, vegvisir::MapMode::List);
+    let l = vegvisir::layout::layout(m, &state, None);
+    let sent: BTreeSet<ItemId> = m.items().into_keys().collect();
+    let doc = model::doc(m, &l, &sent, &state);
+    assert_eq!(doc.descriptor["mode"], "list");
+    let graph_doc = model::doc(m, &l, &sent, &graph_state());
+    assert_eq!(graph_doc.descriptor["mode"], "graph");
+}
+
+fn graph_fact(core: &mut Core, plan: &str, task: &str) {
+    graph(
+        core,
+        vegvisir::GraphFact::Plan {
+            id: plan.into(),
+            title: "P".into(),
+            rank: 1,
+            progress: None,
+            updated: 0,
+        },
+    );
+    graph(
+        core,
+        vegvisir::GraphFact::Task {
+            id: task.into(),
+            plan: plan.into(),
+            title: "T".into(),
+            done: false,
+            updated: 0,
+        },
+    );
 }

@@ -111,7 +111,9 @@ appears in the needs-you strip; its key jumps to the agents in it.
   sends it back to its agent with what the gates found, and `w` waives the gates once for that commit, with a reason
   you type, recorded on the task. Only you can waive; no agent or grant can.
 - `f` hides everything not on the selection's chain; while it is on, the arrow keys move inside the chain and ask the
-  hub for nothing. `o` shows only the agents and branches that overlap. `1` to `8` collapse a layer to one thin row
+  hub for nothing. `o` shows only the agents and branches that overlap. The map opens as a **list**: spec, plan and task rows nested, each task with its agent and machine on its row;
+  `m` on the map (or the List · Graph switch) goes to the graph of layers and back, and each project keeps its mode.
+  In the graph, `1` to `8` collapse a layer to one thin row
   with its name and a count, `0` opens them all. `.` (Cycle Work Filter) goes Active, Completed, All: Active is
   agents that run or wait on you, what is not started, and anything that changed within `drgnx-work-recent-days`
   (7); Completed is finished items only, each marked ✓; All is both, the finished ones faded. Each project keeps

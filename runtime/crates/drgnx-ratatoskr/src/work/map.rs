@@ -561,6 +561,13 @@ fn density(d: MapDensity) -> Density {
     }
 }
 
+fn mode_of(m: runstav::methods::work::MapMode) -> vegvisir::MapMode {
+    match m {
+        runstav::methods::work::MapMode::List => vegvisir::MapMode::List,
+        runstav::methods::work::MapMode::Graph => vegvisir::MapMode::Graph,
+    }
+}
+
 fn filters(f: &MapFilters) -> Filters {
     Filters {
         focus: f.focus.clone().map(ItemId),
@@ -650,6 +657,9 @@ fn view_rows(
     let Some(l) = v.layout.as_ref() else {
         return (Vec::new(), Vec::new());
     };
+    // List mode: nested rows (plain text until the kit draws them), the strip above
+    let list = (v.state.mode == vegvisir::MapMode::List)
+        .then(|| vegvisir::list::entries(m, &v.state, m.minute()));
     let items: BTreeMap<ItemId, vegvisir::Item> = v
         .sent
         .iter()
@@ -686,8 +696,12 @@ fn view_rows(
         .collect();
     let (strip, mut images) = render::strip(&scene, &m.needs_you(), &machines, extra, &renv, fonts);
     let mut rows = vec![strip];
-    rows.extend(drawn.rows);
-    images.extend(drawn.images);
+    if let Some(entries) = &list {
+        rows.extend(render::list_rows(entries, v.selected.as_ref()));
+    } else {
+        rows.extend(drawn.rows);
+        images.extend(drawn.images);
+    }
     (rows, images)
 }
 
@@ -1333,7 +1347,10 @@ impl Map {
         let at = self.now_ms();
         let wake = v.marks.note(conclusions, at);
         let new = v.marks.ids();
-        let doc = v.layout.as_ref().map(|l| model::doc(m, l, &v.sent));
+        let doc = v
+            .layout
+            .as_ref()
+            .map(|l| model::doc(m, l, &v.sent, &v.state));
         #[cfg(test)]
         {
             let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1662,6 +1679,8 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
         density: density(p.density),
         filters: filters(&p.filters),
         collapsed: p.collapsed.iter().copied().collect(),
+        mode: mode_of(p.mode),
+        ..ViewState::default()
     };
     let mut g = lock(&map.inner);
     map.open.store(true, Ordering::Relaxed);
@@ -1748,6 +1767,9 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     }
     if let Some(d) = p.density {
         state.density = density(d);
+    }
+    if let Some(md) = p.mode {
+        state.mode = mode_of(md);
     }
     let selected = p.selected.clone().map(ItemId);
     if selected.is_some() {

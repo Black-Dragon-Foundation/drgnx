@@ -108,6 +108,8 @@
 (defvar drgnx-work-space--view)
 (defvar drgnx-work-space--message)
 (defvar drgnx-work-map--filters)
+(defvar drgnx-work-map--list-or-graph)
+(declare-function drgnx-work-map--mode-for "drgnx-work-map")
 (defvar drgnx-work-recent-days)
 (declare-function drgnx-work-map--filters-wire "drgnx-work-map")
 (declare-function drgnx-work-map--show-for "drgnx-work-map")
@@ -201,7 +203,7 @@ it (a notes repository with the code repositories inside it)."
               work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
               work-collapse-layer-5 work-collapse-layer-6 work-collapse-layer-7 work-collapse-layer-8
-              work-expand-layers work-cycle-filter work-search
+              work-expand-layers work-cycle-filter work-mode-list work-mode-graph work-mode-toggle work-search
               work-escape work-take-wheel work-files work-who-is-here
               work-diffs work-diff-quit work-diff-accept-hunk work-diff-reject-hunk)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
@@ -394,10 +396,12 @@ once per map and when the hub is up; when every folder answered, the map shows w
           (if (drgnx-work-map-rows-p)
               (progn (drgnx-work-map-rows-attach (plist-get workspace :id))
                      (setq drgnx-work-map--filters
-                           (list :show (drgnx-work-map--show-for (plist-get workspace :id))))
+                           (list :show (drgnx-work-map--show-for (plist-get workspace :id)))
+                           drgnx-work-map--list-or-graph (drgnx-work-map--mode-for (plist-get workspace :id)))
                      (drgnx-work-client-open (plist-get workspace :id) workspace
                                              :width (drgnx-work-space--width-units)
                                              :density (symbol-name drgnx-work-space-density)
+                                             :mode (symbol-name drgnx-work-map--list-or-graph)
                                              :filters (drgnx-work-map--filters-wire)))
             (setq drgnx-work-space--message drgnx-work-map-no-sja)
             (drgnx-view-attach 'work-map)
@@ -750,6 +754,9 @@ windows; the commands."
                                                  drgnx-work-map-needs-you-here-previous "Cycle the strip's chips backwards")
                    (work-focus "Focus on the Chain" drgnx-work-map-focus "Hide what is not on the selection's chain; again for all")
                    (work-overlaps "Show Overlaps Only" drgnx-work-map-overlaps "Only the agents and branches that overlap")
+                   (work-mode-list "Work: List" drgnx-work-map-mode-list "The map as nested rows: spec, plan, task")
+                   (work-mode-graph "Work: Graph" drgnx-work-map-mode-graph "The map as layers and the edges between them")
+                   (work-mode-toggle "Work: Switch List and Graph" drgnx-work-map-mode-toggle "m on the map does the same")
                    (work-expand-layers "Expand All Layers" drgnx-work-map-expand-layers "Every layer open again")
                    (work-cycle-filter "Cycle Work Filter" drgnx-work-map-cycle-filter "Active, then Completed, then All")
                    (work-search "Narrow the Map" drgnx-work-map-search "Dim what does not match; Enter selects the first match")

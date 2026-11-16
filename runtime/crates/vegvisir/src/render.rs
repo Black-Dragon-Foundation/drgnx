@@ -1488,6 +1488,65 @@ fn outline_block(s: &Scene, id: &ItemId, cols: usize, env: &Env) -> Vec<Line> {
     lines
 }
 
+/// The rows of List mode: one per entry, keyed `list:N`, a fold mark and the label indented by depth (canonical
+/// characters, never pixels), a task's state glyph and word, then its agent, machine and chips. Each carries its
+/// item's id, which the editor's keys and clicks read. The kit draws these rows later; this is the plain form.
+pub fn list_rows(entries: &[crate::list::ListEntry], selected: Option<&ItemId>) -> Vec<Row> {
+    use crate::list::ListChip;
+    entries
+        .iter()
+        .enumerate()
+        .map(|(n, e)| {
+            let mut b = RowBuilder::new(format!("list:{n}"));
+            let start = b.pos();
+            b.push(&"  ".repeat(usize::from(e.depth)), None);
+            let fold = match (e.depth, e.collapsed) {
+                (2, _) => "",
+                (_, true) => "▸ ",
+                _ => "▾ ",
+            };
+            b.push(fold, None);
+            if let Some(s) = e.chips.iter().find_map(|c| match c {
+                ListChip::State(s) => Some(*s),
+                _ => None,
+            }) {
+                b.push(&format!("{} ", s.glyph()), None);
+            }
+            b.push(&e.label, None);
+            if let Some(n) = e.count {
+                b.push(&format!(" · {n}"), None);
+            }
+            for c in &e.chips {
+                match c {
+                    ListChip::State(s) => b.push(&format!("  {}", s.word()), None),
+                    ListChip::Branch(x) => b.push(&format!("  ⑂ {x}"), None),
+                    ListChip::Files(f, l) => b.push(&format!("  {f} files {l} lines"), None),
+                    ListChip::Progress(d, t) => b.push(&format!("  {d}/{t}"), None),
+                };
+            }
+            if let Some(a) = &e.agent {
+                b.push(
+                    &format!("  {}", a.as_str().trim_start_matches("agent:")),
+                    None,
+                );
+            }
+            if let Some(m) = &e.machine {
+                b.push(&format!("  on {m}"), None);
+            }
+            let end = b.pos();
+            b.face(start, end, "drgnx-work-card");
+            if e.visibility == crate::Visibility::Faded {
+                b.face(start, end, "drgnx-work-dim");
+            }
+            if selected == Some(&e.item) {
+                b.face(start, end, "drgnx-selected");
+            }
+            b.prop(start, end, "drgnx-work-id", Value::String(e.item.0.clone()));
+            b.finish()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

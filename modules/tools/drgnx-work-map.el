@@ -65,6 +65,34 @@ you, and approved specs and plans not yet started; Completed holds finished item
 
 (defconst drgnx-work-map--shows '(active completed all) "What `drgnx-work-map-cycle-filter' goes through.")
 
+(defvar drgnx-work-map--mode-by-project nil
+  "An alist (WORKSPACE-ID . MODE): each project's choice of `list' or `graph', kept in the saved workbench.")
+
+(defvar-local drgnx-work-map--list-or-graph nil "This map's mode, `list' (nil) or `graph'.")
+
+(defun drgnx-work-map--mode ()
+  "This map's mode: `list' (the default) or `graph'."
+  (or drgnx-work-map--list-or-graph 'list))
+
+(defun drgnx-work-map--mode-for (id)
+  "The mode kept for the project (workspace id) ID."
+  (or (cdr (assoc id drgnx-work-map--mode-by-project)) 'list))
+
+(defun drgnx-work-map-set-mode (mode)
+  "Show the map as MODE, `list' or `graph'; the project keeps it."
+  (setq drgnx-work-map--list-or-graph mode)
+  (when drgnx-work-space--view
+    (setf (alist-get drgnx-work-space--view drgnx-work-map--mode-by-project nil nil #'equal) mode)
+    (drgnx-work-client-set drgnx-work-space--view :mode (symbol-name mode))))
+
+(defun drgnx-work-map-mode-list () "Show the map as a list." (interactive) (drgnx-work-map-set-mode 'list))
+(defun drgnx-work-map-mode-graph () "Show the map as a graph." (interactive) (drgnx-work-map-set-mode 'graph))
+
+(defun drgnx-work-map-mode-toggle ()
+  "Switch the map between its list and its graph."
+  (interactive)
+  (drgnx-work-map-set-mode (if (eq (drgnx-work-map--mode) 'list) 'graph 'list)))
+
 (defvar drgnx-work-map--show-by-project nil
   "An alist (WORKSPACE-ID . SHOW): each project's choice of Active, Completed or All, kept in the saved workbench.")
 
@@ -85,8 +113,10 @@ you, and approved specs and plans not yet started; Completed holds finished item
 
 (defun drgnx-work-map--persist-state ()
   "The projects' choices for `drgnx-persist-state-functions': (:work-show ALIST), or nothing before any choice."
-  (when drgnx-work-map--show-by-project
-    (list :work-show (copy-alist drgnx-work-map--show-by-project))))
+  (append (and drgnx-work-map--show-by-project
+               (list :work-show (copy-alist drgnx-work-map--show-by-project)))
+          (and drgnx-work-map--mode-by-project
+               (list :work-mode (copy-alist drgnx-work-map--mode-by-project)))))
 
 (defun drgnx-work-map--adopt-show (frame)
   "`drgnx-persist-after-restore-functions': take the projects' choices saved with FRAME's workbench.  Never prompts."
@@ -94,7 +124,12 @@ you, and approved specs and plans not yet started; Completed holds finished item
     (when (proper-list-p saved)
       (dolist (e saved)
         (when (and (consp e) (stringp (car e)) (memq (cdr e) drgnx-work-map--shows))
-          (setf (alist-get (car e) drgnx-work-map--show-by-project nil nil #'equal) (cdr e)))))))
+          (setf (alist-get (car e) drgnx-work-map--show-by-project nil nil #'equal) (cdr e)))))
+    (let ((modes (plist-get (frame-parameter frame 'drgnx-persist-extra) :work-mode)))
+      (when (proper-list-p modes)
+        (dolist (e modes)
+          (when (and (consp e) (stringp (car e)) (memq (cdr e) '(list graph)))
+            (setf (alist-get (car e) drgnx-work-map--mode-by-project nil nil #'equal) (cdr e))))))))
 (defvar-local drgnx-work-map--asked nil
   "Non-nil from a layout the user asked for (`drgnx-work-map--send-filters') until the hub answers it.")
 (defvar-local drgnx-work-map--needs-at 0 "The index of the strip entry `n' selected last.")
