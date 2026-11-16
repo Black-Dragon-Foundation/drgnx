@@ -55,6 +55,7 @@
 (drgnx-look-gui-deftest drgnx-ui-look-open-hover/the-pointer-on-a-row-turns-its-dot-into-the-close ()
   "A file with unsaved changes in the Open section: the pointer on its row makes it the hovered row (× in place of ●),
 and off the row, not."
+  :tags '(:compositor)
   (skip-unless (display-graphic-p))
   (skip-unless (boundp 'mouse-sensor-enabled))
   (skip-unless (eq t (drgnx-uitest-pointer-set 0 0)))
