@@ -231,11 +231,15 @@ new width over its own; the thumb names a face, so a theme change needs nothing 
 
 ;;;; The minimap (modules/editor/drgnx-minimap.el)
 
+(defvar drgnx-hub--events)
+
 (defmacro ruler-test--with-minimap (&rest body)
   "BODY as `ruler-test--with-scrollbar', the buffer visiting a file, with the minimap's placement hooked and the
 hub's connection taken as up: CALLS holds the hub calls made, (METHOD PARAMS) each, oldest first."
   (declare (indent 0))
-  `(let ((calls nil) (file (make-temp-file "drgnx-minimap" nil ".el")))
+  `(let ((calls nil) (file (make-temp-file "drgnx-minimap" nil ".el"))
+         ;; the hub's connection as the calls name it (the hub client is not loaded here: nothing loads it inside)
+         (drgnx-hub--events 'ruler-test-hub))
      (load (expand-file-name "modules/editor/drgnx-minimap" drgnx-dir) nil t)
      (cl-letf (((symbol-function 'drgnx-minimap--hub-p) (lambda () t))
                ((symbol-function 'drgnx-hub--call-on)
