@@ -21,6 +21,8 @@
 (declare-function drgnx-term-start-directory "drgnx-term" (dir))
 (declare-function drgnx-term-usable-p "drgnx-term")
 (declare-function drgnx-wb-area-toggle-tab "drgnx-area" (area tab &optional start))
+(declare-function drgnx-wb-define-tab "drgnx-area")
+(declare-function drgnx-wb-editor-window "drgnx-wb")
 
 (defun drgnx-terminal-shell ()
   "The user's shell: $SHELL when it names an executable file, else `shell-file-name'."
@@ -86,6 +88,12 @@ the tab has none; pressed while the tab shows, the panel hides."
   (interactive)
   (drgnx-wb-area-toggle-tab 'panel 'terminal #'drgnx-terminal-new))
 
+(defun drgnx-terminal--tab-start ()
+  "The panel's Terminal tab was clicked with no terminal: a new one, from the editor's folder (the click's buffer is
+the tab's placeholder, whose folder is wherever it was made)."
+  (with-current-buffer (window-buffer (drgnx-wb-editor-window))
+    (drgnx-terminal-new)))
+
 (defun drgnx-terminal-here ()
   "A new terminal in the folder of the Explorer row (or of this file)."
   (interactive)
@@ -98,6 +106,9 @@ the tab has none; pressed while the tab shows, the panel hides."
                      :stage 'startup
                      :setup
                      (lambda ()
+                       (require 'drgnx-area)
+                       ;; a click on the Terminal tab with no terminal opens one, as VS Code's
+                       (drgnx-wb-define-tab 'panel 'terminal :start #'drgnx-terminal--tab-start)
                        (drgnx-command-define 'terminal-new :category "Terminal" :title "New Terminal" :scope 'window
                                              :command #'drgnx-terminal-new :doc "A new terminal in the panel")
                        (drgnx-command-define 'terminal-toggle :category "Terminal" :title "Toggle Terminal" :scope 'window
