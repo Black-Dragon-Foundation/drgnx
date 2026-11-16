@@ -61,7 +61,7 @@ impl Kind {
         }
     }
 
-    fn face(self) -> &'static str {
+    pub(super) fn face(self) -> &'static str {
         match self {
             Kind::Ignored => "drgnx-git-ignored",
             Kind::Untracked | Kind::Added => "drgnx-git-added",

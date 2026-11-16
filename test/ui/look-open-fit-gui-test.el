@@ -100,6 +100,53 @@ that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel le
       (dolist (b (list drgnx-buffers-buffer-name drgnx-explorer-buffer-name)) (when (get-buffer b) (kill-buffer b)))
       (delete-directory dir t))))
 
+(drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-folded-open-shows-its-whole-header-under-the-island ()
+  "The user's side bar, 2026-11-16 (6.png, 7.png): Open folded (as it starts) is the dock's top window, under the
+island header, and its header row was half hidden under the Files header.  Settled, the folded row is drawn whole:
+fully visible, the window's body at least the row's height."
+  (let* ((root (drgnx-uitest-root-frame))
+         (dir (file-name-as-directory (make-temp-file "look-open-folded" t)))
+         (config (with-selected-frame root (current-window-configuration)))
+         (drgnx-wb--sections nil)
+         (drgnx-wb--collapsed nil)                           ; Open as it starts: folded
+         (drgnx-explorer--roots (list dir)))
+    (unwind-protect
+        (with-selected-frame root
+          (delete-other-windows)
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (drgnx-look-density-on)
+          (drgnx-state-mode 1)
+          (drgnx-ui-hub-start drgnx-ui-look-open-fit--repo)
+          (let ((drgnx-modules--current 'look-open-fit-row) (drgnx-modules--setup-load load-file-name))
+            (drgnx-buffers-setup)
+            (drgnx-explorer-setup))
+          (drgnx-signal--flush)
+          (drgnx-wb-show-sidebar)
+          (drgnx-ui-look-open-fit--settle)
+          (let ((w (drgnx-wb-section-window 'buffers)))
+            (should (window-live-p w))
+            (should (window-parameter w 'drgnx-folded))
+            (should (window-parameter w 'drgnx-wb-island))    ; the island header is on it: the dock's top window
+            (let ((vis (pos-visible-in-window-p 1 w t)))
+              (should vis)
+              (unless (= 2 (length vis))                       ; fully visible: no part of the row cut off
+                (ert-fail (list "the folded row is cut" :vis vis :body (window-body-height w t)
+                                :line (with-selected-window w (line-pixel-height))
+                                :row (drgnx-wb--row-px root) :tab (window-tab-line-height w)
+                                :total (window-pixel-height w)))))
+            (should (>= (window-body-height w t) (with-selected-window w (line-pixel-height))))))
+      (drgnx-wb-hide-sidebar)
+      (dolist (u (alist-get 'look-open-fit-row drgnx-modules--stacks)) (funcall (cdr u)))
+      (setf (alist-get 'look-open-fit-row drgnx-modules--stacks nil t) nil)
+      (drgnx-state-mode -1)
+      (drgnx-ui-hub-stop)
+      (drgnx-look-density-off)
+      (mapc #'disable-theme custom-enabled-themes)
+      (with-selected-frame root (set-window-configuration config))
+      (dolist (b (list drgnx-buffers-buffer-name drgnx-explorer-buffer-name)) (when (get-buffer b) (kill-buffer b)))
+      (delete-directory dir t))))
+
 (defun drgnx-ui-look-open-fit--squeezed-grows (rows)
   "A dock window squeezed below its tab line (the island header, taller once its font is measured) and header line,
 drawn so, then grown, with ROWS (the Open rows arrived) or with its buffer as it was (a fit after the header grew): an

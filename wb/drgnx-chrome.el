@@ -140,6 +140,32 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
   "The icon name (an `etc/icons' name, as `server') this buffer's tab shows; nil: the file kind of its file's or
 buffer's name (`drgnx-look-file-icon-name').  A remote terminal sets `server'.")
 
+(defvar-local drgnx-chrome-tab-title nil
+  "The title this buffer's tab shows, or nil: the file's name, or a special page's name made readable
+\(`drgnx-chrome-tab-title').")
+
+(defconst drgnx-chrome--titles '(("drgnx start" . "Welcome"))
+  "Special pages whose readable name is not their buffer name's words.")
+
+(defun drgnx-chrome-tab-title (b)
+  "The title of buffer B's tab (audit G3): its own `drgnx-chrome-tab-title', else its name, with a special page's
+`*drgnx settings*' read as \"Settings\" (the stars and drgnx's prefix gone, each word capitalised: \"Keyboard
+Shortcuts\", \"Extensions\", the start page \"Welcome\").  A file's buffer keeps its name."
+  (cond ((buffer-local-value 'drgnx-chrome-tab-title b))
+        ((buffer-file-name b) (buffer-name b))
+        (t (drgnx-chrome-title-of-name (buffer-name b)))))
+
+(defun drgnx-chrome-title-of-name (name)
+  "The tab title of a buffer called NAME that visits no file and names no title of its own (`drgnx-chrome-tab-title'):
+`*drgnx settings*' reads \"Settings\"; a name without stars stays."
+  (if (string-match "\\`\\*\\(.+?\\)\\*\\(<[0-9]+>\\)?\\'" name)
+      (let ((words (match-string 1 name)) (n (match-string 2 name)))
+        (concat (or (cdr (assoc words drgnx-chrome--titles))
+                    (let ((w (string-remove-prefix "drgnx " words)))
+                      (if (let ((case-fold-search nil)) (string-match-p "[A-Z]" w)) w (upcase-initials w))))
+                (if n (concat " " n) "")))
+    name))
+
 (defvar drgnx-chrome--tab-map
   (let ((m (make-sparse-keymap)))
     (define-key m [tab-line mouse-1] #'drgnx-chrome--select-tab)
@@ -217,7 +243,7 @@ shown tab is lifted off the row (PAINT's LIFT), the others are on its hairline (
                   (concat
                    (funcall tab (concat (funcall pad 10)
                                         (and icon (not (string-empty-p icon)) (concat icon (funcall pad 7)))
-                                        (drgnx-chrome--text (buffer-name b))
+                                        (drgnx-chrome--text (drgnx-chrome-tab-title b))
                                         (funcall pad 7)))
                    (funcall close
                             (concat (propertize (funcall pad 2) 'face face)
@@ -227,7 +253,7 @@ shown tab is lifted off the row (PAINT's LIFT), the others are on its hairline (
                                     (propertize (funcall pad 2) 'face face)))
                    (funcall close (propertize (funcall pad 8) 'face face))))
               (concat
-               (funcall tab (format "  %s" (drgnx-chrome--text (buffer-name b))))
+               (funcall tab (format "  %s" (drgnx-chrome--text (drgnx-chrome-tab-title b))))
                (when modified (propertize " ●" 'face (cons 'drgnx-text-muted (ensure-list face))
                                           'help-echo "Show; middle-click closes" 'local-map drgnx-chrome--tab-map))
                (funcall tab " ")

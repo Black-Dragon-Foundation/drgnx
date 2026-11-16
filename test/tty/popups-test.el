@@ -24,8 +24,8 @@
 
 (defun drgnx-tty-popups-test--ready (sess &optional close)
   "Wait until SESS shows the workbench: the *scratch* tab with its CLOSE mark (default: ×; a UTF-8 terminal
-keeps the glyph)."
-  (drgnx-tty-session-wait-screen sess (concat "\\*scratch\\* " (or close "×")) 20))
+keeps the glyph), its title as SESS draws it (`drgnx-tty-session-wait-tab')."
+  (drgnx-tty-session-wait-tab sess (or close "×") 20))
 
 (defun drgnx-tty-popups-test--corfu-dirs ()
   "The corfu and compat directories (the version etc/drgnx.lock.eld pins, when there), read-only; the test is
@@ -33,7 +33,8 @@ skipped, saying how to supply them, when they are not there."
   (drgnx-tty-session-require-packages '(corfu compat)))
 
 (defun drgnx-tty-popups-test--round (sess open shown close)
-  "OPEN a popup (a function), wait until SHOWN (a form) holds in the inner Emacs, then CLOSE it.  Opened, the
+  "OPEN a popup (a function), wait until SHOWN (a form) holds in the inner Emacs, then CLOSE it once the Emacs waits
+for input (`drgnx-tty-session-input-barrier').  Opened, the
 screen and the windows' edges differ from before; closed, every window has its buffer and edges again and the
 frame count is what it was."
   (let* ((before (drgnx-tty-session-eval sess drgnx-tty-popups-test--state))
@@ -44,6 +45,9 @@ frame count is what it was."
           (open-state (drgnx-tty-session-eval sess drgnx-tty-popups-test--state)))
       (should-not (equal screen-before screen-open))
       (should-not (equal (plist-get before :windows) (plist-get open-state :windows))))
+    ;; the evals above leave Lisp running behind them (their connection's sentinel, a redisplay): a C-g that arrives
+    ;; then is a quit of that Lisp ("[Quit]" in the minibuffer, which stays), not the key that ends the prompt
+    (drgnx-tty-session-input-barrier sess)
     (funcall close)
     (drgnx-tty-session-wait sess `(equal ',(plist-get before :windows) ,drgnx-tty-popups-test--windows) 10)
     (should (equal (plist-get before :frames)
@@ -339,7 +343,7 @@ pending, corfu's auto timer run, and no other timer due within 1 s.")
       (let ((screen (drgnx-tty-session-quiet c)))
         (should-not (string-match-p "\\\\u[0-9A-F]\\{4\\}" screen))
         (should-not (string-match-p "[^[:ascii:]]" screen)))
-      (should (drgnx-tty-session-find s "\\*scratch\\* ×"))
+      (should (drgnx-tty-session-find s (drgnx-tty-session-tab-regexp s "×")))
       (should-not (string-match-p "\\\\u[0-9A-F]\\{4\\}" (drgnx-tty-session-screen s)))
       ;; the ASCII hooks are there while that client is, and go with it
       (should (drgnx-tty-session-eval s '(and (memq 'drgnx-tty-popups--pre-redisplay pre-redisplay-functions) t)))
@@ -356,6 +360,6 @@ pending, corfu's auto timer run, and no other timer due within 1 s.")
     (should-not (drgnx-tty-session-eval s '(or (memq 'drgnx-tty-popups--pre-redisplay pre-redisplay-functions)
                                                (memq 'drgnx-tty-popups--windows-changed window-configuration-change-hook)
                                                (advice-member-p #'drgnx-tty-popups--chrome-set 'drgnx-chrome--set))))
-    (should (drgnx-tty-session-find s "\\*scratch\\* ×"))))
+    (should (drgnx-tty-session-find s (drgnx-tty-session-tab-regexp s "×")))))
 
 ;;; popups-test.el ends here

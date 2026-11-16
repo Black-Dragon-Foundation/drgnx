@@ -550,9 +550,13 @@ per `drgnx-view-delay')."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq drgnx-work-map--asked nil)
-      (when (and (not err) drgnx-view-patch)
-        ;; the layout the user asked for moves (`drgnx-work-map--motion-frame'); live patches never call this
-        (if drgnx-work-map--motion (drgnx-work-map--motion-frame) (drgnx-view-hurry drgnx-view))))))
+      (cond ((or err (not drgnx-view-patch))
+             ;; no answer is coming (the hub failed it, the call's deadline passed, the connection went): no capture
+             ;; is left behind
+             (drgnx-work-map-motion-clear))
+            ;; the layout the user asked for moves (`drgnx-work-map--motion-frame'); live patches never call this
+            (drgnx-work-map--motion (drgnx-work-map--motion-frame))
+            (t (drgnx-view-hurry drgnx-view))))))
 
 (defun drgnx-work-map-focus ()
   "Hide what is not on the selection's chain; again, or with nothing selected, show everything.  While focused, the
@@ -710,16 +714,14 @@ cannot move here (`drgnx-work-map--motion-p') or shows no card (the outline): th
           (push (list w rects) windows)))
       (when windows
         (drgnx-timer-cancel (cons 'work-motion-end drgnx-work-space--view))
-        (setq drgnx-work-map--motion (cons (drgnx-work-map--drawn-ids) windows))
-        ;; an answer that never comes (no hub) leaves no capture behind
-        (drgnx-timer-start (cons 'work-motion-expire drgnx-work-space--view) 1 #'drgnx-work-map--motion-expire
-                           :args (list (current-buffer)) :owner (current-buffer))))))
+        ;; it waits for the hub's answer however long that takes: the call answers once, with its result or its
+        ;; failure (`drgnx-work-map--answered'), and a call never sent answers at once (`drgnx-work-client-set-then')
+        (setq drgnx-work-map--motion (cons (drgnx-work-map--drawn-ids) windows))))))
 
 (defun drgnx-work-map--motion-frame ()
   "The hub answered the layout the user asked for (its patches came first, on the same connection): it is drawn now
 when every window's old picture is held, else one period later (`drgnx-work-map--motion-settle'), moving where it is
 held."
-  (drgnx-timer-cancel (cons 'work-motion-expire drgnx-work-space--view))
   (unless (drgnx-work-map--motion-try (current-buffer))
     (drgnx-timer-poll (cons 'work-motion drgnx-work-space--view) drgnx-work-map--motion-period
                       #'drgnx-work-map--motion-try :deadline drgnx-work-map--motion-period
@@ -808,19 +810,12 @@ too (they were made with the capture and motion parameters)."
     (with-current-buffer buffer
       (unless drgnx-work-map--motion (drgnx-work-map--motion-off)))))
 
-(defun drgnx-work-map--motion-expire (buffer)
-  "The timer function a second after a layout was asked for and its frame did not come: the captures go."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (setq drgnx-work-map--motion nil)
-      (drgnx-work-map--motion-off))))
-
 (defun drgnx-work-map-motion-clear (&optional buffer)
   "Stop BUFFER's (default: the current) map motion: nothing waits, its timers stop and its windows lose the capture
 and the motion.  The module's teardown and a map buffer's end call it."
   (with-current-buffer (or buffer (current-buffer))
     (when drgnx-work-space--view
-      (dolist (k '(work-motion work-motion-expire work-motion-end))
+      (dolist (k '(work-motion work-motion-end))
         (drgnx-timer-cancel (cons k drgnx-work-space--view))))
     (setq drgnx-work-map--motion nil)
     (drgnx-work-map--motion-off)))

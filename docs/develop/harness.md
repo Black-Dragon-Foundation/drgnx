@@ -53,7 +53,10 @@ failure, `leak FILE-test.el`, naming each leftover (and the file that defined it
 processes, buffers, features, the default `mode-line-format`, `header-line-format` and `tab-line-format`, the global
 keymap (`current-global-map` and every binding in it; a prefix bound to an autoloaded keymap, like `kmacro-keymap`, is
 one binding, not walked: the scan loads no library), `minor-mode-map-alist`, and the selected frame's parameters and
-the number of frames. The allowlist is the census's (`test/leaks-allowed.eld`); native compilation's `Compiling:`
+the frames themselves (each by its name, child frames too) and the number of root frames (not of child frames: a
+pooled child frame the allowlist names, like quick help's card, would still count). A test that turns on a package
+whose child frames it shows (corfu, eldoc-box, posframe, mini-frame) deletes them in its teardown; the package makes
+them again. The allowlist is the census's (`test/leaks-allowed.eld`); native compilation's `Compiling:`
 jobs are on it, any other process is named. It works in one Emacs or per file, in any
 launcher: it reads state, not how the session was started. The fixtures `test/fixtures/file-leaks/` and the rows
 `drgnx-run-ert/a-file-that-...` show it red (a file that leaks a mode-line entry, a key, a header line, a frame
@@ -1125,6 +1128,10 @@ gets `DRGNX_RATATOSKR_BIN`. A session starts no hub (`DRGNX_NO_HUB_START`): drgn
 foreground once (`serve --foreground --parent-pid`, ended with the session), connects, and before a scenario acts
 waits for the hub's rows of the new fixture's root with the editor's file revealed (30 s, setup only: the error names
 the root, the file and the rows drawn). Without a hub binary the driver says so instead of drawing nothing.
+
+**Screenshots.** `--container --scenario` mounts the evidence folder as `--container --ui` does
+(`DRGNX_UI_EVIDENCE_DIR`, default `.claude/tmp/ui-evidence/<time>`): every screenshot the harness exports is copied
+there, and a scenario may copy its own (the Source Control one names a file per step and scale).
 
 **Known reds.** `test/scenario/known-red.eld` lists, per configuration, scenarios expected to fail
 (`((gryphn drgnx-scenario/explorer-click-stays …))`). Such a scenario counts as expected only if it fails an

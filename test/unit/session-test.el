@@ -200,9 +200,10 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (drgnx-explorer-buffer-name " *drgnx-session-test-explorer*")
         (dir (file-name-as-directory (make-temp-file "drgnx-session-open" t)))
+        (drgnx-session-recent-folders-file (make-temp-file "drgnx-session-recent" nil ".eld"))
         roots asked)
     (unwind-protect
-        (cl-letf (((symbol-function 'read-directory-name) (lambda (&rest _) (setq asked t) dir))
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (setq asked t) dir))   ; a typed path
                   ((symbol-function 'drgnx-session-raise) #'ignore)
                   ((symbol-function 'drgnx-explorer-roots) (lambda () nil))
                   ((symbol-function 'drgnx-explorer-set-roots) (lambda (r) (setq roots r)))
@@ -217,6 +218,71 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
           (drgnx-session-open-folder dir)
           (should-not asked))
       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+      (delete-file drgnx-session-recent-folders-file)
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-session/open-folder-offers-browse-and-the-recent-folders ()
+  ;; Audit L3: Open Folder… is the palette's box (category drgnx-folder) with Browse… first, then the folders opened
+  ;; last, newest first, without repeats, at most ten; a folder that is gone drops off; a typed folder is taken.
+  (let* ((drgnx-session-recent-folders-file (make-temp-file "drgnx-session-recent" nil ".eld"))
+         (top (file-name-as-directory (make-temp-file "drgnx-session-recent" t)))
+         (dirs (mapcar (lambda (i) (let ((d (file-name-as-directory (expand-file-name (format "d%d" i) top))))
+                                     (make-directory d) d))
+                       (number-sequence 1 12)))
+         seen)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-explorer-open-root) #'ignore)
+                  ((symbol-function 'drgnx-explorer-focus) #'ignore)
+                  ((symbol-function 'drgnx-session-raise) #'ignore)
+                  ((symbol-function 'completing-read)
+                   (lambda (_prompt table &rest _)
+                     (setq seen (list (completion-metadata-get (funcall table "" nil 'metadata) 'category)
+                                      (all-completions "" table)
+                                      (funcall (completion-metadata-get (funcall table "" nil 'metadata)
+                                                                        'affixation-function)
+                                               (all-completions "" table))))
+                     (nth 2 (all-completions "" table)))))
+          (let ((drgnx-explorer-buffer-name " *drgnx-session-test-explorer*"))
+            (get-buffer-create drgnx-explorer-buffer-name)
+            (dolist (d dirs) (drgnx-session-open-folder d))
+            (drgnx-session-open-folder (nth 3 dirs))          ; opened again: first, and listed once
+            (kill-buffer drgnx-explorer-buffer-name))
+          (delete-directory (nth 11 dirs))                     ; gone: dropped
+          (let ((recent (drgnx-session-recent-folders)))
+            (should (equal (car recent) (abbreviate-file-name (nth 3 dirs))))
+            (should (= (length recent) 9))
+            (should-not (member (abbreviate-file-name (nth 11 dirs)) recent))
+            (should (equal (seq-uniq recent) recent))
+            ;; the box: Browse… then the recent folders, in that order
+            (should (equal (drgnx-session-read-folder) (nth 1 recent)))
+            (should (eq (nth 0 seen) 'drgnx-folder))
+            (should (equal (nth 1 seen) (cons "Browse…" recent)))
+            ;; a row shows the folder's name, its parent beside it
+            (let ((row (nth 1 (nth 2 seen))))
+              (should (string-suffix-p " d4" (substring-no-properties (nth 0 row))))
+              (should (string-match-p (regexp-quote (abbreviate-file-name top)) (substring-no-properties (nth 2 row)))))))
+      (delete-file drgnx-session-recent-folders-file)
+      (delete-directory top t))))
+
+(ert-deftest drgnx-session/open-folder-browse-uses-the-folder-dialog ()
+  ;; Audit L3: Browse… opens the desktop's folder dialog in a graphical frame (folders only); a typed path to a folder
+  ;; is taken as it is, and one that is not a folder is refused.
+  (let ((drgnx-session-recent-folders-file (make-temp-file "drgnx-session-recent" nil ".eld"))
+        (dir (file-name-as-directory (make-temp-file "drgnx-session-browse" t)))
+        (answer "Browse…") dialog)
+    (unwind-protect
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) answer))
+                  ((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                  ((symbol-function 'x-file-dialog)
+                   (lambda (_prompt _dir &optional _default mustmatch only-dir) (setq dialog (list mustmatch only-dir)) dir)))
+          (should (equal (drgnx-session-read-folder) dir))
+          (should (equal dialog '(t t)))
+          (setq answer (directory-file-name dir) dialog nil)
+          (should (equal (drgnx-session-read-folder) (directory-file-name dir)))
+          (should-not dialog)
+          (setq answer (expand-file-name "no-such-folder" dir))
+          (should-error (drgnx-session-read-folder) :type 'user-error))
+      (delete-file drgnx-session-recent-folders-file)
       (delete-directory dir t))))
 
 (ert-deftest drgnx-session/a-folder-opened-in-a-terminal-frame-opens-there ()

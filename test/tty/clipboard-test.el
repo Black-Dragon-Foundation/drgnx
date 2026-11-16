@@ -18,7 +18,7 @@
 
 (defun drgnx-tty-clip-test--ready (sess)
   "Wait until SESS's Emacs has set its terminal up (the workbench is on the screen); log what it writes."
-  (drgnx-tty-session-wait-screen sess "\\*scratch\\* ×" 20)
+  (drgnx-tty-session-wait-tab sess "×" 20)
   (drgnx-tty-session-eval sess drgnx-tty-clip-test--log))
 
 (defun drgnx-tty-clip-test--copy (sess text)

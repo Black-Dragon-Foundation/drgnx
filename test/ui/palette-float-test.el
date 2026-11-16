@@ -48,7 +48,9 @@
      (require 'drgnx-palette) (require 'drgnx-palette-frame)
      (load (expand-file-name "modules/ui/drgnx-look" drgnx-palette-float-test--repo) nil t)
      (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-           (vertico-multiform-categories (list (cons 'drgnx-command drgnx-palette-frame-multiform)))
+           (vertico-multiform-categories (list (cons 'drgnx-command drgnx-palette-frame-multiform)
+                                               (cons 'drgnx-file drgnx-palette-frame-multiform)
+                                               (cons 'drgnx-folder drgnx-palette-frame-multiform)))
            (was-vertico (bound-and-true-p vertico-mode)) (was-multiform (bound-and-true-p vertico-multiform-mode))
            (drgnx-palette-float-test--ran nil))
        (drgnx-command-define 'it :title "Do It" :category "Test" :command #'drgnx-palette-float-test--run-it)
@@ -64,6 +66,9 @@
          (unless was-multiform (vertico-multiform-mode -1))
          (unless was-vertico (vertico-mode -1))
          (drgnx-palette-frame-delete)))))
+
+(defvar drgnx-palette-float-test--open #'drgnx-palette
+  "What `drgnx-palette-float-test--reading' opens: the palette, or Quick Open (its files mode).")
 
 (defun drgnx-palette-float-test--reading (typed probe &optional ending)
   "Call `drgnx-palette' while TYPED arrives as keys; PROBE runs once the minibuffer holds them.
@@ -88,7 +93,7 @@ module stages are over first: C-g ends the read."
                     (setq result (condition-case err (list :ok (funcall probe)) (error (list :error err))))
                     (setq unread-command-events (or ending (list ?\C-g))))))
     (minibuffer-with-setup-hook setup
-      (condition-case nil (drgnx-palette) (quit nil)))
+      (condition-case nil (funcall drgnx-palette-float-test--open) (quit nil)))
     (pcase result
       (`(:ok ,v) v)
       (`(:error ,err) (signal (car err) (cdr err)))
@@ -274,6 +279,104 @@ of keys; those belong to the box's window alone, and C-g takes them all off the 
             (with-current-buffer mb
               (should-not (seq-find (lambda (o) (eq (overlay-get o 'window) win)) (overlays-in (point-min) (point-max))))))
         (delete-directory noproject t)))))
+
+;; loaded here, before the tests: what they install when they load (project.el's hook, the view library's) is no leak
+(require 'project)
+(require 'xref)
+(require 'drgnx-quick-open)
+(declare-function drgnx-uitest-capture "drgnx-uitest")
+
+(ert-deftest palette-float-quick-open-is-the-palette-in-files-mode ()
+  "Audit P1: Quick Open (Ctrl+P) floats in the palette's own frame, as the palette: the file rows (icon, name,
+folder), the hint `Files · > commands', no Vertico counter.  Without the hub (none here) it lists the project's files."
+  (drgnx-palette-float-test--with-palette
+    (let* ((dir (file-name-as-directory (make-temp-file "palette-float-qo" t)))
+           (project-vc-extra-root-markers '(".project"))
+           (drgnx-palette-float-test--open #'drgnx-quick-open))
+      (unwind-protect
+          ;; the folder is this test's whatever buffer the reading starts in, and the hub (if any) is not asked
+          (cl-letf (((symbol-function 'drgnx-quick-open--root) (lambda () dir))
+                    ((symbol-function 'drgnx-quick-open--hub-p) #'ignore))
+            (make-directory (expand-file-name "core" dir))
+            (dolist (f '(".project" "core/alpha-quick.el" "README.md"))
+              (write-region "" nil (expand-file-name f dir) nil 'silent))
+            (drgnx-palette-float-test--reading
+             "alpha"
+             (lambda ()
+               (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
+                 (condition-case err
+                     (drgnx-test-wait (lambda () (and (frame-visible-p f)
+                                                      (eq (window-buffer (frame-root-window f))
+                                                          (window-buffer (active-minibuffer-window)))
+                                                      (string-search "alpha-quick.el"
+                                                                     (or (overlay-get vertico--candidates-ov 'before-string) ""))))
+                                      :what "Quick Open's rows in the palette's frame")
+                   (ert-test-failed
+                    ;; say what was there instead
+                    (ert-fail (list (cadr err) :input (minibuffer-contents-no-properties)
+                                    :candidates (seq-take (bound-and-true-p vertico--candidates) 5)
+                                    :category (completion-metadata-get
+                                               (completion-metadata "" minibuffer-completion-table
+                                                                    minibuffer-completion-predicate)
+                                               'category)
+                                    :project (ignore-errors (project-current nil dir))
+                                    :files (ignore-errors (project-files (project-current nil dir)))
+                                    :rows (substring-no-properties
+                                           (or (overlay-get vertico--candidates-ov 'before-string) ""))
+                                    :root-buffer (window-buffer (frame-root-window f))))))
+                 (drgnx-test-wait-presented)
+                 (let ((rows (overlay-get vertico--candidates-ov 'before-string)))
+                   (should (string-search "commands" rows))                ; the files mode's hint
+                   (should (string-search "core" rows))                    ; the folder beside the name
+                   (should-not (string-search "core/alpha-quick.el" rows))) ; the name is shown, not the path
+                 (let ((shot (plist-get (drgnx-uitest-capture (make-temp-file "palette-qo-shots" t)) :root)))
+                   (when shot
+                     (let ((out (expand-file-name (format "palette-quick-open-s%s.png" (or (getenv "DRGNX_UI_SCALE") "1"))
+                                                  temporary-file-directory)))
+                       (copy-file shot out t)
+                       (drgnx-uitest--evidence out))))))))
+        (delete-directory dir t)))))
+
+(defvar drgnx-session-recent-folders-file)
+(declare-function drgnx-session--remember-folder "drgnx-session" (dir))
+
+(ert-deftest palette-float-open-folder-is-the-palette-with-recent-folders ()
+  "Audit L3: File → Open Folder… floats in the palette's frame: Browse… first, then the recent folders (icon, name,
+parent folder), the hint `Recent folders · or type a path', no Vertico counter and no `ls' columns."
+  (drgnx-palette-float-test--with-palette
+    (require 'drgnx-session)
+    (let* ((top (file-name-as-directory (make-temp-file "palette-float-of" t)))
+           (drgnx-session-recent-folders-file (expand-file-name "recent-folders.eld" top))
+           (drgnx-palette-float-test--open #'drgnx-session-read-folder))
+      (unwind-protect
+          (progn
+            (dolist (d '("proj-alpha" "proj-beta"))
+              (make-directory (expand-file-name d top))
+              (drgnx-session--remember-folder (expand-file-name d top)))
+            (drgnx-palette-float-test--reading
+             "o"
+             (lambda ()
+               (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
+                 (drgnx-test-wait (lambda () (and (frame-visible-p f)
+                                                  (eq (window-buffer (frame-root-window f))
+                                                      (window-buffer (active-minibuffer-window)))
+                                                  (string-search "proj-alpha"
+                                                                 (or (overlay-get vertico--candidates-ov 'before-string) ""))))
+                                  :what "Open Folder's rows in the palette's frame")
+                 (drgnx-test-wait-presented)
+                 (let ((rows (overlay-get vertico--candidates-ov 'before-string)))
+                   (should (string-search "Recent folders" rows))                       ; the hint
+                   (should (< (string-search "Browse…" rows) (string-search "proj-beta" rows)
+                              (string-search "proj-alpha" rows)))                       ; Browse…, then newest first
+                   (should (string-search (abbreviate-file-name top) rows))           ; the parent beside the name
+                   (should-not (string-search "drwx" rows)))
+                 (let ((shot (plist-get (drgnx-uitest-capture (make-temp-file "palette-of-shots" t)) :root)))
+                   (when shot
+                     (let ((out (expand-file-name (format "palette-open-folder-s%s.png" (or (getenv "DRGNX_UI_SCALE") "1"))
+                                                  temporary-file-directory)))
+                       (copy-file shot out t)
+                       (drgnx-uitest--evidence out))))))))
+        (delete-directory top t)))))
 
 (ert-deftest palette-float-typing-and-ret-runs-command ()
   (drgnx-palette-float-test--with-palette

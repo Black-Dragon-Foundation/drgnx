@@ -248,6 +248,13 @@
       (remove-function after-focus-change-function #'drgnx-fp-test-fn)
       (setq-default fp-test-aliased-hook nil))))
 
+(ert-deftest drgnx-fingerprint/a-keyword-named-like-a-hook-is-not-a-hook ()
+  "A keyword is bound to itself, so `:after-hook' (`define-minor-mode''s, interned when a library using it loads) read as
+a hook holding `:after-hook': 16 GUI files leaked \"hook :after-hook +:after-hook\"."
+  (let ((before (drgnx-modules-fingerprint t)))
+    (intern (format ":drgnx-fp-test-%d-hook" (random 1000000)))
+    (should-not (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint t))))))
+
 (ert-deftest drgnx-fingerprint/a-list-of-hook-names-is-not-a-hook ()
   "A variable ending in -hooks holds hook names (as `unload-feature-special-hooks'; `drgnx-pixels--quiet-hooks'): it is
 not a hook, so a library that defines one leaks nothing (the census named each name in the list as an entry added)."

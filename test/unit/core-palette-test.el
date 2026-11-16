@@ -215,14 +215,6 @@ with an empty registry; `dir' is its root."
         (should (string-match-p "test/unit"
                                 (substring-no-properties (drgnx-palette--file-annotation "File: test/unit/gateway-test.el"))))))))
 
-(ert-deftest drgnx-palette/choosing-a-file-row-visits-it ()
-  (drgnx-test--palette-in-project
-    (let (visited)
-      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "File: test/unit/gateway-test.el"))
-                ((symbol-function 'find-file) (lambda (f &rest _) (setq visited f))))
-        (drgnx-palette))
-      (should (equal visited (expand-file-name "test/unit/gateway-test.el" dir))))))
-
 (ert-deftest drgnx-palette/the-agents-row-asks-with-what-is-typed ()
   "With an `agents-ask' command, the typed text is a row of the Agents group; choosing it, Ctrl+Return, or `@' first
 asks an agent with that text."

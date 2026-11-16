@@ -31,7 +31,9 @@
                                       '((scm-view "Source Control" drgnx-vc-status "The project's changes")
                                         (buffers-diff "Diff with File" drgnx-vc-diff-with-file "Unsaved changes against the file")
                                         (scm-blame "Blame" vc-annotate "Who changed each line")))
-                         (drgnx-command-define id :category "Source Control" :title title :command fn :doc doc))))
+                         ;; Source Control is the side bar's (tools/scm) when that module is on
+                         (unless (and (eq id 'scm-view) (drgnx-module-chosen-p 'tools/scm))
+                           (drgnx-command-define id :category "Source Control" :title title :command fn :doc doc)))))
 
 (provide 'drgnx-vc)
 ;;; drgnx-vc.el ends here

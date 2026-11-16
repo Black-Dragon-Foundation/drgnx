@@ -443,25 +443,95 @@ signal when no hub serves)."
 (defun drgnx-agent-panel--current-buffer ()
   (or (seq-find (lambda (b) (get-buffer-window b 'visible)) (drgnx-agent-panel-buffers))
       (car (drgnx-agent-panel-buffers))
-      (get-buffer-create "*drgnx agent*")))
+      (drgnx-agent-panel-new-chat-buffer)))
 
 (defun drgnx-agent-panel-open (session)
-  "Show SESSION's panel in the right dock, one tab for each open agent."
-  (interactive (list (drgnx-agent-panel--read-session)))
-  (let ((buf (drgnx-agent-panel-buffer session)))
-    (drgnx-pane-show 'agent-panel :buffer buf :select t)
-    (with-current-buffer buf
-      (drgnx-agent-panel-sync-windows)
-      (drgnx-agent-panel-explain-load-grants))
-    buf))
+  "Show SESSION's panel in the right dock, one tab for each open agent.  With no session (nil), a new chat: an empty
+panel whose input starts an agent (`drgnx-agent-panel-new-chat'), as VS Code's chat opens empty."
+  (interactive (list (drgnx-agent-panel--read-session t)))
+  (if (null session)
+      (drgnx-agent-panel-new-chat)
+    (let ((buf (drgnx-agent-panel-buffer session)))
+      (drgnx-pane-show 'agent-panel :buffer buf :select t)
+      (with-current-buffer buf
+        (drgnx-agent-panel-sync-windows)
+        (drgnx-agent-panel-explain-load-grants))
+      buf)))
 
-(defun drgnx-agent-panel--read-session ()
+(defun drgnx-agent-panel--read-session (&optional none-ok)
+  "The session to show: this panel's, the only one, or one picked.  With none, nil when NONE-OK, else an error."
   (or (and (derived-mode-p 'drgnx-agent-panel-mode) drgnx-agent-panel--session)
       (and (boundp 'drgnx-agents--sessions)
            (let ((ids (delq nil (mapcar (lambda (s) (and (fboundp 'drgnx-agent-session-remote) (drgnx-agent-session-remote s)))
                                         drgnx-agents--sessions))))
              (if (cdr ids) (completing-read "Agent: " ids nil t) (car ids))))
-      (user-error "No agent session to show")))
+      (unless none-ok (user-error "No agent session to show"))))
+
+;;;; A new chat: the panel with no session yet (audit A1)
+
+(defconst drgnx-agent-panel-new-chat-name "*drgnx new chat*" "The new chat's buffer.")
+
+(defvar-keymap drgnx-agent-panel-new-chat-mode-map
+  :doc "Keys of a new chat: Return sends (an agent starts), Shift+Return breaks the line."
+  "RET" #'drgnx-agent-panel-new-chat-send
+  "<return>" #'drgnx-agent-panel-new-chat-send
+  "S-<return>" #'newline)
+
+(declare-function drgnx-agents-session-ask "drgnx-agents-session" (text))
+(declare-function drgnx-agents-default-profile "drgnx-agents")
+
+(defun drgnx-agent-panel--new-chat-header ()
+  "The new chat's header line: what it is, which profile starts, how to send."
+  (let ((profile (and (fboundp 'drgnx-agents-default-profile) (ignore-errors (drgnx-agents-default-profile)))))
+    (concat " " (propertize "New chat" 'face 'bold)
+            (propertize (concat (if profile (format " · %s" profile) "") " · Return sends, Shift+Return breaks the line")
+                        'face 'drgnx-text-subtle))))
+
+(defvar-local drgnx-agent-panel--new-chat-hint nil "The new chat's placeholder overlay.")
+
+(defconst drgnx-agent-panel--new-chat-placeholder-text
+  (propertize "Ask an agent about this project…" 'face 'drgnx-text-subtle)
+  "What an empty new chat shows where you type.")
+
+(defun drgnx-agent-panel--new-chat-placeholder ()
+  "Show the placeholder while the new chat is empty (a cheap check of the buffer's size, no scan)."
+  (when (overlayp drgnx-agent-panel--new-chat-hint)
+    (overlay-put drgnx-agent-panel--new-chat-hint 'after-string
+                 (and (= (point-min) (point-max)) drgnx-agent-panel--new-chat-placeholder-text))))
+
+(define-derived-mode drgnx-agent-panel-new-chat-mode text-mode "New Chat"
+  "A new chat: type what you ask and press Return; an agent of the default profile starts in this project, and its
+panel takes this one's place."
+  (setq-local header-line-format (drgnx-agent-panel--new-chat-header))
+  (setq-local word-wrap t)
+  (visual-line-mode 1)
+  (let ((ov (make-overlay (point-min) (point-min) nil t nil)))
+    (setq-local drgnx-agent-panel--new-chat-hint ov)
+    (add-hook 'post-command-hook #'drgnx-agent-panel--new-chat-placeholder nil t)
+    (drgnx-agent-panel--new-chat-placeholder)))
+
+(defun drgnx-agent-panel-new-chat-buffer ()
+  "The new chat's buffer, made the first time."
+  (or (get-buffer drgnx-agent-panel-new-chat-name)
+      (with-current-buffer (get-buffer-create drgnx-agent-panel-new-chat-name)
+        (drgnx-agent-panel-new-chat-mode)
+        (current-buffer))))
+
+(defun drgnx-agent-panel-new-chat ()
+  "Show a new chat in the right dock, its input selected: no agent runs until you send."
+  (interactive)
+  (let ((buf (drgnx-agent-panel-new-chat-buffer)))
+    (drgnx-pane-show 'agent-panel :buffer buf :select t)
+    buf))
+
+(defun drgnx-agent-panel-new-chat-send ()
+  "Send the new chat's text: an agent of the default profile starts in this project with it, and its panel shows."
+  (interactive)
+  (let ((text (string-trim (buffer-substring-no-properties (point-min) (point-max)))))
+    (when (string-empty-p text) (user-error "Type what to ask first"))
+    (unless (fboundp 'drgnx-agents-session-ask) (user-error "No agents here (module tools/agents)"))
+    (drgnx-agents-session-ask text)
+    (let ((inhibit-read-only t)) (erase-buffer))))
 
 (defvar drgnx-agents--sessions)
 (declare-function drgnx-agent-session-remote "drgnx-agents")
@@ -523,7 +593,10 @@ class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same b
 (defun drgnx-agent-panel--setup ()
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"
                         :command #'drgnx-agent-panel-open
-                        :doc "One agent session's steps, live, in the right dock")
+                        :doc "One agent session's steps, live, in the right dock; a new chat when none runs")
+  (drgnx-command-define 'agents-new-chat :category "Agents" :title "New Chat"
+                        :command #'drgnx-agent-panel-new-chat
+                        :doc "An empty chat in the right dock: what you send starts an agent of the default profile")
   (drgnx-command-define 'agents-panel-toggle :category "Agents" :title "Open or Fold the Step"
                         :command #'drgnx-agent-panel-toggle :map 'drgnx-agent-panel-mode-map
                         :doc "Show or fold the thinking and the detail under the step at point")

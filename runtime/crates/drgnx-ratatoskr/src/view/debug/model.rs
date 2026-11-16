@@ -562,18 +562,53 @@ impl<'a> Cx<'a> {
         open
     }
 
+    /// After an open section's rows: when it drew none, one quiet line that says why (audit R1, VS Code's empty
+    /// states), at the rows' depth under the section.
+    fn empty_since(&mut self, name: &str, before: usize, text: &str) {
+        if self.lines.len() == before {
+            self.push(Line {
+                id: format!("empty:{name}"),
+                parent: Some(format!("section:{name}")),
+                depth: 1,
+                kind: "empty",
+                label: text.into(),
+                ..Line::default()
+            });
+        }
+    }
+
     fn all(&mut self) {
         if self.section("variables", "VARIABLES") {
+            let n = self.lines.len();
             self.variables();
+            self.empty_since(
+                "variables",
+                n,
+                "Not paused: variables show when the program stops",
+            );
         }
         if self.section("watch", "WATCH") {
+            let n = self.lines.len();
             self.watch();
+            self.empty_since(
+                "watch",
+                n,
+                "No watch expressions: Add Watch Expression… adds one",
+            );
         }
         if self.section("callstack", "CALL STACK") {
+            let n = self.lines.len();
             self.call_stack();
+            self.empty_since("callstack", n, "Not running");
         }
         if self.section("breakpoints", "BREAKPOINTS") {
+            let n = self.lines.len();
             self.breakpoints();
+            self.empty_since(
+                "breakpoints",
+                n,
+                "No breakpoints: click left of a line's number to add one",
+            );
         }
     }
 

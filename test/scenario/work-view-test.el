@@ -1,5 +1,6 @@
 ;;; work-view-test.el --- Scenarios: the Work space is a view in the editor -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; UX audit S1-1 (2026-11-16): opening the Work space kept you in a full-window layout where a file opened with
 ;; Ctrl+P never showed.  The reference is VS Code: a view is a tab; the Explorer and the editor groups stay, and
