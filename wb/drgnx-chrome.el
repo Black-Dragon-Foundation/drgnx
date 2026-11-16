@@ -858,7 +858,10 @@ or buffer changed (no new tabs while the minibuffer is active: those are preview
     (dolist (f (frame-list))
       (dolist (w (window-list f 'nomini))
         (pcase (drgnx-chrome--role w)
-          ('editor (dolist (p '(tab-line-format header-line-format mode-line-format)) (set-window-parameter w p nil)))
+          ;; the tabs it noted too: turned on, it notes each window's shown buffer (*scratch*), which no other
+          ;; teardown would take back
+          ('editor (dolist (p '(tab-line-format header-line-format mode-line-format drgnx-tabs drgnx-tab-history drgnx-preview))
+                     (set-window-parameter w p nil)))
           ((or 'dock 'area 'lane 'tile)
            (set-window-parameter w 'tab-line-format (or (window-parameter w 'drgnx-wb-island)
                                                         (window-parameter w 'drgnx-grid-tab-row)))
