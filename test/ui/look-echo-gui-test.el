@@ -97,9 +97,8 @@ answer with KEYS.  The harness's queue delivers each note to the read itself, so
 (defun drgnx-look-echo-ui-test--unshown ()
   "Stop watching redisplay for the box, and take the marker pause out of the harness's queue."
   (remove-hook 'pre-redisplay-functions #'drgnx-look-echo-ui-test--redisplay)
-  (setq drgnx-look-echo-ui-test--shown nil
-        drgnx-uitest--queue (seq-remove (lambda (e) (memq (car-safe e) '(drgnx-uitest-pause drgnx-uitest-until)))
-                                        drgnx-uitest--queue)))
+  (setq drgnx-look-echo-ui-test--shown nil)
+  (drgnx-uitest-unqueue (lambda (e) (memq (car-safe e) '(drgnx-uitest-pause drgnx-uitest-until)))))
 
 (defun drgnx-look-echo-ui-test--at-shown (box fn keys)
   "Run FN at the redisplay that shows BOX, which the read now starting does as it waits, then answer with KEYS.

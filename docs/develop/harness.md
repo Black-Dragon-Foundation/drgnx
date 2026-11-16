@@ -414,7 +414,10 @@ through the session's allowlist. The lease is off in CI, in the detached launche
 Input is synthetic but goes through Emacs' normal command loop: `harness/drgnx-uitest.el` queues events and
 delivers **one per 40 ms timer tick** (`drgnx-uitest-tick`) onto `unread-command-events`. Redisplay runs
 between events exactly as it does for a person typing or clicking; dumping a whole sequence at once would
-skip redisplay and hide the very jank we want to see.
+skip redisplay and hide the very jank we want to see. The tick stops as it delivers the last key (a last mouse event keeps one tick more:
+its pointer position stands while its command runs), so a test that ends on its last key leaves no timer; a test that
+takes entries back out of the queue (a pause it no longer needs) calls `drgnx-uitest-unqueue`, which stops the tick at
+once when nothing is left, so the file's leak check finds no `drgnx-uitest--tick` timer.
 
 - **Pixels:** clicks take root-frame pixel coordinates — the same pixels as a screenshot (top-left = 0,0).
   `(posn-at-x-y x y root-frame)` turns them into the click position.
