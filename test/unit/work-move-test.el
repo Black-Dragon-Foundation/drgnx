@@ -15,11 +15,14 @@
 
 (defvar drgnx-work-space-command-ids)
 (defvar drgnx-work-map--selection)
+(defvar drgnx-work-item-map)
+(defvar drgnx-work-lens-map)
+(defvar drgnx-work-detail-mode-map)
 
 (ert-deftest drgnx-work-move/M-sends-the-selected-item ()
   "On a queue's job row the job moves; elsewhere the selected agent's next jobs do (from a Detail, the map's
 selection).  The machine is the one chosen from this machine and the hub's runners.  `M' is the command in every
-profile, and `m' still switches to the map."
+profile, in every Work view and the Detail alike, and `m' still switches to the map."
   (let (sent asked)
     (cl-letf (((symbol-function 'drgnx-hub-call)
                (lambda (method params &rest _) (push (cons method params) sent)))
@@ -49,6 +52,9 @@ profile, and `m' still switches to the map."
                    '(("machines/move" :target "job:x7" :machine "laptop")
                      ("machines/move" :target "session:s4" :machine "laptop")
                      ("machines/move" :target "session:s4" :machine "laptop")))))
+  ;; M is one key wherever a Work item shows: the views share the item keys, and so does the Detail
+  (should (eq (keymap-parent drgnx-work-lens-map) drgnx-work-item-map))
+  (should (eq (keymap-parent drgnx-work-detail-mode-map) drgnx-work-item-map))
   (should (memq 'work-move-machine drgnx-work-space-command-ids))
   (dolist (profile '("vscode" "emacs" "vim"))
     (let ((rows (plist-get (with-temp-buffer

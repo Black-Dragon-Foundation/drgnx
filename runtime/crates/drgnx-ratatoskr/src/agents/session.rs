@@ -3866,8 +3866,12 @@ async fn insert_row(db: &urdr::Handle, s: &Session) {
     let r = db
         .write(move |c| {
             c.execute(
-                "insert or replace into asession(sid, name, profile, role, cwd, task, job, acp, enforced, parent, at) \
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                // an upsert, not a replace: the row keeps what others set on it (the machine the user moved it to)
+                "insert into asession(sid, name, profile, role, cwd, task, job, acp, enforced, parent, at) \
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) on conflict(sid) do update set \
+                 name = excluded.name, profile = excluded.profile, role = excluded.role, cwd = excluded.cwd, \
+                 task = excluded.task, job = excluded.job, acp = excluded.acp, enforced = excluded.enforced, \
+                 parent = excluded.parent, at = excluded.at",
                 (sid, name, profile, role, cwd, task, job, acp, i64::from(enforced), parent, at),
             )?;
             Ok(())

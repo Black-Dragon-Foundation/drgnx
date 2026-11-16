@@ -528,7 +528,8 @@ struct St {
     reservation: Option<forseti::backfill::Reservation>,
     /// The runner last told it holds the head (its `head` frame), with the head's start and memory need.
     head_told: Option<(String, u64, u64)>,
-    /// The machine each session's next jobs go to, as the user moved the session (`machines/move`); kept in memory.
+    /// The machine each session's next jobs go to, as the user moved the session (`machines/move`); kept in
+    /// `asession.machine` and restored with the rest ([`Kept`]).
     prefs: BTreeMap<String, Machine>,
 }
 
@@ -646,6 +647,8 @@ pub struct Kept {
     pub rows: Vec<StoredRow>,
     /// Oldest first, as they were learned from.
     pub history: Vec<HistRow>,
+    /// The machine the user moved each recorded session's next jobs to (`asession.machine`): (session, machine).
+    pub prefs: Vec<(String, String)>,
 }
 
 /// What `rq_rows` and `rq_history` hold.
@@ -713,7 +716,25 @@ pub async fn kept(db: &urdr::Handle) -> Kept {
             })
         })
         .collect();
-    Kept { rows, history }
+    let prefs = db
+        .read(|c| {
+            let mut st =
+                c.prepare("select sid, machine from asession where machine is not null")?;
+            let rows = st
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("runners: the sessions' machines in runtime.db: {e}");
+            vec![]
+        });
+    Kept {
+        rows,
+        history,
+        prefs,
+    }
 }
 
 /// A keyed attempt's log as the hub writes it: every key sent masked, and how far into the runner's log it has read.
@@ -1578,6 +1599,9 @@ impl Queue {
         for h in k.history {
             st.learn(h);
         }
+        for (sid, machine) in k.prefs {
+            st.prefs.insert(sid, Machine::parse(Some(&machine)));
+        }
     }
 
     /// A job enters the queue at NOW, and the queue's tick is woken. With frozen inputs, its trust is theirs (design
@@ -1922,8 +1946,8 @@ impl Queue {
         Ok(out)
     }
 
-    /// The user moves session SESSION: its next jobs go to TO (those started without a machine of their own). A
-    /// machine the queue doesn't know is refused.
+    /// The user moves session SESSION: its next jobs go to TO (those started without a machine of their own), kept in
+    /// `runtime.db` with the session's row. A machine the queue doesn't know is refused.
     pub fn prefer(&self, session: &str, to: Machine) -> Result<(), String> {
         let mut st = self.lock();
         if let Machine::Runner(n) = &to
@@ -1931,10 +1955,23 @@ impl Queue {
         {
             return Err(format!("no runner {n} (`drgnx runner list` shows them)"));
         }
-        if to == Machine::Auto {
-            return Err("name a machine".into());
-        }
+        let word = match &to {
+            Machine::Auto => return Err("name a machine".into()),
+            Machine::Local => LOCAL.to_owned(),
+            Machine::Runner(n) => n.clone(),
+        };
         st.prefs.insert(session.to_owned(), to);
+        drop(st);
+        // kept with the session's recorded row, so a hub restart brings it back (`kept`); a session with no row is
+        // not restored after a restart, and neither is its preference
+        let sid = session.to_owned();
+        self.persist(Box::new(move |c| {
+            c.execute(
+                "update asession set machine = ?2 where sid = ?1",
+                (sid, word),
+            )?;
+            Ok(())
+        }));
         Ok(())
     }
 
@@ -4767,6 +4804,33 @@ mod tests {
         q.tick(100);
         assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some("r2"));
         assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
+    }
+
+    // [D] pure (runtime.db in a folder): the machine the user moved a session to is kept with the session's recorded
+    // row and comes back after a hub restart: the session's next job goes there
+    #[tokio::test]
+    async fn a_sessions_machine_comes_back_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
+        db.write(|c| {
+            Ok(c.execute(
+                "insert into asession(sid, name, profile, at) values ('s1', 'a', 'p', 1.0)",
+                [],
+            )?)
+        })
+        .await
+        .unwrap();
+        let (q, _rx) = test_queue(dir.path(), Some(db.clone()), true);
+        two_runners(&q, 100);
+        q.prefer("s1", Machine::Runner("r2".into())).unwrap();
+        q.flush().await;
+        let (again, _rx2) = test_queue(dir.path(), None, true);
+        again.restore_kept(kept(&db).await);
+        two_runners(&again, 200);
+        again.submit(job("x1", Priority::P3, 64), 200);
+        again.tick(200);
+        let row = again.row("x1").unwrap();
+        assert_eq!(row.machine.as_deref(), Some("r2"), "{row:?}");
     }
 
     // [D] pure: a machine the queue doesn't know is refused, saying so; nothing changes

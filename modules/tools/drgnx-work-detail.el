@@ -47,6 +47,11 @@ when it has several)."
 
 (defvar-local drgnx-work-detail--map nil "The map buffer a detail buffer shows the selection of.")
 
+(defvar drgnx-work-item-map)
+(defvar drgnx-work-detail-mode-map
+  (let ((m (make-sparse-keymap))) (set-keymap-parent m drgnx-work-item-map) m)
+  "Keys of the Detail.  Its parent holds the keys every place a Work item shows shares (`drgnx-work-item-map').")
+
 (define-derived-mode drgnx-work-detail-mode special-mode "Work detail"
   "The Work space's side panel: why the selected item exists, what it touches, its conclusions and what you can do."
   ;; work-space-dark.html `.det': the island's header is "Detail", drawn by the tile (the right dock's tabs stay off it)
