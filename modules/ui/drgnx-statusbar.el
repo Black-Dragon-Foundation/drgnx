@@ -277,17 +277,22 @@ used editor window."
          (str (posn-string posn))
          (id (and str (get-text-property (cdr str) 'drgnx-statusbar-segment (car str))))
          (click (and id (plist-get (gethash id drgnx-statusbar--segments) :click)))
-         (w (posn-window posn)))
+         (w (posn-window posn))
+         (target (cond ((and (window-live-p w) (drgnx-signal-editor-window-p w)) w)
+                       ;; the bar across the frame: its editor's
+                       ((and (window-live-p w) (drgnx-statusbar--frame-window-p w)
+                             (window-live-p (drgnx-state-editor-window (window-frame w))))
+                        (drgnx-state-editor-window (window-frame w)))
+                       (t (selected-window)))))
     (when click
-      (with-selected-window (cond ((and (window-live-p w) (drgnx-signal-editor-window-p w)) w)
-                                  ;; the bar across the frame: its editor's
-                                  ((and (window-live-p w) (drgnx-statusbar--frame-window-p w)
-                                        (window-live-p (drgnx-state-editor-window (window-frame w))))
-                                   (drgnx-state-editor-window (window-frame w)))
-                                  (t (selected-window)))
+      (with-selected-window target
         (cond ((commandp click) (call-interactively click))
               ((functionp click) (funcall click))
-              (t (message "%s is not available" click)))))))
+              (t (message "%s is not available" click))))
+      ;; the click selected the bar's own window: leave focus where the user works
+      (when (and (window-live-p target) (window-live-p (selected-window))
+                 (drgnx-statusbar--frame-window-p (selected-window)))
+        (select-window target)))))
 
 (defun drgnx-statusbar--note-error (id err)
   "Record ERR as the error of segment ID with the time, replacing its entry (the record never grows).
@@ -2035,7 +2040,9 @@ shield in the warning colour, its words on hover; in a text bar `Restricted Mode
 (defun drgnx-statusbar--seg-encoding ()
   (when-let* ((cs buffer-file-coding-system)
               (charset (or (coding-system-get cs :mime-charset) (coding-system-base cs))))
-    (if (memq charset '(undecided prefer-utf-8)) "UTF-8" (upcase (symbol-name charset)))))   ; plain ASCII is undecided
+    (cond ((memq charset '(undecided prefer-utf-8 utf-8-emacs emacs-internal)) "UTF-8")   ; plain ASCII is undecided
+          ((memq charset '(no-conversion raw-text binary)) "Binary")   ; Emacs's own names for bytes as they are
+          (t (upcase (symbol-name charset))))))
 
 (defun drgnx-statusbar--seg-eol ()
   (pcase (and buffer-file-coding-system (coding-system-eol-type buffer-file-coding-system))
@@ -2055,7 +2062,7 @@ One entry per major mode used in the session; emptied when `drgnx-statusbar-lang
     (makefile-gmake-mode . "Makefile") (conf-toml-mode . "TOML") (sql-mode . "SQL")
     (markdown-mode . "Markdown") (markdown-ts-mode . "Markdown") (gfm-mode . "Markdown")
     (yaml-mode . "YAML") (yaml-ts-mode . "YAML") (json-mode . "JSON") (json-ts-mode . "JSON") (toml-ts-mode . "TOML")
-    (css-mode . "CSS") (css-ts-mode . "CSS"))
+    (css-mode . "CSS") (css-ts-mode . "CSS") (elisp-byte-code-mode . "Emacs Lisp (compiled)"))
   "Major mode → the language name the status bar shows for it (as VS Code names it).
 A mode not listed shows its own name (`mode-name') when that is a plain name of the mode (Rust, Go, Python, YAML),
 else a name made from the mode's symbol."
@@ -2094,13 +2101,34 @@ from another (`define-derived-mode')."
     (mapatoms (lambda (s) (when (and (get s 'derived-mode-parent) (commandp s)) (push s modes))))
     (sort (delete-dups modes) #'string<)))
 
+(defun drgnx-statusbar--language-choices ()
+  "The languages to choose from for the language click: an alist LANGUAGE-NAME → major mode, one mode per name (the
+shortest symbol: `css-mode' before `css-ts-mode'; `major-mode-remap' still picks a tree-sitter one), sorted by name."
+  (let (seen)
+    (dolist (m (drgnx-statusbar--major-modes))
+      (let* ((name (drgnx-statusbar--language-name m)) (old (assoc name seen)))
+        (when (or (null old) (< (length (symbol-name m)) (length (symbol-name (cdr old)))))
+          (setq seen (cons (cons name m) (assoc-delete-all name seen))))))
+    (sort seen (lambda (a b) (string< (car a) (car b))))))
+
 (defun drgnx-statusbar-change-mode (mode)
-  "Switch this buffer to the major mode MODE (asked with completion), honouring `major-mode-remap-alist'.
-Click the language in the status bar for it.  A command: it asks; the bar itself never does."
+  "Switch this buffer to the major mode MODE, honouring `major-mode-remap-alist'.  Interactively the choice is a
+language by its name (Python, Emacs Lisp, Plain Text); the mode's own name is shown beside it.  Click the language in
+the status bar for it.  A command: it asks; the bar itself never does."
   (interactive
-   (list (intern (completing-read (format-prompt "Major mode" (symbol-name major-mode))
-                                  (mapcar #'symbol-name (drgnx-statusbar--major-modes)) nil t nil nil
-                                  (symbol-name major-mode)))))
+   (let* ((choices (drgnx-statusbar--language-choices))
+          (cur (drgnx-statusbar--language-name major-mode))
+          (names (mapcar #'car choices))
+          (pick (completing-read (format-prompt "Select language mode" cur)
+                                 (lambda (str pred action)
+                                   (if (eq action 'metadata)
+                                       `(metadata (display-sort-function . identity)
+                                                  (annotation-function
+                                                   . ,(lambda (n) (when-let* ((m (cdr (assoc n choices))))
+                                                                    (format "  %s" m)))))
+                                     (complete-with-action action names str pred)))
+                                 nil t nil nil cur)))
+     (list (cdr (assoc pick choices)))))
   (funcall (or (and (fboundp 'major-mode-remap) (major-mode-remap mode)) mode))
   (force-mode-line-update))
 

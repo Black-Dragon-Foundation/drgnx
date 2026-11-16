@@ -23,6 +23,7 @@
 (require 'drgnx-keys-edit)
 (require 'drgnx-tty-fallback)
 (require 'drgnx-modal)
+(require 'drgnx-palette)   ; `drgnx-palette-keycap-names'
 
 (defcustom drgnx-shortcuts-chord-wait 1.0
   "Seconds to wait, after the first key recorded, for the second key of a chord."
@@ -181,6 +182,11 @@ here: they are lines in your Lisp (config.el), or bound from the keyboard, and w
                       :changed (and (memq id changed) t))))
             (drgnx-commands-all))))
 
+(defun drgnx-shortcuts--keyed-first (rows)
+  "ROWS with the commands that have a key (or one of yours) first, each part in the registry's order."
+  (let ((keyed (lambda (r) (or (plist-get r :keys) (plist-get r :yours)))))
+    (append (seq-filter keyed rows) (seq-remove keyed rows))))
+
 (defun drgnx-shortcuts--shown-p (row)
   "Non-nil if ROW passes this buffer's filters."
   (let ((case-fold-search t))
@@ -219,8 +225,14 @@ here: they are lines in your Lisp (config.el), or bound from the keyboard, and w
   (propertize (format "[%s] %s" (if (memq flag drgnx-shortcuts--only) "x" " ") label)
               'face (if (memq flag drgnx-shortcuts--only) 'drgnx-shortcuts-on 'drgnx-shortcuts-dim)))
 
+(defun drgnx-shortcuts--key-display (key)
+  "KEY as the table shows it: in the VS Code profile as VS Code writes it (\"Ctrl+K Ctrl+O\"), else as Emacs does."
+  (if (equal (drgnx-shortcuts--profile-text) "VS Code")
+      (mapconcat (lambda (chord) (string-join (drgnx-palette-keycap-names chord) "+")) (split-string key " " t) " ")
+    key))
+
 (defun drgnx-shortcuts--keys-text (keys)
-  (mapconcat (lambda (k) (concat (propertize (car k) 'face 'drgnx-shortcuts-key)
+  (mapconcat (lambda (k) (concat (propertize (drgnx-shortcuts--key-display (car k)) 'face 'drgnx-shortcuts-key)
                                  (unless (drgnx-shortcuts-terminal-p (car k))
                                    (propertize "†" 'face 'drgnx-shortcuts-warning
                                                'help-echo (drgnx-shortcuts--terminal-note (car k))))))
@@ -231,16 +243,25 @@ here: they are lines in your Lisp (config.el), or bound from the keyboard, and w
   (let ((s (truncate-string-to-width s width nil nil "…")))
     (concat s (make-string (max 0 (- width (string-width s))) ?\s))))
 
+(defun drgnx-shortcuts--widths (total)
+  "The column widths (COMMAND KEYS SOURCE WHERE) that make a row, with its mark and gaps, fit TOTAL columns."
+  (let* ((keys 18) (source 20) (where 16)
+         (command (max 20 (- total 2 4 keys source where))))
+    (list command keys source where)))
+
+(defvar-local drgnx-shortcuts--widths nil "The column widths of the table being drawn (`drgnx-shortcuts--widths').")
+
 (defun drgnx-shortcuts--insert-row (row)
   (let ((start (point)) (conflicts (plist-get row :conflicts)))
     (insert (if conflicts (propertize "!" 'face 'drgnx-shortcuts-conflict 'help-echo (string-join conflicts "\n")) " ")
-            " " (drgnx-shortcuts--pad (format "%s: %s" (plist-get row :category) (plist-get row :title)) 46)
+            " " (drgnx-shortcuts--pad (format "%s: %s" (plist-get row :category) (plist-get row :title)) (nth 0 drgnx-shortcuts--widths))
             " " (drgnx-shortcuts--pad (drgnx-shortcuts--keys-text
                                        (append (plist-get row :keys)
                                                (mapcar (lambda (y) (cons (car y) 'global-map)) (plist-get row :yours))))
-                                      26)
-            " " (propertize (drgnx-shortcuts--pad (plist-get row :source) 20) 'face 'drgnx-shortcuts-dim)
-            " " (apply #'propertize (plist-get row :where) 'face 'drgnx-shortcuts-dim
+                                      (nth 1 drgnx-shortcuts--widths))
+            " " (propertize (drgnx-shortcuts--pad (plist-get row :source) (nth 2 drgnx-shortcuts--widths)) 'face 'drgnx-shortcuts-dim)
+            " " (apply #'propertize (drgnx-shortcuts--pad (plist-get row :where) (nth 3 drgnx-shortcuts--widths))
+                       'face 'drgnx-shortcuts-dim
                        (and (plist-get row :over)
                             (list 'help-echo (concat "Over Emacs' " (string-join (plist-get row :over) ", "))))))
     (put-text-property start (point) 'drgnx-shortcuts-id (plist-get row :id))
@@ -249,8 +270,10 @@ here: they are lines in your Lisp (config.el), or bound from the keyboard, and w
 (defun drgnx-shortcuts--draw ()
   "Draw the editor in the current buffer, keeping point on the row it was on."
   (let* ((inhibit-read-only t) (id (get-text-property (point) 'drgnx-shortcuts-id))
-         (line (line-number-at-pos)) (rows (drgnx-shortcuts--rows)) (suggest (drgnx-shortcuts--suggestion rows)))
+         (line (line-number-at-pos)) (rows (drgnx-shortcuts--keyed-first (drgnx-shortcuts--rows))) (suggest (drgnx-shortcuts--suggestion rows)))
     (erase-buffer)
+    (setq drgnx-shortcuts--widths
+          (drgnx-shortcuts--widths (window-body-width)))
     (insert (propertize "Keyboard Shortcuts" 'face 'drgnx-shortcuts-heading) " — keys: "
             (propertize (drgnx-shortcuts--profile-text) 'face 'drgnx-shortcuts-heading) "  ")
     (drgnx-shortcuts--button "[Switch Profile…]" #'drgnx-shortcuts-switch-profile
@@ -273,8 +296,9 @@ here: they are lines in your Lisp (config.el), or bound from the keyboard, and w
             (drgnx-shortcuts--toggle-text 'changed "Changed by me") "\n"
             (propertize "! a key conflict (hover for which)   † a terminal cannot send this key (hover: what to press here)\n\n"
                         'face 'drgnx-shortcuts-dim)
-            (propertize (format "  %s %s %s %s\n" (drgnx-shortcuts--pad "Command" 46) (drgnx-shortcuts--pad "Keys" 26)
-                                (drgnx-shortcuts--pad "Source" 20) "Where")
+            (propertize (format "  %s %s %s %s\n" (drgnx-shortcuts--pad "Command" (nth 0 drgnx-shortcuts--widths))
+                                (drgnx-shortcuts--pad "Keys" (nth 1 drgnx-shortcuts--widths))
+                                (drgnx-shortcuts--pad "Source" (nth 2 drgnx-shortcuts--widths)) "Where")
                         'face 'drgnx-shortcuts-heading))
     (let ((shown (seq-filter #'drgnx-shortcuts--shown-p rows)))
       (mapc #'drgnx-shortcuts--insert-row shown)

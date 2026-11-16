@@ -137,6 +137,9 @@ every pause in a .txt file was a \"Corfu detected an error\" backtrace from `isp
                               ;; and so does Open Folder… (Browse… and the recent folders, category drgnx-folder)
                               (drgnx-module-alist-put 'vertico-multiform-categories 'drgnx-folder
                                                       drgnx-palette-frame-multiform)
+                              ;; and Color Theme (drgnx's own on top, the current one marked, a preview as you move)
+                              (drgnx-module-alist-put 'vertico-multiform-categories 'drgnx-theme
+                                                      drgnx-palette-frame-multiform)
                               ;; a path typed after the prompt's folder (~/ then /tmp) replaces it, as VS Code's path
                               ;; box does: the shadowed ~/ goes, so the input reads /tmp, not ~//tmp
                               (drgnx-module-hook 'rfn-eshadow-update-overlay-hook tidy-path ()

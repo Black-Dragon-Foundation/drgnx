@@ -443,6 +443,14 @@ module turned off gives Emacs's arrows back."
     (setq major-mode 'drgnx-start-mode)
     (should (equal (drgnx-face-frame-title) "drgnx"))))
 
+;; audit C1: the title of a buffer that is no file reads in words and does not say the project twice
+(ert-deftest drgnx-face/the-frame-title-of-a-special-buffer-is-in-words ()
+  (with-temp-buffer
+    (rename-buffer "*drgnx work: proj*" t)
+    (setq default-directory "/x/proj/")
+    (setq-local drgnx-chrome--root (cons "/x/proj/" "/x/proj/"))
+    (should (equal (drgnx-face-frame-title) "Work: Proj — drgnx"))))
+
 (ert-deftest drgnx-face/a-redisplay-that-changes-nothing-reuses-the-frame-title ()
   "Pattern D.  The title is formatted on every redisplay: with the same buffer, file, folder and project cache it is
 the string made last, and allocates nothing; a renamed buffer or another project makes it again."

@@ -323,18 +323,18 @@ fn perm_card(i: &In, images: &mut Vec<(ImageId, String)>, p: &Permission) -> Vec
     b.push(" ", None);
     for (k, (label, face, action, help)) in [
         (
-            " Allow ↵ ",
+            " Allow ",
             "drgnx-ui-button-primary",
             "allow",
             "RET: allow it once",
         ),
         (
-            " Always A ",
+            " Always ",
             "drgnx-ui-button",
             "always",
             "A: allow it from now on",
         ),
-        (" Deny D ", "drgnx-ui-button", "deny", "D: deny it"),
+        (" Deny ", "drgnx-ui-button", "deny", "D: deny it"),
     ]
     .into_iter()
     .enumerate()

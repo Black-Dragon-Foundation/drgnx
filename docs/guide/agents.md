@@ -10,7 +10,7 @@ when the profile asks for it and the agent supports it. Only **Stop** cancels.
 
 ## Sessions
 
-Agents: New Agent Session… (palette) starts a **profile** in the current project; Show Agents (`C-k a`, ⌘K A on a
+Agents: New Agent Session… (palette) starts a **profile** in the current project (a profile whose program is not installed says so beside its name: "not installed (Onboarding: Agents sets it up)"; starting it anyway names the program in the error); Show Agents (`C-k a`, ⌘K A on a
 Mac) opens the Agents tab. Profiles are the setting `drgnx-agents-profiles` in
 `settings.el` in your config folder ([settings.md](settings.md); [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)); this file used to be `agents.eld`, and drgnx moved its
 keys into `settings.el` once ([Moving from the old files](settings.md#moving-from-the-old-files)):

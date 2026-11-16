@@ -112,7 +112,8 @@ the usage counts go there, never the user's), no usage counted, and every bindin
   (drgnx-shortcuts-test--with
     (drgnx-keys-edit-bind 'sc-c "C-c q")
     (keymap-set global-map "C-c 9" #'drgnx-shortcuts-test-sc-n)   ; a key a package bound itself
-    (drgnx-shortcuts)
+    (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 120)))   ; a window with room for the titles
+      (drgnx-shortcuts))
     (with-current-buffer "*drgnx keyboard shortcuts*" (should (eq major-mode 'drgnx-shortcuts-mode)))
     (let ((a (drgnx-shortcuts-test--row 'sc-a)) (b (drgnx-shortcuts-test--row 'sc-b))
           (c (drgnx-shortcuts-test--row 'sc-c)) (n (drgnx-shortcuts-test--row 'sc-n)) (d (drgnx-shortcuts-test--row 'sc-d)))
@@ -128,6 +129,23 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (should (string-match-p "Test: Gamma +C-c q +keys\\.eld +global" (drgnx-shortcuts-test--line 'sc-c)))
     (should (string-match-p "Native One +C-c 9 +package" (drgnx-shortcuts-test--line 'sc-n)))
     (should (equal (length (drgnx-shortcuts-test--shown)) (length drgnx-shortcuts-test--commands)))))
+
+(ert-deftest drgnx-shortcuts/audit-k2-keyed-first-vscode-notation-and-fitting-widths ()
+  (drgnx-shortcuts-test--with
+    (drgnx-shortcuts)
+    ;; commands with keys come first, the ones without after them
+    (let* ((rows (drgnx-shortcuts--keyed-first (drgnx-shortcuts--rows)))
+           (keyed (mapcar (lambda (r) (and (or (plist-get r :keys) (plist-get r :yours)) t)) rows)))
+      (should (car keyed))
+      (should (equal keyed (append (seq-filter #'identity keyed) (seq-remove #'identity keyed)))))
+    ;; the VS Code profile writes keys as VS Code does
+    (cl-letf (((symbol-function 'drgnx-shortcuts--profile-text) (lambda () "VS Code")))
+      (let ((s (substring-no-properties (drgnx-shortcuts--keys-text '(("C-k C-o" . global-map))))))
+        (should (string-match-p "Ctrl\\+K Ctrl\\+O" s))))
+    (should (string-match-p "C-k C-o" (substring-no-properties (drgnx-shortcuts--keys-text '(("C-k C-o" . global-map))))))
+    ;; a table's width is the window's
+    (dolist (total '(80 100 140))
+      (should (<= (+ 2 4 (apply #'+ (drgnx-shortcuts--widths total))) total)))))
 
 (ert-deftest drgnx-shortcuts/where-names-the-modal-maps ()
   ;; The Vim profile's keys: the leader map reads where it works (not the keymap's name), the others as the modal
@@ -162,7 +180,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (drgnx-shortcuts-record-filter)
     ;; Conflicts, No key, Changed by me
     (drgnx-shortcuts-toggle-conflicts)
-    (should (equal (drgnx-shortcuts-test--shown) '(sc-a sc-f)))
+    (should (equal (drgnx-shortcuts-test--shown) '(sc-f sc-a)))   ; sc-a lost its key to Zeta: keyless rows come last
     (drgnx-shortcuts-toggle-conflicts)
     (drgnx-shortcuts-toggle-no-key)
     (should (equal (drgnx-shortcuts-test--shown) '(sc-a sc-d sc-g sc-n)))

@@ -169,6 +169,8 @@ be asked, `@' for one."
                                   (propertize " commands" 'face 'drgnx-text-subtle)))
              ;; Open Folder…: a path can be typed too
              ('drgnx-folder (propertize "Recent folders · or type a path" 'face 'drgnx-text-subtle))
+             ;; Color Theme: each candidate shows while the cursor is on it
+             ('drgnx-theme (propertize "Themes · shown as you move" 'face 'drgnx-text-subtle))
              (_ (concat (propertize "Commands · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap "#")
                         (propertize " code" 'face 'drgnx-text-subtle)
                         (when (and (fboundp 'drgnx-palette--ask-command) (drgnx-palette--ask-command))

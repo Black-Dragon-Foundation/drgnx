@@ -140,6 +140,19 @@ own mode line at the same width."
       (drgnx-statusbar-click (list 'mouse-1 (list bar 'mode-line '(0 . 0) 0 (cons s pos))))
       (should (equal drgnx-statusbar-frame-test--ran (list editor))))))
 
+(ert-deftest drgnx-statusbar-frame/a-click-leaves-focus-in-the-editor ()
+  "A real click selects the bar's window first; once the click's command ran, the editor is selected again (audit B3:
+the shield moved focus into the status bar, and the next command ran there)."
+  (drgnx-statusbar-frame-test--with
+    (setq drgnx-statusbar-frame-test--ran nil)
+    (drgnx-statusbar--frame-ensure (selected-frame))
+    (let* ((editor (selected-window)) (bar (drgnx-statusbar-frame-test--bar-window))
+           (s (with-selected-window bar (drgnx-statusbar-frame-mode-line)))
+           (pos (text-property-any 0 (length s) 'drgnx-statusbar-segment 'a s)))
+      (select-window bar)
+      (drgnx-statusbar-click (list 'mouse-1 (list bar 'mode-line '(0 . 0) 0 (cons s pos))))
+      (should (eq (selected-window) editor)))))
+
 (ert-deftest drgnx-statusbar-frame/off-takes-it-away ()
   "Turning the bar off, or the place back to `editors', deletes the bar's window and gives the editors their mode line."
   (drgnx-statusbar-frame-test--with

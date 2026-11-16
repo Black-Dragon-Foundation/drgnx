@@ -50,7 +50,8 @@
      (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
            (vertico-multiform-categories (list (cons 'drgnx-command drgnx-palette-frame-multiform)
                                                (cons 'drgnx-file drgnx-palette-frame-multiform)
-                                               (cons 'drgnx-folder drgnx-palette-frame-multiform)))
+                                               (cons 'drgnx-folder drgnx-palette-frame-multiform)
+                                               (cons 'drgnx-theme drgnx-palette-frame-multiform)))
            (was-vertico (bound-and-true-p vertico-mode)) (was-multiform (bound-and-true-p vertico-multiform-mode))
            (drgnx-palette-float-test--ran nil))
        (drgnx-command-define 'it :title "Do It" :category "Test" :command #'drgnx-palette-float-test--run-it)
@@ -377,6 +378,32 @@ parent folder), the hint `Recent folders · or type a path', no Vertico counter 
                        (copy-file shot out t)
                        (drgnx-uitest--evidence out))))))))
         (delete-directory top t)))))
+
+(ert-deftest palette-float-color-theme-is-the-palette-with-drgnx-themes-first ()
+  "Audit K6: Color Theme floats in the palette's frame; drgnx's own themes come first and the one in force is marked."
+  (drgnx-palette-float-test--with-palette
+    (let ((drgnx-palette-float-test--open #'drgnx-look-read-theme))
+      (drgnx-palette-float-test--reading
+       "dr"
+       (lambda ()
+         (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
+           (drgnx-test-wait (lambda () (and (frame-visible-p f)
+                                            (eq (window-buffer (frame-root-window f))
+                                                (window-buffer (active-minibuffer-window)))
+                                            (string-search "drgnx-dark"
+                                                           (or (overlay-get vertico--candidates-ov 'before-string) ""))))
+                            :what "Color Theme's rows in the palette's frame")
+           (drgnx-test-wait-presented)
+           (let ((rows (overlay-get vertico--candidates-ov 'before-string)))
+             (should (string-search "Themes" rows))                       ; the hint
+             (should (string-search "drgnx-dark" rows)))
+           (let ((shot (plist-get (drgnx-uitest-capture (make-temp-file "palette-ct-shots" t)) :root)))
+             (when shot
+               (let ((out (expand-file-name (format "palette-color-theme-s%s.png" (or (getenv "DRGNX_UI_SCALE") "1"))
+                                            temporary-file-directory)))
+                 (copy-file shot out t)
+                 (drgnx-uitest--evidence out))))))
+       (list ?\C-g)))))
 
 (ert-deftest palette-float-typing-and-ret-runs-command ()
   (drgnx-palette-float-test--with-palette

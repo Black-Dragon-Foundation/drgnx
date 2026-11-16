@@ -637,9 +637,14 @@ It runs on every redisplay: when nothing it reads changed, the title made last c
         (aref last 6)
       (let* ((name (cond ((derived-mode-p 'drgnx-start-mode) nil)
                          (buffer-file-name (file-name-nondirectory buffer-file-name))
+                         ;; a buffer that is no file reads in words, as its tab does (`*drgnx work: drgnx*' is
+                         ;; `work: drgnx'), not by its buffer name
+                         ((fboundp 'drgnx-chrome-title-of-name) (drgnx-chrome-title-of-name (string-trim (buffer-name b))))
                          (t (string-trim (buffer-name b)))))
              (project (and name (consp cache) (stringp (cdr cache)) (equal (car cache) default-directory)
-                           (file-name-nondirectory (directory-file-name (cdr cache)))))
+                           (let ((p (file-name-nondirectory (directory-file-name (cdr cache)))))
+                             ;; not again when the name already says it
+                             (and (not (string-match-p (regexp-quote p) name)) p))))
              (title (string-join (delq nil (list (and name (not (string-empty-p name)) name) project "drgnx")) " — ")))
         (aset last 0 b) (aset last 1 buffer-file-name) (aset last 2 (buffer-name b))
         (aset last 3 default-directory) (aset last 4 cache) (aset last 5 major-mode) (aset last 6 title)

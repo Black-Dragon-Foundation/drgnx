@@ -1205,7 +1205,7 @@ names), again only when the cache learns of a root or the buffer's file changes.
     (drgnx-statusbar--define-defaults)
     (let ((asked nil))
       (cl-letf (((symbol-function 'completing-read)
-                 (lambda (&rest _) (setq asked t) "text-mode"))
+                 (lambda (&rest _) (setq asked t) "Plain Text"))
                 ((symbol-function 'read-string) (lambda (&rest _) (setq asked t) "")))
         (with-temp-buffer
           (emacs-lisp-mode)
@@ -2318,4 +2318,25 @@ it puts it back only when a modal engine runs: without one, the default `mode-li
       (setq-default mode-line-format before))))
 
 (provide 'mod-statusbar-test)
+;; audit B5 and B3: human names for the encoding and the language click's choices
+(ert-deftest drgnx-statusbar/byte-code-buffers-have-human-names ()
+  (with-temp-buffer
+    (setq buffer-file-coding-system 'utf-8-emacs-unix)
+    (should (equal (drgnx-statusbar--seg-encoding) "UTF-8"))
+    (setq buffer-file-coding-system 'no-conversion)
+    (should (equal (drgnx-statusbar--seg-encoding) "Binary")))
+  (should (equal (drgnx-statusbar--language-name 'elisp-byte-code-mode) "Emacs Lisp (compiled)")))
+
+(ert-deftest drgnx-statusbar/the-language-click-offers-languages-not-mode-symbols ()
+  (let ((choices (drgnx-statusbar--language-choices)) offered)
+    (should (equal (cdr (assoc "Emacs Lisp" choices)) 'emacs-lisp-mode))
+    (should (equal (cdr (assoc "Plain Text" choices)) 'text-mode))
+    (should-not (seq-find (lambda (c) (string-suffix-p "-mode" (car c))) choices))
+    (should (= (length choices) (length (delete-dups (mapcar #'car (copy-sequence choices))))))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_p coll &rest _) (setq offered (all-completions "" coll)) "Plain Text")))
+      (with-temp-buffer (emacs-lisp-mode) (call-interactively 'drgnx-statusbar-change-mode)
+                        (should (eq major-mode 'text-mode))))
+    (should (member "Emacs Lisp" offered))))
+
 ;;; mod-statusbar-test.el ends here

@@ -158,8 +158,17 @@
       (should (string-match-p "(setq sat-pg-over 3)" s))
       (should (string-match-p "so 3 stays in effect" s))
       (should (string-match-p "Your change (2)" s))
-      (should (string-match-p "\\[Open config.el:[0-9]+\\]" s))
-      (should (string-match-p "\\[Move into Settings\\]" s)))))
+      ;; flat chips, not [bracket] links (audit K1)
+      (should (string-match-p " Open config.el:[0-9]+ " s))
+      (should (string-match-p " Move into Settings " s))
+      (should-not (string-match-p "\\[\\(Open\\|Move\\)" s)))))
+
+(ert-deftest drgnx-settings-page/no-debug-text-about-an-unknown-line ()
+  (let ((s (drgnx-settings-page-test--run
+            drgnx-settings-page-test--files
+            '((substring-no-properties
+               (drgnx-settings-page--source-text (list :effective 3 :file "/x/y.el" :source "your Lisp")))))))
+    (should-not (string-match-p "line unknown" s))))
 
 (ert-deftest drgnx-settings-page/reset-removes-this-scopes-entry ()
   (let ((r (drgnx-settings-page-test--run

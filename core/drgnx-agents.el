@@ -289,6 +289,25 @@ not installed (starting it says so) is left as it is."
 (defun drgnx-agents-profile-names ()
   (delete-dups (mapcar #'car (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles))))
 
+(defun drgnx-agents-profile-installed-p (name)
+  "Non-nil when profile NAME's program can be found: on the path, or the file it names."
+  (when-let* ((cmd (plist-get (cdr (assoc name (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles)))
+                              :command))
+              (prog (car (drgnx-agents-command cmd))))
+    (and (stringp prog) (or (executable-find prog) (and (file-name-absolute-p prog) (file-executable-p prog))) t)))
+
+(defun drgnx-agents-profile-read (prompt)
+  "Read a profile name with PROMPT; the ones whose program is not installed say so (and where to set them up)."
+  (let ((names (drgnx-agents-profile-names)))
+    (completing-read prompt
+                     (lambda (str pred action)
+                       (if (eq action 'metadata)
+                           `(metadata (annotation-function
+                                       . ,(lambda (n) (unless (drgnx-agents-profile-installed-p n)
+                                                        "  not installed (Onboarding: Agents sets it up)"))))
+                         (complete-with-action action names str pred)))
+                     nil t nil nil (drgnx-agents-default-profile))))
+
 (defun drgnx-agents-default-profile ()
   "The profile New Agent Session offers on Return: `drgnx-agents-default' when it names a profile, else claude."
   (let ((d (default-value 'drgnx-agents-default)))

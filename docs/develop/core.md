@@ -2286,7 +2286,7 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   off. With the hub not up yet the buffer shows a line saying it waits (`drgnx-explorer--waiting`) and fills when the
   hub connects (the env's reconnect subscribes again); nothing is listed in Lisp. The commands that show it (Focus
   Explorer, View: Explorer) start the hub when none runs (`drgnx-explorer-start-hub`, `drgnx-hub-start-for-command`);
-  a hook or timer never does. Next and previous follow `down` and
+  a hook or timer never does. The GUI launch of `bin/drgnx` (`drgnx open`) warms the hub in the background once the window is up (`open_warm_hub`: a detached `ratatoskr ensure`, never waited for, off under DRGNX_NO_HUB_START), so the Explorer usually finds it running. Next and previous follow `down` and
   `up`, expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing
   a folder changes `drgnx-explorer--expanded` and asks the hub again. In the user's commands that open, close or
   reveal (`drgnx-explorer--await` bound: expand, collapse, toggle, open, a click, the Buffers view's reveal) the command

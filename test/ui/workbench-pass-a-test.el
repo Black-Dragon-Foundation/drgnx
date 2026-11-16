@@ -327,4 +327,42 @@ of the test's own making, not a race with a delay."
           (dolist (f (ignore-errors (directory-files-recursively mount-trash "real")))
             (unless (member f before) (ignore-errors (delete-file f)))))))))
 
+;;;; The user's 2026-11-16 bug: click a file in the Explorer, then Ctrl+S (VS Code profile)
+
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-pass-a-ui-test--repo) nil t)
+(mapc #'require (drgnx-test-modules--requires (expand-file-name "modules/core/drgnx-basics.el" drgnx-pass-a-ui-test--repo)))
+(declare-function drgnx-keys-use "drgnx-keys" (layers &optional save))
+
+(ert-deftest drgnx-ui-view-save/a-click-in-the-explorer-then-ctrl-s-saves-the-file ()
+  "A real click on a file's row opens it and leaves focus in the Explorer; a real C-s (VS Code profile) saves that file:
+no prompt, no file named for the Explorer's buffer."
+  (drgnx-test-with-modules '(core/basics)
+    (drgnx-pass-a-ui-test--with-explorer root (lambda () (make-temp-file "drgnx-view-save" t)) t
+      (let ((file (expand-file-name "a.txt" root)) opened)
+        (write-region "one\n" nil file nil 'silent)
+        (drgnx-explorer-refresh)
+        (drgnx-pass-a-ui-test--row-shown file)
+        (require 'drgnx-keys)
+        (drgnx-keys-use '((vscode app editing window)))
+        (unwind-protect
+            (progn
+              (drgnx-pass-a-ui-test--click "a.txt")
+              (should (drgnx-pass-a-ui-test--wait (lambda () (setq opened (get-file-buffer file)))))
+              (with-current-buffer opened (goto-char (point-max)) (insert "two\n"))
+              (let ((explorer (get-buffer drgnx-explorer-buffer-name)))
+                ;; focus stays in the Explorer, as for the user; the key goes through the command loop
+                (select-window (or (get-buffer-window explorer t) (error "no Explorer window")))
+                (should (eq (current-buffer) explorer))
+                (drgnx-uitest-run (drgnx-uitest-key-events "C-s"))
+                (when (active-minibuffer-window) (drgnx-uitest-run (drgnx-uitest-key-events "C-g")) (ert-fail "C-s asked for a name"))
+                (should-not (buffer-modified-p opened))
+                (should (equal "one\ntwo\n" (with-temp-buffer (insert-file-contents file) (buffer-string))))
+                (should-not (buffer-local-value 'buffer-file-name explorer))
+                (should-not (file-exists-p (expand-file-name drgnx-explorer-buffer-name root)))))
+          (when opened (with-current-buffer opened (set-buffer-modified-p nil)) (kill-buffer opened))
+          ;; opening the file made the editor window's tab and bar parameters: they go with it
+          (dolist (w (window-list (drgnx-uitest-root-frame) 'no-mini))
+            (dolist (p '(drgnx-preview drgnx-tabs drgnx-tab-history tab-line-format header-line-format mode-line-format))
+              (set-window-parameter w p nil))))))))
+
 ;;; workbench-pass-a-test.el ends here

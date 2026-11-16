@@ -396,7 +396,7 @@ console's tab shows without taking the focus."
                                                           :map 'drgnx-debug-view-mode-map :when in-view))))
                               ;; the heap graph (drgnx-debug-heap.el): the panel's Graph tab, its key in its own map
                               (when (fboundp 'drgnx-wb-define-tab)
-                                (drgnx-wb-define-tab 'panel 'debug-graph :title "Graph"))
+                                (drgnx-wb-define-tab 'panel 'debug-graph :title "Heap Graph"))
                               (drgnx-command-define 'debug-heap-select :category "Debug" :title "Graph: Select Card"
                                                     :command #'drgnx-debug-heap-select
                                                     :doc "Ring the card at point and show its references"
