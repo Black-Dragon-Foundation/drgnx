@@ -29028,6 +29028,38 @@
       "classes": [
         "user"
       ],
+      "doc": "the editor shows a file in a minimap, or no longer: while it does, the hub sends the file's labels (its definitions, up to 8 MiB of text) on the model's raw path, again after edits pause",
+      "name": "minimap/watch",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`minimap/watch`: the editor shows FILE (absolute) in a minimap (ON), or no longer (not ON).  While a connection\nwatches it, the hub sends the file's minimap labels (its definitions as the Outline reads them, up to\n`MINIMAP_LABELS_MAX` bytes of text) on the model's raw path (`view-model` with `minimap`, docs/develop/hub.md,\n\"The minimap's layers\"), at once and again after the editor's edits to it pause; never per keystroke.",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "file",
+          "on"
+        ],
+        "title": "MinimapWatch",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "clear one cell's output and execution count, or every code cell's; a queued or running cell is left as it is",
       "name": "notebook/clear",
       "params": {

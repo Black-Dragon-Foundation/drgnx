@@ -229,4 +229,81 @@ new width over its own; the thumb names a face, so a theme change needs nothing 
         (should (equal fringes (list 8 (+ 8 (* 2 (funcall px 12))))))
         (should (symbolp (car (plist-get (window-parameter w 'glitnir-ruler) :band))))))))
 
+;;;; The minimap (modules/editor/drgnx-minimap.el)
+
+(defmacro ruler-test--with-minimap (&rest body)
+  "BODY as `ruler-test--with-scrollbar', the buffer visiting a file, with the minimap's placement hooked and the
+hub's connection taken as up: CALLS holds the hub calls made, (METHOD PARAMS) each, oldest first."
+  (declare (indent 0))
+  `(let ((calls nil) (file (make-temp-file "drgnx-minimap" nil ".el")))
+     (load (expand-file-name "modules/editor/drgnx-minimap" drgnx-dir) nil t)
+     (cl-letf (((symbol-function 'drgnx-minimap--hub-p) (lambda () t))
+               ((symbol-function 'drgnx-hub--call-on)
+                (lambda (_proc method params &rest _) (setq calls (append calls (list (list method params)))))))
+       (add-hook 'drgnx-ruler-place-functions #'drgnx-minimap--place)
+       (unwind-protect
+           (ruler-test--with-scrollbar
+             (setq buffer-file-name file)
+             (goto-char (point-max))
+             (insert ";;;; Commands\n")
+             (set-buffer-modified-p nil)
+             (drgnx-ruler--place (selected-window))
+             ,@body)
+         (remove-hook 'drgnx-ruler-place-functions #'drgnx-minimap--place)
+         (delete-file file)))))
+
+(ert-deftest drgnx-minimap/an-editor-window-gets-the-minimap-and-its-labels ()
+  "An editor window with the strip gets `glitnir-minimap': 120 px, the labels on with their colours, the file's true
+name (Sjá's key for the hub's labels); the hub is told once that the file is shown, and the buffer text's line model
+finds the MARK sections with the default expression."
+  (skip-unless (fboundp 'nidhogg-lines-set-section-regexp))
+  (ruler-test--with-minimap
+    (let ((spec (window-parameter (selected-window) 'glitnir-minimap)))
+      (should (equal (plist-get spec :width) 120))
+      (should (eq (plist-get spec :labels) t))
+      (should (equal (plist-get spec :file) (file-truename file)))
+      (should (equal (list (plist-get spec :accent) (plist-get spec :mark)) '(drgnx-accent warning)))
+      (should (equal calls (list (list "minimap/watch" (list :file (file-truename file) :on t)))))
+      (should (equal (nidhogg-lines-sections nil) (list (cons (ruler-test--pos 101) "Commands"))))
+      ;; placed again: nothing new is sent
+      (drgnx-ruler--place (selected-window))
+      (should (= (length calls) 1)))))
+
+(ert-deftest drgnx-minimap/marks-only-and-off ()
+  "`marks-only': the labels stay on but name no file, and the hub is told the file is shown no more; nil: no labels
+at all, and no MARK expression in the model."
+  (skip-unless (fboundp 'nidhogg-lines-set-section-regexp))
+  (ruler-test--with-minimap
+    (let ((drgnx-minimap-labels 'marks-only))
+      (drgnx-ruler--place (selected-window))
+      (let ((spec (window-parameter (selected-window) 'glitnir-minimap)))
+        (should (eq (plist-get spec :labels) 'marks-only))
+        (should-not (plist-get spec :file)))
+      (should (equal (cadr calls) (list "minimap/watch" (list :file (file-truename file) :on :false)))))
+    (let ((drgnx-minimap-labels nil))
+      (drgnx-ruler--place (selected-window))
+      (should-not (plist-get (window-parameter (selected-window) 'glitnir-minimap) :labels))
+      (should-not (nidhogg-lines-sections nil)))))
+
+(ert-deftest drgnx-minimap/no-minimap-for-views-special-buffers-or-when-off ()
+  "A Sjá view (it has a span function), a special-mode buffer and `drgnx-minimap' nil get no minimap; the strip
+stays."
+  (skip-unless (fboundp 'nidhogg-lines-set-section-regexp))
+  (ruler-test--with-minimap
+    (let ((w (selected-window)))
+      (should (window-parameter w 'glitnir-minimap))
+      (let ((drgnx-minimap nil))
+        (drgnx-ruler--place w)
+        (should-not (window-parameter w 'glitnir-minimap))
+        (should (window-parameter w 'glitnir-ruler)))
+      (setq-local drgnx-ruler-span-function (lambda () '(0 10 100)))
+      (drgnx-ruler--place w)
+      (should-not (window-parameter w 'glitnir-minimap))
+      (kill-local-variable 'drgnx-ruler-span-function)
+      (drgnx-ruler--place w)
+      (should (window-parameter w 'glitnir-minimap))
+      (special-mode)
+      (drgnx-ruler--place w)
+      (should-not (window-parameter w 'glitnir-minimap)))))
+
 ;;; ruler-test.el ends here

@@ -298,6 +298,7 @@ params! {
     BuffersSet(view::BuffersSet),
     OutlineSet(view::OutlineSet),
     OutlineScopes(view::OutlineScopesParams),
+    MinimapWatch(view::MinimapWatch),
     TermOpen(term::TermOpen),
     TermConfig(term::TermConfig),
     TermKey(term::TermKey),

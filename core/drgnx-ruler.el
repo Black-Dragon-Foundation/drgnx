@@ -236,9 +236,15 @@ RADIUS [END])."
     (when (window-parameter window 'glitnir-ruler)
       (set-window-parameter window 'glitnir-ruler nil))))
 
+(defvar drgnx-ruler-place-functions nil
+  "Functions called with WINDOW and whether it shows the strip, each time its strip is placed (the minimap widens
+out of the strip: `editor/minimap').")
+
 (defun drgnx-ruler--place (window)
   "WINDOW's strip as it should be now: shown with its spec, or gone."
-  (if (drgnx-ruler--wants-p window) (drgnx-ruler--show window) (drgnx-ruler--hide window)))
+  (let ((on (drgnx-ruler--wants-p window)))
+    (if on (drgnx-ruler--show window) (drgnx-ruler--hide window))
+    (run-hook-with-args 'drgnx-ruler-place-functions window on)))
 
 (defun drgnx-ruler-update (&optional buffer)
   "Give every window showing BUFFER (default current) its strip again, without asking the producers: its span moved
@@ -258,10 +264,12 @@ or a setting changed."
   "`window-buffer-change-functions' (global): a window that now shows another buffer gets that buffer's strip, or
 loses the strip."
   (dolist (w (if (windowp frame-or-window) (list frame-or-window) (window-list frame-or-window 'nomini)))
-    (if (drgnx-ruler--wants-p w)
-        (drgnx-ruler--show w)
-      (when (or (window-parameter w 'glitnir-ruler) (window-parameter w 'drgnx-ruler-fringe))
-        (drgnx-ruler--hide w)))))
+    (let ((on (drgnx-ruler--wants-p w)))
+      (if on
+          (drgnx-ruler--show w)
+        (when (or (window-parameter w 'glitnir-ruler) (window-parameter w 'drgnx-ruler-fringe))
+          (drgnx-ruler--hide w)))
+      (run-hook-with-args 'drgnx-ruler-place-functions w on))))
 
 (defun drgnx-ruler--changed (&rest _)
   "`after-change-functions': the marks are asked again once the typing rests, and given to the line model again."

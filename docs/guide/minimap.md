@@ -21,6 +21,18 @@ Settings, Keyboard Shortcuts, Extensions and the Work views. It is a map as well
 - **Mouse:** press on the strip to go to that place; drag to scroll with the pointer.
 - In a terminal frame there is no strip yet (it arrives with the terminal column).
 
+## The minimap
+
+Rest the pointer on an editor's scroll bar and it widens into a map of the whole file, drawn over the right edge of
+the text (the text does not move): a bar for each line, the part you see as a band, and the names of the file's
+definitions, indented by how deeply they nest. The name under the pointer is in the accent colour. MARK sections
+are drawn in capitals in the warning colour with a line above: comments such as `// MARK: Parsing`, `// region
+Helpers` or `#region`, `#pragma mark`, Lisp `;;;;` headings and `# %%` notebook cells. Click or drag on the map to
+go there; move away and it shrinks back after 600 ms.
+
+Definitions are named for files up to 8 MiB (they come from the same outline as the Outline view); MARK sections
+are found in files of any size.
+
 ## Going from mark to mark
 
 | Command | VS Code | Emacs | Vim |
@@ -41,6 +53,10 @@ says where it is in the echo area, for example `error 2 of 7: unused variable, l
 | `drgnx-minimap-ruler` | on | The scroll bar on every scrollable surface. Off: only buffers with marks of their own (a debugger's breakpoints) show it. |
 | `drgnx-minimap-hide-short` | on | Hide the scroll bar while the content fits the window. |
 | `drgnx-marks-kinds` | all | The kinds of marks shown and visited: changes, errors, warnings, notes, search hits, breakpoints, bookmarks, symbol uses, agent edits, pinned regions, and any other producer's. |
+| `drgnx-minimap` | on | The scroll bar of an editor widens into the minimap when the pointer rests on it. |
+| `drgnx-minimap-width` | 120 | The minimap's width in pixels, 80 to 200. |
+| `drgnx-minimap-labels` | on | Names over the minimap: definitions and MARK sections, MARK sections only, or none. |
+| `drgnx-minimap-mark-regexp` | MARK comments, regions, `;;;;`, `# %%` | Which comment lines are MARK sections: a regular expression in Rust's syntax, matched against each line; the name is its group `name`, else its first group. |
 | `drgnx-marks-symbol-uses` | off | Mark every use of the symbol under the cursor, 400 ms after you stop moving. |
 
 The module is `editor/minimap`; turning it off takes every strip away.

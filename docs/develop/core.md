@@ -1625,6 +1625,16 @@ lists at each publish.
   keeps the newest version of each layer by file, and the line model and the minimap layer read it there
   (`nidhogg-view-minimap` from Lisp). The fixture `tests/fixtures/minimap-push.json` is the hub's lines, and Sjá's
   test loads the same file.
+- **The minimap.** `editor/minimap` hooks `drgnx-ruler-place-functions` (run with each window and whether it shows
+  the strip, when its strip is placed: no Lisp per scroll). An editor window (`drgnx-minimap-window-p`: the strip
+  shown, `drgnx-minimap` on, a file or a `prog-mode`/`text-mode` buffer that is neither a Sjá view nor a special mode)
+  gets the window parameter `glitnir-minimap`: `:width` (`drgnx-minimap-width`, 80–200), the colours, `:nesting`,
+  and with `drgnx-minimap-labels` the labels' `:labels` (`t` or `marks-only`), their colours (`:label`, `:sub` for a
+  nested definition, `:accent` for the one under the pointer, `:mark` for a MARK section), `:label-face` (the font)
+  and `:file`, the file's true name, which keys the hub's `labels` layer in Sjá. The buffer's line model gets the MARK
+  expression (`nidhogg-lines-set-section-regexp`, `drgnx-minimap-mark-regexp`, Rust regex syntax) and finds the MARK
+  sections itself; the hub is told the file is shown (`minimap/watch`, once per change of file) and sends the
+  definitions. Nidhogg draws the rest (Glitnir's minimap layer: tiles, labels, the pointer).
 - **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
   8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
   at 26 %; all through `drgnx-px`.

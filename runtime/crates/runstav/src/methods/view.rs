@@ -335,6 +335,17 @@ pub struct OutlineScopes {
     pub scopes: Vec<OutlineScope>,
 }
 
+/// `minimap/watch`: the editor shows FILE (absolute) in a minimap (ON), or no longer (not ON).  While a connection
+/// watches it, the hub sends the file's minimap labels (its definitions as the Outline reads them, up to
+/// `MINIMAP_LABELS_MAX` bytes of text) on the model's raw path (`view-model` with `minimap`, docs/develop/hub.md,
+/// "The minimap's layers"), at once and again after the editor's edits to it pause; never per keystroke.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MinimapWatch {
+    pub file: String,
+    pub on: bool,
+}
+
 fn check_outline_file(f: &str) -> Result<(), Error> {
     if f.is_empty() || f.len() > OUTLINE_FILE_MAX || !f.starts_with('/') {
         return Err(invalid(
@@ -406,6 +417,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "the file the Outline panel's hub-fed view shows (none: no file): the hub outlines it (the editor's unsaved text where its edit history tracks the buffer, else the disk), again after edits pause, and sends the view's model and rows",
             check: check_outline,
+        ),
+        method!(
+            "minimap/watch", MinimapWatch(MinimapWatch) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor shows a file in a minimap, or no longer: while it does, the hub sends the file's labels (its definitions, up to 8 MiB of text) on the model's raw path, again after edits pause",
+            check: |p: &MinimapWatch| check_outline_file(&p.file),
         ),
         method!(
             "outline/scopes", OutlineScopes(OutlineScopesParams) -> OutlineScopes,

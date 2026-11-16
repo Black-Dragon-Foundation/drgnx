@@ -101,6 +101,11 @@ pub fn shown_of(path: &str, text: &str) -> Shown {
 /// FILE's text as the editor has it (the history's mirror), else as the disk has it; a notice when it is too large or
 /// cannot be read.
 async fn text_of(f: &Front, file: &str) -> Result<String, &'static str> {
+    text_within(f, file, OUTLINE_MAX).await
+}
+
+/// [`text_of`] with the disk's file read only up to MAX bytes (the minimap's labels read further than the Outline).
+pub(super) async fn text_within(f: &Front, file: &str, max: usize) -> Result<String, &'static str> {
     if let Some((t, _)) = crate::editor::mirror_of(f, file).await {
         return Ok(t);
     }
@@ -110,7 +115,7 @@ async fn text_of(f: &Front, file: &str) -> Result<String, &'static str> {
         if !meta.is_file() {
             return Err(NONE);
         }
-        if too_large(meta.len()) {
+        if meta.len() > max as u64 {
             return Err(LARGE);
         }
         let bytes = std::fs::read(&path).map_err(|_| NONE)?;
@@ -341,6 +346,7 @@ pub async fn set(f: &Front, c: &Caller, p: OutlineSet) -> Result<bool, Error> {
 /// The edit history took an edit to FILE: every view showing it is outlined again once its edits pause.
 pub fn touched(f: &Front, file: &str) {
     let file = crate::work::presence::true_name(file);
+    super::minimap::touched(f, &file);
     let due: Vec<((u64, String), u64)> = {
         let mut views = lock(&f.core.views.outlines.views);
         views

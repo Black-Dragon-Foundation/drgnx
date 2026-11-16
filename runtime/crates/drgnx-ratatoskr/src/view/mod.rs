@@ -616,6 +616,8 @@ pub struct Views {
     buffers: buffers::Buffers,
     /// The Outline panels' outlines (`outline/set`).
     outlines: outline::Outlines,
+    /// The files the editor shows in a minimap (`minimap/watch`).
+    pub(crate) minimaps: minimap::Watches,
     /// The Source Control views (`scm/subscribe`).
     scms: scm::Scms,
     /// The Run and Debug views (`debug/view`).
@@ -642,6 +644,7 @@ impl Default for Views {
             lists: extensions::Lists::default(),
             buffers: buffers::Buffers::default(),
             outlines: outline::Outlines::default(),
+            minimaps: minimap::Watches::default(),
             scms: scm::Scms::default(),
             debugs: debug::DebugViews::default(),
             panels: Arc::default(),
@@ -1018,6 +1021,7 @@ impl Views {
         self.lists.gone(conn);
         self.buffers.gone(conn);
         self.outlines.gone(conn);
+        self.minimaps.gone(conn);
         self.scms.gone(conn);
         self.debugs.gone(conn);
         self.panels.gone(conn, None);
