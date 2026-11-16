@@ -72,7 +72,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   hub ended its sessions or closed its connections) does not. Then the hub exits 0. The log is tracing JSON, one object per line, in `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600,
   the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
-  string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
+  string (`info`, the default, with Loro's crates `loro_internal` and `loro` at `warn`: loro-internal logs nine info
+  lines for every block it encodes; `warn,drgnx_ratatoskr::conn=debug`; a string given is taken as it is). The cap, keys and params are never logged. The
   stall watchdog (`stall.rs`) watches the runtime's two async workers: a task beats every 50 ms, and a plain thread
   warns `the runtime stalled` when a beat is later than the threshold or a named task's poll has run that long, with
   every poll in progress (thread, task name, how long) and, on Linux, each worker's kernel state, wait channel and
