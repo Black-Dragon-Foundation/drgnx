@@ -6,6 +6,7 @@
 //! [`BATCH`] or at [`BATCH_BYTES`]. A batch never holds more than [`QUEUE_CAP`] bytes: past it the oldest lines go and
 //! the next batch says how many ("N lines skipped").
 
+use drgnx_rows::faces::FaceId;
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -119,16 +120,16 @@ impl Style {
             f.push(FG[usize::from(c)]);
         }
         if self.bold {
-            f.push("drgnx-debug-console-bold");
+            f.push(FaceId::DebugConsoleBold.name());
         }
         if self.dim {
-            f.push("drgnx-debug-console-faint");
+            f.push(FaceId::DebugConsoleFaint.name());
         }
         if self.italic {
-            f.push("drgnx-debug-console-italic");
+            f.push(FaceId::DebugConsoleItalic.name());
         }
         if self.underline {
-            f.push("drgnx-debug-console-underline");
+            f.push(FaceId::DebugConsoleUnderline.name());
         }
         f
     }

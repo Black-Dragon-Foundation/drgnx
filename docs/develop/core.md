@@ -3283,6 +3283,56 @@ surfaces (for buttons that run registry commands), so the status bar, the lists 
   `drgnx-ui-close`. No close or unqueue mark is a literal `×`: the Buffers panel's rows, the find bar and the agents
   queue (glyph `unqueue`) draw kit glyphs, so a terminal that is not UTF-8 shows `x`, `x` and `-`.
 
+### Components (`etc/ui/components.eld`)
+
+`etc/ui/components.eld` is the kit's one definition: the state table (rest, hover, pressed, selected,
+selected-inactive, focus-visible, disabled; each with its fill, radius, ring, text, semantic face and terminal form)
+and one entry per component (variants with defaults, geometry in logical px, a terminal form, a spoken label, colour
+bindings). The file's header comment is its schema. Lisp reads it once (`drgnx-ui-kit-components`, `-component`,
+`-state`, `-geometry ID VARIANTS`, which resolves `(:by AXIS ...)` cases and `(density KEY)` sizes; nil without
+`ui/look`); the kit faces `drgnx-kit-ID[-VALUE...]` are defined at compile time from its colour bindings
+(`drgnx-ui-kit-define-faces`), and the hub reads it through the generated `kit_gen.rs` (`docs/develop/design-system.md`,
+"Generated code"). Test: `test/unit/ui-kit-test.el`.
+
+### The expansion (`drgnx-ui-kit-expand`, `drgnx-ui-kit-string`)
+
+The hub expands components into rows (`drgnx_rows::kit`, `docs/develop/hub.md`, "The kit"); Lisp expands the same
+file the same way, for Lisp-drawn chrome only (header, mode and tab lines, the title row, settings, the start page).
+The rule both follow: a pad is `floor(logical × scale + 0.5 + 1e-9)` device px per part, a size made of parts (a tree
+row's start pad and its indents) the sum of the rounded parts (`drgnx-px`); on a terminal a pad is `:tty :pad`
+characters and `:tty :indent` per level, and a glyph takes its terminal form; the runs are the component's kit face
+(none where it has none) and the state's face under it, over the component; an action puts `drgnx-action` and
+`mouse-face` (`drgnx-hover`) over the component and its `:hit` padding. The conformance fixture
+(`test/fixtures/kit/cases.json`, `expected.json`) holds each component at scales 1, 1.25, 1.75 and 2 and on a
+terminal (UTF-8 and ASCII); the hub's test writes `expected.json` (`DRGNX_KIT_BLESS=1 cargo test -p drgnx-rows --test
+kit_conformance`, read it before committing) and `drgnx-ui-kit/conformance` checks Lisp against it.
+
+- `(drgnx-ui-kit-expand COMPONENT PROPS SCALE TTY)`: COMPONENT a symbol (`row`), PROPS the hub's `Comp` JSON as a
+  plist (`(:c "row" :kind "tree" :depth 2 :twisty t :text "src" :state "selected")`; `:twisty` t open, `:false`
+  closed, absent none), TTY nil, t or `ascii`. Returns the hub's row shape: `(:text S :runs [[FROM TO FACE]...] :props
+  [[FROM TO NAME VALUE]...] :spaces [[POS W H]...])`.
+- `(drgnx-ui-kit-string COMPONENT PROPS WHERE FRAME)`: the same as a propertized string for WHERE, `text`,
+  `header-line`, `mode-line` or `tab-line`, at FRAME's scale (or as its terminal draws it). In `text` a pad is
+  `(space :width N)` with N = px / `frame-char-width`, canonical characters, so one buffer is right on frames of two
+  scales; on a line it is `(space :width (PX))`, the spec made once per width (`drgnx-ui-kit--pads`, bounded by the
+  pad widths at the scales seen). Per-row path: positional arguments, no `&key`, no `apply`, no closures; after a
+  warm-up a call allocates no vector (`drgnx-ui-kit/row-call-allocates-no-closure`).
+
+### Actions and focus-visible
+
+- A component's action is the property `drgnx-action` = `(KIND ARGS...)` (on the wire `[kind, args...]`). Both dress
+  functions (`drgnx-view-patch--dress`, `drgnx-view-sja--dress`) and `drgnx-ui-kit-string` put the kind's keymap
+  where they put it (`local-map` on a line). `(drgnx-ui-kit-define-action KIND FUNCTION KEYS)` defines a kind
+  (FUNCTION gets ARGS; KEYS `((KEY . ARGS-TRANSFORM)...)` more keys of the kind's map), undone with the module that
+  defined it (`drgnx-ui-kit-undefine-action`; the registry `drgnx-ui-kit--actions` is in the modules fingerprint).
+  `(drgnx-ui-kit-action-map KIND)` is the kind's one map, built once; it inherits `drgnx-ui-kit-action-base-map`
+  (clicks on text and on the three lines), which an unknown kind gets. Every key runs `kit-activate`
+  (`drgnx-ui-kit-activate`, registered by `ui/look`; RET in the three profiles): it reads the property at point or
+  at the click and calls the kind's function; a kind not defined is a `user-error` naming it, never silence.
+- `drgnx-ui-kit-focus-visible-p`: t after a key event, nil after a mouse event (spec §7.3), kept by
+  `drgnx-ui-kit-focus-mode`, a global minor mode with a named `pre-command-hook` function, on with `ui/look`'s setup
+  and off in its teardown.
+
 ## Colour library (`core/drgnx-color.el`)
 
 Every colour computation goes through this file: quick help's card, the panel colours derived when a theme loads,

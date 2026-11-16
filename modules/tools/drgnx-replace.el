@@ -927,7 +927,7 @@ Branch's base and `±'."
         (string-join (delq nil (list (format "%s: %d file%s" name n (if (= n 1) "" "s"))
                                      (and (> sub 0) (format "%d submodule%s not searched" sub (if (= sub 1) "" "s")))
                                      (and (> del 0) (format "%d deleted" del))))
-                     " · ")))))
+                     (drgnx-face-glyph 'sep))))))
 
 (defun drgnx-replace--scope-command (scope)
   "Search the Search view in SCOPE (nil: the chip after its scope)."
@@ -1089,9 +1089,10 @@ why."
   "Write the status line: how many results, still searching, the last message."
   (let* ((n (if drgnx-view-patch (or (cdr drgnx-replace--hub-counts) 0) (length drgnx-replace--matches)))
          (files (if drgnx-view-patch (or (car drgnx-replace--hub-counts) 0) (hash-table-count drgnx-replace--seen)))
-         (counts (cond ((and (zerop n) drgnx-replace--searching) "Searching…")
+         (searching (concat "Searching" (drgnx-face-glyph 'ellipsis)))
+         (counts (cond ((and (zerop n) drgnx-replace--searching) searching)
                        ((zerop n) (if (string-empty-p (drgnx-replace--text 'find)) (drgnx-replace--hint) "No results"))
-                       (t (format "%s%d result%s in %d file%s" (if drgnx-replace--searching "Searching… " "")
+                       (t (format "%s%d result%s in %d file%s" (if drgnx-replace--searching (concat searching " ") "")
                                   n (if (= n 1) "" "s") files (if (= files 1) "" "s")))))
          ;; Symbol finds by name only (no type resolution): its results say so
          (by-name (if (and (> n 0) (eq (drgnx-replace--opt :mode) 'symbol))
@@ -1100,7 +1101,7 @@ why."
          (line (string-join (seq-remove #'string-empty-p
                                         (list counts by-name (or (drgnx-replace--scope-text) "")
                                               drgnx-replace--status))
-                            " · ")))
+                            (drgnx-face-glyph 'sep))))
     (drgnx-replace--drawing
      (delete-region drgnx-replace--status-beg drgnx-replace--status-end)
      (goto-char drgnx-replace--status-beg)
@@ -1111,13 +1112,13 @@ why."
      (insert (drgnx-search-handoff-chip))
      ;; Branch with no base to take (a detached HEAD, no upstream, main or master): its menu
      (when (plist-get drgnx-replace--scope-done :needs_base)
-       (insert (propertize " · " 'face 'drgnx-replace-dim))
-       (insert-text-button "Choose…" 'face 'link 'follow-link t 'help-echo "Choose the branch's base"
+       (insert (propertize (drgnx-face-glyph 'sep) 'face 'drgnx-replace-dim))
+       (insert-text-button (concat "Choose" (drgnx-face-glyph 'ellipsis)) 'face 'link 'follow-link t 'help-echo "Choose the branch's base"
                            'action (lambda (_) (drgnx-replace--choose-base))))
      ;; no automatic mode: a text search that found nothing offers the same words by meaning
      (when (and (equal counts "No results") (eq (drgnx-replace--opt :mode) 'text) (not (drgnx-replace--opt :symbol))
                 (not (plist-get drgnx-replace--scope-done :needs_base)))
-       (insert (propertize " · " 'face 'drgnx-replace-dim))
+       (insert (propertize (drgnx-face-glyph 'sep) 'face 'drgnx-replace-dim))
        (insert-text-button "Try Meaning" 'face 'link 'follow-link t 'help-echo "Search these words by meaning"
                            'action (lambda (_) (drgnx-replace-search-mode-meaning))))
      ;; the grouping's segmented control, under the status line (the hub's rows only)
@@ -1260,10 +1261,11 @@ whose rows end the list, at the end (a new file after its header)."
 (defun drgnx-replace--preview (m new)
   "What M's row shows: the text around it, M as old → new (NEW, the replace field), a skipped match's reason."
   (let* ((before (string-trim-left (plist-get m :before)))
-         (before (if (> (length before) 16) (concat "…" (substring before -15)) before))
+         (before (if (> (length before) 16) (concat (drgnx-face-glyph 'ellipsis) (substring before -15)) before))
          (rep (and (or (plist-get m :placeholder) (not (string-empty-p new)))
                    (ignore-errors (drgnx-replace-new-text m new))))
-         (flat (lambda (s) (string-replace "\n" "⏎" s))))
+         (newline (drgnx-face-glyph 'newline))
+         (flat (lambda (s) (string-replace "\n" newline s))))
     (concat (funcall flat before)
             (if rep
                 (concat (propertize (funcall flat (plist-get m :text)) 'face 'drgnx-replace-old)
@@ -1603,7 +1605,7 @@ buffers' text goes to the hub after a pause (`drgnx-replace--send-buffers'), whi
 (defun drgnx-replace--report (written files skipped)
   "What a write said: WRITTEN matches in FILES files, SKIPPED of them left (\"Replaced 58 in 4 files · 2 skipped\")."
   (format "Replaced %d in %d file%s%s" written files (if (= files 1) "" "s")
-          (if (> skipped 0) (format " · %d skipped" skipped) "")))
+          (if (> skipped 0) (format "%s%d skipped" (drgnx-face-glyph 'sep) skipped) "")))
 
 (defvar-local drgnx-replace--writes nil
   "The view's writes the hub has not ended: alist CHANGE → (KIND DATA SKIPPED), KIND and DATA what its end does
@@ -2118,9 +2120,9 @@ it would draw stays as it was)."
   "SPEC as a line of the lists: its words, its mode unless Text, its scope unless Project."
   (let ((mode (plist-get (plist-get spec :query) :mode)) (kind (plist-get (plist-get spec :scope) :kind)))
     (concat (drgnx-replace--spec-text spec)
-            (and mode (not (equal mode "text")) (format " · %s" (capitalize mode)))
+            (and mode (not (equal mode "text")) (concat (drgnx-face-glyph 'sep) (capitalize mode)))
             (when-let* (((and kind (not (equal kind "project")))) (s (assq (intern kind) drgnx-replace--scopes)))
-              (format " · %s" (nth 1 s))))))
+              (concat (drgnx-face-glyph 'sep) (nth 1 s))))))
 
 (defun drgnx-replace--restore (spec)
   "Make SPEC (a search as the hub keeps it) the view's search, whole, and run it."
@@ -2258,7 +2260,8 @@ and the last recent ones (`drgnx-replace-recent-shown'), each a button that rest
          (when (drgnx-replace--true (plist-get s :pinned))
            (let ((s s) (n (alist-get i drgnx-replace--pin-counts)))
              (push (lambda ()
-                     (drgnx-replace--list-button (format "%s · %s" (plist-get s :name) (if n n "…"))
+                     (drgnx-replace--list-button (format "%s%s%s" (plist-get s :name) (drgnx-face-glyph 'sep)
+                                                         (if n n (drgnx-face-glyph 'ellipsis)))
                                                  "Run this pinned search" (lambda () (drgnx-replace--restore
                                                                                       (plist-get s :search))))
                      (insert " "))
@@ -2282,7 +2285,7 @@ and the last recent ones (`drgnx-replace-recent-shown'), each a button that rest
                (drgnx-replace--list-button "share" "Share with the project (.drgnx/searches.eld)"
                                            (lambda () (drgnx-replace--saved-do "search/saved/share" s)))
                (insert " ")
-               (drgnx-replace--list-button "×" "Delete this saved search"
+               (drgnx-replace--list-button (drgnx-face-glyph 'dismiss) "Delete this saved search"
                                            (lambda () (drgnx-replace--saved-do "search/saved/delete" s))))
              (insert "\n"))))
        (when drgnx-replace--recent
@@ -3215,7 +3218,7 @@ groups line; the hunk's match ids on the whole row)."
                          (band (concat " " (drgnx-replace--hunk-box ids off (length (plist-get h :kept)))
                                        " " (format "hunk %d" (1+ i))
                                        (if-let* ((label (plist-get h :label)))
-                                           (concat (propertize " · " 'face 'drgnx-text-subtle)
+                                           (concat (propertize (drgnx-face-glyph 'sep) 'face 'drgnx-text-subtle)
                                                    (propertize label 'face 'drgnx-replace-preview-def))
                                          "")
                                        (drgnx-replace--right
@@ -3242,8 +3245,8 @@ groups line; the hunk's match ids on the whole row)."
     (list " " (propertize "Preview" 'face 'drgnx-ui-heading) " "
           (if drgnx-replace--preview-root (file-relative-name path drgnx-replace--preview-root)
             (abbreviate-file-name path))
-          (propertize (format " · %d of %d matches ticked · " (cl-count-if-not (lambda (id) (member id off)) all)
-                              (+ (length all) kept))
+          (propertize (format "%s%d of %d matches ticked%s" (drgnx-face-glyph 'sep) (cl-count-if-not (lambda (id) (member id off)) all)
+                              (+ (length all) kept) (drgnx-face-glyph 'sep))
                       'face 'drgnx-text-subtle)
           (propertize (format "+%d" (or (plist-get answer :plus) 0)) 'face 'drgnx-replace-plus) " "
           (propertize (format "−%d" (or (plist-get answer :minus) 0)) 'face 'drgnx-replace-minus)
@@ -3462,7 +3465,7 @@ why, what Undo does, Cancel and Replace)."
                  (propertize (format "Replace %d match%s in %d file%s" n (if (= n 1) "" "es") (length files)
                                      (if (= (length files) 1) "" "s"))
                              'face 'drgnx-ui-heading)
-                 (if skipped (propertize (format " · %d skipped" (length skipped)) 'face 'drgnx-text-subtle) "")
+                 (if skipped (propertize (format "%s%d skipped" (drgnx-face-glyph 'sep) (length skipped)) 'face 'drgnx-text-subtle) "")
                  (propertize "\n" 'line-height 2.4)
                  ;; its rule (the mockup's `.sheet .t' bottom line): an overline on a 6 px row (the room above the
                  ;; files), as wide as the foot's

@@ -11,6 +11,7 @@
 use super::model::Doc;
 use super::{Key, Views, icons, lock};
 use crate::front::Front;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::extensions as w;
 use runstav::methods::view::{Display, ViewEnv};
@@ -118,28 +119,31 @@ fn state_chip(r: &w::Row) -> Option<(String, &'static str)> {
     Some(match r.state {
         S::Unapproved => (
             "not approved: it does not run".into(),
-            "drgnx-status-needs-you",
+            FaceId::StatusNeedsYou.name(),
         ),
-        S::Changed => ("changed: approve it again".into(), "drgnx-status-needs-you"),
+        S::Changed => (
+            "changed: approve it again".into(),
+            FaceId::StatusNeedsYou.name(),
+        ),
         S::Disabled => ("disabled".into(), "shadow"),
-        S::Broken => ("broken".into(), "drgnx-status-fail"),
+        S::Broken => ("broken".into(), FaceId::StatusFail.name()),
         S::Update => (
             r.latest
                 .as_ref()
                 .map_or_else(|| "update".into(), |l| format!("update to {l}")),
-            "drgnx-status-warn",
+            FaceId::StatusWarn.name(),
         ),
-        S::Held => ("held".into(), "drgnx-status-warn"),
-        S::Incompat => ("needs a newer Emacs".into(), "drgnx-status-warn"),
+        S::Held => ("held".into(), FaceId::StatusWarn.name()),
+        S::Incompat => ("needs a newer Emacs".into(), FaceId::StatusWarn.name()),
         // a row the user did not ask for: a neutral warning, not a failure
         S::Missing => (
             "missing: no archive you use has it".into(),
-            "drgnx-status-warn",
+            FaceId::StatusWarn.name(),
         ),
-        S::Failed => ("failed".into(), "drgnx-status-fail"),
-        S::NeedsPackage => ("waits for a package".into(), "drgnx-status-warn"),
-        S::Dependency => ("dependency".into(), "drgnx-status-info"),
-        S::On => ("on".into(), "drgnx-status-ok"),
+        S::Failed => ("failed".into(), FaceId::StatusFail.name()),
+        S::NeedsPackage => ("waits for a package".into(), FaceId::StatusWarn.name()),
+        S::Dependency => ("dependency".into(), FaceId::StatusInfo.name()),
+        S::On => ("on".into(), FaceId::StatusOk.name()),
         S::Off => ("off".into(), "shadow"),
         S::Available | S::Installed | S::BuiltIn => return None,
     })
@@ -241,7 +245,7 @@ fn bundled_by(r: &w::Row) -> String {
 }
 
 /// A header's face: a dock section's title, as the Explorer's (window-dark.html `.sec`).
-const HEADER: &str = "drgnx-wb-section";
+const HEADER: &str = FaceId::WbSection.name();
 
 /// BUILT's rows in LOOK: each header, then each row's line and (unless dense, and when it has one) its summary line;
 /// and the icons they name, each once.  The faces are the Explorer's: the name is the buffer's UI text, the version and
@@ -272,7 +276,7 @@ pub fn rows(b: &Built, look: Look) -> (Vec<Row>, Vec<(ImageId, String)>) {
             }
             if b.restart.contains(&r.id) {
                 l.push("  ", None)
-                    .push("restart to use", Some("drgnx-status-warn"));
+                    .push("restart to use", Some(FaceId::StatusWarn.name()));
             }
             out.push(spans(l, &r.id));
             let modules = bundled_by(r);
@@ -339,9 +343,11 @@ fn generation_rows(
             l.push(&format!("  {note}"), None);
         }
         if g.in_use {
-            l.push("  ", None).push("in use", Some("drgnx-status-warn"));
+            l.push("  ", None)
+                .push("in use", Some(FaceId::StatusWarn.name()));
         } else if g.current {
-            l.push("  ", None).push("current", Some("drgnx-status-ok"));
+            l.push("  ", None)
+                .push("current", Some(FaceId::StatusOk.name()));
         }
         if let Some(size) = &g.size {
             l.push(&format!("  {size}"), None);

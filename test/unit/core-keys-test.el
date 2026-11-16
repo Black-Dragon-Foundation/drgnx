@@ -1108,7 +1108,7 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
   ;; next tab-bar tab there is none of, and did nothing.  VS Code's C-<tab> (the recent editors) is a key that works in
   ;; every mode.
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)))))
-    (should (seq-find (lambda (b) (and (eq (plist-get b :id) 'go-recent) (equal (plist-get b :key) "C-<tab>")
+    (should (seq-find (lambda (b) (and (eq (plist-get b :id) 'editor-recent) (equal (plist-get b :key) "C-<tab>")
                                        (plist-get b :everywhere)))
                       (plist-get r :bindings)))))
 
@@ -1252,7 +1252,7 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
 (ert-deftest drgnx-keys/vscode-on-macos-matches-vscode ()
   ;; VS Code's own macOS keys where they are not its Linux key with Ctrl → Cmd; every key valid.
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
-    (pcase-dolist (`(,id ,key) '((terminal-toggle "C-`") (toggle-panel "M-j") (terminal-new "C-S-`") (go-recent "C-<tab>") (go-back "C--")
+    (pcase-dolist (`(,id ,key) '((terminal-toggle "C-`") (toggle-panel "M-j") (terminal-new "C-S-`") (editor-recent "C-<tab>") (go-back "C--")
                                  (go-forward "C-_") (next-tab "M-s-<right>") (previous-tab "M-s-<left>")
                                  (file-close-window "s-W") (move-editor-to-next-group "C-s-<right>")
                                  (edit-expand "C-S-s-<right>") (edit-shrink "C-S-s-<left>")
@@ -1377,7 +1377,7 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
     (go-forward "M-<right>" nil) (code-definition "<f12>" nil) (code-references "S-<f12>" nil)
     (code-hover "C-S-SPC" nil) (code-quick-fix "C-." nil) (code-problems "C-S-m" nil) (notebook-run-cell "C-<return>" drgnx-notebook-mode-map) (notebook-run-and-advance "S-<return>" drgnx-notebook-mode-map) (notebook-run-all "C-k n r" drgnx-notebook-mode-map) (notebook-run-above "C-k n u" drgnx-notebook-mode-map) (notebook-run-below "C-k n d" drgnx-notebook-mode-map) (notebook-interrupt "C-k n i" drgnx-notebook-mode-map) (notebook-restart "C-k n k" drgnx-notebook-mode-map) (notebook-restart-run-all "C-k n K" drgnx-notebook-mode-map) (notebook-add-below "C-k n b" drgnx-notebook-mode-map) (notebook-add-above "C-k n a" drgnx-notebook-mode-map) (notebook-cut-cell "C-k n x" drgnx-notebook-mode-map) (notebook-copy-cell "C-k n c" drgnx-notebook-mode-map) (notebook-paste-cell "C-k n v" drgnx-notebook-mode-map) (notebook-delete-cell "C-k n D" drgnx-notebook-mode-map) (notebook-move-up "C-k n <up>" drgnx-notebook-mode-map) (notebook-move-down "C-k n <down>" drgnx-notebook-mode-map) (notebook-cell-menu "C-k n ." drgnx-notebook-mode-map) (notebook-split-cell "C-k n s" drgnx-notebook-mode-map) (notebook-merge-cell "C-k n m" drgnx-notebook-mode-map) (notebook-change-type "C-k n t" drgnx-notebook-mode-map) (notebook-clear-outputs "C-k n o" drgnx-notebook-mode-map) (notebook-select-kernel "C-k n e" drgnx-notebook-mode-map) (notebook-open-output "C-k n O" drgnx-notebook-mode-map) (notebook-outline "C-k n j" drgnx-notebook-mode-map) (notebook-kernel-log "C-k n L" drgnx-notebook-mode-map) (notebook-outline-visit "RET" drgnx-notebook-outline-mode-map) (notebook-output-later "M-n" drgnx-notebook-output-mode-map) (notebook-output-earlier "M-p" drgnx-notebook-output-mode-map) (notebook-copy-output "C-k n y" drgnx-notebook-mode-map) (notebook-toggle-outputs "C-k n h" drgnx-notebook-mode-map)
     (org-capture "C-c c" nil) (org-agenda "C-c a" nil) (scm-view "C-S-g" nil) (go-quick-open "C-p" nil)
-    (go-symbol "C-S-o" nil) (go-symbol-project "C-t" nil) (go-recent "C-<tab>" nil) (search-file "C-f" nil)
+    (go-symbol "C-S-o" nil) (go-symbol-project "C-t" nil) (search-file "C-f" nil)
     (search-semantic "C-k C-f" nil) (terminal-new "C-S-`" nil)
     (view-zen "C-k z" nil)
     (view-zen "<f11>" nil) (view-zoom-in "C-=" nil) (view-zoom-in "C-+" nil) (view-zoom-out "C--" nil)
@@ -1530,7 +1530,9 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-run-no-debug ; Run Without Debugging's C-F5
                               inbox-open inbox-next inbox-previous inbox-press inbox-escape ; the inbox
                               terminal-toggle   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
-                              face-menu))       ; a lone Alt opens the menu (Nidhogg's `lone-alt')
+                              kit-activate      ; RET on a kit component's action
+                              face-menu         ; a lone Alt opens the menu (Nidhogg's `lone-alt')
+                              editor-recent editor-recent-up)) ; C-<tab>: VS Code's previous editor
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
