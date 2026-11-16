@@ -21,11 +21,50 @@ pub const NO_CHANGES: &str = "No changes. Your working tree matches HEAD.";
 /// The most rows one section lists; the rest is one row saying how many more.
 pub const SECTION_MAX: usize = 5_000;
 
+/// The room a row has: TEXT's width drawn in FACE (none: the view's default), and the px a row may take.
+pub struct Room<'a> {
+    pub width: &'a dyn Fn(Option<&str>, &str) -> f32,
+    pub px: f32,
+}
+
+impl Room<'_> {
+    /// No bound: every text fits on its row (the tests that read keys and texts).
+    pub fn wide() -> Room<'static> {
+        Room {
+            width: &|_, t| t.chars().count() as f32,
+            px: f32::MAX,
+        }
+    }
+}
+
+/// TEXT's words on as many lines as the room holds, each line led by INDENT and measured with it in FACE (a word wider
+/// than the room has a line of its own, which the hub's fit cuts).
+fn wrap(room: &Room, face: Option<&str>, indent: &str, text: &str) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split(' ').filter(|w| !w.is_empty()) {
+        let next = if line.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{line} {word}")
+        };
+        if !line.is_empty() && (room.width)(face, &format!("{indent}{next}")) > room.px {
+            lines.push(format!("{indent}{line}"));
+            line = word.to_owned();
+        } else {
+            line = next;
+        }
+    }
+    lines.push(format!("{indent}{line}"));
+    lines
+}
+
 /// Rows and the images they name.
 struct Out<'a> {
     rows: Vec<Row>,
     images: BTreeMap<ImageId, String>,
     look: &'a RowLook,
+    room: &'a Room<'a>,
 }
 
 impl Out<'_> {
@@ -119,11 +158,17 @@ fn sync_text(st: &Status) -> String {
 }
 
 /// STATE's rows in LOOK, and the images they name; NOW (seconds since the epoch) dates the graph.
-pub fn rows(state: &ViewState, look: &RowLook, now: i64) -> (Vec<Row>, Vec<(ImageId, String)>) {
+pub fn rows(
+    state: &ViewState,
+    look: &RowLook,
+    room: &Room,
+    now: i64,
+) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut out = Out {
         rows: Vec::new(),
         images: BTreeMap::new(),
         look,
+        room,
     };
     if state.repos.is_empty() {
         let mut b = RowBuilder::new("none");
@@ -271,9 +316,21 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
     );
     out.finish(b, json!({"kind": "commit", "root": root}));
     if st.merge.is_empty() && st.staged.is_empty() && st.changes.is_empty() {
-        let mut b = RowBuilder::new(key(&["note", &root]));
-        b.push(&format!("  {NO_CHANGES}"), Some("drgnx-text-muted"));
-        out.finish(b, json!({"kind": "note", "root": root}));
+        // wrapped to the side bar's width, never cut: the first row keyed `note⇥ROOT`, the next `note⇥ROOT⇥N`
+        let face = Some("drgnx-text-muted");
+        for (i, line) in wrap(out.room, face, "  ", NO_CHANGES)
+            .into_iter()
+            .enumerate()
+        {
+            let k = if i == 0 {
+                key(&["note", &root])
+            } else {
+                key(&["note", &root, &i.to_string()])
+            };
+            let mut b = RowBuilder::new(k);
+            b.push(&line, face);
+            out.finish(b, json!({"kind": "note", "root": root}));
+        }
     }
     for s in Section::ALL {
         let list = st.section(s);

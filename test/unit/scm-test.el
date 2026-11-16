@@ -12,13 +12,16 @@
 (load (expand-file-name "modules/tools/drgnx-scm" drgnx-dir) nil t)
 
 (defvar drgnx-scm-test--sent nil "What the view asked the hub, newest first: (METHOD . PARAMS).")
+(defvar drgnx-scm-test--failed nil "The failure function of each call, newest first (nil when none).")
 
 (defmacro drgnx-scm-test--with (&rest body)
   "BODY with the view's calls to the hub recorded, none sent or answered."
   (declare (indent 0))
-  `(let ((drgnx-scm-test--sent nil))
+  `(let ((drgnx-scm-test--sent nil) (drgnx-scm-test--failed nil))
      (cl-letf (((symbol-function 'drgnx-scm--call)
-                (lambda (method params &optional _then) (push (cons method params) drgnx-scm-test--sent))))
+                (lambda (method params &optional _then failed)
+                  (push (cons method params) drgnx-scm-test--sent)
+                  (push failed drgnx-scm-test--failed))))
        ,@body)))
 
 (ert-deftest drgnx-scm/the-module-registers-the-git-commands-and-goes-cleanly ()
@@ -59,7 +62,12 @@ message asks for a message first."
               (should (equal method "git/commit"))
               (should (equal (plist-get params :root) "/r/app"))
               (should (equal (plist-get params :message) "Fix the parser"))
-              (should (eq (plist-get params :all) :false))))
+              (should (eq (plist-get params :all) :false)))
+            ;; the box empties as the commit starts, before git answers; a failure puts the message back
+            (should (zerop (with-current-buffer (drgnx-scm--message-buffer) (buffer-size))))
+            (funcall (car drgnx-scm-test--failed))
+            (should (equal (with-current-buffer (drgnx-scm--message-buffer) (string-trim (buffer-string)))
+                           "Fix the parser")))
         (when (get-buffer drgnx-scm-message-buffer-name) (kill-buffer drgnx-scm-message-buffer-name))))))
 
 (ert-deftest drgnx-scm/discard-asks-and-untracked-files-go-to-the-trash ()

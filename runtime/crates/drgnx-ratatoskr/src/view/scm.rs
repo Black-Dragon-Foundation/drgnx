@@ -28,6 +28,7 @@ use runstav::methods::scm::{
     Branch, Branches, Checkout, Commit, Committed, DeleteBranch, Paths, Remote, RemoteEvent,
     RemoteId, RemoteOp, Root, Set, Stash, StashOp, Subscribe, ViewAs, ViewId,
 };
+use runstav::methods::view::Display;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -180,8 +181,16 @@ impl Views {
             return false;
         };
         let now = crate::clock::wall_secs() as i64;
-        self.publish_built(f, key, |env, _| {
-            rows::rows(&state, &RowLook::of(env, INDENT, 1), now)
+        self.publish_built(f, key, |env, fonts| {
+            let width = |face: Option<&str>, text: &str| match env.display {
+                Display::Gui => drgnx_rows::fit::width_in(fonts, face, text),
+                Display::Tty => (text.chars().count() as u32 * env.cell.0.max(1)) as f32,
+            };
+            let room = rows::Room {
+                width: &width,
+                px: env.width_px as f32 - drgnx_rows::fit::SLACK,
+            };
+            rows::rows(&state, &RowLook::of(env, INDENT, 1), &room, now)
         });
         true
     }
