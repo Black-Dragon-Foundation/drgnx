@@ -1979,10 +1979,16 @@ nil), so typing below them scans nothing; reads the buffer only."
                            (setq n (1+ n)))
                          (vector tick tabs spaces least (and (not (eobp)) (point)) nil))))))))))
 
+(defvar-local drgnx-statusbar--indent-chosen nil
+  "The indentation chosen with the `indent' segment's click (`drgnx-statusbar-change-indent'): `tabs' or `spaces'.
+The label then says that, not what the buffer's first lines use.")
+
 (defun drgnx-statusbar--indent-tabs-p ()
-  "Non-nil when this buffer is indented with tabs: what its first lines use, else `indent-tabs-mode'."
-  (let ((c (drgnx-statusbar--indent-scan)))
-    (cond ((> (aref c 1) (aref c 2)) t)
+  "Non-nil when this buffer is indented with tabs: what was chosen with the click, else what its first lines use, else
+`indent-tabs-mode'."
+  (let ((c (and (not drgnx-statusbar--indent-chosen) (drgnx-statusbar--indent-scan))))
+    (cond (drgnx-statusbar--indent-chosen (eq drgnx-statusbar--indent-chosen 'tabs))
+          ((> (aref c 1) (aref c 2)) t)
           ((> (aref c 2) 0) nil)
           (t indent-tabs-mode))))
 
@@ -1993,7 +1999,7 @@ bumps the epoch `buffer-look'; an edit changes the text's count): no allocation 
 is not scanned: `tab-width'."
   (if (or (drgnx-large-file-p) (drgnx-statusbar--indent-tabs-p))
       tab-width
-    (or (aref (drgnx-statusbar--indent-scan) 3)
+    (or (and (not drgnx-statusbar--indent-chosen) (aref (drgnx-statusbar--indent-scan) 3))
         (let ((vars drgnx-statusbar-indent-vars) (found nil))
           (while (and vars (not found))
             (let ((v (car vars)))
@@ -2097,6 +2103,68 @@ Click the language in the status bar for it.  A command: it asks; the bar itself
   (funcall (or (and (fboundp 'major-mode-remap) (major-mode-remap mode)) mode))
   (force-mode-line-update))
 
+(defun drgnx-statusbar-change-indent (tabs size)
+  "Indent this buffer with tabs (TABS non-nil, `tab-width' SIZE) or with SIZE spaces (the mode's width variable, the
+first of `drgnx-statusbar-indent-vars' that is set, else the first that is bound).  Click the indentation in the
+status bar for it: it asks which and the size; the label then says what was chosen."
+  (interactive
+   (let* ((kinds '("Indent Using Spaces" "Indent Using Tabs"))
+          (kind (completing-read "Indentation: " kinds nil t nil nil
+                                 (if (drgnx-statusbar--indent-tabs-p) (cadr kinds) (car kinds))))
+          (size (completing-read "Size: " (mapcar #'number-to-string (number-sequence 1 8)) nil t nil nil
+                                 (number-to-string (drgnx-statusbar--indent-width)))))
+     (list (equal kind (cadr kinds)) (string-to-number size))))
+  (unless (and (natnump size) (> size 0)) (user-error "Not a size: %S" size))
+  (setq-local drgnx-statusbar--indent-chosen (if tabs 'tabs 'spaces))
+  (setq-local indent-tabs-mode (and tabs t))
+  (if tabs
+      (setq-local tab-width size)
+    (when-let* ((v (or (seq-find (lambda (v) (and (boundp v) (natnump (symbol-value v)))) drgnx-statusbar-indent-vars)
+                       (seq-find #'boundp drgnx-statusbar-indent-vars))))
+      (set (make-local-variable v) size)))
+  (force-mode-line-update))
+
+(defconst drgnx-statusbar--encodings
+  '(utf-8 utf-8-with-signature utf-16le-with-signature utf-16be-with-signature utf-16le utf-16be iso-latin-1
+          windows-1252 iso-latin-9 windows-1250 windows-1251 koi8-r shift_jis euc-jp gb18030 big5 euc-kr)
+  "The encodings the `encoding' segment's click offers after the file's own (those this Emacs has).")
+
+(defun drgnx-statusbar-change-encoding (action coding)
+  "Reopen this file with the encoding CODING (ACTION `reopen': the text is read again) or save it with CODING (`save':
+the file is converted).  Click the encoding in the status bar for it: it asks which, then the encoding, the file's own
+first and marked (current), so RET changes nothing.  The line endings stay as they are."
+  (interactive
+   (let* ((actions '("Reopen with Encoding" "Save with Encoding"))
+          (action (completing-read "Encoding: " actions nil t nil nil (car actions)))
+          (cur (coding-system-base (or buffer-file-coding-system 'undecided)))
+          (cur-name (format "%s (current)" cur))
+          (names (cons cur-name (delete (symbol-name cur)
+                                        (mapcar #'symbol-name (seq-filter #'coding-system-p drgnx-statusbar--encodings)))))
+          (pick (completing-read (format "%s: " action) names nil t nil nil cur-name)))
+     (list (if (equal action (cadr actions)) 'save 'reopen) (intern (car (split-string pick))))))
+  (let* ((old buffer-file-coding-system)
+         (eol (and old (coding-system-eol-type old)))
+         (coding (if (integerp eol) (coding-system-change-eol-conversion coding eol) coding)))
+    (unless (and old (eq (coding-system-base coding) (coding-system-base old)))
+      (if (eq action 'save)
+          (progn (set-buffer-file-coding-system coding) (when buffer-file-name (save-buffer)))
+        (if buffer-file-name
+            (revert-buffer-with-coding-system coding)
+          (setq buffer-file-coding-system coding))))
+    (force-mode-line-update)))
+
+(defun drgnx-statusbar-change-eol (eol)
+  "Write this file's lines ending in EOL (`unix' LF, `dos' CRLF, `mac' CR) from the next save on; the encoding stays.
+Click the line endings in the status bar for it."
+  (interactive
+   (let* ((names '(("LF" . unix) ("CRLF" . dos) ("CR" . mac)))
+          (cur (car (rassq (pcase (and buffer-file-coding-system (coding-system-eol-type buffer-file-coding-system))
+                             (1 'dos) (2 'mac) (_ 'unix))
+                           names))))
+     (list (cdr (assoc (completing-read "Line endings: " (mapcar #'car names) nil t nil nil cur) names)))))
+  (set-buffer-file-coding-system (coding-system-change-eol-conversion (or buffer-file-coding-system 'undecided) eol))
+  (force-mode-line-update))
+
 (defun drgnx-statusbar--click-branch ()
   (interactive)
   (if (fboundp 'magit-status) (call-interactively 'magit-status) (call-interactively 'vc-dir)))
@@ -2130,11 +2198,11 @@ Click the language in the status bar for it.  A command: it asks; the bar itself
                                   :help "Language server; click for its events")
   (drgnx-statusbar-define-segment 'position :fn #'drgnx-statusbar--seg-position :click 'goto-line
                                   :help "Line and column; click to go to a line")
-  (drgnx-statusbar-define-segment 'indent :fn #'drgnx-statusbar--seg-indent :click 'indent-tabs-mode
-                                  :help "Indentation of this file (tabs or spaces, as its first lines use them); click to switch what new lines use")
-  (drgnx-statusbar-define-segment 'encoding :fn #'drgnx-statusbar--seg-encoding :click 'set-buffer-file-coding-system
-                                  :help "File encoding; click to change it")
-  (drgnx-statusbar-define-segment 'eol :fn #'drgnx-statusbar--seg-eol :click 'set-buffer-file-coding-system
+  (drgnx-statusbar-define-segment 'indent :fn #'drgnx-statusbar--seg-indent :click 'drgnx-statusbar-change-indent
+                                  :help "Indentation of this file (tabs or spaces, as its first lines use them); click to choose spaces or tabs and the size")
+  (drgnx-statusbar-define-segment 'encoding :fn #'drgnx-statusbar--seg-encoding :click 'drgnx-statusbar-change-encoding
+                                  :help "File encoding; click to reopen or save the file with another one")
+  (drgnx-statusbar-define-segment 'eol :fn #'drgnx-statusbar--seg-eol :click 'drgnx-statusbar-change-eol
                                   :help "Line endings; click to change them")
   (drgnx-statusbar-define-segment 'language :fn #'drgnx-statusbar--seg-language :click 'drgnx-statusbar-change-mode
                                   :help "Language (major mode); click to change it"))

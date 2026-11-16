@@ -195,9 +195,9 @@ while the caption's height is absolute, as ui/look writes it: a relative one (ui
 |---|---|---|
 | `lsp` | `LSP: pyright ●` (connected; the name the server gave), `LSP ○` (starting), `LSP ×` (exited) when eglot manages the buffer; a graphical bar says `● pyright` (`● eglot` before the server names itself), the dot green, or red once the server exited | the server's events |
 | `position` | `Ln 12, Col 4`, and `(15 selected)` with a selection, in the selected window only | go to a line |
-| `indent` | `Spaces: 2` or `Tab Size: 8` (`Spaces 2`, `Tab Size 8` on a graphical bar): what the file's own first lines use (tabs, or spaces and how many), else the mode's setting | switch what new lines use |
-| `encoding` | `UTF-8` | change it |
-| `eol` | `LF`, `CRLF` or `CR` | change it |
+| `indent` | `Spaces: 2` or `Tab Size: 8` (`Spaces 2`, `Tab Size 8` on a graphical bar): what the file's own first lines use (tabs, or spaces and how many), else the mode's setting; after a click, what you chose | **Indent Using Spaces** or **Indent Using Tabs**, then the size (1 to 8): new lines use it and the label says it |
+| `encoding` | `UTF-8` | **Reopen with Encoding** (the file is read again in it) or **Save with Encoding** (the file is converted and saved), then the encoding: the file's own comes first, marked `(current)`, so Return changes nothing; the line endings stay |
+| `eol` | `LF`, `CRLF` or `CR` | pick `LF`, `CRLF` or `CR`: the next save writes them; the encoding stays |
 | `language` | the language as VS Code names it: `Rust`, `Go`, `YAML`, `Python`, `Emacs Lisp`, `Shell Script`, `Plain Text` (`drgnx-statusbar-language-names`, else the mode's own name) | **Change Language Mode**: pick another major mode for the buffer |
 
 **Pixels, not columns.** On a graphical frame the bar is laid out in pixels, in the caption type face, as the

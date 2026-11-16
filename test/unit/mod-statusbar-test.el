@@ -1125,6 +1125,63 @@ names), again only when the cache learns of a root or the buffer's file changes.
               (deactivate-mark)                      ; it went away with point where it was
               (should (rebuilt-p)) (should-not (rebuilt-p)))))))))
 
+(ert-deftest drgnx-statusbar/the-encoding-click-offers-the-files-own-encoding-first ()
+  ;; F29: the click asked "Coding system for saving file (default utf-16)" after something had used UTF-16, and RET
+  ;; converted the file.  The choice offers the file's own encoding as its default and marks it; RET changes nothing.
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar--define-defaults)
+    (let ((offered nil) (last-coding-system-used 'utf-16))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt coll &optional _pred _req _init _hist def &rest _)
+                   (let ((def (if (consp def) (car def) def)))
+                     (push (list prompt (all-completions "" coll) def) offered)
+                     (or def (car (all-completions "" coll)))))))
+        (with-temp-buffer
+          (setq buffer-file-coding-system 'utf-8-unix)
+          (call-interactively (plist-get (gethash 'encoding drgnx-statusbar--segments) :click))
+          (should (eq (coding-system-base buffer-file-coding-system) 'utf-8))
+          (should offered)
+          (dolist (o offered)          ; every default offered that is an encoding is the file's own
+            (let ((cs (and (stringp (nth 2 o)) (intern-soft (car (split-string (nth 2 o)))))))
+              (when (and cs (coding-system-p cs)) (should (eq (coding-system-base cs) 'utf-8)))))
+          ;; the list of encodings marks the current one
+          (should (seq-some (lambda (o) (seq-some (lambda (c) (string-match-p "utf-8.*current" c)) (nth 1 o))) offered)))))))
+
+(ert-deftest drgnx-statusbar/the-line-endings-click-changes-only-the-line-endings ()
+  ;; It ran the same "Coding system for saving file" prompt as the encoding: RET could change the encoding too.
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar--define-defaults)
+    (let ((last-coding-system-used 'utf-16))
+      (with-temp-buffer
+        (setq buffer-file-coding-system 'utf-8-unix)
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt coll &rest _) (should (member "CRLF" (all-completions "" coll))) "CRLF")))
+          (call-interactively (plist-get (gethash 'eol drgnx-statusbar--segments) :click)))
+        (should (eq buffer-file-coding-system 'utf-8-dos))))))
+
+(ert-deftest drgnx-statusbar/the-indent-click-is-a-choice-and-the-label-follows-it ()
+  ;; F29: the click toggled `indent-tabs-mode' unasked, and the label still said "Spaces 2" (it reads the file's
+  ;; first lines).  It asks spaces or tabs and the size; the label says what was chosen.
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar--define-defaults)
+    (with-temp-buffer
+      (setq-local drgnx-statusbar-indent-vars '(drgnx-statusbar-test--offset))
+      (insert "(defun f ()\n  (g))\n")
+      (setq-local indent-tabs-mode nil)
+      (should (equal (drgnx-statusbar--seg-indent) "Spaces: 2"))
+      (let ((answers '("Indent Using Tabs" "4")))
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (pop answers))))
+          (call-interactively (plist-get (gethash 'indent drgnx-statusbar--segments) :click))))
+      (should indent-tabs-mode)
+      (should (= tab-width 4))
+      (should (equal (drgnx-statusbar--seg-indent) "Tab Size: 4"))
+      (let ((answers '("Indent Using Spaces" "3")))
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (pop answers))))
+          (call-interactively (plist-get (gethash 'indent drgnx-statusbar--segments) :click))))
+      (should-not indent-tabs-mode)
+      (should (eql drgnx-statusbar-test--offset 3))
+      (should (equal (drgnx-statusbar--seg-indent) "Spaces: 3")))))
+
 (ert-deftest drgnx-statusbar/language-click-may-ask-but-render-never-does ()
   (drgnx-statusbar-test--with
     (drgnx-statusbar--define-defaults)
