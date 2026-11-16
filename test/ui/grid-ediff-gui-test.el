@@ -37,12 +37,18 @@ On a frame of its own, deleted after: the grid's frame parameters stay off the s
       (delete-frame frame))))
 
 (defun drgnx-ui-grid-ediff--settled (window)
-  "WINDOW's pixel edges once the window manager's answers to the frame's size are in (the same at two redisplays)."
-  (let ((last nil))
-    (drgnx-test-wait (lambda () (redisplay t) (prog1 (equal last (window-pixel-edges window))
-                                                (setq last (window-pixel-edges window))))
+  "WINDOW's pixel edges once the window manager's answers to the new frame are in: the frame's size and WINDOW's edges
+the same for half a second (a window manager may give a new frame one size, then another; it need not give the size
+the frame was made at)."
+  (let ((last nil) (since nil) (frame (window-frame window)))
+    (drgnx-test-wait (lambda ()
+                       (redisplay t)
+                       (let ((now (list (frame-pixel-width frame) (frame-pixel-height frame) (window-pixel-edges window))))
+                         (if (equal now last) (>= (- (drgnx-test-wait-now) since) 0.5)
+                           (setq last now since (drgnx-test-wait-now))
+                           nil)))
                      :secs 10 :what "the frame's size")
-    last))
+    (nth 2 last)))
 
 (defun drgnx-ui-grid-ediff--on-frame (start)
   (drgnx-grid-test--with
@@ -83,8 +89,41 @@ On a frame of its own, deleted after: the grid's frame parameters stay off the s
         (drgnx-ui-grid-ediff--check (lambda () (ediff-buffers a b)))
       (kill-buffer a) (kill-buffer b))))
 
+(defconst drgnx-ui-grid-ediff--magit-packages '(magit magit-section transient with-editor compat dash llama cond-let)
+  "The packages magit loads, looked for in $DRGNX_USER_ELPA when the load path has no magit.")
+
+(defun drgnx-ui-grid-ediff--package-dir (name elpa)
+  "The newest directory of package NAME in ELPA, or nil."
+  (let* ((prefix (format "%s-" name))
+         (found (seq-filter (lambda (d) (and (string-match-p "\\`[0-9][0-9.]*\\'" (substring d (length prefix)))
+                                             (file-directory-p (expand-file-name d elpa))))
+                            (directory-files elpa nil (concat "\\`" (regexp-quote prefix))))))
+    (when found
+      (expand-file-name (car (last (sort found (lambda (a b) (version< (substring a (length prefix))
+                                                                       (substring b (length prefix)))))))
+                        elpa))))
+
+(defun drgnx-ui-grid-ediff--magit ()
+  "Load magit: from the load path, else from $DRGNX_USER_ELPA when the session has it (a GUI session does not inherit
+it: `drgnx-ui-keep-env').  No magit fails the row, unless DRGNX_TEST_ALLOW_NO_MAGIT=1 says this run may go without it
+\(then it skips)."
+  (or (featurep 'magit)
+      (require 'magit nil t)
+      (when-let* ((elpa (getenv "DRGNX_USER_ELPA")) ((file-directory-p elpa)))
+        (let ((load-path (append (delq nil (mapcar (lambda (n) (drgnx-ui-grid-ediff--package-dir n elpa))
+                                                   drgnx-ui-grid-ediff--magit-packages))
+                                 load-path)))
+          (require 'magit nil t)))
+      (if (equal (getenv "DRGNX_TEST_ALLOW_NO_MAGIT") "1") (ert-skip "magit not found (DRGNX_TEST_ALLOW_NO_MAGIT=1)")
+        (ert-fail (format "magit not found (DRGNX_USER_ELPA %S%s): put magit on the GUI image's load path, or set DRGNX_TEST_ALLOW_NO_MAGIT=1"
+                          (getenv "DRGNX_USER_ELPA")
+                          (if-let* ((elpa (getenv "DRGNX_USER_ELPA")) ((file-directory-p elpa)))
+                              (format ", magit there: %S" (drgnx-ui-grid-ediff--package-dir 'magit elpa))
+                            ""))))))
+
 (ert-deftest drgnx-ui-grid-ediff/magit-ediff-stays-in-one-tile ()
-  (skip-unless (and (display-graphic-p) (executable-find "git") (require 'magit nil t)))
+  (skip-unless (and (display-graphic-p) (executable-find "git")))
+  (drgnx-ui-grid-ediff--magit)
   (let* ((dir (file-name-as-directory (make-temp-file "drgnx-grid-ediff" t)))
          (file (expand-file-name "a.txt" dir))
          (default-directory dir)

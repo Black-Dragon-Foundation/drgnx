@@ -1288,6 +1288,9 @@ test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label
 `DRGNX_USER_ELPA` (a directory holding the pinned kkp, and corfu, unpacked) is mounted read-only as `/elpa`, so the
 kkp tests and the kitty exit test run there too; without it they skip. Every `--container` tier mounts it the same
 way, so the batch tests that load a package (the extras teardown) run in a container too.
+A GUI session does not inherit `DRGNX_USER_ELPA` (`drgnx-ui-keep-env`), so the GUI tier's magit row
+(`drgnx-ui-grid-ediff/magit-ediff-stays-in-one-tile`) needs magit on the image's load path; without it the row fails,
+unless `DRGNX_TEST_ALLOW_NO_MAGIT=1` (which sessions inherit) lets the run go without it.
 `DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. The tier gets the test hub ([The test hub](#the-test-hub)): a session
 starts none by itself, so a test that reads hub-fed rows (the Explorer's folders and git letters, the Open section)
 starts one in its session with `drgnx-tty-session-hub` (`ratatoskr serve --foreground` on the session's runtime
