@@ -1,44 +1,114 @@
-;;; drgnx-ruler.el --- The overview ruler: a file's marks scaled to the window's height, at its right edge -*- lexical-binding: t -*-
+;;; drgnx-ruler.el --- The scroll bar: a strip at each window's right edge with the file's marks -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; One owner draws the ruler; producers hand it marks.  A producer registers a function in a buffer
-;; (`drgnx-ruler-source'), which returns the marks it has now: (POS LANE FACE PRIORITY), LANE `left', `middle',
-;; `right' or `full' (all three).  The ruler asks its producers again when one says its marks changed
-;; (`drgnx-ruler-refresh') and, debounced, after an edit.
+;; The scroll bar of every scrollable surface (the minimap design's state A, docs/guide/minimap.md): a strip 12
+;; logical pixels wide in the window's right fringe, with a thumb over the part shown and the buffer's marks in lanes.
+;; It shows on editors and on every list and page drgnx draws (the Explorer, Outline, Search, Problems, Source
+;; Control, the panel's views, the palette's lists, Settings…), and is hidden while the content fits.
 ;;
-;; Nidhogg draws it (Glitnir's overview ruler, the window parameter `glitnir-ruler'): a strip 12 logical pixels wide
-;; in the window's right fringe, widened by that much while the ruler is on, next to the text.  The fringe's own
-;; pixels stay outermost, so the card edge's drag (`drgnx-look-edge-drag') keeps its place.  Marks sit at their
-;; position's fraction of the buffer, by characters as Emacs's scroll bar measures (a file of very long lines looks
-;; uneven), and the band over the part shown moves with a scroll in C: nothing here runs on a scroll.  The parameter
-;; is set only when the marks or the window's fringe change.  A click on the strip goes there.  Without Nidhogg's
-;; feature `glitnir-ruler', or in a terminal, there is no ruler.  docs/develop/core.md, "The overview ruler".
+;; One owner draws it; producers hand it marks.  A producer registers a function in a buffer (`drgnx-ruler-source'),
+;; which returns the marks it has now: (POS LANE FACE PRIORITY [SHAPE END]), LANE `left', `middle', `right' or `full',
+;; SHAPE nil (a bar) or `dot' (a breakpoint's), END a position the mark runs to (a hunk's last line).  The ruler asks
+;; its producers again when one says its marks changed (`drgnx-ruler-refresh') and, debounced, after an edit.
+;;
+;; Nidhogg draws it (Glitnir's overview ruler, the window parameter `glitnir-ruler'): the fringe is widened by the
+;; strip while it is on, next to the text, and keeps that width while the strip hides (nothing reflows when the
+;; content grows past the window).  The fringe's own pixels stay outermost, so the card edge's drag
+;; (`drgnx-look-edge-drag') keeps its place.  Marks sit at their position's fraction of the buffer, by characters as
+;; Emacs's scroll bar measures; the thumb moves with a scroll, and the strip hides while everything shows, in C:
+;; nothing here runs on a scroll.  A view the hub sends a window of (the Explorer of a big tree) names its rows
+;; through `drgnx-ruler-span-function', so the thumb stands for the whole view.  The parameter is set only when the
+;; marks, the span or the window's fringe change.  A press on the strip goes there and a drag scrolls (the one place
+;; Lisp runs per pointer motion, while the button is held).  Without Nidhogg's feature `glitnir-ruler', or in a
+;; terminal, there is no strip.  docs/develop/core.md, "The scroll bar and its marks".
 
 ;;; Code:
 (require 'cl-lib)
 (require 'drgnx-pixels)
+(require 'drgnx-setting)
 (require 'drgnx-timer)
 
 (declare-function glitnir-ruler-position "glitnir" (posn))
+(declare-function glitnir-ruler-fraction "glitnir" (posn))
+(declare-function drgnx-look-edge-drag "drgnx-look" (event))
 
-(defface drgnx-ruler-view '((t :inherit shadow))
-  "The ruler's band over the part of the file the window shows (its foreground)." :group 'drgnx)
+(defgroup drgnx-minimap nil "The scroll bar, the minimap and their marks." :group 'drgnx)
 
-(defconst drgnx-ruler--lanes '((left 0 . 3) (middle 3 . 9) (right 9 . 12) (full 0 . 12))
-  "Each lane's x range in the strip, in logical pixels.")
+(defvar drgnx-scrollbar-mode)
+
+(defun drgnx-ruler--setting-changed (&rest _)
+  "A scroll bar setting changed: every window's strip again, now."
+  (when drgnx-scrollbar-mode (drgnx-scrollbar-refresh-all)))
+
+(drgnx-defsetting drgnx-minimap-ruler t
+  "Non-nil: every scrollable window has the scroll bar, a strip at its right edge with the thumb and the file's
+marks.  Nil: only windows whose buffer has marks (a debugger's breakpoints) show the strip."
+  :type 'boolean :group 'drgnx-minimap :scope 'global :apply #'drgnx-ruler--setting-changed)
+
+(drgnx-defsetting drgnx-minimap-hide-short t
+  "Non-nil: the scroll bar hides while the window shows all of its content (it comes back once the content runs
+past the window; the text keeps its width either way)."
+  :type 'boolean :group 'drgnx-minimap :scope 'global :apply #'drgnx-ruler--setting-changed)
+
+(defface drgnx-ruler-view '((t :inherit default))
+  "The scroll bar's thumb over the part of the content the window shows: its foreground, at 26 % (minimap.css
+`.sbar .thumb')." :group 'drgnx-minimap)
+
+(defconst drgnx-ruler--thumb-opacity 0.26 "How opaque the thumb is drawn in `drgnx-ruler-view's foreground.")
+
+(defconst drgnx-ruler--lanes '((left 1 . 4) (middle 4 . 8) (right 8 . 11) (full 0 . 12))
+  "Each lane's x range in the strip, in logical pixels (minimap.css `.mk.l', `.mk.c', `.mk.r').")
 
 (defconst drgnx-ruler--width 12 "The strip's width in logical pixels.")
+(defconst drgnx-ruler--thumb-inset 3 "The thumb's inset from either side of the strip, logical pixels.")
+(defconst drgnx-ruler--thumb-radius 3 "The thumb's corner radius, logical pixels.")
+(defconst drgnx-ruler--mark-height 2 "A mark's height, logical pixels.")
+(defconst drgnx-ruler--mark-radius 1 "A mark's corner radius, logical pixels.")
+(defconst drgnx-ruler--dot '(3 9 6 3) "A `dot' mark (a breakpoint): its x range, height and radius, logical pixels.")
 
 (defvar-local drgnx-ruler--sources nil "This buffer's producers: an alist OWNER → FUNCTION (no arguments) → marks.")
-(defvar-local drgnx-ruler--marks nil "The marks as last asked, drawn in this order: (POS LANE FACE PRIORITY) each.")
+(defvar-local drgnx-ruler--marks nil "The marks as last asked, drawn in this order: (POS LANE FACE PRIORITY …) each.")
+
+(defvar-local drgnx-ruler-span-function nil
+  "Nil, or a function of no arguments giving the buffer's rows as a part of a view: (FROM LENGTH TOTAL), the buffer
+holding rows FROM to FROM + LENGTH of TOTAL (a list the hub sends a window of), or nil when it holds them all.  The
+strip then stands for the TOTAL rows.  Whoever moves the window calls `drgnx-ruler-update' after the draw.")
+
+(defvar-local drgnx-ruler-goto-fraction-function nil
+  "Nil, or a function of (WINDOW FRACTION): a press or drag on the strip of a view with a span went to FRACTION of
+the whole, outside the rows the buffer holds; it brings those rows and puts WINDOW there.")
 
 (defvar drgnx-ruler-mode)
 
 (defun drgnx-ruler-available-p ()
   "Whether this Emacs draws the ruler: Nidhogg's Glitnir on a graphical frame."
   (and (featurep 'glitnir-ruler) (display-graphic-p)))
+
+(defun drgnx-scrollbar-window-p (window)
+  "Whether WINDOW is a scrollable surface that gets the scroll bar: an editor group, a docked pane (the Explorer, the
+panel, the right dock), a popup lane, or a window of a child frame (a palette's list); never the minibuffer, chrome
+\(the status bar and other windows with a `drgnx-role' that is not a pane), a package's side window, or a window
+marked `drgnx-minimap-exclude' (the peek card's, the sticky header's)."
+  (and (window-live-p window)
+       (not (window-minibuffer-p window))
+       (not (window-parameter window 'drgnx-minimap-exclude))
+       (let ((role (window-parameter window 'drgnx-role)))
+         (if role
+             (memq role '(dock panel right))
+           (or (window-parameter window 'drgnx-popup)
+               (frame-parent (window-frame window))
+               (not (window-parameter window 'window-side)))))
+       t))
+
+(defun drgnx-ruler--wants-p (window)
+  "Whether WINDOW shows the strip now: its buffer has marks, or the scroll bar is on and WINDOW is a surface."
+  (and (with-selected-frame (window-frame window) (drgnx-ruler-available-p))
+       (with-current-buffer (window-buffer window)
+         (or (and drgnx-ruler-mode drgnx-ruler--marks)
+             (and drgnx-scrollbar-mode drgnx-minimap-ruler (drgnx-scrollbar-window-p window))))
+       t))
 
 (defun drgnx-ruler-source (owner function &optional buffer)
   "OWNER's marks in BUFFER (default current) come from FUNCTION; nil FUNCTION takes OWNER's marks away."
@@ -56,20 +126,33 @@
     (pcase-dolist (`(,_ . ,f) drgnx-ruler--sources) (setq marks (nconc (copy-sequence (funcall f)) marks)))
     (sort marks (lambda (a b) (< (or (nth 3 a) 0) (or (nth 3 b) 0))))))
 
+(defun drgnx-ruler--mark (m frame)
+  "Mark M, (POS LANE FACE PRIORITY [SHAPE END]), as `glitnir-ruler' takes it for FRAME: (POS X0 X1 FACE HEIGHT
+RADIUS [END])."
+  (pcase-let ((`(,x0 ,x1 ,h ,r) (if (eq (nth 4 m) 'dot)
+                                    drgnx-ruler--dot
+                                  (let ((lane (alist-get (nth 1 m) drgnx-ruler--lanes)))
+                                    (list (car lane) (cdr lane) drgnx-ruler--mark-height drgnx-ruler--mark-radius)))))
+    (append (list (car m) (drgnx-px x0 frame) (drgnx-px x1 frame) (nth 2 m) (drgnx-px h frame) (drgnx-px r frame))
+            (and (nth 5 m) (list (nth 5 m))))))
+
 (defun drgnx-ruler--spec (window)
-  "WINDOW's `glitnir-ruler': the strip in its fringe, beside the text, and the marks."
-  (let ((frame (window-frame window)))
-    (list :width (drgnx-px drgnx-ruler--width frame)
-          :right (or (window-parameter window 'drgnx-ruler-fringe) 0)
-          :height (drgnx-px 3 frame)
-          :band '(drgnx-ruler-view . 0.35)
-          :marks (mapcar (lambda (m)
-                           (let ((lane (alist-get (nth 1 m) drgnx-ruler--lanes)))
-                             (list (car m) (drgnx-px (car lane) frame) (drgnx-px (cdr lane) frame) (nth 2 m))))
-                         drgnx-ruler--marks))))
+  "WINDOW's `glitnir-ruler': the strip in its fringe, beside the text, the thumb, the span and the marks."
+  (let ((frame (window-frame window))
+        (span (and drgnx-ruler-span-function (funcall drgnx-ruler-span-function))))
+    (append
+     (list :width (drgnx-px drgnx-ruler--width frame)
+           :right (or (window-parameter window 'drgnx-ruler-fringe) 0)
+           :height (drgnx-px drgnx-ruler--mark-height frame)
+           :band (cons 'drgnx-ruler-view drgnx-ruler--thumb-opacity)
+           :thumb-inset (drgnx-px drgnx-ruler--thumb-inset frame)
+           :radius (drgnx-px drgnx-ruler--thumb-radius frame)
+           :hide-short (and drgnx-minimap-hide-short t))
+     (and span (list :span span))
+     (list :marks (mapcar (lambda (m) (drgnx-ruler--mark m frame)) (and drgnx-ruler-mode drgnx-ruler--marks))))))
 
 (defun drgnx-ruler--show (window)
-  "Give WINDOW the strip: its right fringe widened by the strip (once), and the marks, set only when they changed."
+  "Give WINDOW the strip: its right fringe widened by the strip (once), and the spec, set only when it changed."
   (let* ((fr (window-fringes window))
          (width (drgnx-px drgnx-ruler--width (window-frame window)))
          (own (or (window-parameter window 'drgnx-ruler-fringe) (cadr fr))))
@@ -77,7 +160,7 @@
       (setq own (if (window-parameter window 'drgnx-ruler-fringe) own (cadr fr)))
       (set-window-parameter window 'drgnx-ruler-fringe own)
       (set-window-fringes window (car fr) (+ own width) (nth 2 fr)))
-    (let ((spec (drgnx-ruler--spec window)))
+    (let ((spec (with-current-buffer (window-buffer window) (drgnx-ruler--spec window))))
       (unless (equal spec (window-parameter window 'glitnir-ruler))
         (set-window-parameter window 'glitnir-ruler spec)))))
 
@@ -91,23 +174,28 @@
     (when (window-parameter window 'glitnir-ruler)
       (set-window-parameter window 'glitnir-ruler nil))))
 
+(defun drgnx-ruler--place (window)
+  "WINDOW's strip as it should be now: shown with its spec, or gone."
+  (if (drgnx-ruler--wants-p window) (drgnx-ruler--show window) (drgnx-ruler--hide window)))
+
+(defun drgnx-ruler-update (&optional buffer)
+  "Give every window showing BUFFER (default current) its strip again, without asking the producers: its span moved
+or a setting changed."
+  (with-current-buffer (or buffer (current-buffer))
+    (dolist (w (get-buffer-window-list nil nil t)) (drgnx-ruler--place w))))
+
 (defun drgnx-ruler-refresh (&optional buffer)
   "Ask BUFFER's producers again (default current), and give every window showing it the marks."
   (with-current-buffer (or buffer (current-buffer))
-    (when drgnx-ruler-mode
-      (setq drgnx-ruler--marks (drgnx-ruler--ask))
-      (dolist (w (get-buffer-window-list nil nil t))
-        (if (and drgnx-ruler--marks (with-selected-frame (window-frame w) (drgnx-ruler-available-p)))
-            (drgnx-ruler--show w)
-          (drgnx-ruler--hide w))))))
+    (when drgnx-ruler-mode (setq drgnx-ruler--marks (drgnx-ruler--ask)))
+    (drgnx-ruler-update)))
 
 (defun drgnx-ruler--buffer-changed (frame-or-window)
-  "`window-buffer-change-functions' (global): a window that now shows another buffer loses this one's strip, and
-one that shows a buffer with the ruler gets it."
+  "`window-buffer-change-functions' (global): a window that now shows another buffer gets that buffer's strip, or
+loses the strip."
   (dolist (w (if (windowp frame-or-window) (list frame-or-window) (window-list frame-or-window 'nomini)))
-    (if (buffer-local-value 'drgnx-ruler-mode (window-buffer w))
-        (with-current-buffer (window-buffer w)
-          (when (and drgnx-ruler--marks (drgnx-ruler-available-p)) (drgnx-ruler--show w)))
+    (if (drgnx-ruler--wants-p w)
+        (drgnx-ruler--show w)
       (when (or (window-parameter w 'glitnir-ruler) (window-parameter w 'drgnx-ruler-fringe))
         (drgnx-ruler--hide w)))))
 
@@ -120,23 +208,61 @@ one that shows a buffer with the ruler gets it."
   "`change-major-mode-hook' and `kill-buffer-hook': the ruler goes before the buffer's locals do."
   (drgnx-ruler-mode -1))
 
+(defun drgnx-ruler--goto (window posn)
+  "Show in WINDOW the place POSN, a press on its strip, stands for, centred: the thumb's middle under the pointer."
+  (let ((frac (and (fboundp 'glitnir-ruler-fraction) (glitnir-ruler-fraction posn)))
+        (span (with-current-buffer (window-buffer window)
+                (and drgnx-ruler-span-function (funcall drgnx-ruler-span-function)))))
+    (if (and frac span (let ((row (* frac (nth 2 span))))
+                         (or (< row (nth 0 span)) (>= row (+ (nth 0 span) (nth 1 span))))))
+        (with-current-buffer (window-buffer window)
+          (when drgnx-ruler-goto-fraction-function (funcall drgnx-ruler-goto-fraction-function window frac)))
+      (when-let* ((pos (and (fboundp 'glitnir-ruler-position) (glitnir-ruler-position posn))))
+        (with-selected-window window
+          (goto-char pos)
+          (recenter))))))
+
+(defun drgnx-ruler--on-strip-p (posn)
+  "Whether POSN, in a right fringe, is on the strip (not the fringe's own pixels outside it, the card edge's)."
+  (let* ((w (posn-window posn))
+         (own (window-parameter w 'drgnx-ruler-fringe))
+         (edges (window-pixel-edges w)))
+    (and own (window-parameter w 'glitnir--ruler)
+         (< (+ (car edges) (car (posn-x-y posn)))
+            (- (nth 2 edges) (window-right-divider-width w) (window-scroll-bar-width w) own)))))
+
+(defun drgnx-ruler-press (event)
+  "A press on a window's right fringe: on the strip it goes to that place and a drag scrolls with the pointer until
+the button comes up (Lisp per motion only while the button is held); off the strip, the card edge's drag."
+  (interactive "e")
+  (let* ((posn (event-start event)) (w (posn-window posn)))
+    (if (not (and (window-live-p w) (drgnx-ruler--on-strip-p posn)))
+        (when (fboundp 'drgnx-look-edge-drag) (drgnx-look-edge-drag event))
+      (drgnx-ruler--goto w posn)
+      (track-mouse
+        (let (e done)
+          (while (not done)
+            (setq e (read-event))
+            (cond ((mouse-movement-p e)
+                   (let ((p (event-start e)))
+                     (when (eq (posn-window p) w)
+                       (drgnx-ruler--goto w (list w 'right-fringe (posn-x-y p) 0 nil nil nil nil nil nil)))))
+                  ((memq (event-basic-type e) '(mouse-1)) (setq done t))
+                  ((not (memq 'down (event-modifiers e))) (setq done t)))))))))
+
 (defun drgnx-ruler-click (event)
   "Mouse EVENT on the ruler's strip: its window shows that place of the file, centred."
   (interactive "e")
-  (let* ((posn (event-start event))
-         (pos (and (fboundp 'glitnir-ruler-position) (glitnir-ruler-position posn))))
-    (when pos
-      (with-selected-window (posn-window posn)
-        (goto-char pos)
-        (recenter)))))
+  (let ((posn (event-start event)))
+    (when (window-live-p (posn-window posn)) (drgnx-ruler--goto (posn-window posn) posn))))
 
 (defvar-keymap drgnx-ruler-mode-map
   :doc "The ruler's mouse: a click on the strip goes there."
   "<right-fringe> <mouse-1>" #'drgnx-ruler-click)
 
 (define-minor-mode drgnx-ruler-mode
-  "The overview ruler at this buffer's windows' right edge, while producers have marks (`drgnx-ruler-source')."
-  :group 'drgnx :keymap drgnx-ruler-mode-map
+  "The overview ruler's marks at this buffer's windows' right edge, while producers have marks (`drgnx-ruler-source')."
+  :group 'drgnx-minimap :keymap drgnx-ruler-mode-map
   (if drgnx-ruler-mode
       (progn
         (add-hook 'after-change-functions #'drgnx-ruler--changed nil t)
@@ -148,11 +274,39 @@ one that shows a buffer with the ruler gets it."
     (remove-hook 'change-major-mode-hook #'drgnx-ruler--off t)
     (remove-hook 'kill-buffer-hook #'drgnx-ruler--off t)
     (drgnx-timer-cancel (cons 'ruler (current-buffer)))
-    (mapc #'drgnx-ruler--hide (get-buffer-window-list nil nil t))
     (setq drgnx-ruler--marks nil drgnx-ruler--sources nil)
-    (unless (seq-some (lambda (b) (and (not (eq b (current-buffer))) (buffer-local-value 'drgnx-ruler-mode b)))
-                      (buffer-list))
+    (mapc #'drgnx-ruler--place (get-buffer-window-list nil nil t))
+    (unless (or drgnx-scrollbar-mode
+                (seq-some (lambda (b) (and (not (eq b (current-buffer))) (buffer-local-value 'drgnx-ruler-mode b)))
+                          (buffer-list)))
       (remove-hook 'window-buffer-change-functions #'drgnx-ruler--buffer-changed))))
+
+(defun drgnx-scrollbar-refresh-all ()
+  "Every live window's strip as it should be now (the scroll bar turned on or off, a setting, the scale or theme)."
+  (dolist (f (frame-list))
+    (dolist (w (window-list f 'nomini)) (drgnx-ruler--place w))))
+
+(defun drgnx-scrollbar--frame-made (frame)
+  "`after-make-frame-functions': a new frame's windows get the strip."
+  (dolist (w (window-list frame 'nomini)) (drgnx-ruler--place w)))
+
+(defvar-keymap drgnx-scrollbar-mode-map
+  :doc "The scroll bar's mouse: a press on the strip goes there, a drag scrolls."
+  "<right-fringe> <down-mouse-1>" #'drgnx-ruler-press
+  "<right-fringe> <mouse-1>" #'ignore)
+
+(define-minor-mode drgnx-scrollbar-mode
+  "The scroll bar on every scrollable surface (`drgnx-scrollbar-window-p'): a strip at the window's right edge with
+the thumb and the buffer's marks, hidden while the content fits (`drgnx-minimap-hide-short')."
+  :global t :group 'drgnx-minimap :keymap drgnx-scrollbar-mode-map
+  (if drgnx-scrollbar-mode
+      (progn
+        (add-hook 'window-buffer-change-functions #'drgnx-ruler--buffer-changed)
+        (add-hook 'after-make-frame-functions #'drgnx-scrollbar--frame-made))
+    (remove-hook 'after-make-frame-functions #'drgnx-scrollbar--frame-made)
+    (unless (seq-some (lambda (b) (buffer-local-value 'drgnx-ruler-mode b)) (buffer-list))
+      (remove-hook 'window-buffer-change-functions #'drgnx-ruler--buffer-changed)))
+  (drgnx-scrollbar-refresh-all))
 
 (provide 'drgnx-ruler)
 ;;; drgnx-ruler.el ends here

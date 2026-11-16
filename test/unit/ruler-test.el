@@ -51,10 +51,15 @@ fringe is widened once, and the parameter set only when the marks change."
     (let ((spec (window-parameter (selected-window) 'glitnir-ruler)))
       (should (equal (plist-get spec :width) (drgnx-px 12)))
       (should (equal (plist-get spec :right) 8))
+      ;; the mockup's lanes (minimap.css): left 1–4, middle 4–8, full 0–12; marks 2 px, radius 1
       (should (equal (plist-get spec :marks)
-                     (list (list (ruler-test--pos 50) 0 (drgnx-px 3) 'warning)
-                           (list (ruler-test--pos 50) (drgnx-px 3) (drgnx-px 9) 'error)
-                           (list (ruler-test--pos 10) 0 (drgnx-px 12) 'success)))))
+                     (list (list (ruler-test--pos 50) (drgnx-px 1) (drgnx-px 4) 'warning (drgnx-px 2) (drgnx-px 1))
+                           (list (ruler-test--pos 50) (drgnx-px 4) (drgnx-px 8) 'error (drgnx-px 2) (drgnx-px 1))
+                           (list (ruler-test--pos 10) 0 (drgnx-px 12) 'success (drgnx-px 2) (drgnx-px 1)))))
+      ;; the thumb: inset 3, radius 3, the foreground at 26 %, hidden while the text fits
+      (should (equal (list (plist-get spec :thumb-inset) (plist-get spec :radius) (plist-get spec :band)
+                           (plist-get spec :hide-short))
+                     (list (drgnx-px 3) (drgnx-px 3) '(drgnx-ruler-view . 0.26) t))))
     (should (equal fringes (list 8 (+ 8 (drgnx-px 12)))))
     (should (equal (list sets fringe-sets) '(1 1)))
     ;; the same marks again: nothing is set; new marks: the parameter only
@@ -124,5 +129,104 @@ there drags the gap, a press further in (the strip's side, its click bound) does
                        dragged)))
           (should (funcall press 797))          ; the outer half of the fringe's own 8 px
           (should-not (funcall press 794)))))))  ; inside: the widened fringe's half would have taken it
+
+;;;; The scroll bar on every surface
+
+(defmacro ruler-test--with-scrollbar (&rest body)
+  "BODY as `ruler-test--with', with the scroll bar on (`drgnx-scrollbar-mode') and no producer; off after."
+  (declare (indent 0))
+  `(ruler-test--with
+     (unwind-protect (progn (drgnx-scrollbar-mode 1) ,@body)
+       (drgnx-scrollbar-mode -1)
+       (dolist (p '(drgnx-role drgnx-popup drgnx-minimap-exclude window-side))
+         (set-window-parameter (selected-window) p nil)))))
+
+(ert-deftest drgnx-scrollbar/every-surface-kind-gets-a-strip ()
+  "With the scroll bar on, a window of every scrollable kind gets the strip though its buffer has no marks: an editor
+group, a docked pane (the Explorer's, the panel's, the right dock's), a popup lane, each with `:hide-short' so C hides
+it while the content fits; the fringe is widened once."
+  (ruler-test--with-scrollbar
+    (let ((w (selected-window)))
+      (should-not drgnx-ruler-mode)
+      (should (plist-get (window-parameter w 'glitnir-ruler) :hide-short))
+      (should (null (plist-get (window-parameter w 'glitnir-ruler) :marks)))
+      (should (equal fringes (list 8 (+ 8 (drgnx-px 12)))))
+      (dolist (params '(((drgnx-role . dock)) ((drgnx-role . panel)) ((drgnx-role . right)) ((drgnx-popup . t))))
+        (pcase-dolist (`(,p . ,v) params) (set-window-parameter w p v))
+        (drgnx-ruler--place w)
+        (should (window-parameter w 'glitnir-ruler))
+        (pcase-dolist (`(,p . ,_) params) (set-window-parameter w p nil)))
+      (should (= fringe-sets 1)))))
+
+(ert-deftest drgnx-scrollbar/chrome-windows-get-no-strip ()
+  "Chrome never gets the strip or a widened fringe: the status bar (a `drgnx-role' that is not a pane), a package's
+side window, and a window marked `drgnx-minimap-exclude' (the peek card's, the sticky header's)."
+  (ruler-test--with-scrollbar
+    (let ((w (selected-window)))
+      (dolist (params '(((drgnx-role . statusbar)) ((window-side . bottom)) ((drgnx-minimap-exclude . t))))
+        (pcase-dolist (`(,p . ,v) params) (set-window-parameter w p v))
+        (drgnx-ruler--place w)
+        (should-not (window-parameter w 'glitnir-ruler))
+        (should (equal fringes '(8 8)))
+        (pcase-dolist (`(,p . ,_) params) (set-window-parameter w p nil))
+        (drgnx-ruler--place w)
+        (should (window-parameter w 'glitnir-ruler))))))
+
+(ert-deftest drgnx-scrollbar/off-takes-every-strip ()
+  "The scroll bar off: windows without marks lose the strip and get their fringe back; a buffer with a producer's
+marks keeps its strip (the debugger's breakpoints show either way)."
+  (ruler-test--with-scrollbar
+    (drgnx-scrollbar-mode -1)
+    (should-not (window-parameter (selected-window) 'glitnir-ruler))
+    (should (equal fringes '(8 8)))
+    (setq ruler-test--marks (list (list 1 'middle 'error 1)))
+    (drgnx-ruler-source 'test #'ruler-test--source)
+    (should (window-parameter (selected-window) 'glitnir-ruler))))
+
+(ert-deftest drgnx-scrollbar/sja-thumb-follows-the-view-window ()
+  "A buffer holding a window of a view's rows (`drgnx-ruler-span-function') gives C the span, so the thumb stands for
+the whole view; when the hub moves the window, `drgnx-ruler-update' sets the new span once, and nothing when it did
+not move."
+  (ruler-test--with-scrollbar
+    (let* ((span (list 400 100 2000)))
+      (setq-local drgnx-ruler-span-function (lambda () span))
+      (drgnx-ruler-update)
+      (should (equal (plist-get (window-parameter (selected-window) 'glitnir-ruler) :span) '(400 100 2000)))
+      (let ((before sets))
+        (drgnx-ruler-update)
+        (should (= sets before))
+        (setq span (list 900 100 2000))
+        (drgnx-ruler-update)
+        (should (= sets (1+ before)))
+        (should (equal (plist-get (window-parameter (selected-window) 'glitnir-ruler) :span) '(900 100 2000)))))))
+
+(ert-deftest drgnx-scrollbar/a-press-outside-the-held-rows-asks-for-them ()
+  "A press on the strip of a view with a span, at a fraction outside the rows held, goes to
+`drgnx-ruler-goto-fraction-function' with that fraction; inside them, to the place by the buffer's characters."
+  (ruler-test--with-scrollbar
+    (let ((asked nil) (w (selected-window)))
+      (setq-local drgnx-ruler-span-function (lambda () (list 400 100 1000)))
+      (setq-local drgnx-ruler-goto-fraction-function (lambda (win frac) (setq asked (list win frac))))
+      (cl-letf (((symbol-function 'glitnir-ruler-fraction) (lambda (_) 0.9))
+                ((symbol-function 'glitnir-ruler-position) (lambda (_) (ruler-test--pos 50)))
+                ((symbol-function 'recenter) #'ignore))
+        (drgnx-ruler--goto w (list w 'right-fringe '(0 . 0) 0))
+        (should (equal asked (list w 0.9)))
+        (setq asked nil)
+        (cl-letf (((symbol-function 'glitnir-ruler-fraction) (lambda (_) 0.45)))
+          (drgnx-ruler--goto w (list w 'right-fringe '(0 . 0) 0)))
+        (should-not asked)
+        (should (= (line-number-at-pos (window-point w)) 50))))))
+
+(ert-deftest drgnx-scrollbar/scale-and-theme-apply-at-once ()
+  "A scale change (the density hook's refresh) gives every strip its new widths at once, the fringe widened by the
+new width over its own; the thumb names a face, so a theme change needs nothing here (Glitnir resolves it again)."
+  (ruler-test--with-scrollbar
+    (let ((w (selected-window)) (px (symbol-function 'drgnx-px)))
+      (cl-letf (((symbol-function 'drgnx-px) (lambda (n &rest _) (* 2 (funcall px n)))))
+        (drgnx-scrollbar-refresh-all)
+        (should (equal (plist-get (window-parameter w 'glitnir-ruler) :width) (* 2 (funcall px 12))))
+        (should (equal fringes (list 8 (+ 8 (* 2 (funcall px 12))))))
+        (should (symbolp (car (plist-get (window-parameter w 'glitnir-ruler) :band))))))))
 
 ;;; ruler-test.el ends here

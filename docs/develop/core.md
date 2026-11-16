@@ -1571,35 +1571,59 @@ An owner starts each margin string with `(drgnx-margins-pad OWNER)`: blanks up t
 buffer's first window. `drgnx-margins-changed-functions` runs with the buffer when places may have moved. Tests:
 `test/unit/margins-test.el`.
 
-## The overview ruler (`drgnx-ruler.el`)
+## The scroll bar and its marks (`drgnx-ruler.el`)
 
-A file's marks at the window's right edge, the whole file top to bottom (the mockup's `debugging-extras.html`).
-Nidhogg draws it: Glitnir's overview ruler, the window parameter `glitnir-ruler` (Nidhogg's case
-`2026-11-13-glitnir-overview-ruler-case`). The strip, its marks and the band are block bars that C lists at each publish.
+Every scrollable surface's scroll bar: a strip at the window's right edge with a thumb over the part shown and the
+file's marks, the whole content top to bottom (the minimap design's state A, `minimap-folding.html`; the user guide is
+[minimap.md](../guide/minimap.md)). Nidhogg draws it: Glitnir's overview ruler, the window parameter `glitnir-ruler`
+(Nidhogg's case `2026-11-13-glitnir-overview-ruler-case`). The strip, its marks and the thumb are block bars that C
+lists at each publish.
 
+- **Where.** `drgnx-scrollbar-mode` (global; module `editor/minimap`, setting `drgnx-minimap-ruler`) gives every
+  window `drgnx-scrollbar-window-p` names the strip: editor groups, the docked panes (`drgnx-role` `dock`, `panel`,
+  `right`), popup lanes and child frames' windows. Never the minibuffer, chrome (the status bar and other roles), a
+  package's side window, or a window with the parameter `drgnx-minimap-exclude`.
+- **Hidden while it fits.** With `drgnx-minimap-hide-short` the spec carries `:hide-short`, and C draws nothing while
+  the window's first row starts the text and a row ends it. The fringe keeps the strip's width, so nothing reflows
+  when the content grows past the window.
+- **Views the hub sends a window of.** A buffer that holds rows FROM to FROM + LENGTH of a view of TOTAL rows names
+  them through `drgnx-ruler-span-function` (Sjá's buffers: `drgnx-view-sja-ruler-span`, the window of
+  `drgnx-view-sja-window-list`). The spec's `:span` makes the strip stand for the TOTAL rows. The Sjá draw calls
+  `drgnx-ruler-update`, which sets the parameter only when the span moved. A press outside the rows held goes to
+  `drgnx-ruler-goto-fraction-function`, which asks the hub for the window around that row (`view/window`) and goes
+  there after the draw.
 - **Producers.** One owner draws; producers hand it marks. A producer calls `(drgnx-ruler-source OWNER FUNCTION)` in a
-  buffer. FUNCTION returns `(POS LANE FACE PRIORITY)` marks, LANE `left`, `middle`, `right` or `full`.
-  - nil for FUNCTION takes OWNER's marks away. With no producer left, the mode goes off.
+  buffer. FUNCTION returns `(POS LANE FACE PRIORITY [SHAPE END])` marks, LANE `left`, `middle`, `right` or `full`,
+  SHAPE nil or `dot` (6 px round, a breakpoint), END a position the mark runs down to (a run of changed lines).
+  - nil for FUNCTION takes OWNER's marks away. With no producer left, `drgnx-ruler-mode` goes off; the strip stays
+    while the scroll bar is on.
   - The ruler asks again on `drgnx-ruler-refresh` (a producer's marks changed) and, debounced 0.3 s, after an edit.
   - A higher PRIORITY is drawn on top.
-  - Today's only producer is the debug column: breakpoints in the middle lane, the stopped line across the strip.
-- **The strip.** It is 12 logical px wide (lanes 0–3, 3–9, 9–12, through `drgnx-px`), in the window's right fringe,
-  beside the text.
-  - The fringe is widened by the strip with `set-window-fringes` only when the ruler turns on or off in the window.
-    Its own width is kept in the window parameter `drgnx-ruler-fringe`, which is also the strip's `:right`.
-  - The fringe's own pixels stay outermost, so `drgnx-look-edge-drag` keeps its hit area: it takes the outer half of
-    the own width.
-  - A window that shows another buffer loses the strip and its width (`window-buffer-change-functions`). The ruler
+  - Producers (`core/drgnx-marks.el`): the change bars (left lane, one mark per run of lines), Flymake
+    (right lane, set once per report after 100 ms), isearch hits (middle lane, the whole buffer once per search
+    string), the Problems list's error and warning rows; the debug column (breakpoints, the stopped line).
+- **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
+  8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
+  at 26 %; all through `drgnx-px`.
+  - The fringe is widened by the strip with `set-window-fringes` only when the strip comes or goes, or the scale
+    changes (`drgnx-scrollbar-refresh-all` on the density hook). Its own width is kept in the window parameter
+    `drgnx-ruler-fringe`, which is also the strip's `:right`.
+  - The fringe's own pixels stay outermost, so `drgnx-look-edge-drag` keeps its hit area: a press there goes to it
+    (`drgnx-ruler-press`).
+  - A window that shows another buffer gets that buffer's strip (`window-buffer-change-functions`). The ruler mode
     turns off before a new major mode or a kill drops its locals.
-- **Marks and band.** Marks sit at their position's fraction of the buffer, by characters, as Emacs's scroll bar
-  measures. The band over the part shown (`drgnx-ruler-view`, its foreground at 0.35) is computed by C from the
-  window's start and end. So a scroll runs no Lisp of the ruler's.
+- **Marks and thumb.** Marks sit at their position's fraction of the buffer (of the view with a span), by characters,
+  as Emacs's scroll bar measures. The thumb is computed by C from the window's start and end. So a scroll runs no Lisp.
 - **When it is set.** `glitnir-ruler` is set only when its value changes. Glitnir resolves the faces again on a theme
   change.
-- **Clicks.** A click on the strip (`<right-fringe> <mouse-1>`, `drgnx-ruler-click`) goes to `glitnir-ruler-position`'s
-  place, centred.
-- **Where there is none.** No ruler without Nidhogg's feature `glitnir-ruler`, or in a terminal
+- **Mouse.** A press on the strip (`<right-fringe> <down-mouse-1>`, `drgnx-ruler-press`) goes to the place under the
+  pointer, centred, and a drag follows the pointer until the button comes up: one `recenter` per motion, the one
+  place Lisp runs per pointer move. `drgnx-ruler-click` serves buffers whose marks show without the scroll bar.
+- **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler`, or in a terminal
   (`drgnx-ruler-available-p`).
+- **Checks.** `ruler-test.el` and `marks-test.el` (batch); the look scenes check every scrollable window of every
+  scene (`drgnx-look-scene-scrollbars`: the strip is set, and drawn exactly when the content runs past the window);
+  Nidhogg's `glitnir-gui/the-ruler-*` rows check the pixels.
 - **Perf.** `debug-ruler-scroll` (10,000 lines, 200 marks) against `debug-ruler-baseline`, the same scroll with the
   ruler off (docs/develop/perf.md, "The overview ruler"). The margin version this
   replaced cost 0.4–1.1 ms a page, all of it in the margin's glyphs.

@@ -70,6 +70,11 @@
     (heap-graph :mockup debugging-extras)
     (heap-graph-light :mockup debugging-extras)
     ;; their hub seeds the map's graph, which no other scene's hub can share: a session of their own
+    (scrollbars-editor :mockup minimap-folding)
+    (scrollbars-panel :mockup minimap-folding)
+    (scrollbars-terminal :mockup minimap-folding)
+    (scrollbars-settings :mockup minimap-folding)
+    (scrollbars-shortcuts :mockup minimap-folding)
     (work-space-dark :seed "map")
     (work-space-light :seed "map")
     (work-space-hc :seed "map"))
@@ -142,6 +147,12 @@ OUT at SCALE (TAG: `s1', `s2'); return (SHOTS . ERRORS), each in drawing order, 
                                                     (drgnx-ui-el (expand-file-name (format "%s-%s-facts.eld" name tag)
                                                                                    out))
                                                     name))))
+              ;; every scrollable surface has the scroll bar, drawn exactly when its content runs past it
+              (setq errs (append errs (drgnx-look-scenes--call
+                                       sess (format "(drgnx-look-scene-scrollbars %s)"
+                                                    (drgnx-ui-el (expand-file-name (format "%s-%s-scrollbars.eld" name tag)
+                                                                                   out)))
+                                       60)))
               ;; no hub-fed row wider than its window, as drawn, narrower and wider (after the shot: it resizes)
               (setq errs (append errs (drgnx-look-scenes--call
                                        sess (format "(drgnx-look-scene-widths %s)"
