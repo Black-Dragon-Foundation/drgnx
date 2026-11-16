@@ -668,6 +668,21 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
            (should (default-value 'indent-tabs-mode)))
        (setq-default indent-tabs-mode orig)))))
 
+(defvar nidhogg-lone-modifier-events)
+
+(ert-deftest drgnx-keys/the-vscode-profile-turns-on-lone-alt-for-the-menu ()
+  "VS Code's lone Alt opens the menu: the profile binds `<lone-alt>' to the menu (☰) and turns on Nidhogg's lone Alt
+\(`nidhogg-lone-modifier-events'); the other profiles leave it as it was."
+  (drgnx-keys-test--live
+   (let ((nidhogg-lone-modifier-events nil))     ; bound here: the batch Emacs may be one without it
+     (drgnx-keys-use '((emacs app editing window)))
+     (should-not nidhogg-lone-modifier-events)
+     (drgnx-keys-use '((vscode app editing window)))
+     (should (equal (cadr (assq 'face-menu (plist-get (alist-get 'vscode drgnx-keys-profiles) :bind))) "<lone-alt>"))
+     (should (equal nidhogg-lone-modifier-events '(alt)))
+     (drgnx-keys-use '((emacs app editing window)))
+     (should-not nidhogg-lone-modifier-events))))
+
 (defvar drgnx-keys-test-late-map (make-sparse-keymap))
 
 (ert-deftest drgnx-keys/deferred-bindings-of-an-old-setup-never-apply ()
