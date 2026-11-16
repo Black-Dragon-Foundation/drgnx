@@ -522,3 +522,40 @@ fn find_lists_only_the_found_files() {
     );
     assert!(got.iter().filter(|e| e.dir).all(|e| e.open));
 }
+
+/// Roots that overlap (one twice, one inside another) list each path once: Sjá pairs rows by key (the path), so a
+/// path twice made every reset fail and the Explorer stopped (the user's five roots, 2026-11-16).  A nested root shows
+/// as its own root only, not again inside the one that holds it, nor through a compact chain.
+#[test]
+fn overlapping_roots_list_each_path_once() {
+    let d = disk();
+    let roots = [
+        PathBuf::from("/r"),
+        PathBuf::from("/r/lib"),
+        PathBuf::from("/r/"),
+        PathBuf::from("/r/a/b"),
+    ];
+    let expanded: HashSet<String> = ["/r/a", "/r/a/b", "/r/lib"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let got = list_tree(&roots, &expanded, true, &AtomicBool::new(false), &mut |p| {
+        d.get(&*p.to_string_lossy()).cloned().unwrap_or_default()
+    })
+    .unwrap();
+    let paths: Vec<&str> = got.iter().map(|e| e.path.as_str()).collect();
+    let unique: HashSet<&str> = paths.iter().copied().collect();
+    assert_eq!(unique.len(), paths.len(), "a path twice: {paths:?}");
+    assert_eq!(
+        paths,
+        [
+            "/r",
+            "/r/a",
+            "/r/z.txt",
+            "/r/lib",
+            "/r/lib/m.el",
+            "/r/a/b",
+            "/r/a/b/c"
+        ]
+    );
+}
