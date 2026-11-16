@@ -544,25 +544,44 @@ and deleted files it skipped; an empty scope says why; a Branch with no base to 
                                     :scope (list :files 0 :needs_base "choose a base: detached HEAD")))
     (should (string-match-p "choose a base: detached HEAD.*Choose…" (drgnx-replace-rows-test--status)))))
 
+(ert-deftest drgnx-replace-rows/the-form-has-an-ascii-form ()
+  "On a terminal that does not write UTF-8 the view's marks are ASCII (`drgnx-face-glyph'): Branch's ▾, `±', the
+pattern language's ▾, ☆ (Save This Search) and a saved search's ☆ (a batch Emacs is such a terminal)."
+  (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) t)))
+    (drgnx-replace-rows-test--with
+      (drgnx-replace-rows-test--answering
+          '(("search/saved/list" . (:saved [(:name "TODOs" :search (:query (:mode "text" :text "TODO")) :pinned :false
+                                                   :project :false :shared :false)])))
+        (drgnx-replace--set-scope 'branch)
+        (drgnx-replace--toggle :pattern)
+        (drgnx-replace--search-now)
+        (should (equal "Branch v" (string-trim (widget-value (drgnx-replace--widget 'branch)))))
+        (should (equal "+-" (string-trim (widget-value (drgnx-replace--widget :lines)))))
+        (should (string-match-p "^  \\* TODOs" (drgnx-replace-rows-test--lists)))
+        (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+          (should (string-match-p "any v" text))
+          (should-not (string-match-p "[▾±☆]" text)))))))
+
 (ert-deftest drgnx-replace-rows/the-branch-menu-picks-a-base ()
   "Pattern D: Branch ▾ pressed while Branch is on opens its menu (`search/scope-bases': the upstream, the default and
 recent branches); the base picked goes with the search and on the chip."
-  (drgnx-replace-rows-test--with
-    (drgnx-replace--fill 'find "needle")
-    (drgnx-replace--set-scope 'branch)
-    (should (equal '(:kind "branch") (drgnx-replace-rows-test--scope)))
-    (let (asked offered)
-      (cl-letf (((symbol-function 'drgnx-hub-call-sync)
-                 (lambda (method params &rest _) (setq asked (cons method params))
-                   (list :current "work" :upstream "origin/main" :default "origin/main" :recent ["main" "dev"]
-                         :detached :false)))
-                ((symbol-function 'completing-read)
-                 (lambda (_prompt coll &rest _) (setq offered (all-completions "" coll)) "dev")))
-        (drgnx-replace--branch-pressed))
-      (should (equal '("search/scope-bases" :root "/r/") asked))
-      (should (equal '("origin/main" "main" "dev") offered)))
-    (should (equal '(:kind "branch" :base "dev") (drgnx-replace-rows-test--scope)))
-    (should (equal "Branch dev ▾" (string-trim (widget-value (drgnx-replace--widget 'branch)))))))
+  (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)))   ; the Unicode marks: ▾, ☆
+    (drgnx-replace-rows-test--with
+      (drgnx-replace--fill 'find "needle")
+      (drgnx-replace--set-scope 'branch)
+      (should (equal '(:kind "branch") (drgnx-replace-rows-test--scope)))
+      (let (asked offered)
+        (cl-letf (((symbol-function 'drgnx-hub-call-sync)
+                   (lambda (method params &rest _) (setq asked (cons method params))
+                     (list :current "work" :upstream "origin/main" :default "origin/main" :recent ["main" "dev"]
+                           :detached :false)))
+                  ((symbol-function 'completing-read)
+                   (lambda (_prompt coll &rest _) (setq offered (all-completions "" coll)) "dev")))
+          (drgnx-replace--branch-pressed))
+        (should (equal '("search/scope-bases" :root "/r/") asked))
+        (should (equal '("origin/main" "main" "dev") offered)))
+      (should (equal '(:kind "branch" :base "dev") (drgnx-replace-rows-test--scope)))
+      (should (equal "Branch dev ▾" (string-trim (widget-value (drgnx-replace--widget 'branch))))))))
 
 (defconst drgnx-replace-rows-test--older
   '(:query (:mode "text" :text "older" :case t :regexp :false) :replace "x"
@@ -619,24 +638,25 @@ Search walks back, and past the newest gives the search that was there before th
 (ert-deftest drgnx-replace-rows/the-empty-view-lists-saved-then-recent ()
   "Pattern D: with Find empty the view lists the project's saved searches, then its last 8 recent ones; a click on
 one restores and runs it; with words in Find the lists go."
-  (drgnx-replace-rows-test--with
-    (drgnx-replace-rows-test--answering
-        `(("search/saved/list" . (:saved [(:name "TODOs" :search (:query (:mode "text" :text "TODO")) :pinned :false
-                                                 :project :false :shared :false)]))
-          ("search/recent" . (:recent ,(vconcat (cons drgnx-replace-rows-test--older
-                                                      (mapcar (lambda (i) `(:query (:mode "text" :text ,(format "r%d" i))))
-                                                              (number-sequence 1 9)))))))
-      (drgnx-replace--search-now)
-      (let ((lists (drgnx-replace-rows-test--lists)))
-        (should (string-match-p "Saved\n.*☆ TODOs.*\nRecent\n.*older" lists))
-        (should (string-match-p "r7" lists))
-        (should-not (string-match-p "r8" lists)))
-      (goto-char drgnx-replace--lists-beg)
-      (search-forward "older")
-      (push-button (match-beginning 0))
-      (should (equal "older" (drgnx-replace--text 'find)))
-      (should (eq 'changed (drgnx-replace--opt :scope)))
-      (should (equal "" (drgnx-replace-rows-test--lists))))))
+  (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)))   ; the Unicode marks: ▾, ☆
+    (drgnx-replace-rows-test--with
+      (drgnx-replace-rows-test--answering
+          `(("search/saved/list" . (:saved [(:name "TODOs" :search (:query (:mode "text" :text "TODO")) :pinned :false
+                                                   :project :false :shared :false)]))
+            ("search/recent" . (:recent ,(vconcat (cons drgnx-replace-rows-test--older
+                                                        (mapcar (lambda (i) `(:query (:mode "text" :text ,(format "r%d" i))))
+                                                                (number-sequence 1 9)))))))
+        (drgnx-replace--search-now)
+        (let ((lists (drgnx-replace-rows-test--lists)))
+          (should (string-match-p "Saved\n.*☆ TODOs.*\nRecent\n.*older" lists))
+          (should (string-match-p "r7" lists))
+          (should-not (string-match-p "r8" lists)))
+        (goto-char drgnx-replace--lists-beg)
+        (search-forward "older")
+        (push-button (match-beginning 0))
+        (should (equal "older" (drgnx-replace--text 'find)))
+        (should (eq 'changed (drgnx-replace--opt :scope)))
+        (should (equal "" (drgnx-replace-rows-test--lists)))))))
 
 (ert-deftest drgnx-replace-rows/a-saved-search-and-its-pinned-count ()
   "Pattern D: Save This Search (☆) names the view's search (the words by default) and keeps it

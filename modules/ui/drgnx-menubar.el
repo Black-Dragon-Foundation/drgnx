@@ -199,13 +199,16 @@ On Nidhogg, Left, Right and the pointer over another title move to that menu, un
       (call-interactively binding))))
 
 (defmacro drgnx-menubar--define-openers ()
-  "One command per menu, `drgnx-menubar-open-ID', for the keys that open it."
+  "One command per menu, `drgnx-menubar-open-ID', for the keys that open it.  Each opens nothing when Emacs reached
+it by dropping a Shift (Alt+Shift+F finds Alt+F's command when nothing binds it): VS Code's Alt+Shift+letter is no
+menu, and a menu would wait on the keys that follow.  The legacy terminals' fallback keeps those keys free."
   `(progn
      ,@(mapcar (lambda (id)
                  `(defun ,(intern (format "drgnx-menubar-open-%s" id)) ()
-                    ,(format "Open the %s menu." (capitalize (symbol-name id)))
+                    ,(format "Open the %s menu (not on its key with Shift)." (capitalize (symbol-name id)))
                     (interactive)
-                    (drgnx-menubar-open ',id)))
+                    (unless this-command-keys-shift-translated
+                      (drgnx-menubar-open ',id))))
                '(file edit selection view go run terminal help))))
 (drgnx-menubar--define-openers)
 

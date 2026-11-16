@@ -559,10 +559,11 @@ the string made last, and allocates nothing; a renamed buffer or another project
   ;; no two glyphs share an ASCII form: on a terminal that is not UTF-8 each still says which it is
   ;; (the meanings the UI kit added -- fail, stopped, dismiss, unqueue, info, warn -- may look like an older one, and
   ;; so may the find bar's buttons, read among its own: match-previous and match-next are ahead's ^ and behind's v,
-  ;; rename-symbol diamond's <>)
+  ;; rename-symbol diamond's <>; and the Search view's dropdown and save-search, behind's v and dot's *)
   ;; nor the glyphs of the icons (`drgnx-ui--icon-glyphs'): they stand in for a picture
   (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (or (memq (car g) '(fail stopped dismiss unqueue info warn
-                                                                               match-previous match-next rename-symbol))
+                                                                               match-previous match-next rename-symbol
+                                                                               dropdown save-search))
                                                           (assq (car g) drgnx-ui--icon-glyphs)))
                                           (default-value 'drgnx-face-glyphs)))))
     (should (= (length ascii) (length (delete-dups (copy-sequence ascii))))))
