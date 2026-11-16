@@ -274,6 +274,7 @@ params! {
     MachinesReport(work::MachineReport),
     MachinesList(Empty),
     WorkConclusions(work::ConclusionsParams),
+    ReviewEffects(work::EffectsParams),
     AgentsPresenceSubscribe(work::PresenceSubscribe),
     AgentsPresenceGet(work::PresenceGet),
     AgentsBufferWatch(editor::BufferWatch),

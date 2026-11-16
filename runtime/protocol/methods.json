@@ -924,6 +924,56 @@
               "worktree_label"
             ],
             "type": "object"
+          },
+          "Proposal": {
+            "additionalProperties": false,
+            "description": "One agent's change to the viewed file, offered as a proposal: the hunk's lines in the file, what it adds and, when\nthe agent recorded one in that turn, why.",
+            "properties": {
+              "end_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "index": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "op": {
+                "description": "The edit history's operation that wrote it, when it names one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session": {
+                "type": "string"
+              },
+              "start_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session",
+              "index",
+              "start_line",
+              "end_line",
+              "text"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -963,6 +1013,14 @@
             "default": [],
             "items": {
               "$ref": "#/$defs/GutterRange"
+            },
+            "type": "array"
+          },
+          "proposals": {
+            "default": [],
+            "description": "What agents working in their own worktrees changed in this file, as hunks to accept or revert.",
+            "items": {
+              "$ref": "#/$defs/Proposal"
             },
             "type": "array"
           },
@@ -5465,6 +5523,56 @@
               "worktree_label"
             ],
             "type": "object"
+          },
+          "Proposal": {
+            "additionalProperties": false,
+            "description": "One agent's change to the viewed file, offered as a proposal: the hunk's lines in the file, what it adds and, when\nthe agent recorded one in that turn, why.",
+            "properties": {
+              "end_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "index": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "op": {
+                "description": "The edit history's operation that wrote it, when it names one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session": {
+                "type": "string"
+              },
+              "start_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session",
+              "index",
+              "start_line",
+              "end_line",
+              "text"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5504,6 +5612,14 @@
             "default": [],
             "items": {
               "$ref": "#/$defs/GutterRange"
+            },
+            "type": "array"
+          },
+          "proposals": {
+            "default": [],
+            "description": "What agents working in their own worktrees changed in this file, as hunks to accept or revert.",
+            "items": {
+              "$ref": "#/$defs/Proposal"
             },
             "type": "array"
           },
@@ -32794,6 +32910,153 @@
       "classes": [
         "user"
       ],
+      "doc": "what a spec, plan or code change would do to the tasks under way or queued: a removed task (or a retired plan or spec) stops, a running task whose brief changes gets a steer, a task whose agent edits or reads a changed file would need to rebase; tasks not started or done are left out",
+      "name": "review/effects",
+      "params": {
+        "$defs": {
+          "ChangeRef": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DocChange"
+              },
+              {
+                "$ref": "#/$defs/CodeChange"
+              }
+            ],
+            "description": "What `review/effects` looks at."
+          },
+          "CodeChange": {
+            "additionalProperties": false,
+            "description": "A code change under review: its files, relative to the repository, and its own branch (a task working on that\nbranch is the change's author, not a task it reaches).",
+            "properties": {
+              "branch": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "paths": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "paths"
+            ],
+            "type": "object"
+          },
+          "DocChange": {
+            "additionalProperties": false,
+            "description": "A spec or plan edit under review: the document now, against its text before (`from`, the git blob id of that\ntext in the document's repository).",
+            "properties": {
+              "doc": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "doc",
+              "from"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`review/effects`'s params.",
+        "properties": {
+          "change": {
+            "$ref": "#/$defs/ChangeRef"
+          }
+        },
+        "required": [
+          "change"
+        ],
+        "title": "EffectsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Effect": {
+            "description": "What the change does to a task: it removes the task (or retires its plan or spec), changes its brief (its own text\nor the plan's shared text), or touches files its agent edits or reads.",
+            "enum": [
+              "stops",
+              "brief-changes",
+              "overlaps"
+            ],
+            "type": "string"
+          },
+          "TaskEffect": {
+            "additionalProperties": false,
+            "description": "One task the change reaches, with the sentence the review shows (\"Task 3 is running: it would stop.\").",
+            "properties": {
+              "agent": {
+                "description": "The name of the session working on it.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "effect": {
+                "$ref": "#/$defs/Effect"
+              },
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "$ref": "#/$defs/TaskState"
+              },
+              "task": {
+                "description": "`JOB#N`.",
+                "type": "string"
+              },
+              "task_title": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task",
+              "task_title",
+              "state",
+              "effect",
+              "why"
+            ],
+            "type": "object"
+          },
+          "TaskState": {
+            "description": "Where a task the change reaches is: under way (running, waiting for an answer, in review) or queued in a run that\ngoes on.",
+            "enum": [
+              "running",
+              "needs-input",
+              "in-review",
+              "queued"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/TaskEffect"
+        },
+        "title": "Array_of_TaskEffect",
+        "type": "array"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a review mark on an agent's change, and its event, in one transaction (drgnx-coord-review-mark)",
       "name": "review/mark",
       "params": {
@@ -44635,12 +44898,8 @@
           },
           "MapFilters": {
             "additionalProperties": false,
-            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).",
+            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (Active, Completed or All).",
             "properties": {
-              "finished": {
-                "default": false,
-                "type": "boolean"
-              },
               "focus": {
                 "description": "An item id: only its chain.",
                 "type": [
@@ -44651,9 +44910,55 @@
               "overlaps": {
                 "default": false,
                 "type": "boolean"
+              },
+              "recent_days": {
+                "default": 7,
+                "description": "Days a changed item stays in Active (`drgnx-work-recent-days`).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "show": {
+                "$ref": "#/$defs/MapShow",
+                "default": "active"
               }
             },
             "type": "object"
+          },
+          "MapMode": {
+            "description": "How a map view is drawn.",
+            "oneOf": [
+              {
+                "const": "list",
+                "description": "Nested rows: spec, plan, task.",
+                "type": "string"
+              },
+              {
+                "const": "graph",
+                "description": "The layers and the edges between them.",
+                "type": "string"
+              }
+            ]
+          },
+          "MapShow": {
+            "description": "Which items a map view shows: `.` cycles them.",
+            "oneOf": [
+              {
+                "const": "active",
+                "description": "Agents running or waiting on you, what is not started, and what changed within `recent_days`.",
+                "type": "string"
+              },
+              {
+                "const": "completed",
+                "description": "Finished items only.",
+                "type": "string"
+              },
+              {
+                "const": "all",
+                "description": "Both, the finished ones faded.",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -44695,6 +45000,17 @@
                 "type": "null"
               }
             ]
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "List or Graph."
           },
           "outline": {
             "description": "The form a rows view is drawn in: `on` the outline, `off` the cards, `auto` (where none was asked) the outline\nonly where the cards do not fit.",
@@ -44773,12 +45089,8 @@
           },
           "MapFilters": {
             "additionalProperties": false,
-            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).",
+            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (Active, Completed or All).",
             "properties": {
-              "finished": {
-                "default": false,
-                "type": "boolean"
-              },
               "focus": {
                 "description": "An item id: only its chain.",
                 "type": [
@@ -44789,9 +45101,55 @@
               "overlaps": {
                 "default": false,
                 "type": "boolean"
+              },
+              "recent_days": {
+                "default": 7,
+                "description": "Days a changed item stays in Active (`drgnx-work-recent-days`).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "show": {
+                "$ref": "#/$defs/MapShow",
+                "default": "active"
               }
             },
             "type": "object"
+          },
+          "MapMode": {
+            "description": "How a map view is drawn.",
+            "oneOf": [
+              {
+                "const": "list",
+                "description": "Nested rows: spec, plan, task.",
+                "type": "string"
+              },
+              {
+                "const": "graph",
+                "description": "The layers and the edges between them.",
+                "type": "string"
+              }
+            ]
+          },
+          "MapShow": {
+            "description": "Which items a map view shows: `.` cycles them.",
+            "oneOf": [
+              {
+                "const": "active",
+                "description": "Agents running or waiting on you, what is not started, and what changed within `recent_days`.",
+                "type": "string"
+              },
+              {
+                "const": "completed",
+                "description": "Finished items only.",
+                "type": "string"
+              },
+              {
+                "const": "all",
+                "description": "Both, the finished ones faded.",
+                "type": "string"
+              }
+            ]
           },
           "Workspace": {
             "additionalProperties": false,
@@ -44837,9 +45195,15 @@
           "filters": {
             "$ref": "#/$defs/MapFilters",
             "default": {
-              "finished": false,
-              "overlaps": false
+              "overlaps": false,
+              "recent_days": 7,
+              "show": "active"
             }
+          },
+          "mode": {
+            "$ref": "#/$defs/MapMode",
+            "default": "list",
+            "description": "List (the default) or Graph."
           },
           "outline": {
             "description": "The form the user asked for (`work/map/set {outline}`, sent again by the editor): `on`, `off` or `auto`.",

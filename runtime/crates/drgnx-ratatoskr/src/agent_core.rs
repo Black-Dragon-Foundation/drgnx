@@ -231,6 +231,7 @@ pub async fn serve(
         Params::RunnersKeysHeld(p) => answer(runners::methods::keys_held(f, c, p).await),
         Params::RunnersAudit(p) => answer(runners::methods::audit(f, c, p).await),
         Params::WorkConclusions(p) => answer(work::conclusions::get(f, c, p).await),
+        Params::ReviewEffects(p) => answer(work::task_effects::effects(f, c, p).await),
         Params::AgentsPresenceSubscribe(p) => answer(work::presence::subscribe(f, c, p).await),
         Params::AgentsPresenceGet(p) => answer(work::presence::get(f, c, p).await),
         Params::AgentsBufferWatch(p) => answer(crate::editor::watch(f, c, p).await),
