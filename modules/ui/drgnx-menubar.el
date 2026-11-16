@@ -134,12 +134,43 @@ them).  On macOS the menus are in the system menu bar whatever this says."
 ;;;; Opening one
 
 (defvar drgnx-menubar--titles-x (make-hash-table :test #'eq :weakness 'key)
-  "Frame → alist menu id → the pixel x its title was last clicked at (`drgnx-menubar-note-click').  Weak on the frame:
-a deleted frame's entry goes with it; at most eight ids a frame.")
+  "Frame → the pixel x where the first menu title starts in its title row, learnt from the last click on a title
+(`drgnx-menubar-note-click').  Weak on the frame: a deleted frame's entry goes with it.")
+
+(defvar nhwl-menu-switch-function)      ; Nidhogg's menus (nhwl-menu.el): a row of menus
+(defvar nhwl-menu-switched)
+(declare-function drgnx-statusbar--measure-fn "drgnx-statusbar" (&optional frame face layout))
+
+(defun drgnx-menubar--spans (frame)
+  "Alist menu id → (LEFT . RIGHT), the pixels (columns on a terminal) its title spans in FRAME's title row."
+  (let ((x (or (gethash frame drgnx-menubar--titles-x) 0))
+        (measure (or (and (fboundp 'drgnx-statusbar--measure-fn)
+                          (with-selected-frame frame (drgnx-statusbar--measure-fn frame 'tab-bar)))
+                     #'string-width))
+        out)
+    (dolist (m (drgnx-menubar-menus) (nreverse out))
+      (let ((w (funcall measure (drgnx-menubar--title-text (nth 1 m)))))
+        (push (cons (car m) (cons x (+ x w))) out)
+        (setq x (+ x w))))))
 
 (defun drgnx-menubar--title-x (id frame)
-  "The pixel x of menu ID's title in FRAME's title row, or 0."
-  (or (alist-get id (gethash frame drgnx-menubar--titles-x)) 0))
+  "The pixel x of menu ID's title in FRAME's title row."
+  (or (cadr (assq id (drgnx-menubar--spans frame))) 0))
+
+(defun drgnx-menubar--switch (id frame)
+  "Where Nidhogg's open menu ID in FRAME moves (`nhwl-menu-switch-function'): Left and Right to the menu beside it,
+around the ends; the pointer over another title to its menu."
+  (lambda (how)
+    (let* ((ids (mapcar #'car (drgnx-menubar-menus)))
+           (at (or (cl-position id ids) 0)))
+      (pcase how
+        ('left (nth (mod (1- at) (length ids)) ids))
+        ('right (nth (mod (1+ at) (length ids)) ids))
+        (`(,x ,y ,f)
+         (and (eq f frame) (>= y 0) (< y (if (display-graphic-p f) (tab-bar-height f t) 1))
+              (let ((hit (seq-find (lambda (s) (and (>= x (cadr s)) (< x (cddr s))))
+                                   (drgnx-menubar--spans frame))))
+                (and hit (not (eq (car hit) id)) (car hit)))))))))
 
 (defun drgnx-menubar--position (id)
   "Where menu ID opens: under its title in the selected frame's title row."
@@ -150,10 +181,17 @@ a deleted frame's entry goes with it; at most eight ids a frame.")
     (list (list (drgnx-menubar--title-x id frame) y) frame)))
 
 (defun drgnx-menubar-open (id &optional position)
-  "Open menu ID (a symbol of `drgnx-menubar-menus') at POSITION (default: under its title) and run what is chosen."
-  (let* ((map (drgnx-menubar-keymap id))
-         (path (x-popup-menu (or position (drgnx-menubar--position id)) map))
-         (binding (and path (lookup-key map (apply #'vector path)))))
+  "Open menu ID (a symbol of `drgnx-menubar-menus') at POSITION (default: under its title) and run what is chosen.
+On Nidhogg, Left, Right and the pointer over another title move to that menu, under its title."
+  (let ((frame (selected-frame)) (next id) binding)
+    (while next
+      (let* ((map (drgnx-menubar-keymap next))
+             (nhwl-menu-switch-function (drgnx-menubar--switch next frame))
+             (nhwl-menu-switched nil)
+             (path (x-popup-menu (or position (drgnx-menubar--position next)) map)))
+        (setq position nil
+              binding (and path (lookup-key map (apply #'vector path)))
+              next (and (not path) nhwl-menu-switched))))
     (when (and binding (commandp binding))
       (call-interactively binding))))
 
@@ -231,10 +269,14 @@ them.  Each item is (KEY menu-item TEXT COMMAND :help HELP), the title row's for
                                       drgnx-menubar-pick :help "The menus"))))))))
 
 (defun drgnx-menubar-note-click (key x frame)
-  "Remember that the title row's item KEY starts at pixel X in FRAME: its menu opens there."
+  "Remember that the title row's item KEY starts at pixel X in FRAME: its menu opens there, and the other titles sit
+beside it."
   (when-let* ((name (symbol-name key))
-              ((string-prefix-p "drgnx-topline-menu-" name)))
-    (setf (alist-get (intern (substring name 19)) (gethash frame drgnx-menubar--titles-x)) x)))
+              ((string-prefix-p "drgnx-topline-menu-" name))
+              (id (intern (substring name 19))))
+    (remhash frame drgnx-menubar--titles-x)
+    (when-let* ((span (assq id (drgnx-menubar--spans frame))))
+      (puthash frame (- x (cadr span)) drgnx-menubar--titles-x))))
 
 ;;;; The menu bar keymap (macOS, Emacs's own menu bar, F10's text menu)
 

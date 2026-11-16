@@ -98,6 +98,42 @@ the VS Code profile (whose ids the key lints check against the registry)."
     (should (keymapp (nth 1 shown)))
     (should ran)))
 
+(defvar nhwl-menu-switch-function)
+(defvar nhwl-menu-switched)
+
+(ert-deftest drgnx-menubar/left-right-and-the-pointer-move-between-the-menus ()
+  "Nidhogg's menu asks where Left, Right and the pointer over the title row go: the menu beside the open one (around
+the ends), or the title under the pointer; the next menu opens under its title, and its choice runs."
+  (let ((opened nil) (ran nil) (moves '(right left left pointer)))
+    (drgnx-menubar-test--with `((edit-undo "Undo" :command ,(lambda () (interactive) (setq ran t))))
+      (clrhash drgnx-menubar--titles-x)
+      (cl-letf (((symbol-function 'x-popup-menu)
+                 (lambda (pos _map)
+                   (push (list (caar pos)) opened)
+                   (let ((how (pop moves)))
+                     (cond ((memq how '(left right))
+                            (setq nhwl-menu-switched (funcall nhwl-menu-switch-function how))
+                            nil)
+                           ((eq how 'pointer)
+                            ;; below the row: nothing; over Go's title: Go
+                            (should-not (funcall nhwl-menu-switch-function (list 1 10000 (selected-frame))))
+                            (let ((go (cdr (assq 'go (drgnx-menubar--spans (selected-frame))))))
+                              (setq nhwl-menu-switched
+                                    (funcall nhwl-menu-switch-function
+                                             (list (1+ (car go)) 0 (selected-frame)))))
+                            nil)
+                           (t (should (eq nhwl-menu-switched nil)) '(edit-undo)))))))
+        (let ((seen nil))
+          (advice-add 'drgnx-menubar-keymap :before (lambda (id) (push id seen)) '((name . drgnx-menubar-test)))
+          (unwind-protect (drgnx-menubar-open 'file)
+            (advice-remove 'drgnx-menubar-keymap 'drgnx-menubar-test))
+          ;; file → right edit → left file → left help (around) → pointer go
+          (should (equal (reverse seen) '(file edit file help go))))
+        (let ((spans (drgnx-menubar--spans (selected-frame))))
+          ;; each menu opened at the left of its title
+          (should (equal (car (car (last opened 2))) (cadr (assq 'edit spans))))))
+      (should-not ran))))
+
 (ert-deftest drgnx-menubar/the-mode-puts-the-eight-menus-in-the-menu-bar-and-takes-them-out ()
   (unwind-protect
       (progn

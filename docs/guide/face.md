@@ -42,7 +42,9 @@ is a command with the key the active key profile gives it, greyed while it can't
 profile changes the keys at the next open. On macOS the same eight menus are in the system menu bar and the title row
 leaves them out.
 
-- **Keys:** `F10` opens File in every profile; inside a menu the arrows, Enter and Esc work. In the VS Code profile
+- **Keys:** `F10` opens File in every profile; inside a menu the arrows, Enter and Esc work, and on Nidhogg's own
+  window Left and Right go on to the menu beside it (Right first opens a submenu) and the pointer moving over another
+  title opens that one, as in VS Code. In the VS Code profile
   Alt and the first letter open a menu (`Alt+F` File, `Alt+E` Edit, `Alt+S` Selection, `Alt+V` View, `Alt+G` Go,
   `Alt+R` Run, `Alt+T` Terminal, `Alt+H` Help), and the titles underline that letter. The Emacs and Vim profiles keep
   Alt for editing; the commands **Open the File Menu** … **Open the Help Menu** take a key of your own like any other
