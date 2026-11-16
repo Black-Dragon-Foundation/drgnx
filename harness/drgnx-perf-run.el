@@ -626,8 +626,11 @@ and draws the card, as the throttle's timer would.  `drgnx-perf--bisect-stop' un
               t))))
 
 (defun drgnx-perf-run--visit-fixture-form ()
-  "The form that visits the fixture and puts point where the keys go: the line under `drgnx-perf-run--fixture-mark'."
-  (format "(let ((f %S)) (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+  "The form that visits the fixture and puts point where the keys go: the line under `drgnx-perf-run--fixture-mark'.
+The fixture is core/ three times, near `large-file-warning-threshold' and growing with core/: its question would read
+stdin in batch and stop a session, so it is not asked."
+  (format "(let ((f %S) (large-file-warning-threshold nil))
+                         (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
                          (find-file f) (goto-char (point-min)) (search-forward %S) (forward-line 1) t)"
           drgnx-perf-run--fixture drgnx-perf-run--fixture-mark))
 
