@@ -557,9 +557,15 @@ parameters, its sizes clamped, marked `:fill' (read from a file); nil when it is
         (dolist (area '((:left 0.5 . width) (:panel 0.7 . height) (:right 0.5 . width)) out)
           (let ((spec (plist-get snap (car area))))
             (unless (and (proper-list-p spec) (cl-evenp (length spec))) (throw 'bad nil))
-            (let ((limit (* (cadr area) (if (eq (cddr area) 'width) (frame-pixel-width) (frame-pixel-height)))))
+            ;; one :px, clamped, in place of the saved one(s): a file from before this kept a clamped copy in front at
+            ;; every restart, the saved size last
+            (let ((limit (* (cadr area) (if (eq (cddr area) 'width) (frame-pixel-width) (frame-pixel-height))))
+                  (px nil) (rest nil))
+              (while spec
+                (if (eq (car spec) :px) (setq px (cadr spec)) (setq rest (append rest (list (car spec) (cadr spec)))))
+                (setq spec (cddr spec)))
               (setq out (append out (list (car area)
-                                          (append (list :px (drgnx-persist--clamp (plist-get spec :px) limit)) spec)))))))))))
+                                          (append rest (list :px (drgnx-persist--clamp px limit)))))))))))))
 
 (defun drgnx-layouts--adopt (frame)
   "Make the layout saved with FRAME's restored workbench its current one, without arranging anything

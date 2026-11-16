@@ -271,6 +271,27 @@ window, and the persist hooks as the layouts module wires them.  Prompts signal 
     (drgnx-layouts-apply 'editor)
     (should (= 2 (length (drgnx-groups-list))))))       ; the pane is gone, the user's split stays
 
+(ert-deftest drgnx-layouts/an-arrangement-keeps-one-width-through-restarts ()
+  "Each restart read an arrangement's dock sizes by putting a clamped :px in front of the saved plist, so the saved
+file grew a :px per restart and the first, oldest one won: a daily install's Explorer came back at a stale width.
+An arrangement keeps one :px per area, through any number of restarts; a file that already holds several gives
+the one the plist was saved with (the last)."
+  (drgnx-layouts-persist-test--with
+    (drgnx-layouts-apply 'agent)
+    (drgnx-layouts-apply 'editor)
+    (dotimes (_ 3) (drgnx-persist-save) (drgnx-layouts-persist-test--restart))
+    (let ((left (plist-get (alist-get 'agent (frame-parameter nil 'drgnx-layouts-state)) :left)))
+      (should (= 1 (seq-count (lambda (x) (eq x :px)) left))))
+    (drgnx-persist-save)
+    (let* ((state (drgnx-persist--read drgnx-persist-file))
+           (agent (alist-get 'agent (plist-get (plist-get (car (plist-get state :frames)) :extra) :arrangements))))
+      (drgnx-layouts-persist-test--edit-state
+       :arrangements (list (cons 'agent (plist-put (copy-sequence agent) :left '(:px 3 :px 4 :shown t :view explorer :px 30))))))
+    (drgnx-layouts-persist-test--restart)
+    (let ((left (plist-get (alist-get 'agent (frame-parameter nil 'drgnx-layouts-state)) :left)))
+      (should (equal (seq-count (lambda (x) (eq x :px)) left) 1))
+      (should (eql (plist-get left :px) (min 30 (floor (* 0.5 (frame-pixel-width)))))))))
+
 (ert-deftest drgnx-layouts/crafted-arrangements-are-ignored ()
   "Junk where the arrangements go is no error and gives no arrangement."
   (drgnx-layouts-persist-test--with

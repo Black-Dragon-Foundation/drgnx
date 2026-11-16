@@ -239,6 +239,52 @@ frame is a graphical workbench frame for the store."
       (set-frame-parameter nil 'drgnx-persist-restore nil)
       (delete-file file))))
 
+(ert-deftest drgnx-persist/the-main-window-keeps-its-size-and-maximized-state ()
+  ;; A daily install's main window opened at the toolkit's default size after every restart: only job windows kept
+  ;; theirs.  The main window saves its geometry and `fullscreen' and gets them back at the restore.
+  (let ((frame (selected-frame)) placed sized (file (make-temp-file "drgnx-persist" nil ".eld")))
+    (unwind-protect
+        (let (state)
+          (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                    ((symbol-function 'frame-edges) (lambda (&rest _) '(10 20 1210 820)))
+                    ((symbol-function 'frame-text-width) (lambda (&rest _) 1190))
+                    ((symbol-function 'frame-text-height) (lambda (&rest _) 790)))
+            (setq state (drgnx-persist-state)))
+          (should (equal (plist-get state :geometry) '(10 20 1190 790)))
+          (should-not (plist-member state :fullscreen))
+          (with-temp-file file (prin1 (list :version 2 :frames (list state)) (current-buffer)))
+          (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                    ((symbol-function 'drgnx-state-frame-kind) #'drgnx-persist-test--kind-gui)
+                    ((symbol-function 'select-frame-set-input-focus) #'ignore)
+                    ((symbol-function 'display-monitor-attributes-list) (lambda (&optional _) '(((workarea 0 0 1920 1080)))))
+                    ((symbol-function 'set-frame-position) (lambda (f x y) (push (list f x y) placed)))
+                    ((symbol-function 'set-frame-size) (lambda (f w h &optional pixelwise) (push (list f w h pixelwise) sized))))
+            (drgnx-persist-restore file))
+          (should (equal placed (list (list frame 10 20))))
+          (should (member (list frame 1190 790 t) sized))
+          ;; maximized: saved so, and made so again
+          (set-frame-parameter frame 'fullscreen 'maximized)
+          (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                    ((symbol-function 'frame-edges) (lambda (&rest _) '(0 0 1920 1080))))
+            (setq state (drgnx-persist-state)))
+          (set-frame-parameter frame 'fullscreen nil)
+          (should (eq (plist-get state :fullscreen) 'maximized))
+          (with-temp-file file (prin1 (list :version 2 :frames (list state)) (current-buffer)))
+          (let ((asked nil))
+            (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                      ((symbol-function 'drgnx-state-frame-kind) #'drgnx-persist-test--kind-gui)
+                      ((symbol-function 'select-frame-set-input-focus) #'ignore)
+                      ((symbol-function 'display-monitor-attributes-list) (lambda (&optional _) '(((workarea 0 0 1920 1080)))))
+                      ((symbol-function 'set-frame-position) #'ignore)
+                      ((symbol-function 'set-frame-size) #'ignore)
+                      ;; native code calls `set-frame-parameter' directly: what is asked is caught one step up
+                      ((symbol-function 'drgnx-persist--keep-state) (lambda (_f _g fullscreen) (push fullscreen asked))))
+              (drgnx-persist-restore file))
+            (should (memq 'maximized asked))))
+      (set-frame-parameter nil 'fullscreen nil)
+      (remhash frame drgnx-persist--unmaximize)
+      (delete-file file))))
+
 (ert-deftest drgnx-persist/custom-frame-keeps-its-geometry ()
   ;; M9b4-9: a window that rebuilds itself comes back where and how big it was: pixel left, top, width, height,
   ;; applied to the frame the rebuilding function returns.

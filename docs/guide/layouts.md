@@ -74,7 +74,8 @@ and is your current layout again at the next start, so Next Layout carries on fr
 again. The windows themselves come back as the workbench was; nothing is rearranged. The chat beside the editor
 (Agent) and the web page pane (Browser) are still the layout's pane: the next layout takes them away, and Open URL
 uses the same pane. The last arrangement of each other layout is saved too (its groups, sizes, docks, the panel's
-tab, and each group's tabs and shown file), so going back to it after a restart brings it back as you left it. The files
+tab, and each group's tabs and shown file), so going back to it after a restart brings it back as you left it, each dock at the width it was saved with (cut to
+half the window when the window is smaller). The files
 are opened again by name (nothing is asked, local files only, at most 50 tabs per group); a buffer that was not a file is
 not, and its window shows another buffer. An arrangement that cannot be put back is built
 fresh, with a message. A layout that no longer exists (a deleted one of yours) is ignored. Only the main window's
