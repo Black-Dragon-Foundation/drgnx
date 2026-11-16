@@ -2167,8 +2167,18 @@ Click the line endings in the status bar for it."
   (force-mode-line-update))
 
 (defun drgnx-statusbar--click-branch ()
+  "Source Control (command `scm-view': the side bar's view, else magit's or VC's status), else VC's status."
   (interactive)
-  (if (fboundp 'magit-status) (call-interactively 'magit-status) (call-interactively 'vc-dir)))
+  (if-let* ((cmd (drgnx-commands-get 'scm-view)))
+      (call-interactively (drgnx-cmd-command cmd))
+    (call-interactively 'vc-dir)))
+
+(declare-function drgnx-problems-show "drgnx-problems")
+
+(defun drgnx-statusbar--click-problems ()
+  "The problems count was clicked: the Problems view (lang/eglot's), else Flymake's list of this file."
+  (interactive)
+  (if (fboundp 'drgnx-problems-show) (drgnx-problems-show) (call-interactively 'flymake-show-buffer-diagnostics)))
 
 (defun drgnx-statusbar--define-defaults ()
   "Define the segments the bar ships with."
@@ -2179,8 +2189,8 @@ Click the line endings in the status bar for it."
                                           "Restricted Mode: this folder is not trusted; click to trust it"))
   (drgnx-statusbar-define-segment 'folder :fn #'drgnx-statusbar--seg-folder :click 'drgnx-session-open-folder
                                   :help "The folder in the Explorer; click to open another")
-  (drgnx-statusbar-define-segment 'problems :fn #'drgnx-statusbar--seg-problems :click 'flymake-show-buffer-diagnostics
-                                  :help "Problems in this file; click to list them")
+  (drgnx-statusbar-define-segment 'problems :fn #'drgnx-statusbar--seg-problems :click #'drgnx-statusbar--click-problems
+                                  :help "Problems in this file; click for the Problems view")
   (drgnx-statusbar-define-segment 'tests :fn #'drgnx-statusbar--seg-tests :click #'drgnx-statusbar--click-tests
                                   :help "The last test run; click for its output")
   (drgnx-statusbar-define-segment 'needs-you :fn #'drgnx-notice-needs-you-text :click #'drgnx-notice-needs-you-click

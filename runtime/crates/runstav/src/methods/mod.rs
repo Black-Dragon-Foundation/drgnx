@@ -34,6 +34,7 @@ pub mod plugins;
 pub mod records;
 pub mod runners;
 pub mod say;
+pub mod scm;
 pub mod search;
 pub mod settings;
 pub mod tasks;
@@ -372,6 +373,20 @@ params! {
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
     GitLetters(git::LettersParams),
+    ScmSubscribe(scm::Subscribe),
+    ScmSet(scm::Set),
+    ScmClose(scm::ViewId),
+    GitStage(scm::Paths),
+    GitUnstage(scm::Paths),
+    GitDiscard(scm::Paths),
+    GitCommit(scm::Commit),
+    GitUndoCommit(scm::Root),
+    GitRemote(scm::Remote),
+    GitRemoteStop(scm::RemoteId),
+    GitBranches(scm::Root),
+    GitCheckout(scm::Checkout),
+    GitDeleteBranch(scm::DeleteBranch),
+    GitStash(scm::Stash),
     SearchRun(search::RunParams),
     SearchBuffer(search::BufferParams),
     SearchFiles(search::FilesParams),
@@ -482,6 +497,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(editor::methods());
     v.extend(search::methods());
     v.extend(git::methods());
+    v.extend(scm::methods());
     v.extend(runners::methods());
     v.extend(extensions::methods());
     v.extend(plugins::methods());

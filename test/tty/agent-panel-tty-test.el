@@ -74,7 +74,7 @@
   `(let ((bin (getenv "DRGNX_RATATOSKR_BIN")))
      (skip-unless (and bin (file-executable-p bin)))
      (drgnx-tty-session-with (,(car spec) :size "120x40" :env (list (concat "DRGNX_RATATOSKR_BIN=" bin)))
-       (drgnx-tty-session-wait-screen ,(car spec) "\\*scratch\\*" 20)
+       (drgnx-tty-session-wait-tab ,(car spec) nil 20)
        (skip-unless (drgnx-tty-session-eval ,(car spec) '(fboundp 'nidhogg-view--call)))
        (unwind-protect
            (progn (drgnx-tty-agent-panel-test--up ,(car spec) bin)

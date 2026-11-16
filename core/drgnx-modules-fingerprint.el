@@ -189,7 +189,8 @@ whose value is not what its name says is skipped.  About 12 ms compiled."
      (lambda (s)
        (when (fboundp s)
          (advice-mapc (lambda (f _props) (push (cons (list 'advice s) f) advice)) s))
-       (when (and (default-boundp s) (eq (indirect-variable s) s))
+       ;; a keyword is bound to itself: `:after-hook' is no hook
+       (when (and (default-boundp s) (not (keywordp s)) (eq (indirect-variable s) s))
          (let* ((name (symbol-name s)) (own (string-prefix-p "drgnx-" name)))
            (cond
             ((drgnx-modules-fingerprint--hook-name-p name)
@@ -255,8 +256,9 @@ load its library, and the scan loads nothing."
 
 (defun drgnx-modules-fingerprint--frame-items ()
   "Items for the selected frame's parameters (a changed value shows as the old one gone and the new one there, by
-its printed text), and the number of frames."
-  (let ((items (list (cons (list 'frame-count) (length (frame-list))))))
+its printed text), and the number of root frames (a child frame left shows by its own line, its name: counted here
+too, a pooled child frame the allowlist names would still read as a leak)."
+  (let ((items (list (cons (list 'frame-count) (cl-count-if-not #'frame-parent (frame-list))))))
     (dolist (p (frame-parameters (selected-frame)))
       (unless (or (memq (car p) drgnx-modules-fingerprint-frame-parameters-ignored)
                   ;; a terminal frame's size is the terminal's (it changes with the first message): only a graphic frame's is read

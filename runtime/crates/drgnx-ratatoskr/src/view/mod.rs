@@ -31,6 +31,7 @@ pub mod panel;
 pub mod panel_cards;
 pub mod panel_review;
 pub mod panel_top;
+pub mod scm;
 pub mod search;
 #[cfg(test)]
 mod tests;
@@ -614,6 +615,8 @@ pub struct Views {
     buffers: buffers::Buffers,
     /// The Outline panels' outlines (`outline/set`).
     outlines: outline::Outlines,
+    /// The Source Control views (`scm/subscribe`).
+    scms: scm::Scms,
     /// The Run and Debug views (`debug/view`).
     pub debugs: debug::DebugViews,
     /// The agent panels' rows (`agent-panel/SESSION`).
@@ -638,6 +641,7 @@ impl Default for Views {
             lists: extensions::Lists::default(),
             buffers: buffers::Buffers::default(),
             outlines: outline::Outlines::default(),
+            scms: scm::Scms::default(),
             debugs: debug::DebugViews::default(),
             panels: Arc::default(),
             front: OnceLock::new(),
@@ -676,6 +680,7 @@ impl Views {
             || self.extensions_build(f, key)
             || self.buffers_build(f, key)
             || self.outline_build(f, key)
+            || self.scm_build(f, key)
             || self.debugs.env_build(f, key)
             || f.core.presence.here_build(f, key.0, &key.1)
             || f.notebooks.views.env_build(key.0, &key.1)
@@ -1011,6 +1016,7 @@ impl Views {
         self.lists.gone(conn);
         self.buffers.gone(conn);
         self.outlines.gone(conn);
+        self.scms.gone(conn);
         self.debugs.gone(conn);
         self.panels.gone(conn, None);
         lock(&self.sja).retain(|(c, _, _)| *c != conn);
@@ -1138,6 +1144,7 @@ pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     views.lists.stop(c.conn_id, &p.view);
     views.buffers.stop(c.conn_id, &p.view);
     views.outlines.stop(c.conn_id, &p.view);
+    views.scms.stop(c.conn_id, &p.view);
     views.debugs.stop(c.conn_id, &p.view);
     f.notebooks.views.view_closed(c.conn_id, &p.view);
     views.panels.gone(c.conn_id, Some(&p.view));

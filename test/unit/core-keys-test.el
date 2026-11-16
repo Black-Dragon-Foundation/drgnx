@@ -1344,9 +1344,9 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
     (edit-line-below "C-<return>" nil) (edit-line-above "C-S-<return>" nil) (go-back "M-<left>" nil)
     (go-forward "M-<right>" nil) (code-definition "<f12>" nil) (code-references "S-<f12>" nil)
     (code-hover "C-S-SPC" nil) (code-quick-fix "C-." nil) (code-problems "C-S-m" nil) (notebook-run-cell "C-<return>" drgnx-notebook-mode-map) (notebook-run-and-advance "S-<return>" drgnx-notebook-mode-map) (notebook-run-all "C-k n r" drgnx-notebook-mode-map) (notebook-run-above "C-k n u" drgnx-notebook-mode-map) (notebook-run-below "C-k n d" drgnx-notebook-mode-map) (notebook-interrupt "C-k n i" drgnx-notebook-mode-map) (notebook-restart "C-k n k" drgnx-notebook-mode-map) (notebook-restart-run-all "C-k n K" drgnx-notebook-mode-map) (notebook-add-below "C-k n b" drgnx-notebook-mode-map) (notebook-add-above "C-k n a" drgnx-notebook-mode-map) (notebook-cut-cell "C-k n x" drgnx-notebook-mode-map) (notebook-copy-cell "C-k n c" drgnx-notebook-mode-map) (notebook-paste-cell "C-k n v" drgnx-notebook-mode-map) (notebook-delete-cell "C-k n D" drgnx-notebook-mode-map) (notebook-move-up "C-k n <up>" drgnx-notebook-mode-map) (notebook-move-down "C-k n <down>" drgnx-notebook-mode-map) (notebook-cell-menu "C-k n ." drgnx-notebook-mode-map) (notebook-split-cell "C-k n s" drgnx-notebook-mode-map) (notebook-merge-cell "C-k n m" drgnx-notebook-mode-map) (notebook-change-type "C-k n t" drgnx-notebook-mode-map) (notebook-clear-outputs "C-k n o" drgnx-notebook-mode-map) (notebook-select-kernel "C-k n e" drgnx-notebook-mode-map) (notebook-open-output "C-k n O" drgnx-notebook-mode-map) (notebook-outline "C-k n j" drgnx-notebook-mode-map) (notebook-kernel-log "C-k n L" drgnx-notebook-mode-map) (notebook-outline-visit "RET" drgnx-notebook-outline-mode-map) (notebook-output-later "M-n" drgnx-notebook-output-mode-map) (notebook-output-earlier "M-p" drgnx-notebook-output-mode-map) (notebook-copy-output "C-k n y" drgnx-notebook-mode-map) (notebook-toggle-outputs "C-k n h" drgnx-notebook-mode-map)
-    (org-capture "C-c c" nil) (org-agenda "C-c a" nil) (go-quick-open "C-p" nil)
+    (org-capture "C-c c" nil) (org-agenda "C-c a" nil) (scm-view "C-S-g" nil) (go-quick-open "C-p" nil)
     (go-symbol "C-S-o" nil) (go-symbol-project "C-t" nil) (go-recent "C-<tab>" nil) (search-file "C-f" nil)
-    (search-semantic "C-k C-f" nil) (terminal-new "C-S-`" nil) (scm-view "C-S-g" nil)
+    (search-semantic "C-k C-f" nil) (terminal-new "C-S-`" nil)
     (view-zen "C-k z" nil)
     (view-zen "<f11>" nil) (view-zoom-in "C-=" nil) (view-zoom-in "C-+" nil) (view-zoom-out "C--" nil)
     (view-zoom-reset "C-0" nil) (decor-activate "RET" drgnx-decor-button-map)
@@ -1487,6 +1487,8 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-console debug-console-history-previous debug-console-history-next ; the console
                               debug-memory-next debug-memory-previous debug-memory-write ; the memory view
                               debug-heap-select ; the heap graph's RET
+                              scm-open scm-stage scm-unstage scm-discard scm-toggle ; the Source Control view's own
+                              scm-commit-message ; its commit box's Ctrl+Enter
                               menu-bar-open-file menu-bar-open-edit menu-bar-open-selection menu-bar-open-view
                               menu-bar-open-go menu-bar-open-run menu-bar-open-terminal menu-bar-open-help ; Alt+letter
                               debug-disassembly-toggle-breakpoint ; the disassembly view

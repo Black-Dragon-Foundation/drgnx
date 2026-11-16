@@ -56,6 +56,8 @@ string-pixel-width uses)")
   :why "buffers are closed by the harness's cleanup between files (ert-kill-all-test-buffers); a hidden work buffer is no state")
  (:what "\\`frame-param drgnx-\\(?:wb-\\|intent-by\\|layouts-\\|look-\\|frame-role\\|monitor\\|platform-wm\\|work-space-shown\\)"
   :why "the workbench's own layout and look bookkeeping in the frame parameters: every file that opens a panel sets it; the look rows' drgnx-look-gui-check-clean reads what moves pixels")
+ (:what "\\`frame-param drgnx-popup-frame \\+nil\\'"
+  :why "the popup lane's slot on the frame, empty again: the row deleted the popup's frame (a frame parameter cannot be removed, only emptied)")
  (:what "\\`frame-param \\(?:glitnir--[a-z-]+\\|session-name\\) "
   :why "the renderer's and the session's own bookkeeping")
  (:what "\\`window-param \\(?:quit-restore\\|quit-restore-prev\\|internal-region-overlay\\|drgnx-uitest-id\\) "
@@ -75,9 +77,16 @@ string-pixel-width uses)")
  (:what "\\`global-map "
   :source "/emacs/[0-9.]+/lisp/\\|/Contents/Resources/lisp/"
   :why "keys an Emacs library (tab-line, help, kmacro) binds in the global map when it loads")
- (:what "\\`\\(?:hook \\(?:hack-dir-local-get-variables-functions\\|drgnx-settings-[a-z-]+\\|drgnx-keys-after-apply-functions\\)\\|advice \\(?:hack-local-variables-filter\\|hack-dir-local--get-variables\\)\\) \\+"
+ (:what "\\`\\(?:hook \\(?:hack-dir-local-get-variables-functions\\|drgnx-settings?-[a-z-]+\\|drgnx-keys-after-apply-functions\\)\\|advice \\(?:hack-local-variables-filter\\|hack-dir-local--get-variables\\)\\) \\+"
   :source "\\`\\(?:core\\|wb\\|modules\\)/"
   :why "drgnx's settings and keys libraries wiring themselves into Emacs's file-local variable machinery and their own hooks when they load; a library is never unloaded")
+ (:what "\\`\\(?:hook after-load-functions\\|advice [^ ]+\\) \\+drgnx-keys--"
+  :source "\\`core/drgnx-keys\\.el\\'"
+  :why "the keys core's redirect, installed when drgnx-keys loads and on for the session (`drgnx-keys--install-redirect'; removed only by unload-feature): a GUI file whose session loads the keys core lazily (a bare frame, then a module that requires it) sees it arrive")
+ (:what "\\`frame  \\*drgnx-quickhelp\\* \\+"
+  :why "quick help's card, a pool of one: `drgnx-quickhelp--frame' is made the first time a card shows and reused (hidden, never deleted) by every card after it")
+ (:what "\\`frame-param drgnx-popup-frame \\+nil\\'"
+  :why "the popup lane's floating child frame, a pool of one per root (`drgnx-popup--float-frame'): a test that deletes it sets the root's parameter to nil, and Emacs keeps a parameter once set; nil reads as none")
  (:what "\\`advice drgnx-hub--connect-socket \\+"
   :source "\\`harness/"
   :why "the harness's own hub-caller bookkeeping, installed when drgnx-uitest loads")

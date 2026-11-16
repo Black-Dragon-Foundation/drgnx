@@ -1422,8 +1422,19 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
 | `git/blame` | user | `{path: string, worktree_root: string}` | `{agents: [AgentLines], commits: [BlameCommit], head?: string, lines: [natnum]}` | no |
 | `git/blame/line` | user | `{path: string, pos: integer, width: integer, worktree_root: string}` | `{sha?: string, text?: string, time?: integer}` | no |
+| `git/branches` | user | `{root: AbsPath}` | `{branches: [Branch]}` | no |
+| `git/checkout` | user | `{branch: string, create?: boolean, root: AbsPath}` | `boolean` | yes |
+| `git/commit` | user | `{all?: boolean, amend?: boolean, message: string, root: AbsPath}` | `{sha: string}` | yes |
+| `git/delete-branch` | user | `{branch: string, force?: boolean, root: AbsPath}` | `boolean` | yes |
+| `git/discard` | user | `{paths: [string], root: AbsPath}` | `boolean` | yes |
 | `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
+| `git/remote` | user | `{op: "push" \| "pull" \| "fetch" \| "sync" \| "publish", root: AbsPath}` | `{id: natnum}` | yes |
+| `git/remote-stop` | user | `{id: natnum}` | `boolean` | yes |
+| `git/stage` | user | `{paths: [string], root: AbsPath}` | `boolean` | yes |
 | `git/stage-hunk` | user | `{new_start: integer, path: string, worktree_root: string}` | `{staged: boolean}` | yes |
+| `git/stash` | user | `{op: "push" \| "pop", root: AbsPath}` | `boolean` | yes |
+| `git/undo-commit` | user | `{root: AbsPath}` | `boolean` | yes |
+| `git/unstage` | user | `{paths: [string], root: AbsPath}` | `boolean` | yes |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
 | `graph/compact` | user | `{dry_run?: boolean}` | `{dry_run: boolean, link_stats: natnum, versions: natnum}` | yes |
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no |
@@ -1538,6 +1549,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `say/end` | user | `{id: Id}` | `boolean` | yes |
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
+| `scm/close` | user | `{view: string}` | `boolean` | no |
+| `scm/set` | user | `{active?: AbsPath, more?: AbsPath, refresh?: boolean, select?: {on: boolean, root: AbsPath}, toggle?: string, view: string, view_as?: "list" \| "tree"}` | `boolean` | no |
+| `scm/subscribe` | user | `{active?: AbsPath, roots: [AbsPath], view: string, view_as?: "list" \| "tree"}` | `boolean` | no |
 | `search/applied` | user | `{applied?: [string], change: natnum, inverse?: [{byte_end?: natnum, byte_start?: natnum, col: natnum, end_col: natnum, end_line: natnum, id: string, line: natnum, new: string, old: string}], not_open?: boolean, path: string, saved?: boolean, skipped?: [{id: string, why: string}], tick?: natnum}` | `boolean` | no |
 | `search/apply` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
 | `search/buffer` | user | `{large?: boolean, mirror?: boolean, path: AbsPath, text?: string, tick?: natnum, version?: natnum, view: string}` | `boolean` | no |
@@ -2951,6 +2965,46 @@ the editor's side is `wb/drgnx-buffers.el`).
   connection's repositories read by `git/letters`, an ignored or untracked folder's around it; an ignored name is dimmed
   instead) and `drgnx-buffers-modified` while it has unsaved changes. A status read draws the connection's panels
   again. The editor draws the right edge (the letter, ● or ×, the hover) for the rows drawn near what a window shows.
+
+### The Source Control view (`scm/*`, `git/*`)
+
+The side bar's Source Control rows: the repositories of the workspace, each one's changes and its commit graph, built
+by the hub (`runtime/crates/drgnx-ratatoskr/src/view/scm.rs` and `view/scm/`; the methods are
+`runstav::methods::scm`; the editor's side is `modules/tools/drgnx-scm.el`). Git runs in the hub, never in Emacs.
+
+- `scm/subscribe {view, roots, active?, view_as}` starts the view: the hub finds the repositories under ROOTS on a
+  thread (breadth first, at most 200 repositories, 50,000 folders and 6 levels; `.git`, `node_modules`, `target` and
+  `.venv` are not entered), adds each one's linked worktrees (read from `.git/worktrees/*/gitdir`, named "MAIN · wt"),
+  reads each (`git status --porcelain=v2 --branch -z --untracked-files=all`) and draws. One repository shows its
+  sections; several show a Repositories list first, and the one chosen (`scm/set {select}`), else the one holding the
+  ACTIVE file, else one with changes, below it. `scm/set {view, active?, select?, view_as?, toggle?, more?, refresh}`
+  changes it: the editor's file, the chosen repository, list or tree (`view_as`, folders first), a section or folder
+  folded (`toggle`, a row's key), 200 more commits of the graph (`more`), or a read of every shown repository
+  (`refresh`: the window took the focus). `scm/close` and the connection's end forget it.
+- **Kept current.** A thread watches each shown repository's git dir and refs (as the Explorer's letters do) and
+  reads them again; a 3 s poll covers what a watch misses (an edit in a folder without a watch). An after-save in the
+  editor sends `active`, which reads that file's repository at once.
+- **The rows.** Keys are tab-joined (`repos`, `repo⇥ROOT`, `head⇥ROOT`, `branch⇥ROOT`, `commit⇥ROOT`, `sec⇥ROOT⇥SECTION`,
+  `f⇥ROOT⇥SECTION⇥PATH`, `d⇥…` a folder, `graph⇥ROOT`, `c⇥ROOT⇥SHA`, `more⇥ROOT`); each row carries `drgnx-scm` (a JSON
+  object: kind, root, path, section, untracked, letter, sha, branch) and a button `drgnx-scm-action`. Sections are
+  Merge Changes, Staged Changes and Changes (git's X letter is staged, Y unstaged, `?` is U); the graph starts folded
+  and draws lanes with ● │ ╮ ╯, the commits ahead and behind the upstream marked. An empty tree says "No changes.
+  Your working tree matches HEAD."
+- **Commands.** `git/stage` (`add -A --`), `git/unstage` (`restore --staged`, or `rm --cached` before the first commit),
+  `git/discard` (`restore --worktree`; untracked files are the editor's: it moves them to the trash), `git/commit
+  {root, message, all, amend}` (the message on stdin, `add -A` first with ALL; answers `{sha}`), `git/undo-commit`
+  (`reset --soft HEAD~1`), `git/branches`, `git/checkout {branch, create}`, `git/delete-branch`, `git/stash`. Paths
+  are relative, without `..` or NUL, 1 to 10,000 of them. Each runs off the hub's loop; local ones have a 10 s
+  deadline, a commit 300 s (its hooks), and the process group is killed past it.
+- **The user's commands run as the user.** They do not go through draugr (whose overrides turn hooks off): a commit
+  runs the repository's hooks, with `core.editor=false`, `core.pager=cat`, `protocol.ext.allow=never` and
+  `GIT_TERMINAL_PROMPT=0`; `GIT_DIR` and the other variables a git hook would leak are removed.
+- **Remotes.** `git/remote {root, op}` (push, pull, fetch, sync = pull then push, publish = `push -u REMOTE HEAD`)
+  answers an id at once and runs on a thread; its `scm-remote` events say running, done, failed (git's text) or
+  stopped. `git/remote-stop {id}` kills it.
+
+Rows: `test/conformance/scm/`. They wait on the view's own patches (an `insert` carrying the row a change makes),
+never a fixed time; the GUI scenario is `drgnx-scenario/scm-stage-and-commit-by-hand` (`docs/develop/scenarios.md`).
 
 ### The Outline panel's rows (`outline/set`)
 

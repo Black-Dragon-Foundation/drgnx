@@ -194,7 +194,7 @@ pub struct ViewGlyphsAsk {
 /// A string `view-glyphs` asks the editor to measure: its key, its text, its runs `[start, end, face]`.
 pub type MeasureAsk = (String, String, Vec<(u32, u32, String)>);
 
-fn check_ids(view: &str, class: Option<&str>) -> Result<(), Error> {
+pub(crate) fn check_ids(view: &str, class: Option<&str>) -> Result<(), Error> {
     if view.is_empty() || view.len() > VIEW_MAX {
         return Err(invalid("view", "a view id of 1 to 64 bytes"));
     }

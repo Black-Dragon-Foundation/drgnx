@@ -185,6 +185,11 @@ is on by default is in :disabled when off."
 the one it was defined with) is `off' and it is not in :enabled.  :disabled wins."
   (drgnx-modules--disabled-in (drgnx-modules-read-state) module default))
 
+(defun drgnx-module-chosen-p (module)
+  "Non-nil if MODULE is defined and chosen to run (not disabled), whether its stage has come or not.  A module that
+yields a shared command to another one asks this, so the start order of the two does not matter."
+  (and (assq module drgnx-modules--table) (not (drgnx-module-disabled-p module))))
+
 (defun drgnx-modules-set-enabled (module on)
   "Choose MODULE on or off in modules.eld.  A module that is off until chosen: ON adds it to :enabled and
 takes it out of :disabled; off takes it out of :enabled.  One that is on by default: ON takes it out of
@@ -200,10 +205,11 @@ the new state; `drgnx-config-refused' for a file with a mistake or a newer one."
     ('failed (drgnx-notify 'modules 'fail (format "%s did not start: %s" name err) :id name :life 'condition
                            :fix "Turn it off in Preferences: Modules, or report the error"
                            :command 'preferences-modules))
-    ('missing-packages (drgnx-notify 'modules 'warn (format "%s waits for packages: %s" name
+    ;; waiting for packages is something to know (the Notices list), not a problem counted in the status bar (audit L2)
+    ('missing-packages (drgnx-notify 'modules 'info (format "%s waits for packages: %s" name
                                                             (mapconcat #'symbol-name missing " "))
                                      :id name :life 'condition :fix "drgnx sync installs them"))
-    ('missing-requires (drgnx-notify 'modules 'warn (format "%s needs %s, which did not start" name
+    ('missing-requires (drgnx-notify 'modules 'info (format "%s needs %s, which did not start" name
                                                             (mapconcat #'symbol-name missing ", "))
                                      :id name :life 'condition))
     (_ (if (and (eq status 'ok) problems)

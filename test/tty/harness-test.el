@@ -29,9 +29,9 @@
 
 (ert-deftest drgnx-tty-harness/capture-is-stable ()
   (drgnx-tty-session-with (s :config "minimal")
-    (drgnx-tty-session-wait-screen s "\\*scratch\\*")
+    (drgnx-tty-session-wait-tab s)
     (let ((a (drgnx-tty-session-quiet s)))
-      (should (string-match-p "\\*scratch\\*" a))
+      (should (string-match-p (drgnx-tty-session-tab-regexp s) a))
       (should (equal a (drgnx-tty-session-screen s))))))
 
 (ert-deftest drgnx-tty-harness/the-inner-emacs-answers-on-its-socket ()
@@ -49,7 +49,7 @@
                                (window-total-height (frame-root-window f)))))
                    '(t nil 120 40 39)))
     ;; the client's terminal is the pane: what it shows is on screen
-    (drgnx-tty-session-wait-screen s "\\*scratch\\*")
+    (drgnx-tty-session-wait-tab s)
     ;; a second client is another window of the same server, with its own target
     (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
       (should-not (equal (plist-get c :target) (plist-get s :target)))
@@ -62,7 +62,7 @@
                                                    (frame-list)))
                                #'string<))
                      '("tmux-256color" "xterm-256color")))
-      (drgnx-tty-session-wait-screen c "\\*scratch\\*"))
+      (drgnx-tty-session-wait-tab c))
     ;; emacsclient arguments: a file to visit
     (let ((file (expand-file-name "note.txt" (plist-get s :run))))
       (drgnx-ui--write file "hello from a file\n")
@@ -185,7 +185,7 @@
 
 (ert-deftest drgnx-tty-harness/flags-resize-keys-and-clipboard ()
   (drgnx-tty-session-with (s :config "minimal")
-    (drgnx-tty-session-wait-screen s "\\*scratch\\*")
+    (drgnx-tty-session-wait-tab s)
     ;; the pane's mouse mode follows what Emacs asks of its terminal
     (should (equal (plist-get (drgnx-tty-session-pane-flags s) :mouse-sgr) 0))
     (drgnx-tty-session-eval s '(xterm-mouse-mode 1))

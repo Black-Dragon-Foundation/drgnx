@@ -19,7 +19,7 @@
 
 (defun drgnx-tty-tmux-test--ready (sess)
   "Wait until SESS's Emacs shows the workbench; log its commands."
-  (drgnx-tty-session-wait-screen sess "\\*scratch\\* ×" 20)
+  (drgnx-tty-session-wait-tab sess "×" 20)
   (drgnx-tty-session-eval sess drgnx-tty-tmux-test--log))
 
 (defun drgnx-tty-tmux-test--copy (sess text)

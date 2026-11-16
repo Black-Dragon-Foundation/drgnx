@@ -191,7 +191,8 @@ and every shard inherits. It combines with `--one-process`. It is **report only*
 - **Around every test** the runner reads the cheap fingerprint (`drgnx-modules-fingerprint`: timers, processes,
   buffers, `features`, the hooks drgnx touches, `global-mode-string`, the alists a mode writes into, drgnx's
   registries; [harness.md](harness.md#the-fingerprint)) before and after; every difference is a leak of that test.
-- **Around every test file** it reads the full fingerprint, which adds every hook variable and every advised function
+- **Around every test file** it reads the full fingerprint, which adds every hook variable (a bound symbol named
+  `…-hook` or `…-functions`; never a keyword such as `:after-hook`, bound to itself) and every advised function
   (about 10 ms), and compares the file's start with its end. What a test was already named for is not said twice. An
   advice or a hook outside the listed ones shows only here, so its line names the file, not the test (`(file)`).
 - A **timer a test left pending is cancelled** after it (and reported), so it cannot fire inside the next test; a
