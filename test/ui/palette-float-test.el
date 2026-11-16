@@ -49,7 +49,8 @@
      (load (expand-file-name "modules/ui/drgnx-look" drgnx-palette-float-test--repo) nil t)
      (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
            (vertico-multiform-categories (list (cons 'drgnx-command drgnx-palette-frame-multiform)
-                                               (cons 'drgnx-file drgnx-palette-frame-multiform)))
+                                               (cons 'drgnx-file drgnx-palette-frame-multiform)
+                                               (cons 'drgnx-folder drgnx-palette-frame-multiform)))
            (was-vertico (bound-and-true-p vertico-mode)) (was-multiform (bound-and-true-p vertico-multiform-mode))
            (drgnx-palette-float-test--ran nil))
        (drgnx-command-define 'it :title "Do It" :category "Test" :command #'drgnx-palette-float-test--run-it)
@@ -335,6 +336,47 @@ folder), the hint `Files · > commands', no Vertico counter.  Without the hub (n
                        (copy-file shot out t)
                        (drgnx-uitest--evidence out))))))))
         (delete-directory dir t)))))
+
+(defvar drgnx-session-recent-folders-file)
+(declare-function drgnx-session--remember-folder "drgnx-session" (dir))
+
+(ert-deftest palette-float-open-folder-is-the-palette-with-recent-folders ()
+  "Audit L3: File → Open Folder… floats in the palette's frame: Browse… first, then the recent folders (icon, name,
+parent folder), the hint `Recent folders · or type a path', no Vertico counter and no `ls' columns."
+  (drgnx-palette-float-test--with-palette
+    (require 'drgnx-session)
+    (let* ((top (file-name-as-directory (make-temp-file "palette-float-of" t)))
+           (drgnx-session-recent-folders-file (expand-file-name "recent-folders.eld" top))
+           (drgnx-palette-float-test--open #'drgnx-session-read-folder))
+      (unwind-protect
+          (progn
+            (dolist (d '("proj-alpha" "proj-beta"))
+              (make-directory (expand-file-name d top))
+              (drgnx-session--remember-folder (expand-file-name d top)))
+            (drgnx-palette-float-test--reading
+             "o"
+             (lambda ()
+               (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
+                 (drgnx-test-wait (lambda () (and (frame-visible-p f)
+                                                  (eq (window-buffer (frame-root-window f))
+                                                      (window-buffer (active-minibuffer-window)))
+                                                  (string-search "proj-alpha"
+                                                                 (or (overlay-get vertico--candidates-ov 'before-string) ""))))
+                                  :what "Open Folder's rows in the palette's frame")
+                 (drgnx-test-wait-presented)
+                 (let ((rows (overlay-get vertico--candidates-ov 'before-string)))
+                   (should (string-search "Recent folders" rows))                       ; the hint
+                   (should (< (string-search "Browse…" rows) (string-search "proj-beta" rows)
+                              (string-search "proj-alpha" rows)))                       ; Browse…, then newest first
+                   (should (string-search (abbreviate-file-name top) rows))           ; the parent beside the name
+                   (should-not (string-search "drwx" rows)))
+                 (let ((shot (plist-get (drgnx-uitest-capture (make-temp-file "palette-of-shots" t)) :root)))
+                   (when shot
+                     (let ((out (expand-file-name (format "palette-open-folder-s%s.png" (or (getenv "DRGNX_UI_SCALE") "1"))
+                                                  temporary-file-directory)))
+                       (copy-file shot out t)
+                       (drgnx-uitest--evidence out))))))))
+        (delete-directory top t)))))
 
 (ert-deftest palette-float-typing-and-ret-runs-command ()
   (drgnx-palette-float-test--with-palette

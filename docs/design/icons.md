@@ -49,9 +49,9 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `file-text` | file kind: 14 names, 22 extensions |
 | `flag` | - |
 | `flask-conical` | - |
-| `folder` | `core/drgnx-icons.el`, `core/drgnx-palette.el`, `wb/drgnx-explorer.el` |
+| `folder` | `core/drgnx-icons.el`, `core/drgnx-palette.el`, `core/drgnx-session.el`, `wb/drgnx-explorer.el` |
 | `folder-git-2` | - |
-| `folder-open` | `core/drgnx-icons.el`, `wb/drgnx-explorer.el` |
+| `folder-open` | `core/drgnx-icons.el`, `core/drgnx-session.el`, `wb/drgnx-explorer.el` |
 | `git-branch` | `core/drgnx-palette.el`, `modules/ui/drgnx-statusbar.el` |
 | `git-commit-horizontal` | - |
 | `git-fork` | `modules/tools/drgnx-agent-panel-composer.el`, `modules/tools/drgnx-search-handoff.el` |

@@ -58,6 +58,8 @@ string-pixel-width uses)")
   :why "the workbench's own layout and look bookkeeping in the frame parameters: every file that opens a panel sets it; the look rows' drgnx-look-gui-check-clean reads what moves pixels")
  (:what "\\`frame-param drgnx-popup-frame \\+nil\\'"
   :why "the popup lane's slot on the frame, empty again: the row deleted the popup's frame (a frame parameter cannot be removed, only emptied)")
+ (:what "\\`advice server-visit-files \\+drgnx-session--visit-unasked\\'"
+  :why "drgnx-session's load-time advice (no question for a file `drgnx PATH' opens): core, loaded in every drgnx; a feature is never unloaded")
  (:what "\\`frame-param \\(?:glitnir--[a-z-]+\\|session-name\\) "
   :why "the renderer's and the session's own bookkeeping")
  (:what "\\`window-param \\(?:quit-restore\\|quit-restore-prev\\|internal-region-overlay\\|drgnx-uitest-id\\) "
