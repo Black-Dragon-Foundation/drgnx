@@ -32,9 +32,10 @@ row while the shown tab is the only one with content (`drgnx-area--lone-p')."
         (list :side side :size size :lone lone :tabs (plist-get (alist-get area drgnx-wb--areas) :tabs)))
   area)
 
-(cl-defun drgnx-wb-define-tab (area tab &key title icon placeholder actions companions)
+(cl-defun drgnx-wb-define-tab (area tab &key title icon placeholder start actions companions)
   "Add TAB to AREA, titled TITLE; ICON (an icon name, `drgnx-look-icon') shows before the title; PLACEHOLDER returns
-the buffer shown while the tab has none.
+the buffer shown while the tab has none.  START, a function of no arguments, makes the tab's buffer when a click on
+the tab finds none (VS Code's Terminal tab opens a terminal); the rules show what it makes in the tab.
 ACTIONS, a function of no arguments, returns the tab's own pieces (a string, or nil for none), drawn at the right of
 the tab row before its ✕ while the tab is shown; the tab's module calls `drgnx-wb-area-redraw' when they change.
 COMPANIONS, a function of the tab's buffer, returns (ABOVE BELOW): the buffers shown in windows of their own above
@@ -46,7 +47,7 @@ defined here.  Two modules defining the same tab may be torn down in either orde
          (spec (alist-get area drgnx-wb--areas)) (tabs (copy-alist (plist-get spec :tabs)))
          (previous (cdr (assq tab tabs)))
          (props (list :title (or title (capitalize (symbol-name tab))) :icon icon :placeholder placeholder
-                      :actions actions :companions companions)))
+                      :start start :actions actions :companions companions)))
     (if (assq tab tabs) (setf (alist-get tab tabs) props)
       (setq tabs (append tabs (list (cons tab props)))))         ; in the order they are defined
     (setf (alist-get area drgnx-wb--areas) (plist-put spec :tabs tabs))
@@ -190,11 +191,15 @@ it lives, else the view's buffer of the twin it was, else nil."
 ;;;; The tab row
 
 (defun drgnx-area--tab-click (event)
-  "Show the tab clicked in an area's tab row."
+  "Show the tab clicked in an area's tab row; a tab with no buffer of its own and a START (`drgnx-wb-define-tab')
+makes one."
   (interactive "e")
   (let* ((posn (event-start event)) (s (posn-string posn)))
     (when-let* ((s) (spec (get-text-property (cdr s) 'drgnx-tab (car s))))
-      (drgnx-wb-area-show (car spec) (cdr spec)))))
+      (let ((w (drgnx-wb-area-show (car spec) (cdr spec)))
+            (start (plist-get (alist-get (cdr spec) (plist-get (alist-get (car spec) drgnx-wb--areas) :tabs)) :start)))
+        (when (and start (window-live-p w) (not (drgnx-area--content-p (window-buffer w))))
+          (funcall start))))))
 
 (defvar drgnx-area--tab-map
   (let ((m (make-sparse-keymap))) (define-key m [header-line mouse-1] #'drgnx-area--tab-click) m))

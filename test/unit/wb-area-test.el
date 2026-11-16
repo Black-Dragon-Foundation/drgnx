@@ -70,6 +70,29 @@
      (should (= h (window-pixel-height (drgnx-wb-area-window 'panel))))
      (should (= wd (window-pixel-width (drgnx-wb-area-window 'right)))))))
 
+;; the user's panel, 2026-11-16: a click on the Terminal tab after a restart showed an empty placeholder
+(ert-deftest drgnx-area/a-click-on-an-empty-tab-starts-what-it-shows ()
+  "A click on a tab that has no buffer of its own calls the tab's START (VS Code's Terminal tab opens a terminal); a
+click on it once it has one only shows it."
+  (drgnx-area-test--with
+   (let* ((started 0) (drgnx-wb--areas (copy-tree drgnx-wb--areas))
+          (click (lambda (tab)
+                   (let ((s (propertize "x" 'drgnx-tab (cons 'panel tab))))
+                     (cl-letf (((symbol-function 'posn-string) (lambda (_) (cons s 0))))
+                       (drgnx-area--tab-click (list 'mouse-1 (list (selected-window)))))))))
+     (drgnx-wb-define-tab 'panel 'terminal
+                          :start (lambda () (cl-incf started) (pop-to-buffer (get-buffer-create "*terminal*"))))
+     (unwind-protect
+         (progn
+           (funcall click 'terminal)
+           (should (= started 1))
+           (should (eq (window-buffer (drgnx-wb-area-window 'panel)) (get-buffer "*terminal*")))
+           (funcall click 'help)
+           (funcall click 'terminal)                          ; it has one now: shown, none started
+           (should (= started 1))
+           (should (eq (window-buffer (drgnx-wb-area-window 'panel)) (get-buffer "*terminal*"))))
+       (kill-buffer "*terminal*")))))
+
 (ert-deftest drgnx-area/a-tab-toggle-shows-its-tab-or-hides-the-area ()
   "VS Code's Ctrl+` (`drgnx-terminal-toggle'): the Terminal tab is shown and selected, a terminal started when it
 has none; pressed again while it shows, the panel hides; from another tab it switches."
