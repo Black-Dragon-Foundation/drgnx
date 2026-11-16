@@ -296,5 +296,35 @@
         (dotimes (_ 1000) (drgnx-ui-kit-string 'row props 'header-line nil))
         (should (= (- (nth 2 (memory-use-counts)) before) 0))))))
 
+;; The catalogue (Design: Component Catalogue): a cell per variant and state, each a drawn component
+(defun ui-kit-test--catalogue ()
+  (unless (featurep 'drgnx-kit-catalogue)
+    (load (expand-file-name "modules/ui/drgnx-kit-catalogue" drgnx-dir) nil t)))
+
+(ert-deftest drgnx-ui-kit/catalogue-lists-every-cell ()
+  (ui-kit-test--catalogue)
+  (let ((buf (drgnx-kit-catalogue-open 'row)))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((cells (drgnx-kit-catalogue-cells)))
+            ;; row: 3 kinds x 7 states, in order
+            (should (= 21 (length cells)))
+            (should (equal (mapcar (lambda (c) (list (nth 0 c) (nth 1 c) (nth 2 c))) cells)
+                           (cl-loop for k in '(list tree map)
+                                    append (mapcar (lambda (st) (list 'row (list k) st)) drgnx-ui-kit-states))))
+            (pcase-dolist (`(,_ ,variants ,state ,beg ,end) cells)
+              ;; each cell is the kit's expansion, dressed as the hub's rows are: the state's face on its text
+              (let ((e (drgnx-ui-kit-expand 'row (list :kind (symbol-name (car variants)) :depth (if (eq (car variants) 'tree) 1 0)
+                                                       :twisty (and (eq (car variants) 'tree) :false)
+                                                       :text (format "%s · %s" (car variants) state)
+                                                       :state (symbol-name state))
+                                            (drgnx-pixels-scale (selected-frame))
+                                            (cond ((display-graphic-p) nil) ((drgnx-ui-ascii-frame-p) 'ascii) (t t)))))
+                (should (equal (plist-get e :text) (buffer-substring-no-properties beg end)))
+                (when-let* ((face (plist-get (drgnx-ui-kit-state state) :face)))
+                  (let ((at (get-text-property (1- end) 'face)))
+                    (should (memq face (ensure-list at)))))))))
+      (kill-buffer buf))))
+
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

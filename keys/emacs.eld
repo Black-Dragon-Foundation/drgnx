@@ -231,6 +231,7 @@
               (diff-prev-file "p" :map drgnx-diff-mode-map)
               (diff-visit "RET" :map drgnx-diff-mode-map)
               (kit-activate "RET" :map drgnx-ui-kit-action-base-map)
+              (design-component-catalogue :none "in the palette (Design: Component Catalogue)")
               (diff-toggle-layout "s" :map drgnx-diff-mode-map)
               (diff-collapse-all :none "the palette")
               (diff-expand-all :none "the palette")

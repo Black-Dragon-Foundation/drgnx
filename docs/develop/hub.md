@@ -2383,7 +2383,8 @@ it builds for Android too).
   [[pos, image_id, alt]], spaces: [[pos, width, height]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
   not know and never interns it); a stop is one placeholder character at POS, displayed as the space up to PX
   (`(space :align-to (PX))`); an image takes one placeholder character too, and so does a space, shown as WIDTH x
-  HEIGHT device px (`(space :width (W) :height (H))`, a card's progress bar) in its run's face. Empty lists are left out. Runs may
+  HEIGHT device px (`(space :width (W) :height (H))`, a card's progress bar; a HEIGHT of 0 is the line's, as a kit pad
+  has: `(space :width (W))`) in its run's face. Empty lists are left out. Runs may
   overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
 - **Faces by `FaceId`.** Rust never spells a drgnx face as a string: it writes `FaceId::TextMuted.name()` (or a
   family's `FaceId::AGENT[i].name()`), from the generated `drgnx_rows::faces` (`bin/drgnx design`; see
