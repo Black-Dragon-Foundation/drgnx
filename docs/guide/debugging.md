@@ -7,7 +7,9 @@ drgnx debugs through its own client of the Debug Adapter Protocol, so the adapte
 
 **Start Debugging…** offers the project's configurations: those of `.vscode/launch.json` (read as VS Code reads it,
 comments, `${…}` variables, `inputs` and platform sections included), your own in the setting `debug.configurations`,
-and a default for the file's language when there is neither. The adapters: debugpy for Python, the
+and a default for the file's language when there is neither. With none of these (no launch.json, and no file of a
+language drgnx debugs), it asks **Select debugger** as VS Code does, writes that debugger's starting configurations to
+a new `.vscode/launch.json` and offers them; **Open launch.json** asks the same when the project has none. The adapters: debugpy for Python, the
 JavaScript/TypeScript debugger, delve for Go, CodeLLDB or lldb-dap for C, C++ and Rust. A launch.json `compounds`
 entry starts its configurations together (its own `preLaunchTask` first; with `stopAll`, stopping one stops them
 all). A configuration's `preLaunchTask` (and `postDebugTask`) runs from `.vscode/tasks.json` first, in a terminal tab

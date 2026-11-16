@@ -210,12 +210,11 @@ as projects the user selected in, cleared by the module's teardown.")
     (drgnx-debug-launch-start root (drgnx-debug--config root) t)))
 
 (defun drgnx-debug-open-launch-json ()
-  "Open this project's .vscode/launch.json, made with an empty list of configurations when there is none."
+  "Open this project's .vscode/launch.json; when there is none, ask which debugger (VS Code's \"Select debugger\") and
+make it with that debugger's starting configurations (`drgnx-debug-launch-create')."
   (interactive)
-  (let ((file (expand-file-name ".vscode/launch.json" (drgnx-debug-launch-root))))
-    (unless (file-exists-p file)
-      (make-directory (file-name-directory file) t)
-      (drgnx-file-write-text file "{\n  \"version\": \"0.2.0\",\n  \"configurations\": [\n  ]\n}\n"))
+  (let* ((root (drgnx-debug-launch-root)) (file (expand-file-name ".vscode/launch.json" root)))
+    (unless (file-exists-p file) (drgnx-debug-launch-create root))
     (find-file file)
     (goto-char (point-min))
     (when (search-forward "\"configurations\": [" nil t) (forward-line 1))))
