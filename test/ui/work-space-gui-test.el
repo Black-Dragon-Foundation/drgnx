@@ -353,6 +353,8 @@ layout fits (many cards move at once); at scale 2 four, as 30 (or 8) do not fit 
 \(a layout that does not fit is the outline, which never moves), and one more agent still fits."
   (if (< (frame-scale-factor) 2) 30 4))
 
+(defvar drgnx-work-gui--mode nil "`list' to open the map as a list, nil (the graph) otherwise: `drgnx-work-gui--with-map-of'.")
+
 (defmacro drgnx-work-gui--with-map (&rest body)
   "BODY in the map of the 30-agent workspace's first `drgnx-work-gui--agents' agents (`drgnx-work-gui--with-map-of')."
   (declare (indent 0))
@@ -372,7 +374,7 @@ only with it): an error without it (the rows' `skip-unless' says so first)."
              (with-selected-frame root
                (delete-other-windows)
                (drgnx-work-thirty-start (drgnx-work-gui--bin) ,count)
-               (setq buf (drgnx-work-thirty-map t))
+               (setq buf (drgnx-work-thirty-map t drgnx-work-gui--mode))
                (delete-other-windows)
                (setq win (selected-window))
                (set-window-buffer win buf)
@@ -576,6 +578,29 @@ give it motion either."
       (drgnx-work-map-motion-clear)
       (should (= skipped (drgnx-work-gui--stat :skipped)))
       (should (= legs (drgnx-work-gui--stat :legs))))))
+
+(ert-deftest drgnx-work-gui/a-live-arrival-never-moves-the-list ()
+  "The same promise in List mode: an agent arrives while the list is scrolled and a row is selected: the scroll stays
+on the row it was on, the selection stays, and nothing moves (no capture, no motion)."
+  (skip-unless (drgnx-work-gui--rows-p))
+  (let ((drgnx-work-gui--mode 'list))
+    (drgnx-work-gui--with-map
+      (with-current-buffer buf
+        (goto-char (point-min)) (forward-line 6)
+        (set-window-start win (point)))
+      (redisplay t)
+      (let ((start (drgnx-view-key-at (window-start win)))
+            (selected (buffer-local-value 'drgnx-work-map--selection buf))
+            (agents (drgnx-work-thirty-agent-items buf)))
+        (drgnx-work-gui--one-more-agent)
+        (drgnx-test-wait (lambda () (redisplay t) (> (drgnx-work-thirty-agent-items buf) agents)) :secs 30
+                         :what "the new agent")
+        (drgnx-work-gui--settle buf)
+        (redisplay t)
+        (should (equal start (drgnx-view-key-at (window-start win))))
+        (should (equal selected (buffer-local-value 'drgnx-work-map--selection buf)))
+        (should-not (window-parameter win 'glitnir-layout-capture))
+        (should-not (window-parameter win 'glitnir-layout-motion))))))
 
 (defun drgnx-work-gui--key-times ()
   "Milliseconds of 40 map keys (the selection right, then left), each with its redisplay."

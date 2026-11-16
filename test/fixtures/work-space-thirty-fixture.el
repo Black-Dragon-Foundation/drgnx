@@ -247,8 +247,8 @@ send each its ask; wait until all are busy.  Returns the mirrors."
 
 (defvar drgnx-work-map--mode-by-project)
 
-(defun drgnx-work-thirty-map (shown)
-  "The map of the fixture's workspace: in a window beside the selected one when SHOWN, else open and shown nowhere
+(defun drgnx-work-thirty-map (shown &optional mode)
+  "The map of the fixture's workspace, as a `graph' (MODE nil) or a `list': in a window beside the selected one when SHOWN, else open and shown nowhere
 (the hub told).  Waits for the map with every agent started.  The selected window is the one selected before.  The
 buffer."
   (unless (eq 'ok (plist-get (cdr (assq 'tools/work-space (drgnx-modules-report))) :status))
@@ -256,7 +256,7 @@ buffer."
   (setq drgnx-work-space-roots drgnx-work-thirty--roots)
   (let* ((editor (selected-window)) (workspace (drgnx-work-space-workspace))
          ;; what the workloads and tests measure is the graph: the map opens as a list by default
-         (drgnx-work-map--mode-by-project (list (cons (plist-get workspace :id) 'graph)))
+         (drgnx-work-map--mode-by-project (list (cons (plist-get workspace :id) (or mode 'graph))))
          (buffer (drgnx-work-space-open workspace t)))
     (if shown
         (progn (unless (get-buffer-window buffer) (set-window-buffer (split-window editor nil 'right) buffer))
