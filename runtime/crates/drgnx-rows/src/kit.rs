@@ -20,13 +20,38 @@ use serde_json::Value;
 
 pub use crate::kit_gen::{CompId, GLYPHS, State};
 
-/// What an expansion reads of the display class: its scale, whether it is a terminal, and the glyphs as the editor's
-/// frame draws them (`ViewEnv.glyphs`: `[name, glyph]`, ASCII on a terminal that is not UTF-8).
+/// What an expansion reads of the display class: its scale, whether it is a terminal, the glyphs as the editor's
+/// frame draws them (`ViewEnv.glyphs`: `[name, glyph]`, ASCII on a terminal that is not UTF-8) and the user's density
+/// (`ViewEnv.density`, `drgnx-look-density`).
 #[derive(Clone, Copy, Debug)]
 pub struct KitEnv<'a> {
     pub scale: f32,
     pub tty: bool,
     pub glyphs: &'a [(String, String)],
+    pub density: Density,
+}
+
+/// The user's density (`drgnx-look-density`): the sizes the kit's `(density KEY)` geometry takes. On the wire, its
+/// name; an env without one is comfortable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum Density {
+    Compact,
+    #[default]
+    Comfortable,
+    Roomy,
+}
+
+impl Density {
+    /// Its name, as a kit variant slice names it (`kit_gen::geom`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Density::Compact => "compact",
+            Density::Comfortable => "comfortable",
+            Density::Roomy => "roomy",
+        }
+    }
 }
 
 /// What a click or RET on a component does: the editor calls KIND's function (`drgnx-ui-kit-define-action`) with ARGS.
@@ -129,7 +154,7 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             state,
             action,
         } => {
-            let variant = [kind.name()];
+            let variant = [kind.name(), env.density.name()];
             let g: Geom = kit_gen::geom(CompId::Row, &variant);
             let face = comp_face(kit_gen::face(CompId::Row, &variant));
             let hit = if action.is_some() && !env.tty {
@@ -208,6 +233,7 @@ mod tests {
             scale: 1.0,
             tty: true,
             glyphs: &glyphs,
+            density: Density::Comfortable,
         };
         assert_eq!(expand_rows(&env, "k", &row(Some(true)))[0].text, "   v a ");
         assert_eq!(expand_rows(&env, "k", &row(Some(false)))[0].text, "   > a ");
@@ -216,6 +242,7 @@ mod tests {
             scale: 1.0,
             tty: true,
             glyphs: &[],
+            density: Density::Comfortable,
         };
         assert_eq!(expand_rows(&env, "k", &row(Some(true)))[0].text, "   ⌄ a ");
         assert_eq!(expand_rows(&env, "k", &row(None))[0].key, "k/0");
@@ -237,11 +264,40 @@ mod tests {
                 scale: 1.75,
                 tty: false,
                 glyphs: &[],
+                density: Density::Comfortable,
             },
             "k",
             &c,
         )[0];
         assert_eq!(r.spaces, vec![(0, 53, 0), (2, 11, 0)]);
         assert_eq!(r.runs, vec![(0, 3, FaceId::Selected.name().to_owned())]);
+    }
+
+    #[test]
+    fn roomy_env_indents_14() {
+        // a tree level is the density's `tree-indent`: 12 at comfortable, 14 at roomy
+        let at = |density| {
+            expand_rows(
+                &KitEnv {
+                    scale: 1.0,
+                    tty: false,
+                    glyphs: &[],
+                    density,
+                },
+                "k",
+                &row(None),
+            )[0]
+            .spaces[0]
+                .1
+        };
+        assert_eq!(at(Density::Comfortable), 6 + 12);
+        assert_eq!(at(Density::Roomy), 6 + 14);
+        // on the wire, its name; none is comfortable
+        assert_eq!(serde_json::to_value(Density::Roomy).unwrap(), "roomy");
+        assert_eq!(
+            serde_json::from_value::<Density>("compact".into()).unwrap(),
+            Density::Compact
+        );
+        assert_eq!(Density::default(), Density::Comfortable);
     }
 }
