@@ -868,6 +868,11 @@ in the same transaction as the change they record:
   summary) and a merge into the job's branch (`status`).
 - **Cards, decisions and tasks** (`norn::write::{cards,decisions}`, `norn::tracker`): `card`, `question`, `answer`,
   `decision` and `task` rows.
+- **Budgets** (`budget.rs`): the `budget` event (`BudgetEvent`: `scope`, `spent`, `remaining`, `state` one of `ok`,
+  `nearing` from 80 % of the binding limit, `reached`, `none`, and `burn_per_hour`) goes to every subscriber once a
+  second for each scope whose spend moved (bursts coalesce, the last value wins; ancestors count). The burn is a
+  per-hour rate over the last hour from an in-memory ring (empty before ten minutes of spend; lost on restart). A
+  cost an agent reports is a number or `{"amount", "currency"}`: `budget::cost_amount` reads both, everywhere.
 - **Retention:** the hub's housekeeping runs the daily prune (`coord/prune`, `norn::write::prune`): by age once a
   day, and on every call the row cap.
 

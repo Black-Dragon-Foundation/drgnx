@@ -36,7 +36,11 @@ pub struct JobSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
     /// The plan's own limits by unit (its budget): none when it has none.
-    #[serde(default, deserialize_with = "null_as_empty", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub limits: Vec<Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent: Option<f64>,

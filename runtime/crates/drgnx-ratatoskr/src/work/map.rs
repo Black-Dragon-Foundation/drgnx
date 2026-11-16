@@ -319,10 +319,7 @@ impl Sess {
         // the cost is a number, or an object with an `amount` (what the agent's usage update carries)
         let spend = usage
             .and_then(|u| u.cost.as_ref())
-            .and_then(|c| {
-                c.as_f64()
-                    .or_else(|| c.get("amount").and_then(Value::as_f64))
-            })
+            .and_then(crate::budget::cost_amount)
             .map(|c| format!("${c:.2}"));
         let mut out = vec![Event::Session(SessionFact {
             id: s.id.clone(),
@@ -1669,7 +1666,8 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
         })
         .collect();
     // the seed: the store's records and refs, the machines, the sessions and who is in which file now
-    let (records, cards) = read_store(f).await;
+    let (mut records, cards) = read_store(f).await;
+    records.extend(budget_events(f, &records));
     let refs = refs_of(f, &p.workspace).await;
     let machines = crate::work::machines::facts_now(f);
     let sessions: Vec<(Snapshot, Vec<crate::work::subagents::Child>)> = f
@@ -1962,6 +1960,62 @@ fn legacy_duplicates<'a>(
 const NO_PLAN: &str = "no-plan";
 
 /// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
+/// The budget facts of the records READ and of the live sessions: spend against the binding limit, none when no limit
+/// counts for the item.
+fn budget_events(f: &Front, records: &[Event]) -> Vec<Event> {
+    use runstav::methods::timeline::BudgetScope;
+    let mut items: Vec<(String, BudgetScope)> = Vec::new();
+    let scope = |kind: &str, id: &str| -> Option<BudgetScope> {
+        serde_json::from_value(json!({ kind: format!("{kind}:{id}") })).ok()
+    };
+    for e in records {
+        if let Event::Graph(g) = e {
+            let (kind, id) = match g {
+                GraphFact::Spec { id, .. } => ("spec", id),
+                GraphFact::Plan { id, .. } if id != NO_PLAN => ("plan", id),
+                GraphFact::Task { id, .. } => ("task", id),
+                _ => continue,
+            };
+            if let Some(s) = scope(kind, id) {
+                items.push((format!("{kind}:{id}"), s));
+            }
+        }
+    }
+    for s in f.core.agents.live_sessions() {
+        items.push((format!("agent:{}", s.id), s.scope()));
+    }
+    items
+        .into_iter()
+        .map(|(item, s)| {
+            Event::Graph(GraphFact::Budget {
+                item,
+                budget: item_budget(&f.core.budgets, &s),
+            })
+        })
+        .collect()
+}
+
+/// What SCOPE has spent against its binding limit; none with no limit at or above it.
+pub(crate) fn item_budget(
+    b: &crate::budget::Budgets,
+    scope: &runstav::methods::timeline::BudgetScope,
+) -> Option<vegvisir::model::ItemBudget> {
+    let (unit, spent, limit) = b.binding(scope)?;
+    let own = b.limits(scope).iter().any(|l| l.unit == unit);
+    Some(vegvisir::model::ItemBudget {
+        spent: vegvisir::model::Num(spent),
+        limit: own.then_some(vegvisir::model::Num(limit)),
+        unit: serde_json::to_value(unit)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default(),
+        state: serde_json::to_value(b.state(scope))
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default(),
+    })
+}
+
 async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
     f.writer
         .db
@@ -2144,7 +2198,8 @@ pub async fn run(front: Arc<Front>) {
         if !front.core.map.open() {
             continue;
         }
-        let (records, cards) = read_store(&front).await;
+        let (mut records, cards) = read_store(&front).await;
+        records.extend(budget_events(&front, &records));
         let spaces: Vec<(String, Vec<PathBuf>)> = {
             let g = lock(&front.core.map.inner);
             g.spaces

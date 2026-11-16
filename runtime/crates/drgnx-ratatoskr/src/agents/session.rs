@@ -3821,6 +3821,15 @@ fn named_rels(cwd: &Path, c: &ClosedStep) -> Vec<String> {
 /// The newest record of the edit history this session caused at or before END: what a revert to the step restores the
 /// text to; with STEP, only a record that step caused.  None when the session has no history (a folder that is no git
 /// worktree, a test, a history that fails).
+/// The cost TOTAL a `usage_update` carries (a number, or `{"amount", "currency"}`): what the budget books; none for any
+/// other update.
+fn usage_cost_total(update: &Value) -> Option<f64> {
+    update
+        .get("cost")
+        .and_then(crate::budget::cost_amount)
+        .filter(|_| update.get("sessionUpdate") == Some(&json!("usage_update")))
+}
+
 async fn newest_record(ctx: &StepCtx, end: f64, step: Option<i64>) -> Option<i64> {
     let (hubs, state) = ctx.history.clone()?;
     let (cwd, sid) = (ctx.cwd.clone(), ctx.session.clone());
@@ -4421,11 +4430,7 @@ impl Session {
                             );
                             return;
                         }
-                        if let Some(total) = v
-                            .pointer("/cost/amount")
-                            .and_then(Value::as_f64)
-                            .filter(|_| v.get("sessionUpdate") == Some(&json!("usage_update")))
-                        {
+                        if let Some(total) = usage_cost_total(&v) {
                             let booked = self.budgets.spend_total_in(
                                 &self.scope(),
                                 "usd-est",
@@ -7272,6 +7277,29 @@ mod tests {
     }
 
     /// A cost reading TOTAL of conversation CONV, as `Session::handle` books it: the budget's delta is also the turn's.
+    #[test]
+    fn a_usage_update_books_its_cost_as_a_number_or_an_object() {
+        let upd = |cost: Value| json!({"sessionUpdate": "usage_update", "used": 1, "cost": cost});
+        assert_eq!(usage_cost_total(&upd(json!(0.25))), Some(0.25));
+        assert_eq!(
+            usage_cost_total(&upd(json!({"amount": 0.01, "currency": "USD"}))),
+            Some(0.01)
+        );
+        // another kind of update, or no cost, books nothing
+        let other = json!({"sessionUpdate": "agent_message_chunk", "cost": {"amount": 1.0}});
+        assert_eq!(usage_cost_total(&other), None);
+        assert_eq!(
+            usage_cost_total(&json!({"sessionUpdate": "usage_update"})),
+            None
+        );
+        // and the booking itself reads the object's amount through the budget
+        let b = Budgets::default();
+        let mut st = State::new();
+        let total = usage_cost_total(&upd(json!({"amount": 0.10, "currency": "USD"}))).unwrap();
+        read_cost(&b, &mut st, "c1", total);
+        assert!((st.take_turn_cost().unwrap() - 0.10).abs() < 1e-9);
+    }
+
     fn read_cost(b: &Budgets, st: &mut State, conv: &str, total: f64) {
         let scope: BudgetScope = serde_json::from_value(json!({"worker": "w1"})).unwrap();
         let booked = b.spend_total_in(&scope, "usd-est", conv, Unit::UsdEst, total);

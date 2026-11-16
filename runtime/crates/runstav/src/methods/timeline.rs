@@ -257,6 +257,35 @@ pub enum BudgetScope {
     Worker(Id),
 }
 
+/// Where a scope stands against its limits (and those above it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum BudgetState {
+    /// Within its limits.
+    Ok,
+    /// 80 % or more of the binding limit is spent: the unit whose remaining share is the least.
+    Nearing,
+    /// A limit is reached.
+    Reached,
+    /// No limit on the scope or above it.
+    None,
+}
+
+/// The `budget` event: a scope's spend moved (at most once a second per scope; the last value wins).  `burn_per_hour`
+/// is what it spent per hour over the last hour, in each unit, empty until 10 minutes of spend were seen.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetEvent {
+    pub scope: BudgetScope,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub spent: Vec<Limit>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub remaining: Vec<Limit>,
+    pub state: BudgetState,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub burn_per_hour: Vec<Limit>,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct BudgetGetParams {
     pub scope: BudgetScope,

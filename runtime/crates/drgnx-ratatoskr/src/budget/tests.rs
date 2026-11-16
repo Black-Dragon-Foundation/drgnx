@@ -458,3 +458,117 @@ fn an_old_per_job_plan_scope_becomes_its_run() {
     );
     assert_eq!(c.limits(&run), vec![lim(20.0, Unit::Usd)]);
 }
+
+/// An agent's usage update carries its cost as a number or as `{"amount", "currency"}`: one reader takes both, and
+/// nothing else.
+#[test]
+fn a_cost_is_a_number_or_an_object_with_an_amount() {
+    use serde_json::json;
+    assert_eq!(cost_amount(&json!(0.25)), Some(0.25));
+    assert_eq!(
+        cost_amount(&json!({"amount": 0.01, "currency": "USD"})),
+        Some(0.01)
+    );
+    for bad in [
+        json!(null),
+        json!("0.5"),
+        json!({"currency": "USD"}),
+        json!({"amount": "x"}),
+        json!([0.1]),
+    ] {
+        assert_eq!(cost_amount(&bad), None, "{bad}");
+    }
+}
+
+fn run_scope(id: &str) -> BudgetScope {
+    serde_json::from_value(json!({"run": id})).unwrap()
+}
+
+#[test]
+fn burn_is_the_hourly_rate_after_ten_minutes_of_spend() {
+    let b = Budgets::default();
+    let s = run_scope("job-1");
+    b.spend_at(&s, Unit::Usd, 1.0, 1000.0);
+    // under ten minutes seen: nothing yet
+    assert!(b.burn(&s, 1300.0).is_empty());
+    b.spend_at(&s, Unit::Usd, 1.0, 1600.0);
+    // 2 usd over 1200 s is 6 usd an hour
+    let burn = b.burn(&s, 2200.0);
+    assert_eq!(burn.len(), 1);
+    assert_eq!(burn[0].unit, Unit::Usd);
+    assert!((burn[0].amount - 6.0).abs() < 1e-9, "{burn:?}");
+    // an hour on, the old readings left the ring
+    assert!(b.burn(&s, 1000.0 + 3700.0 + 3600.0).is_empty());
+}
+
+#[test]
+fn a_scope_nears_at_eighty_percent_of_its_binding_limit() {
+    let b = Budgets::default();
+    let s = run_scope("job-2");
+    assert_eq!(b.state(&s), BudgetState::None);
+    b.set(
+        &s,
+        vec![Limit {
+            amount: 10.0,
+            unit: Unit::Usd,
+        }],
+    );
+    assert_eq!(b.state(&s), BudgetState::Ok);
+    b.spend(&s, Unit::Usd, 7.9);
+    assert_eq!(b.state(&s), BudgetState::Ok);
+    b.spend(&s, Unit::Usd, 0.2);
+    assert_eq!(b.state(&s), BudgetState::Nearing);
+    b.spend(&s, Unit::Usd, 2.0);
+    assert_eq!(b.state(&s), BudgetState::Reached);
+}
+
+#[test]
+fn changes_are_taken_once_with_the_ancestors() {
+    let b = Budgets::default();
+    let (p, r) = (run_scope("p"), run_scope("r"));
+    b.link(&r, &p);
+    b.spend(&r, Unit::Usd, 1.0);
+    b.spend(&r, Unit::Usd, 1.0);
+    let got = b.take_changed();
+    assert_eq!(got.len(), 1 + 1, "{got:?}");
+    assert!(b.take_changed().is_empty());
+}
+
+#[test]
+fn the_binding_unit_is_the_least_remaining_share() {
+    let b = Budgets::default();
+    let s = run_scope("job-3");
+    b.set(
+        &s,
+        vec![
+            Limit {
+                amount: 100.0,
+                unit: Unit::Tokens,
+            },
+            Limit {
+                amount: 10.0,
+                unit: Unit::Usd,
+            },
+        ],
+    );
+    b.spend(&s, Unit::Tokens, 50.0); // half left
+    b.spend(&s, Unit::Usd, 9.0); // a tenth left
+    assert_eq!(b.binding(&s), Some((Unit::Usd, 9.0, 10.0)));
+    b.spend(&s, Unit::Tokens, 45.0); // a twentieth left
+    assert_eq!(b.binding(&s).map(|(u, ..)| u), Some(Unit::Tokens));
+}
+
+#[test]
+fn events_coalesce_to_one_a_second_per_scope() {
+    // ten spends before the flush are one change per scope of the chain, whatever the amounts
+    let b = Budgets::default();
+    let (p, r) = (run_scope("p2"), run_scope("r2"));
+    b.link(&r, &p);
+    for _ in 0..10 {
+        b.spend(&r, Unit::Usd, 0.1);
+    }
+    let got = b.take_changed();
+    assert_eq!(got.len(), 2, "{got:?}");
+    let e = b.event_of(&r, 0.0);
+    assert!((e.spent[0].amount - 1.0).abs() < 1e-9);
+}
