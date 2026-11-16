@@ -442,8 +442,9 @@ in the editor."
 
 (defun drgnx-buffers-setup ()
   "Put the Buffers panel in the dock (above the Explorer) and keep it current."
+  ;; folded at first, as VS Code's Open Editors: a file opened adds no row above the Explorer under the pointer
   (drgnx-wb-define-section 'buffers :slot -1 :title #'drgnx-buffers--current-title :height 0.3 :fit 0.3
-                           :buffer #'drgnx-buffers--buffer)
+                           :collapsed t :buffer #'drgnx-buffers--buffer)
   (drgnx-state-subscribe 'selected-changed #'drgnx-wb--selected-changed)
   (drgnx-wb-rows-follow)
   (drgnx-signal-subscribe 'buffer-set-changed #'drgnx-buffers--set-changed)

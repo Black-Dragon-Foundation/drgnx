@@ -16,6 +16,8 @@
   `(drgnx-test-with-state
      (let* ((,dir (make-temp-file "drgnx-buffers-edge" t))
             (drgnx-wb--sections nil) (drgnx-buffers--filter nil) (drgnx-buffers-all-windows nil)
+            (drgnx-wb--collapsed (list (cons 'buffers nil)))   ; Open unfolded, as its user left it
+
             (drgnx-buffers--ids (make-hash-table :test #'eq :weakness 'key))
             (drgnx-buffers--by-id (make-hash-table :test #'equal :weakness 'value))
             (drgnx-buffers--sent (make-hash-table :test #'eq :weakness 'key))
@@ -43,6 +45,15 @@
 
 (defun drgnx-buffers-edge--header (section)
   (format "%s" (window-parameter (drgnx-wb-section-window section) 'header-line-format)))
+
+;; audit E2 (2026-11-16): each opened file added a row to Open, so the Explorer under it moved down a row under the
+;; pointer and the next click landed one row off
+(ert-deftest drgnx-buffers/open-is-folded-at-first-as-vs-code-s-open-editors ()
+  ;; Open starts folded to its header, so opening files moves nothing under the pointer; a click on its header opens it
+  (drgnx-buffers-edge--with dir
+    (ignore dir)
+    (let ((drgnx-wb--collapsed nil))                    ; never toggled
+      (should (drgnx-wb-section-collapsed-p 'buffers)))))
 
 (ert-deftest drgnx-buffers/the-filter-title-survives-hide-and-show ()
   (drgnx-buffers-edge--with dir
