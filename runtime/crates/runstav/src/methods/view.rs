@@ -65,6 +65,10 @@ pub struct ViewEnv {
     /// (`drgnx_rows::kit`).
     #[serde(default)]
     pub glyphs: Vec<(String, String)>,
+    /// The user's density (`drgnx-look-density`): the kit's sizes that follow it (a tree level's indent). None:
+    /// comfortable. A change is a new epoch, as a scale change is.
+    #[serde(default)]
+    pub density: drgnx_rows::kit::Density,
     /// The first env of a new buffer for this (view, class): a pair the hub already holds for the connection (no
     /// `view/close` came) is dropped and starts again, so the new buffer gets the rows whole.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

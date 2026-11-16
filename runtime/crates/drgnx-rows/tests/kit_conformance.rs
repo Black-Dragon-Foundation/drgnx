@@ -23,7 +23,11 @@ fn expansions() -> Value {
             .iter()
             .map(|(n, _, a)| ((*n).to_owned(), (*a).to_owned()))
             .collect();
+        let density =
+            serde_json::from_value(e.get("density").cloned().unwrap_or(json!("comfortable")))
+                .unwrap();
         let env = KitEnv {
+            density,
             scale: e["scale"].as_f64().unwrap() as f32,
             tty: e["tty"].as_bool().unwrap(),
             glyphs: if e["ascii"].as_bool().unwrap() {

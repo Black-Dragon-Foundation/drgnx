@@ -134,6 +134,7 @@ fn extensions_kinds_are_lucide_icons_on_a_graphical_display() {
         tz: String::new(),
         reduced_motion: false,
         glyphs: Vec::new(),
+        density: Default::default(),
         attach: false,
         rows_in_sja: false,
         headless: false,

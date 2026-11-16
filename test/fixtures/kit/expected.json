@@ -82,5 +82,19 @@
 {"name":"tty-ascii/selected-inactive","props":[],"runs":[[0,7,"drgnx-selected-inactive"]],"spaces":[],"text":"   > a "},
 {"name":"tty-ascii/focus-visible","props":[],"runs":[[0,7,"drgnx-focus"]],"spaces":[],"text":"   > a "},
 {"name":"tty-ascii/disabled","props":[],"runs":[[0,7,"drgnx-text-disabled"]],"spaces":[],"text":"   > a "},
-{"name":"tty-ascii/action","props":[[0,6,"drgnx-action",["kit-test",1,"a"]],[0,6,"mouse-face","drgnx-hover"]],"runs":[[0,6,"drgnx-selected"]],"spaces":[],"text":" open "}
+{"name":"tty-ascii/action","props":[[0,6,"drgnx-action",["kit-test",1,"a"]],[0,6,"mouse-face","drgnx-hover"]],"runs":[[0,6,"drgnx-selected"]],"spaces":[],"text":" open "},
+{"name":"roomy/list-0","props":[],"runs":[],"spaces":[[0,6,0],[8,6,0]],"text":" main.rs "},
+{"name":"roomy/list-2","props":[],"runs":[],"spaces":[[0,6,0],[7,6,0]],"text":" lib.rs "},
+{"name":"roomy/tree-0-open","props":[],"runs":[],"spaces":[[0,6,0],[6,6,0]],"text":" ⌄ src "},
+{"name":"roomy/tree-2-closed","props":[],"runs":[],"spaces":[[0,34,0],[6,6,0]],"text":" › kit "},
+{"name":"roomy/tree-2-leaf","props":[],"runs":[],"spaces":[[0,34,0],[7,6,0]],"text":" kit.rs "},
+{"name":"roomy/map-0","props":[],"runs":[],"spaces":[[0,6,0],[5,6,0]],"text":" Work "},
+{"name":"roomy/map-2-open","props":[],"runs":[],"spaces":[[0,6,0],[6,6,0]],"text":" ⌄ 日本語 "},
+{"name":"roomy/hover","props":[],"runs":[[0,5,"drgnx-hover"]],"spaces":[[0,20,0],[4,6,0]],"text":" › a "},
+{"name":"roomy/pressed","props":[],"runs":[[0,5,"drgnx-selected-quiet"]],"spaces":[[0,20,0],[4,6,0]],"text":" › a "},
+{"name":"roomy/selected","props":[],"runs":[[0,5,"drgnx-selected"]],"spaces":[[0,20,0],[4,6,0]],"text":" › a "},
+{"name":"roomy/selected-inactive","props":[],"runs":[[0,5,"drgnx-selected-inactive"]],"spaces":[[0,20,0],[4,6,0]],"text":" › a "},
+{"name":"roomy/focus-visible","props":[],"runs":[[0,5,"drgnx-focus"]],"spaces":[[0,20,0],[4,6,0]],"text":" › a "},
+{"name":"roomy/disabled","props":[],"runs":[[0,5,"drgnx-text-disabled"]],"spaces":[[0,20,0],[4,6,0]],"text":" › a "},
+{"name":"roomy/action","props":[[0,6,"drgnx-action",["kit-test",1,"a"]],[0,6,"mouse-face","drgnx-hover"]],"runs":[[0,6,"drgnx-selected"]],"spaces":[[0,6,0],[5,6,0]],"text":" open "}
 ]
