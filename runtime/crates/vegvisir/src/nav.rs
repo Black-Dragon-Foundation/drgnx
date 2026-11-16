@@ -197,6 +197,16 @@ pub struct StripEntry {
     pub id: ItemId,
 }
 
+/// A card's text on the strip.  A gate's is a forecast ("2 tasks, about 0.00 USD ..."), led by what it is so a chip cut
+/// at its width still says it is one to approve; the other cards' texts say it themselves.
+fn said(n: &crate::NeedsYou) -> String {
+    if n.kind == crate::CardKind::SignOff && !n.text.to_lowercase().starts_with("sign off") {
+        format!("Sign off: {}", n.text)
+    } else {
+        n.text.clone()
+    }
+}
+
 /// The strip's entries, in the editor's strip's order: the cards (NEEDS, by id) but the huddles, then the agents among
 /// ITEMS (the shown ones) that need you with no such card (by id; a huddle covers nobody), then the open huddles.
 pub fn strip_entries(needs: &[crate::NeedsYou], items: &BTreeMap<ItemId, Item>) -> Vec<StripEntry> {
@@ -204,7 +214,7 @@ pub fn strip_entries(needs: &[crate::NeedsYou], items: &BTreeMap<ItemId, Item>) 
         .iter()
         .partition(|n| n.kind == crate::CardKind::Huddle);
     let entry = |n: &crate::NeedsYou| StripEntry {
-        text: n.text.clone(),
+        text: said(n),
         id: n
             .about
             .iter()

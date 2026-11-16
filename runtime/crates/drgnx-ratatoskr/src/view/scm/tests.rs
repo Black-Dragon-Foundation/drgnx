@@ -467,3 +467,28 @@ fn ages() {
     assert_eq!(graph::age(0, 2 * 86_400), "2d");
     assert_eq!(graph::age(0, 400 * 86_400), "1y");
 }
+
+/// [D] A commit answers its sha from the same pass as the commit (one read of the repository by the views after it, not
+/// one per git command), with the message on stdin and `all` staging first.
+#[tokio::test]
+async fn commit_answers_the_sha_of_the_commit_it_made() {
+    let tmp = tempfile::tempdir().unwrap();
+    let r = repo(tmp.path(), "app");
+    sh(&r, "printf 'edited\\n' > a.txt");
+    let p: Commit = serde_json::from_value(serde_json::json!({
+        "root": r.to_string_lossy(), "message": "edit a", "all": true
+    }))
+    .unwrap();
+    let done = commit_quiet(&r, &p).await.unwrap();
+    let head = run::git(
+        &r,
+        As::Reader,
+        &["rev-parse", "HEAD"],
+        None,
+        Some(LOCAL),
+        None,
+    )
+    .unwrap();
+    assert_eq!(done.sha, String::from_utf8_lossy(&head).trim());
+    assert!(status_of(&r).changes.is_empty());
+}
