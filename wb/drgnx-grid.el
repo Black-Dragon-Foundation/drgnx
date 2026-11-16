@@ -46,6 +46,10 @@
 
 (defconst drgnx-grid-docks '(left bottom right) "The homes a tool tile docks at.")
 
+(defvar drgnx-grid--into nil
+  "A live window `drgnx-grid-split-dock' hands out in place of a new one: bound by `drgnx-grid-apply-tree' while the
+side bar or an area fills the window it made for them.")
+
 (defconst drgnx-grid--default-size '((left . 32) (bottom . 12) (right . 50))
   "A dock's size the first time it shows, in columns (left, right) or lines (bottom), when its kinds give none.")
 
@@ -265,7 +269,19 @@ the tiles it last gave its space to that still live; nil when none does."
 neighbour (`drgnx-grid--dock-target').  PX is its size in pixels along the split (left and right a width, bottom a
 height); nil: DOCK's `:sizes' intent, else KINDS' `:size', else `drgnx-grid--default-size'.  It is clamped so the
 new window and the one it comes from keep `drgnx-grid-min-size' (at most half the room each).  The window gets
-`drgnx-tile-dock' DOCK, an id and `no-delete-other-windows'; the caller gives it its role, buffer and the rest."
+`drgnx-tile-dock' DOCK, an id and `no-delete-other-windows'; the caller gives it its role, buffer and the rest.
+A tile shown full size comes back first, with every other tile (`drgnx-grid-leave-full-size')."
+  (if (window-live-p drgnx-grid--into)
+      (let ((w drgnx-grid--into))
+        (setq drgnx-grid--into nil)                     ; one window, for the first split only
+        (set-window-parameter w 'drgnx-tile-dock dock)
+        (set-window-parameter w 'no-delete-other-windows t)
+        (drgnx-grid-tile-id w)
+        w)
+    (drgnx-grid-leave-full-size frame)
+    (drgnx-grid--split-dock dock px frame kinds)))
+
+(defun drgnx-grid--split-dock (dock px frame kinds)
   (drgnx-grid--adopt-editors frame)
   (let* ((frame (or frame (selected-frame)))
          (memory (drgnx-grid--memory dock frame))
@@ -475,6 +491,7 @@ A docked tile's size is noted as its dock's `:sizes' intent.  The window, or nil
 
 (defun drgnx-grid-toggle-dock (dock)
   "Hide DOCK's tile when it shows, else show it with the kind it showed last (its first kind the first time)."
+  (drgnx-grid-leave-full-size)
   (let ((w (drgnx-grid-dock dock)))
     (if w (drgnx-grid-hide (car (window-parameter w 'drgnx-pane-stack)))
       (let* ((memory (drgnx-grid--memory dock))
@@ -489,7 +506,9 @@ A docked tile's size is noted as its dock's `:sizes' intent.  The window, or nil
 
 (defun drgnx-grid-split-tile (window side)
   "A new window beside WINDOW's whole tile (its atom, `drgnx-grid--tile-root') on SIDE (`right', `below'), taking half
-of the tile, pixelwise; an id and `no-delete-other-windows'.  The caller gives it what it shows."
+of the tile, pixelwise; an id and `no-delete-other-windows'.  The caller gives it what it shows.  A tile shown full
+size comes back first, with every other tile."
+  (drgnx-grid-leave-full-size (window-frame window))
   (let ((new (let ((drgnx-rules--placing t) (window-combination-limit nil) (window-combination-resize nil)
                    (ignore-window-parameters t) (window-resize-pixelwise t))
                (split-window (drgnx-grid--tile-root window) nil side t))))
@@ -586,16 +605,23 @@ For invoked commands only (`split-editor-right' and `split-editor-down' on a too
 (defun drgnx-grid--docked-p (kind)
   "Non-nil when KIND lives in its dock (a home `left', `bottom' or `right'), not in a tile it was moved to."
   (and (drgnx-grid--dock-of kind) (not (drgnx-grid--tile-of kind (selected-frame)))))
+(defun drgnx-grid--leave-unless-shown (kind)
+  "A grid command on KIND while a tile shows full size: every tile comes back first, unless KIND is what shows."
+  (unless (window-live-p (drgnx-grid--backend-window kind (selected-frame))) (drgnx-grid-leave-full-size)))
 (defun drgnx-grid--backend-show (kind buffer select)
+  (drgnx-grid--leave-unless-shown kind)
   (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-show kind buffer select)
     (drgnx-grid-show kind :buffer buffer :select select)))
 (defun drgnx-grid--backend-hide (kind)
+  (drgnx-grid-leave-full-size)
   (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-hide kind) (drgnx-grid-hide kind)))
 (defun drgnx-grid--backend-window (kind frame)
   (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-window kind frame) (drgnx-grid-window kind frame)))
 (defun drgnx-grid--backend-focus (kind)
+  (drgnx-grid--leave-unless-shown kind)
   (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-focus kind) (drgnx-grid-focus kind)))
 (defun drgnx-grid--backend-resize (kind px horizontal)
+  (drgnx-grid-leave-full-size)
   (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-resize kind px horizontal) (drgnx-grid-resize kind px horizontal)))
 
 (setf (alist-get 'grid drgnx-pane--backends)
@@ -656,6 +682,310 @@ frame is made (the plain setup, never ediff's frames)."
       (ediff-setup-windows-plain buffer-A buffer-B buffer-C control-buffer))
     (with-current-buffer control-buffer
       (add-hook 'ediff-after-quit-hook-internal (lambda () (drgnx-grid--ediff-restore tile before)) nil t))))
+
+;;;; One frame's tree, its apply, full size
+
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+(declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab buffer))
+(declare-function drgnx-wb-area-tab "drgnx-area" (area))
+(declare-function drgnx-wb-show-sidebar "drgnx-wb" ())
+(declare-function drgnx-wb-sidebar-view "drgnx-wb" (&optional frame))
+(declare-function drgnx-chrome-tabs "drgnx-chrome" (w))
+(declare-function drgnx-chrome-apply "drgnx-chrome" (&optional frame note))
+(defvar drgnx-wb--areas)
+
+(defun drgnx-grid--atom-root-p (window)
+  "Non-nil when WINDOW is an internal window holding one tile's atom."
+  (and (not (window-live-p window)) (window-parameter window 'window-atom)
+       (eq (window-atom-root window) window)))
+
+(defun drgnx-grid--main-of (window)
+  "The tile's main window under WINDOW (a live window, or an atom's root): the first that is not a part."
+  (if (window-live-p window) window
+    (or (seq-find (lambda (w) (not (window-parameter w 'drgnx-tile-part))) (drgnx-grid--leaves window))
+        (car (drgnx-grid--leaves window)))))
+
+(defun drgnx-grid--buffer-name (b)
+  "How a tree names buffer B: its file, else its name."
+  (or (buffer-file-name b) (buffer-name b)))
+
+(defun drgnx-grid--named-buffer (name)
+  "The live buffer a tree's NAME stands for (a file's buffer, else one of that name), or nil.  Nothing is visited."
+  (and (stringp name) (or (get-file-buffer name) (get-buffer name))))
+
+(defun drgnx-grid--leaf (w)
+  "The tree node of the tile whose main window is W (Task 2's format, without :px and :share)."
+  (let ((role (window-parameter w 'drgnx-role)) (dock (window-parameter w 'drgnx-tile-dock))
+        (id (drgnx-grid-tile-id w)))
+    (cond ((eq role 'tile)
+           (let ((stack (window-parameter w 'drgnx-pane-stack)))
+             (list 'tile :id id :kinds stack :shown (car stack) :dock dock :state nil)))
+          ((eq role 'dock)
+           (list 'tile :id id :kinds '(side-bar) :shown 'side-bar :dock (or dock 'left)
+                 :state (list :view (drgnx-wb-sidebar-view (window-frame w)))))
+          ((and role (assq role drgnx-wb--areas))
+           (let ((tab (drgnx-wb-area-tab role)))
+             (list 'tile :id id :kinds (and tab (list tab)) :shown tab :dock dock :state (list :area role))))
+          (t (let ((b (window-buffer w)))
+               (list 'editor :id id
+                     :tabs (delete-dups (mapcar #'drgnx-grid--buffer-name
+                                                (seq-filter #'buffer-live-p (window-parameter w 'drgnx-tabs))))
+                     :shown (drgnx-grid--buffer-name b) :point (window-point w) :start (window-start w)))))))
+
+(defun drgnx-grid--node (window scale parent horizontal)
+  "WINDOW's tree node; PARENT the pixel size of its parent along HORIZONTAL (nil at the root)."
+  (let* ((px (and parent (window-size window horizontal t)))
+         (sizes (and parent (list :px (max 1 (drgnx-grid-tree-to-logical px scale))
+                                  :share (min 1.0 (max 1e-4 (/ (float px) parent)))))))
+    (if (or (window-live-p window) (drgnx-grid--atom-root-p window))
+        (let ((leaf (drgnx-grid--leaf (drgnx-grid--main-of window))))
+          (cons (car leaf) (append sizes (cdr leaf))))
+      (let* ((row (and (window-left-child window) t))
+             (size (window-size window row t)))
+        (append (list (if row 'row 'col) :px (plist-get sizes :px) :share (plist-get sizes :share))
+                (mapcar (lambda (c) (drgnx-grid--node c scale size row)) (drgnx-grid--children window)))))))
+
+(defun drgnx-grid-tree (&optional frame)
+  "FRAME's grid as a TREE (Task 2's format: `drgnx-grid-valid-tree-p'), its sizes logical pixels at FRAME's scale.
+An editor tile names its buffers by file, else by name."
+  (let ((frame (or frame (selected-frame))))
+    (with-selected-frame frame
+      (drgnx-grid--adopt-editors frame)
+      (drgnx-grid--node (drgnx-grid-root frame) (drgnx-pixels-scale frame) nil nil))))
+
+;;; Apply
+
+(defun drgnx-grid--tree-ids (node)
+  (delq nil (mapcar (lambda (l) (plist-get (cdr l) :id)) (drgnx-grid-tree-leaves node))))
+
+(defun drgnx-grid--live-shape (window keep)
+  "WINDOW's tree restricted to the tile ids KEEP: an id, or (row|col SHAPE…) of two or more; nil when none is kept."
+  (if (or (window-live-p window) (drgnx-grid--atom-root-p window))
+      (let ((id (window-parameter (drgnx-grid--main-of window) 'drgnx-tile-id))) (and (memq id keep) id))
+    (let ((kids (delq nil (mapcar (lambda (c) (drgnx-grid--live-shape c keep)) (drgnx-grid--children window)))))
+      (if (cdr kids) (cons (if (window-left-child window) 'row 'col) kids) (car kids)))))
+
+(defun drgnx-grid--tree-shape (node keep)
+  "NODE restricted to the ids KEEP, as `drgnx-grid--live-shape' gives it."
+  (if (memq (car node) '(tile editor))
+      (let ((id (plist-get (cdr node) :id))) (and (memq id keep) id))
+    (let ((kids (delq nil (mapcar (lambda (c) (drgnx-grid--tree-shape c keep)) (nthcdr 5 node)))))
+      (if (cdr kids) (cons (car node) kids) (car kids)))))
+
+(defun drgnx-grid--split-new (window side limit)
+  "A new window split off WINDOW on SIDE, half of it; LIMIT: a parent of their own (`window-combination-limit')."
+  (let ((drgnx-rules--placing t) (window-combination-limit limit) (window-combination-resize nil)
+        (ignore-window-parameters t) (window-resize-pixelwise t) (window-min-width 1) (window-min-height 1))
+    (split-window window nil side t)))
+
+(defun drgnx-grid--grow (node w keep)
+  "Make NODE's windows from W, the live or internal window holding the part of NODE that has kept tiles (all of it
+when none has).  Only splits: W and the kept windows stay.  Returns ((NODE . WINDOW)…) for every node."
+  (if (memq (car node) '(tile editor))
+      (list (cons node w))
+    (let* ((children (nthcdr 5 node)) (n (length children)) (row (eq (car node) 'row))
+           (kept (mapcar (lambda (c) (and (drgnx-grid--tree-shape c keep) t)) children))
+           (wins (make-vector n nil)) (out nil))
+      (if (> (cl-count t kept) 1)
+          ;; W is the matching row or col: its children are the kept children's windows, in order
+          (let ((live (drgnx-grid--children w)))
+            (dotimes (i n) (when (nth i kept) (aset wins i (pop live))))
+            (push (cons node w) out))
+        (aset wins (or (cl-position t kept) 0) w))
+      ;; the others split off their neighbours: after a kept one to its right (below), before it to its left (above)
+      (let ((first (cl-position-if #'identity wins)) (own (not (> (cl-count t kept) 1))))
+        (cl-loop for i from (1+ first) below n
+                 unless (aref wins i)
+                 do (aset wins i (drgnx-grid--split-new (aref wins (1- i)) (if row 'right 'below) (prog1 own (setq own nil)))))
+        (cl-loop for i downfrom (1- first) to 0
+                 unless (aref wins i)
+                 do (aset wins i (drgnx-grid--split-new (aref wins (1+ i)) (if row 'left 'above) (prog1 own (setq own nil)))))
+        (unless (> (cl-count t kept) 1) (push (cons node (window-parent (aref wins first))) out)))
+      (dotimes (i n)
+        (setq out (nconc out (drgnx-grid--grow (nth i children) (aref wins i) keep))))
+      out)))
+
+(defun drgnx-grid--size (node window scale)
+  "Give WINDOW's children (NODE's) their sizes: NODE's logical :px at SCALE when they add up to WINDOW's size, else
+their :share of it; pixelwise, each taking from the next."
+  (let* ((children (nthcdr 5 node)) (row (eq (car node) 'row)) (kids (drgnx-grid--children window))
+         (total (window-size window row t))
+         (pxs (mapcar (lambda (c) (drgnx-grid-tree-from-logical (plist-get (cdr c) :px) scale)) children))
+         (targets (if (= (apply #'+ pxs) total) pxs
+                    (let ((left total))
+                      (cl-loop for (c . more) on children
+                               collect (if more (let ((p (round (* (or (plist-get (cdr c) :share) (/ 1.0 (length children)))
+                                                                   total))))
+                                                  (setq left (- left p)) p)
+                                         left))))))
+    (when (= (length kids) (length children))
+      ;; each window's trailing edge moved to its target, so only the next window gives or takes the difference
+      (cl-loop for k in kids for target in targets for more on kids
+               when (cdr more)
+               do (let ((window-resize-pixelwise t) (delta (- target (window-size k row t))))
+                    (unless (zerop delta) (ignore-errors (adjust-window-trailing-edge k delta row t))))))))
+
+(defun drgnx-grid--sized (frame fn)
+  "Call FN with FRAME's preserved sizes (`window-preserve-size') lifted, so it may set any size; then every window that
+had one keeps the size it has now."
+  (let ((kept (delq nil (mapcar (lambda (w) (let ((p (window-parameter w 'window-preserved-size))) (and p (cons w p))))
+                                (window-list frame 'nomini)))))
+    (dolist (e kept) (set-window-parameter (car e) 'window-preserved-size nil))
+    (unwind-protect (funcall fn)
+      (pcase-dolist (`(,w _ ,width ,height) kept)
+        (when (window-live-p w)
+          (when width (window-preserve-size w t t))
+          (when height (window-preserve-size w nil t)))))))
+
+(defun drgnx-grid--fill-leaf (node w frame)
+  "Give W, a window made for leaf NODE, what NODE shows: an editor's buffers, a docked area or the side bar, or a tool
+tile's stack (an unknown kind shows its placeholder)."
+  (let* ((p (cdr node)) (id (plist-get p :id)) (state (plist-get p :state)) (dock (plist-get p :dock)))
+    (when id (set-window-parameter w 'drgnx-tile-id id))
+    (set-window-parameter w 'no-delete-other-windows t)
+    (pcase (car node)
+      ('editor
+       (let* ((tabs (delq nil (mapcar #'drgnx-grid--named-buffer (plist-get p :tabs))))
+              (shown (or (drgnx-grid--named-buffer (plist-get p :shown)) (car tabs) (get-scratch-buffer-create))))
+         (set-window-dedicated-p w nil)
+         (set-window-buffer w shown)
+         (set-window-parameter w 'drgnx-tabs tabs)
+         (when (plist-get p :start) (set-window-start w (plist-get p :start) t))
+         (when (plist-get p :point) (set-window-point w (plist-get p :point)))
+         (drgnx-grid--adopt w)))
+      (_
+       (when dock (set-window-parameter w 'drgnx-tile-dock dock))
+       ;; the area and the side bar make their window through `drgnx-grid-split-dock', which hands them W
+       (cond ((plist-get state :area)
+              (let ((drgnx-grid--into w)) (drgnx-wb-area-show (plist-get state :area) (plist-get p :shown))))
+             ((memq 'side-bar (plist-get p :kinds))
+              (when-let* ((view (plist-get state :view))) (set-frame-parameter frame 'drgnx-wb-view view))
+              (let ((drgnx-grid--into w)) (drgnx-wb-show-sidebar)))
+             (t (drgnx-grid--tool-tile w (or (plist-get p :kinds) (list (plist-get p :shown))) frame
+                                       (and dock (drgnx-grid--horizontal-dock-p dock)))
+                (drgnx-grid--put-row w)))))))
+
+(defun drgnx-grid--delete-leaf (window)
+  "Delete the tile held by WINDOW (live, or an atom's root) as it is, its space to its siblings."
+  (let ((ignore-window-parameters t) (window-combination-resize nil))
+    (ignore-errors (delete-window window))))
+
+(defun drgnx-grid--leaf-windows (frame)
+  "The windows holding one tile each under FRAME's grid root: live windows and atoms' roots."
+  (let (out)
+    (cl-labels ((walk (w) (if (or (window-live-p w) (drgnx-grid--atom-root-p w)) (push w out)
+                            (mapc #'walk (drgnx-grid--children w)))))
+      (walk (drgnx-grid-root frame)))
+    (nreverse out)))
+
+(defun drgnx-grid-apply-tree (tree &optional frame)
+  "Arrange FRAME's grid as TREE (`drgnx-grid-tree').  An invalid TREE changes nothing and gives one warning.
+The live tiles whose ids TREE holds stay (the same windows), the others are deleted and TREE's missing tiles split off
+the kept ones; sizes are TREE's logical pixels at FRAME's scale (its shares when those do not add up).  An unknown kind
+shows its placeholder.  No buffer is killed: an editor tile leaving the grid gives its tabs to the editor you used
+last.  When the kept tiles are arranged otherwise than TREE has them, only the first stays.  Non-nil when applied."
+  (let ((frame (or frame (selected-frame))))
+    (if (not (drgnx-grid-valid-tree-p tree))
+        (progn (drgnx-notify 'workbench 'warn "A saved arrangement of the tiles was not valid; nothing changed") nil)
+      (with-selected-frame frame
+        (drgnx-grid--adopt-editors frame)
+        (let* ((ids (drgnx-grid--tree-ids tree)) (orphans nil)
+               (selected (selected-window)))
+          ;; the tiles TREE does not hold go (an editor's tabs stay with the editors)
+          (dolist (w (drgnx-grid--leaf-windows frame))
+            (let ((main (drgnx-grid--main-of w)))
+              (unless (memq (window-parameter main 'drgnx-tile-id) ids)
+                (when (and (drgnx-grid-editor-tile-p main) (cdr (drgnx-grid--leaf-windows frame)))
+                  (setq orphans (append orphans (drgnx-chrome-tabs main) (list (window-buffer main)))))
+                (when (cdr (drgnx-grid--leaf-windows frame)) (drgnx-grid--delete-leaf w)))))
+          (let* ((leaves (drgnx-grid--leaf-windows frame))
+                 (keep (delq nil (mapcar (lambda (w) (car (memq (window-parameter (drgnx-grid--main-of w) 'drgnx-tile-id) ids)))
+                                         leaves))))
+            ;; kept tiles arranged otherwise than TREE: keep the first only
+            (unless (equal (drgnx-grid--live-shape (drgnx-grid-root frame) keep) (drgnx-grid--tree-shape tree keep))
+              (let ((first (seq-find (lambda (id) (memq id keep)) ids)))
+                (dolist (w leaves)
+                  (unless (eql (window-parameter (drgnx-grid--main-of w) 'drgnx-tile-id) first)
+                    (when (and (drgnx-grid-editor-tile-p (drgnx-grid--main-of w)) (cdr (drgnx-grid--leaf-windows frame)))
+                      (setq orphans (append orphans (drgnx-chrome-tabs (drgnx-grid--main-of w)))))
+                    (when (cdr (drgnx-grid--leaf-windows frame)) (drgnx-grid--delete-leaf w))))
+                (setq keep (and first (list first)))))
+            ;; nothing kept: TREE's first leaf gets a plain window in place of the one left
+            (unless keep
+              (let* ((last (car (drgnx-grid--leaf-windows frame))) (main (drgnx-grid--main-of last))
+                     (fresh (drgnx-grid--split-new last 'right t)))
+                (when (drgnx-grid-editor-tile-p main)
+                  (setq orphans (append orphans (drgnx-chrome-tabs main) (list (window-buffer main)))))
+                (drgnx-grid--delete-leaf last)
+                (set-window-dedicated-p fresh nil)))
+            (let* ((scale (drgnx-pixels-scale frame))
+                   (made (drgnx-grid--grow tree (drgnx-grid-root frame) keep)))
+              (pcase-dolist (`(,node . ,w) made)
+                (when (and (memq (car node) '(tile editor)) (window-live-p w)
+                           (not (memq (window-parameter w 'drgnx-tile-id) keep)))
+                  (drgnx-grid--fill-leaf node w frame)))
+              (drgnx-grid--sized
+               frame (lambda ()
+                       (pcase-dolist (`(,node . ,w) made)
+                         (when (and (memq (car node) '(row col)) (window-valid-p w)) (drgnx-grid--size node w scale)))))
+              (let ((top (apply #'max 0 ids)))
+                (when (> top (or (frame-parameter frame 'drgnx-grid-next-id) 0))
+                  (set-frame-parameter frame 'drgnx-grid-next-id top)))))
+          ;; the leaving editors' buffers become tabs of the editor you used last
+          (when-let* ((orphans (seq-filter #'buffer-live-p (delete-dups orphans)))
+                      (mru (or (drgnx-state-editor-window frame) (car (drgnx-grid-tiles frame 'editor)))))
+            (set-window-parameter mru 'drgnx-tabs
+                                  (append (window-parameter mru 'drgnx-tabs)
+                                          (seq-remove (lambda (b) (memq b (window-parameter mru 'drgnx-tabs))) orphans))))
+          (when (window-live-p selected) (select-window selected 'norecord))
+          (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply frame))
+          t)))))
+
+;;; Full size
+
+(defun drgnx-grid--keep-only (window)
+  "Delete every tile of WINDOW's frame but WINDOW's (its atom stays whole), past `no-delete-other-windows'."
+  (let ((mine (drgnx-grid--tile-root window)))
+    (dolist (w (drgnx-grid--leaf-windows (window-frame window)))
+      (unless (eq w mine) (drgnx-grid--delete-leaf w)))))
+
+(defun drgnx-grid-full-size-p (&optional frame)
+  "Non-nil while a tile of FRAME shows full size: (ID . TREE), the tile and the tree it goes back to."
+  (frame-parameter frame 'drgnx-grid-full))
+
+(defun drgnx-grid--full-note (count)
+  "The note a full-size tile's tab row starts with: \"Full size · 1 of COUNT · KEY back\"."
+  (let ((key (substitute-command-keys "\\[drgnx-grid-full-size-toggle]")))
+    (propertize (format " Full size · 1 of %d · %s back " count
+                        (if (string-prefix-p "M-x " key) "tile-full-size" key))
+                'face 'shadow)))
+
+(defun drgnx-grid-forget-full-size (&optional frame)
+  "FRAME shows no tile full size any more, though its tiles stay as they are (a layout put its own arrangement back).
+The saved tree, or nil when there was none."
+  (when-let* ((full (drgnx-grid-full-size-p frame)))
+    (set-frame-parameter frame 'drgnx-grid-full nil)
+    (dolist (w (window-list frame 'nomini)) (set-window-parameter w 'drgnx-grid-full-note nil))
+    (cdr full)))
+
+(defun drgnx-grid-leave-full-size (&optional frame)
+  "Back from full size on FRAME, when it shows one: the saved tree, exact (`drgnx-grid-apply-tree')."
+  (when-let* ((tree (drgnx-grid-forget-full-size frame)))
+    (drgnx-grid-apply-tree tree frame)))
+
+(defun drgnx-grid-full-size-toggle (&optional window)
+  "Show WINDOW's tile (default: the selected window's) alone, at the grid's full size; again to put every tile back
+as it was.  The tab row says so, with the key back."
+  (interactive)
+  (let* ((window (or window (selected-window))) (frame (window-frame window)))
+    (if (drgnx-grid-full-size-p frame)
+        (drgnx-grid-leave-full-size frame)
+      (let* ((main (drgnx-grid--main-of (drgnx-grid--tile-root window)))
+             (tree (drgnx-grid-tree frame)))
+        (set-frame-parameter frame 'drgnx-grid-full (cons (drgnx-grid-tile-id main) tree))
+        (drgnx-grid--keep-only main)
+        (set-window-parameter main 'drgnx-grid-full-note (drgnx-grid--full-note (length (drgnx-grid-tree-leaves tree))))
+        (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply frame))))))
 
 ;; The side bar as one kind: the left dock with the current view's sections (the flow plan's places show it).
 (drgnx-pane-define-kind 'side-bar :title "Side Bar" :home 'left :sidebar t)

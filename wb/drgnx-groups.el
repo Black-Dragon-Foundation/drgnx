@@ -28,6 +28,7 @@
 (declare-function drgnx-grid-split-tile "drgnx-grid" (window side))
 (declare-function drgnx-grid-pick-kind "drgnx-grid" (window))
 (declare-function drgnx-grid--adopt "drgnx-grid" (window))
+(declare-function drgnx-grid-leave-full-size "drgnx-grid" (&optional frame))
 
 (defun drgnx-groups--on-tile-p ()
   "Non-nil when the grid is on and the selected window belongs to a tool tile (a dock, the panel, a moved kind)."
@@ -35,7 +36,9 @@
 
 (defun drgnx-groups--split (side)
   "Split the editor group you are in on SIDE, the new one showing its file.  On a tool tile (the grid on), a new tile
-beside the whole tile instead, showing what you pick (`drgnx-grid-pick-kind')."
+beside the whole tile instead, showing what you pick (`drgnx-grid-pick-kind').  With the grid on, a tile shown full
+size comes back first, with every other tile."
+  (when (drgnx-wb-grid-p) (drgnx-grid-leave-full-size))
   (if (drgnx-groups--on-tile-p)
       (let ((new (drgnx-grid-split-tile (selected-window) side)))
         (drgnx-grid-pick-kind new)

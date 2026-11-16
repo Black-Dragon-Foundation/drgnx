@@ -1530,7 +1530,8 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-run-no-debug ; Run Without Debugging's C-F5
                               inbox-open inbox-next inbox-previous inbox-press inbox-escape ; the inbox
                               terminal-toggle   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
-                              face-menu))       ; a lone Alt opens the menu (Nidhogg's `lone-alt')
+                              face-menu         ; a lone Alt opens the menu (Nidhogg's `lone-alt')
+                              tile-full-size))  ; the grid's Full-Size Tile (C-k C-m, C-k RET)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

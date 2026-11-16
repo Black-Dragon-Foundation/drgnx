@@ -709,14 +709,21 @@ it, so without this the next redisplay may keep the old line (the window's text 
     (set-window-parameter w param value)
     (with-current-buffer (window-buffer w) (force-mode-line-update))))
 
+(defun drgnx-chrome--full (w value)
+  "W's tab line VALUE after the grid's note on a tile shown full size (`drgnx-grid-full-note'), when it has one."
+  (if-let* ((full (window-parameter w 'drgnx-grid-full-note)))
+      (if (memq value '(nil none)) full (list full value))
+    value))
+
 (defun drgnx-chrome--apply-window (w note)
   (pcase (drgnx-chrome--role w)
     ('editor
      (when note (drgnx-chrome--note w))
      (drgnx-chrome--set w 'tab-line-format
-                        (if (buffer-local-value 'drgnx-chrome-own-tab-line (window-buffer w))
-                            drgnx-chrome--own-tab-line
-                          (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s))))
+                        (drgnx-chrome--full
+                         w (if (buffer-local-value 'drgnx-chrome-own-tab-line (window-buffer w))
+                               drgnx-chrome--own-tab-line
+                             (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s)))))
      (drgnx-chrome--set w 'header-line-format
                         (with-current-buffer (window-buffer w)
                           (cond ((and (local-variable-p 'header-line-format) header-line-format)
@@ -735,11 +742,11 @@ it, so without this the next redisplay may keep the old line (the window's text 
      (drgnx-chrome--set w 'mode-line-format (drgnx-chrome--editor-mode-line w)))
     ((or 'dock 'area)
      ;; the sidebar island's header row (`drgnx-wb-island-refresh') on the dock's top window
-     (drgnx-chrome--set w 'tab-line-format (or (window-parameter w 'drgnx-wb-island) 'none))
+     (drgnx-chrome--set w 'tab-line-format (drgnx-chrome--full w (or (window-parameter w 'drgnx-wb-island) 'none)))
      (drgnx-chrome--set w 'mode-line-format 'none))
     ('tile
      ;; a grid's tool tile: the tab row of its stack (`drgnx-grid--put-row'), no mode line
-     (drgnx-chrome--set w 'tab-line-format (or (window-parameter w 'drgnx-grid-tab-row) 'none))
+     (drgnx-chrome--set w 'tab-line-format (drgnx-chrome--full w (or (window-parameter w 'drgnx-grid-tab-row) 'none)))
      (drgnx-chrome--set w 'mode-line-format 'none))
     ('lane
      (dolist (p '(tab-line-format mode-line-format)) (drgnx-chrome--set w p 'none)))))

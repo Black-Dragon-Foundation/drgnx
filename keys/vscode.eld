@@ -532,6 +532,7 @@
               (split-editor-right "C-\\")
               (split-editor-down "C-k C-\\")
               (close-group :none "in the palette (VS Code has no default key)")
+              (tile-full-size "C-k C-m" "C-k RET")
               (close-group-editors "C-k w")
               (focus-group-1 "C-1" "M-1")
               (focus-group-2 "C-2" "M-2")

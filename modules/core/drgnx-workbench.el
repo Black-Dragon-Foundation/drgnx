@@ -9,6 +9,7 @@
 (require 'drgnx-memo)
 (declare-function drgnx-signal-mode "drgnx-signal")
 (declare-function drgnx-grid-mode "drgnx-grid")
+(declare-function drgnx-grid-full-size-toggle "drgnx-grid" (&optional window))
 (declare-function drgnx-state-mode "drgnx-state")
 (declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-state-intent--user-resized "drgnx-state-intent")
@@ -119,6 +120,14 @@ another buffer (BUFFER-NAME) is left as it was."
                        ;; not side windows (docs/develop/core.md, "The grid").
                        (require 'drgnx-grid)
                        (drgnx-grid-mode 1)
+                       (drgnx-command-define 'tile-full-size :category "View" :title "Full-Size Tile" :scope 'window
+                                             :command #'drgnx-grid-full-size-toggle
+                                             :doc "Show this tile alone, at the grid's full size; again to put every tile back as it was")
+                       ;; Emacs's and Vim's "this window only" keys (C-x 1, C-w o, C-w _, C-w |) toggle full size:
+                       ;; the other tiles come back, where `delete-other-windows' would lose the layout
+                       (dolist (cmd '(delete-other-windows evil-window-delete-others evil-window-set-height
+                                                           evil-window-set-width))
+                         (drgnx-module-define-key 'global-map (vector 'remap cmd) #'drgnx-grid-full-size-toggle))
                        (require 'drgnx-popup)
                        ;; A warning is logged and counted on the status bar, never shown by itself (as VS Code's Output)
                        (drgnx-module-advice 'display-warning :around quiet-warning (fn type message &optional level buffer-name)

@@ -81,3 +81,12 @@
     (drgnx-state-sync)
     (should-error (drgnx-groups-close) :type 'user-error)
     (should (= 1 (length (drgnx-grid-tiles nil 'editor))))))
+
+(ert-deftest drgnx-grid-editor/c-x-1-is-the-full-size-toggle ()
+  ;; C-x 1 and Vim's C-w o, C-w _ and C-w | would lose the layout: with the workbench on they toggle full size
+  (require 'drgnx)
+  (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+  (drgnx-test-with-modules '(core/workbench)
+    (dolist (cmd '(delete-other-windows evil-window-delete-others evil-window-set-height evil-window-set-width))
+      (should (eq (command-remapping cmd nil global-map) 'drgnx-grid-full-size-toggle)))
+    (should (eq (key-binding (kbd "C-x 1")) 'drgnx-grid-full-size-toggle))))

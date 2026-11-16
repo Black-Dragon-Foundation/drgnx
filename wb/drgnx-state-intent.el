@@ -52,7 +52,9 @@ KEY and SUBKEY, and where the answer comes from until the grid:
   `:view'       — the sidebar's view (`drgnx-wb-view'), also one no module defines now;
   `:layout', `:previous', `:zen-return' — the layout applied, the one before, Zen's return (layouts' own
                   parameters; read-only until B10);
-  `:places', `:arrangement' — nil until the grid.
+  `:arrangement' — the arrangement a tile shown full size goes back to: (ID . TREE), `drgnx-grid-full' (read-only:
+                  the grid's full size writes it); nil when no tile shows full size;
+  `:places'     — nil until the grid.
 BY is who asked (`drgnx-state-intent-bys'), nil when nobody said."
   (let ((frame (or frame (selected-frame))))
     (when (frame-live-p frame)
@@ -74,7 +76,8 @@ BY is who asked (`drgnx-state-intent-bys'), nil when nobody said."
                (nreverse out)))))
         (:view (frame-parameter frame 'drgnx-wb-view))
         ((or :layout :previous :zen-return) (frame-parameter frame (alist-get key drgnx-state-intent--layouts)))
-        ((or :places :arrangement) nil)
+        (:arrangement (frame-parameter frame 'drgnx-grid-full))
+        (:places nil)
         (_ (error "drgnx-state-intent: no intent %S" key))))))
 
 (defun drgnx-state-intent--record (frame key subkey by)

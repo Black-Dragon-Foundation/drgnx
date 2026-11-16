@@ -287,7 +287,7 @@ commands, so the workbench keeps its editor groups, tabs and layout (the key tip
 | `:sp [FILE]`, `C-w s` | Split Editor Down (`FILE` opens in the new group) |
 | `:vs [FILE]`, `C-w v` | Split Editor Right (`FILE` opens in the new group) |
 | `C-w c`, `:clo` | Close Tile |
-| `C-w o` | Close the other editor groups (the sidebar, the panel and the right dock stay) |
+| `C-w o`, `C-w _`, `C-w \|` | Full-Size Tile: this tile alone; again to put every tile back |
 | `:new [FILE]`, `C-w n` | A new editor group below with an empty buffer (`FILE` opens there) |
 | `:bd[!]` | Kill the buffer; each group showing it closes that tab and goes on with its next one, no group is closed |
 | `:q`, `ZQ` | Close Tab when the group has other tabs, else Close Tile when there is another group, else Close Window |

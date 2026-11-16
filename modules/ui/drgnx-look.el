@@ -635,6 +635,11 @@ only the one remap is reapplied."
 (declare-function drgnx-wb-area-window "drgnx-area")
 (declare-function drgnx-wb-area-hide "drgnx-area")
 (declare-function drgnx-wb-area-show "drgnx-area")
+(declare-function drgnx-wb-grid-p "drgnx-wb")
+(declare-function drgnx-wb-editor-window "drgnx-wb")
+(declare-function drgnx-grid-full-size-p "drgnx-grid" (&optional frame))
+(declare-function drgnx-grid-full-size-toggle "drgnx-grid" (&optional window))
+(declare-function drgnx-grid-leave-full-size "drgnx-grid" (&optional frame))
 
 (defun drgnx-look--margins (on)
   "Zen's centring of every editor window while ON (`drgnx-margins': the other claims stay)."
@@ -642,8 +647,27 @@ only the one remap is reapplied."
     (drgnx-margins-centre w (and on (max 0 (/ (- (window-total-width w) drgnx-look-zen-width) 2))))))
 
 (defun drgnx-look-zen ()
-  "Only the text: hide the sidebar, panel and right dock, centre the text; again to give them back."
+  "Only the text: hide the sidebar, panel and right dock, centre the text; again to give them back.
+With the grid on, Zen is the editor's tile at full size (`drgnx-grid-full-size-toggle') with its text centred, and
+leaving it puts every tile back as it was."
   (interactive)
+  (if (and (fboundp 'drgnx-wb-grid-p) (drgnx-wb-grid-p))
+      (drgnx-look--zen-grid)
+    (drgnx-look--zen-docks)))
+
+(defun drgnx-look--zen-grid ()
+  (if (frame-parameter nil 'drgnx-look-zen)
+      (progn
+        (set-frame-parameter nil 'drgnx-look-zen nil)
+        (drgnx-look--margins nil)
+        (drgnx-grid-leave-full-size))
+    (let ((editor (if (drgnx-signal-editor-window-p (selected-window)) (selected-window) (drgnx-wb-editor-window))))
+      (unless (drgnx-grid-full-size-p) (drgnx-grid-full-size-toggle editor))
+      (select-window editor)
+      (set-frame-parameter nil 'drgnx-look-zen (list :on t))
+      (drgnx-look--margins t))))
+
+(defun drgnx-look--zen-docks ()
   (if-let* ((was (frame-parameter nil 'drgnx-look-zen)))
       (progn
         (set-frame-parameter nil 'drgnx-look-zen nil)

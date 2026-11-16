@@ -3265,6 +3265,33 @@ the middle), else `center` (a stack). A corner goes to the nearer side, a tie to
 N)` gives the switcher's letters: the home row first (`a s d f j k l ; g h`), then the other letters of a–z, at most 27.
 Test: `test/unit/grid-tree-test.el`.
 
+**A frame's tree.** `(drgnx-grid-tree &optional FRAME)` is FRAME's grid (`drgnx-grid-root`, the status bar's row left
+out) as a `TREE`, its sizes logical pixels at FRAME's scale. A docked area is a `tile` whose `:state` is `(:area
+AREA)`, the side bar one holding the kind `side-bar` with `(:view VIEW)`; an atom is one leaf (its main window's).
+`(drgnx-grid-apply-tree TREE &optional FRAME)` arranges FRAME as TREE and answers non-nil:
+
+- an invalid TREE changes nothing and gives one `drgnx-notify` warning;
+- the live tiles whose ids TREE holds stay, the same window objects; the others are deleted and TREE's missing tiles are
+  split off the kept ones (only splits, so the kept windows never move to another parent). When the kept tiles are
+  arranged otherwise than TREE has them, only the first stays and the rest is built around it;
+- sizes are TREE's `:px` at FRAME's scale when a container's children add up to its size, else their `:share`s, set
+  pixelwise by moving each child's trailing edge (`adjust-window-trailing-edge`), preserved sizes lifted for the call;
+- a docked area or the side bar fills its new window through its own show, which `drgnx-grid-split-dock` hands the
+  window (`drgnx-grid--into`); a tool tile shows its stack, an unknown kind its placeholder;
+- no buffer is killed: an editor tile leaving the grid gives its tabs to the editor you used last.
+
+**Full size.** `(drgnx-grid-full-size-toggle &optional WINDOW)`, the command `tile-full-size` (Full-Size Tile:
+`C-k C-m`, `C-k RET` · `C-x w m` · Vim's `C-w o`, `C-w _`, `C-w |`), saves `(ID . TREE)` in the frame parameter
+`drgnx-grid-full` (the `:arrangement` intent) and deletes every other tile of the grid (the status bar stays), past
+`no-delete-other-windows`. Again, `drgnx-grid-leave-full-size` applies the saved tree: the same edges, ±0 px at the
+same scale. While a tile is full size, every other grid command — a split, a tile shown, hidden, focused or resized, a
+dock toggled — leaves full size first, then acts. The full tile's tab line starts "Full size · 1 of N · KEY back"
+(window parameter `drgnx-grid-full-note`, read by the chrome; KEY from the profile). Workbench remaps
+`delete-other-windows`, `evil-window-delete-others`, `evil-window-set-height` and `evil-window-set-width` to it, so
+`C-x 1` and those Vim keys never lose the layout. Zen is full size plus centred text: View: Zen (`drgnx-look-zen`) and
+the Zen layout (`drgnx-layouts--zen`, its way back the layout's own: `drgnx-grid-forget-full-size`).
+Tests: `test/unit/grid-tree-live-test.el`, `test/ui/grid-full-size-gui-test.el`.
+
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 
 `drgnx-grid-mode` (global) makes `grid` the pane backend (`drgnx-pane-backend`): pane kinds then live in **tool
@@ -3727,7 +3754,8 @@ twice and the saved workbench (`workbench.eld`) does not change.
 | `:front` AREA | the tab in front | the area's `:tab` in `drgnx-wb-areas` |
 | `:view` | the sidebar's view, also one no module defines now | `drgnx-wb-view` |
 | `:layout`, `:previous`, `:zen-return` | read-only until B10 | `drgnx-layouts-current`, `-previous`, `-zen-return` |
-| `:places`, `:arrangement` | nil until the grid | — |
+| `:arrangement` | what a tile shown full size goes back to, `(ID . TREE)`; read-only (full size writes it) | `drgnx-grid-full` |
+| `:places` | nil until the grid | — |
 
 Without SUBKEY, `:sizes` and `:front` answer an alist of every home or area. FRAME nil is the selected frame.
 

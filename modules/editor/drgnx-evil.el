@@ -278,8 +278,7 @@ Installed with `evil-ex-define-cmd' when the engine starts and taken out when it
     (evil-window-vsplit . drgnx-evil-ex-split-right)
     (evil-window-delete . drgnx-evil-ex-close-group)
     (evil-window-new . drgnx-evil-ex-new)
-    (evil-delete-buffer . drgnx-evil-ex-delete-buffer)
-    (delete-other-windows . drgnx-evil-ex-only))
+    (evil-delete-buffer . drgnx-evil-ex-delete-buffer))
   "evil's window and quit commands and drgnx's replacement for each: `:around' advice while the engine runs.  Evil's
 own would act on its windows and could quit Emacs; the workbench keeps its groups, tabs and layout.  Each replacement
 calls evil's own command when the workbench is not on (`drgnx-evil-ex--workbench-p').")
@@ -454,17 +453,6 @@ group that shows it closes that tab and goes on with its next one; no group or w
           (with-selected-window g (drgnx-chrome-close-tab))))
       (with-current-buffer buf (set-buffer-modified-p nil))
       (kill-buffer buf))))
-
-(defun drgnx-evil-ex-only (orig &rest args)
-  "Advice around `delete-other-windows' when it is the command run (`C-w o', Vim's only): keep this editor group and
-close the other groups; the sidebar, the panel and the right dock stay.  In a dock it goes back to the editor you used
-last first.  Lisp callers of `delete-other-windows' get it unchanged."
-  (if (or (not (eq this-command 'delete-other-windows)) (not (drgnx-evil-ex--workbench-p)))
-      (apply orig args)
-    (when (drgnx-evil-ex--in-dock-p) (drgnx-evil-ex--run 'focus-editor))
-    (let ((keep (selected-window)))
-      (dolist (g (drgnx-groups-list))
-        (unless (eq g keep) (delete-window g))))))
 
 (defun drgnx-evil--ex-names (spec)
   "The names `evil-ex-define-cmd' defines for SPEC: \"w[rite]\" is w, wr, wri, writ, write."

@@ -341,7 +341,9 @@ Split the editor into **groups** — each an editor window with its own tabs —
 Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC w s`; the new group shows the same file;
 in a tool tile — a dock, the panel, the right side — a new tile beside the whole tile asks what it shows: Editor or
 any pane, which moves there from its dock), Close Tile (palette · `C-x 0` · `SPC w c`; an editor group closes and the
-last one stays, a tool tile hides), Close All Editors in Group (`C-k w`; the
+last one stays, a tool tile hides), Full-Size Tile (`C-k C-m` · `C-x w m`, also `C-x 1` · `C-w o`, `C-w _`, `C-w |`:
+this tile alone, its tab row saying "Full size · 1 of N · KEY back"; again, or any other tile command, puts every tile
+back exactly where it was; Zen is the same plus centred text), Close All Editors in Group (`C-k w`; the
 palette in the Emacs and Vim profiles; its tabs go, the files stay open; the group closes, or, the last one, shows
 `*scratch*`), Focus Group 1–3 (`C-1`–`C-3` · `C-x o` · `SPC 1`–`SPC 3`; one past the last makes a group to the right),
 Move Editor into Next Group (`C-M-<right>` · palette · `SPC w m`; a group left without tabs closes, as in VS Code),
