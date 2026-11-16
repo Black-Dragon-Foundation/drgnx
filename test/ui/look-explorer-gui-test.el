@@ -260,13 +260,12 @@ under the pointer."
 (drgnx-look-gui-deftest drgnx-ui-look-explorer/a-pointer-swept-down-the-docked-explorer-leaves-one-lit ()
   "Pattern D (mutter, the user's compositor; 8.png as the product runs): the Explorer docked in the workbench beside
 the Open section, ui/look on (cards, decoration boxes, the look's hover), Open's mouse sensors on through its own
-setup; the pointer sweeps down ten rows; only the row under it has the hover's tint.  Not under sway: ui/look's
-teardown leaves headless sway's frame 2 pixels shorter (reported), which every later row would fail on."
+setup; the pointer sweeps down ten rows; only the row under it has the hover's tint."
   :tags '(:compositor)
   (skip-unless (display-graphic-p))
   (skip-unless (boundp 'mouse-sensor-enabled))
   (let ((kind (drgnx-ui-look-explorer--pointer-kind)))
-    (skip-unless (eq kind 'mutter))
+    (skip-unless kind)
     (let* ((root (drgnx-uitest-root-frame))
            (dir (file-name-as-directory (make-temp-file "look-explorer-dock" t)))
            (config (with-selected-frame root (current-window-configuration)))
