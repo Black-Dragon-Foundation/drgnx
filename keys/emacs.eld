@@ -328,6 +328,7 @@
               (work-diff-reject-hunk "D")
               (work-who-is-here "C-c w h")
               (work-job-log "l" :map drgnx-work-detail-mode-map)
+              (work-move-machine "M")
               (agents-here-follow "RET")
               (agents-here-panel "o")
               (agents-here-quit "q")

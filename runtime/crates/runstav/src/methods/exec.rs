@@ -111,6 +111,10 @@ pub struct ExecRow {
     /// Its priority, 1 (the user's) to 5 (background work), as the hub set it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<u8>,
+    /// Why it was placed on `machine` and not elsewhere ("r1: about 4 min, warm cache; local: …", or "pinned by
+    /// you"); absent while it waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placed_why: Option<String>,
 }
 
 /// One argument: at most 4096 characters.

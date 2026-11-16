@@ -128,6 +128,7 @@ fn a_job_chip_links_to_its_agent() {
         started: 0,
         limit_min: None,
         keys: vec![],
+        why: None,
     });
     let c = core(vec![
         Event::Machines(vec![MachineFact {

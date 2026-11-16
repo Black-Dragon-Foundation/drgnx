@@ -277,16 +277,21 @@ fn coalescing_in_every_order() {
 }
 
 /// [D] A session whose job runs on a runner is drawn running on that runner's machine: the "runs on" edge points at
-/// the runner, and the agent's card carries the job.
+/// the runner, and the agent's card carries the job; its Detail says where it runs and why there.
 #[test]
 fn runner_job_runs_on_edge_points_at_the_runner() {
     let row: runstav::methods::exec::ExecRow = serde_json::from_value(json!({
         "id": "x1", "session": "s1", "kind": "other", "cwd": "/w", "name": "suite", "status": "running",
-        "started": 100.0, "timebox_s": 360, "machine": "desktop"
+        "started": 100.0, "timebox_s": 360, "machine": "desktop",
+        "placed_why": "desktop: about 6 min; local: every job slot of the machine is in use"
     }))
     .expect("a job row");
     let job = job_fact(&row, vec!["token".into()]);
     assert_eq!(job.runner.as_deref(), Some("desktop"));
+    assert_eq!(
+        job.why.as_deref(),
+        Some("desktop: about 6 min; local: every job slot of the machine is in use")
+    );
     assert_eq!(
         (job.name.as_str(), job.limit_min, job.keys.as_slice()),
         ("suite", Some(6), ["token".to_string()].as_slice())
@@ -344,6 +349,13 @@ fn runner_job_runs_on_edge_points_at_the_runner() {
     assert_eq!(
         a.fields.job.as_ref().map(|j| j.name.as_str()),
         Some("suite")
+    );
+    let lines = detail::lines(core.model(), Some(&a.id), 0);
+    assert!(
+        lines.iter().any(|l| l.0 == "head"
+            && l.1
+                == "Runs on desktop · why: desktop: about 6 min; local: every job slot of the machine is in use"),
+        "{lines:?}"
     );
 }
 

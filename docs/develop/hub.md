@@ -1499,6 +1499,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `job/stop` | user | `{id: Id}` | `JobSummary` | yes |
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
+| `machines/move` | user | `{machine: string, target: string}` | `{card?: string, moved: boolean, said: string}` | yes |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
 | `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit" \| "huddles" \| "debug.read" \| "debug.probe" \| "debug.fork" \| "debug.live-eval" \| "debug.drive", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
@@ -3795,6 +3796,29 @@ watched while it runs. Every 250 ms the hub reads `FILE.plan.json` and then `FIL
 each that changed since the last look and holds a JSON object it broadcasts `exec-progress {id, file, plan}` or
 `{id, file, step}`; one last look runs before `exec-done`, so the final step is never lost. The editor's jobs take
 these events instead of watching and reading the files themselves.
+
+**Where a job runs, and moving it.** Each placement records why (`runners/queue.rs`, `why_placed`): a job whose
+machine was named says "pinned by you" (`Placement.by_user`: the user's connection named it, moved it, or set its
+session's preference) or "pinned by its starter"; otherwise the machine chosen and its estimate come first, then every
+other candidate with the reason it was passed over (held for the head, refused by admission here, a filter's refusal
+in `wait_text`'s words, or just its estimate): "r1: about 4 min, warm cache; local: every job slot of the machine is in
+use". The text is `Row.placed_why`, the `ExecRow`'s `placed_why` (absent while the job waits; a requeue clears it), and
+the map's `JobFact.why`; the Detail of a job's agent says "Runs on r1 · why: …".
+
+`machines/move {target, machine}` (user class only; `work/machines.rs`, `move_to`) answers `{moved, card?, said}`:
+
+- `session:ID`: the session's next jobs that name no machine are pinned to `machine` (`Queue::prefer`, kept in memory;
+  a job that machine can't take is placed as before). A running turn is not moved.
+- `job:ID` of a waiting job: `Queue::move_job` pins it there (`by_user`) and the queue ticks; `moved: true`.
+- `job:ID` of a running job: nothing stops. The hub opens a `machine-move` card ("Restart make check on laptop? It
+  stops the run on desk", choices `restart` and `keep`) and answers its id. Only the card's Restart moves it
+  (`card_settled`): a job on a runner gets `attempts::Event::Move` (its attempt is cancelled there and requeued,
+  `Effect::Requeue` "moved by you", a late result kept as that attempt's); a job running here has no attempt to
+  requeue, so it is stopped and its start request (`Pending`) started again, pinned to the machine, as a new job.
+- The job's own machine is a no-op (`moved: false`). A machine the queue doesn't know (`no runner NAME`), a job that
+  runs here only, or a machine one of the placement filters refuses (trust, OS, features, the send and accept modes,
+  the matrix cell) is refused, `invalid-params` at `machine`; an unknown session or job at `target`. A runner that is
+  only benched, unreachable or draining is accepted: the job waits for it.
 
 ## Runners: the transport
 
