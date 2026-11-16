@@ -7,6 +7,7 @@
 //! and `held` (the tasks a gate holds: the needs-you chips).
 
 use crate::view::model::Doc;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::Measure;
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::view::{Display, ViewEnv};
@@ -43,32 +44,32 @@ pub(crate) enum Chip {
 
 /// The Flow's text faces (drgnx-work-flow.el: the UI font, the theme's tokens): the table's and cards' text (12 px),
 /// labels, headings.
-const TEXT: &str = "drgnx-work-flow-text";
-const LABEL: &str = "drgnx-work-flow-label";
-const HEAD: &str = "drgnx-work-flow-heading";
+const TEXT: &str = FaceId::WorkFlowText.name();
+const LABEL: &str = FaceId::WorkFlowLabel.name();
+const HEAD: &str = FaceId::WorkFlowHeading.name();
 /// The detail tile's text (12.5 px), its section heads (muted, semibold) and the agent's name on its head.
-const DTEXT: &str = "drgnx-work-flow-detail-text";
-const SECTION: &str = "drgnx-work-flow-section";
-const AGENT: &str = "drgnx-work-flow-agent";
+const DTEXT: &str = FaceId::WorkFlowDetailText.name();
+const SECTION: &str = FaceId::WorkFlowSection.name();
+const AGENT: &str = FaceId::WorkFlowAgent.name();
 /// A row's light under the pointer (the mockup's `--hover`).
-const HOVER: &str = "drgnx-hover";
+const HOVER: &str = FaceId::Hover.name();
 /// A key's badge (the keycap).
-const KEY: &str = "drgnx-work-flow-key";
+const KEY: &str = FaceId::WorkFlowKey.name();
 /// The detail's actions (`.btn`), the first one primary (`.btn.pri`) with its key in its colour.
-const BUTTON: &str = "drgnx-work-flow-button";
-const BUTTON_PRI: &str = "drgnx-work-flow-button-primary";
-const KEY_PRI: &str = "drgnx-work-flow-key-primary";
-const BUTTON_KEY: &str = "drgnx-work-flow-button-key";
+const BUTTON: &str = FaceId::WorkFlowButton.name();
+const BUTTON_PRI: &str = FaceId::WorkFlowButtonPrimary.name();
+const KEY_PRI: &str = FaceId::WorkFlowKeyPrimary.name();
+const BUTTON_KEY: &str = FaceId::WorkFlowButtonKey.name();
 /// The detail's action rows, logical px (`.detail .acts`: 24 px buttons, 6 px apart).
 const ACT_ROW: f32 = 30.0;
 /// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
-const CARD: &str = "drgnx-work-flow-card";
-const CARD_TEXT: &str = "drgnx-work-flow-card-text";
-const CARD_LABEL: &str = "drgnx-work-flow-card-label";
-const CARD_HEAD: &str = "drgnx-work-flow-card-heading";
+const CARD: &str = FaceId::WorkFlowCard.name();
+const CARD_TEXT: &str = FaceId::WorkFlowCardText.name();
+const CARD_LABEL: &str = FaceId::WorkFlowCardLabel.name();
+const CARD_HEAD: &str = FaceId::WorkFlowCardHeading.name();
 /// Names in the code font (a check's selector, a tip), and its card twin.
-const CODE: &str = "drgnx-work-flow-code";
-const CARD_CODE: &str = "drgnx-work-flow-card-code";
+const CODE: &str = FaceId::WorkFlowCode.name();
+const CARD_CODE: &str = FaceId::WorkFlowCardCode.name();
 /// The text property that marks a block Glitnir draws over the rows (`glitnir-blocks`): `["ring", ID, X0, X1]` on a
 /// card's span of each of its rows, `["rule", KEY, X0, X1]` on a row with a hairline under it (device px).
 const BLOCK: &str = "drgnx-work-flow-block";
@@ -77,11 +78,11 @@ impl Chip {
     /// The chip's face.
     pub(crate) fn face(self) -> &'static str {
         match self {
-            Chip::Ok => "drgnx-work-flow-chip-ok",
-            Chip::Run => "drgnx-work-flow-chip-run",
-            Chip::Held => "drgnx-work-flow-chip-held",
-            Chip::Err => "drgnx-work-flow-chip-err",
-            Chip::Wait => "drgnx-work-flow-chip-wait",
+            Chip::Ok => FaceId::WorkFlowChipOk.name(),
+            Chip::Run => FaceId::WorkFlowChipRun.name(),
+            Chip::Held => FaceId::WorkFlowChipHeld.name(),
+            Chip::Err => FaceId::WorkFlowChipErr.name(),
+            Chip::Wait => FaceId::WorkFlowChipWait.name(),
             Chip::Na => LABEL,
         }
     }
@@ -811,7 +812,7 @@ pub(crate) fn flow_rows(
         b.prop(start, end, "drgnx-work-id", json!(t.id));
         b.prop(start, end, "mouse-face", json!(HOVER));
         if let Some(card) = t.card {
-            b.prop(start, end, "drgnx-work-card", json!(card));
+            b.prop(start, end, FaceId::WorkCard.name(), json!(card));
         }
         rule(&mut b, &format!("task:{}", t.id), env);
         rows.push(b.finish());
@@ -1436,7 +1437,7 @@ pub(crate) fn detail_tile(
     let end = head.pos();
     head.prop(start, end, "drgnx-work-id", json!(t.id));
     if let Some(card) = t.card {
-        head.prop(start, end, "drgnx-work-card", json!(card));
+        head.prop(start, end, FaceId::WorkCard.name(), json!(card));
     }
     let mut out = vec![title, head.finish()];
     // under it the task and the agent's time, spend and context (the map's), else where the task stands
@@ -2196,6 +2197,8 @@ mod tests {
             tty_widths: vec![],
             tz: String::new(),
             reduced_motion: false,
+            glyphs: Vec::new(),
+            density: Default::default(),
             attach: false,
             rows_in_sja: false,
             headless: false,
@@ -2260,7 +2263,7 @@ mod tests {
             assert!(
                 held.props
                     .iter()
-                    .any(|p| p.2 == "drgnx-work-card" && p.3 == json!(42))
+                    .any(|p| p.2 == FaceId::WorkCard.name() && p.3 == json!(42))
             );
             let stops: Vec<u32> = held.stops.iter().map(|s| s.1).collect();
             assert_eq!(stops.len(), 7);
@@ -2559,7 +2562,7 @@ mod tests {
             rows[1]
                 .props
                 .iter()
-                .any(|p| p.2 == "drgnx-work-card" && p.3 == json!(42))
+                .any(|p| p.2 == FaceId::WorkCard.name() && p.3 == json!(42))
         );
         for want in [
             "Why it is held",
@@ -2782,7 +2785,7 @@ mod tests {
         assert!(
             head.props
                 .iter()
-                .any(|p| p.2 == "drgnx-work-card" && p.3 == json!(42))
+                .any(|p| p.2 == FaceId::WorkCard.name() && p.3 == json!(42))
         );
         let (_, svg) = images
             .iter()

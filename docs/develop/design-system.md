@@ -13,10 +13,42 @@ with it.
 | `components/*.md` | by hand; each has a dark and a light picture in `img/` cut from the look scenes |
 | `index.md`, `app-icon.md`, `theme-authors.md`, `book.css` | by hand (`book.css` only reads the custom properties of the generated `tokens.css`) |
 
+## Token tiers
+
+The token table has two tiers. The **semantic** tier is the roles: surfaces, text, borders, hover, selection, focus,
+status and agent colours, named by the faces in `core/drgnx-faces.el`. The **component** tier holds only what one
+component of the kit needs of its own, named `COMPONENT-SLOT[-STATE]` with the component's id first
+(`button-primary-bg`, `key-hint-edge`), and its value is always a reference to the semantic tier: a token,
+`(tint TOKEN . ALPHA)` or `(over BASE TOKEN . ALPHA)`, never a literal. `drgnx-design-token-tier` says which tier a
+token is in, and the tokens page has a *Tier* column. The tests hold the tier to that
+(`drgnx-design/component-tokens-are-references`) and to the contrast bars (`drgnx-lint/contrast-component-tokens`:
+text on a primary button 4.5:1, 7:1 in high contrast; the edges a control is found by 3:1 on the panel, which is why
+dark and light build them from `subtle` rather than the 1.3:1 separator borders).
+
+Under a third-party theme `drgnx-look-derive` solves the colours the theme does not give; when it has to move one of
+the theme's own (a `shadow` too faint for muted text), it clamps it to the bar and says so in one notice of the `look`
+source, which the next run updates or clears, never a second one and never a prompt.
+
+## Generated code
+
+`bin/drgnx design` also writes code, beside the pages (`drgnx-design-code-makers`, paths relative to the checkout), so
+`cargo build` never needs Emacs:
+
+| File | Made from |
+|---|---|
+| `runtime/crates/drgnx-rows/src/faces.rs` | `FaceId`: every `(defface NAME` in `core/`, `wb/` and `modules/` (read as text: a face a loop defines is not seen), the kit's faces and the faces a view patch may name. A variant is the name without `drgnx-` in UpperCamelCase (`drgnx-text-muted` is `TextMuted`); `name()` and `from_name()` go between the two; a numbered family (`NAME-1`… or `NAME-0`…, two or more) is also an associated array (`FaceId::AGENT`, `FaceId::WORK_WHO`, `FaceId::TERM_COLOR`), indexed by the number less the first |
+| `runtime/crates/drgnx-rows/src/kit_gen.rs` | `etc/ui/components.eld`: `CompId`, `State` (serde: its name, `"selected-inactive"`), `STATES` (each state but rest with its semantic face), `GLYPHS` (the glyphs the components name, `(name, Unicode, ASCII)`) and per component `geom(id, variant)`, `label(id, variant)` and `face(id, variant)`; a variant slice names variant values and, optionally, a density (`"compact"`, `"comfortable"`, the default, `"roomy"`) |
+| `etc/ui/faces.eld` | the same face list, for Lisp |
+
+Both Rust files are `#[rustfmt::skip]` in `lib.rs`: their layout is the generator's. `bin/drgnx design --check` lists a
+stale code file as it does a stale page, and `drgnx-design/code-files-are-current` fails the unit suite; the Rust test
+`runtime/crates/drgnx-rows/tests/faces.rs` checks every face's name reads back and the kit tables answer. The check
+runner's `cargo` stage runs `drgnx-rows`' clippy and tests.
+
 ## Regenerating
 
 ```sh
-bin/drgnx design            # write the generated pages
+bin/drgnx design            # write the generated pages and code
 bin/drgnx design --check    # list the stale ones, exit 1 when there is any
 bin/drgnx design --shots SCENES-DIR...   # cut the component pictures from look-scene output
 ```

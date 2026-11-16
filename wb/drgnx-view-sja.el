@@ -283,6 +283,9 @@ asked again the next time (it may be defined later)."
            do (when-let* ((name (drgnx-view-patch--prop (aref props (+ i 2)))))
                 (let ((from (aref props i)) (to (aref props (1+ i))) (v (drgnx-view-sja--value (aref props (+ i 3)))))
                   (put-text-property from to name v text)
+                  ;; a kit component's action: its kind's one keymap (`kit-activate' reads the property)
+                  (when (eq name 'drgnx-action)
+                    (put-text-property from to 'keymap (drgnx-ui-kit-action-map (car-safe v)) text))
                   (when-let* ((fn (alist-get name drgnx-view-sja-prop-functions))) (funcall fn from to v text)))))
   (let ((lo 0))
     (cl-loop for i from 0 below (length display) by 4

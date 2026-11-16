@@ -12,7 +12,8 @@
 ;; alone.  The result is written as the face's defface spec, with a `(type tty)' clause when the terminal differs; the
 ;; original spec of every face derive wrote is recorded once, and `drgnx-look-derive-off' puts it back.  A colour the
 ;; theme leaves unspecified never signals: derive falls back to the theme's `default' colours, or leaves the face, and
-;; `drgnx-look-derive-gaps' says which.  See docs/guide/look.md ("Under another theme").
+;; `drgnx-look-derive-gaps' says which.  A theme colour moved to reach its bar (a faint `shadow') is named in one
+;; notice of the `look' source, updated on the next run, never a second (`drgnx-look-derive-clamped').  See docs/guide/look.md ("Under another theme").
 
 ;;; Code:
 (require 'cl-lib)
@@ -21,6 +22,7 @@
 (require 'drgnx-color)
 (require 'drgnx-faces)
 (require 'drgnx-agent-identity)
+(require 'drgnx-notice)
 (unless (featurep 'drgnx-theme-gen)
   (load (expand-file-name "themes/drgnx-theme-gen" drgnx-dir) nil t))
 
@@ -53,6 +55,11 @@
 
 (defvar drgnx-look-derive-gaps nil
   "((FACE . REASON)...) from the last run: faces derive could not derive, or derived from `default' alone.")
+
+(defvar drgnx-look-derive-clamped nil
+  "Faces the last run moved off the theme's own colour to reach a contrast bar (the theme's `shadow' too faint).")
+
+(defvar drgnx-look-derive--on nil "Non-nil between `drgnx-look-derive-on' and `drgnx-look-derive-off'.")
 
 ;;;; Reading the theme
 
@@ -152,6 +159,8 @@ order: the six slots, then the variants kept besides."
                        (setq c (or (drgnx-color-solve c f surface 4.5) c))))))
         (unless shadow
           (push (cons 'drgnx-text-muted "no `shadow' colour: derived from `default'") drgnx-look-derive-gaps))
+        (when (and shadow (not (equal shadow text)))
+          (cl-pushnew 'drgnx-text-muted drgnx-look-derive-clamped))
         (unless link (push (cons 'drgnx-accent "no `link' colour: the body text's") drgnx-look-derive-gaps))
         `((drgnx-surface-panel :background ,panel) (drgnx-surface-gap :background ,gap)
           (drgnx-surface-raised :background ,raised) (drgnx-surface-overlay :background ,raised)
@@ -201,7 +210,7 @@ order: the six slots, then the variants kept besides."
 (defun drgnx-look-derive ()
   "Derive the panel, text and agent colours of the semantic faces no enabled theme sets, from the theme's own.
 A run that finds nothing to derive changes nothing, and nothing here signals on a colour the theme leaves unspecified."
-  (setq drgnx-look-derive-gaps nil drgnx-look-derive-identity-ms 0.0)
+  (setq drgnx-look-derive-gaps nil drgnx-look-derive-clamped nil drgnx-look-derive-identity-ms 0.0)
   (let ((gui (drgnx-look-derive--values 'gui))
         (tty (drgnx-look-derive--values 'tty256)))
     (setq drgnx-agent-identity-rings
@@ -217,7 +226,18 @@ A run that finds nothing to derive changes nothing, and nothing here signals on 
                (push (cons face "the theme's `default' gives no colours") drgnx-look-derive-gaps)
                (drgnx-look-derive--restore face))
               (t (drgnx-look-derive--put face (drgnx-look-derive--spec g ty)))))))
-  (setq drgnx-look-derive-gaps (delete-dups drgnx-look-derive-gaps)))
+  (setq drgnx-look-derive-gaps (delete-dups drgnx-look-derive-gaps))
+  (when drgnx-look-derive--on (drgnx-look-derive--tell)))
+
+(defun drgnx-look-derive--tell ()
+  "Keep the one `look' notice in step with the last run: posted (or updated, never a second) when a colour was
+clamped to its bar, cleared when none was.  A notice, never a prompt: derive runs from hooks."
+  (if drgnx-look-derive-clamped
+      (drgnx-notify 'look 'info
+                    (format "The theme's colours were raised to drgnx's contrast bars: %s"
+                            (mapconcat #'symbol-name (sort (copy-sequence drgnx-look-derive-clamped) #'string<) ", "))
+                    :id 'contrast-clamp :life 'condition)
+    (drgnx-notice-clear 'look 'contrast-clamp)))
 
 (defun drgnx-look-accent-text (rgb variant)
   "The portal's accent RGB, (R G B) floats in 0..1, as text for VARIANT (`dark', `light' or `hc'): lighter on dark,
@@ -246,7 +266,11 @@ and white reads better on PILL, as little as that takes."
   (drgnx-look-derive))
 
 (defun drgnx-look-derive-on ()
-  "Derive now, and again whenever a theme is enabled or disabled or a frame is made by the server."
+  "Derive now, and again whenever a theme is enabled or disabled or a frame is made by the server.
+A run that clamps a colour says so in one notice of the `look' source."
+  (unless drgnx-look-derive--on
+    (drgnx-notice-define-source 'look :title "Look")
+    (setq drgnx-look-derive--on t))
   (add-hook 'enable-theme-functions #'drgnx-look-derive--on-theme)
   (add-hook 'disable-theme-functions #'drgnx-look-derive--on-theme)
   (add-hook 'server-after-make-frame-hook #'drgnx-look-derive--on-frame)
@@ -259,7 +283,10 @@ and white reads better on PILL, as little as that takes."
   (remove-hook 'server-after-make-frame-hook #'drgnx-look-derive--on-frame)
   (dolist (saved (copy-sequence drgnx-look-derive--saved))
     (drgnx-look-derive--restore (car saved)))
-  (setq drgnx-look-derive-gaps nil drgnx-agent-identity-rings nil)
+  (when drgnx-look-derive--on
+    (drgnx-notice-undefine-source 'look)
+    (setq drgnx-look-derive--on nil))
+  (setq drgnx-look-derive-gaps nil drgnx-look-derive-clamped nil drgnx-agent-identity-rings nil)
   (drgnx-agent-identity-clear))
 
 (provide 'drgnx-look-derive)

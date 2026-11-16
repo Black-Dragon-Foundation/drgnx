@@ -1,5 +1,6 @@
 use super::model::*;
 use crate::debug::session::{ScopeVars, Stop};
+use drgnx_rows::faces::FaceId;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -576,16 +577,24 @@ fn rows_draw_names_values_chevrons_and_places() {
     let row = |id: &str| rs.iter().find(|r| r.key == id).unwrap().clone();
     let n = row("v:s1:Locals/n");
     assert_eq!(n.text, "      n: 5");
-    assert!(n.runs.iter().any(|r| r.2 == "drgnx-debug-view-changed"));
+    assert!(
+        n.runs
+            .iter()
+            .any(|r| r.2 == FaceId::DebugViewChanged.name())
+    );
     let st = row("v:s1:Locals/s");
-    assert!(st.runs.iter().any(|r| r.2 == "drgnx-debug-view-string"));
+    assert!(
+        st.runs
+            .iter()
+            .any(|r| r.2 == FaceId::DebugViewString.name())
+    );
     assert_eq!(row("v:s1:Locals/obj").text, "    ▸ obj: Obj");
     assert_eq!(row("v:s1:Locals").text, "  ▾ Locals");
     let bp = row("b:1");
     assert_eq!(bp.text, "    ● a.py 3");
     // the line against the right edge: 400 px less its column and a column of room
     assert_eq!(bp.stops, vec![(10, 380)]);
-    assert!(bp.runs.iter().any(|r| r.2 == "drgnx-debug-view-place"));
+    assert!(bp.runs.iter().any(|r| r.2 == FaceId::DebugViewPlace.name()));
     let long = row("v:s1:Locals/long");
     assert!(long.text.ends_with('…'), "{}", long.text);
     assert!(long.text.chars().count() <= 40);

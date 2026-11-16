@@ -1530,6 +1530,7 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-run-no-debug ; Run Without Debugging's C-F5
                               inbox-open inbox-next inbox-previous inbox-press inbox-escape ; the inbox
                               terminal-toggle   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
+                              kit-activate      ; RET on a kit component's action
                               face-menu         ; a lone Alt opens the menu (Nidhogg's `lone-alt')
                               editor-recent editor-recent-up)) ; C-<tab>: VS Code's previous editor
          (drgnx-keys-test--later-stages t)
