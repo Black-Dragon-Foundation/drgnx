@@ -34,6 +34,8 @@
 
 (ert-deftest drgnx-title-row-tty/a-click-on-the-toggle-hides-and-shows-the-side-bar ()
   (drgnx-tty-session-with (s :size "140x40")
+    ;; two clicks on one place are a double click, which maximises: here each is a click of its own
+    (should (drgnx-tty-session-eval s '(progn (setq double-click-time 0) t)))
     (let ((shown (lambda () (drgnx-tty-session-eval s '(and (drgnx-wb-sidebar-showing-p) t)))))
       (should (funcall shown))
       (let ((col (drgnx-title-row-tty-test--col s "◧")))

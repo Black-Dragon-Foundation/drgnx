@@ -52,6 +52,12 @@ leaves them out.
 - **What is in them:** `etc/menus.eld` lists the commands of each menu in groups; titles and keys come from the
   registry and the profile. A module's command with a menu path (`:menu ("View")`) joins the end of that menu, and
   one of the Options menu joins **File ▸ Preferences**. A command whose module is off is not shown.
+- **How they look:** the menu cards (the ☰ list and the context menus) use the UI sans at the UI size, with rows 28
+  pixels high and 12 pixels of room at each end, scaled with the display and the UI scale
+  (`modules/ui/drgnx-menu-look.el`). Nidhogg's menu code (`lisp/term/nhwl-menu.el`) draws one text line per row in the
+  stock fixed-pitch face; drgnx dresses it through the menu's face and advice, and reads the row under the pointer from
+  the text instead of from the character height. The card's finish (ring, shadow, hover) comes with the shared
+  component system.
 - **Narrow windows:** the ☰ button never hides; see [the title row](#the-top-line).
 
 | Setting | Default | What it does |

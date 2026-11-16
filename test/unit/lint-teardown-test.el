@@ -81,7 +81,8 @@ BATCH).  One that is gone fails the lint too, so the entry goes with it.")
     ("modules/ui/drgnx-close.el" . ui/face) ("modules/ui/drgnx-quickhelp.el" . ui/face)
     ("modules/ui/drgnx-start.el" . ui/face) ("modules/ui/drgnx-statusbar.el" . ui/face)
     ("modules/ui/drgnx-topline.el" . ui/face) ("modules/ui/drgnx-menubar.el" . ui/face)
-    ("modules/ui/drgnx-inbox.el" . ui/face))
+    ("modules/ui/drgnx-inbox.el" . ui/face)
+    ("modules/ui/drgnx-menu-look.el" . ui/face))
   "Files under modules/ that define no module: (FILE . the MODULE whose setup uses them).")
 
 ;;;; Reading modules/

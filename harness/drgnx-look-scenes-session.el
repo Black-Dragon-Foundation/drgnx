@@ -1032,6 +1032,12 @@ look-scenes' types them)."
   (drgnx-look-scene--waiting)
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene-menu-list ()
+  "The ☰ list open (F10), a submenu not yet: the menu cards in the look."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--answer))
+
 (defun drgnx-look-scene-title-row-light ()
   (drgnx-look-scene--theme 'drgnx-light)
   (drgnx-look-scene--editor)

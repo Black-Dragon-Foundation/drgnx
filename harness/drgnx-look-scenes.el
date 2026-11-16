@@ -34,6 +34,7 @@
     (window-light)
     (window-hc)
     (title-row-dark)
+    (menu-list :keys "<f10>" :then "<escape>")
     (title-row-light)
     (inbox-dropdown)
     (inbox-pinned)
