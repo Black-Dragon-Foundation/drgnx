@@ -262,14 +262,14 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
     b.finish()
 }
 
-/// The disclosure strip (agent-panel.html `.disc`): "Open:" and a pill for each step type, the open ones raised, a click
+/// The disclosure strip (agent-panel.html `.disc`): "Expand steps:" and a pill for each step type, the open ones raised, a click
 /// flips one (`type:NAME`); "make default" at the right end of the line it fits on (`default`).  The pills go on as many
 /// rows as the width needs, the later ones indented under the first pill.
 fn strip(cx: &Cx) -> Vec<Row> {
     let env = cx.env;
     let gui = env.display == Display::Gui;
     let cell = env.cell.0.max(1);
-    let open = " Open: ";
+    let open = " Expand steps: ";
     let default = "make default";
     let width = |face: &str, t: &str| text_width(cx, Some(face), t);
     let room = i64::from(env.width_px) - i64::from(px(env, 12.0));
@@ -343,6 +343,15 @@ fn strip(cx: &Cx) -> Vec<Row> {
                     end,
                     "help-echo",
                     json!("M: what is open now is what new panels open"),
+                );
+            } else if let Some(t) = action.strip_prefix("type:") {
+                b.prop(
+                    start,
+                    end,
+                    "help-echo",
+                    json!(format!(
+                        "Click to expand or collapse the detail of every {t} step"
+                    )),
                 );
             }
         }
