@@ -632,6 +632,18 @@ can tell it from a command; the guard is put on where the callback is handed ove
 
 The model is loaded at the first catch, not when the guard loads (`drgnx-notice` requires `drgnx-guard`).
 
+### Unsaved changes on close
+
+`(drgnx-save-ask NAME)` (`core/drgnx-save-ask.el`) is the one question a close asks about a file's unsaved changes,
+as VS Code asks it: "Do you want to save the changes you made to NAME?", answered `save` (s), `discard` (d, Don't
+Save) or `cancel` (c, Escape, C-g). A close clicked with the mouse asks in a dialog where the frame can show one. It
+is no command and asks only where somebody can answer (`drgnx-save-ask-can-ask-p`): in batch, under
+`inhibit-interaction`, in a timer, in `drgnx-automatic` code or on the daemon's own terminal the answer is `cancel`
+at once, so nothing is lost and nothing waits. `(drgnx-save-ask-discard BUFFER)` carries out Don't Save: it kills
+BUFFER without asking again and keeps its text first in `drgnx-close-discarded` (the last five, newest first, as
+`(:file FILE :text TEXT :time TIME)`), so a mis-click is not fatal. Close Tab asks it
+([workbench](../guide/workbench.md)).
+
 ## Notices (`drgnx-notice.el`)
 
 One model for everything drgnx tells the user. Producers post; the chrome (status bar, Notices list) and the

@@ -319,6 +319,9 @@ pixels). With two editor groups or more, the selected group's card is ringed in 
 
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
+  Closing the last tab of a file with unsaved changes asks first, as VS Code does: Save (`s`), Don't Save (`d`: the
+  buffer closes too and the changes go, kept for a while in `drgnx-close-discarded`) or Cancel (`c`, `Escape`,
+  `C-g`); a file another group still has a tab of closes without asking.
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
   `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown. Killing a buffer takes its tab
   out of every window at once; closing the shown tab (or killing its buffer) shows the tab you used before it, as in VS Code; with no such tab, the one to its right, else its left. Each window keeps its own history.
