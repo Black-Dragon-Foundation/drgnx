@@ -330,7 +330,38 @@ impl Buffers {
                 found.push((s.id.clone(), paired, diff));
             }
         }
-        proposals::for_sessions(&found)
+        let mut out = proposals::for_sessions(&found);
+        // which record wrote each hunk, and the reason it recorded
+        let mut records = Vec::new();
+        for (sid, _, _) in &found {
+            records.extend(
+                crate::work::edits::record_hunks(front, sid)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|r| r.path == rel)
+                    .map(|r| (sid.clone(), r)),
+            );
+        }
+        let decisions: Vec<String> = records
+            .iter()
+            .filter_map(|(_, r)| r.decision.clone())
+            .collect();
+        let reasons = crate::work::changes::reasons(front, decisions).await;
+        for sid in found.iter().map(|(s, _, _)| s) {
+            let mine: Vec<_> = records
+                .iter()
+                .filter(|(s, _)| s == sid)
+                .map(|(_, r)| r.clone())
+                .collect();
+            let at: Vec<usize> = (0..out.len()).filter(|i| out[*i].session == *sid).collect();
+            let mut slice: Vec<_> = at.iter().map(|i| out[*i].clone()).collect();
+            proposals::annotate(&mut slice, &mine, &reasons);
+            for (i, p) in at.into_iter().zip(slice) {
+                out[i] = p;
+            }
+        }
+        out
     }
 
     /// Give AGENTS and GUTTER the buffer positions of their lines and each agent its symbol, in TEXT (the edit

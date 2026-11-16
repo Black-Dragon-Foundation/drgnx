@@ -127,6 +127,68 @@ pub fn hunks_of(diff: &str, agent: &str, session: &str) -> Vec<HunkRef> {
     out
 }
 
+/// The words of each decision id in DECISIONS (the conclusion an agent recorded): its reason.
+pub async fn reasons(
+    f: &Front,
+    decisions: Vec<String>,
+) -> std::collections::BTreeMap<String, String> {
+    if decisions.is_empty() {
+        return std::collections::BTreeMap::new();
+    }
+    f.writer
+        .db
+        .read(move |c| {
+            let mut out = std::collections::BTreeMap::new();
+            for d in &decisions {
+                let row: Result<(String, Option<String>, Option<String>), _> = c.query_row(
+                    "select kind, title, body from entity where id = ?1 and retired_tx is null",
+                    [d],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                );
+                if let Ok((kind, title, body)) = row {
+                    let text = crate::work::conclusions::from_entity(
+                        d,
+                        &kind,
+                        title.as_deref(),
+                        body.as_deref(),
+                        &serde_json::Value::Null,
+                        0.0,
+                    )
+                    .text;
+                    out.insert(d.clone(), text);
+                }
+            }
+            Ok(out)
+        })
+        .await
+        .unwrap_or_default()
+}
+
+/// The hunks of FILE's records among RECORDS (with the REASONS of their decisions), as the Changes view shows
+/// them: the operation, the lines it wrote, the agent and the reason it recorded in that turn. None when the history
+/// holds no record of the file.
+pub fn record_refs(
+    records: &[crate::work::edits::RecordHunk],
+    reasons: &std::collections::BTreeMap<String, String>,
+    path: &str,
+    agent: &str,
+    session: &str,
+) -> Vec<HunkRef> {
+    records
+        .iter()
+        .filter(|h| h.path == path && h.live)
+        .map(|h| HunkRef {
+            op: u64::try_from(h.op).ok(),
+            index: u32::try_from(h.index).unwrap_or(u32::MAX),
+            start_line: h.start_line,
+            end_line: h.end_line,
+            agent: Some(agent.to_owned()),
+            session: Some(session.to_owned()),
+            reason: h.decision.as_ref().and_then(|d| reasons.get(d).cloned()),
+        })
+        .collect()
+}
+
 /// The edits of every live session, by task: each session's files from the edit history, each file's hunks from its
 /// diff. A hunk's `reason` and `op` come with the history's provenance (the cause an agent write records); until
 /// then the session is the hunk's agent and its task the hunk's task.
@@ -136,13 +198,27 @@ pub async fn by_task(f: &Front) -> Result<Vec<TaskGroup>, Error> {
         let Some(changed) = crate::work::edits::edited(f, &sid).await? else {
             continue;
         };
+        let records = crate::work::edits::record_hunks(f, &sid)
+            .await
+            .unwrap_or_default();
+        let reasons = reasons(
+            f,
+            records.iter().filter_map(|h| h.decision.clone()).collect(),
+        )
+        .await;
         let mut files = Vec::new();
         for c in changed.files {
-            let diff = crate::work::edits::diff_of(f, &sid, &c.path)
-                .await
-                .unwrap_or_default();
+            // the records' own hunks (each with the operation that wrote it and its reason); the diff's when the
+            // history holds none of the file
+            let mut hunks = record_refs(&records, &reasons, &c.path, &name, &sid);
+            if hunks.is_empty() {
+                let diff = crate::work::edits::diff_of(f, &sid, &c.path)
+                    .await
+                    .unwrap_or_default();
+                hunks = hunks_of(&diff, &name, &sid);
+            }
             files.push(FileGroup {
-                hunks: hunks_of(&diff, &name, &sid),
+                hunks,
                 path: c.path,
                 plus: c.plus,
                 minus: c.minus,
@@ -264,6 +340,39 @@ mod tests {
         assert_eq!(
             got[0].files[0].hunks[0].reason.as_deref(),
             Some("the lock was taken twice")
+        );
+    }
+
+    #[test]
+    fn record_hunks_carry_their_op_and_reason_and_skip_undone_ones() {
+        use crate::work::edits::RecordHunk;
+        let rec = |op: i64, path: &str, live: bool, decision: Option<&str>| RecordHunk {
+            op,
+            path: path.into(),
+            index: 0,
+            start_line: 3,
+            end_line: 5,
+            live,
+            decision: decision.map(Into::into),
+        };
+        let records = vec![
+            rec(7, "a.rs", true, Some("decision:1")),
+            rec(8, "a.rs", false, None),
+            rec(9, "b.rs", true, None),
+        ];
+        let reasons = std::collections::BTreeMap::from([(
+            "decision:1".to_owned(),
+            "fixed the race".to_owned(),
+        )]);
+        let got = record_refs(&records, &reasons, "a.rs", "Opus", "s1");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].op, Some(7));
+        assert_eq!(got[0].reason.as_deref(), Some("fixed the race"));
+        assert_eq!(got[0].session.as_deref(), Some("s1"));
+        // a write with no conclusion this turn says so (no reason borrowed)
+        assert_eq!(
+            record_refs(&records, &reasons, "b.rs", "Opus", "s1")[0].reason,
+            None
         );
     }
 
