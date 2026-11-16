@@ -73,7 +73,7 @@ last lets go.  A subscription made before the first module's, by code that recor
 (defun drgnx-signal-editor-window-p (window)
   "Non-nil if WINDOW is an editor window: its role in the state store is `editor' (`drgnx-state-window-role').
 Not the minibuffer, a package's side window or a window of a role in the store's role table — a dock, an
-area, a popup lane, a find bar (once tools/replace defined `bar'), …"
+area, a popup lane, a grid's tool tile, a find bar (once tools/replace defined `bar'), …"
   (eq (drgnx-state-window-role window) 'editor))
 
 (defun drgnx-signal-editor-window ()

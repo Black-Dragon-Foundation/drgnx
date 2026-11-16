@@ -737,6 +737,10 @@ it, so without this the next redisplay may keep the old line (the window's text 
      ;; the sidebar island's header row (`drgnx-wb-island-refresh') on the dock's top window
      (drgnx-chrome--set w 'tab-line-format (or (window-parameter w 'drgnx-wb-island) 'none))
      (drgnx-chrome--set w 'mode-line-format 'none))
+    ('tile
+     ;; a grid's tool tile: the tab row of its stack (`drgnx-grid--put-row'), no mode line
+     (drgnx-chrome--set w 'tab-line-format (or (window-parameter w 'drgnx-grid-tab-row) 'none))
+     (drgnx-chrome--set w 'mode-line-format 'none))
     ('lane
      (dolist (p '(tab-line-format mode-line-format)) (drgnx-chrome--set w p 'none)))))
 
@@ -855,8 +859,9 @@ or buffer changed (no new tabs while the minibuffer is active: those are preview
       (dolist (w (window-list f 'nomini))
         (pcase (drgnx-chrome--role w)
           ('editor (dolist (p '(tab-line-format header-line-format mode-line-format)) (set-window-parameter w p nil)))
-          ((or 'dock 'area 'lane)
-           (set-window-parameter w 'tab-line-format (window-parameter w 'drgnx-wb-island))
+          ((or 'dock 'area 'lane 'tile)
+           (set-window-parameter w 'tab-line-format (or (window-parameter w 'drgnx-wb-island)
+                                                        (window-parameter w 'drgnx-grid-tab-row)))
            (set-window-parameter w 'mode-line-format nil)))))))
 
 (provide 'drgnx-chrome)

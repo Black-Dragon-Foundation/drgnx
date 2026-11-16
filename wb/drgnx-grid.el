@@ -1,0 +1,517 @@
+;;; drgnx-grid.el --- The tiled grid: every pane a tile on Emacs's own window tree -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; A tile is a live window and a container an internal window: the grid is Emacs's window tree, and drgnx keeps no
+;; second tree beside it (`drgnx-grid-tree' is only its snapshot format).  Two kinds of tile:
+;; - a tool tile: window parameter `drgnx-role' `tile', `drgnx-pane-stack' (the pane kinds it holds, the shown one
+;;   first), `drgnx-tile-id' (an integer, per frame) and `drgnx-tile-dock' (`left', `right', `bottom', or nil once it
+;;   was moved away from its home); it is dedicated, never selected unless asked, and `delete-window' on it hides it;
+;; - an editor tile: an ordinary editor window (no role), with a `drgnx-tile-id' and its tabs (`drgnx-tabs').
+;; Every tile carries `no-delete-other-windows', so `delete-other-windows' cannot collapse a layout.
+;; The rules the grid keeps are R1–R8 (docs/develop/core.md, "Tiles and the `grid' backend"), each with a test in
+;; test/unit/grid-rules-test.el.  The grid is the `grid' backend of pane kinds (`drgnx-pane--backends'): callers keep
+;; calling `drgnx-pane-show', `-hide', `-focus', `-window' and `-resize'.  See docs/develop/core.md, "The grid".
+
+;;; Code:
+(require 'cl-lib)
+(require 'seq)
+(require 'drgnx-state)
+(require 'drgnx-state-intent)
+(require 'drgnx-pixels)
+(require 'drgnx-grid-tree)
+(require 'drgnx-panes)
+
+(defvar drgnx-rules--placing)
+(defvar drgnx-wb-dock-columns)
+(declare-function drgnx-wb-focus-editor "drgnx-wb")
+(declare-function drgnx-wb-editor-window "drgnx-wb")
+(declare-function drgnx-wb-close-button "drgnx-wb")
+(declare-function drgnx-wb-bar "drgnx-wb")
+
+(defgroup drgnx-grid nil "The tiled grid: every pane a tile." :group 'drgnx)
+
+(defcustom drgnx-grid-min-px 120
+  "The least width or height of a tile in a graphical frame, in logical pixels (`drgnx-px')."
+  :type 'natnum :group 'drgnx-grid)
+
+(defcustom drgnx-grid-min-columns 12
+  "The least width of a tile in a terminal frame, in columns."
+  :type 'natnum :group 'drgnx-grid)
+
+(defcustom drgnx-grid-min-lines 3
+  "The least height of a tile in a terminal frame, in lines."
+  :type 'natnum :group 'drgnx-grid)
+
+(defconst drgnx-grid-docks '(left bottom right) "The homes a tool tile docks at.")
+
+(defconst drgnx-grid--default-size '((left . 32) (bottom . 12) (right . 50))
+  "A dock's size the first time it shows, in columns (left, right) or lines (bottom), when its kinds give none.")
+
+;;;; Tiles
+
+(defun drgnx-grid-root (&optional frame)
+  "The root of FRAME's grid: `window-main-window', the frame's root less the shell's side windows (the rail)."
+  (window-main-window frame))
+
+(defun drgnx-grid-tool-tile-p (window)
+  "Non-nil when WINDOW is a live tool tile."
+  (and (window-live-p window) (eq (window-parameter window 'drgnx-role) 'tile)))
+
+(defun drgnx-grid-editor-tile-p (window)
+  "Non-nil when WINDOW is a live editor tile: an editor window of the state store (no role, no side)."
+  (and (window-live-p window) (eq (drgnx-state-window-role window) 'editor)))
+
+(defun drgnx-grid-tiles (&optional frame filter)
+  "FRAME's tiles in reading order (top-left to bottom-right).  FILTER `editor' or `tool' keeps only those."
+  (let ((frame (or frame (selected-frame))))
+    (seq-filter (lambda (w) (pcase filter
+                              ('editor (drgnx-grid-editor-tile-p w))
+                              ('tool (drgnx-grid-tool-tile-p w))
+                              (_ (or (drgnx-grid-tool-tile-p w) (drgnx-grid-editor-tile-p w)))))
+                (window-list frame 'nomini (frame-first-window frame)))))
+
+(defun drgnx-grid--next-id (frame)
+  "A new tile id on FRAME."
+  (let ((n (1+ (or (frame-parameter frame 'drgnx-grid-next-id) 0))))
+    (set-frame-parameter frame 'drgnx-grid-next-id n)
+    n))
+
+(defun drgnx-grid-tile-id (window)
+  "WINDOW's tile id, given one first if it has none."
+  (or (window-parameter window 'drgnx-tile-id)
+      (set-window-parameter window 'drgnx-tile-id (drgnx-grid--next-id (window-frame window)))))
+
+(defun drgnx-grid--tile-by-id (id frame)
+  (seq-find (lambda (w) (eql (window-parameter w 'drgnx-tile-id) id)) (window-list frame 'nomini)))
+
+(defun drgnx-grid--adopt (window)
+  "Make editor WINDOW an editor tile: an id, `no-delete-other-windows', and the grid's `delete-window' (R8)."
+  (drgnx-grid-tile-id window)
+  (set-window-parameter window 'no-delete-other-windows t)
+  (unless (window-parameter window 'delete-window)
+    (set-window-parameter window 'delete-window #'drgnx-grid--delete-editor)))
+
+(defun drgnx-grid--adopt-editors (&optional frame)
+  "Adopt FRAME's editor windows as editor tiles (those that are not yet)."
+  (dolist (w (drgnx-grid-tiles frame 'editor))
+    (unless (window-parameter w 'no-delete-other-windows) (drgnx-grid--adopt w))))
+
+(defun drgnx-grid--windows-changed (data)
+  "The store's `windows-changed' while the grid is on: a new editor window (a split) becomes an editor tile."
+  (when-let* ((frame (plist-get data :frame)) ((frame-live-p frame)))
+    (drgnx-grid--adopt-editors frame)))
+
+;;;; Kinds' buffers, starts and points, per frame
+
+(defvar drgnx-grid--kinds (make-hash-table :test 'eq :weakness 'key)
+  "Frame → alist KIND → (BUFFER START POINT): where each kind was left on that frame.
+Kept out of frame parameters: a buffer object in one would make the saved frame state unreadable.")
+
+(defun drgnx-grid--saved (kind frame)
+  (alist-get kind (gethash frame drgnx-grid--kinds)))
+
+(defun drgnx-grid--remember (window)
+  "Remember the buffer, start and point tile WINDOW shows for its shown kind."
+  (when-let* (((drgnx-grid-tool-tile-p window)) (kind (car (window-parameter window 'drgnx-pane-stack))))
+    (setf (alist-get kind (gethash (window-frame window) drgnx-grid--kinds))
+          (list (window-buffer window) (window-start window) (window-point window)))))
+
+(defun drgnx-grid--placeholder (kind)
+  "KIND's placeholder: its :placeholder function's buffer, else a blank special buffer named after it."
+  (let* ((spec (drgnx-pane-kind kind)) (fn (plist-get spec :placeholder))
+         (b (and (functionp fn) (funcall fn))))
+    (if (buffer-live-p b) b
+      (or (get-buffer (format " *drgnx %s*" kind))
+          (with-current-buffer (get-buffer-create (format " *drgnx %s*" kind) t)
+            (special-mode)
+            (setq-local cursor-type nil)
+            (current-buffer))))))
+
+(defun drgnx-grid--buffer-for (kind frame &optional buffer)
+  "The buffer KIND shows on FRAME: BUFFER when given, else the one it was left on, else its own (`:buffer'), else
+its placeholder.  Also the saved start and point, as (BUFFER START POINT); START and POINT nil when none apply."
+  (let ((saved (drgnx-grid--saved kind frame)))
+    (cond ((buffer-live-p buffer) (list buffer nil nil))
+          ((buffer-live-p (car saved)) saved)
+          (t (let* ((spec (drgnx-pane-kind kind)) (b (and spec (plist-get spec :buffer)))
+                    (own (cond ((functionp b) (funcall b)) ((stringp b) (get-buffer-create b)) ((buffer-live-p b) b))))
+               (list (if (buffer-live-p own) own (drgnx-grid--placeholder kind)) nil nil))))))
+
+(defun drgnx-grid--put-buffer (window kind frame &optional buffer)
+  "Show KIND in tool tile WINDOW (its buffer, start and point as left, or BUFFER)."
+  (pcase-let ((`(,b ,start ,point) (drgnx-grid--buffer-for kind frame buffer)))
+    (unless (eq (window-buffer window) b)
+      (set-window-buffer window b)
+      ;; Emacs preserves a size only for the buffer it was set with: set again for this one
+      (when-let* ((dock (window-parameter window 'drgnx-tile-dock)))
+        (window-preserve-size window (drgnx-grid--horizontal-dock-p dock) t)))
+    (set-window-dedicated-p window 'drgnx)
+    (when start (set-window-start window start t))
+    (when point (set-window-point window point))
+    (with-current-buffer b (add-hook 'kill-buffer-hook #'drgnx-grid--killed nil t))
+    b))
+
+(defun drgnx-grid--killed ()
+  "The current buffer is being killed: tiles showing it show their kind's placeholder (R6)."
+  (let ((dying (current-buffer)))
+    (dolist (f (frame-list))
+      (dolist (w (window-list f 'nomini))
+        (when (and (drgnx-grid-tool-tile-p w) (eq (window-buffer w) dying))
+          (let ((kind (car (window-parameter w 'drgnx-pane-stack))))
+            (setf (alist-get kind (gethash f drgnx-grid--kinds)) nil)
+            (let ((p (drgnx-grid--placeholder kind)))
+              (unless (eq p dying)
+                (set-window-buffer w p)
+                (set-window-dedicated-p w 'drgnx)))
+            (drgnx-grid--put-row w)))))))
+
+;;;; Sizes
+
+(defun drgnx-grid--horizontal-dock-p (dock) (memq dock '(left right)))
+
+(defun drgnx-grid-min-size (frame horizontal)
+  "The least width (HORIZONTAL) or height of a tile on FRAME, in its pixels."
+  (if (display-graphic-p frame)
+      (drgnx-px drgnx-grid-min-px frame)
+    (if horizontal (* drgnx-grid-min-columns (frame-char-width frame))
+      (* drgnx-grid-min-lines (frame-char-height frame)))))
+
+(defun drgnx-grid--home (kind) (plist-get (drgnx-pane-kind kind) :home))
+
+(defun drgnx-grid--dock-default-px (dock kinds frame)
+  "DOCK's size the first time it shows on FRAME: its intent (`:sizes'), else the first of KINDS' :size, else
+`drgnx-grid--default-size', in columns or lines made pixels."
+  (or (plist-get (drgnx-state-intent frame :sizes dock) :px)
+      (let ((n (or (seq-some (lambda (k) (plist-get (drgnx-pane-kind k) :size)) kinds)
+                   (if (eq dock 'left) (or (bound-and-true-p drgnx-wb-dock-columns) 32)
+                     (alist-get dock drgnx-grid--default-size)))))
+        (if (drgnx-grid--horizontal-dock-p dock) (* n (frame-char-width frame)) (* n (frame-char-height frame))))))
+
+;;;; Docks
+
+(defun drgnx-grid-dock (dock &optional frame)
+  "The tool tile docked at DOCK (`left', `bottom', `right') on FRAME, or nil."
+  (seq-find (lambda (w) (and (drgnx-grid-tool-tile-p w) (eq (window-parameter w 'drgnx-tile-dock) dock)))
+            (window-list (or frame (selected-frame)) 'nomini)))
+
+(defun drgnx-grid--children (window)
+  (let ((c (window-child window)) out)
+    (while c (push c out) (setq c (window-next-sibling c)))
+    (nreverse out)))
+
+(defun drgnx-grid--leaves (window)
+  "The live windows under WINDOW (itself when live)."
+  (if (window-live-p window) (list window) (mapcan #'drgnx-grid--leaves (drgnx-grid--children window))))
+
+(defun drgnx-grid--lca (windows)
+  "The smallest window (live or internal) holding every one of WINDOWS."
+  (let ((node (car windows)))
+    (while (and node (not (seq-every-p (lambda (w) (memq w (drgnx-grid--leaves node))) windows)))
+      (setq node (window-parent node)))
+    node))
+
+(defun drgnx-grid--center (frame)
+  "The part of FRAME's grid between the left and right docks: the smallest window holding every tile that is not
+docked left or right; nil when there is none."
+  (let ((inner (seq-remove (lambda (w) (memq (window-parameter w 'drgnx-tile-dock) '(left right)))
+                           (drgnx-grid-tiles frame))))
+    (and inner (drgnx-grid--lca inner))))
+
+(defun drgnx-grid--dock-target (dock frame)
+  "Where DOCK's tile is split from on FRAME, as (WINDOW . SIDE): the left and right docks run the frame's full
+height beside the whole grid; the bottom dock sits under the part between them (`drgnx-grid--center')."
+  (let ((root (drgnx-grid-root frame)))
+    (pcase dock
+      ('left (cons (if (window-combination-p root t) (window-child root) root) 'left))
+      ('right (cons (if (window-combination-p root t) (window-last-child root) root) 'right))
+      ('bottom (let ((left (drgnx-grid-dock 'left frame)) (right (drgnx-grid-dock 'right frame)))
+                 ;; under the part between the side docks, or under the whole grid when no side dock shows
+                 (cons (or (and (or left right) (drgnx-grid--center frame)) root) 'below))))))
+
+(defun drgnx-grid--remembered-target (memory frame)
+  "Where a hidden tile goes back to on FRAME, from its MEMORY: (WINDOW . SIDE), WINDOW the smallest window holding
+the tiles it last gave its space to that still live; nil when none does."
+  (let ((live (delq nil (mapcar (lambda (id) (drgnx-grid--tile-by-id id frame)) (plist-get memory :neighbour)))))
+    (and live (plist-get memory :side) (cons (drgnx-grid--lca live) (plist-get memory :side)))))
+
+(defun drgnx-grid--memory (key &optional frame)
+  (alist-get key (frame-parameter frame 'drgnx-grid-memory)))
+
+(defun drgnx-grid--set-memory (key value &optional frame)
+  (let ((all (copy-alist (frame-parameter frame 'drgnx-grid-memory))))
+    (setf (alist-get key all) value)
+    (set-frame-parameter frame 'drgnx-grid-memory all)))
+
+(defun drgnx-grid--no-room ()
+  "Say that a tile has no room there; nothing changed."
+  (message "No room there")
+  nil)
+
+(defun drgnx-grid--make-tool-tile (dock kinds frame)
+  "Split a new tool tile for DOCK holding KINDS on FRAME, from where it was last (R2), else from its dock's
+neighbour, at its remembered size clamped to the room there.  Nil, and nothing changed, when there is no room."
+  (let* ((memory (drgnx-grid--memory dock frame))
+         (target (or (drgnx-grid--remembered-target memory frame) (drgnx-grid--dock-target dock frame)))
+         (window (car target)) (side (cdr target))
+         (horizontal (and (memq side '(left right)) t))
+         (room (window-size window horizontal t))
+         (least (drgnx-grid-min-size frame horizontal))
+         (px (max least (min (drgnx-grid--dock-default-px dock kinds frame) (- room least)))))
+    (if (< (- room least) least)
+        (drgnx-grid--no-room)
+      (let ((w (let ((drgnx-rules--placing t) (window-combination-limit nil) (window-combination-resize nil)
+                     (ignore-window-parameters t))
+                 (split-window window (- px) side t))))
+        (set-window-parameter w 'drgnx-role 'tile)
+        (set-window-parameter w 'drgnx-pane-stack (copy-sequence kinds))
+        (set-window-parameter w 'drgnx-tile-dock dock)
+        (drgnx-grid-tile-id w)
+        (dolist (p '((no-delete-other-windows . t) (no-other-window . t) (mode-line-format . none)
+                     (delete-window . drgnx-grid--delete-window) (quit-restore . nil)))
+          (set-window-parameter w (car p) (cdr p)))
+        (set-window-scroll-bars w nil nil nil nil t)
+        (drgnx-grid--put-buffer w (car kinds) frame)
+        ;; after the scroll bars: Emacs keeps the size only while it equals the body size it recorded
+        (window-preserve-size w horizontal t)
+        w))))
+
+(defun drgnx-grid--dock-of (kind)
+  "The dock KIND lives at: its home (`left', `bottom', `right'), nil for an editor kind."
+  (car (memq (drgnx-grid--home kind) drgnx-grid-docks)))
+
+;;;; Show, hide, focus
+
+(defun drgnx-grid--tile-of (kind frame)
+  "The tool tile on FRAME whose stack holds KIND, or nil."
+  (seq-find (lambda (w) (and (drgnx-grid-tool-tile-p w) (memq kind (window-parameter w 'drgnx-pane-stack))))
+            (window-list frame 'nomini)))
+
+(defun drgnx-grid-window (kind &optional frame)
+  "The window showing KIND on FRAME: the tool tile whose stack shows it in front, or, for an editor kind, the window
+showing the last buffer it put there; nil when it does not show."
+  (let ((frame (or frame (selected-frame))))
+    (if (eq (drgnx-grid--home kind) 'editor)
+        (drgnx-pane--areas-window kind frame)
+      (let ((w (drgnx-grid--tile-of kind frame)))
+        (and w (eq (car (window-parameter w 'drgnx-pane-stack)) kind) w)))))
+
+(defun drgnx-grid--bring-to-front (window kind frame &optional buffer)
+  "Show KIND in WINDOW, whose stack holds it: the window and every edge stay (R1)."
+  (let ((stack (window-parameter window 'drgnx-pane-stack)))
+    (unless (eq (car stack) kind)
+      (drgnx-grid--remember window)
+      (set-window-parameter window 'drgnx-pane-stack (cons kind (remq kind stack))))
+    (drgnx-grid--put-buffer window kind frame buffer)
+    (drgnx-grid--put-row window)
+    window))
+
+(cl-defun drgnx-grid-show (kind &key buffer select dock)
+  "Show pane KIND on the selected frame and return its window.
+R1: a kind in a stack comes to the front, the window and its edges unchanged.  R2: a hidden kind joins its dock's
+tile (DOCK, else its home) when that shows, else a new tile splits its remembered neighbour, else its dock's, taking
+space from that window only.  R5: the selected window stays unless SELECT.  BUFFER: what KIND shows."
+  (let* ((frame (selected-frame)) (selected (selected-window)) (spec (drgnx-pane--spec kind)))
+    (prog1
+        (if (eq (plist-get spec :home) 'editor)
+            (drgnx-pane--areas-show kind buffer select)
+          (drgnx-grid--adopt-editors frame)
+          (let* ((dock (or dock (drgnx-grid--dock-of kind)))
+                 (w (or (drgnx-grid--tile-of kind frame)
+                        (when-let* ((tile (drgnx-grid-dock dock frame)))
+                          (set-window-parameter tile 'drgnx-pane-stack
+                                                (append (window-parameter tile 'drgnx-pane-stack) (list kind)))
+                          tile))))
+            (if w (drgnx-grid--bring-to-front w kind frame buffer)
+              (when (setq w (drgnx-grid--make-tool-tile dock (list kind) frame))
+                (when buffer (drgnx-grid--put-buffer w kind frame buffer))
+                (drgnx-grid--put-row w)))
+            (when w
+              (when-let* ((fn (plist-get spec :on-show))) (funcall fn w))
+              (when select (select-window w)))
+            w))
+      (unless (or select (eq (selected-window) selected) (not (window-live-p selected)))
+        (select-window selected 'norecord)))))
+
+(defun drgnx-grid--touches-p (window edge-px horizontal before)
+  "Non-nil when WINDOW's edge along HORIZONTAL meets EDGE-PX: its right (or bottom) edge when BEFORE (it lies before
+the deleted window), else its left (or top) edge."
+  (let ((e (window-pixel-edges window)))
+    (if horizontal (= (if before (nth 2 e) (nth 0 e)) edge-px)
+      (= (if before (nth 3 e) (nth 1 e)) edge-px))))
+
+(defun drgnx-grid--delete-tile (window)
+  "Delete tile WINDOW, its space going to its sibling only and, inside the sibling, to the tiles along its edge (R3).
+Returns the memory to come back with: (:side SIDE :neighbour IDS), SIDE where WINDOW was beside the sibling."
+  (let* ((horizontal (window-combined-p window t))
+         (sibling (or (window-left window) (window-right window)))
+         (before (and sibling (eq sibling (window-left window))))
+         (e (window-pixel-edges window))
+         (edge (if horizontal (if before (nth 0 e) (nth 2 e)) (if before (nth 1 e) (nth 3 e))))
+         (leaves (and sibling (drgnx-grid--leaves sibling)))
+         (along (seq-filter (lambda (w) (drgnx-grid--touches-p w edge horizontal before)) leaves))
+         (others (seq-difference leaves along))
+         (kept (mapcar (lambda (w) (cons w (window-parameter w 'window-preserved-size))) others))
+         (memory (and sibling
+                      (list :side (if horizontal (if before 'right 'left) (if before 'below 'above))
+                            :neighbour (delq nil (mapcar (lambda (w) (window-parameter w 'drgnx-tile-id)) leaves))))))
+    (unwind-protect
+        (progn
+          (dolist (w others) (window-preserve-size w horizontal t))
+          (set-window-parameter window 'delete-window nil)
+          (let ((ignore-window-parameters t) (window-combination-resize nil)) (delete-window window)))
+      (pcase-dolist (`(,w . ,size) kept)
+        (when (window-live-p w) (set-window-parameter w 'window-preserved-size size))))
+    memory))
+
+(defun drgnx-grid-hide (kind)
+  "Hide the tool tile showing KIND in front (R3): its space goes back to the neighbour it took it from, and where it
+was, its size and its stack are remembered for the next show (R4).  A kind not in front is left alone."
+  (let* ((frame (selected-frame)) (w (drgnx-grid-window kind frame)))
+    (when (drgnx-grid-tool-tile-p w)
+      (drgnx-grid--remember w)
+      (let* ((dock (window-parameter w 'drgnx-tile-dock))
+             (horizontal (if dock (drgnx-grid--horizontal-dock-p dock) (window-combined-p w t)))
+             (px (if horizontal (window-pixel-width w) (window-pixel-height w))))
+        (when dock (drgnx-state-note-intent frame :sizes dock px :by 'auto))
+        (when (eq (selected-window) w)
+          (select-window (or (drgnx-state-editor-window frame) (car (drgnx-grid-tiles frame 'editor)))))
+        (let ((memory (drgnx-grid--delete-tile w))
+              (logical (drgnx-grid-tree-to-logical px (drgnx-pixels-scale frame))))
+          (drgnx-grid--set-memory (or dock kind) (append memory (list :px logical :dock dock)) frame))
+        t))))
+
+(defun drgnx-grid--delete-window (window)
+  "`delete-window' on a tool tile (C-x 0, a package deleting a window it once had): hide it (R7)."
+  (with-selected-frame (window-frame window)
+    (drgnx-grid-hide (car (window-parameter window 'drgnx-pane-stack)))))
+
+(defun drgnx-grid--delete-editor (window)
+  "`delete-window' on an editor tile: deleted, unless it is its frame's last editor tile (R8)."
+  (if (<= (length (drgnx-grid-tiles (window-frame window) 'editor)) 1)
+      (user-error "The last editor tile stays")
+    (set-window-parameter window 'delete-window nil)
+    (let ((ignore-window-parameters nil)) (delete-window window))))
+
+(defun drgnx-grid-focus (kind)
+  "Show KIND and select its window; its :on-focus runs with the window."
+  (let ((w (drgnx-grid-show kind :select t)))
+    (when-let* ((fn (plist-get (drgnx-pane-kind kind) :on-focus)) ((window-live-p w))) (funcall fn w))
+    w))
+
+(defun drgnx-grid-resize (kind px horizontal)
+  "Give KIND's tile PX pixels: its dock's dimension (left and right a width, bottom a height), else HORIZONTAL's.
+A docked tile's size is noted as its dock's `:sizes' intent.  The window, or nil when KIND does not show."
+  (let* ((frame (selected-frame)) (dock (drgnx-grid--dock-of kind)) (w (drgnx-grid-window kind frame))
+         (dock (or (and w (window-parameter w 'drgnx-tile-dock)) (and (not w) dock))))
+    (when dock (drgnx-state-note-intent frame :sizes dock px))
+    (when (window-live-p w)
+      (let ((horizontal (if dock (drgnx-grid--horizontal-dock-p dock) horizontal)) (window-resize-pixelwise t))
+        (ignore-errors (window-resize w (- px (window-size w horizontal t)) horizontal 'preserved t))
+        (window-preserve-size w horizontal t)
+        w))))
+
+(defun drgnx-grid-toggle-dock (dock)
+  "Hide DOCK's tile when it shows, else show it with the kind it showed last (its first kind the first time)."
+  (let ((w (drgnx-grid-dock dock)))
+    (if w (drgnx-grid-hide (car (window-parameter w 'drgnx-pane-stack)))
+      (let* ((memory (drgnx-grid--memory dock))
+             (kind (or (car (plist-get memory :kinds)) (car (drgnx-pane-kinds dock)))))
+        (when kind (drgnx-grid-show kind))))))
+
+;;;; The tab row (today's drawing; the kit's tab later)
+
+(defun drgnx-grid--tab-click (event)
+  "A click on a tool tile's tab: show that kind."
+  (interactive "e")
+  (when-let* ((s (posn-string (event-start event))) (kind (get-text-property (cdr s) 'drgnx-grid-kind (car s))))
+    (with-selected-window (posn-window (event-start event)) (drgnx-grid-show kind))))
+
+(defvar drgnx-grid--tab-map
+  (let ((m (make-sparse-keymap))) (define-key m [tab-line mouse-1] #'drgnx-grid--tab-click) m))
+
+(defun drgnx-grid--close-click (event)
+  "A click on a tool tile's ✕: hide the tile."
+  (interactive "e")
+  (let ((w (posn-window (event-start event))))
+    (when (drgnx-grid-tool-tile-p w)
+      (with-selected-frame (window-frame w) (drgnx-grid-hide (car (window-parameter w 'drgnx-pane-stack)))))))
+
+(defun drgnx-grid--tab-row (window)
+  "Tool tile WINDOW's tab row: its kinds in their definition order, the shown one current, then the ✕."
+  (let* ((stack (window-parameter window 'drgnx-pane-stack)) (shown (car stack))
+         (kinds (seq-filter (lambda (k) (memq k stack)) (append (drgnx-pane-kinds) stack))))
+    (concat
+     (mapconcat (lambda (k)
+                  (let ((title (or (plist-get (drgnx-pane-kind k) :title) (capitalize (symbol-name k)))))
+                    (propertize (concat " " (if (functionp title) (funcall title) title) " ")
+                                'face (if (eq k shown) 'tab-line-tab-current 'tab-line-tab-inactive)
+                                'drgnx-grid-kind k 'mouse-face 'highlight 'local-map drgnx-grid--tab-map
+                                'help-echo "Show this tab")))
+                (delete-dups kinds) " ")
+     (propertize " " 'display '(space :align-to (- right 3)))
+     (if (fboundp 'drgnx-wb-close-button)
+         (drgnx-wb-close-button #'drgnx-grid--close-click "Close (Esc, q)")
+       "x"))))
+
+(defun drgnx-grid--put-row (window)
+  "Set tool tile WINDOW's tab row as its `tab-line-format' (the chrome reads `drgnx-grid-tab-row')."
+  (when (drgnx-grid-tool-tile-p window)
+    (let ((row (drgnx-grid--tab-row window)))
+      (set-window-parameter window 'drgnx-grid-tab-row row)
+      (set-window-parameter window 'tab-line-format row))))
+
+;;;; The backend
+
+(defun drgnx-grid--define (kind spec old)
+  "The `grid' backend's :define: as the docks' (the sections, tabs and editor place rules stay the shared data)."
+  (drgnx-pane--areas-define kind spec old))
+
+(defun drgnx-grid--backend-show (kind buffer select) (drgnx-grid-show kind :buffer buffer :select select))
+(defun drgnx-grid--backend-hide (kind) (drgnx-grid-hide kind))
+(defun drgnx-grid--backend-window (kind frame) (drgnx-grid-window kind frame))
+(defun drgnx-grid--backend-focus (kind) (drgnx-grid-focus kind))
+(defun drgnx-grid--backend-resize (kind px horizontal) (drgnx-grid-resize kind px horizontal))
+
+(setf (alist-get 'grid drgnx-pane--backends)
+      (list :define #'drgnx-grid--define :show #'drgnx-grid--backend-show :hide #'drgnx-grid--backend-hide
+            :window #'drgnx-grid--backend-window :focus #'drgnx-grid--backend-focus
+            :resize #'drgnx-grid--backend-resize))
+
+;;;; Packages' window calls
+
+(defun drgnx-grid--balance-editors-only (balance &rest args)
+  "Around `balance-windows': the tool tiles keep their sizes (R7), so only editor tiles are balanced.
+Their buffers' `window-size-fixed' is t for the call (Emacs balances around a fixed window, never a preserved one)."
+  (let ((kept nil))
+    (unwind-protect
+        (progn
+          (dolist (w (drgnx-grid-tiles nil 'tool))
+            (let ((b (window-buffer w)))
+              (unless (assq b kept)
+                (with-current-buffer b
+                  (push (list b (local-variable-p 'window-size-fixed) window-size-fixed) kept)
+                  (setq-local window-size-fixed t)))))
+          (apply balance args))
+      (pcase-dolist (`(,b ,local ,value) kept)
+        (when (buffer-live-p b)
+          (with-current-buffer b
+            (if local (setq-local window-size-fixed value) (kill-local-variable 'window-size-fixed))))))))
+
+(define-minor-mode drgnx-grid-mode
+  "The tiled grid: pane kinds live in tiles, ordinary windows of Emacs's window tree (`drgnx-pane-backend' `grid').
+Off, they live in the docks again (`areas')."
+  :global t :group 'drgnx-grid
+  (if drgnx-grid-mode
+      (progn
+        (setq drgnx-pane-backend 'grid)
+        (drgnx-state-subscribe 'windows-changed #'drgnx-grid--windows-changed :lane 'now)
+        (advice-add 'balance-windows :around #'drgnx-grid--balance-editors-only)
+        (dolist (f (frame-list)) (drgnx-grid--adopt-editors f)))
+    (setq drgnx-pane-backend 'areas)
+    (drgnx-state-unsubscribe 'windows-changed #'drgnx-grid--windows-changed)
+    (advice-remove 'balance-windows #'drgnx-grid--balance-editors-only)))
+
+(provide 'drgnx-grid)
+;;; drgnx-grid.el ends here

@@ -3235,7 +3235,7 @@ What the `areas` backend does with the edges:
 - Redefining a kind with another home takes it out of its old dock; an editor kind's place rule goes when its
   `:buffer` or home changes.
 
-## The grid (`wb/drgnx-grid-tree.el`)
+## The grid (`wb/drgnx-grid-tree.el`, `wb/drgnx-grid.el`)
 
 The tiled grid is Emacs's own window tree: a tile is a live window and a container is an internal window, so drgnx
 keeps no second tree that could drift from it. Its snapshot, `TREE`, exists only as data: for full size, the layout
@@ -3265,6 +3265,51 @@ the middle), else `center` (a stack). A corner goes to the nearer side, a tie to
 N)` gives the switcher's letters: the home row first (`a s d f j k l ; g h`), then the other letters of a–z, at most 27.
 Test: `test/unit/grid-tree-test.el`.
 
+### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
+
+`drgnx-grid-mode` (global) makes `grid` the pane backend (`drgnx-pane-backend`): pane kinds then live in **tool
+tiles**, ordinary windows of the frame's window tree, not side windows. Callers keep calling `drgnx-pane-show`,
+`-hide`, `-focus`, `-window` and `-resize`; the backend is registered in `drgnx-pane--backends` from
+`wb/drgnx-grid.el`.
+
+- A **tool tile** has the role `tile` (chrome `tile`: the tab row of its stack on its tab line, no mode line),
+  `drgnx-pane-stack` (its kinds, the shown one first), `drgnx-tile-id` (an integer, per frame), `drgnx-tile-dock`
+  (`left`, `right`, `bottom`, nil once moved off its home), `no-delete-other-windows`, `no-other-window`, and a
+  `delete-window` parameter that hides it. It is dedicated (`drgnx`), so `display-buffer` never puts another buffer
+  there.
+- An **editor tile** is an editor window (role `editor`) with a `drgnx-tile-id` and `no-delete-other-windows`; its
+  `delete-window` refuses the last one.
+- `(drgnx-grid-root &optional FRAME)` is `window-main-window`; `(drgnx-grid-tiles &optional FRAME FILTER)` lists the
+  tiles in reading order (`editor`, `tool` or nil for both); `(drgnx-grid-dock DOCK &optional FRAME)` is the tile
+  docked there; `(drgnx-grid-toggle-dock DOCK)` hides it or shows it with the kind it showed last.
+- **Where a tile goes.** The left and right docks run the frame's full height beside the whole grid; the bottom dock
+  sits under the part between them. A hidden dock comes back beside the tiles it gave its space to (frame parameter
+  `drgnx-grid-memory`, keyed by dock, or by kind for a tile without one: `(:side :neighbour IDS :px LOGICAL :dock)`),
+  else at its dock. A kind whose dock tile shows joins its stack. The size is the dock's `:sizes` intent, else the
+  kinds' `:size` in columns or lines, clamped so both the new tile and its neighbour keep `drgnx-grid-min-px` (120
+  logical px; in a terminal `drgnx-grid-min-columns` 12 and `drgnx-grid-min-lines` 3). With no room it says "No room
+  there" and changes nothing.
+- **Hiding** deletes the window with its space going to its sibling only, and inside the sibling only to the tiles
+  along the deleted edge: the others' sizes are preserved for the delete (Emacs's `delete-window` gives the space to
+  `window-left` or `window-right`).
+- Each kind's buffer, start and point per frame are kept in a weak table (`drgnx-grid--kinds`), not a frame
+  parameter, so the saved frame state never holds a buffer. A killed buffer brings its kind's placeholder.
+- While the mode is on, `balance-windows` balances only editor tiles (`drgnx-grid--balance-editors-only`: the tool
+  tiles' buffers are `window-size-fixed` for the call), and a new editor window becomes an editor tile (the store's
+  `windows-changed`).
+
+The rules, each a test in `test/unit/grid-rules-test.el`:
+
+| | Rule |
+|---|---|
+| R1 | Showing a kind already in a stack brings its tab to the front; the window and every edge stay |
+| R2 | Showing a hidden tile takes space only from its neighbour |
+| R3 | Hiding a tile gives its space back to that neighbour only |
+| R4 | A tile keeps its pixel size across hide and show (±0 px) |
+| R5 | Tool tiles never take focus unless asked |
+| R6 | A tool tile shows only its kinds' buffers; killing one shows the placeholder |
+| R7 | Nothing splits, resizes or makes a frame on its own: `delete-window` on a tool tile hides it, `balance-windows` and `delete-other-windows` leave the tool tiles |
+| R8 | The last editor tile stays |
 
 ## The UI kit (`drgnx-ui-kit.el`)
 
