@@ -62,6 +62,7 @@ and off the row, not."
          (dir (file-name-as-directory (make-temp-file "look-open-hover" t)))
          (config (with-selected-frame root (current-window-configuration)))
          (drgnx-wb--sections nil)
+         (drgnx-wb--collapsed (list (cons 'buffers nil)))   ; Open unfolded (it starts folded), as its user left it
          (drgnx-explorer--roots (list dir)) opened dirty)
     (unwind-protect
         (with-selected-frame root

@@ -44,6 +44,7 @@ that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel le
          (size (list (frame-pixel-width root) (frame-pixel-height root)))
          (config (with-selected-frame root (current-window-configuration)))
          (drgnx-wb--sections nil)
+         (drgnx-wb--collapsed (list (cons 'buffers nil)))   ; Open unfolded (it starts folded), as its user left it
          (drgnx-explorer--roots (list dir)) opened want)
     (unwind-protect
         (with-selected-frame root
