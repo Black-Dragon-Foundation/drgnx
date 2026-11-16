@@ -279,6 +279,7 @@ pub fn read(view: &str, edited: &str, model: &ViewModel) -> Proposal {
                 None
             },
             body: std::mem::take(&mut text[k]),
+            key: String::new(),
             source: String::new(),
             task: None,
             parent: None,

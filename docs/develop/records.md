@@ -54,9 +54,24 @@ All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well und
   (`Origin::Imported`, `source = records:<hash of the path>`) whose `body` is the piece's raw text: a plan is its head
   (`plan`), one `task` per task (heading, body and the sections after it) and its tail; a ledger a head and one
   `note` per section; DEFERRED prose pieces (a head first) and one `todo` per row of every four-cell register table (`#`/`id` first, `status`/`state` last) and per `### <ID> — title` entry (role `entry`, status the first word of its `- **Status:**` bullet); the board a `note` per text or table block;
-  `board.org` a head and one `task` per headline. Ids are `<kind>:rec-<hash>-<seq>`, so importing twice changes
-  nothing (the second report says 0 operations and adds no `tx` row); pieces that disappeared from the file are
-  retired.
+  `board.org` a head and one `task` per headline; a spec (`docs/specs/**`) or a decision record (`docs/decisions/**`,
+  `docs/adr/**`) is one `spec` or `decision` piece, the whole file (`saga::spec`: title from the first `# ` heading,
+  status from a `**Status:**` line or MADR front matter, `approved`/`accepted` read as `done`, headings kept as
+  anchors). Each piece has a **key**, what it is in its file and unique there (`head`, `rest`, `row 12`, `entry
+  R6-KI-3`, `task 5`, `section Done`; a repeated key gets ` #2`), and its id is `<kind>:rec-<hash of the path>-<hash
+  of the key>`: importing twice changes nothing (the second report says 0 operations and adds no `tx` row), a row
+  added in the middle leaves every other piece's id alone, and pieces that disappeared from the file are retired.
+- **Links.** `saga::links::links(text, file, root, known)` reads a record file's links to other records from its own
+  text: a relative markdown link or a backtick path naming a record is `relates`; a plan's `**Spec:**` line (or its
+  first link to a spec) is `derives`; `X.ledger.md` relates to `X.md`; an ADR's link on a line saying `Supersedes` is
+  `supersedes`. Links inside code fences, to files that are not records, or out of the root are dropped.
+- **The merge.** `saga::merge::merge(file, base, live)` is the three-way merge of a view with the graph, piece by
+  piece: FILE is the file's pieces now, BASE what the hub last wrote or read of each (the digests of its last texts,
+  newest first), LIVE the graph's pieces in order. A piece changed on one side takes that side; changed on both to
+  different text, or changed in the file back to an older text of the base (a stale editor save), or changed in a
+  user-only field (`saga::proposal::USER_ONLY_FIELDS`), keeps the file's text and is flagged (`Act::Conflict`); a
+  piece new in the file is created, one deleted from it retired (flagged when the graph changed it meanwhile); a
+  piece new in the graph is placed after its neighbour. An unchanged graph and file render the file byte for byte.
 - **Views.** `saga::view::render` concatenates the pieces in `seq` order: an unchanged graph renders the imported
   file byte for byte. The hub writes the file back at its path (tmp file + rename) with a one-line header comment,
   which the importer strips.

@@ -3,7 +3,9 @@
 //!
 //! A file becomes an ordered list of pieces; each piece is one entity whose `body` is the piece's raw text, so
 //! concatenating the bodies in `seq` order is the file again, byte for byte ([`crate::view::render`]).  Ids are
-//! stable (`<kind>:rec-<hash of the source path>-<seq>`), so importing a file twice changes nothing.
+//! stable and keyed (`<kind>:rec-<hash of the source path>-<hash of the piece's key>`): a piece's key is what it is
+//! in its file (`head`, `row 12`, `task 5`, `section Done`), so importing a file twice changes nothing and a row
+//! added in the middle leaves the other rows' ids alone.
 
 use crate::board_md::{self, BoardDoc};
 use crate::deferred::{self, DeferredDoc};
@@ -20,6 +22,9 @@ pub enum AnyDoc {
     Deferred(DeferredDoc),
     Board(BoardDoc),
     Org(OrgDoc),
+    /// A spec or a decision record: one piece, the whole file.
+    Spec(crate::spec::SpecDoc),
+    Decision(crate::spec::SpecDoc),
 }
 
 /// One entity of an imported file.  `seq` 0 is the head piece (the entity the file is known by).
@@ -28,6 +33,8 @@ pub struct GraphOp {
     pub id: String,
     pub kind: &'static str,
     pub seq: u32,
+    /// What the piece is in its file, unique there (`head`, `row 12`, `task 5`…): the id is made from it.
+    pub key: String,
     /// What the piece is: `head`, `task`, `section`, `row`, `block`, `item` or `rest`.
     pub role: &'static str,
     pub title: Option<String>,
@@ -125,7 +132,34 @@ struct Out {
     ops: Vec<GraphOp>,
 }
 
+/// A piece's key before it is made unique: its role, then what names it in the file (a row's id, a task's number,
+/// a section's title, an item's first line).
+fn piece_key(role: &str, title: Option<&str>, body: &str) -> String {
+    let name = match role {
+        "head" | "rest" => return role.to_string(),
+        // `5 Do the thing` / `R6-KI-14 text`: the first word is the number or the id
+        "task" | "row" | "entry" => title.and_then(|t| t.split_whitespace().next()),
+        _ => title.or_else(|| body.lines().find(|l| !l.trim().is_empty())),
+    };
+    match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => format!("{role} {n}"),
+        None => role.to_string(),
+    }
+}
+
 impl Out {
+    /// KEY, or KEY with ` #2`, ` #3`… when an earlier piece of the file has it.
+    fn unique(&self, key: String) -> String {
+        let taken = |k: &str| self.ops.iter().any(|o| o.key == k);
+        if !taken(&key) {
+            return key;
+        }
+        (2..)
+            .map(|n| format!("{key} #{n}"))
+            .find(|k| !taken(k))
+            .expect("unbounded")
+    }
+
     fn push(
         &mut self,
         kind: &'static str,
@@ -135,10 +169,12 @@ impl Out {
         body: String,
     ) {
         let seq = self.ops.len() as u32;
+        let key = self.unique(piece_key(role, t.as_deref(), &body));
         self.ops.push(GraphOp {
-            id: format!("{kind}:rec-{}-{seq}", self.h),
+            id: format!("{kind}:rec-{}-{}", self.h, hash(&key)),
             kind,
             seq,
+            key,
             role,
             title: t,
             status,
@@ -261,11 +297,34 @@ pub fn ops(doc: &AnyDoc, source: &std::path::Path) -> Vec<GraphOp> {
                 );
             }
         }
+        AnyDoc::Spec(d) | AnyDoc::Decision(d) => {
+            let kind = if matches!(doc, AnyDoc::Spec(_)) {
+                "spec"
+            } else {
+                "decision"
+            };
+            let st = d.status.as_deref().map(spec_status);
+            o.push(kind, "head", d.title.clone(), st, d.text.clone());
+        }
     }
     o.ops
 }
 
-/// Parse TEXT as a record file of KIND (`plan`, `ledger`, `deferred`, `board-md`, `org`).
+/// A spec's or ADR's status word as one of `status::STATUSES`: approved and accepted are done, proposed and draft
+/// are open, superseded and rejected are dropped.
+fn spec_status(raw: &str) -> String {
+    let t = raw.trim().to_lowercase();
+    if ["approved", "accepted", "adopted", "final"]
+        .iter()
+        .any(|w| t.starts_with(w))
+    {
+        "done".into()
+    } else {
+        crate::status::normalize(raw)
+    }
+}
+
+/// Parse TEXT as a record file of KIND (`plan`, `ledger`, `deferred`, `board-md`, `org`, `spec`, `decision`).
 pub fn parse(kind: &str, text: &str) -> Option<AnyDoc> {
     Some(match kind {
         "plan" => AnyDoc::Plan(plan::parse(text)),
@@ -273,6 +332,8 @@ pub fn parse(kind: &str, text: &str) -> Option<AnyDoc> {
         "deferred" => AnyDoc::Deferred(deferred::parse(text)),
         "board-md" => AnyDoc::Board(board_md::parse(text)),
         "org" => AnyDoc::Org(org::parse(text)),
+        "spec" => AnyDoc::Spec(crate::spec::parse(text)),
+        "decision" => AnyDoc::Decision(crate::spec::parse(text)),
         _ => return None,
     })
 }
