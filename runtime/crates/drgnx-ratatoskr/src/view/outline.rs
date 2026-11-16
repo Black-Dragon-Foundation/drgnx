@@ -11,9 +11,13 @@ use super::model::Doc;
 use super::{Key, Views, icons, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
+use drgnx_rows::fit::FontSet;
+use drgnx_rows::fit_row::{Room, fit_row};
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use hrafn::symbols::OutlineEntry;
-use runstav::methods::view::{OutlineScope, OutlineScopes, OutlineScopesParams, OutlineSet};
+use runstav::methods::view::{
+    Display, OutlineScope, OutlineScopes, OutlineScopesParams, OutlineSet, ViewEnv,
+};
 use runstav::wire::Error;
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -185,23 +189,88 @@ pub fn rows(shown: &Shown, look: &RowLook) -> (Vec<Row>, Vec<(ImageId, String)>)
             (rows, Vec::new())
         }
         Shown::Notice(text) => {
-            let mut images = BTreeMap::new();
-            let mut r = RowBuilder::new(NOTICE_KEY);
-            r.push("  ", None);
-            if let Some((_, icon, _)) = look.gui
-                && let Some((id, svg)) = icons::svg("info", icon)
-            {
-                images.insert(id, svg);
-                r.image(id, " ");
-                r.push(" ", None);
-            }
-            r.push(text, None);
-            let end = r.pos();
-            r.face(0, end, "drgnx-text-muted");
-            r.prop(0, end, "drgnx-row-inert", json!(true));
-            (vec![r.finish()], images.into_iter().collect())
+            let (row, images) = notice_row(NOTICE_KEY, text, look, true);
+            (vec![row], images)
         }
     }
+}
+
+/// A notice's row KEY: two columns, the info icon (a graphical display, when ICON) and TEXT, muted, inert.
+fn notice_row(key: &str, text: &str, look: &RowLook, icon: bool) -> (Row, Vec<(ImageId, String)>) {
+    let mut images = BTreeMap::new();
+    let mut r = RowBuilder::new(key);
+    r.push("  ", None);
+    if let Some((_, size, _)) = look.gui
+        && let Some((id, svg)) = icons::svg("info", size)
+    {
+        if icon {
+            images.insert(id, svg);
+            r.image(id, " ");
+        } else {
+            r.push(" ", None); // the icon's place, so the lines start together
+        }
+        r.push(" ", None);
+    }
+    r.push(text, None);
+    let end = r.pos();
+    r.face(0, end, "drgnx-text-muted");
+    r.prop(0, end, "drgnx-row-inert", json!(true));
+    (r.finish(), images.into_iter().collect())
+}
+
+/// SHOWN's rows in LOOK for ENV's window, measured in FONTS: as [`rows`], but a notice wider than the window wraps
+/// at its spaces onto rows of its own (keys `notice`, `notice-2`, …) instead of being cut (the store fits every row it
+/// publishes to the window, `drgnx_rows::fit_row`): a notice is read whole.
+pub fn rows_in(
+    shown: &Shown,
+    look: &RowLook,
+    env: &ViewEnv,
+    fonts: &FontSet,
+) -> (Vec<Row>, Vec<(ImageId, String)>) {
+    let Shown::Notice(text) = shown else {
+        return rows(shown, look);
+    };
+    if env.width_px == 0 || env.headless {
+        return rows(shown, look);
+    }
+    let (_, icon_images) = notice_row(NOTICE_KEY, "", look, true);
+    let image_px = |id: &ImageId| {
+        icon_images
+            .iter()
+            .find(|(i, _)| i == id)
+            .and_then(|(_, svg)| drgnx_rows::image::svg_width(svg))
+    };
+    let room = Room {
+        width_px: env.width_px,
+        tty: matches!(env.display, Display::Tty)
+            .then_some((env.cell.0.max(1), env.tty_widths.as_slice())),
+        image_px: &image_px,
+    };
+    let fits = |line: &str, first: bool| {
+        let (mut r, _) = notice_row(NOTICE_KEY, line, look, first);
+        !fit_row(&mut r, fonts, &room)
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        let first = lines.len() == 1;
+        match lines.last_mut() {
+            Some(line) if fits(&format!("{line} {word}"), first) => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(word.to_owned()),
+        }
+    }
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let key = if i == 0 {
+            NOTICE_KEY.to_owned()
+        } else {
+            format!("{NOTICE_KEY}-{}", i + 1)
+        };
+        out.push(notice_row(&key, line, look, i == 0).0);
+    }
+    (out, icon_images)
 }
 
 impl Views {
@@ -210,7 +279,9 @@ impl Views {
         let Some(shown) = self.outlines.shown(key.0, &key.1) else {
             return false;
         };
-        self.publish_built(f, key, |env, _| rows(&shown, &RowLook::of(env, INDENT, 1)));
+        self.publish_built(f, key, |env, fonts| {
+            rows_in(&shown, &RowLook::of(env, INDENT, 1), env, fonts)
+        });
         true
     }
 
