@@ -9,6 +9,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-color)
 (require 'drgnx-faces)
+(require 'diff-mode)                    ; the diff faces it measures (no drgnx file needs to load them first)
 (load (expand-file-name "modules/ui/drgnx-look-derive" drgnx-dir) nil t)
 (add-to-list 'custom-theme-load-path (expand-file-name "test/fixtures/themes" drgnx-dir))
 

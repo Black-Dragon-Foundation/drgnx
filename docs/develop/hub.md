@@ -1517,9 +1517,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `plugins/disable` | user | `{name: string}` | `PluginRow` | yes |
 | `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
-| `records/decide` | user | `{accept: boolean, id: Id}` | `{backup?: string, id: string, note?: string, status: "open" \| "accepted" \| "rejected" \| "stale"}` | yes |
-| `records/import` | user | `{dry_run?: boolean, only?: "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
-| `records/proposals` | user | `{path?: AbsPath}` | `{proposals?: [Proposal]}` | no |
+| `records/conflict` | user | `{id: Id}` | `{at: number, file: string, graph: string, id: string, path: string}` | no |
+| `records/import` | user | `{dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
+| `records/resolve` | user | `{id: Id, keep: "file" \| "graph"}` | `{id: string, keep: "file" \| "graph", path: string}` | yes |
 | `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
@@ -1717,8 +1717,9 @@ result is (`event(NAME).check`):
 | `agent-buffer` | the buffer views (to the view's connection only) | `{view, version, base, doc_version?, approximate?, agents: [{session, ordinal?, handle?, mode, line?, line_end?, col?, source, live?, projected?, step_title?, plan_entry?}], gutter: [{session, kind, start, end, projected?, help}]}`: a watched buffer's frame, at most once per view per 50 ms ("The buffer view") |
 | `agent-follow` | the follow feed (to the view's connection only) | `{view, session, file?, worktree, line?, col?, mode: listed \| read \| pending \| write \| edit, step_title?, plan_entry?, why_source: plan_entry \| step_title, changed?}`: where the followed session is now, at most once per 200 ms ("The follow feed") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
-| `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
-| `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
+| `view-written` | records | `{path, kind, hash}`: a record file written (never committed) |
+| `records-notice` | records | `{root, files, backup?}`: a project's record files were adopted (once per file); none is rewritten before |
+| `records-conflict` | records | `{path, ids}`: records both their file and the graph changed, newly flagged (Records: Resolve Conflict) |
 | `agent-wheel` | sessions | `{id, state: held \| free}`: the user's hold on a session's wheel; `held` once the turn the take stopped has ended and its step snapshot is taken (coordination.md, "Take the wheel") |
 | `wheel-save` | sessions (a give) | `{req, id, worktree}`: the editor saves its buffers in the session's worktree and answers `agents/wheel/saved {req, unsaved}` |
 | `pair-apply` | the pair door (to the editor that has the file) | `{write, session, ordinal, file, version?, floor?, edits: [{kind: replace, old, new} \| {kind: lines, line, delete, text}], ttl_ms}`: applied whole or refused whole, answered by `pair/answer` ([Pair mode](#pair-mode)) |

@@ -802,31 +802,27 @@ of the built one.
 
 ## Plans and records
 
-Plans, ledgers, `DEFERRED.md`, `BUILD-BOARD.md` (and `board.org`, only when you name it) can move into the graph:
-`ratatoskr graph import-records --root DIR` (add `--dry-run` to see what it would do). Every file is copied to
-`<state>/hub/records-backup/<date>/` first; importing again changes nothing. Afterwards each file is a view of the
-graph: drgnx rewrites it when the records change, starts it with a one-line comment saying so, and never overwrites
-a file you edited by hand. drgnx never commits these files; that stays yours.
+A project's specs (`docs/specs/`), plans and ledgers (`docs/plans/`), decision records (`docs/decisions/`,
+`docs/adr/`), `DEFERRED.md` and `BUILD-BOARD.md` (and `board.org`, only when you name it) move into the Work graph:
+`ratatoskr graph import-records --root DIR` (add `--dry-run` to see what it would do). The first time, every file and
+the graph store are copied to `<state>/hub/records-backup/<date>/`, and a notice lists the files drgnx keeps from now
+on; adopting them changes no byte. Importing again changes nothing. drgnx never commits these files; that stays yours.
 
-### Editing a plan file
+### Editing a record file
 
-You can edit these files by hand. drgnx does not refuse and does not overwrite: it reads what you changed as a
-proposal (a diff, and the changes to the records it comes to) and leaves your file as it is. The file waits, with the
-graph's own changes, until you accept or reject the proposal; a second edit replaces it. Accepting applies the
-changes and rewrites the file; if a record changed in the meantime, the proposal is marked stale and read again. Parts
-that match no record (a deleted row, say) become a note. Rejecting keeps a copy of your edit in
-`<state>/hub/records-backup/` and rewrites the file. A manager agent may decide a proposal when the matrix allows it,
-except for settings only you may change (a plan's `matrix`).
+The files stay yours to edit, by hand, in any editor, or by an agent: an edit reaches the graph, and a change in the
+graph (a task closed, a row's status) is written back into the file, piece by piece (a row, a task, a section), so
+your edits elsewhere in the file stay as they are. No header is added. Two people (or agents) editing different rows
+of the same file both keep their change; a write that lands while drgnx is merging makes it start over.
 
-### Reviewing a hand edit
-
-The hub writes the org folder's plans, ledgers and DEFERRED file as views of its graph. If you edit one by hand, the
-hub does not overwrite it: the edit becomes a proposal and you get a notice ("A hand edit to … is waiting for
-review"). The notice only tells you; nothing asks. **Records: Review Proposal** (from the notice, or the palette) shows
-the proposal as a diff, with a line saying how many operations it would apply. In that buffer `C-c C-a` accepts (the
-hub applies the operations if the records did not change meanwhile, then rewrites the file) and `C-c C-r` rejects (your
-edited file is kept in the hub's records backup, then the file is rewritten). A proposal that went stale stays open:
-review it again. Also available as **Records: Accept Proposal** and **Records: Reject Proposal**.
+When the file and the graph changed **the same** piece, the file keeps your text and the record is flagged: a notice
+says so ("A record in DEFERRED.md changed in the file and in the graph"), and nothing asks. The same happens when an
+editor saves text it loaded before drgnx's last change (it would undo that change), and when a file edit changes a
+setting only you may set (a plan's `matrix`). **Records: Resolve Conflict** (from the notice, or the palette) shows both
+versions; in that buffer `C-c C-f` keeps the file's text (it becomes the record's) and `C-c C-g` keeps the graph's (it
+is written back into the file). Also available as **Records: Keep the File's Version** and **Records: Keep the
+Graph's Version**. A manager agent may resolve a conflict when the matrix allows it (`record_conflict_resolve`), but
+never keeps a file's change to a setting only you may set.
 
 ## Going back to a step, and forking from one
 
