@@ -1427,13 +1427,33 @@ fn a_file_the_importer_holds_is_not_drawn_again_from_the_old_scanners_entity() {
 }
 
 #[test]
+fn a_proposal_chip_says_sign_off_once_and_names_its_job() {
+    let mut core = core_with(1);
+    core.step(Event::Card(CardFact {
+        id: "g1".into(),
+        kind: CardKind::SignOff,
+        about: Vec::new(),
+        text: strip_text(
+            "job-7",
+            "2 tasks, about 0.00 USD (some unpriced), 3M tokens, 40 min: approve to start",
+        ),
+        open: true,
+    }));
+    let v = rows_view(core.model(), 226);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    assert!(rows[0].text.contains("Sign off: 2 tasks (job-7)"), "{}", rows[0].text);
+    assert!(!rows[0].text.to_lowercase().contains("sign off: sign off"), "{}", rows[0].text);
+    assert_eq!(rows[0].text.matches("Sign off").count(), 1, "{}", rows[0].text);
+}
+
+#[test]
 fn a_proposal_on_the_strip_says_what_to_approve_and_which_job() {
     assert_eq!(
         strip_text(
             "job-7",
             "2 tasks, about 0.00 USD (some unpriced), 3M tokens, 40 min: approve to start"
         ),
-        "approve 2 tasks (job-7)"
+        "Sign off: 2 tasks (job-7)"
     );
     assert_eq!(
         strip_text("job-7", "Codex asks: cargo clippy"),
