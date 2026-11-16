@@ -89,7 +89,10 @@
     (should (member "README.md" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-frame-buffers kx-f1))")))
     ;; The Buffers panel lists the selected window's buffers, and its rows are the hub's: the session has a hub of its own.
     (drgnx-frames-test--eval sess "(progn (load (expand-file-name \"test/fixtures/ui-hub-fixture\" drgnx-dir) nil t) (drgnx-ui-hub-start drgnx-dir) t)")
-    (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f2) (drgnx-wb-show-sidebar) t)")
+    ;; Open unfolded (it starts folded), as its user would
+    (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f2) (drgnx-wb-show-sidebar)
+                                          (when (drgnx-wb-section-collapsed-p 'buffers) (drgnx-wb-toggle-section 'buffers))
+                                          t)")
     (drgnx-ui-measure sess nil)                     ; the bus re-renders the panel for this window
     (should (member "a.txt" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-buffers--shown))")))
     (should-not (member "README.md" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-buffers--shown))")))

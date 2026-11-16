@@ -370,7 +370,7 @@ within three lines of the word icon."
 
 ;;;; The pages
 
-(defvar drgnx-design-page-makers '(drgnx-design--tokens-pages drgnx-design--type-icon-pages)
+(defvar drgnx-design-page-makers '(drgnx-design--tokens-pages drgnx-design--type-icon-pages drgnx-design--component-pages)
   "Functions that return generated pages as ((PATH . TEXT)…), PATH relative to docs/design/.")
 
 (defun drgnx-design--tokens-pages ()
@@ -384,6 +384,104 @@ within three lines of the word icon."
         (cons "icons.md" (drgnx-design--icons-page))
         (cons "img/icons-dark.svg" (drgnx-design--icon-sheet 'dark))
         (cons "img/icons-light.svg" (drgnx-design--icon-sheet 'light))))
+
+;;;; The kit's component pages, from etc/ui/components.eld
+
+(defvar drgnx-design--densities)          ; the kit's tables, below
+
+(defun drgnx-design--component-page (id entry states)
+  "components/ID.md for component ID (ENTRY of etc/ui/components.eld) with the state table STATES."
+  (let* ((ax (drgnx-design--axes entry)) (combos (drgnx-design--combos (car ax)))
+         (g (plist-get entry :geometry)) (tty (plist-get entry :tty)))
+    (concat
+     (format "# %s (kit)\n\n" (capitalize (replace-regexp-in-string "-" " " (symbol-name id))))
+     (format "<!-- %s -->\n\n" (format drgnx-design--notice "etc/ui/components.eld"))
+     (format "The kit's `%s` component: one definition in `etc/ui/components.eld`, expanded the same way by the hub "
+             id)
+     "(`drgnx_rows::kit`) and by the Lisp chrome (`drgnx-ui-kit-expand`). Sizes are logical pixels; every colour is a "
+     "[token](../tokens.md). Open it live with **Design: Component Catalogue**.\n\n"
+     (format "![The %s component, dark](../img/kit-%s-dark.png)\n\n" id id)
+     (format "![The %s component, light](../img/kit-%s-light.png)\n\n" id id)
+     (format "![The %s component, high contrast](../img/kit-%s-hc.png)\n\n" id id)
+     "## Variants\n\n"
+     (if (plist-get entry :variants)
+         (mapconcat (lambda (a) (format "- `%s`: %s (default `%s`)" (car a)
+                                        (mapconcat (lambda (v) (format "`%s`" v)) (cdr a) ", ")
+                                        (plist-get (plist-get entry :defaults) (car a))))
+                    (plist-get entry :variants) "\n")
+       "- none")
+     "\n\n## Geometry\n\n"
+     "| Variant | Density | Height | Pad (start / end) | Gap | Box | Radius | Hit | Indent |\n"
+     "|---|---|---|---|---|---|---|---|---|\n"
+     (mapconcat
+      (lambda (chosen)
+        (mapconcat
+         (lambda (d)
+           (let* ((get (lambda (k) (drgnx-design--resolve (plist-get g k) chosen d))) (pad (funcall get :pad)))
+             (format "| %s | %s | %s | %s | %s | %s | %s | %s | %s |"
+                     (if chosen (mapconcat (lambda (c) (symbol-name (cdr c))) chosen " ") "-") d
+                     (drgnx-design--cell (funcall get :height))
+                     (if pad (format "%s / %s" (car pad) (cdr pad)) "-")
+                     (drgnx-design--cell (funcall get :gap)) (if (funcall get :box) "yes" "no")
+                     (drgnx-design--cell (funcall get :radius)) (drgnx-design--cell (funcall get :hit))
+                     (drgnx-design--cell (funcall get :indent)))))
+         drgnx-design--densities "\n"))
+      (or combos '(nil)) "\n")
+     "\n\n## On a terminal\n\n"
+     (format "- padding: %s character(s) each side\n" (or (plist-get tty :pad) 0))
+     (if (plist-get tty :indent)
+         (format "- indent: %s character(s) a level (%s)\n"
+                 (mapconcat (lambda (chosen) (format "%s %s" (cdar chosen)
+                                                     (drgnx-design--resolve (plist-get tty :indent) chosen nil)))
+                            combos ", ")
+                 "per variant")
+       "")
+     (if (plist-get tty :twisty)
+         (format "- twisty: `%s` closed, `%s` open (glyphs of `drgnx-face-glyphs`, ASCII `%s` and `%s`)\n"
+                 (car (alist-get (car (plist-get tty :twisty)) drgnx-ui--default-glyphs))
+                 (car (alist-get (cadr (plist-get tty :twisty)) drgnx-ui--default-glyphs))
+                 (cdr (alist-get (car (plist-get tty :twisty)) drgnx-ui--default-glyphs))
+                 (cdr (alist-get (cadr (plist-get tty :twisty)) drgnx-ui--default-glyphs)))
+       "")
+     (if (plist-get tty :glyph) (format "- glyph: `%s`\n" (plist-get tty :glyph)) "")
+     "\n## Spoken label\n\n"
+     (let ((l (plist-get entry :label)))
+       (cond ((null l) "None: the row's own text is what a screen reader speaks.\n")
+             ((stringp l) (format "\"%s\"\n" l))
+             (t (format "`%S`\n" l))))
+     "\n## Colours\n\n"
+     (if (plist-get entry :bind)
+         (concat "| Binding | Face | Fill | Text | Edge |\n|---|---|---|---|---|\n"
+                 (mapconcat (lambda (b)
+                              (format "| %s | `drgnx-kit-%s%s` | %s | %s | %s |"
+                                      (if (car b) (mapconcat #'symbol-name (car b) " ") "own") id
+                                      (if (car b) (concat "-" (mapconcat #'symbol-name (car b) "-")) "")
+                                      (drgnx-design--cell (plist-get (cdr b) :bg)) (drgnx-design--cell (plist-get (cdr b) :fg))
+                                      (drgnx-design--cell (plist-get (cdr b) :edge))))
+                            (plist-get entry :bind) "\n")
+                 "\n")
+       "No colours of its own: it draws on the surface it is in, with the states' faces.\n")
+     "\n## States\n\n| State | Fill | Ring | Text | Face | Terminal |\n|---|---|---|---|---|---|\n"
+     (mapconcat (lambda (s)
+                  (let ((p (cdr s)))
+                    (format "| %s | %s | %s | %s | %s | %s |" (car s)
+                            (if (plist-get p :fill)
+                                (format "`%s`%s" (plist-get p :fill)
+                                        (if (plist-get p :radius) (format ", radius %s" (plist-get p :radius)) ""))
+                              "the surface")
+                            (if (plist-get p :ring) (format "`%s`, %s px inset" (car (plist-get p :ring)) (cdr (plist-get p :ring))) "-")
+                            (if (plist-get p :fg) (format "`%s`" (plist-get p :fg)) "unchanged")
+                            (if (plist-get p :face) (format "`%s`" (plist-get p :face)) "-")
+                            (or (plist-get p :tty) "-"))))
+                states "\n")
+     "\n")))
+
+(defun drgnx-design--component-pages (&optional table)
+  "components/ID.md for each component of TABLE (default etc/ui/components.eld)."
+  (let ((table (or table (drgnx-ui-kit-components))))
+    (mapcar (lambda (c) (cons (format "components/%s.md" (car c))
+                              (drgnx-design--component-page (car c) (cdr c) (alist-get 'state-table table))))
+            (alist-get 'components table))))
 
 (defun drgnx-design-pages ()
   "Every generated page: ((PATH . TEXT)…), PATH relative to docs/design/."
@@ -717,6 +815,19 @@ NAME-light.png.  Scenes that need the Work space run on their own
                                    "-strip" "-define" "png:compression-level=9" target))
         (error "drgnx design: cutting %s failed" target)))))
 
+(defun drgnx-design--trim (source target)
+  "The PNG SOURCE (a whole frame) into TARGET with ImageMagick: the mode line and echo area (the bottom 5 %) cut off,
+then trimmed to what is drawn on the surface, with 16 px of the surface round it."
+  (let ((program (or (executable-find "magick") (executable-find "convert"))))
+    (unless program (error "drgnx design: no ImageMagick (magick) to cut the pictures"))
+    (let ((surface (with-temp-buffer
+                     (call-process program nil t nil source "-format" "%[pixel:p{0,0}]" "info:")
+                     (string-trim (buffer-string)))))
+      (unless (zerop (call-process program nil nil nil source "-gravity" "north" "-crop" "100%x95%+0+0" "+repage"
+                                   "-trim" "+repage" "-bordercolor" surface "-border" "16" "-strip"
+                                   "-define" "png:compression-level=9" target))
+        (error "drgnx design: cutting %s failed" target)))))
+
 (defun drgnx-design-cut-shots (dirs &optional dir)
   "Cut every picture of `drgnx-design-shots' from the look scenes' output in DIRS
 (`bin/drgnx ui look-scenes OUT', scale 1) into DIR (default the checkout's docs/design/img/).  A scene is looked for in
@@ -730,6 +841,16 @@ each of DIRS in turn.  The paths written."
                  (target (expand-file-name (format "%s-%s.png" name (car variant)) out)))
             (unless source (error "drgnx design: no picture %s in %s" file (string-join dirs ", ")))
             (drgnx-design--crop source target box)
+            (push target written)))))
+    ;; the kit's components: each sheet's picture (`drgnx-kit-sheet-check', kit-sheet-ID-THEME.png at scale 1 and the
+    ;; comfortable density), where a sheet row ran; a component whose sheet is not in DIRS keeps its pictures
+    (dolist (c (alist-get 'components (drgnx-ui-kit-components)))
+      (dolist (theme '("dark" "light" "hc"))
+        (when-let* ((source (seq-some (lambda (d) (let ((f (expand-file-name (format "kit-sheet-%s-%s.png" (car c) theme) d)))
+                                                    (and (file-exists-p f) f)))
+                                      dirs)))
+          (let ((target (expand-file-name (format "kit-%s-%s.png" (car c) theme) out)))
+            (drgnx-design--trim source target)
             (push target written)))))
     (nreverse written)))
 

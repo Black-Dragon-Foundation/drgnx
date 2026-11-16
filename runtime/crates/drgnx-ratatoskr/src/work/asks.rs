@@ -562,6 +562,16 @@ impl Shell {
         match front.writer.db.read(move |c| read_written(c, since)).await {
             Ok(seen) => {
                 self.seen = Some(seen.last);
+                // the recording session's next write names it as its reason (in this turn, from this step on)
+                for r in seen.recorded.iter().filter(|r| call_of(r).is_some()) {
+                    if let Ok(s) = front
+                        .core
+                        .agents
+                        .find(r.session.trim_start_matches("session:"))
+                    {
+                        s.conclusion_recorded(&r.conclusion);
+                    }
+                }
                 let due: Vec<_> = seen
                     .recorded
                     .iter()

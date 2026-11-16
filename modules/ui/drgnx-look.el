@@ -36,7 +36,11 @@
   (load (expand-file-name "drgnx-look-echo" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-look-bridge)
   (load (expand-file-name "drgnx-look-bridge" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+;; and the component catalogue (Design: Component Catalogue)
+(unless (featurep 'drgnx-kit-catalogue)
+  (load (expand-file-name "drgnx-kit-catalogue" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-look-variant "drgnx-theme-gen" (&optional frame))
+(declare-function drgnx-kit-catalogue-open "drgnx-kit-catalogue" (&optional component theme density scale))
 (declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
 (defvar drgnx-look-density-changed-hook)
 (declare-function drgnx-look-follow-on "drgnx-look-follow" ())
@@ -66,6 +70,7 @@
 ;;;; Chrome (Glitnir, the compositor)
 
 (declare-function drgnx-look-variant "drgnx-theme-gen" (&optional frame))
+(declare-function drgnx-kit-catalogue-open "drgnx-kit-catalogue" (&optional component theme density scale))
 
 (drgnx-defsetting drgnx-look-motion 'auto
   "Motion of popups, the palette and notices under Glitnir: `auto' follows the desktop's reduced-motion
@@ -698,10 +703,15 @@ only the one remap is reapplied."
                        (drgnx-look-echo-apply)
                        ;; the kit: the focus ring after a key, not a click; a component's action on RET or a click
                        (drgnx-ui-kit-focus-mode 1)
+                       ;; the faces a component replaces inherit its kit face (undone with the module)
+                       (drgnx-ui-kit-define-aliases)
                        (drgnx-command-define 'kit-activate :category "View" :title "Activate the Component at Point"
                                              :command #'drgnx-ui-kit-activate :map 'drgnx-ui-kit-action-base-map
                                              :when (lambda () (get-text-property (point) 'drgnx-action))
                                              :doc "Run the action of the button, row or card at point (its `drgnx-action')")
+                       (drgnx-command-define 'design-component-catalogue :category "Design"
+                                             :title "Component Catalogue" :command #'drgnx-kit-catalogue-open
+                                             :doc "Every kit component in every variant and state, as drgnx draws it")
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window

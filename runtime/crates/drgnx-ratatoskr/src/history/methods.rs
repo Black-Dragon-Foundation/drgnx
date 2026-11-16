@@ -187,6 +187,7 @@ impl Hub {
             } else {
                 &c.origin
             })?;
+            let cause = g.whole_cause(cause);
             let peer = g.peer(branch, &key, &author)?;
             let inner = &mut *g;
             let mut ad = inner.h.activate(doc, branch, || Ok(String::new()))?;
