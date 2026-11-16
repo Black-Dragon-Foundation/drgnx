@@ -26,7 +26,7 @@
 (defvar display-line-numbers-grow-only)
 (declare-function window-divider-mode "frame")
 ;; the parts of the module, beside this file: set up by its setup, turned off by its teardown
-(dolist (part (quote (drgnx-close drgnx-statusbar drgnx-quickhelp drgnx-menubar drgnx-topline drgnx-start)))
+(dolist (part (quote (drgnx-close drgnx-statusbar drgnx-quickhelp drgnx-menubar drgnx-topline drgnx-inbox drgnx-start)))
   (unless (featurep part)
     (load (expand-file-name (symbol-name part) (file-name-directory (or load-file-name buffer-file-name))) nil t)))
 (defvar drgnx-topline--active)
@@ -37,8 +37,11 @@
 (declare-function drgnx-menubar-setup "drgnx-menubar")
 (declare-function drgnx-menubar-off "drgnx-menubar")
 (declare-function drgnx-menubar-open "drgnx-menubar")
+(declare-function drgnx-menubar-pick "drgnx-menubar")
 (defvar drgnx-menubar-mode)
 (declare-function drgnx-topline-setup "drgnx-topline")
+(declare-function drgnx-inbox-setup "drgnx-inbox")
+(declare-function drgnx-inbox-off "drgnx-inbox")
 (declare-function drgnx-topline--off "drgnx-topline")
 (declare-function drgnx-start-setup "drgnx-start")
 (declare-function drgnx-start-teardown "drgnx-start")
@@ -677,12 +680,12 @@ when it is off and ours is there.  A format of your own stays."
   (message "Menu bar %s" (if drgnx-face-menu-bar "shown" "hidden")))
 
 (defun drgnx-face-menu ()
-  "Open the menu: Emacs's menu bar when it is shown, else drgnx's File menu under the title row (the menu bar,
+  "Open the menu: Emacs's menu bar when it is shown, else drgnx's menu list under the title row's ☰ (the menu bar,
 drgnx-menubar.el), else the menu as text in the minibuffer (`tmm-menubar').
 F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden, and can freeze the window."
   (interactive)
   (cond ((not (zerop (or (frame-parameter nil 'menu-bar-lines) 0))) (call-interactively #'menu-bar-open))
-        ((bound-and-true-p drgnx-menubar-mode) (drgnx-menubar-open 'file))   ; under File in the title row
+        ((bound-and-true-p drgnx-menubar-mode) (drgnx-menubar-pick))   ; the menu button's list in the title row
         (t (tmm-menubar))))
 
 (defun drgnx-face-preferences ()
@@ -710,6 +713,7 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-quickhelp-setup)               ; quick help (drgnx-quickhelp.el)
   (drgnx-menubar-setup)                 ; the menu bar (drgnx-menubar.el)
   (drgnx-topline-setup)                 ; the top line (drgnx-topline.el)
+  (drgnx-inbox-setup)                   ; the needs-you inbox (drgnx-inbox.el)
   (drgnx-start-setup)                   ; the start page (drgnx-start.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
   (add-hook 'enable-theme-functions #'drgnx-face--on-theme)
@@ -741,6 +745,7 @@ bar and scroll bars, and the status bar's segments and commands.  Idempotent."
         drgnx-face--eglot-waiting nil drgnx-topline--active nil)
   (drgnx-face--apply-editor #'drgnx-face-editor-clear)
   (drgnx-topline--off)
+  (drgnx-inbox-off)
   (drgnx-menubar-off)
   (drgnx-quickhelp-off)
   (drgnx-start-teardown)

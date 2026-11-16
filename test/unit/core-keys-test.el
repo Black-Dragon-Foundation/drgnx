@@ -1496,6 +1496,7 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-disassembly-toggle-breakpoint ; the disassembly view
                               debug-inline-breakpoint ; Shift+F9, as in VS Code
                               debug-run-no-debug ; Run Without Debugging's C-F5
+                              inbox-open inbox-next inbox-previous inbox-press inbox-escape ; the inbox
                               terminal-toggle))   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))

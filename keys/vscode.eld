@@ -733,6 +733,22 @@
               (menu-bar-open-terminal "M-t" :mac ())   ; macOS: the system menu bar
               (menu-bar-open-help "M-h" :mac ())   ; macOS: the system menu bar
               (menu-bar-toggle :none "the palette; View > Appearance")
+              (title-row-project :none "the title row's project name; the palette")
+              (title-row-close-folder :none "the project switcher; the palette")
+              (inbox-open "C-M-n")  ; the pill's click; Ctrl+Shift+I is the LLM menu in the VS Code profile
+              (inbox-next "<down>")
+              (inbox-previous "<up>")
+              (inbox-press "RET")
+              (inbox-escape "<escape>")
+              (inbox-pin :none "the inbox's Pin as side bar button; the palette")
+              (inbox-unpin :none "the inbox tab's Unpin button; the palette")
+              (inbox-allow-once :none "in the inbox: Enter on a permission row, or its button")
+              (inbox-allow-session :none "in the inbox: its button")
+              (inbox-deny :none "in the inbox: its button")
+              (inbox-show :none "in the inbox: Enter on any other row, or its button")
+              (inbox-mark-all-read :none "in the inbox: its button")
+              (inbox-clear-answered :none "in the inbox: its button")
+              (inbox-all-notices :none "in the inbox: its button")
               (help-documentation :none "the palette; Help menu")
               (help-about :none "the palette; Help menu")
               (statusbar-toggle :none "the palette")

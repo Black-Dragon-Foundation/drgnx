@@ -36,13 +36,13 @@ module off (Preferences: Modules), nothing of this runs after startup and `(menu
 
 ## The menu bar
 
-drgnx has VS Code's menus: **File Edit Selection View Go Run Terminal Help**, at the left of the title row. A click
-opens the menu under its title (on Nidhogg's own window a menu of its own, in a terminal Emacs's text menu); each row
+drgnx has VS Code's menus: **File Edit Selection View Go Run Terminal Help**, behind the **☰** button at the left of the
+title row (after the logo). A click opens them as one list, a submenu opening to the right (on Nidhogg's own window a menu of its own, in a terminal Emacs's text menu); each row
 is a command with the key the active key profile gives it, greyed while it can't run here. Moving to another
 profile changes the keys at the next open. On macOS the same eight menus are in the system menu bar and the title row
 leaves them out.
 
-- **Keys:** `F10` opens File in every profile; inside a menu the arrows, Enter and Esc work, and on Nidhogg's own
+- **Keys:** `F10` opens the ☰ list in every profile (on a build with no list, Emacs's menu bar or the text menu); inside a menu the arrows, Enter and Esc work, and on Nidhogg's own
   window Left and Right go on to the menu beside it (Right first opens a submenu) and the pointer moving over another
   title opens that one, as in VS Code. In the VS Code profile
   Alt and the first letter open a menu (`Alt+F` File, `Alt+E` Edit, `Alt+S` Selection, `Alt+V` View, `Alt+G` Go,
@@ -52,11 +52,11 @@ leaves them out.
 - **What is in them:** `etc/menus.eld` lists the commands of each menu in groups; titles and keys come from the
   registry and the profile. A module's command with a menu path (`:menu ("View")`) joins the end of that menu, and
   one of the Options menu joins **File ▸ Preferences**. A command whose module is off is not shown.
-- **Narrow windows:** when the eight titles don't fit beside the search box, one **≡** button holds them.
+- **Narrow windows:** the ☰ button never hides; see [the title row](#the-top-line).
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-menubar-visibility` | `classic` | `classic`: the eight menus (one button when the window is narrow); `compact`: always the one button; `toggle` or `hidden`: none in the title row (`F10` and the menu keys still open them). As VS Code's `window.menuBarVisibility`. **Toggle Menu Bar** (View ▸ Appearance) switches between `classic` and `compact`. |
+| `drgnx-menubar-visibility` | `classic` | `classic` and `compact`: the ☰ button; `toggle` or `hidden`: none in the title row (`F10` and the menu keys still open them). As VS Code's `window.menuBarVisibility`. **Toggle Menu Bar** (View ▸ Appearance) switches between `classic` and `compact`. |
 
 The menu bar keymap (`drgnx-menubar-mode`, on with the module) holds the same menus, made when they open; Emacs's
 Options, Buffers and Tools menus are hidden while it is on, and Help is drgnx's.
@@ -397,13 +397,20 @@ carries none runs nothing. The buttons are commands like any other, in the palet
 Restore Window** (`title-row-maximize`) and **Close Window** (`title-row-close`); each one lights up under the mouse.
 
 On a graphical frame the line is the window's title row, 38 pixels tall at the normal density (34 compact, 42
-comfortable), on the gap colour behind the cards: the drgnx mark and the project, the branch as a quiet chip (`main
-↑2` when two commits wait to be pushed), a search box in the middle (`Search files, commands, symbols…` with Quick
-Open's key in your key profile as a keycap, `Ctrl P` in the VS Code profile; a click opens Quick Open, `>` for
-commands), the two chips, and the window controls. The search box sits where the design has it: centred between the
-left items and the right ones with both chips counted, so it stays put when a chip comes or goes, and leaves when the
-window is too narrow for it. A window too narrow even for the items without the box drops them from the right end
-(the window controls first), so the row never wraps or runs past the edge. At any display scale or UI scale every part takes a whole number of device pixels
+comfortable), on the gap colour behind the cards, left to right: the drgnx logo, the **☰** button (every menu, see [the
+menu bar](#the-menu-bar)), the **project switcher** (the folder's name in semibold and a chevron: a click lists the
+recent folders, then **Open Folder…**, **Add Folder to Workspace…** and **Close Folder**, in the palette's card; it is
+the command **Switch Project…**, `title-row-project`, and **Close Folder** is `title-row-close-folder`), a search box
+in the middle (`Search files, commands, symbols…` with Quick Open's key in your key profile as a keycap, `Ctrl P` in
+the VS Code profile; a click opens Quick Open, `>` for commands), the **N need you** pill (it opens [the
+inbox](#the-needs-you-inbox)), the **layout toggles** and the window controls. The three layout toggles are **Toggle
+Primary Side Bar** (`toggle-sidebar`), **Toggle Panel** (`toggle-panel`) and **Toggle Secondary Side Bar**
+(`toggle-right-dock`): each icon is drawn filled while its part is shown and plain while it is hidden, and its tooltip
+names its key. The branch is in the status bar, not here. The search box sits where the design has it: centred between
+the left items and the right ones with the pills counted, so it stays put when a pill comes or goes. In a narrow window
+the search box shrinks first (to 120 px), then the project's name is cut with an ellipsis; only a window too narrow for
+a box that small drops it. The ☰ button, the pill, the toggles and the window controls are never hidden. A window too
+narrow even for those drops items from the right end, so the row never wraps or runs past the edge. At any display scale or UI scale every part takes a whole number of device pixels
 (rounded half up: a 26 pixel control is 33 at 125 %), so the row adds up to what is drawn and stays one line.
 Under the mouse a window control gets a round hover, 26 pixels across. Chips, the search box,
 the mark and the buttons are small images drawn from the theme's faces (a text background would fill the whole row
@@ -585,3 +592,18 @@ A row with a hidden control puts `mouse-face` `drgnx-hover-row` on the whole row
 `drgnx-look-hover-control`; the selected row, a row with the keyboard focus and terminal frames always show it. Pass
 the row's frame as its third argument when you know it (a tab line does): the frame decides, not the selected one, so
 a terminal frame's tabs keep their × while a graphical frame of the same daemon is in use.
+
+## The needs-you inbox
+
+The **N need you** pill in the title row opens a card under it (or press `Ctrl+Alt+N` in the VS Code profile, `C-c i`
+in Emacs, `SPC a i` in Vim: **Show What Needs You**, `inbox-open`): one row for each thing that waits on you, newest
+first, with a dot, a title, a detail line and the buttons of its kind. An agent's permission ask has **Allow once**,
+**Always for this session** and **Deny**, the answers the agent panel's permission card sends; any other item has
+**Show**, which goes where the pill used to go. Answering removes the row at once and the pill's count follows. The keys
+in the card: Up and Down move, Enter presses the row's first button, Esc closes it; a click outside closes it too.
+**Mark all read** fades the rows now waiting; **All notices →** opens the Notices list.
+
+**Pin as side bar** closes the card and opens an **Inbox** tab in the right side bar with the same rows and buttons. In
+the tab an answered row stays for the session, faded, until **Clear answered**; **Unpin** goes back to the card. drgnx
+remembers the choice (`state/inbox.eld`): once pinned, the pill shows the tab. A terminal shows the tab always. The
+inbox reads the notice model only, so it never waits on the hub.

@@ -819,13 +819,20 @@ Signals when FRAME never sees it."
         (drgnx-uitest--pointer-by (/ (- x (car seen)) scale) (/ (- y (cdr seen)) scale))))
     (or (drgnx-uitest--pointer-seen frame) (error "drgnx-uitest: the frame never saw the pointer"))))
 
-(defun drgnx-uitest-pointer-click (x y &optional until timeout)
+(defun drgnx-uitest--pointer-binding (keys)
+  "The command KEYS (a mouse sequence just read) are bound to, looked up at the pointer's position as the command
+loop does: a text property's keymap there (a button in a card's window) counts, which `key-binding' alone, looking at
+point, would miss."
+  (key-binding keys t nil (and (consp last-input-event) (ignore-errors (event-start last-input-event)))))
+
+(defun drgnx-uitest-pointer-click (x y &optional until timeout frame)
   "Click the real pointer's first button at pixel X, Y of the selected frame, then read the key sequences it makes and
 run their commands, as the command loop would (Emacs hit-tests the events and looks the keys up), until UNTIL (a
-function of no arguments) is non-nil or TIMEOUT seconds (default 5) pass.  Return UNTIL's last value.
+function of no arguments) is non-nil or TIMEOUT seconds (default 5) pass.  X and Y are pixels of FRAME (default the
+selected frame: a child frame's own, where its pixels, not its parent's, are meant).  Return UNTIL's last value.
 A nested command loop (`recursive-edit', as `drgnx-uitest-run') reads none of a real pointer's events while a test
 runs from the session's server, so the keys are read here."
-  (drgnx-uitest-pointer-move x y)
+  (drgnx-uitest-pointer-move x y frame)
   (while (read-event nil nil 0.2))                          ; the motion's own events
   (drgnx-uitest--pointer-send "NotifyPointerButton" :int32 272 t)     ; BTN_LEFT
   (drgnx-uitest--pointer-send "NotifyPointerButton" :int32 272 nil)
@@ -833,8 +840,8 @@ runs from the session's server, so the keys are read here."
     (setq drgnx-uitest-pointer-keys nil)
     (while (and (not (setq result (and until (funcall until)))) (< (float-time) deadline))
       (let ((keys (with-timeout ((max 0.05 (- deadline (float-time))) nil) (read-key-sequence-vector nil))))
-        (when keys (push (list keys (key-binding keys t)) drgnx-uitest-pointer-keys))
-        (when-let* ((cmd (and keys (key-binding keys t))) ((commandp cmd)))
+        (when keys (push (list keys (drgnx-uitest--pointer-binding keys)) drgnx-uitest-pointer-keys))
+        (when-let* ((cmd (and keys (drgnx-uitest--pointer-binding keys))) ((commandp cmd)))
           (setq this-command cmd)
           (call-interactively cmd nil keys))))
     result))

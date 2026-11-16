@@ -1010,6 +1010,52 @@ look-scenes' types them)."
   (drgnx-look-scene--palette-commands)
   (drgnx-look-scene--answer))
 
+(defvar drgnx-inbox--pinned)
+(defvar drgnx-notice--needs-you)
+(declare-function drgnx-notice-set "drgnx-notice")
+(declare-function drgnx-inbox-open "drgnx-inbox")
+(declare-function drgnx-inbox-pin "drgnx-inbox")
+(declare-function drgnx-inbox-close "drgnx-inbox")
+
+(defun drgnx-look-scene--waiting ()
+  "Two things waiting on you, for the title row's pill and the inbox: an agent's permission ask and a failed run."
+  (drgnx-notice-set 'agents (list (list :id '(permission "s1" . 7) :command 'agents-answer
+                                        :text "claude · fix-explorer wants to run a command\ncargo test -p explorer --release")
+                                  (list :id '(permission "s2" . 3) :command 'agents-answer
+                                        :text "gemini · docs-sweep wants to edit a file\nREADME.md")))
+  (setq drgnx-notice--needs-you 2))
+
+(defun drgnx-look-scene-title-row-dark ()
+  "The title row (title-bar.html option B): logo, ☰, project switcher, search box, pill, toggles."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--waiting)
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-title-row-light ()
+  (drgnx-look-scene--theme 'drgnx-light)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--waiting)
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-inbox-dropdown ()
+  "The inbox's drop-down under the pill (inbox.html option C)."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--waiting)
+  (setq drgnx-inbox--pinned nil)
+  (drgnx-inbox-open)
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-inbox-pinned ()
+  "The inbox pinned as a tab of the right side bar."
+  (drgnx-inbox-close)
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--waiting)
+  (drgnx-inbox-pin)
+  (drgnx-look-scene--answer))
+
 (defun drgnx-look-scene-window-light ()
   (drgnx-look-scene--theme 'drgnx-light)
   (drgnx-look-scene--editor)

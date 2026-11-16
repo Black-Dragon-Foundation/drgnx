@@ -51,9 +51,9 @@ keys: the first, once the menu is drawn, looks at it; a menu that reads on past 
     (car (last seen))))
 
 (drgnx-look-gui-deftest drgnx-ui-menubar/a-menu-opens-under-its-title-with-the-profiles-keys ()
-  "The title row has File first and Help last; File opens as a child-frame menu whose first row is New File with the
-key the profile gives it, and Enter on it runs the command; Edit, the second title, opens under its own left edge,
-below the title row."
+  "The title row has the menu button after the logo and no menu words; File opens as a child-frame menu whose first row is New File with the
+key the profile gives it, and Enter on it runs the command; a menu opened after a click on the menu button opens under
+the button's left edge, below the title row."
   (skip-unless (and (display-graphic-p) (fboundp 'nhwl-menu--live-frames)))
   (drgnx-uitest-bare-frame)
   (let ((buf (get-buffer-create "*menubar-gui*"))
@@ -71,10 +71,10 @@ below the title row."
           (drgnx-test-wait-presented)
           (let* ((items (drgnx-topline--line))
                  (measure (drgnx-statusbar--measure-fn nil 'tab-bar))
-                 (at (cl-position 'drgnx-topline-menu-edit (mapcar #'car items)))
+                 (at (cl-position 'drgnx-topline-menu (mapcar #'car items)))
                  (left (and at (drgnx-topline--width (seq-take items at) measure))))
-            (should (eq (car (car items)) 'drgnx-topline-menu-file))   ; the row's first item
-            (should (memq 'drgnx-topline-menu-help (mapcar #'car items)))
+            (should (eq (car (cadr items)) 'drgnx-topline-menu))   ; the logo, then the menu button
+            (should-not (memq 'drgnx-topline-menu-help (mapcar #'car items)))   ; no menu words
             (should (> left 0))
             ;; File: the profile's key on its row, Enter runs it
             (setq drgnx-ui-menubar--ran nil)
@@ -83,11 +83,11 @@ below the title row."
               (should (string-match-p "New File" (nth 2 file)))
               (should (string-match-p "C-n" (nth 2 file)))
               (should drgnx-ui-menubar--ran))
-            ;; Edit: under its title, as the click on it left it
-            (drgnx-menubar-note-click 'drgnx-topline-menu-edit left (selected-frame))
-            (let ((edit (drgnx-ui-menubar--open-and-look 'edit)))
+            ;; Edit, opened as the menu button's list opens a menu: under the button, as the click on it left it
+            (drgnx-menubar-note-click 'drgnx-topline-menu left (selected-frame))
+            (let ((edit (drgnx-ui-menubar--open-and-look 'file)))
               (should edit)
-              (should (string-match-p "Undo" (nth 2 edit)))
+              (should (string-match-p "New File" (nth 2 edit)))
               (should (<= (abs (- (nth 0 edit) left)) 2))
               (should (>= (nth 1 edit) (tab-bar-height nil t))))))
       (drgnx-topline--off)
