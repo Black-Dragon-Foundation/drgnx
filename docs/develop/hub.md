@@ -2081,6 +2081,12 @@ send each personality's real shapes. A Claude Code subagent's steps (the `Task` 
 Edits have their own words (table in `runtime/conformance/src/mock_acp/mod.rs`): `provider:edit-stream`,
 `provider:pending-edit`, `provider:diff-hunks`, `provider:whole-diff`, `provider:native-edit` and `moves N [SECONDS]`.
 
+The step table's schema 13 (`norn::migrate13`) adds `machine`, `slots_used`, `slots_total` and the index
+`step_session_start (session, start)`. A step carries the machine it ran on (`Step.machine`; none: the hub's own or not
+known) and a machine-queue step the slots in use and in all when its wait began (`Step.slots`); the hub does not fill
+them yet (`JobEvent::Queued` is no longer sent and a session has no placement to read). A roll-up carries `first` (the
+first step's start) and `last` (the last step's end, none while a step is open).
+
 ### The presence model
 
 Who is in which file, at which line, now (`work::presence`; agent system part 2 builds it, part 3's cursors, gutter

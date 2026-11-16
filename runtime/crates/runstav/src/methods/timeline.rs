@@ -63,6 +63,14 @@ pub struct StepDetail {
     pub origin: String,
 }
 
+/// A machine's slots: in use, and in all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Slots {
+    pub used: u32,
+    pub total: u32,
+}
+
 /// One row of the `step` table.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -116,6 +124,12 @@ pub struct Step {
     /// What the step read, searched or fetched (tool steps).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<StepDetail>,
+    /// The machine the step ran on (none: the hub's own, or not known).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// A machine-queue step: the slots in use and in all when the wait began.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<Slots>,
     /// The agent conversation (ACP session id) the step ran in: a session runs another one after a revert.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acp: Option<String>,
@@ -196,6 +210,11 @@ pub struct Rollup {
     #[serde(default, deserialize_with = "null_as_empty")]
     pub cost: Vec<Limit>,
     pub tokens: Tokens,
+    /// The first step's start and the last step's end, seconds since the epoch; `last` is none while a step is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<f64>,
 }
 
 /// At most 500 steps a call; `next` continues.

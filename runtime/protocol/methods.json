@@ -1353,6 +1353,27 @@
     {
       "data": {
         "$defs": {
+          "Slots": {
+            "additionalProperties": false,
+            "description": "A machine's slots: in use, and in all.",
+            "properties": {
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "total"
+            ],
+            "type": "object"
+          },
           "Step": {
             "additionalProperties": false,
             "description": "One row of the `step` table.",
@@ -1464,6 +1485,13 @@
                   "null"
                 ]
               },
+              "machine": {
+                "description": "The machine the step ran on (none: the hub's own, or not known).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "message_id": {
                 "description": "The anchors (part 4's rewind): the message, the turn, the step snapshot (a tree id) and the decision log's\nversion.",
                 "type": [
@@ -1502,6 +1530,17 @@
               },
               "session": {
                 "type": "string"
+              },
+              "slots": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Slots"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A machine-queue step: the slots in use and in all when the wait began."
               },
               "snapshot": {
                 "type": [
@@ -9461,6 +9500,27 @@
             ],
             "type": "string"
           },
+          "Slots": {
+            "additionalProperties": false,
+            "description": "A machine's slots: in use, and in all.",
+            "properties": {
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "total"
+            ],
+            "type": "object"
+          },
           "Step": {
             "additionalProperties": false,
             "description": "One row of the `step` table.",
@@ -9572,6 +9632,13 @@
                   "null"
                 ]
               },
+              "machine": {
+                "description": "The machine the step ran on (none: the hub's own, or not known).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "message_id": {
                 "description": "The anchors (part 4's rewind): the message, the turn, the step snapshot (a tree id) and the decision log's\nversion.",
                 "type": [
@@ -9610,6 +9677,17 @@
               },
               "session": {
                 "type": "string"
+              },
+              "slots": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Slots"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A machine-queue step: the slots in use and in all when the wait began."
               },
               "snapshot": {
                 "type": [
@@ -42997,6 +43075,21 @@
                 },
                 "type": "array"
               },
+              "first": {
+                "description": "The first step's start and the last step's end, seconds since the epoch; `last` is none while a step is open.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "last": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "secs": {
                 "default": [],
                 "items": {
@@ -43010,6 +43103,27 @@
             },
             "required": [
               "tokens"
+            ],
+            "type": "object"
+          },
+          "Slots": {
+            "additionalProperties": false,
+            "description": "A machine's slots: in use, and in all.",
+            "properties": {
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "total"
             ],
             "type": "object"
           },
@@ -43124,6 +43238,13 @@
                   "null"
                 ]
               },
+              "machine": {
+                "description": "The machine the step ran on (none: the hub's own, or not known).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "message_id": {
                 "description": "The anchors (part 4's rewind): the message, the turn, the step snapshot (a tree id) and the decision log's\nversion.",
                 "type": [
@@ -43162,6 +43283,17 @@
               },
               "session": {
                 "type": "string"
+              },
+              "slots": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Slots"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A machine-queue step: the slots in use and in all when the wait began."
               },
               "snapshot": {
                 "type": [
@@ -44885,5 +45017,5 @@
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 12
+  "schema": 13
 }
