@@ -595,14 +595,21 @@ the string made last, and allocates nothing; a renamed buffer or another project
       (insert-file-contents (expand-file-name (format "keys/%s.eld" p) drgnx-dir))
       (should (search-forward "(face-toggle-menu-bar " nil t)))))
 
-(ert-deftest drgnx-face/f10-opens-the-menu-as-text-while-the-bar-is-hidden ()
+(ert-deftest drgnx-face/f10-opens-the-file-menu-or-the-menu-as-text-while-the-bar-is-hidden ()
   (drgnx-face-test--with
     (should (drgnx-commands-get 'face-menu))
     (should (eq (key-binding (kbd "<f10>")) 'drgnx-face-menu))   ; the remap of `menu-bar-open'
     (let ((lines 0) (calls nil))
       (cl-letf (((symbol-function 'frame-parameter) (lambda (_f p) (and (eq p 'menu-bar-lines) lines)))
                 ((symbol-function 'tmm-menubar) (lambda (&rest _) (interactive) (push 'tmm calls)))
+                ((symbol-function 'drgnx-menubar-open) (lambda (id &rest _) (push (list 'menubar id) calls)))
                 ((symbol-function 'menu-bar-open) (lambda (&rest _) (interactive) (push 'open calls))))
+        ;; the menu bar's mode is on with the module: File opens under the title row
+        (should drgnx-menubar-mode)
+        (call-interactively (key-binding (kbd "<f10>")))
+        (should (equal calls '((menubar file))))
+        (setq calls nil)
+        (drgnx-menubar-mode -1)
         (call-interactively (key-binding (kbd "<f10>")))
         (should (equal calls '(tmm)))
         (setq lines 1 calls nil)

@@ -42,6 +42,8 @@
 (declare-function drgnx-palette-keycap-names "drgnx-palette")
 (declare-function nidhogg-view-bar "nidhogg-views" (spec))   ; loaded by drgnx-statusbar.el
 (declare-function glitnir-active-p "glitnir")
+(declare-function drgnx-menubar-title-items "drgnx-menubar" (room &optional measure))
+(declare-function drgnx-menubar-note-click "drgnx-menubar" (key x frame))
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-face-drawn-title-p "drgnx-face")
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces")
@@ -255,7 +257,16 @@ Nidhogg's native shell, attach to a tab-bar click), or nil."
 (defun drgnx-topline-mouse-up (event)
   "A release on the title row (EVENT): run the command of the item under it, as a button does."
   (interactive "e")
-  (let ((cmd (nth 3 (drgnx-topline--event-item event))))
+  (let* ((item (drgnx-topline--event-item event)) (cmd (nth 3 item)))
+    (when (and item (fboundp 'drgnx-menubar-note-click))   ; a menu's title: its menu opens under its left edge
+      (let* ((posn (event-start event)) (str (posn-string posn)))
+        (drgnx-menubar-note-click (car item)
+                                  (max 0 (- (or (car (posn-x-y posn)) 0)
+                                            (if (and (consp str) (stringp (car str)) (integerp (cdr str)))
+                                                (string-pixel-width (substring (car str) 0 (cdr str)))
+                                              0)))
+                                  (let ((w (posn-window posn)))   ; a tab-bar click's is the frame
+                                    (cond ((framep w) w) ((windowp w) (window-frame w)) (t (selected-frame)))))))
     (unless (memq cmd '(nil ignore drgnx-topline-drag-window))
       (call-interactively cmd))))
 
@@ -570,6 +581,25 @@ colour under the pointer where the row draws a `mouse-face')."
              help))
           drgnx-topline--control-commands))
 
+(defun drgnx-topline--menus (room &optional measure)
+  "The menu bar's items for ROOM (columns, or units of MEASURE): none on macOS (the system menu bar has them), while
+Emacs's own menu bar shows, or without the menu bar's mode (drgnx-menubar.el)."
+  (and (bound-and-true-p drgnx-menubar-mode)
+       (not (eq system-type 'darwin))
+       (zerop (or (frame-parameter nil 'menu-bar-lines) 0))
+       (drgnx-menubar-title-items room measure)))
+
+(defun drgnx-topline--with-menus (left pixels measure drawn)
+  "The pixel row's LEFT items with the menu bar's in front, in the room a row PIXELS wide leaves them once the search
+box, both chips and (DRAWN) the controls have theirs."
+  (let* ((search (drgnx-topline--search-box))
+         (taken (+ (drgnx-topline--width left measure)
+                   (if search (funcall measure (nth 2 search)) 0)
+                   (drgnx-topline--width (append (drgnx-topline--pills 1 2) (and drawn (drgnx-topline--control-buttons)))
+                                         measure)
+                   (* 4 (drgnx-topline--px 10)))))
+    (append (drgnx-topline--menus (- pixels taken) measure) left)))
+
 (defun drgnx-topline--build-pixels (buffer pixels drawn)
   "The items for BUFFER on a graphical frame PIXELS wide: the design's title row (see above).  The search box is
 centred between the left items and the right ones as the design has them, both chips included (`1 needs you',
@@ -585,7 +615,9 @@ the sides; the controls sit 8 px from the right edge."
 items Sjá keeps with the gaps it answers.  No search box is sent as one whose gap is wider than the row, so the one
 gap fills the row."
   (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
-         (left (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer))))
+         (left (drgnx-topline--with-menus
+                (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer)))
+                pixels measure drawn))
          (paused (drgnx-topline--paused-pill))
          (right (append paused (drgnx-topline--pills) (and drawn (drgnx-topline--control-buttons))
                         (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil))))
@@ -611,7 +643,9 @@ gap fills the row."
 (defun drgnx-topline--build-pixels-lisp (buffer pixels drawn)
   "`drgnx-topline--build-pixels' laid out here, for an Emacs without Sjá's bar.  Frozen."
   (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
-         (left (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer))))
+         (left (drgnx-topline--with-menus
+                (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer)))
+                pixels measure drawn))
          (paused (drgnx-topline--paused-pill))
          (right (append paused (drgnx-topline--pills) (and drawn (drgnx-topline--control-buttons))
                         (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil))))
@@ -650,9 +684,11 @@ PIXELS, the frame's width in pixels: lay out in pixels instead (`drgnx-topline--
                                                        (string-width (nth 2 mark)))))
          (hint (with-current-buffer buffer (drgnx-topline--hint)))
          (hint-w (drgnx-topline--width hint))
-         (mark-w (+ (string-width (nth 2 mark)) (if branch (string-width (nth 2 branch)) 0)))
+         (menus (drgnx-topline--menus (- width controls-w (string-width (nth 2 mark)) 2)))
+         (mark-w (+ (drgnx-topline--width menus)
+                    (string-width (nth 2 mark)) (if branch (string-width (nth 2 branch)) 0)))
          (hint (and hint (<= (+ mark-w hint-w controls-w 4) width) hint)))
-    (let ((column mark-w) (items (if branch (list mark branch) (list mark))))
+    (let ((column mark-w) (items (append menus (if branch (list mark branch) (list mark)))))
       (when hint                                         ; centred
         (let ((gap (max 2 (- (/ (- width hint-w) 2) column))))   ; never touching the mark
           (setq items (append items (cons (drgnx-topline--gap 'drgnx-topline-gap-1 gap drawn) hint))
@@ -700,7 +736,10 @@ this file alone.")
                           ;; one pair per entry of `drgnx-topline--hint-commands'
                           (drgnx-topline--hint-command 'go-quick-open) (drgnx-topline--hint-bound 'go-quick-open)
                           (drgnx-topline--hint-command 'palette) (drgnx-topline--hint-bound 'palette)
-                          (drgnx-topline--hint-command 'keys-sheet) (drgnx-topline--hint-bound 'keys-sheet))
+                          (drgnx-topline--hint-command 'keys-sheet) (drgnx-topline--hint-bound 'keys-sheet)
+                          ;; the menu bar: shown or not, how, and whether Alt opens it (its titles' underlines)
+                          (bound-and-true-p drgnx-menubar-mode) (bound-and-true-p drgnx-menubar-visibility)
+                          (drgnx-topline--hint-bound 'menu-bar-open-file))
                    :doc "Frame → the top line's items.")
 
 (defconst drgnx-topline--declared '(buffer-look git topline)

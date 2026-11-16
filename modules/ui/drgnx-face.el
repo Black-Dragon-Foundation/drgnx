@@ -26,7 +26,7 @@
 (defvar display-line-numbers-grow-only)
 (declare-function window-divider-mode "frame")
 ;; the parts of the module, beside this file: set up by its setup, turned off by its teardown
-(dolist (part (quote (drgnx-close drgnx-statusbar drgnx-quickhelp drgnx-topline drgnx-start)))
+(dolist (part (quote (drgnx-close drgnx-statusbar drgnx-quickhelp drgnx-menubar drgnx-topline drgnx-start)))
   (unless (featurep part)
     (load (expand-file-name (symbol-name part) (file-name-directory (or load-file-name buffer-file-name))) nil t)))
 (defvar drgnx-topline--active)
@@ -34,6 +34,10 @@
 (declare-function drgnx-statusbar-setup "drgnx-statusbar")
 (declare-function drgnx-quickhelp-setup "drgnx-quickhelp")
 (declare-function drgnx-quickhelp-off "drgnx-quickhelp")
+(declare-function drgnx-menubar-setup "drgnx-menubar")
+(declare-function drgnx-menubar-off "drgnx-menubar")
+(declare-function drgnx-menubar-open "drgnx-menubar")
+(defvar drgnx-menubar-mode)
 (declare-function drgnx-topline-setup "drgnx-topline")
 (declare-function drgnx-topline--off "drgnx-topline")
 (declare-function drgnx-start-setup "drgnx-start")
@@ -97,7 +101,8 @@ module is turned off.  Made by the setup.")
 (defcustom drgnx-face-menu-bar nil
   "Non-nil: show Emacs's menu bar (hidden, the commands are in the palette,
 and F10 opens the menu as text in the minibuffer).
-Toggle for this session with the command Toggle Menu Bar."
+Toggle for this session with the command Toggle Emacs's Menu Bar.  drgnx's own menus are in the title row
+(`drgnx-menubar-visibility', drgnx-menubar.el); while this bar shows, the title row leaves them out."
   :type 'boolean :set #'drgnx-face--set :group 'drgnx-face)
 
 (defcustom drgnx-face-scroll-bars 'none
@@ -655,12 +660,13 @@ when it is off and ours is there.  A format of your own stays."
   (message "Menu bar %s" (if drgnx-face-menu-bar "shown" "hidden")))
 
 (defun drgnx-face-menu ()
-  "Open the menu: Emacs's menu bar when it is shown, else the same menu as text in the minibuffer (`tmm-menubar').
+  "Open the menu: Emacs's menu bar when it is shown, else drgnx's File menu under the title row (the menu bar,
+drgnx-menubar.el), else the menu as text in the minibuffer (`tmm-menubar').
 F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden, and can freeze the window."
   (interactive)
-  (if (zerop (or (frame-parameter nil 'menu-bar-lines) 0))
-      (tmm-menubar)
-    (call-interactively #'menu-bar-open)))
+  (cond ((not (zerop (or (frame-parameter nil 'menu-bar-lines) 0))) (call-interactively #'menu-bar-open))
+        ((bound-and-true-p drgnx-menubar-mode) (drgnx-menubar-open 'file))   ; under File in the title row
+        (t (tmm-menubar))))
 
 (defun drgnx-face-preferences ()
   "Open Customize on the `drgnx-face' group: every setting of how drgnx looks, applied live."
@@ -668,7 +674,7 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (customize-group 'drgnx-face))
 
 (defun drgnx-face--setup ()
-  (drgnx-command-define 'face-toggle-menu-bar :category "View" :title "Toggle Menu Bar" :menu '("View")
+  (drgnx-command-define 'face-toggle-menu-bar :category "View" :title "Toggle Emacs's Menu Bar" :menu '("View")
                         :command #'drgnx-face-toggle-menu-bar
                         :doc "Show or hide Emacs's menu bar for this session (hidden, F10 opens the menu as text)")
   (drgnx-command-define 'face-toggle-wrap :category "View" :title "Toggle Word Wrap" :menu '("View")
@@ -685,6 +691,7 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-close-setup)                   ; Esc and q close panes (drgnx-close.el)
   (drgnx-statusbar-setup)               ; the status bar (drgnx-statusbar.el)
   (drgnx-quickhelp-setup)               ; quick help (drgnx-quickhelp.el)
+  (drgnx-menubar-setup)                 ; the menu bar (drgnx-menubar.el)
   (drgnx-topline-setup)                 ; the top line (drgnx-topline.el)
   (drgnx-start-setup)                   ; the start page (drgnx-start.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
@@ -717,6 +724,7 @@ bar and scroll bars, and the status bar's segments and commands.  Idempotent."
         drgnx-face--eglot-waiting nil drgnx-topline--active nil)
   (drgnx-face--apply-editor #'drgnx-face-editor-clear)
   (drgnx-topline--off)
+  (drgnx-menubar-off)
   (drgnx-quickhelp-off)
   (drgnx-start-teardown)
   (let ((drgnx-face-title-bar 'system))  ; the system's title bar: GTK variant, appearance and decorations taken back
@@ -764,6 +772,7 @@ bar and scroll bars, and the status bar's segments and commands.  Idempotent."
                                  (drgnx-quickhelp-delay . "seconds the mouse rests before quick help shows")
                                  (drgnx-quickhelp-max-lines . "most lines of docs on the card")
                                  (drgnx-quickhelp-strip-lines . "height of the quick help strip in a terminal")
+                                 (drgnx-menubar-visibility . "classic (default), compact, toggle or hidden: the menus in the title row")
                                  (drgnx-topline . "the top line: project, branch, the keys that open everything")
                                  (drgnx-topline-min-lines . "fewest lines a terminal needs to show the top line")))
 

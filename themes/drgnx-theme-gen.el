@@ -295,6 +295,7 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
          (header-line :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'editor))   ; part of its card
          (header-line-highlight :background ,(c 'hover))
          (tab-bar :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'gap))   ; the title row (§4)
+         (menu :inherit drgnx-ui-text :foreground ,(c 'fg) :background ,(c 'overlay))   ; the menu bar's menus (popups)
          (drgnx-topline-strong :inherit drgnx-ui-heading :foreground ,(c 'fg) :background ,(c 'gap))
          (tab-bar-tab :inherit drgnx-ui-text :foreground ,(c 'fg) :background ,(c 'editor))
          (tab-bar-tab-inactive :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'panel))

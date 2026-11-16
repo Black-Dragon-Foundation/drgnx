@@ -882,6 +882,13 @@ right-click menus (contexts via `drgnx-surfaces-define-context`), which-key labe
 the **key sheet** ("Keyboard Shortcuts", `*drgnx keys*`), a markdown cheat sheet (`drgnx-surfaces-export-markdown`), "next time:
 KEY" tips after a command run from a menu or the palette, and the **command palette** (`C-S-p` in every profile): every available
 command as "Category: Title" with its key and description beside it, through the normal completion UI.
+
+The title row's menu bar (`modules/ui/drgnx-menubar.el`) is the one surface with a layout file: `etc/menus.eld` lists
+each of the eight menus as groups of registry ids (and `(:sub TITLE ID…)` submenus); the titles and keys still come from
+the registry and the profile, and each menu is made when it opens (`drgnx-menubar-keymap`). A command's `:menu` path
+adds it to the end of the menu of that title (`:also` maps other names, Options to File ▸ Preferences). The title row
+opens a menu with `x-popup-menu` under its title; `drgnx-menubar-mode` puts the same menus in the menu-bar keymap
+(`:filter`s), which the macOS system menu bar and Emacs's own menu bar read.
 A module adds a section to the key sheet by putting a function on `drgnx-surfaces-cheatsheet-sections` (it returns
 `(TITLE . LINES)` or nil); the sheet inserts each one after "Key problems". Quitting asks once about programs still
 running: each function on `drgnx-session-running-functions` returns the names to list (the terminal modules' own),
