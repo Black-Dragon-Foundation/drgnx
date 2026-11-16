@@ -254,7 +254,7 @@ profile:
 | `SPC u t` | Undo Tree… |
 | `SPC u z` | Zen Mode |
 | `SPC v` | Expand Selection |
-| `SPC w c` | Close Editor Group |
+| `SPC w c` | Close Tile |
 | `SPC w g` | Move Editor Group into New Window |
 | `SPC w m` | Move Editor into Next Group |
 | `SPC w n` | Move Editor into New Window |
@@ -287,11 +287,11 @@ commands, so the workbench keeps its editor groups, tabs and layout (the key tip
 | `:e FILE` | Open File… `FILE` (`:e` alone and `:e!` re-read the file, evil's own) |
 | `:sp [FILE]`, `C-w s` | Split Editor Down (`FILE` opens in the new group) |
 | `:vs [FILE]`, `C-w v` | Split Editor Right (`FILE` opens in the new group) |
-| `C-w c`, `:clo` | Close Editor Group |
-| `C-w o` | Close the other editor groups (the sidebar, the panel and the right dock stay) |
+| `C-w c`, `:clo` | Close Tile |
+| `C-w o`, `C-w _`, `C-w \|` | Full-Size Tile: this tile alone; again to put every tile back |
 | `:new [FILE]`, `C-w n` | A new editor group below with an empty buffer (`FILE` opens there) |
 | `:bd[!]` | Kill the buffer; each group showing it closes that tab and goes on with its next one, no group is closed |
-| `:q`, `ZQ` | Close Tab when the group has other tabs, else Close Editor Group when there is another group, else Close Window |
+| `:q`, `ZQ` | Close Tab when the group has other tabs, else Close Tile when there is another group, else Close Window |
 | `:wq`, `:x`, `ZZ` | Save when the buffer changed, then what `:q` does |
 | `:wq`, `:x`, `ZZ` in a Magit commit or rebase message | Finish the edit: git goes on (`with-editor-finish`) |
 | `:q`, `ZQ` in a Magit commit or rebase message | Cancel the edit (`with-editor-cancel`) |

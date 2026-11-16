@@ -27,6 +27,8 @@ over the editor, bottom-centre) or `auto': `float' under Glitnir, `window' witho
   :scope 'global :workspace 'never :agents 'never
   :schema '(or (const auto) (const window) (const float)))
 
+(declare-function drgnx-grid-popup-row "drgnx-grid" (buffer fraction))
+(declare-function drgnx-grid-end-popup-row "drgnx-grid" (window))
 (declare-function glitnir-active-p "glitnir")
 (declare-function glitnir-refresh "glitnir")
 
@@ -201,7 +203,8 @@ Buffer-local remaps, once per buffer."
 
 (defun drgnx-popup--show (buffer alist props)
   "The `popup' place: borrow the panel's window — unless you are typing in it — else a temporary
-one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame instead."
+one (with the grid on, a row under the grid, `drgnx-grid-popup-row'); mark it as the lane.
+Under `drgnx-popup-style' `float', one child frame instead."
   (drgnx-popup--fonts buffer)
   (let ((lane (drgnx-popup--window)) (panel (drgnx-wb-area-window 'panel)))
     (cond
@@ -225,6 +228,10 @@ one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame in
         (add-hook 'window-buffer-change-functions #'drgnx-popup--check-window nil t))
       (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))  ; a lane always has one header line (I3)
       (drgnx-wb-set-area-buffer lane buffer))
+     ((drgnx-wb-grid-p)                         ; no side windows in the grid: a row under it, gone after
+      (setq lane (drgnx-grid-popup-row buffer (plist-get props :height)))
+      (set-window-parameter lane 'header-line-format (drgnx-popup--header buffer))
+      (set-window-parameter lane 'drgnx-popup (list :borrowed nil :popup buffer :row t)))
      (t
       (setq lane (let ((drgnx-rules--placing t))
                    (display-buffer-in-side-window
@@ -258,6 +265,7 @@ one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame in
       (when-let* (((eq (selected-frame) (window-frame lane))) (root (frame-parent (window-frame lane))))
         (select-window (frame-selected-window root)))
       (make-frame-invisible (window-frame lane) t))
+     ((plist-get saved :row) (drgnx-grid-end-popup-row lane))
      ((not (plist-get saved :borrowed))
       (delete-window lane))
      (t

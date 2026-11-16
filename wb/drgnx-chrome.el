@@ -23,6 +23,7 @@
 (require 'drgnx-pixels)                 ; rows of an exact height, `drgnx-look-pixel-width'
 (require 'drgnx-icons)                  ; `drgnx-look-icon'
 (require 'drgnx-timer)                  ; the breadcrumb's symbol, on idle
+(require 'drgnx-save-ask)               ; Close Tab on a changed file
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function glitnir-active-p "glitnir")
 (declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
@@ -133,8 +134,7 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
   (interactive "e")
   (when-let* ((posn (event-start event)) (s (posn-string posn))
               (b (get-text-property (cdr s) 'drgnx-buffer (car s))) (w (posn-window posn)))
-    (drgnx-chrome--record-closed-position w b)
-    (drgnx-chrome--close w b)))
+    (drgnx-chrome--close-closing w b)))
 
 (defvar-local drgnx-chrome-tab-icon nil
   "The icon name (an `etc/icons' name, as `server') this buffer's tab shows; nil: the file kind of its file's or
@@ -501,11 +501,36 @@ An error here must never stop the kill."
           (drgnx-chrome--record-closed-position w b)
           (drgnx-chrome--close w b))))))
 
+(defvar server-buffer-clients)
+
+(defun drgnx-chrome--close-asked (w b)
+  "Whether Close Tab may take B out of W: t, nil (Cancel) or `discard' (closed, then B goes without its changes).
+B's last tab of a changed file asks Save / Don't Save / Cancel (`drgnx-save-ask'); Save writes it first.  No question
+when another group still has a tab of it (the edit stays in view), nor for a file an emacsclient waits for (closing
+its tab ends the edit, which asks as C-x # does: `drgnx-tty-frames')."
+  (if (not (and (buffer-modified-p b) (buffer-file-name b)
+                (not (and (boundp 'server-buffer-clients) (buffer-local-value 'server-buffer-clients b)))
+                (not (seq-some (lambda (o) (and (not (eq o w)) (eq (drgnx-chrome--role o) 'editor)
+                                                (or (eq (window-buffer o) b) (memq b (window-parameter o 'drgnx-tabs)))))
+                               (window-list-1 nil 'nomini t)))))
+      t
+    (pcase (drgnx-save-ask (buffer-name b))
+      ('save (with-current-buffer b (save-buffer)) t)
+      ('discard 'discard))))
+
+(defun drgnx-chrome--close-closing (w b)
+  "Close B's tab in W as the user asked (Close Tab, the tab's ×): asked first about unsaved changes
+\(`drgnx-chrome--close-asked'), recorded for Reopen Closed Tab."
+  (when-let* ((go (drgnx-chrome--close-asked w b)))
+    (drgnx-chrome--record-closed-position w b)
+    (drgnx-chrome--close w b)
+    (when (eq go 'discard) (drgnx-save-ask-discard b))))
+
 (defun drgnx-chrome-close-tab ()
-  "Close the shown tab (the buffer stays open; Close in the Buffers panel closes it)."
+  "Close the shown tab (the buffer stays open; Close in the Buffers panel closes it).  A changed file's last tab asks
+Save / Don't Save / Cancel first; Don't Save closes the buffer too."
   (interactive)
-  (drgnx-chrome--record-closed-position (selected-window) (window-buffer))
-  (drgnx-chrome--close (selected-window) (window-buffer)))
+  (drgnx-chrome--close-closing (selected-window) (window-buffer)))
 
 (defun drgnx-chrome--step (n)
   (let* ((tabs (drgnx-chrome-tabs (selected-window))) (i (seq-position tabs (window-buffer))))
@@ -776,14 +801,21 @@ it, so without this the next redisplay may keep the old line (the window's text 
     (set-window-parameter w param value)
     (with-current-buffer (window-buffer w) (force-mode-line-update))))
 
+(defun drgnx-chrome--full (w value)
+  "W's tab line VALUE after the grid's note on a tile shown full size (`drgnx-grid-full-note'), when it has one."
+  (if-let* ((full (window-parameter w 'drgnx-grid-full-note)))
+      (if (memq value '(nil none)) full (list full value))
+    value))
+
 (defun drgnx-chrome--apply-window (w note)
   (pcase (drgnx-chrome--role w)
     ('editor
      (when note (drgnx-chrome--note w))
      (drgnx-chrome--set w 'tab-line-format
-                        (if (buffer-local-value 'drgnx-chrome-own-tab-line (window-buffer w))
-                            drgnx-chrome--own-tab-line
-                          (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s))))
+                        (drgnx-chrome--full
+                         w (if (buffer-local-value 'drgnx-chrome-own-tab-line (window-buffer w))
+                               drgnx-chrome--own-tab-line
+                             (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s)))))
      (drgnx-chrome--set w 'header-line-format
                         (with-current-buffer (window-buffer w)
                           (cond ((and (local-variable-p 'header-line-format) header-line-format)
@@ -802,7 +834,11 @@ it, so without this the next redisplay may keep the old line (the window's text 
      (drgnx-chrome--set w 'mode-line-format (drgnx-chrome--editor-mode-line w)))
     ((or 'dock 'area)
      ;; the sidebar island's header row (`drgnx-wb-island-refresh') on the dock's top window
-     (drgnx-chrome--set w 'tab-line-format (or (window-parameter w 'drgnx-wb-island) 'none))
+     (drgnx-chrome--set w 'tab-line-format (drgnx-chrome--full w (or (window-parameter w 'drgnx-wb-island) 'none)))
+     (drgnx-chrome--set w 'mode-line-format 'none))
+    ('tile
+     ;; a grid's tool tile: the tab row of its stack (`drgnx-grid--put-row'), no mode line
+     (drgnx-chrome--set w 'tab-line-format (drgnx-chrome--full w (or (window-parameter w 'drgnx-grid-tab-row) 'none)))
      (drgnx-chrome--set w 'mode-line-format 'none))
     ('lane
      (dolist (p '(tab-line-format mode-line-format)) (drgnx-chrome--set w p 'none)))))
@@ -926,8 +962,9 @@ or buffer changed (no new tabs while the minibuffer is active: those are preview
           ('editor (dolist (p '(tab-line-format header-line-format mode-line-format drgnx-tabs drgnx-tab-history drgnx-preview
                                                 drgnx-chrome-symbol))
                      (set-window-parameter w p nil)))
-          ((or 'dock 'area 'lane)
-           (set-window-parameter w 'tab-line-format (window-parameter w 'drgnx-wb-island))
+          ((or 'dock 'area 'lane 'tile)
+           (set-window-parameter w 'tab-line-format (or (window-parameter w 'drgnx-wb-island)
+                                                        (window-parameter w 'drgnx-grid-tab-row)))
            (set-window-parameter w 'mode-line-format nil)))))))
 
 (provide 'drgnx-chrome)

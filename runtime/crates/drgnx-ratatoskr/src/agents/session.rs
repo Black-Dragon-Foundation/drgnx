@@ -2048,11 +2048,9 @@ pub(crate) async fn open_with(
         started: now(),
         role,
         cwd,
-        // one form for every reader: `J#5`, never `task:J#5`
-        task: p
-            .task
-            .as_ref()
-            .map(|t| norn::write::tasks::task_key(t.as_str()).to_string()),
+        // kept as the caller named it (the editor's tracker names its tasks `task:…`, the runner `JOB#N`): readers
+        // that join on it compare `tasks::task_key`
+        task: p.task.as_ref().map(|t| t.as_str().to_string()),
         job: p.job.as_ref().map(|j| j.as_str().to_string()),
         parent,
         about: p.about.as_ref().map(|a| a.to_string()),
@@ -3947,8 +3945,11 @@ async fn record_entities(front: &Front, caller: &Caller, s: &Session) {
                 .map_err(refused)?;
             link::add(tx, ses.n, "run_by", agent, None, Origin::Recorded, None).map_err(refused)?;
             if let Some(t) = task
-                && let Some(te) = entity::by_id(tx.sql(), &norn::write::tasks::entity_id(&t))
-                    .map_err(|e| norn::store::CoordError::Refused(e.to_string()))?
+                && let Some(te) = entity::by_id(
+                    tx.sql(),
+                    &norn::write::tasks::entity_id(norn::write::tasks::task_key(&t)),
+                )
+                .map_err(|e| norn::store::CoordError::Refused(e.to_string()))?
             {
                 link::add(tx, ses.n, "works_on", te.n, None, Origin::Recorded, None)
                     .map_err(refused)?;
@@ -4203,6 +4204,8 @@ impl Session {
             (st.seq, entries)
         };
         let snapshot = self.snapshot();
+        // the Agents side follows every session, a map open or not
+        self.map.agents_changed();
         if self.map.open() {
             self.map.session(&snapshot, &self.subagents());
         }

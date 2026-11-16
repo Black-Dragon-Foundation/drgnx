@@ -50,6 +50,7 @@ this at an exported REF.")
 (defconst drgnx-ui-keep-env
   '("USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
     "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_UITEST_TICK" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_CHILDFRAME_REQUIRED" "DRGNX_LEASE_HELD" "DRGNX_PERF_GLITNIR"
+    "DRGNX_TEST_ALLOW_NO_MAGIT" "DRGNX_USER_ELPA"
     "DRGNX_PERF_WATCHDOG" "DRGNX_PERF_WORKERS")
   "The only variables a session inherits; everything else (keys, tokens) stays out.  Not HOME: a session's is
 RUN/home (`drgnx-ui-session-env').")

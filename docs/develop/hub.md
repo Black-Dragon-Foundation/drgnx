@@ -1547,6 +1547,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
+| `review/effects` | user | `{change: ChangeRef}` | `[TaskEffect]` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
 | `runners/add` | user | `{accept?: "all" \| "heavy", allow_admin?: boolean, allow_own_account?: boolean, host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
@@ -2266,6 +2267,28 @@ overlays from it):
   read from disk, and such a frame is `approximate`. Base texts are kept by (base tree, path), the 256 last used. While
   the user types, a watch is answered from the frame already built; the file is projected again after the quiet.
 - **Test hooks:** `__test_buffer_views` answers `{views, built}`: the views open and the frame bodies built so far.
+
+### The effect on tasks
+
+`review/effects {change}` (`work/task_effects.rs`, user, read-only) says what a change under review would do to the
+tasks under way: a run's task that is claimed or running (`running`), `needs-input`, `in-review`, or ready or pending in
+a run that goes on (`queued`). Tasks not started (a proposed run) or done are left out. The answer is one `TaskEffect
+{task, task_title, plan?, agent?, state, effect, why}` per task reached, in task order; `agent` is the name of the
+session the task's `works_on` link comes from.
+
+- **A spec or plan edit**, `{doc, from}`: `doc` is the document's absolute path and `from` the git blob id of its text
+  before (40 or 64 hex digits), read with `git cat-file` in the main checkout of the document's repository, never in an
+  agent's tree. The text after is the file now; no file is a retired document. For a plan (the runs whose plan file
+  is `doc`), the old and new tasks are aligned: by text first (title and body without the number, so a renumbered task
+  is the same task), then by number with a similar text, then by the most similar text (`similar`'s line ratio, at
+  least 0.5). A task with no match was removed: `stops` ("Task 3 is running: it would stop.", "Task 2 is queued: it
+  would not start."). A running task whose own text changed, or every running task when the plan's shared text changed
+  (the sections before, between and after the tasks), `brief-changes` ("… its brief changes; the agent gets a steer.").
+  A plan retired (no text, or a `**Status:**` line that says dropped, superseded or rejected) stops all its tasks. For a
+  spec, retiring it stops every task of the plans that `derive` from it.
+- **A code change**, `{paths, branch?}`: `paths` relative to the repository. A task under way whose agent edited one
+  (`work::edits::edited`) or is in one now (the presence model) `overlaps` ("Task 5 edits session.rs: it would need to
+  rebase."). `branch`, the change's own branch, leaves out the task the runner made it for (`job/JOB-N`).
 
 ### The Work map
 
@@ -4968,12 +4991,15 @@ write rate. A manager's own spend comes from the `manager` samples, per task, be
 `manager:`, `worker:`. `Plan` is the plan document (`runner::plan_id`: a graph plan's id, or `plan:` and the plan file's
 path, which is its parsed entity's id), `Run` one job (`runner::run_scope`), `Task` one task by its bare reference
 (`JOB#N`: `norn::write::tasks::task_key` takes off a `task:`, so `J#5` and `task:J#5` are one scope). A session keeps its
-task in that same bare form (set once, at its start); the graph's lookups, such as the session's `works_on` link, add the
-prefix back with `tasks::entity_id`. The chain (`Budgets::link_up`) is worker →
+task as the caller named it (the editor's tracker says `task:…`, the runner `JOB#N`), so `agents/list` answers it
+unchanged; whatever joins on it compares `task_key`, and the graph's lookups, such as the session's `works_on` link, add
+the prefix back with `tasks::entity_id(task_key(…))`. The chain (`Budgets::link_up`) is worker →
 task → run → plan → spec → project: the tick links a worker's whole chain when it starts it (`runner::budget_chain`
 reads the plan's `derives` link for its spec; a plan with no spec, or a run with no plan, sits under the project), the
 approval links the run's (`runner::link_run`), a manager links under its run, a worker it started under it.
-`Budgets::rekey` moves a session's links to its new session (`agents/move`). A hit's sessions are `members` of the scope
+`Budgets::rekey` moves a session's links to its new session (`agents/move`). The saved state carries a version: one
+saved before the split (below 2) gave a job with no plan its own `plan:JOB` scope, which is migrated on load to the
+job's `run` scope with its limits, spend, joint dollars and links; a plan file's or graph plan's scope keeps its meaning. A hit's sessions are `members` of the scope
 that hit; its jobs are the `Run` scopes below it and the gateway jobs bound below it (`jobs_under`), so a spec's or a
 plan's limit pauses every run under it, one card each. The saved state carries `version` 2; a state saved before (when
 `plan:` was one job) drops its `plan` scopes on load, with one log line.

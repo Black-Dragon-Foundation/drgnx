@@ -699,7 +699,8 @@ mod model {
         let [Effect::Delta { delta, .. }] = effects.as_slice() else {
             panic!("{effects:?}")
         };
-        assert_eq!(delta.changed, vec![id("agent:A")]);
+        // the agent, and its task, whose row says how its agents are
+        assert_eq!(delta.changed, vec![id("agent:A"), id("task:t")]);
     }
 
     /// [D] An agent card carries its task's id beside the title: two tasks of one title are told apart by it (the Board

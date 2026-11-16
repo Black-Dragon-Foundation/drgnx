@@ -34042,6 +34042,153 @@
       "classes": [
         "user"
       ],
+      "doc": "what a spec, plan or code change would do to the tasks under way or queued: a removed task (or a retired plan or spec) stops, a running task whose brief changes gets a steer, a task whose agent edits or reads a changed file would need to rebase; tasks not started or done are left out",
+      "name": "review/effects",
+      "params": {
+        "$defs": {
+          "ChangeRef": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DocChange"
+              },
+              {
+                "$ref": "#/$defs/CodeChange"
+              }
+            ],
+            "description": "What `review/effects` looks at."
+          },
+          "CodeChange": {
+            "additionalProperties": false,
+            "description": "A code change under review: its files, relative to the repository, and its own branch (a task working on that\nbranch is the change's author, not a task it reaches).",
+            "properties": {
+              "branch": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "paths": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "paths"
+            ],
+            "type": "object"
+          },
+          "DocChange": {
+            "additionalProperties": false,
+            "description": "A spec or plan edit under review: the document now, against its text before (`from`, the git blob id of that\ntext in the document's repository).",
+            "properties": {
+              "doc": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "doc",
+              "from"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`review/effects`'s params.",
+        "properties": {
+          "change": {
+            "$ref": "#/$defs/ChangeRef"
+          }
+        },
+        "required": [
+          "change"
+        ],
+        "title": "EffectsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Effect": {
+            "description": "What the change does to a task: it removes the task (or retires its plan or spec), changes its brief (its own text\nor the plan's shared text), or touches files its agent edits or reads.",
+            "enum": [
+              "stops",
+              "brief-changes",
+              "overlaps"
+            ],
+            "type": "string"
+          },
+          "TaskEffect": {
+            "additionalProperties": false,
+            "description": "One task the change reaches, with the sentence the review shows (\"Task 3 is running: it would stop.\").",
+            "properties": {
+              "agent": {
+                "description": "The name of the session working on it.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "effect": {
+                "$ref": "#/$defs/Effect"
+              },
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "$ref": "#/$defs/TaskState"
+              },
+              "task": {
+                "description": "`JOB#N`.",
+                "type": "string"
+              },
+              "task_title": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task",
+              "task_title",
+              "state",
+              "effect",
+              "why"
+            ],
+            "type": "object"
+          },
+          "TaskState": {
+            "description": "Where a task the change reaches is: under way (running, waiting for an answer, in review) or queued in a run that\ngoes on.",
+            "enum": [
+              "running",
+              "needs-input",
+              "in-review",
+              "queued"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/TaskEffect"
+        },
+        "title": "Array_of_TaskEffect",
+        "type": "array"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a review mark on an agent's change, and its event, in one transaction (drgnx-coord-review-mark)",
       "name": "review/mark",
       "params": {

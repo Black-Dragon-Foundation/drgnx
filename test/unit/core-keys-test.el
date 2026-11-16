@@ -1537,7 +1537,8 @@ The commands of modules that need no installed package are in it, the later stag
                               terminal-toggle   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
                               kit-activate      ; RET on a kit component's action
                               face-menu         ; a lone Alt opens the menu (Nidhogg's `lone-alt')
-                              editor-recent editor-recent-up)) ; C-<tab>: VS Code's previous editor
+                              editor-recent editor-recent-up ; C-<tab>: VS Code's previous editor
+                              tile-full-size))  ; the grid's Full-Size Tile (C-k C-m, C-k RET)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

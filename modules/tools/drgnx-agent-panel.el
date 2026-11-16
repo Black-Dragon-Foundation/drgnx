@@ -591,6 +591,13 @@ commands on the step at point read; the hub draws its rows again itself)."
 (declare-function drgnx-agent-panel--header-of "drgnx-agent-panel-header")
 (declare-function drgnx-agent-panel-header--for "drgnx-agent-panel-header" (header buffer))
 
+(defun drgnx-agent-panel--session-of (buffer)
+  "The session panel BUFFER shows, or nil for another buffer: the pane kind's `:instance-key'.  With the grid on, a
+second open session's panel gets a tile of its own, and a third and later stack onto it (`drgnx-pane-define-kind');
+one session shows in the right dock, as without the grid."
+  (and (eq (buffer-local-value 'major-mode buffer) 'drgnx-agent-panel-mode) (not (drgnx-view-patch-twin-p buffer))
+       (buffer-local-value 'drgnx-agent-panel--session buffer)))
+
 (defun drgnx-agent-panel--companions (buffer)
   "The area companions of panel BUFFER (`drgnx-pane-define-kind' :companions): (ABOVE BELOW), the header above and the
 composer below.  BUFFER may be the transcript's twin in another display class: the header is then its twin of that
@@ -626,7 +633,8 @@ class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same b
     (drgnx-command-define (nth 0 c) :category "Agents" :title (nth 1 c) :command (nth 2 c)
                           :map 'drgnx-agent-panel-mode-map :doc (nth 3 c)))
   (drgnx-pane-define-kind 'agent-panel :title " AGENT" :home 'right :buffer #'drgnx-agent-panel--current-buffer
-                          :companions #'drgnx-agent-panel--companions)
+                          :companions #'drgnx-agent-panel--companions
+                          :instance #'drgnx-agent-panel-buffer :instance-key #'drgnx-agent-panel--session-of)
   (drgnx-module-hook 'drgnx-hub-event-functions panel-event (event data)
     :events '("history/applied" "agent" "agent-entries")
     (drgnx-agent-panel--event event data))

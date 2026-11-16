@@ -965,6 +965,7 @@ impl Front {
             | Params::RunnersKeysHeld(_)
             | Params::RunnersAudit(_)
             | Params::WorkConclusions(_)
+            | Params::ReviewEffects(_)
             | Params::AgentsPresenceSubscribe(_)
             | Params::AgentsPresenceGet(_)
             | Params::AgentsBufferWatch(_)
