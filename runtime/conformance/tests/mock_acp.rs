@@ -980,3 +980,75 @@ fn the_new_words_leave_the_old_ones_alone() {
     let u = tool_updates(&a);
     assert_eq!(u[0]["rawInput"]["content"], "written by the mock\n");
 }
+
+/// Where claude-agent-acp's Claude Code reads a conversation: `<config dir>/projects/<cwd, non-alphanumerics as ->/<id>.jsonl`.
+fn claude_conversation(config: &std::path::Path, cwd: &str, id: &str) -> std::path::PathBuf {
+    let folder: String = cwd
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    config
+        .join("projects")
+        .join(folder)
+        .join(format!("{id}.jsonl"))
+}
+
+// [C] claude-agent-acp `resumeSession` starts Claude Code with `{resume: sessionId}` (src/acp-agent.ts), which reads the
+// conversation from `projects/<cwd as a folder name>/<id>.jsonl` under its config dir; a missing one is not-found.
+#[test]
+fn claude_resume_needs_the_conversation_where_claude_code_reads_it() {
+    let d = dir();
+    let config = d.path().join("cfg");
+    let cwd = "/w/orchard-1";
+    let id = "5f0c1e2a-0000-4000-8000-000000000001";
+    let env = [("CLAUDE_CONFIG_DIR", config.to_str().unwrap())];
+    let params = |cwd: &str, sid: &str| json!({"sessionId": sid, "cwd": cwd, "mcpServers": []});
+
+    let mut a = Acp::start_env(&["--as", "claude"], &env);
+    a.init();
+    // no file: not found (-32002), not a fresh session
+    let r = a.call("session/resume", params(cwd, id));
+    assert_eq!(r["error"]["code"], -32002, "{r}");
+    // the file in the right folder: resumed
+    let file = claude_conversation(&config, cwd, id);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "{}\n").unwrap();
+    let r = a.call("session/resume", params(cwd, id));
+    assert!(r["result"].is_object(), "{r}");
+    // the wrong cwd, or another id, finds nothing (a session the process holds already resumes whatever the cwd)
+    let id2 = "5f0c1e2a-0000-4000-8000-000000000003";
+    let file2 = claude_conversation(&config, cwd, id2);
+    std::fs::write(&file2, "{}\n").unwrap();
+    let r = a.call("session/resume", params("/w/other", id2));
+    assert_eq!(r["error"]["code"], -32002, "{r}");
+    let r = a.call("session/resume", params(cwd, "s1"));
+    assert_eq!(r["error"]["code"], -32002, "{r}");
+}
+
+#[test]
+fn claude_resume_is_logged_with_its_cwd() {
+    let d = dir();
+    let config = d.path().join("cfg");
+    let log = d.path().join("a.log");
+    let id = "5f0c1e2a-0000-4000-8000-000000000002";
+    let file = claude_conversation(&config, "/w/pear", id);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "{}\n").unwrap();
+    let mut a = Acp::start_env(
+        &["--as", "claude", "--log", log.to_str().unwrap()],
+        &[("CLAUDE_CONFIG_DIR", config.to_str().unwrap())],
+    );
+    a.init();
+    a.call(
+        "session/resume",
+        json!({"sessionId": id, "cwd": "/w/pear", "mcpServers": []}),
+    );
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        logged.lines().any(|l| {
+            let v: Value = serde_json::from_str(l).unwrap();
+            v["session/resume"]["sessionId"] == id && v["session/resume"]["cwd"] == "/w/pear"
+        }),
+        "{logged}"
+    );
+}

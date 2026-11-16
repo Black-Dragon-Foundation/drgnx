@@ -17,12 +17,12 @@ use drgnx_rows::{Row, RowBuilder};
 use minni::{Provider, Reader};
 use runstav::methods::agents::{Entry, EntryType};
 use runstav::methods::past::{
-    PastHit, PastHits, PastOpened, PastProvider, PastRef, PastResume, PastResumed, PastRoute,
-    PastScanned, PastSearch, PastSession, PastSubscribe,
+    PastDrift, PastHit, PastHits, PastOpened, PastProvider, PastRef, PastResume, PastResumed,
+    PastRoute, PastScanned, PastSearch, PastSession, PastStatus, PastSubscribe,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -85,6 +85,8 @@ pub struct Roots {
     pub claude: Option<PathBuf>,
     pub gemini: Option<PathBuf>,
     pub codex: Option<PathBuf>,
+    /// Files whose change time is older than this many days are not read (0: no cap).
+    pub days: u32,
 }
 
 /// A session file found: its CLI, path, size and change time (ns).
@@ -107,6 +109,7 @@ impl Roots {
                     .map(|h| h.join(".gemini"))
                     .unwrap_or_else(|| home.join(".gemini")),
             ),
+            days: 0,
         }
     }
 
@@ -125,6 +128,12 @@ impl Roots {
         self
     }
 
+    /// Only files changed within the last DAYS days (`drgnx-agents-history-days`; 0 reads all).
+    pub fn within(mut self, days: u32) -> Roots {
+        self.days = days;
+        self
+    }
+
     /// The root PROVIDER's files live under.
     pub fn root(&self, p: Provider) -> Option<&Path> {
         match p {
@@ -137,22 +146,38 @@ impl Roots {
     /// Every session file under the roots (never through a link): Claude's `projects/*/*.jsonl`, Gemini's
     /// `tmp/*/chats/session-*.json{l,}`, Codex's `sessions/YYYY/MM/DD/rollout-*.jsonl` and `archived_sessions/*.jsonl`.
     pub fn files(&self) -> Vec<Found> {
-        let mut out = Vec::new();
+        let mut out = self.walk(&mut Walk::default()).fresh;
+        out.sort_by_key(|f| std::cmp::Reverse(f.mtime));
+        out
+    }
+
+    /// The walk W remembers: a folder of files none of which changed within the last hour is read again only when its
+    /// own change time moved or on every 30th walk (a file appended to in an old folder is then seen within a minute at
+    /// 2 s polling); a folder with a recent file is read every walk.  Only the folders read are in `fresh`.
+    pub fn walk(&self, w: &mut Walk) -> Walked {
+        w.round += 1;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as i64);
+        let ctx = Ctx {
+            recheck: w.round % COLD_ROUNDS == 1,
+            hot_after: now - HOT_NS,
+            cutoff: (self.days > 0).then(|| now - i64::from(self.days) * 86_400 * 1_000_000_000),
+        };
+        let mut out = Walked::default();
+        let mut leaf = |dir: &Path, p: Provider, want: &dyn Fn(&str) -> bool| {
+            leaf_in(dir, p, want, w, &ctx, &mut out)
+        };
         if let Some(r) = &self.claude {
             for d in dirs_in(&r.join("projects")) {
-                files_in(&d, Provider::Claude, |n| n.ends_with(".jsonl"), &mut out);
+                leaf(&d, Provider::Claude, &|n| n.ends_with(".jsonl"));
             }
         }
         if let Some(r) = &self.gemini {
             for d in dirs_in(&r.join("tmp")) {
-                files_in(
-                    &d.join("chats"),
-                    Provider::Gemini,
-                    |n| {
-                        n.starts_with("session-") && (n.ends_with(".jsonl") || n.ends_with(".json"))
-                    },
-                    &mut out,
-                );
+                leaf(&d.join("chats"), Provider::Gemini, &|n| {
+                    n.starts_with("session-") && (n.ends_with(".jsonl") || n.ends_with(".json"))
+                });
             }
         }
         if let Some(r) = &self.codex {
@@ -160,20 +185,91 @@ impl Roots {
             for y in dirs_in(&r.join("sessions")) {
                 for m in dirs_in(&y) {
                     for d in dirs_in(&m) {
-                        files_in(&d, Provider::Codex, rollout, &mut out);
+                        leaf(&d, Provider::Codex, &rollout);
                     }
                 }
             }
-            files_in(
-                &r.join("archived_sessions"),
-                Provider::Codex,
-                rollout,
-                &mut out,
-            );
+            leaf(&r.join("archived_sessions"), Provider::Codex, &rollout);
         }
-        out.sort_by_key(|f| std::cmp::Reverse(f.mtime));
         out
     }
+}
+
+/// A folder is "hot" while a file in it changed within this long.
+const HOT_NS: i64 = 3_600 * 1_000_000_000;
+/// Every this many walks the cold folders are read again whatever their change time says.
+const COLD_ROUNDS: u64 = 30;
+
+/// What `Roots::walk` remembers between walks: each leaf folder's change time and whether it held a recent file.
+#[derive(Default)]
+pub struct Walk {
+    dirs: HashMap<PathBuf, Seen>,
+    round: u64,
+}
+
+struct Seen {
+    mtime: i64,
+    hot: bool,
+}
+
+/// The files of the folders read this walk, and the folders (with their file counts) taken as they were.
+#[derive(Default)]
+pub struct Walked {
+    pub fresh: Vec<Found>,
+    /// The folders read this walk (even when empty), and the ones taken as they were.
+    pub read: HashSet<PathBuf>,
+    pub cached: HashSet<PathBuf>,
+}
+
+struct Ctx {
+    recheck: bool,
+    hot_after: i64,
+    cutoff: Option<i64>,
+}
+
+fn leaf_in(
+    dir: &Path,
+    p: Provider,
+    want: &dyn Fn(&str) -> bool,
+    w: &mut Walk,
+    ctx: &Ctx,
+    out: &mut Walked,
+) {
+    let Ok(m) = std::fs::metadata(dir) else {
+        w.dirs.remove(dir);
+        return;
+    };
+    let dm = mtime_of(&m);
+    if let Some(s) = w.dirs.get(dir)
+        && s.mtime == dm
+        && !s.hot
+        && !ctx.recheck
+    {
+        out.cached.insert(dir.to_path_buf());
+        return;
+    }
+    out.read.insert(dir.to_path_buf());
+    let before = out.fresh.len();
+    files_in(dir, p, want, &mut out.fresh);
+    if let Some(c) = ctx.cutoff {
+        let mut i = before;
+        while i < out.fresh.len() {
+            if out.fresh[i].mtime < c {
+                out.fresh.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+    let hot = out.fresh[before..].iter().any(|f| f.mtime > ctx.hot_after);
+    w.dirs.insert(dir.to_path_buf(), Seen { mtime: dm, hot });
+}
+
+fn parent_of(path: &str) -> PathBuf {
+    Path::new(path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
 }
 
 /// The folders in DIR (not links).
@@ -223,7 +319,8 @@ const SCHEMA: &str = "
 create table if not exists session (
   key text primary key, provider text not null, sid text not null, path text not null unique, cwd text,
   title text not null, branch text, started text, updated text, turns integer not null, size integer not null,
-  mtime integer not null, off integer not null, entries integer not null);
+  mtime integer not null, off integer not null, entries integer not null, lines integer not null,
+  unknown integer not null);
 create virtual table if not exists turn using fts5(key unindexed, idx unindexed, text);
 ";
 
@@ -242,6 +339,24 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     f.set_permissions(std::fs::Permissions::from_mode(0o600))
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let c = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // the index is a cache: one from before the format-drift columns is dropped and read again
+    let old: bool = c
+        .query_row(
+            "select count(*) = 0 from pragma_table_info('session') where name = 'unknown'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?
+        && c.query_row(
+            "select count(*) > 0 from pragma_table_info('session')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if old {
+        c.execute_batch("drop table session; drop table turn;")
+            .map_err(|e| e.to_string())?;
+    }
     c.execute_batch(SCHEMA)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(c)
@@ -269,6 +384,10 @@ fn index_text(e: &Value) -> Option<String> {
     (!t.is_empty()).then(|| crate::agents::transcript::redact(t))
 }
 
+/// A file counts as drifted from the format at this share of unknown lines, over at least this many lines.
+const DRIFT_PCT: i64 = 20;
+const DRIFT_LINES: i64 = 10;
+
 /// What a shown History list asked for: its workspace, its query and, for a section of another list, its limit.
 type Asked = (Option<String>, Option<String>, Option<usize>);
 
@@ -282,6 +401,8 @@ pub struct History {
     shown: Mutex<BTreeMap<(u64, String), Asked>>,
     /// The transcripts open, by view, oldest first.
     open: Mutex<Vec<(String, Arc<Vec<Entry>>)>>,
+    /// Files opened to read since the start.
+    reads: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Default)]
@@ -290,6 +411,13 @@ struct Inner {
     db_path: Option<PathBuf>,
     roots: Option<Roots>,
     readers: Vec<(PathBuf, Reader)>,
+    /// The indexed files by path, as the index has them (loaded once, kept current by each scan).
+    known: Option<HashMap<String, Indexed>>,
+    /// How many indexed files each leaf folder holds (the known ones, by their parent).
+    per_dir: HashMap<PathBuf, usize>,
+    walk: Walk,
+    /// The list has been read from the index since it was opened.
+    listed: bool,
 }
 
 impl History {
@@ -298,8 +426,15 @@ impl History {
         let mut i = lock(&self.inner);
         if i.db_path.as_ref() != Some(&db_path) {
             i.db = None;
+            i.known = None;
+            i.walk = Walk::default();
+            i.listed = false;
         }
         i.db_path = Some(db_path);
+        if i.roots.as_ref() != Some(&roots) {
+            // other roots (or another cap): every folder is read again
+            i.walk = Walk::default();
+        }
         i.roots = Some(roots);
     }
 
@@ -308,6 +443,9 @@ impl History {
     pub fn off(&self, db_path: &Path) {
         let mut i = lock(&self.inner);
         i.db = None;
+        i.known = None;
+        i.walk = Walk::default();
+        i.listed = false;
         i.roots = None;
         i.readers.clear();
         for suffix in ["", "-journal", "-wal", "-shm"] {
@@ -338,34 +476,100 @@ impl History {
     /// Scan the roots now (blocking): new and changed files read (an append from its offset), gone ones dropped.  The
     /// answer is how many sessions are indexed.
     pub fn scan(&self) -> Result<u64, String> {
+        self.scan_changed().map(|(n, _)| n)
+    }
+
+    /// Files opened to read since the start (a scan that finds nothing new opens none).
+    pub fn reads(&self) -> u64 {
+        self.reads.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// `scan`, and whether the index changed.  The walk is stat-only: the files' size and change time are compared with
+    /// the known ones held in memory; when nothing is new, changed or gone nothing is opened, written or listed.
+    pub fn scan_changed(&self) -> Result<(u64, bool), String> {
         let mut i = lock(&self.inner);
         let Some(roots) = i.roots.clone() else {
-            return Ok(0);
+            return Ok((0, false));
         };
-        let found = roots.files();
         if i.db.is_none() {
             let Some(p) = i.db_path.clone() else {
-                return Ok(0);
+                return Ok((0, false));
             };
             i.db = Some(open_db(&p)?);
+            i.known = None;
+            i.walk = Walk::default();
+            i.listed = false;
         }
-        let Inner { db, readers, .. } = &mut *i;
+        let Inner {
+            db,
+            readers,
+            known,
+            listed,
+            per_dir,
+            walk,
+            ..
+        } = &mut *i;
         let db = db.as_mut().expect("opened above");
-        let known = indexed(db)?;
-        let paths: BTreeSet<String> = found
+        if known.is_none() {
+            let k = indexed(db)?;
+            per_dir.clear();
+            for r in k.values() {
+                *per_dir.entry(parent_of(&r.path)).or_default() += 1;
+            }
+            *known = Some(k);
+        }
+        let known_map = known.as_mut().expect("loaded above");
+        let walked = roots.walk(walk);
+        let found = &walked.fresh;
+        let todo: Vec<&Found> = found
             .iter()
-            .map(|f| f.path.to_string_lossy().into_owned())
+            .filter(|f| {
+                f.size <= MAX_FILE
+                    && !known_map
+                        .get(f.path.to_string_lossy().as_ref())
+                        .is_some_and(|r| r.size == f.size && r.mtime == f.mtime)
+            })
+            .collect();
+        // what is known in the folders read, against what was found there; and every folder known is still there
+        let mut matched: HashMap<&Path, usize> = HashMap::new();
+        for f in found {
+            if known_map.contains_key(f.path.to_string_lossy().as_ref())
+                && let Some(d) = f.path.parent()
+            {
+                *matched.entry(d).or_default() += 1;
+            }
+        }
+        let steady = per_dir.iter().all(|(d, n)| {
+            walked.cached.contains(d)
+                || (walked.read.contains(d) && matched.get(d.as_path()).copied().unwrap_or(0) == *n)
+        });
+        if todo.is_empty() && steady && *listed {
+            return Ok((known_map.len() as u64, false));
+        }
+        let paths: HashSet<&Path> = found.iter().map(|f| f.path.as_path()).collect();
+        let gone: Vec<Indexed> = known_map
+            .values()
+            .filter(|k| {
+                let path = Path::new(&k.path);
+                let dir = path.parent().unwrap_or(path);
+                if walked.cached.contains(dir) {
+                    false
+                } else if walked.read.contains(dir) {
+                    !paths.contains(path)
+                } else {
+                    true
+                }
+            })
+            .cloned()
             .collect();
         let tx = db.transaction().map_err(|e| e.to_string())?;
-        for k in known.values().filter(|k| !paths.contains(&k.path)) {
+        for k in &gone {
             drop_session(&tx, &k.key)?;
         }
-        for f in &found {
+        let mut put: Vec<Indexed> = Vec::new();
+        for f in todo {
             let path = f.path.to_string_lossy().into_owned();
-            let row = known.get(&path);
-            if row.is_some_and(|r| r.size == f.size && r.mtime == f.mtime) || f.size > MAX_FILE {
-                continue;
-            }
+            let row = known_map.get(&path);
             // a file read before and grown since reads on from its offset with the reader kept, else whole
             let mut reader = None;
             if let Some(r) = row
@@ -378,6 +582,8 @@ impl History {
             }
             let fresh = reader.is_none();
             let mut rd = reader.unwrap_or_else(|| Reader::new(f.provider));
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if let Err(e) = read_into(&mut rd, f) {
                 tracing::debug!("past sessions: {}: {e}", f.path.display());
                 continue;
@@ -387,17 +593,61 @@ impl History {
             } else {
                 row.map_or(0, |r| r.entries)
             };
-            index_one(&tx, f, &rd, row, old_entries)?;
+            put.push(index_one(&tx, f, &rd, row, old_entries)?);
             readers.push((f.path.clone(), rd));
             if readers.len() > READERS {
                 readers.remove(0);
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
+        for k in &gone {
+            known_map.remove(&k.path);
+            let d = parent_of(&k.path);
+            if let Some(n) = per_dir.get_mut(&d) {
+                *n -= 1;
+                if *n == 0 {
+                    per_dir.remove(&d);
+                }
+            }
+        }
+        for r in put {
+            let d = parent_of(&r.path);
+            if known_map.insert(r.path.clone(), r).is_none() {
+                *per_dir.entry(d).or_default() += 1;
+            }
+        }
         let list = list_of(db)?;
-        let n = list.len() as u64;
+        let n = known_map.len() as u64;
         *lock(&self.list) = list;
-        Ok(n)
+        *listed = true;
+        Ok((n, true))
+    }
+
+    /// The CLIs whose files read with a share of lines this build does not know: per provider, how many files had at
+    /// least `DRIFT_PCT` percent unknown lines over at least `DRIFT_LINES` lines, and the share over those files.
+    pub fn drift(&self) -> Result<Vec<PastDrift>, String> {
+        let i = lock(&self.inner);
+        let Some(db) = i.db.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let mut st = db
+            .prepare(
+                "select provider, count(*), sum(unknown), sum(lines) from session
+                 where lines >= ?1 and unknown * 100 >= lines * ?2 group by provider order by provider",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = st
+            .query_map((DRIFT_LINES, DRIFT_PCT), |r| {
+                let provider: String = r.get(0)?;
+                let (unknown, lines): (i64, i64) = (r.get(2)?, r.get(3)?);
+                Ok(PastDrift {
+                    provider: past_of(Provider::from_name(&provider).unwrap_or(Provider::Claude)),
+                    files: r.get::<_, i64>(1)? as u64,
+                    unknown_pct: (unknown * 100 / lines.max(1)) as u64,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
     }
 
     /// The sessions whose title or transcript hold every word of QUERY, best first.
@@ -545,7 +795,7 @@ fn index_one(
     rd: &Reader,
     row: Option<&Indexed>,
     old_entries: u64,
-) -> Result<(), String> {
+) -> Result<Indexed, String> {
     let meta = rd.meta();
     let sid = meta.id.clone().unwrap_or_else(|| {
         f.path
@@ -584,9 +834,10 @@ fn index_one(
         .unwrap_or_else(|| "(untitled)".into());
     tx.execute(
         "insert into session (key, provider, sid, path, cwd, title, branch, started, updated, turns, size, mtime, off,
-           entries) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+           entries, lines, unknown) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          on conflict(key) do update set path = ?4, cwd = ?5, title = ?6, branch = ?7, started = ?8, updated = ?9,
-           turns = ?10, size = ?11, mtime = ?12, off = ?13, entries = ?14",
+           turns = ?10, size = ?11, mtime = ?12, off = ?13, entries = ?14, lines = ?15,
+           unknown = ?16",
         (
             &key,
             f.provider.name(),
@@ -602,10 +853,19 @@ fn index_one(
             f.mtime,
             rd.offset() as i64,
             entries.len() as i64,
+            rd.lines() as i64,
+            rd.unknown() as i64,
         ),
     )
     .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(Indexed {
+        key,
+        path: f.path.to_string_lossy().into_owned(),
+        size: f.size,
+        mtime: f.mtime,
+        off: rd.offset(),
+        entries: entries.len() as u64,
+    })
 }
 
 const COLUMNS: &str = "provider, sid, title, cwd, branch, started, updated, turns";
@@ -983,7 +1243,9 @@ fn ready(f: &Front) -> Result<bool, Error> {
         f.core.past.off(&db);
         return Ok(false);
     }
-    let roots = Roots::of(&dirs.home, |n| std::env::var(n).ok()).only(&v.agents_history_providers);
+    let roots = Roots::of(&dirs.home, |n| std::env::var(n).ok())
+        .only(&v.agents_history_providers)
+        .within(v.agents_history_days);
     if f.core.past.roots().as_ref() != Some(&roots) {
         f.core.past.configure(db, roots);
     }
@@ -1002,11 +1264,13 @@ pub async fn scan_now(f: &Front) -> Result<u64, Error> {
         return Ok(0);
     }
     let me = f.core.past.clone();
-    let n = crate::clock::blocking(move || me.scan())
+    let (n, changed) = crate::clock::blocking(move || me.scan_changed())
         .await
         .map_err(|e| internal(format!("the scan: {e}")))?
         .map_err(internal)?;
-    f.core.past.rebuild_lists(f);
+    if changed {
+        f.core.past.rebuild_lists(f);
+    }
     Ok(n)
 }
 
@@ -1109,6 +1373,31 @@ pub async fn rescan(
 ) -> Result<PastScanned, Error> {
     Ok(PastScanned {
         sessions: scan_now(f).await?,
+    })
+}
+
+/// Whether past sessions are on, how many are indexed, and the CLIs whose files drift from the formats read.
+pub async fn status(
+    f: &Front,
+    _: &Caller,
+    _: runstav::methods::Empty,
+) -> Result<PastStatus, Error> {
+    if !ready(f)? {
+        return Ok(PastStatus {
+            on: false,
+            sessions: 0,
+            drift: Vec::new(),
+        });
+    }
+    let me = f.core.past.clone();
+    let drift = crate::clock::blocking(move || me.drift())
+        .await
+        .map_err(|e| internal(format!("the status: {e}")))?
+        .map_err(internal)?;
+    Ok(PastStatus {
+        on: true,
+        sessions: lock(&f.core.past.list).len() as u64,
+        drift,
     })
 }
 

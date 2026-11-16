@@ -72,7 +72,18 @@ impl Fx {
         let list: Vec<String> = profiles
             .iter()
             .filter(|(name, ..)| Some(*name) != without)
-            .map(|(name, provider, c)| format!("(\"{name}\" :provider {provider} :command {c})"))
+            .map(|(name, provider, c)| {
+                // Claude Code reads a resumed conversation under its config dir: the fixture's own home
+                let env = if *provider == "claude" {
+                    format!(
+                        " :env (\"CLAUDE_CONFIG_DIR={}\")",
+                        p("home/.claude").display()
+                    )
+                } else {
+                    String::new()
+                };
+                format!("(\"{name}\" :provider {provider} :command {c}{env})")
+            })
             .collect();
         let file = p("config").join("settings.el");
         std::fs::write(

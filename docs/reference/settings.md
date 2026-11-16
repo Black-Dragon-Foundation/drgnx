@@ -269,6 +269,24 @@ index of them (history.db) is deleted.
 | `:agents` | `never` |
 | `:schema` | `boolean` |
 
+## drgnx-agents-history-days
+
+Past sessions older than this many days (by the file's change time) are not listed or searched, and leave the
+index.  0 reads every session however old.
+
+| Key | Value |
+| --- | --- |
+| Default | `180` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"u32"` |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
 ## drgnx-agents-history-providers
 
 The CLIs whose past sessions the hub reads (`drgnx-agents-history'): "claude" (Claude Code), "gemini" (Gemini

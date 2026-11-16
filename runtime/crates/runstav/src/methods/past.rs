@@ -129,6 +129,26 @@ pub struct PastScanned {
     pub sessions: u64,
 }
 
+/// One CLI whose session files read with many lines this build does not know.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PastDrift {
+    pub provider: PastProvider,
+    /// Files at 20% unknown lines or more, over at least 10 lines.
+    pub files: u64,
+    /// The share of unknown lines over those files, in percent.
+    pub unknown_pct: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PastStatus {
+    pub on: bool,
+    pub sessions: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub drift: Vec<PastDrift>,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -155,6 +175,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "agents/history/rescan", PastRescan(super::Empty) -> PastScanned,
             classes: [User], writes: false,
             doc: "the CLIs' folders read again for past sessions (read-only)",
+        ),
+        method!(
+            "agents/history/status", PastStatus(super::Empty) -> PastStatus,
+            classes: [User], writes: false,
+            doc: "whether past sessions are on, how many are indexed, and the CLIs whose files read with many unknown lines (format drift)",
         ),
     ]
 }

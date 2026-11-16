@@ -347,6 +347,7 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
             values.agents_trace_opens = default.agents_trace_opens.clone()
         }
         "drgnx-agents-history" => values.agents_history = default.agents_history,
+        "drgnx-agents-history-days" => values.agents_history_days = default.agents_history_days,
         "drgnx-agents-history-providers" => {
             values.agents_history_providers = default.agents_history_providers.clone()
         }

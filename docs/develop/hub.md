@@ -1314,6 +1314,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/history/rescan` | user | `{}` | `{sessions: natnum}` | no |
 | `agents/history/resume` | user | `{id: string, profile?: string, provider: "claude" \| "gemini" \| "codex", route: "copy" \| "original"}` | `{route: "copy" \| "original", session: string}` | yes |
 | `agents/history/search` | user | `{query: string}` | `{hits?: [PastHit]}` | no |
+| `agents/history/status` | user | `{}` | `{drift?: [PastDrift], on: boolean, sessions: natnum}` | no |
 | `agents/history/subscribe` | user | `{limit?: natnum, query?: string, view: string, workspace?: AbsPath}` | `boolean` | no |
 | `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
 | `agents/huddle/start` | user | `{clash?: string, sessions?: [Id]}` | `Huddle` | yes |
@@ -2026,8 +2027,12 @@ size, mtime and the offset read to) and an FTS5 table `turn` of each entry's tex
 - **Roots** (`Roots::of`): `$CLAUDE_CONFIG_DIR` or `~/.claude`, `$CODEX_HOME` or `~/.codex`, `$GEMINI_CLI_HOME/.gemini`
   or `~/.gemini`, narrowed by `drgnx-agents-history-providers`; the walk never follows a link. The same folders are
   on norn's deny list (`cli_session_dirs`), hard tier.
-- **Scan**: `follow` scans every 2 s on a blocking thread; a file whose size and mtime are unchanged is skipped, a
-  grown one is read on from its offset with the kept `minni::Reader` (32 kept), a shrunk or unknown one is read whole,
+- **Scan**: `follow` scans every 2 s on a blocking thread. The walk is stat-only and hot/cold: a leaf folder (a Claude project folder, a Codex day, a Gemini `chats`) none of whose files changed within the hour is read again only when its own mtime moved or on every 30th walk (an append to an old file is seen within about a minute), a folder with a recent file every walk (`Roots::walk`, `Walk`). The known files (path, size, mtime,
+  offset) are kept in memory, loaded from the index once, and a scan compares the walk with them. When nothing is new,
+  changed or gone it opens no file, starts no transaction, reads no list and builds no view (`scan_changed` answers
+  `changed: false`; `History::reads` counts the files opened, for the test). Files whose mtime is older than
+  `drgnx-agents-history-days` (180; 0 = no cap) are not read and leave the index. A file whose size and mtime are
+  unchanged is skipped, a grown one is read on from its offset with the kept `minni::Reader` (32 kept), a shrunk or unknown one is read whole,
   a gone one dropped. Polling, not a watch: Hrafn's inotify watch reports no in-place modify, and Codex appends to a
   file it keeps open. A scan writes nothing in the roots (a test holds bytes, mtimes and modes equal).
 - **Views**: `agents/history/subscribe {view, workspace?, query?}` makes VIEW the list (rows keyed `h:PROVIDER:ID`
@@ -2037,7 +2042,10 @@ size, mtime and the offset read to) and an FTS5 table `turn` of each entry's tex
   places it after its own rows: its buffer keeps its Lisp view and attaches the hub view with
   `drgnx-view-patch-attach … :keep t` and an apply function of its own (`drgnx-agent-panel-list--past-apply`). `agents/history/open` reads the file whole and publishes the transcript on
   `agent-history/PROVIDER:ID` with the agent panel's row builder (16 kept), and answers the terminal's resume argv.
-  `agents/history/search` answers the hits (title matches first, then FTS, 50 at most); `rescan` scans now.
+  `agents/history/status` answers `{on, sessions, drift}`: `drift` lists, per CLI, the files whose share of lines of a type
+  minni has never heard of (`Reader::unknown`; the types skipped on purpose are `minni::known_skipped`) is 20% or more over at
+  least 10 lines (the `session` table's `lines` and `unknown` columns); the doctor's `past-sessions` check shows it. An
+  index made before those columns is dropped and read again (it is a cache). `agents/history/search` answers the hits (title matches first, then FTS, 50 at most); `rescan` scans now.
 - **Resume**: `agents/history/resume {provider, id, route}` checks the file (`checked_file`: a regular file, its true
   name under the root), records a `Grant` for the new session id and starts the session on the provider's profile with
   `Attach::Resume(ID)`. The sandbox (`resume_grant`) then puts the file where the CLI looks under the jail's empty

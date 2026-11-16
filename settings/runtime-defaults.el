@@ -83,6 +83,7 @@
  (drgnx-agents-trace-opens ("claude"))
  (drgnx-agents-history t)
  (drgnx-agents-history-providers ("claude" "gemini" "codex"))
+ (drgnx-agents-history-days 180)
  (drgnx-agents-matrix (:preset balanced))
  (drgnx-agents-away-after 600)
  (drgnx-agents-wait-refusals 3)
