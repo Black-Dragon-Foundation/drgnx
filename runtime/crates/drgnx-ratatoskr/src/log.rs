@@ -2,7 +2,7 @@
 //! kept), written by tracing-appender's non-blocking worker; warnings and errors also to stderr, with `<4>` / `<3>`
 //! priority prefixes when `JOURNAL_STREAM` says stderr is the journal, through a worker of their own too (a stderr that
 //! does not drain holds no hub thread; lines a full queue drops are counted and told, [`to_stderr`]).  The level comes from `DRGNX_RATATOSKR_LOG` (a
-//! `Targets` string such as `info` or `warn,drgnx_ratatoskr::conn=debug`; default `info`).  Never logged: the cap,
+//! `Targets` string such as `info` or `warn,drgnx_ratatoskr::conn=debug`; default `info`, Loro's crates `warn`).  Never logged: the cap,
 //! keys, params.
 
 use std::fs::File;
@@ -26,24 +26,32 @@ impl Drop for Guard {
     }
 }
 
-/// Start logging into DIR (made 0700 by the caller).
-pub fn init(dir: &Path) -> io::Result<Guard> {
-    use tracing_subscriber::Layer;
+/// The file log's filter: LEVEL (`DRGNX_RATATOSKR_LOG`, a `Targets` string), or by default `info` with Loro at `warn`:
+/// loro-internal logs nine info lines for every block it encodes, hundreds a save.
+fn targets(level: &str) -> io::Result<tracing_subscriber::filter::Targets> {
     use tracing_subscriber::filter::{LevelFilter, Targets};
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-    let (file, guard) = tracing_appender::non_blocking(Daily::open(dir)?);
-    let level = std::env::var("DRGNX_RATATOSKR_LOG").unwrap_or_default();
-    let targets = if level.is_empty() {
-        Targets::new().with_default(LevelFilter::INFO)
+    if level.is_empty() {
+        Ok(Targets::new()
+            .with_default(LevelFilter::INFO)
+            .with_target("loro_internal", LevelFilter::WARN)
+            .with_target("loro", LevelFilter::WARN))
     } else {
         level.parse::<Targets>().map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("DRGNX_RATATOSKR_LOG={level:?}: {e}"),
             )
-        })?
-    };
+        })
+    }
+}
+
+/// Start logging into DIR (made 0700 by the caller).
+pub fn init(dir: &Path) -> io::Result<Guard> {
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let (file, guard) = tracing_appender::non_blocking(Daily::open(dir)?);
+    let targets = targets(&std::env::var("DRGNX_RATATOSKR_LOG").unwrap_or_default())?;
     let journal = std::env::var_os("JOURNAL_STREAM").is_some();
     let (stderr, stderr_flush) = to_stderr(io::stderr(), journal, STDERR_LINES);
     tracing_subscriber::registry()
@@ -311,6 +319,23 @@ mod stderr_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_default_level_keeps_loros_diagnostics_out() {
+        // loro-internal logs nine info lines per block it encodes (`diagnose_block`): hundreds a save
+        let t = targets("").unwrap();
+        let info = tracing::Level::INFO;
+        assert!(!t.would_enable("loro_internal::oplog::change_store::block_encode", &info));
+        assert!(!t.would_enable("loro::doc", &info));
+        assert!(t.would_enable("loro_internal::oplog", &tracing::Level::WARN));
+        assert!(t.would_enable("drgnx_ratatoskr::conn", &info));
+        // a level asked for is taken as it is
+        assert!(
+            targets("info")
+                .unwrap()
+                .would_enable("loro_internal::oplog", &info)
+        );
+    }
 
     #[test]
     fn utc_days() {
