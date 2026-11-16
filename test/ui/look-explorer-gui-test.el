@@ -178,6 +178,26 @@ H the density's `tree-row' (22 compact, 30 roomy)."
       (should a) (should b)
       (should (<= (abs (- a b)) 1)))))
 
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-cut-off-name-draws-no-arrow-in-the-inset ()
+  "Pattern D: a name too long for the window is cut at the row's edge; the fringes are the rows' inset, so Emacs's
+truncation arrow is not drawn there (audit E5: a stray ← after long rows at 1.25)."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-explorer--with root
+    (let ((long (concat (make-string 200 ?n) ".txt")))
+      (write-region "" nil (expand-file-name long root) nil 'silent)
+      (drgnx-test-wait (lambda () (with-current-buffer drgnx-explorer-buffer-name
+                                    (string-match-p "nnnn" (buffer-string))))
+                       :secs 20 :what "the long name's row")
+      (drgnx-test-wait-presented)
+      (with-current-buffer drgnx-explorer-buffer-name
+        (let ((w (get-buffer-window (current-buffer) t)))
+          (should w)
+          (goto-char (point-min)) (search-forward "nnnn")
+          ;; the probe tells: the row is cut, its end is off the window
+          (should (> (car (window-text-pixel-size w (pos-bol) (pos-eol))) (window-body-width w t)))
+          (should-not (seq-intersection (fringe-bitmaps-at-pos (point) w)
+                                      '(left-arrow right-arrow left-curly-arrow right-curly-arrow))))))))
+
 (drgnx-look-gui-deftest drgnx-ui-look-explorer/hover-reveals-the-ellipsis ()
   "Pattern D (sway): the ⋯ of a row that is not at point is drawn in the row's background until the pointer is on
 the row, and again after the pointer leaves."
