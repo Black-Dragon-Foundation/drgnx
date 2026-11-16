@@ -51,7 +51,7 @@ Opening the Work map adopts each of its folders' specs, plans, ledgers and other
 (`records/import`; a copy of the files and of the graph is kept the first time). While that runs, a line above the map
 says so; when it is done the map shows the records (it turns on "show finished", `.`, since a spec or plan is live
 only while an agent works under it) and you can turn that off again. A map that cannot load says why on that line too:
-no hub, or the hub's rows have not come yet.
+no hub, or the hub's rows have not come yet. A gate waiting for your approval is a chip on the strip led by "Sign off:", so it says what it is even when its forecast is cut to the chip's width.
 
 ## Recording commits
 
