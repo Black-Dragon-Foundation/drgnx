@@ -318,7 +318,17 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
     let mut vis: BTreeSet<Sym> = d
         .items
         .iter()
-        .filter(|(_, it)| it.live || v.filters.finished)
+        .filter(|(_, it)| {
+            crate::view::visibility(
+                it.kind,
+                it.live,
+                it.done,
+                it.ready,
+                it.touched,
+                &v.filters,
+                m.minute(),
+            ) != crate::Visibility::Hidden
+        })
         .map(|(&y, _)| y)
         .collect();
     let mut chain = BTreeSet::new();

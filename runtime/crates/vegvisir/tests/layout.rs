@@ -42,6 +42,7 @@ fn agent_events(i: usize, a: &Gen, plans: u8, machines: u8) -> Vec<Event> {
             plan: format!("p{p}"),
             title: format!("task {i}"),
             done: false,
+            updated: 0,
         }));
     }
     let branch = format!("drgnx/b{i:02}");
@@ -118,6 +119,7 @@ fn world_events(w: &World) -> Vec<Event> {
             title: format!("plan {p}"),
             rank: u64::from(p),
             progress: None,
+            updated: 0,
         }));
         out.push(Event::Graph(GraphFact::Ask {
             key: format!("{p}"),

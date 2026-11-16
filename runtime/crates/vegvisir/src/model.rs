@@ -19,7 +19,13 @@ pub enum GraphFact {
     /// `ask:KEY`: the user's words that started work.
     Ask { key: String, text: String },
     /// `spec:ID`.
-    Spec { id: String, title: String },
+    Spec {
+        id: String,
+        title: String,
+        /// When the record last changed, in minutes.
+        #[serde(default)]
+        updated: u64,
+    },
     /// `plan:ID`; `rank` orders the plans (and so their blocks).
     Plan {
         id: String,
@@ -27,6 +33,8 @@ pub enum GraphFact {
         rank: u64,
         #[serde(default)]
         progress: Option<(u32, u32)>,
+        #[serde(default)]
+        updated: u64,
     },
     /// A task of a plan (`parent_of` plan → task): an item in layer 4.
     Task {
@@ -35,6 +43,8 @@ pub enum GraphFact {
         title: String,
         #[serde(default)]
         done: bool,
+        #[serde(default)]
+        updated: u64,
     },
     /// Link `asked`: ask `ask` (its key) → `to`, one of `spec:ID`, `plan:ID`, `task:ID` or `agent:SID`.
     Asked { ask: String, to: String },
@@ -313,7 +323,7 @@ pub struct Item {
     pub id: ItemId,
     pub kind: Kind,
     pub label: String,
-    /// On the map without "show finished".
+    /// A live agent is under it (or it is a live branch or file): on the map in Active.
     pub live: bool,
     /// The plan whose block it sits in (agents and branches); `None`: the "No plan" block.
     pub block: Option<ItemId>,
@@ -326,6 +336,12 @@ pub struct Item {
     pub needs_you: bool,
     /// A file in an overlap: drawn as a node by default.
     pub shared: bool,
+    /// Finished: a done task, or what has nothing live and nothing waiting under it.
+    pub done: bool,
+    /// Not started: no agent has worked on it yet (a spec, plan or task).
+    pub ready: bool,
+    /// The latest change of the item or of what is under it, in minutes.
+    pub touched: u64,
     pub fields: Fields,
     /// A machine's jobs, one chip each, each linking to the agent that started it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -460,6 +476,8 @@ struct Facts {
     asks: BTreeMap<Sym, String>,
     specs: BTreeMap<Sym, String>,
     plans: BTreeMap<Sym, PlanF>,
+    /// spec, plan and task → when its record last changed (minutes)
+    stamps: BTreeMap<Sym, u64>,
     /// task → (plan, title, done)
     tasks: BTreeMap<Sym, (Sym, String, bool)>,
     asked: BTreeSet<(Sym, Sym)>,
@@ -489,6 +507,12 @@ pub(crate) struct ItemD {
     pub(crate) warn: bool,
     pub(crate) needs_you: bool,
     pub(crate) shared: bool,
+    /// Finished, for the Completed filter.
+    pub(crate) done: bool,
+    /// Not started: nothing has worked on it yet.
+    pub(crate) ready: bool,
+    /// The latest change of the item or of what is under it, in minutes.
+    pub(crate) touched: u64,
 }
 
 #[derive(Clone, Default)]
@@ -551,15 +575,22 @@ impl Model {
         change
     }
 
-    /// The delta a view with (or without) "show finished" gets for a change.
-    pub(crate) fn delta_for(&self, change: &Change, finished: bool) -> Delta {
+    /// The delta a view with FILTERS gets for a change.
+    pub(crate) fn delta_for(&self, change: &Change, filters: &crate::Filters) -> Delta {
+        let now = self.facts.minute;
         let mut delta = Delta {
             edges: change.edges,
             needs_you: change.needs_you,
             ..Delta::default()
         };
         for (y, a, b, fields) in &change.items {
-            let shown = |d: &Option<ItemD>| d.as_ref().is_some_and(|d| d.live || finished);
+            let shown = |d: &Option<ItemD>| {
+                d.as_ref().is_some_and(|d| {
+                    crate::view::visibility(
+                        d.kind, d.live, d.done, d.ready, d.touched, filters, now,
+                    ) != crate::Visibility::Hidden
+                })
+            };
             let (was, is) = (shown(a), shown(b));
             if is && (!was || a != b || *fields) {
                 delta.changed.push(self.names.id(*y));
@@ -819,6 +850,9 @@ impl Model {
             warn: d.warn,
             needs_you: d.needs_you,
             shared: d.shared,
+            done: d.done,
+            ready: d.ready,
+            touched: d.touched,
             fields,
             chips,
         }
@@ -885,12 +919,13 @@ impl Model {
                     f.asks.insert(y, text);
                     touched.insert(y);
                 }
-                GraphFact::Spec { id, title } => {
+                GraphFact::Spec { id, title, updated } => {
                     let y = n.intern_as("spec", &id);
-                    if f.specs.get(&y) == Some(&title) {
+                    if f.specs.get(&y) == Some(&title) && f.stamps.get(&y) == Some(&updated) {
                         return None;
                     }
                     f.specs.insert(y, title);
+                    f.stamps.insert(y, updated);
                     touched.insert(y);
                 }
                 GraphFact::Plan {
@@ -898,13 +933,15 @@ impl Model {
                     title,
                     rank,
                     progress,
+                    updated,
                 } => {
                     let y = n.intern_as("plan", &id);
                     let v = (title, rank, progress);
-                    if f.plans.get(&y) == Some(&v) {
+                    if f.plans.get(&y) == Some(&v) && f.stamps.get(&y) == Some(&updated) {
                         return None;
                     }
                     f.plans.insert(y, v);
+                    f.stamps.insert(y, updated);
                     touched.insert(y);
                 }
                 GraphFact::Task {
@@ -912,13 +949,15 @@ impl Model {
                     plan,
                     title,
                     done,
+                    updated,
                 } => {
                     let t = n.intern_as("task", &id);
                     let v = (n.intern_as("plan", &plan), title, done);
-                    if f.tasks.get(&t) == Some(&v) {
+                    if f.tasks.get(&t) == Some(&v) && f.stamps.get(&t) == Some(&updated) {
                         return None;
                     }
                     f.tasks.insert(t, v);
+                    f.stamps.insert(t, updated);
                     // the task's title is on its agents' cards
                     touched.extend(
                         f.sessions
@@ -1265,6 +1304,9 @@ impl Model {
             warn: false,
             needs_you: false,
             shared: false,
+            done: false,
+            ready: false,
+            touched: 0,
         };
         for &a in f.asks.keys() {
             d.items
@@ -1428,6 +1470,102 @@ impl Model {
                     }
                 }
             }
+        }
+
+        // finished, not started, and last touched (the Show filter reads these)
+        let mut touched: BTreeMap<Sym, u64> = BTreeMap::new();
+        let mut started: BTreeSet<Sym> = BTreeSet::new();
+        for (&a, sess) in &f.sessions {
+            touched.insert(a, sess.fact.since);
+            if let Some(t) = sess.task {
+                started.insert(t);
+                let e = touched.entry(t).or_default();
+                *e = (*e).max(sess.fact.since);
+            }
+        }
+        let stamp = |y: Sym| f.stamps.get(&y).copied().unwrap_or(0);
+        let mut plan_tasks: BTreeMap<Sym, Vec<Sym>> = BTreeMap::new();
+        for (&t, (pl, _, _)) in &f.tasks {
+            plan_tasks.entry(*pl).or_default().push(t);
+            let e = touched.entry(t).or_default();
+            *e = (*e).max(stamp(t));
+        }
+        let mut ready: BTreeSet<Sym> = BTreeSet::new();
+        let mut done: BTreeSet<Sym> = BTreeSet::new();
+        for (&t, (_, _, finished)) in &f.tasks {
+            if *finished {
+                done.insert(t);
+            } else if !started.contains(&t) {
+                ready.insert(t);
+            }
+        }
+        for (&p, (_, _, progress)) in &f.plans {
+            let tasks = plan_tasks.get(&p).map_or(&[][..], Vec::as_slice);
+            let mut at = stamp(p);
+            at = tasks.iter().map(|t| touched[t]).fold(at, u64::max);
+            touched.insert(p, at);
+            let live = d.items[&p].live;
+            let complete = progress.is_some_and(|(x, y)| y > 0 && x >= y)
+                || (!tasks.is_empty() && tasks.iter().all(|t| done.contains(t)));
+            if !live && !complete && !tasks.iter().any(|t| started.contains(t)) {
+                ready.insert(p);
+            } else if !live {
+                done.insert(p);
+            }
+        }
+        for &sp in f.specs.keys() {
+            let plans: Vec<Sym> = f
+                .derives
+                .iter()
+                .filter(|(_, s)| *s == sp)
+                .map(|&(p, _)| p)
+                .collect();
+            let at = plans
+                .iter()
+                .filter_map(|p| touched.get(p))
+                .fold(stamp(sp), |x, &y| x.max(y));
+            touched.insert(sp, at);
+            let live = d.items[&sp].live;
+            if !live
+                && plans
+                    .iter()
+                    .all(|p| ready.contains(p) || !f.plans.contains_key(p))
+            {
+                ready.insert(sp);
+            } else if !live {
+                done.insert(sp);
+            }
+        }
+        for &a in f.asks.keys() {
+            let at = f
+                .asked
+                .iter()
+                .filter(|(x, _)| *x == a)
+                .filter_map(|(_, t)| touched.get(t))
+                .fold(0, |x, &y| x.max(y));
+            touched.insert(a, at);
+            if !d.items[&a].live {
+                done.insert(a);
+            }
+        }
+        for (&y, it) in d.items.iter_mut() {
+            match it.kind {
+                Kind::Agent | Kind::Subagent | Kind::File => it.done = !it.live,
+                Kind::Branch => {
+                    it.done = !it.live;
+                    it.touched = it
+                        .parent
+                        .and_then(|o| touched.get(&o).copied())
+                        .unwrap_or(0);
+                    continue;
+                }
+                Kind::Machine => continue,
+                _ => {
+                    it.done = done.contains(&y);
+                    it.ready = ready.contains(&y);
+                }
+            }
+            it.touched = touched.get(&y).copied().unwrap_or(0);
         }
 
         edges.retain(|(a, b, _)| a != b && d.items.contains_key(a) && d.items.contains_key(b));

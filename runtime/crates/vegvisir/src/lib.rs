@@ -31,7 +31,10 @@ pub use model::{
     PresenceEntry, PresenceFact, RefFact, RunnerFact, SessionFact, State, StepFact, TaskState,
 };
 pub use overlap::Overlap;
-pub use view::{Density, Filters, ViewKey, ViewOp, ViewState};
+pub use view::{
+    Density, Filters, Group, RECENT_DAYS, Show, ViewKey, ViewOp, ViewState, Visibility, group,
+    shown,
+};
 
 /// An item's stable id: `ask:N`, `spec:ID`, `plan:ID`, `task:ID`, `agent:SID`, `agent:SID/TOOLID` (a subagent),
 /// `branch:REPO/NAME`, `file:REPO/PATH`, `machine:NAME`. Its prefix fixes its kind, so its layer never changes.
@@ -207,7 +210,7 @@ pub enum Event {
 pub struct Delta {
     /// Items new or changed that the view shows.
     pub changed: Vec<ItemId>,
-    /// Items the view showed that are gone or no longer shown (finished, without "show finished").
+    /// Items the view showed that are gone or no longer shown (finished, in Active).
     pub removed: Vec<ItemId>,
     /// The edge set changed.
     pub edges: bool,
@@ -274,7 +277,7 @@ impl Core {
                 }
                 let mut out = Vec::new();
                 for (key, v) in self.views.iter().filter(|(_, v)| v.shown) {
-                    let delta = self.model.delta_for(&change, v.state.filters.finished);
+                    let delta = self.model.delta_for(&change, &v.state.filters);
                     if !delta.is_empty() {
                         out.push(Effect::Delta {
                             view: key.clone(),

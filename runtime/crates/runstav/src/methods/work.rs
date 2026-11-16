@@ -255,8 +255,25 @@ pub enum MapDensity {
     Roomy,
 }
 
-/// A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+/// Which items a map view shows: `.` cycles them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MapShow {
+    /// Agents running or waiting on you, what is not started, and what changed within `recent_days`.
+    #[default]
+    Active,
+    /// Finished items only.
+    Completed,
+    /// Both, the finished ones faded.
+    All,
+}
+
+fn recent_days() -> u32 {
+    7
+}
+
+/// A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (Active, Completed or All).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MapFilters {
     /// An item id: only its chain.
@@ -265,7 +282,21 @@ pub struct MapFilters {
     #[serde(default)]
     pub overlaps: bool,
     #[serde(default)]
-    pub finished: bool,
+    pub show: MapShow,
+    /// Days a changed item stays in Active (`drgnx-work-recent-days`).
+    #[serde(default = "recent_days")]
+    pub recent_days: u32,
+}
+
+impl Default for MapFilters {
+    fn default() -> MapFilters {
+        MapFilters {
+            focus: None,
+            overlaps: false,
+            show: MapShow::default(),
+            recent_days: recent_days(),
+        }
+    }
 }
 
 /// `work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it

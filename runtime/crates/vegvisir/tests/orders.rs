@@ -235,6 +235,7 @@ fn plan(id: &str, rank: u64) -> Event {
         title: format!("plan {id}"),
         rank,
         progress: None,
+        updated: 0,
     })
 }
 
@@ -244,6 +245,7 @@ fn task(id: &str, plan: &str) -> Event {
         plan: plan.to_string(),
         title: format!("task {id}"),
         done: false,
+        updated: 0,
     })
 }
 
@@ -282,6 +284,7 @@ fn same_final_model_in_every_order() {
             g(GraphFact::Spec {
                 id: "ws".into(),
                 title: "the Work space".into(),
+                updated: 0,
             }),
             plan("p", 1),
             g(GraphFact::Derives {
@@ -470,6 +473,7 @@ mod chain {
             g(GraphFact::Spec {
                 id: "s".into(),
                 title: "spec".into(),
+                updated: 0,
             }),
             plan("p", 1),
             plan("q", 2),
@@ -683,7 +687,7 @@ mod model {
         assert!(delta.structural);
         // with "show finished" they stay, in the subtle face
         let mut state = ViewState::default();
-        state.filters.finished = true;
+        state.filters.show = vegvisir::Show::All;
         c.step(Event::View(ViewOp::Set {
             view: view("v"),
             state,
@@ -708,6 +712,7 @@ mod model {
                 plan: "p".into(),
                 title: "Ship it".into(),
                 done: false,
+                updated: 0,
             })
         };
         let c = run(vec![

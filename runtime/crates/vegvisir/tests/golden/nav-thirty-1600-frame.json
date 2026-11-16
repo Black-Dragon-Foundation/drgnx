@@ -790,6 +790,7 @@
   "items": [
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "activity": "edit",
         "conclusion": "lanes share a slot per source",
@@ -814,11 +815,14 @@
       "needs_you": false,
       "order": 1,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 20,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "minutes": 10,
         "reads": 0,
@@ -832,11 +836,14 @@
       "needs_you": false,
       "order": 27,
       "parent": "agent:s01",
+      "ready": false,
       "shared": false,
+      "touched": 50,
       "warn": true
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "minutes": 9,
         "reads": 0,
@@ -850,11 +857,14 @@
       "needs_you": false,
       "order": 28,
       "parent": "agent:s01",
+      "ready": false,
       "shared": false,
+      "touched": 51,
       "warn": true
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "activity": "test",
         "conclusion": "schema 11 is free after parts 4 and 5",
@@ -878,11 +888,14 @@
       "needs_you": false,
       "order": 2,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 35,
       "warn": true
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -904,11 +917,14 @@
       "needs_you": false,
       "order": 3,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 41,
       "warn": true
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -930,11 +946,14 @@
       "needs_you": true,
       "order": 4,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 55,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -956,11 +975,14 @@
       "needs_you": false,
       "order": 5,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 30,
       "warn": true
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -982,11 +1004,14 @@
       "needs_you": false,
       "order": 6,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 50,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1008,11 +1033,14 @@
       "needs_you": false,
       "order": 7,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 44,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "activity": "test",
         "conclusion": "counts come from the base snapshot, never main",
@@ -1036,11 +1064,14 @@
       "needs_you": false,
       "order": 8,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 58,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1062,11 +1093,14 @@
       "needs_you": false,
       "order": 9,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 25,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1087,11 +1121,14 @@
       "needs_you": false,
       "order": 10,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 59,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "activity": "build",
         "context": 86,
@@ -1115,11 +1152,14 @@
       "needs_you": false,
       "order": 11,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 15,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "minutes": 18,
         "reads": 0,
@@ -1133,11 +1173,14 @@
       "needs_you": false,
       "order": 29,
       "parent": "agent:s11",
+      "ready": false,
       "shared": false,
+      "touched": 42,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1159,11 +1202,14 @@
       "needs_you": true,
       "order": 12,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 22,
       "warn": true
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1185,11 +1231,14 @@
       "needs_you": false,
       "order": 13,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 40,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1211,11 +1260,14 @@
       "needs_you": true,
       "order": 14,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 33,
       "warn": true
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1237,11 +1289,14 @@
       "needs_you": false,
       "order": 15,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 12,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1263,11 +1318,14 @@
       "needs_you": false,
       "order": 16,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 47,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1289,11 +1347,14 @@
       "needs_you": false,
       "order": 17,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 38,
       "warn": false
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "activity": "edit",
         "conclusion": "turn_core drops the started flag on a session end",
@@ -1317,11 +1378,14 @@
       "needs_you": false,
       "order": 18,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 10,
       "warn": false
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "minutes": 24,
         "reads": 1,
@@ -1335,11 +1399,14 @@
       "needs_you": false,
       "order": 30,
       "parent": "agent:s18",
+      "ready": false,
       "shared": false,
+      "touched": 36,
       "warn": false
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1361,11 +1428,14 @@
       "needs_you": false,
       "order": 19,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 28,
       "warn": true
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1387,11 +1457,14 @@
       "needs_you": true,
       "order": 20,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 52,
       "warn": false
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1413,11 +1486,14 @@
       "needs_you": false,
       "order": 21,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 46,
       "warn": false
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "activity": "test",
         "conclusion": "install rows pass on Fedora 45",
@@ -1441,11 +1517,14 @@
       "needs_you": false,
       "order": 22,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 57,
       "warn": false
     },
     {
       "block": "plan:jobq",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1467,11 +1546,14 @@
       "needs_you": true,
       "order": 23,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 48,
       "warn": false
     },
     {
       "block": "plan:jobq",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1494,11 +1576,14 @@
       "needs_you": false,
       "order": 24,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 53,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "edits": [
           6,
@@ -1519,11 +1604,14 @@
       "needs_you": false,
       "order": 25,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 5,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1544,11 +1632,14 @@
       "needs_you": false,
       "order": 26,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 56,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {},
       "id": "ask:1",
       "kind": "ask",
@@ -1557,11 +1648,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 59,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {},
       "id": "ask:2",
       "kind": "ask",
@@ -1570,11 +1664,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 47,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {},
       "id": "ask:3",
       "kind": "ask",
@@ -1583,11 +1680,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 57,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {},
       "id": "ask:4",
       "kind": "ask",
@@ -1596,11 +1696,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 53,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {},
       "id": "ask:5",
       "kind": "ask",
@@ -1609,11 +1712,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 5,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {},
       "id": "ask:6",
       "kind": "ask",
@@ -1622,11 +1728,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 56,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "repo": "drgnx"
       },
@@ -1637,11 +1746,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 0,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1658,11 +1770,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s09",
+      "ready": false,
       "shared": false,
+      "touched": 25,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1679,11 +1794,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s02",
+      "ready": false,
       "shared": false,
+      "touched": 35,
       "warn": true
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1700,11 +1818,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s08",
+      "ready": false,
       "shared": false,
+      "touched": 58,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           7,
@@ -1721,11 +1842,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s01",
+      "ready": false,
       "shared": false,
+      "touched": 20,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1742,11 +1866,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s07",
+      "ready": false,
       "shared": false,
+      "touched": 44,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1763,11 +1890,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s06",
+      "ready": false,
       "shared": false,
+      "touched": 50,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1784,11 +1914,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s03",
+      "ready": false,
       "shared": false,
+      "touched": 41,
       "warn": true
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1805,11 +1938,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s05",
+      "ready": false,
       "shared": false,
+      "touched": 30,
       "warn": true
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1826,11 +1962,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s10",
+      "ready": false,
       "shared": false,
+      "touched": 59,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1847,11 +1986,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s04",
+      "ready": false,
       "shared": false,
+      "touched": 55,
       "warn": false
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "repo": "drgnx"
       },
@@ -1862,11 +2004,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 0,
       "warn": false
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "edits": [
           6,
@@ -1883,11 +2028,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s18",
+      "ready": false,
       "shared": false,
+      "touched": 10,
       "warn": false
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1904,11 +2052,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s19",
+      "ready": false,
       "shared": false,
+      "touched": 28,
       "warn": true
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1924,11 +2075,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s22",
+      "ready": false,
       "shared": false,
+      "touched": 57,
       "warn": false
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1945,11 +2099,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s21",
+      "ready": false,
       "shared": false,
+      "touched": 46,
       "warn": false
     },
     {
       "block": "plan:race-proof",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -1966,11 +2123,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s20",
+      "ready": false,
       "shared": false,
+      "touched": 52,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -1987,11 +2147,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s13",
+      "ready": false,
       "shared": false,
+      "touched": 40,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -2008,11 +2171,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s17",
+      "ready": false,
       "shared": false,
+      "touched": 38,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -2029,11 +2195,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s12",
+      "ready": false,
       "shared": false,
+      "touched": 22,
       "warn": true
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           6,
@@ -2050,11 +2219,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s11",
+      "ready": false,
       "shared": false,
+      "touched": 15,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -2071,11 +2243,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s15",
+      "ready": false,
       "shared": false,
+      "touched": 12,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -2092,11 +2267,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s14",
+      "ready": false,
       "shared": false,
+      "touched": 33,
       "warn": true
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "edits": [
           4,
@@ -2113,11 +2291,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s16",
+      "ready": false,
       "shared": false,
+      "touched": 47,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
+      "done": false,
       "fields": {
         "repo": "nidhogg"
       },
@@ -2128,11 +2309,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 0,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "edits": [
           6,
@@ -2148,11 +2332,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s25",
+      "ready": false,
       "shared": false,
+      "touched": 5,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -2168,11 +2355,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s26",
+      "ready": false,
       "shared": false,
+      "touched": 56,
       "warn": false
     },
     {
       "block": "plan:jobq",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -2189,11 +2379,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s23",
+      "ready": false,
       "shared": false,
+      "touched": 48,
       "warn": false
     },
     {
       "block": "plan:jobq",
+      "done": false,
       "fields": {
         "edits": [
           5,
@@ -2210,11 +2403,14 @@
       "needs_you": false,
       "order": 0,
       "parent": "agent:s24",
+      "ready": false,
       "shared": false,
+      "touched": 53,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "repo": "org"
       },
@@ -2225,11 +2421,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 0,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "change": [
           30,
@@ -2243,11 +2442,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": true,
+      "touched": 0,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "change": [
           60,
@@ -2261,11 +2463,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": true,
+      "touched": 0,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "change": [
           520,
@@ -2279,11 +2484,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": true,
+      "touched": 0,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "change": [
           40,
@@ -2297,11 +2505,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": true,
+      "touched": 0,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "slots": [
           15,
@@ -2315,11 +2526,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 0,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "slots": [
           1,
@@ -2333,11 +2547,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 0,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "slots": [
           3,
@@ -2351,11 +2568,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 0,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "progress": [
           3,
@@ -2369,11 +2589,14 @@
       "needs_you": false,
       "order": 1,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 59,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "progress": [
           2,
@@ -2387,11 +2610,14 @@
       "needs_you": false,
       "order": 2,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 47,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "progress": [
           0,
@@ -2405,11 +2631,14 @@
       "needs_you": false,
       "order": 4,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 53,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {
         "progress": [
           4,
@@ -2423,11 +2652,14 @@
       "needs_you": false,
       "order": 3,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 57,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {},
       "id": "spec:glitnir",
       "kind": "spec",
@@ -2436,11 +2668,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 47,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {},
       "id": "spec:race-proof",
       "kind": "spec",
@@ -2449,11 +2684,14 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 57,
       "warn": false
     },
     {
       "block": null,
+      "done": false,
       "fields": {},
       "id": "spec:work-space",
       "kind": "spec",
@@ -2462,12 +2700,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 59,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t01",
       "kind": "task",
       "label": "vegvisir: model and layout",
@@ -2475,12 +2718,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 20,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t02",
       "kind": "task",
       "label": "The migration and hub-only records",
@@ -2488,12 +2736,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 35,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t03",
       "kind": "task",
       "label": "Worktree bases, machines, shell reads",
@@ -2501,12 +2754,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 41,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "needs-you"
+      },
       "id": "task:t04",
       "kind": "task",
       "label": "Targeted sends and per-session entries",
@@ -2514,12 +2772,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 55,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t05",
       "kind": "task",
       "label": "Step detail and conclusions",
@@ -2527,12 +2790,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 30,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t06",
       "kind": "task",
       "label": "Spike S4: the tracing cost",
@@ -2540,12 +2808,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 50,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t07",
       "kind": "task",
       "label": "Spike S1: geometry and rasters",
@@ -2553,12 +2826,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 44,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "not-started"
+      },
       "id": "task:t08",
       "kind": "task",
       "label": "Edited files and hunks, the interim",
@@ -2566,12 +2844,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 58,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t09",
       "kind": "task",
       "label": "The presence model and the current ask",
@@ -2579,12 +2862,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 25,
       "warn": false
     },
     {
       "block": "plan:agent-system-p2",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t10",
       "kind": "task",
       "label": "The trace supervisor",
@@ -2592,12 +2880,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 59,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t11",
       "kind": "task",
       "label": "Rounded scroll layers",
@@ -2605,12 +2898,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 15,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "needs-you"
+      },
       "id": "task:t12",
       "kind": "task",
       "label": "The layout leg",
@@ -2618,12 +2916,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 22,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t13",
       "kind": "task",
       "label": "Cards and rings",
@@ -2631,12 +2934,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 40,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "needs-you"
+      },
       "id": "task:t14",
       "kind": "task",
       "label": "Scroll layers promoted",
@@ -2644,12 +2952,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 33,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "not-started"
+      },
       "id": "task:t15",
       "kind": "task",
       "label": "The pacer",
@@ -2657,12 +2970,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 12,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t16",
       "kind": "task",
       "label": "Native shell reconnect",
@@ -2670,12 +2988,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 47,
       "warn": false
     },
     {
       "block": "plan:glitnir-p2-p4",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "not-started"
+      },
       "id": "task:t17",
       "kind": "task",
       "label": "Font fallback",
@@ -2683,12 +3006,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 38,
       "warn": false
     },
     {
       "block": "plan:race-proof",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t18",
       "kind": "task",
       "label": "SESSION-END-LOSES-STARTED-1",
@@ -2696,12 +3024,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 10,
       "warn": false
     },
     {
       "block": "plan:race-proof",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t19",
       "kind": "task",
       "label": "Hub client core restarts",
@@ -2709,12 +3042,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 28,
       "warn": false
     },
     {
       "block": "plan:race-proof",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "needs-you"
+      },
       "id": "task:t20",
       "kind": "task",
       "label": "The det sweep",
@@ -2722,12 +3060,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 52,
       "warn": false
     },
     {
       "block": "plan:race-proof",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t21",
       "kind": "task",
       "label": "Module teardown rows",
@@ -2735,12 +3078,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 46,
       "warn": false
     },
     {
       "block": "plan:race-proof",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "not-started"
+      },
       "id": "task:t22",
       "kind": "task",
       "label": "Install rows",
@@ -2748,12 +3096,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 57,
       "warn": false
     },
     {
       "block": "plan:jobq",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "needs-you"
+      },
       "id": "task:t23",
       "kind": "task",
       "label": "Write the jobq plan",
@@ -2761,12 +3114,17 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 48,
       "warn": false
     },
     {
       "block": "plan:jobq",
-      "fields": {},
+      "done": false,
+      "fields": {
+        "task_state": "running"
+      },
       "id": "task:t24",
       "kind": "task",
       "label": "The slot reporter",
@@ -2774,7 +3132,9 @@
       "needs_you": false,
       "order": 0,
       "parent": null,
+      "ready": false,
       "shared": false,
+      "touched": 53,
       "warn": false
     }
   ],

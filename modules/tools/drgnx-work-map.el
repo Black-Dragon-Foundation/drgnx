@@ -53,8 +53,48 @@
 ;; a mode line keeps the faces of a variable's string only when the variable is risky
 (put 'drgnx-work-map--lens 'risky-local-variable t)
 (defvar-local drgnx-work-map--filters nil
-  "The filters sent to the hub: a plist (:focus ITEM-ID :overlaps BOOL :finished BOOL).")
-(defvar-local drgnx-work-map--collapsed nil "The collapsed layers (1 to 6).")
+  "The filters sent to the hub: a plist (:focus ITEM-ID :overlaps BOOL :show SYMBOL), :show being `active',
+`completed' or `all' (nil: `active').")
+(defvar-local drgnx-work-map--collapsed nil "The collapsed layers (1 to 8).")
+
+(drgnx-defsetting drgnx-work-recent-days 7
+  "Days an item that changed stays in the Work map's Active view.  Active also holds agents that run or wait on
+you, and approved specs and plans not yet started; Completed holds finished items only; All holds both."
+  :type 'natnum :group 'drgnx :scope 'global :agents 'never
+  :schema '(pred natnump "a number of days"))
+
+(defconst drgnx-work-map--shows '(active completed all) "What `drgnx-work-map-cycle-filter' goes through.")
+
+(defvar drgnx-work-map--show-by-project nil
+  "An alist (WORKSPACE-ID . SHOW): each project's choice of Active, Completed or All, kept in the saved workbench.")
+
+(defun drgnx-work-map--show-for (id)
+  "The choice kept for the project (workspace id) ID: `active', `completed' or `all'."
+  (or (cdr (assoc id drgnx-work-map--show-by-project)) 'active))
+
+(defun drgnx-work-map--show ()
+  "This map's choice of Active, Completed or All."
+  (or (plist-get drgnx-work-map--filters :show) 'active))
+
+(defun drgnx-work-map--filters-wire ()
+  "The filters as `work/map/subscribe' and `work/map/set' take them."
+  (list :focus (plist-get drgnx-work-map--filters :focus)
+        :overlaps (if (plist-get drgnx-work-map--filters :overlaps) t :false)
+        :show (symbol-name (drgnx-work-map--show))
+        :recent_days drgnx-work-recent-days))
+
+(defun drgnx-work-map--persist-state ()
+  "The projects' choices for `drgnx-persist-state-functions': (:work-show ALIST), or nothing before any choice."
+  (when drgnx-work-map--show-by-project
+    (list :work-show (copy-alist drgnx-work-map--show-by-project))))
+
+(defun drgnx-work-map--adopt-show (frame)
+  "`drgnx-persist-after-restore-functions': take the projects' choices saved with FRAME's workbench.  Never prompts."
+  (let ((saved (plist-get (frame-parameter frame 'drgnx-persist-extra) :work-show)))
+    (when (proper-list-p saved)
+      (dolist (e saved)
+        (when (and (consp e) (stringp (car e)) (memq (cdr e) drgnx-work-map--shows))
+          (setf (alist-get (car e) drgnx-work-map--show-by-project nil nil #'equal) (cdr e)))))))
 (defvar-local drgnx-work-map--asked nil
   "Non-nil from a layout the user asked for (`drgnx-work-map--send-filters') until the hub answers it.")
 (defvar-local drgnx-work-map--needs-at 0 "The index of the strip entry `n' selected last.")
@@ -536,9 +576,7 @@ asks for moves (`drgnx-work-map--motion-begin')."
     (setq drgnx-work-map--asked t)
     (drgnx-work-client-set-then drgnx-work-space--view
                                 (apply-partially #'drgnx-work-map--answered (current-buffer))
-                                :filters (list :focus (plist-get drgnx-work-map--filters :focus)
-                                               :overlaps (if (plist-get drgnx-work-map--filters :overlaps) t :false)
-                                               :finished (if (plist-get drgnx-work-map--filters :finished) t :false))
+                                :filters (drgnx-work-map--filters-wire)
                                 :collapsed (vconcat drgnx-work-map--collapsed))))
 
 (defvar drgnx-work-map--motion)                   ; "Motion", below
@@ -574,11 +612,16 @@ arrow keys move inside the chain and send nothing."
   (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :overlaps (not (plist-get drgnx-work-map--filters :overlaps))))
   (drgnx-work-map--send-filters))
 
-(defun drgnx-work-map-show-finished ()
-  "Show finished items too; again to hide them."
+(defun drgnx-work-map-cycle-filter ()
+  "Show Active, then Completed, then All; the project keeps its choice."
   (interactive)
-  (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :finished (not (plist-get drgnx-work-map--filters :finished))))
-  (drgnx-work-map--send-filters))
+  (let* ((rest (cdr (memq (drgnx-work-map--show) drgnx-work-map--shows)))
+         (next (or (car rest) (car drgnx-work-map--shows))))
+    (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :show next))
+    (when drgnx-work-space--view
+      (setf (alist-get drgnx-work-space--view drgnx-work-map--show-by-project nil nil #'equal) next))
+    (drgnx-work-map--send-filters)
+    (message "Work: %s" (capitalize (symbol-name next)))))
 
 (defun drgnx-work-map-collapse-layer (n)
   "Collapse layer N to one thin row, or expand it."
@@ -607,8 +650,10 @@ arrow keys move inside the chain and send nothing."
   (cond ((and drgnx-work-map--search (not (string-empty-p drgnx-work-map--search)))
          (drgnx-work-map-search nil))
         ((or (plist-get drgnx-work-map--filters :focus) (plist-get drgnx-work-map--filters :overlaps)
-             (plist-get drgnx-work-map--filters :finished) drgnx-work-map--collapsed)
+             (not (eq (drgnx-work-map--show) 'active)) drgnx-work-map--collapsed)
          (setq drgnx-work-map--filters nil drgnx-work-map--collapsed nil)
+         (when drgnx-work-space--view
+           (setf (alist-get drgnx-work-space--view drgnx-work-map--show-by-project nil nil #'equal) nil))
          (drgnx-work-map--send-filters))
         (t (drgnx-close-pane))))
 

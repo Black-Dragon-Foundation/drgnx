@@ -1,19 +1,19 @@
 {
   "version": 3,
   "items": [
-    {"id": "ask:1", "kind": "ask", "label": "fix deferred testing rows", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "fields": {}},
-    {"id": "spec:race-proof", "kind": "spec", "label": "race-proof tests", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "fields": {}},
-    {"id": "plan:deferred", "kind": "plan", "label": "deferred testing rows", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "fields": {"progress": [3, 6]}},
-    {"id": "agent:a1", "kind": "agent", "label": "hub rows", "live": true, "block": "plan:deferred", "parent": null, "order": 1, "warn": true, "needs_you": false, "shared": false,
+    {"id": "ask:1", "kind": "ask", "label": "fix deferred testing rows", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "done": false, "ready": false, "touched": 0, "fields": {}},
+    {"id": "spec:race-proof", "kind": "spec", "label": "race-proof tests", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "done": false, "ready": false, "touched": 0, "fields": {}},
+    {"id": "plan:deferred", "kind": "plan", "label": "deferred testing rows", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "done": false, "ready": false, "touched": 0, "fields": {"progress": [3, 6]}},
+    {"id": "agent:a1", "kind": "agent", "label": "hub rows", "live": true, "block": "plan:deferred", "parent": null, "order": 1, "warn": true, "needs_you": false, "shared": false, "done": false, "ready": false, "touched": 0,
      "fields": {"state": "running", "minutes": 32, "model": "Opus", "task": "SESSION-END-LOSES-STARTED-1", "spend": "$1.20", "progress": [3, 6], "activity": "testing", "conclusion": "turn_core drops the started flag", "edits": [2, 52, 4], "reads": 14}},
-    {"id": "agent:a2", "kind": "agent", "label": "fx-sess", "live": true, "block": "plan:deferred", "parent": null, "order": 2, "warn": true, "needs_you": true, "shared": false,
+    {"id": "agent:a2", "kind": "agent", "label": "fx-sess", "live": true, "block": "plan:deferred", "parent": null, "order": 2, "warn": true, "needs_you": true, "shared": false, "done": false, "ready": false, "touched": 0,
      "fields": {"state": "needs-you", "minutes": 5, "model": "Sonnet", "task": "review item 3", "conclusion": "fixed in seq", "reads": 3}},
-    {"id": "agent:a1/t1", "kind": "subagent", "label": "explore", "live": true, "block": "plan:deferred", "parent": "agent:a1", "order": 1, "warn": false, "needs_you": false, "shared": false,
+    {"id": "agent:a1/t1", "kind": "subagent", "label": "explore", "live": true, "block": "plan:deferred", "parent": "agent:a1", "order": 1, "warn": false, "needs_you": false, "shared": false, "done": false, "ready": false, "touched": 0,
      "fields": {"state": "running", "minutes": 2, "model": "Opus"}},
-    {"id": "branch:drgnx/rp-df-hub", "kind": "branch", "label": "rp-df-hub", "live": true, "block": "plan:deferred", "parent": "agent:a1", "order": 1, "warn": true, "needs_you": false, "shared": false, "fields": {"repo": "drgnx", "edits": [2, 52, 4]}},
-    {"id": "branch:drgnx/rp-fx-sess", "kind": "branch", "label": "rp-fx-sess", "live": true, "block": "plan:deferred", "parent": "agent:a2", "order": 2, "warn": true, "needs_you": false, "shared": false, "fields": {"repo": "drgnx", "edits": [1, 9, 2]}},
-    {"id": "file:drgnx/src/session.rs", "kind": "file", "label": "session.rs", "live": true, "block": null, "parent": null, "order": 1, "warn": true, "needs_you": false, "shared": true, "fields": {"change": [40, 3]}},
-    {"id": "machine:desktop", "kind": "machine", "label": "desktop", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "fields": {"slots": [3, 16]}}
+    {"id": "branch:drgnx/rp-df-hub", "kind": "branch", "label": "rp-df-hub", "live": true, "block": "plan:deferred", "parent": "agent:a1", "order": 1, "warn": true, "needs_you": false, "shared": false, "done": false, "ready": false, "touched": 0, "fields": {"repo": "drgnx", "edits": [2, 52, 4]}},
+    {"id": "branch:drgnx/rp-fx-sess", "kind": "branch", "label": "rp-fx-sess", "live": true, "block": "plan:deferred", "parent": "agent:a2", "order": 2, "warn": true, "needs_you": false, "shared": false, "done": false, "ready": false, "touched": 0, "fields": {"repo": "drgnx", "edits": [1, 9, 2]}},
+    {"id": "file:drgnx/src/session.rs", "kind": "file", "label": "session.rs", "live": true, "block": null, "parent": null, "order": 1, "warn": true, "needs_you": false, "shared": true, "done": false, "ready": false, "touched": 0, "fields": {"change": [40, 3]}},
+    {"id": "machine:desktop", "kind": "machine", "label": "desktop", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "done": false, "ready": false, "touched": 0, "fields": {"slots": [3, 16]}}
   ],
   "edges": [
     {"from": "ask:1", "to": "spec:race-proof", "kind": "came-from"},

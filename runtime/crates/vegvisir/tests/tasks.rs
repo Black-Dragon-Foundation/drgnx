@@ -35,6 +35,7 @@ fn task(id: &str, plan: &str, done: bool) -> Event {
         plan: plan.into(),
         title: format!("title {id}"),
         done,
+        updated: 0,
     })
 }
 
@@ -44,6 +45,7 @@ fn plan(id: &str) -> Event {
         title: id.into(),
         rank: 1,
         progress: None,
+        updated: 0,
     })
 }
 

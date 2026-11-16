@@ -1506,6 +1506,9 @@ mod tests {
             warn: false,
             needs_you: false,
             shared: false,
+            done: false,
+            ready: false,
+            touched: 0,
             fields: Fields {
                 slots: Some((1, 2)),
                 runner: Some(RunnerFact {

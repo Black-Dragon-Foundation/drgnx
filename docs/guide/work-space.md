@@ -111,8 +111,11 @@ appears in the needs-you strip; its key jumps to the agents in it.
   sends it back to its agent with what the gates found, and `w` waives the gates once for that commit, with a reason
   you type, recorded on the task. Only you can waive; no agent or grant can.
 - `f` hides everything not on the selection's chain; while it is on, the arrow keys move inside the chain and ask the
-  hub for nothing. `o` shows only the agents and branches that overlap. `1` to `6` collapse a layer to one thin row
-  with its name and a count, `0` opens them all, `.` brings finished items back. Each of these is a layout you asked
+  hub for nothing. `o` shows only the agents and branches that overlap. `1` to `8` collapse a layer to one thin row
+  with its name and a count, `0` opens them all. `.` (Cycle Work Filter) goes Active, Completed, All: Active is
+  agents that run or wait on you, what is not started, and anything that changed within `drgnx-work-recent-days`
+  (7); Completed is finished items only, each marked ✓; All is both, the finished ones faded. Each project keeps
+  its choice. Each of these is a layout you asked
   for, so the hub lays the map out again at once.
 - A layout you asked for **moves**: each card slides from where it was to its new place over 160 ms, cards that leave
   fade out and new ones fade in. The compositor moves the pixels, so your keys act on the new layout from the first

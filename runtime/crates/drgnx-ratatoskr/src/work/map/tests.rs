@@ -1476,6 +1476,7 @@ fn a_plan_task_with_a_live_agent_is_a_task_item_linked_both_ways() {
             title: "P".into(),
             rank: 1,
             progress: None,
+            updated: 0,
         },
     );
     graph(
@@ -1485,6 +1486,7 @@ fn a_plan_task_with_a_live_agent_is_a_task_item_linked_both_ways() {
             plan: "p".into(),
             title: "do it".into(),
             done: false,
+            updated: 0,
         },
     );
     task_session(&mut core, 1, "t", State::NeedsYou);

@@ -17,7 +17,7 @@ use runstav::methods::agents::{SessionStatus, Snapshot};
 use runstav::methods::timeline::StepClass;
 use runstav::methods::view::{Display, ViewEnv};
 use runstav::methods::work::{
-    Machine, MapClose, MapDensity, MapFilters, MapRows, MapSet, MapSubscribe, MapVersion,
+    Machine, MapClose, MapDensity, MapFilters, MapRows, MapSet, MapShow, MapSubscribe, MapVersion,
     PresenceMode, Workspace,
 };
 use runstav::wire::{Error, ErrorCode};
@@ -565,7 +565,12 @@ fn filters(f: &MapFilters) -> Filters {
     Filters {
         focus: f.focus.clone().map(ItemId),
         overlaps: f.overlaps,
-        finished: f.finished,
+        show: match f.show {
+            MapShow::Active => vegvisir::Show::Active,
+            MapShow::Completed => vegvisir::Show::Completed,
+            MapShow::All => vegvisir::Show::All,
+        },
+        recent_days: f.recent_days,
     }
 }
 
@@ -624,7 +629,7 @@ fn frame_items(m: &vegvisir::Model, v: &ViewState, l: &Layout) -> Vec<vegvisir::
         .filter(|it| {
             l.at.contains_key(&it.id)
                 || (!narrowed
-                    && (it.live || v.filters.finished)
+                    && vegvisir::shown(it, &v.filters, m.minute()) != vegvisir::Visibility::Hidden
                     && v.collapsed.contains(&it.kind.layer()))
         })
         .collect()
@@ -1262,8 +1267,9 @@ impl Map {
         let mut new = Vec::new();
         for id in &delta.changed {
             let Some(it) = m.item(id) else { continue };
-            let visible =
-                (it.live || v.state.filters.finished) && (it.kind != Kind::File || it.shared);
+            let visible = vegvisir::shown(&it, &v.state.filters, m.minute())
+                != vegvisir::Visibility::Hidden
+                && (it.kind != Kind::File || it.shared);
             if v.sent.contains(id) || (!narrowed && visible) {
                 if !v.sent.contains(id) {
                     new.push(id.clone());
@@ -1919,7 +1925,8 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
             {
                 let mut q = c.prepare(
                     "select id, kind, coalesce(title, ''), coalesce(status, ''), \
-                     coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file') \
+                     coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file'), \
+                     coalesce((select at from tx where tx.id = entity.updated_tx), 0) \
                      from entity where retired_tx is null and kind in ('ask', 'spec', 'plan', 'task') order by n",
                 )?;
                 let all = q
@@ -1931,6 +1938,7 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                             r.get::<_, String>(3)?,
                             r.get::<_, String>(4)?,
                             r.get::<_, Option<String>>(5)?,
+                            r.get::<_, f64>(6)?,
                         ))
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1946,9 +1954,12 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                         title: "No plan".into(),
                         rank: u64::MAX / 2,
                         progress: None,
+                        updated: 0,
                     }));
                 }
-                for (rank, (id, kind, title, status, text, _)) in all.into_iter().enumerate() {
+                for (rank, (id, kind, title, status, text, _, at)) in all.into_iter().enumerate() {
+                    // when the record last changed, in minutes (the Active filter's window)
+                    let updated = (at / 60.0).max(0.0) as u64;
                     if hidden.contains(&strip(&id)) {
                         continue;
                     }
@@ -1960,12 +1971,14 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                         "spec" => Event::Graph(GraphFact::Spec {
                             id: strip(&id),
                             title,
+                            updated,
                         }),
                         "plan" => Event::Graph(GraphFact::Plan {
                             id: strip(&id),
                             title,
                             rank: rank as u64,
                             progress: None,
+                            updated,
                         }),
                         _ => {
                             let plan = plan_of.get(&id).map_or(NO_PLAN, String::as_str);
@@ -1974,6 +1987,7 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                                 plan: plan.to_owned(),
                                 title,
                                 done: status == "done",
+                                updated,
                             })
                         }
                     });
