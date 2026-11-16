@@ -13,6 +13,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'drgnx-color)
+(require 'drgnx-ui-kit)
 
 (defconst drgnx-theme--tokens-file
   (expand-file-name "drgnx-tokens.eld" (file-name-directory (or load-file-name buffer-file-name)))
@@ -452,7 +453,9 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
                          (list `(,(intern (format "drgnx-notebook-fg-%s" name)) :foreground ,(c token))
                                `(,(intern (format "drgnx-notebook-bg-%s" name)) :background ,(c token))
                                `(,(intern (format "drgnx-notebook-fg-bright-%s" name)) :foreground ,bright)
-                               `(,(intern (format "drgnx-notebook-bg-bright-%s" name)) :background ,bright))))))))
+                               `(,(intern (format "drgnx-notebook-bg-bright-%s" name)) :background ,bright))))
+       ;; the kit's faces (etc/ui/components.eld): their bindings' tokens
+       (drgnx-ui-kit-theme-specs #'c)))))
 
 (defun drgnx-theme--tty-token (tok)
   "TOK for a terminal: the gap and the panel are the editor's colour."

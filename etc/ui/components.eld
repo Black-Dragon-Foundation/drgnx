@@ -1,0 +1,36 @@
+;;; components.eld --- the UI kit's components: one definition, two renderers  -*- mode: lisp-data -*-
+;; The one definition of drgnx's components.  The hub expands it in Rust (drgnx-rows, from generated tables) and
+;; core/drgnx-ui-kit.el in Lisp, for Lisp-drawn chrome only; a conformance test keeps the two equal.  See
+;; docs/develop/core.md ("The UI kit") and docs/develop/design-system.md.
+;;
+;; ((state-table . STATES) (components . ENTRIES))
+;;
+;; STATES: (STATE . PLIST), in order: :fill a token (the state's fill), :radius logical px, :ring (TOKEN . PX) an inset
+;; ring, :fg a token (the text), :face the semantic face that draws it, :tty its terminal form (`none', `inverse',
+;; `underline', `dim').  Rows have no box edges in hover or selection.
+;;
+;; ENTRY: (ID :variants ((AXIS VALUE...)...) :defaults (AXIS VALUE...) :geometry GEOM :tty TTY :label LABEL
+;;         :bind BINDINGS :replaces ((OLD-FACE . KIT-FACE)...) :helpers (OLD-FN...) :lint BOOL)
+;;   GEOM, all logical px: :height :pad (START . END) :gap :box :radius :line-height :hit (action-carrying padding each
+;;   side) :indent.  A value may be (:by AXIS (VALUE X)...) where variants differ, or (density KEY): the size
+;;   `drgnx-look-density-value' gives KEY at the user's density.
+;;   TTY: :glyph GLYPH-NAME (of `drgnx-face-glyphs'), :twisty (CLOSED OPEN) glyph names, :pad CHARS.
+;;   LABEL: the word a screen reader speaks, a string or (:by AXIS (VALUE "word")...).
+;;   BINDINGS: (((VARIANT-VALUE...) :bg TOKEN :fg TOKEN :edge TOKEN :inherit (STANDARD-FACE...))...); the binding
+;;   of () is the component's own face `drgnx-kit-ID', another one `drgnx-kit-ID-VALUE...', made only where its
+;;   colours differ from the component's own.
+((state-table
+  (rest)
+  (hover :fill hover :face drgnx-hover :tty none)
+  (pressed :fill sel-quiet :face drgnx-selected-quiet)
+  (selected :fill sel :radius 6 :face drgnx-selected :tty inverse)
+  (selected-inactive :fill sel-inactive :radius 6 :face drgnx-selected-inactive :tty underline)
+  (focus-visible :ring (focus . 2) :face drgnx-focus :tty inverse)
+  (disabled :fg disabled :face drgnx-text-disabled :tty dim))
+ (components
+  ;; a row of a list, a tree (depth and twisty) or a map; its states are the state table's
+  (row :variants ((kind list tree map)) :defaults (kind list)
+       :geometry (:height (density tree-row) :pad (6 . 6) :gap 0 :box nil :radius 6 :hit 0
+                          :indent (:by kind (list 0) (tree (density tree-indent)) (map 0)))
+       :tty (:pad 1 :twisty (chevron-right chevron-down))
+       :label nil :bind nil :replaces nil :helpers nil :lint nil)))

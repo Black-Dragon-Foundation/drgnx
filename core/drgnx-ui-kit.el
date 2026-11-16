@@ -8,12 +8,16 @@
 ;; `fail' is "tests failed", `dismiss' is "dismiss this notice" -- restyling one leaves the others alone.  Each
 ;; glyph has an ASCII form for terminals that do not write UTF-8.  The status faces inherit theme faces.  A button
 ;; runs a registry command, a command or a function; the close button is the `close' glyph on a header line.
+;; The components (etc/ui/components.eld) are read here: the state table, each component's geometry, and the kit
+;; faces generated from the file's colour bindings.
 ;; The file is not `drgnx-ui.el': that is the harness's feature (harness/drgnx-ui.el), and the test runner has both on its
 ;; `load-path'.  See docs/develop/core.md ("The UI kit") and docs/guide/face.md.
 
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
 (require 'drgnx-faces)
@@ -196,6 +200,109 @@ Build it when a title or row is set, never while drawing."
                     (setf (alist-get key drgnx-ui--close-maps nil nil #'equal) m)))))
     (apply #'propertize (drgnx-face-glyph 'close) 'face 'drgnx-ui-close 'mouse-face 'highlight
            (if (eq where 'text) 'keymap 'local-map) map 'help-echo help props)))
+
+;;;; Components: etc/ui/components.eld
+
+;; The reader and the face list are needed when this file is compiled: `drgnx-ui-kit-define-faces' expands to one
+;; `defface' per kit face, read from the file then.
+(eval-and-compile
+  (defconst drgnx-ui-kit-file (expand-file-name "etc/ui/components.eld" drgnx-dir)
+    "The kit's components: the state table and one entry per component (docs/develop/core.md, \"The UI kit\").")
+
+  (defun drgnx-ui-kit--read (&optional file)
+    "The components FILE (default `drgnx-ui-kit-file') as data: ((state-table . STATES) (components . ENTRIES))."
+    (let ((r (drgnx-file-read (or file drgnx-ui-kit-file))))
+      (unless (eq (plist-get r :status) 'ok)
+        (error "drgnx: the components file %s is %s" (or file drgnx-ui-kit-file) (plist-get r :status)))
+      (plist-get r :data)))
+
+  (defun drgnx-ui-kit--colours (binding)
+    "The colours BINDING ((VALUE...) :bg :fg :edge ...) names, as (BG FG EDGE)."
+    (list (plist-get (cdr binding) :bg) (plist-get (cdr binding) :fg) (plist-get (cdr binding) :edge)))
+
+  (defun drgnx-ui-kit-face-bindings (&optional table)
+    "((FACE ID BINDING-PLIST)...): the kit faces of TABLE (default the components file), in its order.
+A component's binding of () is its face `drgnx-kit-ID'; another binding, of variant values V..., is
+`drgnx-kit-ID-V...' and is made only when its colours differ from the component's own (size is geometry, never a face)."
+    (let (out)
+      (dolist (c (alist-get 'components (or table (drgnx-ui-kit-components))))
+        (let* ((binds (plist-get (cdr c) :bind)) (own (assq nil binds)))
+          (dolist (b binds)
+            (when (or (eq b own) (not own)
+                      (not (equal (drgnx-ui-kit--colours b) (drgnx-ui-kit--colours own))))
+              (push (list (intern (mapconcat #'symbol-name (cons (car c) (car b)) "-" ))
+                          (car c) (cdr b))
+                    out)))))
+      (mapcar (lambda (f) (cons (intern (format "drgnx-kit-%s" (car f))) (cdr f))) (nreverse out)))))
+
+(defvar drgnx-ui-kit--table nil "The components file once read (`drgnx-ui-kit-components').")
+
+(defun drgnx-ui-kit-components ()
+  "The components file as data, read once: ((state-table . STATES) (components . ENTRIES))."
+  (or drgnx-ui-kit--table (setq drgnx-ui-kit--table (drgnx-ui-kit--read))))
+
+(defconst drgnx-ui-kit-states '(rest hover pressed selected selected-inactive focus-visible disabled)
+  "The state table's states, in its order (spec §7.3).")
+
+(defun drgnx-ui-kit-state (state)
+  "STATE's plist in the state table: :fill, :radius, :ring, :fg, :face and :tty."
+  (cdr (assq state (alist-get 'state-table (drgnx-ui-kit-components)))))
+
+(defun drgnx-ui-kit-component (id)
+  "The entry of component ID: a plist of :variants, :defaults, :geometry, :tty, :label, :bind, :replaces, :helpers
+and :lint."
+  (cdr (assq id (alist-get 'components (drgnx-ui-kit-components)))))
+
+(defun drgnx-ui-kit--chosen (entry variants)
+  "AXIS → VALUE for ENTRY: its defaults, each of VARIANTS (variant values) put on the axis that has it."
+  (let ((chosen nil) (d (plist-get entry :defaults)))
+    (while d (push (cons (car d) (cadr d)) chosen) (setq d (cddr d)))
+    (dolist (v variants chosen)
+      (dolist (axis (plist-get entry :variants))
+        (when (memq v (cdr axis)) (setf (alist-get (car axis) chosen) v))))))
+
+(declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
+
+(defun drgnx-ui-kit--value (value chosen)
+  "VALUE of a geometry key resolved for CHOSEN (AXIS → VALUE): a (:by AXIS (V X)...) case, a (density KEY) size (nil
+without ui/look), or VALUE itself."
+  (pcase value
+    (`(:by ,axis . ,cases) (drgnx-ui-kit--value (cadr (assq (alist-get axis chosen) cases)) chosen))
+    (`(density ,key) (and (fboundp 'drgnx-look-density-value) (drgnx-look-density-value key)))
+    (_ value)))
+
+(defun drgnx-ui-kit-geometry (id variants)
+  "Component ID's geometry for VARIANTS (a list of variant values; the defaults fill the other axes): a plist of
+logical px (:height :pad :gap :box :radius :line-height :hit :indent), every per-variant and density value resolved."
+  (let* ((entry (drgnx-ui-kit-component id)) (chosen (drgnx-ui-kit--chosen entry variants))
+         (g (plist-get entry :geometry)) (out nil))
+    (while g
+      (setq out (plist-put out (car g) (drgnx-ui-kit--value (cadr g) chosen)) g (cddr g)))
+    out))
+
+(defmacro drgnx-ui-kit-define-faces ()
+  "Define every kit face of etc/ui/components.eld, as the file stood when this was compiled.
+Each inherits its binding's standard faces, so any theme styles it; drgnx's themes give it the bindings' token
+colours (`drgnx-ui-kit-theme-specs')."
+  `(progn
+     ,@(mapcar (lambda (f)
+                 `(defface ,(car f) '((t :inherit ,(plist-get (nth 2 f) :inherit)))
+                    ,(format "The kit's `%s' component (etc/ui/components.eld)." (nth 1 f))
+                    :group 'drgnx))
+               (drgnx-ui-kit-face-bindings (drgnx-ui-kit--read)))))
+
+(drgnx-ui-kit-define-faces)
+
+(defun drgnx-ui-kit-theme-specs (tok &optional table)
+  "((FACE . ATTRIBUTES)...) of the kit faces of TABLE (default the components file) for one of drgnx's themes: the
+bindings' tokens as colours through TOK (a token name → a colour), the edge as a 1 px box inside the face."
+  (mapcar (lambda (f)
+            (let ((b (nth 2 f)))
+              `(,(car f)
+                ,@(and (plist-get b :bg) `(:background ,(funcall tok (plist-get b :bg))))
+                ,@(and (plist-get b :fg) `(:foreground ,(funcall tok (plist-get b :fg))))
+                ,@(and (plist-get b :edge) `(:box (:line-width (-1 . -1) :color ,(funcall tok (plist-get b :edge))))))))
+          (drgnx-ui-kit-face-bindings table)))
 
 (provide 'drgnx-ui-kit)
 ;;; drgnx-ui-kit.el ends here
