@@ -733,6 +733,61 @@ plist each (`:type', `:request', `:name', `:program' …), `${…}' variables as
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-editing-font-size
+
+The size of the code font in pixels (VS Code's editor.fontSize).  13.5 is drgnx's own code size; the code font
+role (`drgnx-look-font-code') still sets a size of its own on top.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `13.5` |
+| Type | `number` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-editing--apply-font-size` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(pred drgnx-editing--font-size-p "a size in pixels from 6 to 72")` |
+
+## drgnx-editing-tab-size
+
+How many columns a tab character, and one level of indent where the mode has none of its own, take (VS Code's
+editor.tabSize).  A change applies at once.  A mode that sets its own indent keeps it.
+
+| Key | Value |
+| --- | --- |
+| Default | `4` |
+| Type | `integer` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-editing--apply-tab-size` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(pred drgnx-editing--tab-size-p "a number of columns from 1 to 16")` |
+
+## drgnx-editing-word-wrap
+
+Whether a line longer than its window continues on the next row, breaking at a word (`on'), or runs off the edge
+(`off'), as VS Code's editor.wordWrap.  drgnx wraps by default.  Toggle Word Wrap flips it for one buffer.  A change
+applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `on` |
+| Type | `(choice (const on) (const off))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-editing--apply-word-wrap` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum on off)` |
+
 ## drgnx-extensions-check-updates
 
 How the Extensions view learns of updates: `daily' reads the archives in the background once a day, `manual' only
