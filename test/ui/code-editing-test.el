@@ -47,6 +47,7 @@
             (copy-file shot (expand-file-name "code-editing.png" temporary-file-directory) t)
             (message "code editing screenshot: %s" (expand-file-name "code-editing.png" temporary-file-directory))))
       (when (buffer-live-p buf) (kill-buffer buf))
+      (dolist (w (window-list root)) (set-window-parameter w 'indent-bars-whr nil))   ; indent-bars' per-window cache
       (drgnx-ui-hub-stop)
       (when (bound-and-true-p pixel-scroll-precision-mode) (pixel-scroll-precision-mode -1))
       (when (bound-and-true-p ultra-scroll-mode) (ultra-scroll-mode -1))

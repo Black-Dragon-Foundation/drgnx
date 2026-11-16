@@ -4,7 +4,9 @@ The agent panel shows one agent session in the right dock, beside the editor and
 windows: the header at the top (who it is and what it is doing, a row of chips, the disclosure strip), the transcript
 (the conversation as rows) and the composer at the bottom, where you write to the agent. Open it with **Agents: Open
 the Agent Panel** (`C-k p` in the VS Code profile, `SPC a p` in Vim).
-There is one tab for each open agent.
+There is one tab for each open agent. With the tiled grid on, a second agent opens in a tile of its own beside the
+first, with its own header and composer, and a third and later stack as tabs onto that tile; one agent stays in the
+right dock.
 
 With no agent running, the panel opens as a **new chat** (also **Agents: New Chat**), as VS Code's chat does: an empty
 input with "Ask an agent about this project…" in it and the default profile named in its header. Return sends (Shift+Return

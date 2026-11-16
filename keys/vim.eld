@@ -560,6 +560,7 @@
               (split-editor-right "SPC w v")
               (split-editor-down "SPC w s")
               (close-group "SPC w c")
+              (tile-full-size :none "C-w o, C-w _ and C-w | (remaps of their window commands)")
               (close-group-editors :none "in the palette")
               (focus-group-1 "SPC 1")
               (focus-group-2 "SPC 2")
