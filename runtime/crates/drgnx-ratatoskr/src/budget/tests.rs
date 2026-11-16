@@ -576,3 +576,85 @@ fn events_coalesce_to_one_a_second_per_scope() {
     b.spend(&r, Unit::Usd, 0.1);
     assert_eq!(b.flush(2.0).len(), 2);
 }
+
+fn scope_of(kind: &str, id: &str) -> BudgetScope {
+    serde_json::from_value(json!({ kind: id })).unwrap()
+}
+
+#[test]
+fn tree_walks_project_to_worker() {
+    let b = Budgets::default();
+    let (proj, spec, plan) = (
+        scope_of("project", "proj"),
+        scope_of("spec", "spec:s"),
+        scope_of("plan", "plan:p"),
+    );
+    let (run, worker) = (run_scope("job-1"), scope_of("worker", "w1"));
+    b.link(&spec, &proj);
+    b.link(&plan, &spec);
+    b.link(&run, &plan);
+    b.link(&worker, &run);
+    let t = b.tree_scopes(None, None);
+    let order: Vec<_> = t.iter().map(|(_, s, _)| s.clone()).collect();
+    assert_eq!(
+        order,
+        vec![
+            proj.clone(),
+            spec.clone(),
+            plan.clone(),
+            run.clone(),
+            worker.clone()
+        ]
+    );
+    assert_eq!(t[0].2, None);
+    assert_eq!(t[4].2.as_ref(), Some(&run));
+    // a root and a depth cut the walk
+    let sub: Vec<_> = b
+        .tree_scopes(Some(&plan), Some(1))
+        .into_iter()
+        .map(|(_, s, _)| s)
+        .collect();
+    assert_eq!(sub, vec![plan, run]);
+}
+
+#[test]
+fn a_run_carries_its_share_of_the_plan() {
+    let b = Budgets::default();
+    let plan = scope_of("plan", "plan:p");
+    let (r1, r2) = (run_scope("job-1"), run_scope("job-2"));
+    b.link(&r1, &plan);
+    b.link(&r2, &plan);
+    b.set(
+        &plan,
+        vec![Limit {
+            amount: 100.0,
+            unit: Unit::Usd,
+        }],
+    );
+    b.spend(&r1, Unit::Usd, 6.0);
+    b.spend(&r2, Unit::Usd, 4.0);
+    // an unrelated unit must not dilute the share
+    b.spend(&r1, Unit::Tokens, 1000.0);
+    let n1 = b.node(&r1, Some(&plan), "run 1".into(), 0.0);
+    let n2 = b.node(&r2, Some(&plan), "run 2".into(), 0.0);
+    assert!((n1.share_of_parent.unwrap() - 0.6).abs() < 1e-9, "{n1:?}");
+    assert!((n2.share_of_parent.unwrap() - 0.4).abs() < 1e-9);
+    // a plan has none, and neither has a run with no plan above it
+    assert_eq!(b.node(&plan, None, "p".into(), 0.0).share_of_parent, None);
+    assert_eq!(b.node(&r1, None, "r".into(), 0.0).share_of_parent, None);
+}
+
+#[test]
+fn tree_pages_with_after() {
+    let keys: Vec<String> = (0..5).map(|i| format!("k{i}")).collect();
+    let ks: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let (r, next) = page_of(&ks, None, 2);
+    assert_eq!((r, next.as_deref()), (0..2, Some("k1")));
+    let (r, next) = page_of(&ks, Some("k1"), 2);
+    assert_eq!((r, next.as_deref()), (2..4, Some("k3")));
+    let (r, next) = page_of(&ks, Some("k3"), 2);
+    assert_eq!((r, next), (4..5, None));
+    // an exact fit ends without a next
+    let (r, next) = page_of(&ks, None, 5);
+    assert_eq!((r, next), (0..5, None));
+}

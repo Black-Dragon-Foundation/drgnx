@@ -24,8 +24,8 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::matrix::{Limit, Unit};
 use runstav::methods::timeline::{
-    BudgetEvent, BudgetGetParams, BudgetScope, BudgetSetParams, BudgetState, BudgetView, Pace,
-    PaceParams, Paces,
+    BudgetEvent, BudgetGetParams, BudgetNode, BudgetScope, BudgetSetParams, BudgetState,
+    BudgetTree, BudgetTreeParams, BudgetView, Pace, PaceParams, Paces,
 };
 use runstav::wire::Error;
 use serde::{Deserialize, Serialize};
@@ -692,6 +692,86 @@ impl Budgets {
             .collect()
     }
 
+    /// The scopes below ROOT (itself included; none: every scope with no parent) down to DEPTH levels, depth first, each
+    /// with its parent; children in key order, so a page's `after` (a key) finds its place again.
+    pub fn tree_scopes(
+        &self,
+        root: Option<&BudgetScope>,
+        depth: Option<u8>,
+    ) -> Vec<(Key, BudgetScope, Option<BudgetScope>)> {
+        let st = self.st();
+        let mut kids: BTreeMap<&Key, Vec<&Key>> = BTreeMap::new();
+        for (c, p) in &st.parent {
+            kids.entry(p).or_default().push(c);
+        }
+        let mut out = Vec::new();
+        let roots: Vec<Key> = match root {
+            Some(r) => vec![key(r)],
+            None => st
+                .scopes
+                .keys()
+                .filter(|k| !st.parent.contains_key(*k))
+                .cloned()
+                .collect(),
+        };
+        // an explicit stack: (key, level), children pushed in reverse so the least key is next
+        let mut stack: Vec<(Key, u8)> = roots.into_iter().rev().map(|k| (k, 0)).collect();
+        let mut seen = BTreeSet::new();
+        while let Some((k, level)) = stack.pop() {
+            if !seen.insert(k.clone()) {
+                continue;
+            }
+            let Some(scope) = st
+                .scopes
+                .get(&k)
+                .cloned()
+                .or_else(|| root.filter(|r| key(r) == k).cloned())
+            else {
+                continue;
+            };
+            let parent = st.parent.get(&k).and_then(|p| st.scopes.get(p)).cloned();
+            out.push((k.clone(), scope, parent));
+            if depth.is_none_or(|d| level < d) {
+                for c in kids.get(&k).into_iter().flatten().rev() {
+                    stack.push(((*c).clone(), level + 1));
+                }
+            }
+        }
+        out
+    }
+
+    /// SCOPE's node: its view, state and burn at NOW, and, for a run under a plan, its share of the plan's spend in
+    /// the plan's binding unit.
+    pub fn node(
+        &self,
+        scope: &BudgetScope,
+        parent: Option<&BudgetScope>,
+        label: String,
+        now: f64,
+    ) -> BudgetNode {
+        let v = self.view(scope);
+        let share = match (scope, parent) {
+            (BudgetScope::Run(_), Some(p @ BudgetScope::Plan(_))) => {
+                self.binding(p).and_then(|(unit, spent, _)| {
+                    let mine = v.spent.iter().find(|l| l.unit == unit)?.amount;
+                    (spent > 0.0).then_some((mine / spent).clamp(0.0, 1.0))
+                })
+            }
+            _ => None,
+        };
+        BudgetNode {
+            scope: scope.clone(),
+            parent: parent.cloned(),
+            label,
+            limits: v.limits,
+            spent: v.spent,
+            remaining: v.remaining,
+            state: self.state(scope),
+            burn_per_hour: self.burn(scope, now),
+            share_of_parent: share,
+        }
+    }
+
     /// One flush: the events of every scope whose spend moved since the last flush, one each however many spends it
     /// took (the hub calls it once a second).
     pub fn flush(&self, now: f64) -> Vec<BudgetEvent> {
@@ -980,6 +1060,103 @@ pub fn meter_of(method: &str, params: &Value) -> Option<(&'static str, f64, Opti
 
 pub async fn get(f: &Front, _: &Caller, p: BudgetGetParams) -> Result<BudgetView, Error> {
     Ok(f.core.budgets.view(&p.scope))
+}
+
+/// Nodes in a page of `budget/tree`.
+const TREE_PAGE: usize = 200;
+
+/// The slice of KEYS a page of SIZE after AFTER covers (the start when AFTER is none or unknown), and the `next` to ask
+/// for the page after it.
+fn page_of(
+    keys: &[&str],
+    after: Option<&str>,
+    size: usize,
+) -> (std::ops::Range<usize>, Option<String>) {
+    let start = after
+        .and_then(|a| keys.iter().position(|k| *k == a).map(|i| i + 1))
+        .unwrap_or(0);
+    let end = (start + size).min(keys.len());
+    let next = (end < keys.len() && end > start).then(|| keys[end - 1].to_owned());
+    (start..end, next)
+}
+
+/// The titles of the graph's specs, plans and tasks, by entity id.
+async fn titles(f: &Front) -> BTreeMap<String, String> {
+    f.writer
+        .db
+        .read(|c| {
+            let mut q = c.prepare(
+                "select id, coalesce(title, '') from entity where retired_tx is null and kind in ('spec', 'plan', 'task')",
+            )?;
+            let rows = q
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows.into_iter().collect())
+        })
+        .await
+        .unwrap_or_default()
+}
+
+pub async fn tree(f: &Front, _: &Caller, p: BudgetTreeParams) -> Result<BudgetTree, Error> {
+    let b = &f.core.budgets;
+    let all = b.tree_scopes(p.root.as_ref(), p.depth);
+    let titles = titles(f).await;
+    let names: BTreeMap<String, String> = f
+        .core
+        .agents
+        .live_sessions()
+        .iter()
+        .map(|s| {
+            (
+                s.id.to_string(),
+                s.snapshot().name.unwrap_or_else(|| s.id.to_string()),
+            )
+        })
+        .collect();
+    // "run N": a parent's runs in start order (the job ids sort by their start)
+    let mut runs: BTreeMap<Option<Key>, Vec<Key>> = BTreeMap::new();
+    for (k, s, parent) in &all {
+        if matches!(s, BudgetScope::Run(_)) {
+            runs.entry(parent.as_ref().map(key))
+                .or_default()
+                .push(k.clone());
+        }
+    }
+    for v in runs.values_mut() {
+        v.sort();
+    }
+    let label = |k: &Key, s: &BudgetScope, parent: &Option<BudgetScope>| -> String {
+        match s {
+            BudgetScope::Spec(i) | BudgetScope::Plan(i) | BudgetScope::Task(i) => titles
+                .get(i.as_str())
+                .filter(|t| !t.is_empty())
+                .cloned()
+                .unwrap_or_else(|| i.as_str().to_owned()),
+            BudgetScope::Project(i) => i.as_str().to_owned(),
+            BudgetScope::Run(_) => {
+                let n = runs
+                    .get(&parent.as_ref().map(key))
+                    .and_then(|v| v.iter().position(|x| x == k))
+                    .map_or(1, |i| i + 1);
+                format!("run {n}")
+            }
+            BudgetScope::Manager(i) | BudgetScope::Worker(i) => names
+                .get(i.as_str())
+                .cloned()
+                .unwrap_or_else(|| i.as_str().to_owned()),
+        }
+    };
+    let keys: Vec<&str> = all.iter().map(|(k, ..)| k.as_str()).collect();
+    let (range, next) = page_of(&keys, p.after.as_ref().map(|a| a.as_str()), TREE_PAGE);
+    let page: Vec<_> = all[range].iter().collect();
+    let at = now();
+    Ok(BudgetTree {
+        nodes: page
+            .into_iter()
+            .map(|(k, s, parent)| b.node(s, parent.as_ref(), label(k, s, parent), at))
+            .collect(),
+        next,
+    })
 }
 
 pub async fn set(f: &Front, _: &Caller, p: BudgetSetParams) -> Result<BudgetView, Error> {

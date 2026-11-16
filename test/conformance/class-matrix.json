@@ -49,6 +49,7 @@
   "browser/check": ["user"],
   "brief/set": ["user"],
   "budget/get": ["user"],
+  "budget/tree": ["user"],
   "budget/set": ["user"],
   "buffers/set": ["user"],
   "cards/settle": ["user"],

@@ -11561,6 +11561,433 @@
       "classes": [
         "user"
       ],
+      "doc": "the budget scopes the hub knows as a tree (200 nodes a page, depth first): limits, spend, remaining, state, burn, and a run's share of its plan",
+      "name": "budget/tree",
+      "params": {
+        "$defs": {
+          "BudgetScope": {
+            "description": "What a budget is set on (the limit is kept on the scope's entity); the remaining amount is the least over its\nancestors.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "project": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
+                "properties": {
+                  "plan": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A manager session.",
+                "properties": {
+                  "manager": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "manager"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A worker session.",
+                "properties": {
+                  "worker": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "worker"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`budget/tree`: the scopes the hub knows, depth first in chain order, a page at a time.",
+        "properties": {
+          "after": {
+            "default": null,
+            "description": "The `next` of the page before.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "depth": {
+            "default": null,
+            "description": "How many levels below the root (0: only the root); none: all.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BudgetScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The scope to start at, itself included; none: every scope with no parent, in turn."
+          }
+        },
+        "title": "BudgetTreeParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BudgetNode": {
+            "description": "One scope of the tree.",
+            "properties": {
+              "burn_per_hour": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "label": {
+                "description": "What the user calls it: the entity's title, a session's name, \"run N\" for the runs of a parent in start order.",
+                "type": "string"
+              },
+              "limits": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "parent": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BudgetScope"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "remaining": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "scope": {
+                "$ref": "#/$defs/BudgetScope"
+              },
+              "share_of_parent": {
+                "default": null,
+                "description": "A run's spend over its plan's, in the plan's binding unit (0 to 1); nothing else has one.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "spent": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "state": {
+                "$ref": "#/$defs/BudgetState"
+              }
+            },
+            "required": [
+              "scope",
+              "label",
+              "state"
+            ],
+            "type": "object"
+          },
+          "BudgetScope": {
+            "description": "What a budget is set on (the limit is kept on the scope's entity); the remaining amount is the least over its\nancestors.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "project": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
+                "properties": {
+                  "plan": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A manager session.",
+                "properties": {
+                  "manager": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "manager"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A worker session.",
+                "properties": {
+                  "worker": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "worker"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "BudgetState": {
+            "description": "Where a scope stands against its limits (and those above it).",
+            "oneOf": [
+              {
+                "const": "ok",
+                "description": "Within its limits.",
+                "type": "string"
+              },
+              {
+                "const": "nearing",
+                "description": "80 % or more of the binding limit is spent: the unit whose remaining share is the least.",
+                "type": "string"
+              },
+              {
+                "const": "reached",
+                "description": "A limit is reached.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "No limit on the scope or above it.",
+                "type": "string"
+              }
+            ]
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A page of the tree.",
+        "properties": {
+          "next": {
+            "default": null,
+            "description": "Pass as `after` for the next page; none at the end.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nodes": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/BudgetNode"
+            },
+            "type": "array"
+          }
+        },
+        "title": "BudgetTree",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "changes to the Buffers panel's open buffers of a hub-fed view (put, modified, remove, the window's scope, the filter), in order: the hub sends the view's rows that changed to every class of it",
       "name": "buffers/set",
       "params": {

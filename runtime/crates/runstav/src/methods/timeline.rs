@@ -286,6 +286,51 @@ pub struct BudgetEvent {
     pub burn_per_hour: Vec<Limit>,
 }
 
+/// `budget/tree`: the scopes the hub knows, depth first in chain order, a page at a time.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BudgetTreeParams {
+    /// The scope to start at, itself included; none: every scope with no parent, in turn.
+    #[serde(default)]
+    pub root: Option<BudgetScope>,
+    /// How many levels below the root (0: only the root); none: all.
+    #[serde(default)]
+    pub depth: Option<u8>,
+    /// The `next` of the page before.
+    #[serde(default)]
+    pub after: Option<Bounded<String, 256>>,
+}
+
+/// One scope of the tree.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BudgetNode {
+    pub scope: BudgetScope,
+    pub parent: Option<BudgetScope>,
+    /// What the user calls it: the entity's title, a session's name, "run N" for the runs of a parent in start order.
+    pub label: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub limits: Vec<Limit>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub spent: Vec<Limit>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub remaining: Vec<Limit>,
+    pub state: BudgetState,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub burn_per_hour: Vec<Limit>,
+    /// A run's spend over its plan's, in the plan's binding unit (0 to 1); nothing else has one.
+    #[serde(default)]
+    pub share_of_parent: Option<f64>,
+}
+
+/// A page of the tree.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BudgetTree {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub nodes: Vec<BudgetNode>,
+    /// Pass as `after` for the next page; none at the end.
+    #[serde(default)]
+    pub next: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct BudgetGetParams {
     pub scope: BudgetScope,
@@ -406,6 +451,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "budget/get", BudgetGet(BudgetGetParams) -> BudgetView,
             classes: [User], writes: false,
             doc: "a scope's budget: its limits, spend and what remains (the least over its ancestors), by unit",
+        ),
+        method!(
+            "budget/tree", BudgetTreePage(BudgetTreeParams) -> BudgetTree,
+            classes: [User], writes: false,
+            doc: "the budget scopes the hub knows as a tree (200 nodes a page, depth first): limits, spend, remaining, state, burn, and a run's share of its plan",
         ),
         method!(
             "budget/set", BudgetSet(BudgetSetParams) -> BudgetView,

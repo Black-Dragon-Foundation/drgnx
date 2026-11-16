@@ -512,7 +512,7 @@ mod tests {
     ];
 
     /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
-    const CORE_WRITES: [&str; 12] = [
+    const CORE_WRITES: [&str; 13] = [
         "agents/move",
         "agents/role",
         "exec/bump",
