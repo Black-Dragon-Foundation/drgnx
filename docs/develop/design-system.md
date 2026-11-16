@@ -45,6 +45,71 @@ stale code file as it does a stale page, and `drgnx-design/code-files-are-curren
 `runtime/crates/drgnx-rows/tests/faces.rs` checks every face's name reads back and the kit tables answer. The check
 runner's `cargo` stage runs `drgnx-rows`' clippy and tests.
 
+## The kit's lint
+
+Once a component lands, it owns its role, and the old ways of drawing that role may only decrease. `drgnx-lint/kit-roles` (`test/unit/lint-kit-test.el`) checks this.
+
+- **Switching a role on.** A role (`drgnx-lint-kit-roles`) is on when its component's entry in `etc/ui/components.eld` has `:lint t`. The roles are:
+  - `row`: selected and hover faces;
+  - `button`, `chip`, `card` and `tab`;
+  - `section-header`;
+  - `key-hint`;
+  - `status-dot`, with the literal `"●"`.
+
+  Each component's task sets `:lint t` when it lands.
+- **What is counted.** For a role that is on, the lint counts, per file in `core/`, `wb/` and `modules/` (not `core/drgnx-ui-kit.el`):
+  - a `defface` whose name matches the role's regexp;
+  - a use of a face the entry `:replaces`;
+  - a call of one of its `:helpers`;
+  - a string holding one of the role's literals (not in docstrings).
+
+  In Rust it counts uses of a replaced face's `FaceId` variant, outside `drgnx-rows/src/kit.rs` and the generated enum.
+- **What is never counted.** Domain faces (syntax, diff refine, ANSI, the debugger, notebooks) never match a role.
+- **The allowlist.** The counts are checked against `drgnx-lint-kit--not-yet`, rows of `(FILE ID COUNT)`. The lint fails when a file's count is:
+  - above its row ("above": draw it with the kit);
+  - below its row ("below": lower or remove the row).
+
+  A branch merged later adds its counts in its merge commit.
+- **Aliases.** `(drgnx-ui-kit-define-aliases)`, called by `ui/look`'s setup, makes each replaced face inherit its kit face. It sets the default spec to `((t :inherit KIT-FACE))` through `drgnx-module-face-spec`. The `defface` stays where it is, so a user's customization of the old name still applies. drgnx's themes stop styling a face once its component has landed (`drgnx-ui-kit-replaced-faces`).
+
+## The catalogue and the sheets
+
+**Design: Component Catalogue** (`design-component-catalogue`, `modules/ui/drgnx-kit-catalogue.el`) opens
+`*drgnx: Components*`: one section per component of `etc/ui/components.eld`, one cell per variant and state.
+
+- **How a cell is drawn.** A component the hub expands (the row) is drawn as a hub-fed view draws it:
+  `drgnx-ui-kit-expand`, then the inserter's dress. A Lisp chrome component is drawn through `drgnx-ui-kit-string`.
+- **What a cell carries.** Each cell has the text property `drgnx-kit-cell`, `(ID VARIANTS STATE)`.
+  `(drgnx-kit-catalogue-cells)` lists them as `((ID VARIANTS STATE BEG END)…)`.
+- **Opening it from Lisp.** `(drgnx-kit-catalogue-open COMPONENT THEME DENSITY SCALE)` takes an optional theme,
+  density and scale.
+
+**The sheets.** Each component has a GUI row `drgnx-kit-sheet/ID` (`test/ui/kit-sheets-gui-test.el`), added by the
+component's task. It runs `(drgnx-kit-sheet-check ID)`, which opens the catalogue for the component in the dark, light
+and high-contrast themes at the three densities, at the session's scale (and at 1.25 too, at scale 1). For every cell
+it checks:
+
+- each pad the expansion gives is drawn exactly its device px wide;
+- the cell is its pads plus its text;
+- the fill inside the start pad is the state's token (the surface's when the state has no fill);
+- in high contrast, nothing is drawn beside the cell (no shadow).
+
+The comfortable sheet's picture is written to the evidence folder as `kit-sheet-ID-THEME.png` (scale 1).
+`bin/drgnx design --shots DIR…` copies it to `docs/design/img/kit-ID-THEME.png`.
+
+**The pages.** `bin/drgnx design` writes `docs/design/components/ID.md` for each component, from
+`etc/ui/components.eld`:
+
+- its variants;
+- the geometry per variant and density;
+- the terminal form;
+- the spoken label;
+- the colour bindings;
+- the states.
+
+A geometry change without a regeneration therefore fails `--check`. The perf workload `kit-catalogue-open` (budget
+500 ms p95) draws the whole catalogue again.
+
 ## Regenerating
 
 ```sh

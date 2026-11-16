@@ -18,6 +18,7 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Research trail](trail.md) | an agent's steps, in order |
 | [Notebook cell](notebook-cell.md) | a Jupyter cell as a card on Glitnir, a band elsewhere |
 | [Empty states](empty-states.md) | what a list or view says when there is nothing in it |
+| [Row (kit)](row.md) | a list, tree or map row, as the kit expands it (generated from `etc/ui/components.eld`) |
 
 ## How to read a page
 
