@@ -254,6 +254,9 @@ pub struct Fields {
     pub minutes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// A task item's state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_state: Option<TaskState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     /// An agent's task's id (`task:ID`), which tells two tasks of one title apart: the hub's Board puts the agent on
@@ -708,7 +711,10 @@ impl Model {
                 fields.progress = *progress;
                 title.clone()
             }
-            Kind::Task => f.tasks[&y].1.clone(),
+            Kind::Task => {
+                fields.task_state = Some(self.task_state(&self.names.id(y)));
+                f.tasks[&y].1.clone()
+            }
             Kind::Agent | Kind::Subagent => {
                 let s = &f.sessions[&y];
                 fields.state = Some(s.fact.state);

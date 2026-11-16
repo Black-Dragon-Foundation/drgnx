@@ -22,7 +22,7 @@ let chain = core.model().chain(&vegvisir::ItemId("agent:S1".into()));
 
 | Event | Source | Meaning |
 |---|---|---|
-| `Graph(GraphFact)` | Urdr | an ask, spec, plan or task record, or an `asked` or `derives` link; idempotent, so an import that runs again changes nothing |
+| `Graph(GraphFact)` | Urdr | an ask, spec, plan or task record, or an `asked` or `derives` link; idempotent, so an import that runs again changes nothing. A task no plan holds is read under a "No plan" plan item (`plan:no-plan`), never skipped. The model doc gives each task node a `task_state` field |
 | `Session(SessionFact)` | hub sessions | a session's (or a Claude Code subagent's, `SID/TOOLID`) snapshot: state, task, branch, worktree, recorded base, machine, spend; it replaces the last one |
 | `Step(StepFact)` | timeline steps | a closed step: its class and a conclusion recorded there; the latest by step number wins |
 | `Changed { worktree, base, files }` | the edit history | a worktree's changed files (`REPO/PATH` → `(plus, minus)`), measured against `base`, untracked files included |

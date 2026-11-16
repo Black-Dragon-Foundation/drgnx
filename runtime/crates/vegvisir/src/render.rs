@@ -829,6 +829,7 @@ fn chip_line(it: &Item) -> Line {
             Kind::Ask => ("message-square", "❝"),
             Kind::Spec => ("file-text", "◫"),
             Kind::Plan => ("list-checks", "☰"),
+            Kind::Task => ("flag", "⚑"),
             Kind::Branch => ("git-branch", "⑂"),
             Kind::File => ("file-code", "▭"),
             Kind::Machine if it.label == "laptop" => ("laptop", "▭"),
@@ -838,6 +839,11 @@ fn chip_line(it: &Item) -> Line {
         l.1 = Some((name, alt));
     }
     let extra: Vec<String> = match it.kind {
+        Kind::Task => f
+            .task_state
+            .map(|s| format!("{} {}", s.glyph(), s.word()))
+            .into_iter()
+            .collect(),
         Kind::Plan => f
             .progress
             .map(|(a, b)| format!("{a}/{b}"))
@@ -1410,7 +1416,9 @@ fn why(s: &Scene, id: &ItemId) -> String {
         cur = parent(s, c);
     }
     chain.reverse();
-    if let Some(t) = s.items.get(id).and_then(|it| it.fields.task.clone()) {
+    if let Some(t) = s.items.get(id).and_then(|it| it.fields.task.clone())
+        && !chain.contains(&t)
+    {
         chain.push(t);
     }
     chain.join(" › ")

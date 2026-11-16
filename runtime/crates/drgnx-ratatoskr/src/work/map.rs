@@ -1882,6 +1882,9 @@ fn legacy_duplicates<'a>(
     .collect()
 }
 
+/// The plan item that holds the tasks no plan holds.
+const NO_PLAN: &str = "no-plan";
+
 async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
     f.writer
         .db
@@ -1933,6 +1936,18 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                     .collect::<Result<Vec<_>, _>>()?;
                 let hidden = legacy_duplicates(all.iter().map(|r| (r.0.as_str(), r.5.as_deref())));
                 plan_of.retain(|_, plan| !hidden.contains(plan));
+                // a task with no plan sits under a "No plan" plan item, never skipped
+                let orphans = all.iter().any(|r| {
+                    r.1 == "task" && !hidden.contains(&strip(&r.0)) && !plan_of.contains_key(&r.0)
+                });
+                if orphans {
+                    out.push(Event::Graph(GraphFact::Plan {
+                        id: NO_PLAN.into(),
+                        title: "No plan".into(),
+                        rank: u64::MAX / 2,
+                        progress: None,
+                    }));
+                }
                 for (rank, (id, kind, title, status, text, _)) in all.into_iter().enumerate() {
                     if hidden.contains(&strip(&id)) {
                         continue;
@@ -1953,10 +1968,10 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                             progress: None,
                         }),
                         _ => {
-                            let Some(plan) = plan_of.get(&id) else { continue };
+                            let plan = plan_of.get(&id).map_or(NO_PLAN, String::as_str);
                             Event::Graph(GraphFact::Task {
                                 id: strip(&id),
-                                plan: plan.clone(),
+                                plan: plan.to_owned(),
                                 title,
                                 done: status == "done",
                             })

@@ -93,6 +93,9 @@ pub(crate) fn doc(m: &Model, l: &Layout, sent: &BTreeSet<ItemId>) -> Doc {
         if let Some(t) = &it.fields.task {
             fields.push(json!(["task", t]));
         }
+        if let Some(s) = it.fields.task_state {
+            fields.push(json!(["task_state", word(&s)]));
+        }
         fields.extend(card_fields(&it.fields));
         if let Some(o) = overlaps.get_mut(&id) {
             o.sort_unstable();

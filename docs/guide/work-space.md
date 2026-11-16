@@ -12,7 +12,8 @@ the repositories yourself, set `drgnx-work-space-roots`.
 
 The map is a read-only buffer, `*drgnx work: NAME*`, in eight layers: you asked, specs, plans, tasks, agents, branches,
 files, and "Runs on" (the machines). A task shows its state as a glyph and a word: ✓ done, ▶ running, ● needs you,
-○ not started; an agent hangs under the task it works on. The hub keeps what the map shows and sends changes as they happen; the map never asks again until
+○ not started; an agent hangs under the task it works on. A task no plan holds sits under a "No plan" plan. The detail panel's why-chain shows the task as its own step
+after the plan. The hub keeps what the map shows and sends changes as they happen; the map never asks again until
 the hub restarts. If the hub goes away the map keeps what it showed and says "reconnecting" in its mode line, and it
 subscribes again by itself when the hub is back. A map no window shows costs nothing: the hub sends it no changes, and
 it is drawn again when you show it.

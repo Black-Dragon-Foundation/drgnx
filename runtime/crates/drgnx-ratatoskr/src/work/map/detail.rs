@@ -51,13 +51,17 @@ fn why(m: &Model, it: &Item) -> Vec<(&'static str, String)> {
                 "ask" => ("you", format!("“{}”", pi.label)),
                 "spec" => ("spec", pi.label),
                 "plan" => ("plan", pi.label),
+                "task" => ("task", pi.label),
                 _ => ("", pi.label),
             });
         }
         cur = p;
     }
     chain.reverse();
-    chain.extend(it.fields.task.clone().map(|t| ("task", t)));
+    // an agent whose task is no item (a run's task) still names it
+    if !chain.iter().any(|(k, _)| *k == "task") {
+        chain.extend(it.fields.task.clone().map(|t| ("task", t)));
+    }
     chain
 }
 

@@ -1440,3 +1440,141 @@ fn a_proposal_on_the_strip_says_what_to_approve_and_which_job() {
         "Codex asks: cargo clippy"
     );
 }
+
+/// A session on TASK (a bare task id), in state STATE.
+fn task_session(core: &mut Core, i: u64, task: &str, state: State) {
+    let snap: Snapshot = serde_json::from_value(
+        json!({"id": format!("s{i}"), "name": format!("agent {i}"), "task": task}),
+    )
+    .expect("a snapshot");
+    let sess = Sess {
+        snap,
+        kids: Vec::new(),
+        place: None,
+        seq: i,
+        state,
+        since: 0,
+        job: None,
+    };
+    for ev in sess.facts() {
+        core.step(ev);
+    }
+}
+
+fn graph(core: &mut Core, f: vegvisir::GraphFact) {
+    core.step(vegvisir::Event::Graph(f));
+}
+
+/// [D] A plan's task with a live agent is a task item, linked plan → task → agent, and its model node says its state.
+#[test]
+fn a_plan_task_with_a_live_agent_is_a_task_item_linked_both_ways() {
+    let mut core = Core::new();
+    graph(
+        &mut core,
+        vegvisir::GraphFact::Plan {
+            id: "p".into(),
+            title: "P".into(),
+            rank: 1,
+            progress: None,
+        },
+    );
+    graph(
+        &mut core,
+        vegvisir::GraphFact::Task {
+            id: "t".into(),
+            plan: "p".into(),
+            title: "do it".into(),
+            done: false,
+        },
+    );
+    task_session(&mut core, 1, "t", State::NeedsYou);
+    let m = core.model();
+    let item = m.item(&ItemId("task:t".into())).expect("a task item");
+    assert_eq!(item.kind, Kind::Task);
+    assert_eq!(item.fields.task_state, Some(vegvisir::TaskState::NeedsYou));
+    let has = |a: &str, b: &str| {
+        m.edges()
+            .iter()
+            .any(|e| e.from.as_str() == a && e.to.as_str() == b)
+    };
+    assert!(has("plan:p", "task:t") && has("task:t", "agent:s1"));
+    let l = vegvisir::layout::layout(
+        m,
+        &ViewState {
+            width_units: 226,
+            ..ViewState::default()
+        },
+        None,
+    );
+    let sent: BTreeSet<ItemId> = m.items().into_keys().collect();
+    let doc = model::doc(m, &l, &sent);
+    let node = &doc.nodes["task:t"];
+    assert!(
+        node["fields"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(["task_state", "needs-you"])),
+        "{node}"
+    );
+}
+
+/// [D] The store's reader: a task with no plan sits under a "No plan" plan item instead of being skipped.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_task_without_a_plan_sits_under_no_plan() {
+    use urdr::graph::entity::{self, EntityNew, Origin};
+    let dir = tempfile::tempdir().unwrap();
+    let front = Front::new(
+        runstav::proof::Cap::generate().unwrap(),
+        dir.path().join("hub-x.sock"),
+        crate::store::WorkDb::spawn(dir.path().join("work.db")).unwrap(),
+        norn::store::CoordDb::spawn(dir.path().join("work.db")),
+    );
+    front
+        .writer
+        .write(&crate::runner::service(), "test", |tx| {
+            let mut mk = |id: &str, kind: &str| {
+                entity::create(
+                    tx,
+                    EntityNew {
+                        id: id.into(),
+                        kind: kind.into(),
+                        project: None,
+                        title: Some(id.into()),
+                        status: None,
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({}),
+                        origin: Origin::Recorded,
+                        source: None,
+                    },
+                )
+                .map(|e| e.n)
+                .map_err(|e| norn::store::CoordError::Refused(e.to_string()))
+            };
+            let plan = mk("plan:p1", "plan")?;
+            let t1 = mk("task:t1", "task")?;
+            mk("task:t2", "task")?;
+            urdr::graph::link::add(tx, plan, "parent_of", t1, None, Origin::Recorded, None)
+                .map_err(|e| norn::store::CoordError::Refused(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (events, _) = read_store(&front).await;
+    let task_plan = |id: &str| {
+        events.iter().find_map(|e| match e {
+            vegvisir::Event::Graph(vegvisir::GraphFact::Task { id: t, plan, .. }) if t == id => {
+                Some(plan.clone())
+            }
+            _ => None,
+        })
+    };
+    assert_eq!(task_plan("t1").as_deref(), Some("p1"));
+    assert_eq!(task_plan("t2").as_deref(), Some("no-plan"));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        vegvisir::Event::Graph(vegvisir::GraphFact::Plan { id, title, .. })
+            if id == "no-plan" && title == "No plan"
+    )));
+}
