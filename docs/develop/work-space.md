@@ -563,7 +563,7 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   starts with the conclusion's number in a filled accent circle (`drgnx-work-step-number`, the solid chip
   `drgnx-chip-solid` in the badge's pill), the
   others keep the room; the newest conclusion's card says `new` while it is stamped on one of the last three steps.
-- **Cards, Detail and trail as the mockup draws them.** The Work layout's trail tile is 250 logical px tall (the mockup's), the lens switch is a rail with the shown lens raised on it (`drgnx-work-lens-rail`). A card line is as tall as its layout row says (a row's
+- **Cards, Detail and trail as the mockup draws them.** The trail is the panel's Trail tab, the lens switch is a rail with the shown lens raised on it (`drgnx-work-lens-rail`). A card line is as tall as its layout row says (a row's
   `height` unit, px: `drgnx-view-patch` sets `line-height` from it; a row with no unit is that many default lines).
   An agent's initial is a filled circle of its colour (`drgnx-work-who-N`), the going line is the UI font with its
   numbers in the code font, the flag line carries the branch's totals (`edits N (+P −M)`, `Fields::edits` of an
@@ -581,12 +581,20 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   `N agents` chips the counts of the map's model (`drgnx-look-scene--work-selected`).
 - **The lens bar's right** (`drgnx-work-lens--controls`): the grip (drawn; the tile layout's drag is not wired), maximise
   (`drgnx-work-lens-maximize`: hides the Detail island and the trail, again shows them) and ⋯ (shown while the bar is hovered; its menu is the four lenses and the keys sheet). The lens
-  shown is a pill in a ring (the themes give `drgnx-work-lens-current` its box).
-- **The Work layout** (`drgnx-layouts`' `work`): the map full width, the Detail island at its right (340 logical px) and
-  the trail under the map. The Detail tile and the trail tile draw their own title row in the area's row
+  shown is a pill in a ring (the themes give `drgnx-work-lens-current` its box). Each lens name and each key chip
+  carries a keymap (`drgnx-work-lens--click`): a click on the tab line or a header line selects the bar's window and
+  runs the registered command (`work-view-*`, the chips' by `drgnx-work-lens--chip-commands`), UX audit W2.
+- **UX audit W1, W3, W4** (2026-11-16): `drgnx-work-map--require-sja` names Sjá only in a map of an Emacs without it
+  (outside a map it says to open the Work space, a map waiting for its rows says it is loading); the strip's load
+  chips leave out the machines the scene draws (`view_rows`, test `a_machine_on_the_map_is_not_repeated_on_the_strip`);
+  `vegvisir::render::activity` gives the last step's class only while the agent runs (`None` or `Running`), else the
+  state's words.
+- **Work is a view, not a layout** (UX audit S1-1, 2026-11-16): a lens is a tab in an editor group beside the Explorer;
+  `drgnx-work-space--follow-layout` shows the Detail pane in the right dock while a lens is on screen and hides it once
+  none is, and a file opened over a lens shows in that window. The trail is the panel's Trail tab. The Detail tile and the trail tile draw their own title row in the area's row
   (`drgnx-area-own-title` as a string, with the area's close): "Detail", and "Trail · AGENT | Agent · AGENT | following ▾".
   The trail follows the map's selection (`drgnx-work-space--follow-trail`: the trail of the selected agent, made when
-  there is none, shown in the panel under layout Work); the Flow still shows its Rules tile on demand. The lens bar is
+  there is none, shown in the panel while a lens is on screen); the Flow still shows its Rules tile on demand. The lens bar is
   pills and keycaps: the lens shown is `drgnx-pill-on`, the map's own keys (focus f, overlaps o) are `drgnx-pill` with a
   `drgnx-keycap`.
 - **A hub restart:** the patches dim the view, the client subscribes again on the new connection, and the new hub's

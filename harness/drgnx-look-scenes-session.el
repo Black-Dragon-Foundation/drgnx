@@ -1083,9 +1083,8 @@ Its session's hub seeds the map's own graph (`drgnx-look-scene-seed' \"map\", th
   (drgnx-look-scene--theme theme)
   (drgnx-look-scene--try "work space"
     (when-let* ((map (drgnx-look-scene--work-map)))
-      ;; the Work layout (the design's §14): the map full width, the Detail island at its right, the trail under it; the
-      ;; layout follows a shown lens by itself, but not before the shot, so it is asked for and waited for
-      (unless (eq (drgnx-layouts-current) 'work) (drgnx-layouts-apply 'work))
+      ;; the Work space is a view in the editor (UX audit S1-1): the map in the editor group beside the Explorer, its
+      ;; Detail in the right dock (`drgnx-work-space--follow-layout')
       (unless (get-buffer-window map) (set-window-buffer (drgnx-wb-editor-window) map))
       (unless (drgnx-look-scene--until 15 "the map's seeded graph (the first agent, agent:a1)"
                                        (lambda () (with-current-buffer map
@@ -1131,9 +1130,7 @@ gate state, the held one, the batch.  A Flow without the run's task rows (its wa
     (when-let* ((map (drgnx-look-scene--work-map))
                 (flow (drgnx-work-flow-open map)))
       (pop-to-buffer-same-window flow)
-      ;; the Work layout, as a shown lens enters it (`drgnx-work-space--follow-layout'), but now: left to its hook, the
-      ;; shot drew the Flow beside the Explorer (758 px) or in the layout (1074 px) from run to run
-      (unless (eq (drgnx-layouts-current) 'work) (drgnx-layouts-apply 'work))
+      ;; the Flow in the editor group beside the Explorer, as any Work lens (UX audit S1-1)
       (unless (get-buffer-window flow) (set-window-buffer (drgnx-wb-editor-window) flow))
       ;; the held task's row (its `drgnx-work-id' is the task's id) and the batch's heading
       (drgnx-look-scene--until 15 "the seeded run's Flow rows (scene-run#5, the batch)"
