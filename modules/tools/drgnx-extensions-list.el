@@ -75,9 +75,9 @@
 (defun drgnx-extensions-parse-query (string)
   "STRING, what is typed in the search, as (:text S :filters PLIST :local WORDS :sort S :unknown TOKENS).
 Words that start with @ are filters (`@installed', `@updates', `@enabled', `@disabled', `@builtin', `@bundled',
-`@plugins', `@unsigned', `@archive:A', `@kind:K', `@keyword:W'), local ones the editor answers (`@recommended', `@this-project',
-`@failed', `@restart', `@generations') or `@sort:name|downloads|updated|installed'.  The other words are the text.  A
-word that starts with @ and is none of these is listed under :unknown, never an error."
+`@plugins', `@unsigned', `@archive:A', `@kind:K', `@keyword:W'), local ones the editor answers (`@recommended',
+`@this-project', `@failed', `@restart', `@generations') or `@sort:name|downloads|updated|installed'.  The other words
+are the text.  A word that starts with @ and is none of these is listed under :unknown, never an error."
   (let (text filters local sort unknown)
     (dolist (token (split-string string))
       (if (not (string-prefix-p "@" token))
