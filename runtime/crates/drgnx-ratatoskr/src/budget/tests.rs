@@ -415,28 +415,46 @@ fn an_unprefixed_task_ref_joins_its_budget() {
     assert_eq!(key(&hits[0].scope), "task:J#5");
 }
 
-/// Pure (D): a state saved before the scopes were split kept a job under `plan:JOB`; it is dropped on load (no
-/// back-compat before launch), the rest is read, and the drop is counted once.
+/// Pure (D): a state saved before the scopes were split (version 1, as the user's install may hold it) kept a job with
+/// no plan under `plan:JOB`, and a plan file's runs under `plan:PATH`. On load the job's scope becomes its `run`, with
+/// its limit, its spend, its joint dollars and its links; the plan file's keeps its meaning; each move is counted once.
 #[test]
-fn an_old_plan_job_key_is_dropped_on_load() {
+fn an_old_per_job_plan_scope_becomes_its_run() {
     let old = json!({
-        "limits": [[{"plan": "plan:JOB"}, [{"amount": 20.0, "unit": "usd"}]],
+        "version": 1,
+        "limits": [[{"plan": "plan:job-20261101-120000"}, [{"amount": 20.0, "unit": "usd"}]],
+                   [{"plan": "plan:/p/x.md"}, [{"amount": 9.0, "unit": "usd"}]],
                    [{"worker": "w1"}, [{"amount": 3.0, "unit": "usd"}]]],
-        "spent": [[{"plan": "plan:JOB"}, [{"amount": 5.0, "unit": "usd"}]]],
-        "parents": [[{"worker": "w1"}, {"plan": "plan:JOB"}]],
+        "spent": [[{"plan": "plan:job-20261101-120000"}, [{"amount": 5.0, "unit": "usd"}]]],
+        "parents": [[{"worker": "w1"}, {"plan": "plan:job-20261101-120000"}],
+                    [{"plan": "plan:job-20261101-120000"}, {"project": "project:q"}]],
+        "joint": [{"plan": "plan:job-20261101-120000"}],
     });
     let b = Budgets::default();
-    assert_eq!(b.restore(serde_json::from_value(old).unwrap()), 3);
-    let plan = sc(json!({"plan": "plan:JOB"}));
-    assert!(b.limits(&plan).is_empty());
-    assert!(b.view(&plan).spent.is_empty());
-    assert_eq!(left(&b, &sc(json!({"worker": "w1"})), Unit::Usd), Some(3.0));
-    // what this build saves reads back whole
-    b.set(&plan, vec![lim(7.0, Unit::Usd)]);
+    assert_eq!(b.restore(serde_json::from_value(old).unwrap()), 5);
+    let run = sc(json!({"run": "job-20261101-120000"}));
+    let gone = sc(json!({"plan": "plan:job-20261101-120000"}));
+    assert_eq!(b.limits(&run), vec![lim(20.0, Unit::Usd)]);
+    assert_eq!(b.view(&run).spent, vec![lim(5.0, Unit::Usd)]);
+    assert!(b.limits(&gone).is_empty());
+    assert_eq!(
+        b.limits(&sc(json!({"plan": "plan:/p/x.md"}))),
+        vec![lim(9.0, Unit::Usd)]
+    );
+    // the worker still spends from the run's limit: 20 less the 5 spent, under its own 3
+    let w1 = sc(json!({"worker": "w1"}));
+    assert_eq!(left(&b, &w1, Unit::Usd), Some(3.0));
+    b.set(&w1, Vec::new());
+    assert_eq!(left(&b, &w1, Unit::Usd), Some(15.0));
+    assert_eq!(
+        b.members(&sc(json!({"project": "project:q"}))),
+        vec![w1.clone()]
+    );
+    // what this build saves reads back whole, with nothing moved
     let c = Budgets::default();
     assert_eq!(
         c.restore(serde_json::from_str(&serde_json::to_string(&b.saved()).unwrap()).unwrap()),
         0
     );
-    assert_eq!(c.limits(&plan), vec![lim(7.0, Unit::Usd)]);
+    assert_eq!(c.limits(&run), vec![lim(20.0, Unit::Usd)]);
 }

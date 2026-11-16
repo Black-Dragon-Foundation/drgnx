@@ -4958,7 +4958,9 @@ prefix back with `tasks::entity_id`. The chain (`Budgets::link_up`) is worker �
 task → run → plan → spec → project: the tick links a worker's whole chain when it starts it (`runner::budget_chain`
 reads the plan's `derives` link for its spec; a plan with no spec, or a run with no plan, sits under the project), the
 approval links the run's (`runner::link_run`), a manager links under its run, a worker it started under it.
-`Budgets::rekey` moves a session's links to its new session (`agents/move`). A hit's sessions are `members` of the scope
+`Budgets::rekey` moves a session's links to its new session (`agents/move`). The saved state carries a version: one
+saved before the split (below 2) gave a job with no plan its own `plan:JOB` scope, which is migrated on load to the
+job's `run` scope with its limits, spend, joint dollars and links; a plan file's or graph plan's scope keeps its meaning. A hit's sessions are `members` of the scope
 that hit; its jobs are the `Run` scopes below it and the gateway jobs bound below it (`jobs_under`), so a spec's or a
 plan's limit pauses every run under it, one card each. The saved state carries `version` 2; a state saved before (when
 `plan:` was one job) drops its `plan` scopes on load, with one log line.
