@@ -16,6 +16,7 @@ pub mod buffer_view;
 pub mod follow;
 pub mod marks;
 pub mod project;
+pub mod proposals;
 pub mod ranges;
 
 use crate::dispatch::Caller;
@@ -76,6 +77,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 struct Body {
     agents: Vec<BufferAgent>,
     gutter: Vec<GutterRange>,
+    proposals: Vec<runstav::methods::editor::Proposal>,
     approximate: Option<bool>,
     /// The version of the edit history's tracked buffer of the file (its last batch's); none when no buffer of it is
     /// tracked, and the frame then names the version the view's watch sent.
@@ -284,9 +286,11 @@ impl Buffers {
             .await;
         let mut gutter = buffer_view::merge_gutter(gutter);
         self.place(file, text, &mut agents, &mut gutter).await;
+        let proposals = self.proposals(front, file).await;
         let body = Body {
             agents,
             gutter,
+            proposals,
             // the user's text read from disk (no tracked buffer): approximate
             approximate: projected
                 .is_some_and(project::UserSource::approximate)
@@ -295,6 +299,38 @@ impl Buffers {
         };
         lock(&self.last).insert(file.to_string(), body.clone());
         body
+    }
+
+    /// What the sessions working in their own worktrees changed in FILE, as proposals; a paired session's writes are
+    /// in the buffer already.
+    async fn proposals(
+        &self,
+        front: &Front,
+        file: &str,
+    ) -> Vec<runstav::methods::editor::Proposal> {
+        let Some((top, _)) = presence::checkout_of(Path::new(file)) else {
+            return Vec::new();
+        };
+        let Ok(rel) = Path::new(file).strip_prefix(&top) else {
+            return Vec::new();
+        };
+        let rel = rel.to_string_lossy().into_owned();
+        let mut found = Vec::new();
+        for s in front.core.agents.live_sessions() {
+            if s.worktree() == top {
+                continue;
+            }
+            let paired = front.pair.paired_now(&s.id).unwrap_or(false);
+            if paired {
+                continue;
+            }
+            if let Ok(diff) = crate::work::edits::diff_of(front, &s.id, &rel).await
+                && !diff.is_empty()
+            {
+                found.push((s.id.clone(), paired, diff));
+            }
+        }
+        proposals::for_sessions(&found)
     }
 
     /// Give AGENTS and GUTTER the buffer positions of their lines and each agent its symbol, in TEXT (the edit
@@ -623,6 +659,7 @@ fn frame_of(
         approximate: b.approximate,
         agents: b.agents.clone(),
         gutter: b.gutter.clone(),
+        proposals: b.proposals.clone(),
     }
 }
 

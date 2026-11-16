@@ -355,6 +355,8 @@
               (agents-follow-stop "q" "<escape>")
               (agents-follow-panel "o")
               (agents-follow-wheel "W")
+              (agents-proposal-accept "a")
+              (agents-proposal-revert "D")
               (agents-take-wheel "SPC a W")
               (agents-give-wheel :none "W again, in a file you hold; the palette")
               (ai-tab "TAB" :map drgnx-ai-ghost-mode-map)
