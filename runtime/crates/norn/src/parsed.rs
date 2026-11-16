@@ -428,12 +428,14 @@ fn live_n(tx: &Tx<'_>, id: &str) -> Result<Option<i64>, WriteError> {
         .map(|e| e.n))
 }
 
-/// Retire every live entity whose source is SOURCE (except KEEP); how many.
+/// A link row as migration reads it: src, kind, dst, data, origin, source.
+type LinkRow = (i64, String, i64, Option<String>, String, Option<String>);
+
 /// Before the scanner's entities of a file the importer holds are retired, their links move to the importer's: the
 /// scanner's `plan:/F` to the importer's plan head of F, `spec:/F` to its spec, `task:/F#N` to its task numbered N (a
 /// commit's `implements`, a plan's `on_branch`, a ruling's `parent_of`, whatever a link of any kind says, with its data,
-/// origin and source).  A link between two scanner entities is the importer's own structure and is not copied; a step
-/// has no counterpart (the importer keeps steps in the task's data).  Then the scanner's entities are retired, all of
+/// origin and source).  A link between two scanner entities goes between their counterparts (the importer has its plan to
+/// task links already); a step has no counterpart (the importer keeps steps in the task's data) and its links go with it.  Then the scanner's entities are retired, all of
 /// them, so none is left half-migrated.
 fn migrate_legacy(tx: &mut Tx<'_>, held: &HashSet<String>) -> Result<(), WriteError> {
     if held.is_empty() {
@@ -498,7 +500,7 @@ fn migrate_legacy(tx: &mut Tx<'_>, held: &HashSet<String>) -> Result<(), WriteEr
         let Some(&theirs) = ours.get(n) else {
             continue;
         };
-        let links: Vec<(i64, String, i64, Option<String>, String, Option<String>)> = {
+        let links: Vec<LinkRow> = {
             let mut st = tx.sql().prepare(
                 "select src, kind, dst, data, origin, source from link where tx_to = ?1 and (src = ?2 or dst = ?2)",
             )?;
@@ -583,6 +585,7 @@ fn importer_files(tx: &mut Tx<'_>) -> Result<HashSet<String>, WriteError> {
     Ok(files)
 }
 
+/// Retire every live entity whose source is SOURCE (except KEEP); how many.
 fn retire_source(tx: &mut Tx<'_>, source: &str, keep: &HashSet<&str>) -> Result<u64, WriteError> {
     let rows: Vec<(i64, String)> = {
         let mut stmt = tx.sql().prepare(
