@@ -480,6 +480,21 @@ its advice off `timer-event-handler' and the hub batch."
     ;; the baseline is a workload of its own, with the column's setup
     (should (assq 'debug-gutter-baseline (drgnx-perf-run--workloads)))))
 
+(ert-deftest drgnx-perf-run/the-minimap-is-judged-against-the-same-scroll-without-it ()
+  ;; the open minimap (design §8): a 10,000-line file with the line model on, scrolled; its baseline differs only by the
+  ;; minimap, by the same rule as the ruler's
+  (let ((fails (lambda (m mb)
+                 (seq-some (lambda (l) (string-search "minimap-scroll input p50" l))
+                           (drgnx-perf-run--relative-fails
+                            `((minimap-scroll :input (:p50 ,m)) (minimap-baseline :input (:p50 ,mb))))))))
+    (should-not (funcall fails 4.7 4.4))
+    (should (funcall fails 4.8 4.4))
+    (should-not (funcall fails 10.4 10.0))   ; 0.4 ms, but 4 %
+    (should (funcall fails 10.6 10.0))
+    (should-not (drgnx-perf-run--relative-fails '((minimap-scroll :input (:p50 9.0)))))
+    (should (assq 'minimap-baseline (drgnx-perf-run--workloads)))
+    (should (assq 'minimap-scroll (drgnx-perf-run--workloads)))))
+
 (ert-deftest drgnx-perf-run/the-ruler-is-judged-against-the-same-scroll-without-it ()
   ;; the ruler's row narrows the file and has the column on; its baseline differs from it only by the ruler, so neither
   ;; the narrowing nor the column is counted against the ruler

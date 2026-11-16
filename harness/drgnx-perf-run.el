@@ -2449,6 +2449,31 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :check "(and (featurep 'glitnir-ruler) (= 200 (length (plist-get (window-parameter nil 'glitnir-ruler) :marks))) t)"   ; Nidhogg has the ruler's 200 marks
        :teardown ,(concat "(progn (with-current-buffer (window-buffer) (widen)) (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; the minimap's baseline: the fixture narrowed to its first 10,000 lines with the line model on, scrolled as
+      ;; code-scrolling; minimap-scroll differs from it only by the open minimap
+      (minimap-baseline
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (narrow-to-region (point-min) (progn (forward-line 10000) (point))) (goto-char (point-min))"
+                      " (when (fboundp 'nidhogg-lines-enable) (nidhogg-lines-enable nil t))"
+                      " (set-window-parameter nil 'glitnir-minimap nil) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(null (window-parameter nil 'glitnir-minimap))"
+       :teardown ,(concat "(progn (with-current-buffer (window-buffer) (widen)) " kill-fixture " t)"))
+      ;; the open minimap (design §8, state B) over the same scroll: Nidhogg draws it from the line model at each
+      ;; publish (tiles of 256 rows, cached), so a scroll runs no Lisp of the minimap's; its colours are the default
+      ;; face's (judged against minimap-baseline, which differs only by it)
+      (minimap-scroll
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (narrow-to-region (point-min) (progn (forward-line 10000) (point))) (goto-char (point-min))"
+                      " (when (fboundp 'nidhogg-lines-enable) (nidhogg-lines-enable nil t))"
+                      " (set-window-parameter nil 'glitnir-minimap"
+                      "   (list :width 120 :open t :fill (cons (face-background 'default nil t) 1)"
+                      "         :text (cons (face-foreground 'default nil t) 0.5)"
+                      "         :band (cons (face-foreground 'default nil t) 0.08))) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(and (featurep 'glitnir) (vectorp (window-parameter nil 'glitnir--minimap)) t)"   ; Nidhogg resolved it
+       :teardown ,(concat "(progn (set-window-parameter nil 'glitnir-minimap nil)"
+                          " (with-current-buffer (window-buffer) (widen)) " kill-fixture " t)"))
       ;; Glitnir's edges (the heap graph's references): debug-gutter-baseline's file and keys with 200 edges in the
       ;; window's `glitnir-edges', one every 50 lines, each from a line's 10th column down three lines with two bends
       ;; and an arrow; judged against debug-gutter-baseline as it is (Nidhogg resolves the points at each publish: a
@@ -3047,6 +3072,8 @@ pairs below, each judged only when both sides were measured."
         (gutter-base (drgnx-perf--get results 'debug-gutter-baseline '(:input :p50)))
         (ruler (drgnx-perf--get results 'debug-ruler-scroll '(:input :p50)))
         (ruler-base (drgnx-perf--get results 'debug-ruler-baseline '(:input :p50)))
+        (minimap (drgnx-perf--get results 'minimap-scroll '(:input :p50)))
+        (minimap-base (drgnx-perf--get results 'minimap-baseline '(:input :p50)))
         (edges (drgnx-perf--get results 'debug-edges-scroll '(:input :p50))))
     (append
      ;; the breakpoint column: at most the larger of 5 % and 0.3 ms over the same scroll with its margin (and hunks')
@@ -3064,6 +3091,12 @@ pairs below, each judged only when both sides were measured."
        (list (format "debug-ruler-scroll input p50 %s ms is %s%% (%s ms) over debug-ruler-baseline's %s ms (the ruler may add at most 5 %% or 0.3 ms)"
                      (drgnx-perf--round ruler) (round (* 100 (- (/ ruler ruler-base) 1)))
                      (drgnx-perf--round (- ruler ruler-base)) (drgnx-perf--round ruler-base))))
+     ;; the open minimap, by the same rule, against the same scroll without it
+     (when (and (numberp minimap) (numberp minimap-base)
+                (> minimap (+ (max (* 1.05 minimap-base) (+ minimap-base 0.3)) 1e-6)))
+       (list (format "minimap-scroll input p50 %s ms is %s%% (%s ms) over minimap-baseline's %s ms (the minimap may add at most 5 %% or 0.3 ms)"
+                     (drgnx-perf--round minimap) (round (* 100 (- (/ minimap minimap-base) 1)))
+                     (drgnx-perf--round (- minimap minimap-base)) (drgnx-perf--round minimap-base))))
      ;; Glitnir's edges, by the same rule
      (when (and (numberp edges) (numberp gutter-base)
                 (> edges (+ (max (* 1.05 gutter-base) (+ gutter-base 0.3)) 1e-6)))
@@ -3341,6 +3374,8 @@ version and the commit, as JSON in FILE."
                                     debug-step-line debug-inline debug-inline-heavy debug-toolbar-show debug-step-variables debug-expand-chunks
                                     debug-console-flood
                                     debug-bisect-typing view-remove-above view-select-dim))
+    ,@(mapcar (lambda (w) (cons w "the minimap: its allocation, CPU and rows are set from three pinned runs on the desktop island"))
+              '(minimap-baseline minimap-scroll))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))

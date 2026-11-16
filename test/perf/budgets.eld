@@ -20,6 +20,8 @@
  ;; graphical debugging's breakpoint column (300 marks while scrolling; F9 on 20 lines): input within a frame
  (debug-gutter-scroll (:input :p95) 16) (debug-gutter-scroll (:input :max) 50)
  (debug-ruler-scroll (:input :p95) 16) (debug-ruler-scroll (:input :max) 50)
+ ;; the open minimap over a 10,000-line scroll (design §8): within a frame, and judged against minimap-baseline
+ (minimap-scroll (:input :p95) 16) (minimap-scroll (:input :max) 50)
  (debug-edges-scroll (:input :p95) 16) (debug-edges-scroll (:input :max) 50)
  (debug-breakpoint-click (:input :p95) 16) (debug-breakpoint-click (:input :max) 50)
  ;; a step's stop drawn (spec §5): the arrow, band and point moved within a frame (16 ms p95, from the event)
