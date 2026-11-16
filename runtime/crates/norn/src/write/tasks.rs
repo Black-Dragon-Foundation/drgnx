@@ -49,6 +49,13 @@ pub fn entity_id(task: &str) -> String {
     format!("task:{task}")
 }
 
+/// TASK as the hub keeps a task reference (`JOB#N`, a tracker task's id): the `task:` of its entity id taken off, so
+/// `J#5` and `task:J#5` are one task. A session's task, the budget's task scope and the map hold this form; the graph's
+/// lookups add the prefix back with [`entity_id`].
+pub fn task_key(task: &str) -> &str {
+    task.strip_prefix("task:").unwrap_or(task)
+}
+
 /// Change job task TASK's entity as F says of its current row; false (nothing written) when there is no such job
 /// task (a parsed or tracker task is no job task: its `data.job` is empty).
 fn update_task(

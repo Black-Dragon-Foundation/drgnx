@@ -2043,7 +2043,11 @@ pub(crate) async fn open_with(
         started: now(),
         role,
         cwd,
-        task: p.task.as_ref().map(|t| t.as_str().to_string()),
+        // one form for every reader: `J#5`, never `task:J#5`
+        task: p
+            .task
+            .as_ref()
+            .map(|t| norn::write::tasks::task_key(t.as_str()).to_string()),
         job: p.job.as_ref().map(|j| j.as_str().to_string()),
         parent,
         about: p.about.as_ref().map(|a| a.to_string()),
@@ -3927,7 +3931,7 @@ async fn record_entities(front: &Front, caller: &Caller, s: &Session) {
                 .map_err(refused)?;
             link::add(tx, ses.n, "run_by", agent, None, Origin::Recorded, None).map_err(refused)?;
             if let Some(t) = task
-                && let Some(te) = entity::by_id(tx.sql(), &t)
+                && let Some(te) = entity::by_id(tx.sql(), &norn::write::tasks::entity_id(&t))
                     .map_err(|e| norn::store::CoordError::Refused(e.to_string()))?
             {
                 link::add(tx, ses.n, "works_on", te.n, None, Origin::Recorded, None)
@@ -6893,15 +6897,12 @@ pub(crate) async fn rekey(front: &Front, old: &Session, new: &str) {
             .runs
             .set_scope(new, plan.clone(), project.clone());
     }
-    let worker = scope_of(old.role, new);
-    if let Some((plan, _)) = &scope {
-        let plan_scope =
-            runstav::methods::timeline::BudgetScope::Plan(runstav::types::Bounded(plan.clone()));
-        front.core.budgets.link(&worker, &plan_scope);
-    }
-    if let Some(job) = &old.job {
-        front.core.budgets.bind_job(job, &worker);
-    }
+    // the new session counts toward what the old one did (its task, run, plan and up), and the gateway books its
+    // job under it
+    front
+        .core
+        .budgets
+        .rekey(&scope_of(old.role, &old.id), &scope_of(old.role, new));
     if let Some(task) = old.task.clone() {
         let (tid, new) = (task, new.to_owned());
         let r = front

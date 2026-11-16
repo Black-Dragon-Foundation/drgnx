@@ -10603,6 +10603,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10611,6 +10626,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -10681,6 +10723,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10689,6 +10746,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -10839,6 +10923,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10847,6 +10946,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -10975,6 +11101,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10983,6 +11124,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },

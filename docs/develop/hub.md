@@ -1342,8 +1342,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
-| `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
-| `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
+| `budget/get` | user | `{scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
+| `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
 | `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
 | `config/changed` | user | `{}` | `boolean` | no |
@@ -4924,6 +4924,20 @@ added share, so the Autonomous rule's spend and week checks read the calibrated 
 to keep). The wake line is a
 second simulation with the same seed and a price of each drawn observation's cold wakes × its context at the cache
 write rate. A manager's own spend comes from the `manager` samples, per task, beside the total.
+
+**Budget scopes** (`budget.rs`, `BudgetScope`). Keys are `kind:id`: `project:`, `spec:`, `plan:`, `run:`, `task:`,
+`manager:`, `worker:`. `Plan` is the plan document (`runner::plan_id`: a graph plan's id, or `plan:` and the plan file's
+path, which is its parsed entity's id), `Run` one job (`runner::run_scope`), `Task` one task by its bare reference
+(`JOB#N`: `norn::write::tasks::task_key` takes off a `task:`, so `J#5` and `task:J#5` are one scope). A session keeps its
+task in that same bare form (set once, at its start); the graph's lookups, such as the session's `works_on` link, add the
+prefix back with `tasks::entity_id`. The chain (`Budgets::link_up`) is worker →
+task → run → plan → spec → project: the tick links a worker's whole chain when it starts it (`runner::budget_chain`
+reads the plan's `derives` link for its spec; a plan with no spec, or a run with no plan, sits under the project), the
+approval links the run's (`runner::link_run`), a manager links under its run, a worker it started under it.
+`Budgets::rekey` moves a session's links to its new session (`agents/move`). A hit's sessions are `members` of the scope
+that hit; its jobs are the `Run` scopes below it and the gateway jobs bound below it (`jobs_under`), so a spec's or a
+plan's limit pauses every run under it, one card each. The saved state carries `version` 2; a state saved before (when
+`plan:` was one job) drops its `plan` scopes on load, with one log line.
 
 **The week's pace** (`Forecast.pace`, one `PaceEffect` for each subscription meter a task of the plan runs on). A
 meter's readings are kept in a thinned history (`Budgets::history`): one for each quarter hour, none older than 8 days,

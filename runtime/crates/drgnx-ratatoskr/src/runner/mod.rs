@@ -48,7 +48,9 @@ use runstav::methods::jobs::{
     StatusParams, TaskNo, WithBudget,
 };
 use runstav::methods::matrix::{Limit, Unit};
+use runstav::methods::timeline::BudgetScope;
 use runstav::registry::Class;
+use runstav::types::{Bounded, Id};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -630,14 +632,84 @@ pub(crate) fn user() -> Caller {
 /// The job's data key `job/stop` sets on a proposal (a rejected one): it never started, `job/resume` refuses it.
 pub(crate) const NEVER_APPROVED: &str = "never_approved";
 
-/// The plan scope JOB's steps and budget are filed under: a graph plan's id already carries `plan:`, a plan file's
-/// path does not, and a job with no plan has its own.
-pub(crate) fn plan_scope(job: &Job) -> String {
+/// The plan JOB's steps are filed under (`step.plan`): a graph plan's id already carries `plan:`, a plan file's path
+/// does not (its parsed entity's id is `plan:PATH`), and a job with no plan has its own.
+pub(crate) fn plan_id(job: &Job) -> String {
     match job.plan.as_deref() {
         Some(p) if p.starts_with("plan:") => p.to_string(),
         Some(p) => format!("plan:{p}"),
         None => format!("plan:{}", job.id),
     }
+}
+
+/// JOB's own budget scope: one run of its plan.
+pub(crate) fn run_scope(job: &Job) -> BudgetScope {
+    BudgetScope::Run(Id::new(&job.id).expect("a job id is an id"))
+}
+
+/// The budget scope of JOB's plan (the plan document, across its runs); none for a job with no plan.
+pub(crate) fn plan_scope(job: &Job) -> Option<BudgetScope> {
+    job.plan
+        .is_some()
+        .then(|| BudgetScope::Plan(Bounded(plan_id(job))))
+}
+
+/// The budget chain above JOB's sessions, from its run up: run, plan, the spec the plan derives from (its `derives`
+/// link in the store), PROJECT.  A plan with no spec sits under the project; a job with no plan has its run alone
+/// under it.
+pub(crate) async fn budget_chain(
+    front: &Front,
+    job: &Job,
+    project: Option<String>,
+) -> Vec<BudgetScope> {
+    let mut chain = vec![run_scope(job)];
+    if let Some(plan) = plan_scope(job) {
+        let id = plan_id(job);
+        let spec = front
+            .writer
+            .db
+            .read(move |c| {
+                c.query_row(
+                    "select b.id from link l join entity a on a.n = l.src join entity b on b.n = l.dst \
+                     where a.id = ?1 and l.kind = 'derives' and l.tx_to = ?2 \
+                     and a.retired_tx is null and b.retired_tx is null order by b.id limit 1",
+                    (id, urdr::graph::schema::SENTINEL),
+                    |r| r.get::<_, String>(0),
+                )
+                .map(Some)
+                .or_else(|e| match e {
+                    urdr::SqliteError::QueryReturnedNoRows => Ok(None),
+                    e => Err(e.into()),
+                })
+            })
+            .await;
+        chain.push(plan);
+        match spec {
+            Ok(Some(s)) => chain.push(BudgetScope::Spec(Bounded(s))),
+            Ok(None) => {}
+            // the plan then sits under its project, and the log says why
+            Err(e) => tracing::warn!(job = job.id, "the spec of the job's plan: {e:?}"),
+        }
+    }
+    chain.extend(project.map(|p| BudgetScope::Project(Bounded(p))));
+    chain
+}
+
+/// JOB's run is linked into the budget chain (at its approval and at a manager's start): its plan, spec and project,
+/// the project read from the job's repository.
+pub(crate) async fn link_run(front: &Front, job: &Job) {
+    let project = match job.repo.as_deref() {
+        Some(r) => match crate::graph::project_of(Path::new(r)).await {
+            Ok(p) => p.map(|p| p.id),
+            Err(e) => {
+                tracing::warn!(job = job.id, "the run's budget scope: {e}");
+                None
+            }
+        },
+        None => None,
+    };
+    let chain = budget_chain(front, job, project).await;
+    front.core.budgets.link_up(&chain);
 }
 
 fn data_of(job: &Job) -> Map<String, Value> {
@@ -1737,6 +1809,8 @@ async fn approve_job(
     if !approved {
         return Err(invalid(format!("Job {id} is no longer proposed")));
     }
+    // the run counts toward its plan, the plan toward its spec or project, from now on
+    link_run(front, &l.job).await;
     // the job's USD budget is its plan's limit: reaching it pauses the run (Task 16b)
     if let Some(b) = budget {
         fallback::set_budget(front, &l.job, b, true);
@@ -2012,7 +2086,7 @@ mod price_tests {
 
     /// Pure (D).
     #[test]
-    fn plan_scope_does_not_double_the_prefix() {
+    fn plan_id_does_not_double_the_prefix() {
         let job = |plan: Option<&str>| Job {
             id: "JOB".into(),
             title: None,
@@ -2022,9 +2096,19 @@ mod price_tests {
             created: None,
             data: None,
         };
-        assert_eq!(plan_scope(&job(Some("plan:ab-1"))), "plan:ab-1");
-        assert_eq!(plan_scope(&job(Some("/p/x.md"))), "plan:/p/x.md");
-        assert_eq!(plan_scope(&job(None)), "plan:JOB");
+        assert_eq!(plan_id(&job(Some("plan:ab-1"))), "plan:ab-1");
+        assert_eq!(plan_id(&job(Some("/p/x.md"))), "plan:/p/x.md");
+        assert_eq!(plan_id(&job(None)), "plan:JOB");
+        // the budget: the plan document, across runs, and the run apart
+        assert_eq!(
+            plan_scope(&job(Some("/p/x.md"))),
+            Some(BudgetScope::Plan(Bounded("plan:/p/x.md".into())))
+        );
+        assert_eq!(plan_scope(&job(None)), None);
+        assert_eq!(
+            run_scope(&job(None)),
+            BudgetScope::Run(Id::new("JOB").unwrap())
+        );
     }
 
     use runstav::methods::forecast::{CostRange, Forecast, Range};
@@ -2587,9 +2671,7 @@ pub(crate) mod graph_plan_tests {
         .await;
         let l = load(&f, &id, false).await.unwrap().unwrap();
         fallback::set_budget(&f, &l.job, 20.0, true);
-        let scope = runstav::methods::timeline::BudgetScope::Plan(runstav::types::Bounded(
-            plan_scope(&l.job),
-        ));
+        let scope = plan_scope(&l.job).unwrap();
         let b = &f.core.budgets;
         assert!(b.spend(&scope, Unit::UsdEst, 19.0).is_empty());
         let hits = b.spend(&scope, Unit::Usd, 19.0);
