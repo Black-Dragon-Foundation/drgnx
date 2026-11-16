@@ -104,18 +104,18 @@ the frame was made at)."
                         elpa))))
 
 (defun drgnx-ui-grid-ediff--magit ()
-  "Load magit: from the load path, else from $DRGNX_USER_ELPA when the session has it (a GUI session does not inherit
-it: `drgnx-ui-keep-env').  No magit fails the row, unless DRGNX_TEST_ALLOW_NO_MAGIT=1 says this run may go without it
-\(then it skips)."
+  "Load magit: from the load path, else from the user's package directory ($DRGNX_USER_ELPA, mounted read-only and
+inherited by the session: `drgnx-ui-keep-env').  No magit fails the row, unless DRGNX_TEST_ALLOW_NO_MAGIT=1 says this
+run may go without it (then it skips)."
   (or (featurep 'magit)
       (require 'magit nil t)
       (when-let* ((elpa (getenv "DRGNX_USER_ELPA")) ((file-directory-p elpa)))
-        (let ((load-path (append (delq nil (mapcar (lambda (n) (drgnx-ui-grid-ediff--package-dir n elpa))
-                                                   drgnx-ui-grid-ediff--magit-packages))
-                                 load-path)))
-          (require 'magit nil t)))
+        ;; on the session's load path for good: magit loads its parts (magit-ediff) when they are first used
+        (dolist (n drgnx-ui-grid-ediff--magit-packages)
+          (when-let* ((d (drgnx-ui-grid-ediff--package-dir n elpa))) (add-to-list 'load-path d)))
+        (require 'magit nil t))
       (if (equal (getenv "DRGNX_TEST_ALLOW_NO_MAGIT") "1") (ert-skip "magit not found (DRGNX_TEST_ALLOW_NO_MAGIT=1)")
-        (ert-fail (format "magit not found (DRGNX_USER_ELPA %S%s): put magit on the GUI image's load path, or set DRGNX_TEST_ALLOW_NO_MAGIT=1"
+        (ert-fail (format "magit not found (DRGNX_USER_ELPA %S%s): set it to a package directory with magit, or DRGNX_TEST_ALLOW_NO_MAGIT=1"
                           (getenv "DRGNX_USER_ELPA")
                           (if-let* ((elpa (getenv "DRGNX_USER_ELPA")) ((file-directory-p elpa)))
                               (format ", magit there: %S" (drgnx-ui-grid-ediff--package-dir 'magit elpa))
