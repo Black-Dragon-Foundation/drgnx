@@ -156,6 +156,12 @@ CLI), \"codex\" (Codex).  A CLI taken out of the list is no longer read and its 
   :group 'drgnx :scope 'global
   :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
 
+(drgnx-defsetting drgnx-agents-history-days 180
+  "Past sessions older than this many days (by the file's change time) are not listed or searched, and leave the
+index.  0 reads every session however old."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u32" :schema 'natnum)
+
 (drgnx-defsetting drgnx-agents-history-resume-writes-original nil
   "Non-nil: Resume Here on a past session starts with \"write the original\" chosen, so the jailed agent may write
 that one CLI session file and your own CLI sees the continuation.  Nil: it starts on a copy (the default).  You still

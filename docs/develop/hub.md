@@ -2029,7 +2029,8 @@ size, mtime and the offset read to) and an FTS5 table `turn` of each entry's tex
 - **Scan**: `follow` scans every 2 s on a blocking thread. The walk is stat-only: the known files (path, size, mtime,
   offset) are kept in memory, loaded from the index once, and a scan compares the walk with them. When nothing is new,
   changed or gone it opens no file, starts no transaction, reads no list and builds no view (`scan_changed` answers
-  `changed: false`; `History::reads` counts the files opened, for the test). A file whose size and mtime are
+  `changed: false`; `History::reads` counts the files opened, for the test). Files whose mtime is older than
+  `drgnx-agents-history-days` (180; 0 = no cap) are not read and leave the index. A file whose size and mtime are
   unchanged is skipped, a grown one is read on from its offset with the kept `minni::Reader` (32 kept), a shrunk or unknown one is read whole,
   a gone one dropped. Polling, not a watch: Hrafn's inotify watch reports no in-place modify, and Codex appends to a
   file it keeps open. A scan writes nothing in the roots (a test holds bytes, mtimes and modes equal).

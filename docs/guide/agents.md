@@ -676,7 +676,8 @@ folder, mode 0600, on this machine only; what looks like a key is replaced by `[
 indexed. No agent tool, no search index and no embedder reaches the sessions or the index, and a transcript is sent
 to a model only when you press Resume Here, and only to the CLI it came from. `drgnx-agents-history` (on by default)
 turns it all off and deletes `history.db`; `drgnx-agents-history-providers` names the CLIs read (all three by
-default).
+default). `drgnx-agents-history-days` (180) skips sessions whose file is older than that many days: they are not
+listed or searched and leave the index; 0 reads all of them.
 
 ## Agents outside drgnx
 

@@ -85,6 +85,8 @@ pub struct Roots {
     pub claude: Option<PathBuf>,
     pub gemini: Option<PathBuf>,
     pub codex: Option<PathBuf>,
+    /// Files whose change time is older than this many days are not read (0: no cap).
+    pub days: u32,
 }
 
 /// A session file found: its CLI, path, size and change time (ns).
@@ -107,6 +109,7 @@ impl Roots {
                     .map(|h| h.join(".gemini"))
                     .unwrap_or_else(|| home.join(".gemini")),
             ),
+            days: 0,
         }
     }
 
@@ -122,6 +125,12 @@ impl Roots {
         if !on("codex") {
             self.codex = None;
         }
+        self
+    }
+
+    /// Only files changed within the last DAYS days (`drgnx-agents-history-days`; 0 reads all).
+    pub fn within(mut self, days: u32) -> Roots {
+        self.days = days;
         self
     }
 
@@ -170,6 +179,13 @@ impl Roots {
                 rollout,
                 &mut out,
             );
+        }
+        if self.days > 0 {
+            let age = std::time::Duration::from_secs(u64::from(self.days) * 86_400);
+            if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                let cutoff = now.saturating_sub(age).as_nanos() as i64;
+                out.retain(|f| f.mtime >= cutoff);
+            }
         }
         out.sort_by_key(|f| std::cmp::Reverse(f.mtime));
         out
@@ -1052,7 +1068,8 @@ fn ready(f: &Front) -> Result<bool, Error> {
         return Ok(false);
     }
     let roots = Roots::of(&dirs.home, |n| std::env::var(n).ok())
-        .only(&v.agents_history_providers);
+        .only(&v.agents_history_providers)
+        .within(v.agents_history_days);
     if f.core.past.roots().as_ref() != Some(&roots) {
         f.core.past.configure(db, roots);
     }

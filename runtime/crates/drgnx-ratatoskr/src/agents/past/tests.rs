@@ -439,3 +439,36 @@ fn an_unchanged_scan_opens_no_file_and_writes_nothing() {
     std::fs::remove_file(&p).unwrap();
     assert_eq!(h.history.scan_changed().unwrap(), (1, true));
 }
+
+#[test]
+fn a_session_older_than_the_cap_is_neither_listed_nor_searchable() {
+    let h = Home::new();
+    let old = h.claude("old1", "count the quinces");
+    let fresh = h.claude("new1", "count the quinces");
+    let back = |p: &Path, days: u64| {
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    };
+    back(&old, 200);
+    back(&fresh, 10);
+    // no cap: both
+    assert_eq!(h.history.scan().unwrap(), 2);
+    // the cap of 180 days: the old one leaves the index, the 10-day one stays
+    let roots = h.history.roots().unwrap().within(180);
+    h.history.configure(h.state.join(DB), roots);
+    assert_eq!(h.history.scan().unwrap(), 1);
+    let ids: Vec<String> = h.list().into_iter().map(|s| s.id).collect();
+    assert_eq!(ids, ["new1"]);
+    let hits = h.history.search("quinces").unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].session.id, "new1");
+    // 0 is no cap
+    let roots = h.history.roots().unwrap().within(0);
+    h.history.configure(h.state.join(DB), roots);
+    assert_eq!(h.history.scan().unwrap(), 2);
+}
