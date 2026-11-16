@@ -167,10 +167,14 @@ async fn iopub_messages_arrive_and_one_that_does_not_verify_is_dropped_and_count
     };
     assert_eq!(channel, Channel::Iopub);
     assert_eq!(message.content["execution_state"], "idle");
-    assert!(
-        s.lock().await.bad() >= 1,
-        "the badly signed one was counted"
-    );
+    // the round whose good one arrived may have lost its badly signed one: the subscription took hold between the
+    // two. It holds now, so one more badly signed message reaches the reader, which counts it.
+    let st = Message::request("kernel", "status", json!({"execution_state": "idle"}));
+    p.lock().await.iopub.send(zmq(&other, &st)).await.unwrap();
+    skuld::wait_until_async("the badly signed one counted", 30, || async {
+        (s.lock().await.bad() >= 1).then_some(())
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
