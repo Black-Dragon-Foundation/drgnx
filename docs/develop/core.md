@@ -2363,6 +2363,11 @@ A dock section is as tall as its rows (`drgnx-wb--fit-window`, `window-resize` o
 all put in the buffer) or the inserter's, and no line of the buffer is counted for a view. A buffer that is not a view
 keeps `count-lines`.
 
+A folded section is one row under its tab line both ways (`drgnx-wb--fold-shrink` shrinks it or grows it back):
+folded at the top of the dock and given the island header after (`drgnx-wb-island-refresh` resizes it then), it would
+otherwise keep the island header in its height and have no row left (the Open header missing until a frame swap laid
+the dock out again: `drgnx-live/echo-swap-keeps-the-whole-workbench`).
+
 A section fitted while its island header was still short (the title font not yet measured) is squeezed below its tab
 and header lines once the header grows: its header line is drawn past its bottom and the section below draws over
 that part. When the section grows to its rows, Nidhogg draws its tab and header lines again (stock Emacs keeps the old
