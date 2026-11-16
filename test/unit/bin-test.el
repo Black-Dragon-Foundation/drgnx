@@ -456,6 +456,27 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
                            (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
                            (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)))))))
 
+;; audit L4: the GUI launch warms the hub in the background, so the Explorer does not wait for a cold start.
+(ert-deftest drgnx-session/open-warms-the-hub ()
+  (drgnx-bin-test--with-open
+    (drgnx-bin-test--touch dir "running" "gui")
+    (setq env (append (list "DRGNX_RATATOSKR_BIN" "DRGNX_NO_HUB_START") env))   ; the run's own hub binary and no-start rule are not this test's
+    (let* ((bindir (expand-file-name "data/bin" dir))
+           (log (expand-file-name "rt.log" dir)))
+      (make-directory bindir t)
+      (drgnx-bin-test--fake (expand-file-name "ratatoskr" bindir) log)
+      (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin env "open"))))
+      (drgnx-test-wait (lambda () (string-match-p " ensure --timeout 5" (drgnx-bin-test--slurp log)))
+                       :what "the hub warm-up")
+      ;; starting is off: nothing runs.  The open after it, with starting on, is what the wait is for: the log then
+      ;; holds one ensure, the later open's.
+      (delete-file log)
+      (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_NO_HUB_START=1" env) "open"))))
+      (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin env "open"))))
+      (drgnx-test-wait (lambda () (string-match-p " ensure --timeout 5" (drgnx-bin-test--slurp log)))
+                       :what "the second open's warm-up")
+      (should (= 1 (length (split-string (string-trim (drgnx-bin-test--slurp log)) "\n" t)))))))
+
 ;; M12a-31: on macOS emacsclient runs without XDG_RUNTIME_DIR, so Terminal and Finder reach one socket.
 (ert-deftest drgnx-bin/emacsclient-ignores-xdg-runtime-dir-on-darwin ()
   (drgnx-bin-test--with-open

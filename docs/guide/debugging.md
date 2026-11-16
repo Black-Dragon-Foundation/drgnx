@@ -223,7 +223,7 @@ another name, or in a file that is neither the stop's nor on its stack.
 
 ## The heap graph
 
-**Show as Graph** on a variable in Run and Debug (the palette) opens the panel's **Graph** tab. On a local, the graph
+**Show as Graph** on a variable in Run and Debug (the palette) opens the panel's **Heap Graph** tab. On a local, the graph
 is the whole frame's locals: the first card is the frame, titled Locals, with an arrow from each local that refers to an
 object, and the local you picked is selected. RET or a click on a card selects it: it is ringed, and its arrows take
 the accent colour. The strip at the top names the graph, the function and stop it was read at and how many objects

@@ -7,7 +7,7 @@ Keyboard Shortcuts, `C-k C-r` / `C-h C-k` / `SPC ?`) is the read-only overview.
 
 ## The page
 
-One line per command:
+One line per command, the commands that have a key first (in the registry's order), then those without. The columns fit the window; in the VS Code profile keys are written as VS Code writes them (`Ctrl+K Ctrl+O`):
 
 | Column | What it shows |
 |---|---|

@@ -520,9 +520,67 @@ under `auto' the follower pauses, as for a `load-theme' in config.el."
   (drgnx-look--load theme)
   (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme))))
 
+(defun drgnx-look--theme-choices ()
+  "The themes to pick from: drgnx's own first (dark, light, high contrast), then the others by name."
+  (let* ((all (sort (mapcar #'symbol-name (custom-available-themes)) #'string<))
+         (own (seq-filter (lambda (n) (string-prefix-p "drgnx-" n)) all)))
+    (append own (seq-remove (lambda (n) (member n own)) all))))
+
+(defun drgnx-look--theme-affix (cands)
+  "The Color Theme rows as the palette draws them: the name, then who made it and the one in force."
+  (let ((current (and custom-enabled-themes (symbol-name (car custom-enabled-themes)))))
+    (mapcar (lambda (c)
+              (list c ""
+                    (concat (when (string-prefix-p "drgnx-" c) (propertize "  drgnx" 'face 'drgnx-text-subtle))
+                            (when (equal c current) (propertize "  ✓ current" 'face 'drgnx-text-subtle)))))
+            cands)))
+
+(defvar drgnx-look--theme-previewed nil "The theme the open Color Theme prompt last previewed.")
+
+(defun drgnx-look--theme-preview ()
+  "In the Color Theme prompt, after a command: the candidate under the cursor shows (a theme that does not load is
+skipped, quietly)."
+  (let ((cand (and (fboundp 'vertico--candidate) (ignore-errors (substring-no-properties (vertico--candidate))))))
+    (when (and cand (not (equal cand drgnx-look--theme-previewed)) (memq (intern-soft cand) (custom-available-themes)))
+      (setq drgnx-look--theme-previewed cand)
+      (ignore-errors (let ((drgnx-look-follow--loading t)) (drgnx-look--load (intern cand)))))))
+
+(defun drgnx-look--theme-restore (themes)
+  "Put THEMES (what was enabled, first one last on top) back after a prompt that previewed and was left."
+  (ignore-errors
+    (let ((drgnx-look-follow--loading t))
+      (mapc #'disable-theme custom-enabled-themes)
+      (dolist (theme (reverse themes))
+        (if (custom-theme-p theme) (enable-theme theme) (load-theme theme t))))))
+
+(defun drgnx-look-read-theme ()
+  "Ask for a colour theme in the palette's frame: drgnx's own first, the one in force marked, each candidate shown
+while the cursor is on it; leaving the prompt without a choice puts the colours back."
+  (let* ((saved (copy-sequence custom-enabled-themes)) (choice nil)
+         (completion-category-defaults
+          (if (or (memq 'orderless completion-styles) (assq 'drgnx-theme completion-category-overrides))
+              completion-category-defaults
+            (cons '(drgnx-theme (styles substring partial-completion basic)) completion-category-defaults)))
+         (names (drgnx-look--theme-choices)))
+    (setq drgnx-look--theme-previewed nil)
+    (unwind-protect
+        (setq choice
+              (minibuffer-with-setup-hook
+                  (lambda () (add-hook 'post-command-hook #'drgnx-look--theme-preview nil t))
+                (completing-read
+                 "Color Theme: "
+                 (lambda (string pred action)
+                   (if (eq action 'metadata)
+                       '(metadata (category . drgnx-theme) (display-sort-function . identity)
+                                  (cycle-sort-function . identity) (affixation-function . drgnx-look--theme-affix))
+                     (complete-with-action action names string pred)))
+                 nil t)))
+      (unless choice (drgnx-look--theme-restore saved)))
+    choice))
+
 (defun drgnx-look-choose-theme (theme)
   "Pick the colour theme (remembered for the next start)."
-  (interactive (list (intern (completing-read "Color theme: " (mapcar #'symbol-name (custom-available-themes)) nil t))))
+  (interactive (list (intern (drgnx-look-read-theme))))
   (drgnx-look-load-theme theme))
 
 ;;;; The echo area on the gap

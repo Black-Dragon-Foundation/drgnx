@@ -123,7 +123,8 @@ pub enum Event {
 
 #[derive(Debug)]
 pub enum Error {
-    Spawn(std::io::Error),
+    /// The program that would not start (its name, as the profile gives it), and why.
+    Spawn(String, std::io::Error),
     /// The child is gone or its stdin is closed.
     Closed,
     /// The call got no answer within `ConnOpts::deadline` (the method).  The connection is unharmed.
@@ -141,7 +142,11 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Spawn(e) => write!(f, "cannot start the agent: {e}"),
+            Error::Spawn(program, e) if e.kind() == std::io::ErrorKind::NotFound => write!(
+                f,
+                "cannot start the agent: {program} is not installed (run \"Onboarding: Agents\" to set it up)"
+            ),
+            Error::Spawn(program, e) => write!(f, "cannot start the agent {program}: {e}"),
             Error::Closed => write!(f, "the agent has exited"),
             Error::Deadline(m) => write!(f, "{m}: no answer in time"),
             Error::Rpc { code, message, .. } => write!(f, "agent error {code}: {message}"),

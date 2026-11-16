@@ -1,0 +1,38 @@
+;;; look-theme-pick-test.el --- batch tests: Color Theme lists drgnx's themes first and marks the current one -*- lexical-binding: t -*-
+;; test-class: det
+(require 'ert)
+(require 'cl-lib)
+(require 'seq)
+(require 'drgnx)
+(require 'drgnx-faces)
+(load (expand-file-name "modules/ui/drgnx-look-follow" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-look" drgnx-dir) nil t)
+
+(ert-deftest drgnx-look/color-theme-lists-drgnx-themes-first-and-marks-the-current ()
+  (cl-letf (((symbol-function 'custom-available-themes) (lambda () '(wombat drgnx-light tango drgnx-dark))))
+    (should (equal (drgnx-look--theme-choices) '("drgnx-dark" "drgnx-light" "tango" "wombat")))
+    (let* ((custom-enabled-themes '(tango))
+           (rows (drgnx-look--theme-affix (drgnx-look--theme-choices))))
+      (should (string-search "drgnx" (nth 2 (assoc "drgnx-dark" rows))))
+      (should (string-search "current" (nth 2 (assoc "tango" rows))))
+      (should-not (string-search "current" (nth 2 (assoc "wombat" rows)))))))
+
+(ert-deftest drgnx-look/color-theme-leaving-the-prompt-puts-the-colours-back ()
+  (let ((restored nil) (custom-enabled-themes '(tango)))
+    (cl-letf (((symbol-function 'custom-available-themes) (lambda () '(tango wombat)))
+              ((symbol-function 'drgnx-look--theme-restore) (lambda (themes) (setq restored themes)))
+              ((symbol-function 'completing-read)
+               (lambda (_p coll &rest _)
+                 (should (eq (completion-metadata-get (funcall coll "" nil 'metadata) 'category) 'drgnx-theme))
+                 nil)))
+      (should-not (drgnx-look-read-theme))
+      (should (equal restored '(tango))))
+    (setq restored nil)
+    (cl-letf (((symbol-function 'custom-available-themes) (lambda () '(tango wombat)))
+              ((symbol-function 'drgnx-look--theme-restore) (lambda (themes) (setq restored themes)))
+              ((symbol-function 'completing-read) (lambda (&rest _) "wombat")))
+      (should (equal (drgnx-look-read-theme) "wombat"))
+      (should-not restored))))
+
+(provide 'look-theme-pick-test)
+;;; look-theme-pick-test.el ends here

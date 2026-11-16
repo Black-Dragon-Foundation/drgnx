@@ -225,7 +225,7 @@ while the caption's height is absolute, as ui/look writes it: a relative one (ui
 | `indent` | `Spaces: 2` or `Tab Size: 8` (`Spaces 2`, `Tab Size 8` on a graphical bar): what the file's own first lines use (tabs, or spaces and how many), else the mode's setting; after a click, what you chose | **Indent Using Spaces** or **Indent Using Tabs**, then the size (1 to 8): new lines use it and the label says it |
 | `encoding` | `UTF-8` | **Reopen with Encoding** (the file is read again in it) or **Save with Encoding** (the file is converted and saved), then the encoding: the file's own comes first, marked `(current)`, so Return changes nothing; the line endings stay |
 | `eol` | `LF`, `CRLF` or `CR` | pick `LF`, `CRLF` or `CR`: the next save writes them; the encoding stays |
-| `language` | the language as VS Code names it: `Rust`, `Go`, `YAML`, `Python`, `Emacs Lisp`, `Shell Script`, `Plain Text` (`drgnx-statusbar-language-names`, else the mode's own name) | **Change Language Mode**: pick another major mode for the buffer |
+| `language` | the language as VS Code names it: `Rust`, `Go`, `YAML`, `Python`, `Emacs Lisp`, `Shell Script`, `Plain Text` (`drgnx-statusbar-language-names`, else the mode's own name) | **Change Language Mode**: pick another language by its name (the mode's own name beside it); `.elc` files read `Emacs Lisp (compiled)` and their encoding `UTF-8` |
 
 **Pixels, not columns.** On a graphical frame the bar is laid out in pixels, in the caption type face, as the
 design's: 8 logical pixels at each end, each segment with 6 of room either side (its hover and click target) and 2

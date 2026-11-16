@@ -51,7 +51,7 @@ exists is connected to (asynchronously)."
 
 (defun drgnx-agents-session-new-durable (profile)
   "Start an agent session of PROFILE in this project, held by the hub: it keeps working when Emacs closes."
-  (interactive (list (completing-read "Durable agent profile: " (drgnx-agents-profile-names) nil t nil nil (drgnx-agents-default-profile))))
+  (interactive (list (drgnx-agents-profile-read "Durable agent profile: ")))
   (require 'drgnx-agents-mirror)
   (drgnx-hub-ensure)
   (drgnx-agents-mirror-sync)
@@ -60,7 +60,7 @@ exists is connected to (asynchronously)."
 
 (defun drgnx-agents-session-new (profile)
   "Start an agent session of PROFILE in this project and open its panel."
-  (interactive (list (completing-read "Agent profile: " (drgnx-agents-profile-names) nil t nil nil (drgnx-agents-default-profile))))
+  (interactive (list (drgnx-agents-profile-read "Agent profile: ")))
   (require 'drgnx-agents-mirror)
   (let ((s (drgnx-agents-mirror-start profile (drgnx-agents-session--cwd))))
     (when-let* ((id (drgnx-agent-session-remote s))) (drgnx-agent-panel-open id))))

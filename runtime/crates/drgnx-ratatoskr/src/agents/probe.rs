@@ -193,4 +193,15 @@ mod tests {
         let keyed = tail_of(&format!("boom\nOPENAI_API_KEY={key}")).unwrap();
         assert!(!keyed.contains(&key), "{keyed}");
     }
+
+    #[test]
+    fn a_missing_agent_program_is_named_with_the_way_to_set_it_up() {
+        let e = hermod::Error::Spawn(
+            "claude-agent-acp".into(),
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        );
+        let text = e.to_string();
+        assert!(text.contains("claude-agent-acp"), "{text}");
+        assert!(text.contains("Onboarding: Agents"), "{text}");
+    }
 }

@@ -11,7 +11,7 @@ brings it back) with the word at point, or the selected text, in **Find**. It ha
 
 - the **mode chip** at the left of **Find** (what Find means: **Text**, **Symbol** or **Meaning**; below), and
   **Replace**;
-- toggles: **Aa** (match case), **ab** (whole word), **.\*** (regular expression);
+- toggles, drawn as flat chips (not bracketed buttons; the scope chips wrap to a second line in a narrow side bar): **Aa** (match case), **ab** (whole word), **.\*** (regular expression);
 - the scope chips, one on at a time (below): **Project** (the project of the file you were in), **This file**,
   **Open**, **Changed**, **Staged**, **Branch ▾**, and **±** (changed lines only);
 - **Include** and **Exclude**: globs, comma-separated (`src/**, *.el`); a glob without a slash matches at any depth;

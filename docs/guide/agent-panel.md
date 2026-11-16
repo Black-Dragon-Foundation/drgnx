@@ -159,7 +159,7 @@ What the agent changed and what it asks sit under the transcript as cards.
   agent is told, in a queued message, to take it back. The panel never writes to an agent's worktree and keeps no queue
   of its own; both keys are the review view's own functions (module `tools/work-space`).
 - **Permission cards:** a request the agent waits on: what it asks, on the attention tint and ringed in the attention
-  colour, and under it the buttons **Allow ↵**, **Always A** and **Deny D**. `RET` allows it once, `A` always, `D`
+  colour, and under it the buttons **Allow**, **Always** and **Deny** (their keys are in the buttons' hover text). `RET` allows it once, `A` always, `D`
   denies it. The card goes when the hub's next snapshot no longer holds the request. A chat (an agent that is not a
   worker or a manager) never edits or runs commands in its project outside Pair: the permission matrix answers such a
   request itself (`code.edit` is Never for chat in every preset), so no card shows and the agent hears "rejected".
