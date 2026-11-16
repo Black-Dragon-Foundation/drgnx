@@ -383,6 +383,16 @@ fn entry_node(e: &Entry) -> Value {
 }
 
 /// The entries a window of WINDOW entries from FROM holds in a listing of LEN: FROM clamped so the window is full.
+/// Where a window of WINDOW entries of LEN, now from FROM, starts to show entry AT (a revealed file): None when it
+/// shows it already.  From the root while AT fits in the first window (the tree above it shows), else a quarter window
+/// above it.
+pub fn window_around(len: usize, window: usize, from: Option<usize>, at: usize) -> Option<usize> {
+    if window_range(len, window, from).contains(&at) {
+        return None;
+    }
+    Some(if at < window { 0 } else { at - window / 4 })
+}
+
 pub fn window_range(len: usize, window: usize, from: Option<usize>) -> std::ops::Range<usize> {
     let from = from.unwrap_or(0).min(len.saturating_sub(window));
     from..len.min(from + window)
@@ -1104,10 +1114,9 @@ impl Views {
             .finish(conn, view, id, entries, |entries, shape, around| {
                 let mut from = self.window_from(conn, view, "order");
                 let at = around.and_then(|a| entries.iter().position(|e| e.path == a));
-                if let Some(i) =
-                    at.filter(|i| !window_range(entries.len(), shape.window, from).contains(i))
+                if let Some(want) =
+                    at.and_then(|i| window_around(entries.len(), shape.window, from, i))
                 {
-                    let want = i.saturating_sub(shape.window / 4);
                     lock(&self.store).set_window(conn, view, "order", want);
                     from = Some(want);
                 }

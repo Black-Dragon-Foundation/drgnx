@@ -1069,7 +1069,12 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
       (when (and (overlayp o) (overlay-buffer o) (/= (overlay-start o) (pos-bol))) (drgnx-wb-selection-sync)))
     (when drgnx-explorer--badges        ; a few rows at most: the badges of rows that went
       (maphash (lambda (key o) (unless (drgnx-view-row-start view key) (delete-overlay o) (remhash key drgnx-explorer--badges)))
-               drgnx-explorer--badges))))
+               drgnx-explorer--badges))
+    ;; rows drawn under a window at their top (or end) page the hub's window as a scroll there would: above the
+    ;; buffer's start no scroll can run, so a window of the listing drawn from its middle would never show the rows
+    ;; before it
+    (dolist (w (get-buffer-window-list (current-buffer) nil t))
+      (drgnx-explorer--rows-scrolled w (window-start w)))))
 
 (defun drgnx-explorer--rows-twin (class)
   "The Explorer's buffer in display CLASS (a dock on a monitor at another scale; `drgnx-view-patch-twin-function'), made
