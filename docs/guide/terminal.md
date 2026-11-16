@@ -492,7 +492,7 @@ terminal; on 256 colours it is approximated, on 8 colours only the basic ones re
   fixes are in the SSH section above.
 - **Nothing is told by colour alone.** On 8 colours drgnx still tells states apart: git status by its letter at the
   edge of an Explorer row (`M` changed, `A` added, `U` untracked, `D` deleted, `C` conflict; ignored files, which have
-  no letter, are italic, and an `I` on the Linux console, which draws no italic), a review finding by its
+  no letter, are italic on a terminal, and an `I` on the Linux console, which draws no italic), a review finding by its
   severity word, the shown tabs by their weight (bold on a terminal frame only; a graphical window keeps the
   look's colour cue), and Work items by their glyph and words. Each of
   these faces is checked on 8, 256 and 24-bit terminals: none draws its text in its own background colour.

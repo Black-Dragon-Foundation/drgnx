@@ -21,7 +21,10 @@
 (defface drgnx-git-added '((t :inherit vc-locally-added-state)) "An added or untracked file." :group 'drgnx)
 (defface drgnx-git-deleted '((t :inherit vc-removed-state)) "A deleted file." :group 'drgnx)
 (defface drgnx-git-conflict '((t :inherit vc-conflict-state)) "A file with merge conflicts." :group 'drgnx)
-(defface drgnx-git-ignored '((t :inherit (shadow italic))) "An ignored file or folder." :group 'drgnx)
+(defface drgnx-git-ignored '((((type tty)) :inherit (shadow italic)) (t :inherit shadow))
+  "An ignored file or folder: dimmed, as VS Code greys it.  A terminal adds italic, its cue beside the colour; a
+graphical frame does not (where the display claims no italic, Emacs's `italic' draws an underline: a link's look)."
+  :group 'drgnx)
 
 (defconst drgnx-git--looks
   '((conflict "C" drgnx-git-conflict 6) (deleted "D" drgnx-git-deleted 5) (modified "M" drgnx-git-modified 4)
@@ -204,8 +207,8 @@ A peek: it keeps nothing from eviction."
   (let ((l (alist-get status drgnx-git--looks))) (list (car l) (cadr l))))
 
 (defun drgnx-git-letter (status)
-  "The letter an Explorer row shows for STATUS: M, A, U, D, C or R; an ignored file has none (its name is dimmed and
-italic), but on the Linux console, which draws no italic, it gets an I."
+  "The letter an Explorer row shows for STATUS: M, A, U, D, C or R; an ignored file has none (its name is dimmed, and
+italic on a terminal), but on the Linux console, which draws no italic, it gets an I."
   (or (car (alist-get status drgnx-git--looks))
       (and (eq status 'ignored) (not (display-graphic-p)) (equal (tty-type) "linux") "I")))
 
