@@ -175,7 +175,7 @@ shows in the icon's place. They are not in the table below.
 | `sep` | ` · ` | ` \| ` | `flag` | ⚑ | `#` |
 | `diamond` | ◆ | `<>` | `search` | ⌕ | `/` |
 | `minimize` | – | `-` | `maximize` | ▢ | `[]` |
-| `bullet` | • | `>` | | | |
+| `bullet` | • | `>` | `newline` | ⏎ | `\n` |
 | `fail` | ✕ | `X` | `stopped` | ■ | `#` |
 | `dismiss` | × | `x` | `unqueue` | − | `-` |
 | `info` | ℹ | `i` | `warn` | ⚠ | `!` |
