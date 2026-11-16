@@ -306,6 +306,64 @@ pub fn from_entity(
     }
 }
 
+// ---- a write's reason ----
+
+/// The conclusions one session recorded in its current turn, each with the step running when it was recorded: what an
+/// agent's write names as its reason (`Cause.decision`, hunk provenance).  A new turn starts empty, so a write never
+/// borrows an older turn's conclusion.  Pure.
+#[derive(Clone, Debug, Default)]
+pub struct TurnConclusions {
+    turn: u64,
+    /// `(step, conclusion)` in the order recorded; the step is the session's step key (`step.seq`), none when no step
+    /// was running.
+    recorded: Vec<(Option<i64>, String)>,
+}
+
+impl TurnConclusions {
+    /// CONCLUSION (`decision:N`, a note's id) was recorded in TURN while STEP ran.
+    pub fn record(&mut self, turn: u64, step: Option<i64>, conclusion: String) {
+        if turn != self.turn {
+            self.turn = turn;
+            self.recorded.clear();
+        }
+        self.recorded.push((step, conclusion));
+    }
+
+    /// The newest conclusion recorded in TURN at or before STEP (the write's step): none when the turn recorded none
+    /// by then.  A conclusion with no step counts as before any step; a write with no step takes the newest.
+    pub fn latest_in_turn(&self, turn: u64, step: Option<i64>) -> Option<String> {
+        if turn != self.turn {
+            return None;
+        }
+        self.recorded
+            .iter()
+            .rev()
+            .find(|(at, _)| match (at, step) {
+                (Some(a), Some(s)) => a <= &s,
+                _ => true,
+            })
+            .map(|(_, c)| c.clone())
+    }
+}
+
+/// What caused SESSION's write at STEP in TURN, working on TASK: the session, the step, the task, and the newest
+/// conclusion CONCLUDED holds for that turn at or before that step (none: "no reason recorded").
+pub fn write_cause(
+    session: &str,
+    task: Option<&str>,
+    turn: u64,
+    step: Option<i64>,
+    concluded: &TurnConclusions,
+) -> verdandi::Cause {
+    verdandi::Cause {
+        session: Some(session.to_owned()),
+        step: step.map(|s| s.to_string()),
+        task: task.map(str::to_owned),
+        decision: concluded.latest_in_turn(turn, step),
+        ..Default::default()
+    }
+}
+
 // ---- the shell ----
 
 /// The hub's stamp core, shared by the sessions' readers (a tool step begins), their step writers (a step is written,

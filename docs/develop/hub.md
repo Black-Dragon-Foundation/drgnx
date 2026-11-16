@@ -1330,6 +1330,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
 | `agents/send` | user | `{id: Id, if_free?: boolean, text: Prompt}` | `boolean` | yes |
+| `agents/side/close` | user | `{view: string}` | `boolean` | no |
+| `agents/side/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
+| `agents/side/subscribe` | user | `{view: string}` | `boolean` | no |
 | `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no |
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
@@ -1342,10 +1345,13 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
-| `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
-| `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
+| `budget/get` | user | `{scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
+| `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
 | `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
+| `changes/close` | user | `{view: string}` | `boolean` | no |
+| `changes/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
+| `changes/subscribe` | user | `{view: string}` | `boolean` | no |
 | `config/changed` | user | `{}` | `boolean` | no |
 | `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no |
 | `coord/agent` | user | `{register?: {base?: string, branch?: string, clear?: ["kind" \| "name" \| "cwd" \| "worktree" \| "branch" \| "base" \| "plan" \| "task" \| "pid"], cwd?: string, id: AgentName, kind?: string, name?: string, pid?: natnum, plan?: string, task?: TaskRef, worktree?: string}, seen?: AgentName}` | `{id?: string, seen?: number}` | yes |
@@ -1470,6 +1476,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], marks: [HunkMark], tracked: boolean}` | no |
 | `history/line-positions` | user | `{lines: [natnum], path: string, worktree_root: string}` | `{positions: [LinePosition], tracked: boolean}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
+| `history/provenance` | user | `{index?: integer, line?: integer, op?: integer, path?: string, worktree: string}` | `Provenance` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
 | `history/resync` | user | `{buffer_id: string, text: string, version: natnum}` | `{ok: boolean}` | yes |
@@ -1540,6 +1547,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
+| `review/effects` | user | `{change: ChangeRef}` | `[TaskEffect]` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
 | `runners/add` | user | `{accept?: "all" \| "heavy", allow_admin?: boolean, allow_own_account?: boolean, host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
@@ -1627,7 +1635,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
-| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, faces?: [{avg?: number, face: string, file?: string, index?: natnum, pad?: number, px?: number, role: string, wght?: number}], glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
@@ -1639,8 +1647,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `work/flow/subscribe` | user | `{detail?: string, job?: string, map: string, rules?: boolean, view: string}` | `{hub: natnum}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
-| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
-| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
+| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
 | `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
@@ -2251,6 +2259,28 @@ overlays from it):
   the user types, a watch is answered from the frame already built; the file is projected again after the quiet.
 - **Test hooks:** `__test_buffer_views` answers `{views, built}`: the views open and the frame bodies built so far.
 
+### The effect on tasks
+
+`review/effects {change}` (`work/task_effects.rs`, user, read-only) says what a change under review would do to the
+tasks under way: a run's task that is claimed or running (`running`), `needs-input`, `in-review`, or ready or pending in
+a run that goes on (`queued`). Tasks not started (a proposed run) or done are left out. The answer is one `TaskEffect
+{task, task_title, plan?, agent?, state, effect, why}` per task reached, in task order; `agent` is the name of the
+session the task's `works_on` link comes from.
+
+- **A spec or plan edit**, `{doc, from}`: `doc` is the document's absolute path and `from` the git blob id of its text
+  before (40 or 64 hex digits), read with `git cat-file` in the main checkout of the document's repository, never in an
+  agent's tree. The text after is the file now; no file is a retired document. For a plan (the runs whose plan file
+  is `doc`), the old and new tasks are aligned: by text first (title and body without the number, so a renumbered task
+  is the same task), then by number with a similar text, then by the most similar text (`similar`'s line ratio, at
+  least 0.5). A task with no match was removed: `stops` ("Task 3 is running: it would stop.", "Task 2 is queued: it
+  would not start."). A running task whose own text changed, or every running task when the plan's shared text changed
+  (the sections before, between and after the tasks), `brief-changes` ("… its brief changes; the agent gets a steer.").
+  A plan retired (no text, or a `**Status:**` line that says dropped, superseded or rejected) stops all its tasks. For a
+  spec, retiring it stops every task of the plans that `derive` from it.
+- **A code change**, `{paths, branch?}`: `paths` relative to the repository. A task under way whose agent edited one
+  (`work::edits::edited`) or is in one now (the presence model) `overlaps` ("Task 5 edits session.rs: it would need to
+  rebase."). `branch`, the change's own branch, leaves out the task the runner made it for (`job/JOB-N`).
+
 ### The Work map
 
 The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources, lays each map view
@@ -2383,8 +2413,25 @@ it builds for Android too).
   [[pos, image_id, alt]], spaces: [[pos, width, height]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
   not know and never interns it); a stop is one placeholder character at POS, displayed as the space up to PX
   (`(space :align-to (PX))`); an image takes one placeholder character too, and so does a space, shown as WIDTH x
-  HEIGHT device px (`(space :width (W) :height (H))`, a card's progress bar) in its run's face. Empty lists are left out. Runs may
+  HEIGHT device px (`(space :width (W) :height (H))`, a card's progress bar; a HEIGHT of 0 is the line's, as a kit pad
+  has: `(space :width (W))`) in its run's face. Empty lists are left out. Runs may
   overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
+- **Faces by `FaceId`.** Rust never spells a drgnx face as a string: it writes `FaceId::TextMuted.name()` (or a
+  family's `FaceId::AGENT[i].name()`), from the generated `drgnx_rows::faces` (`bin/drgnx design`; see
+  `docs/develop/design-system.md`, "Generated code"), so a renamed or removed face is a compile error. `RowBuilder`
+  keeps its `&str` API. The lint `drgnx-lint/rust-faces-through-the-enum` (`test/unit/lint-kit-test.el`) counts the
+  face literals and family `format!`s left per file against `drgnx-lint-kit--rust-face-literals-not-yet`, which only
+  falls; the standard faces (`default`, `bold`, `error`, …) are left as words.
+- **The kit.** A view builds a kit component (`etc/ui/components.eld`) with `drgnx_rows::kit`: a `Comp` (JSON
+  `{"c": "row", "kind": "tree", "depth": 2, "twisty": true, "text": …, "state": "selected", "action": {"kind", "args"}}`)
+  and a `KitEnv` (`view::kit_env(&env)`: the env's scale, whether it is a terminal, its `glyphs` and `density`) go through
+  `kit::expand(&mut builder, &kit_env, &comp)` (inline, onto the row being built) or `kit::expand_rows(&kit_env, key,
+  &comp)` (whole rows, keys `KEY/0`, `KEY/1`…). Pads are `RowBuilder::pad` spaces of `floor(logical × scale + 0.5 +
+  1e-9)` device px per part; on a terminal, characters, and glyphs in the env's form (else Unicode, `kit::GLYPHS`);
+  the runs are the component's kit face and the state's under it; an `Action` puts `drgnx-action` = `[kind, args…]`
+  and `mouse-face` over the component, which the editor maps to the kind's one keymap (`docs/develop/core.md`,
+  "Actions and focus-visible"). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
+  (`tests/kit_conformance.rs` and `drgnx-ui-kit/conformance` over `test/fixtures/kit`) keeps the two equal.
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
 - **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no
@@ -2412,8 +2459,11 @@ All of it is in memory only.
 
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
-  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, attach?, rows_in_sja?,
-  headless?}` keeps the env of (view, class) and builds its rows again. `headless: true` marks a view that Lisp only
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, glyphs: [[name, glyph]],
+  density?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again. `glyphs` are
+  the kit's glyphs as the class's frame draws them (ASCII on a terminal that is not UTF-8); `density` is the user's
+  (`compact`, `comfortable` when absent, `roomy`; `drgnx-look-density`), which the kit's sizes follow (a tree level's
+  indent), and a change of it is a new epoch. `headless: true` marks a view that Lisp only
   reads and never draws (git's letters): its rows are fitted to no window.  `attach: true` (the editor sends it with the first env of a new buffer) makes the hub
   drop a pair it already holds for the connection, with no `view/close` between (a buffer killed without its hook, an
   Emacs restarted on the same connection), and start over: the rows go out whole, a reset from version 1.
@@ -4924,6 +4974,23 @@ added share, so the Autonomous rule's spend and week checks read the calibrated 
 to keep). The wake line is a
 second simulation with the same seed and a price of each drawn observation's cold wakes × its context at the cache
 write rate. A manager's own spend comes from the `manager` samples, per task, beside the total.
+
+**Budget scopes** (`budget.rs`, `BudgetScope`). Keys are `kind:id`: `project:`, `spec:`, `plan:`, `run:`, `task:`,
+`manager:`, `worker:`. `Plan` is the plan document (`runner::plan_id`: a graph plan's id, or `plan:` and the plan file's
+path, which is its parsed entity's id), `Run` one job (`runner::run_scope`), `Task` one task by its bare reference
+(`JOB#N`: `norn::write::tasks::task_key` takes off a `task:`, so `J#5` and `task:J#5` are one scope). A session keeps its
+task as the caller named it (the editor's tracker says `task:…`, the runner `JOB#N`), so `agents/list` answers it
+unchanged; whatever joins on it compares `task_key`, and the graph's lookups, such as the session's `works_on` link, add
+the prefix back with `tasks::entity_id(task_key(…))`. The chain (`Budgets::link_up`) is worker →
+task → run → plan → spec → project: the tick links a worker's whole chain when it starts it (`runner::budget_chain`
+reads the plan's `derives` link for its spec; a plan with no spec, or a run with no plan, sits under the project), the
+approval links the run's (`runner::link_run`), a manager links under its run, a worker it started under it.
+`Budgets::rekey` moves a session's links to its new session (`agents/move`). The saved state carries a version: one
+saved before the split (below 2) gave a job with no plan its own `plan:JOB` scope, which is migrated on load to the
+job's `run` scope with its limits, spend, joint dollars and links; a plan file's or graph plan's scope keeps its meaning. A hit's sessions are `members` of the scope
+that hit; its jobs are the `Run` scopes below it and the gateway jobs bound below it (`jobs_under`), so a spec's or a
+plan's limit pauses every run under it, one card each. The saved state carries `version` 2; a state saved before (when
+`plan:` was one job) drops its `plan` scopes on load, with one log line.
 
 **The week's pace** (`Forecast.pace`, one `PaceEffect` for each subscription meter a task of the plan runs on). A
 meter's readings are kept in a thinned history (`Budgets::history`): one for each quarter hour, none older than 8 days,

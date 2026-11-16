@@ -924,6 +924,56 @@
               "worktree_label"
             ],
             "type": "object"
+          },
+          "Proposal": {
+            "additionalProperties": false,
+            "description": "One agent's change to the viewed file, offered as a proposal: the hunk's lines in the file, what it adds and, when\nthe agent recorded one in that turn, why.",
+            "properties": {
+              "end_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "index": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "op": {
+                "description": "The edit history's operation that wrote it, when it names one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session": {
+                "type": "string"
+              },
+              "start_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session",
+              "index",
+              "start_line",
+              "end_line",
+              "text"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -963,6 +1013,14 @@
             "default": [],
             "items": {
               "$ref": "#/$defs/GutterRange"
+            },
+            "type": "array"
+          },
+          "proposals": {
+            "default": [],
+            "description": "What agents working in their own worktrees changed in this file, as hunks to accept or revert.",
+            "items": {
+              "$ref": "#/$defs/Proposal"
             },
             "type": "array"
           },
@@ -5465,6 +5523,56 @@
               "worktree_label"
             ],
             "type": "object"
+          },
+          "Proposal": {
+            "additionalProperties": false,
+            "description": "One agent's change to the viewed file, offered as a proposal: the hunk's lines in the file, what it adds and, when\nthe agent recorded one in that turn, why.",
+            "properties": {
+              "end_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "index": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "op": {
+                "description": "The edit history's operation that wrote it, when it names one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session": {
+                "type": "string"
+              },
+              "start_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session",
+              "index",
+              "start_line",
+              "end_line",
+              "text"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5504,6 +5612,14 @@
             "default": [],
             "items": {
               "$ref": "#/$defs/GutterRange"
+            },
+            "type": "array"
+          },
+          "proposals": {
+            "default": [],
+            "description": "What agents working in their own worktrees changed in this file, as hunks to accept or revert.",
+            "items": {
+              "$ref": "#/$defs/Proposal"
             },
             "type": "array"
           },
@@ -9390,6 +9506,94 @@
       "classes": [
         "user"
       ],
+      "doc": "an Agents side view is shown no more",
+      "name": "agents/side/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view id: `agents/side/close`.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "ViewId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a change to an Agents side view: refresh reads the sessions and the past sessions again",
+      "name": "agents/side/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/side/set`: a change to VIEW: REFRESH reads the sessions and the past sessions again.",
+        "properties": {
+          "refresh": {
+            "default": false,
+            "type": "boolean"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Set",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a hub-fed view shows the Agents side: a card per session (needs you first, then running, then the rest by last activity), each with one button, and the five newest past sessions under Earlier; one session's change patches only its card's rows",
+      "name": "agents/side/subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/side/subscribe`: VIEW shows the Agents side; its rows come as `view-patch` per display class and follow\nevery session's change.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Subscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "steps of a session's transcript with their entries (at most 50; never a whole transcript)",
       "name": "agents/slice",
       "params": {
@@ -10603,6 +10807,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10611,6 +10830,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -10681,6 +10927,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10689,6 +10950,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -10839,6 +11127,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10847,6 +11150,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -10975,6 +11305,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10983,6 +11328,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -11328,6 +11700,94 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a Changes view is shown no more",
+      "name": "changes/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view id: `changes/close`.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "ViewId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a change to a Changes view: refresh reads the sessions' edits again",
+      "name": "changes/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`changes/set`: a change to VIEW: REFRESH reads the sessions' edits again.",
+        "properties": {
+          "refresh": {
+            "default": false,
+            "type": "boolean"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Set",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a hub-fed view shows what the agents changed, grouped by the task each worked on (task, file, hunk; the hunks no task owns last), as rows",
+      "name": "changes/subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`changes/subscribe`: VIEW shows what the agents changed, by task; its rows come as `view-patch` per display class.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Subscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -24784,10 +25244,46 @@
             ],
             "type": "string"
           },
+          "OpCause": {
+            "additionalProperties": false,
+            "description": "Why a record was made, as the history holds it: the agent's session and step, the task it worked on, the conclusion\n(`decision:N`, a note's id) it recorded in the same turn at or before the write.",
+            "properties": {
+              "decision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "step": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
           "OpHunk": {
             "additionalProperties": false,
             "description": "One hunk of a record: its lines in the text now (1-based), the record's text still there, the text it removed.",
             "properties": {
+              "cause": {
+                "$ref": "#/$defs/OpCause",
+                "default": {},
+                "description": "Why its record was made (hunk provenance)."
+              },
               "deleted": {
                 "type": "string"
               },
@@ -24866,6 +25362,125 @@
           "hunks"
         ],
         "title": "OpHunks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "why a hunk is there: the record that wrote the line under a position (or hunk INDEX of record OP), its agent's session, the task it worked on and the conclusion it recorded in the same turn at or before the write, in the agent's words; none recorded is said so, never an older turn's",
+      "name": "history/provenance",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/provenance`: in the worktree WORKTREE, the hunk under LINE (1-based) of PATH (relative to it), or hunk\nINDEX of record OP.",
+        "properties": {
+          "index": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "line": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "op": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktree"
+        ],
+        "title": "ProvenanceParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Where a hunk came from.  No `session`: no agent wrote it (the user, the outside world).  No `decision`: the agent\nrecorded no conclusion in that turn before the write (\"no reason recorded\").",
+        "properties": {
+          "agent": {
+            "description": "The agent's name (the session's), else its session id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "op": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "The conclusion's text: the agent's words.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "path",
+          "index"
+        ],
+        "title": "Provenance",
         "type": "object"
       },
       "writes": false
@@ -32632,6 +33247,153 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what a spec, plan or code change would do to the tasks under way or queued: a removed task (or a retired plan or spec) stops, a running task whose brief changes gets a steer, a task whose agent edits or reads a changed file would need to rebase; tasks not started or done are left out",
+      "name": "review/effects",
+      "params": {
+        "$defs": {
+          "ChangeRef": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DocChange"
+              },
+              {
+                "$ref": "#/$defs/CodeChange"
+              }
+            ],
+            "description": "What `review/effects` looks at."
+          },
+          "CodeChange": {
+            "additionalProperties": false,
+            "description": "A code change under review: its files, relative to the repository, and its own branch (a task working on that\nbranch is the change's author, not a task it reaches).",
+            "properties": {
+              "branch": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "paths": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "paths"
+            ],
+            "type": "object"
+          },
+          "DocChange": {
+            "additionalProperties": false,
+            "description": "A spec or plan edit under review: the document now, against its text before (`from`, the git blob id of that\ntext in the document's repository).",
+            "properties": {
+              "doc": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "doc",
+              "from"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`review/effects`'s params.",
+        "properties": {
+          "change": {
+            "$ref": "#/$defs/ChangeRef"
+          }
+        },
+        "required": [
+          "change"
+        ],
+        "title": "EffectsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Effect": {
+            "description": "What the change does to a task: it removes the task (or retires its plan or spec), changes its brief (its own text\nor the plan's shared text), or touches files its agent edits or reads.",
+            "enum": [
+              "stops",
+              "brief-changes",
+              "overlaps"
+            ],
+            "type": "string"
+          },
+          "TaskEffect": {
+            "additionalProperties": false,
+            "description": "One task the change reaches, with the sentence the review shows (\"Task 3 is running: it would stop.\").",
+            "properties": {
+              "agent": {
+                "description": "The name of the session working on it.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "effect": {
+                "$ref": "#/$defs/Effect"
+              },
+              "plan": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "$ref": "#/$defs/TaskState"
+              },
+              "task": {
+                "description": "`JOB#N`.",
+                "type": "string"
+              },
+              "task_title": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task",
+              "task_title",
+              "state",
+              "effect",
+              "why"
+            ],
+            "type": "object"
+          },
+          "TaskState": {
+            "description": "Where a task the change reaches is: under way (running, waiting for an answer, in review) or queued in a run that\ngoes on.",
+            "enum": [
+              "running",
+              "needs-input",
+              "in-review",
+              "queued"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/TaskEffect"
+        },
+        "title": "Array_of_TaskEffect",
+        "type": "array"
       },
       "writes": false
     },
@@ -43488,6 +44250,15 @@
       "name": "view/env",
       "params": {
         "$defs": {
+          "Density": {
+            "description": "The user's density (`drgnx-look-density`): the sizes the kit's `(density KEY)` geometry takes. On the wire, its\nname; an env without one is comfortable.",
+            "enum": [
+              "compact",
+              "comfortable",
+              "roomy"
+            ],
+            "type": "string"
+          },
           "Display": {
             "description": "A display's kind.",
             "enum": [
@@ -43524,6 +44295,11 @@
           },
           "class": {
             "type": "string"
+          },
+          "density": {
+            "$ref": "#/$defs/Density",
+            "default": "comfortable",
+            "description": "The user's density (`drgnx-look-density`): the kit's sizes that follow it (a tree level's indent). None:\ncomfortable. A change is a new epoch, as a scale change is."
           },
           "display": {
             "$ref": "#/$defs/Display"
@@ -43572,6 +44348,24 @@
                 {
                   "format": "float",
                   "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "glyphs": {
+            "default": [],
+            "description": "`[name, glyph]`: the kit's glyphs (those `etc/ui/components.eld` names) as `drgnx-face-glyph` draws them on the\nclass's frame, ASCII on a terminal that is not UTF-8; a name missing here is drawn in its Unicode form\n(`drgnx_rows::kit`).",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
                 }
               ],
               "type": "array"
@@ -44448,12 +45242,8 @@
           },
           "MapFilters": {
             "additionalProperties": false,
-            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).",
+            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (Active, Completed or All).",
             "properties": {
-              "finished": {
-                "default": false,
-                "type": "boolean"
-              },
               "focus": {
                 "description": "An item id: only its chain.",
                 "type": [
@@ -44464,9 +45254,55 @@
               "overlaps": {
                 "default": false,
                 "type": "boolean"
+              },
+              "recent_days": {
+                "default": 7,
+                "description": "Days a changed item stays in Active (`drgnx-work-recent-days`).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "show": {
+                "$ref": "#/$defs/MapShow",
+                "default": "active"
               }
             },
             "type": "object"
+          },
+          "MapMode": {
+            "description": "How a map view is drawn.",
+            "oneOf": [
+              {
+                "const": "list",
+                "description": "Nested rows: spec, plan, task.",
+                "type": "string"
+              },
+              {
+                "const": "graph",
+                "description": "The layers and the edges between them.",
+                "type": "string"
+              }
+            ]
+          },
+          "MapShow": {
+            "description": "Which items a map view shows: `.` cycles them.",
+            "oneOf": [
+              {
+                "const": "active",
+                "description": "Agents running or waiting on you, what is not started, and what changed within `recent_days`.",
+                "type": "string"
+              },
+              {
+                "const": "completed",
+                "description": "Finished items only.",
+                "type": "string"
+              },
+              {
+                "const": "all",
+                "description": "Both, the finished ones faded.",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -44508,6 +45344,17 @@
                 "type": "null"
               }
             ]
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "List or Graph."
           },
           "outline": {
             "description": "The form a rows view is drawn in: `on` the outline, `off` the cards, `auto` (where none was asked) the outline\nonly where the cards do not fit.",
@@ -44586,12 +45433,8 @@
           },
           "MapFilters": {
             "additionalProperties": false,
-            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).",
+            "description": "A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (Active, Completed or All).",
             "properties": {
-              "finished": {
-                "default": false,
-                "type": "boolean"
-              },
               "focus": {
                 "description": "An item id: only its chain.",
                 "type": [
@@ -44602,9 +45445,55 @@
               "overlaps": {
                 "default": false,
                 "type": "boolean"
+              },
+              "recent_days": {
+                "default": 7,
+                "description": "Days a changed item stays in Active (`drgnx-work-recent-days`).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "show": {
+                "$ref": "#/$defs/MapShow",
+                "default": "active"
               }
             },
             "type": "object"
+          },
+          "MapMode": {
+            "description": "How a map view is drawn.",
+            "oneOf": [
+              {
+                "const": "list",
+                "description": "Nested rows: spec, plan, task.",
+                "type": "string"
+              },
+              {
+                "const": "graph",
+                "description": "The layers and the edges between them.",
+                "type": "string"
+              }
+            ]
+          },
+          "MapShow": {
+            "description": "Which items a map view shows: `.` cycles them.",
+            "oneOf": [
+              {
+                "const": "active",
+                "description": "Agents running or waiting on you, what is not started, and what changed within `recent_days`.",
+                "type": "string"
+              },
+              {
+                "const": "completed",
+                "description": "Finished items only.",
+                "type": "string"
+              },
+              {
+                "const": "all",
+                "description": "Both, the finished ones faded.",
+                "type": "string"
+              }
+            ]
           },
           "Workspace": {
             "additionalProperties": false,
@@ -44650,9 +45539,15 @@
           "filters": {
             "$ref": "#/$defs/MapFilters",
             "default": {
-              "finished": false,
-              "overlaps": false
+              "overlaps": false,
+              "recent_days": 7,
+              "show": "active"
             }
+          },
+          "mode": {
+            "$ref": "#/$defs/MapMode",
+            "default": "list",
+            "description": "List (the default) or Graph."
           },
           "outline": {
             "description": "The form the user asked for (`work/map/set {outline}`, sent again by the editor): `on`, `off` or `auto`.",

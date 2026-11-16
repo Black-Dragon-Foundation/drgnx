@@ -193,3 +193,15 @@ O open in a buffer". When the hub kept only the ends of a huge output the count 
 and what waits for you. `RET` opens that session's panel. Enter on an agent's card on the Work map opens the panel
 too. This list and the panel replaced the old Agents view; chat with a model (gptel) is gone with it, and the
 agent panel is where you talk to a model now.
+
+## Ask an agent about this
+
+*Ask an Agent About This* (`ask-agent-about-this`; VS Code `Ctrl+I`, Emacs `C-c w a`, Vim `SPC a a`; also in the
+right-click menu on a buffer and on an Explorer row) opens the Agents side with what you are on as context in the
+message: the file, the lines of the region, or the Work item. If an agent is working on that file its conversation
+opens; otherwise a new chat does. The context is a removable item; when you send, each item becomes an `@` reference in
+your text (`@path`, `@path:3-9`, `@task:ID`). Nothing is sent for you, and opening a file never switches the side by
+itself.
+
+`Ctrl+I` is the Tab character on a terminal, so there it is not bound: use the palette or the context menu. In a
+graphical window the Tab key keeps its own bindings. `Ctrl+L` stays "select line".

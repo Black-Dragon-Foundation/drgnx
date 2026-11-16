@@ -178,6 +178,23 @@ out.
   so it holds for any history; the scan costs a version checkout per later delete operation in the document and runs
   only for a hunk with something gone.
 
+## Hunk provenance
+
+Why a hunk is there. Hunks are not Urdr entities: a hunk is `(op, path, index)`, and its record's `Cause` is the link.
+Every agent write fills it: the file tool's writes and a paired chat's writes to a file open nowhere through
+`on_agent_write`, a paired chat's writes to an open buffer through the editor's batch and `Hub::note_cause`. `task` is
+the session's `works_on` task; `decision` is the id of the newest conclusion (`decision:N`, a finding's note id) the
+session recorded **in the same turn, at or before the write's step** (`conclusions::TurnConclusions::latest_in_turn`,
+in the session's memory: the asks shell tells the session when its MCP call records one, before the call answers), else
+none. A quick fix with no conclusion says "no reason recorded"; an older turn's conclusion is never borrowed, and one
+recorded after the write is not its reason.
+
+`history/provenance {worktree, path, line}` (the record that wrote the line's text: `Hub::hunk_at`, from the blame of
+the line and that record's hunks) or `{worktree, op, index}` answers `Provenance {op, path, index, session?, agent?,
+task?, task_title?, decision?, reason?, step?}`: `agent` is the session's name, `task_title` the task's, `reason` the
+conclusion's text, shown as the agent's words. A line no record wrote (the base's text) is an error. `history/op/hunks`
+carries each hunk's `cause` (`OpCause`), so the Changes view and review need no call per hunk.
+
 ## Privacy: redaction and excise
 
 `redact::scan(batch)` runs on capture, before a change reaches a document: the shapes of well-known keys (`sk-…`,
@@ -246,8 +263,9 @@ Each version is published as the bus event `history/file-version {worktree, path
 consumers.
 
 Every `fs/write_text_file` the session handler serves (`agents/session.rs`, after the fence allowed the path) calls
-`on_agent_write` first, in its worktree's project history, with the session as the cause; the step is not named, since
-its row is written when the step ends. A folder that is no git worktree or a path outside it (a brainstorm's document)
+`on_agent_write` first, in its worktree's project history, with the session's whole cause (`Session::write_cause`): the
+session, the step running (its key, `step.seq`), the task it works on, and the conclusion it recorded in the same turn
+at or before that step. A folder that is no git worktree or a path outside it (a brainstorm's document)
 is not recorded, and a history that fails never fails the write. A Fork from here of a worker starts a worker in its new
 tree, so its writes are served (a chat's fork stays a chat, its project read-only).
 
@@ -288,8 +306,9 @@ flight, which ends its hold. A file the hub wrote itself is no second version.
 tracked}`: a gitignored file, a credentials file, a personal-notes file and a folder a sandboxed agent worked in are
 `tracked: false` with the reason. `history/batch {buffer_id, changes, region_hash, version}` applies changes (character
 offsets in the document's LF text) as the origin's peer (`user`, or `agent:<session>#<step>` for a change merged in or a
-paired chat's write: the record's cause carries the session and its step; an `agent:` origin without the step is
-refused) and answers `{ok}` or `{resync: true}` when the SHA-256 of the document's text differs from `region_hash`.
+paired chat's write: the record's cause carries the session and its step, and for a paired chat's write the task and
+the conclusion the session noted with `Hub::note_cause` when it made the write (the last 256 kept); an `agent:` origin
+without the step is refused) and answers `{ok}` or `{resync: true}` when the SHA-256 of the document's text differs from `region_hash`.
 `region_hash` is optional: the editor sends it only for a text of at most 256 KiB, and without it the hub checks nothing
 and never reads the document's whole text (the batch costs the edit, at any size). More than 1 MiB inserted is refused
 as `split-required`. `history/resync {buffer_id, text, version}` replaces the document's

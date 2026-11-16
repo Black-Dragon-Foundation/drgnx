@@ -13,6 +13,7 @@ use crate::agents::session::rows;
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::view::Key;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{Row, RowBuilder};
 use minni::{Provider, Reader};
 use runstav::methods::agents::{Entry, EntryType};
@@ -480,6 +481,11 @@ impl History {
     }
 
     /// Files opened to read since the start (a scan that finds nothing new opens none).
+    /// The past sessions as last read from the index, newest first.
+    pub fn sessions(&self) -> Vec<PastSession> {
+        lock(&self.list).clone()
+    }
+
     pub fn reads(&self) -> u64 {
         self.reads.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -996,7 +1002,7 @@ fn in_workspace(cwd: Option<&str>, workspace: Option<&str>) -> bool {
 fn session_row(s: &PastSession, snippet: Option<&str>) -> Row {
     let mut r = RowBuilder::new(format!("h:{}:{}", provider_of(s.provider).name(), s.id));
     r.push("  ", None);
-    r.push(mark(s.provider), Some("drgnx-agent-panel-subtle"));
+    r.push(mark(s.provider), Some(FaceId::AgentPanelSubtle.name()));
     r.push("  ", None);
     r.push(&rows::one_line(&s.title, 70), None);
     let project = s
@@ -1019,12 +1025,12 @@ fn session_row(s: &PastSession, snippet: Option<&str>) -> Row {
     let meta: Vec<String> = meta.into_iter().filter(|m| !m.is_empty()).collect();
     r.push(
         &format!("  {}", meta.join(" · ")),
-        Some("drgnx-agent-panel-subtle"),
+        Some(FaceId::AgentPanelSubtle.name()),
     );
     if let Some(sn) = snippet.filter(|sn| *sn != s.title) {
         r.push(
             &format!("  — {}", rows::one_line(sn, 60)),
-            Some("drgnx-agent-panel-subtle"),
+            Some(FaceId::AgentPanelSubtle.name()),
         );
     }
     let end = r.pos();
@@ -1039,7 +1045,7 @@ fn session_row(s: &PastSession, snippet: Option<&str>) -> Row {
 
 fn header_row(key: &str, text: &str) -> Row {
     let mut r = RowBuilder::new(key);
-    r.push(text, Some("drgnx-agent-panel-subtle"));
+    r.push(text, Some(FaceId::AgentPanelSubtle.name()));
     r.finish()
 }
 

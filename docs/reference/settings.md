@@ -3039,3 +3039,21 @@ Settings: Lisp Files shows the files; Settings: Add Lisp File… adds one.
 | `:agents` | `never` |
 | `:schema` | `(list-of any)` |
 
+## drgnx-work-recent-days
+
+Days an item that changed stays in the Work map's Active view.  Active also holds agents that run or wait on
+you, and approved specs and plans not yet started; Completed holds finished items only; All holds both.
+
+| Key | Value |
+| --- | --- |
+| Default | `7` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(pred natnump "a number of days")` |
+

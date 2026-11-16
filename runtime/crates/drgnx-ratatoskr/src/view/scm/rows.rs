@@ -11,6 +11,7 @@ use super::status::{Change, Section, Status};
 use super::{RepoState, ViewState};
 use crate::view::explorer::RowLook;
 use crate::view::icons;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::scm::ViewAs;
 use serde_json::{Value, json};
@@ -92,7 +93,7 @@ impl Out<'_> {
         self.icon(b, name, alt);
         let end = b.pos();
         b.prop(start, end, "drgnx-scm-action", json!(action));
-        b.prop(start, end, "mouse-face", json!("drgnx-hover"));
+        b.prop(start, end, "mouse-face", json!(FaceId::Hover.name()));
         b.prop(start, end, "help-echo", json!(help));
     }
 
@@ -109,7 +110,7 @@ impl Out<'_> {
         b.push(label, Some(face));
         let end = b.pos();
         b.prop(start, end, "drgnx-scm-action", json!(action));
-        b.prop(start, end, "mouse-face", json!("drgnx-hover"));
+        b.prop(start, end, "mouse-face", json!(FaceId::Hover.name()));
         b.prop(start, end, "help-echo", json!(help));
     }
 
@@ -178,7 +179,7 @@ pub fn rows(
             } else {
                 "  Looking for repositories…"
             },
-            Some("drgnx-text-muted"),
+            Some(FaceId::TextMuted.name()),
         );
         out.finish(b, json!({"kind": "none"}));
         return (out.rows, out.images.into_iter().collect());
@@ -188,7 +189,10 @@ pub fn rows(
         let open_list = open(state, "repos");
         let mut b = RowBuilder::new("repos");
         chevron(&mut out, &mut b, open_list);
-        b.push("SOURCE CONTROL REPOSITORIES", Some("drgnx-scm-section"));
+        b.push(
+            "SOURCE CONTROL REPOSITORIES",
+            Some(FaceId::ScmSection.name()),
+        );
         out.finish(b, json!({"kind": "repos", "key": "repos"}));
         if open_list {
             for r in &state.repos {
@@ -216,22 +220,22 @@ fn repo_row(out: &mut Out, state: &ViewState, r: &RepoState) {
     }
     let end = b.pos();
     b.prop(start, end, "drgnx-scm-action", json!("select"));
-    b.prop(start, end, "mouse-face", json!("drgnx-hover"));
+    b.prop(start, end, "mouse-face", json!(FaceId::Hover.name()));
     b.push(" ", None);
     b.push(&r.found.name, None);
     if let Some(Ok(st)) = &r.status {
         b.push("  ", None);
         b.push(
             st.head.name.as_deref().unwrap_or("(detached)"),
-            Some("drgnx-text-muted"),
+            Some(FaceId::TextMuted.name()),
         );
         let n = st.count();
         if n > 0 {
-            b.push(&format!("  {n}"), Some("drgnx-text-muted"));
+            b.push(&format!("  {n}"), Some(FaceId::TextMuted.name()));
         }
         let s = sync_text(st);
         if !s.is_empty() {
-            b.push(&format!("  {s}"), Some("drgnx-text-muted"));
+            b.push(&format!("  {s}"), Some(FaceId::TextMuted.name()));
         }
     }
     out.finish(b, json!({"kind": "repo", "root": root, "selected": on}));
@@ -243,7 +247,7 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
     let mut b = RowBuilder::new(key(&["head", &root]));
     b.push(" ", None);
     if multi {
-        b.push(&r.found.name, Some("drgnx-scm-section"));
+        b.push(&r.found.name, Some(FaceId::ScmSection.name()));
     }
     out.button(&mut b, "check", "✓", "commit", "Commit");
     out.button(&mut b, "refresh-cw", "↻", "refresh", "Refresh");
@@ -252,13 +256,13 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
     let st = match &r.status {
         None => {
             let mut b = RowBuilder::new(key(&["note", &root]));
-            b.push("  Reading…", Some("drgnx-text-muted"));
+            b.push("  Reading…", Some(FaceId::TextMuted.name()));
             out.finish(b, json!({"kind": "note", "root": root}));
             return;
         }
         Some(Err(e)) => {
             let mut b = RowBuilder::new(key(&["note", &root]));
-            b.push(&format!("  git: {e}"), Some("drgnx-text-muted"));
+            b.push(&format!("  git: {e}"), Some(FaceId::TextMuted.name()));
             out.finish(b, json!({"kind": "note", "root": root}));
             return;
         }
@@ -273,11 +277,11 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
     b.push(st.head.name.as_deref().unwrap_or("(detached)"), None);
     let end = b.pos();
     b.prop(start, end, "drgnx-scm-action", json!("checkout"));
-    b.prop(start, end, "mouse-face", json!("drgnx-hover"));
+    b.prop(start, end, "mouse-face", json!(FaceId::Hover.name()));
     b.prop(start, end, "help-echo", json!("Checkout to…"));
     let s = sync_text(st);
     if !s.is_empty() {
-        b.push(&format!("  {s}"), Some("drgnx-text-muted"));
+        b.push(&format!("  {s}"), Some(FaceId::TextMuted.name()));
     }
     if st.head.name.is_some() {
         b.push("  ", None);
@@ -285,7 +289,7 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
             out.text_button(
                 &mut b,
                 " Publish Branch ",
-                "drgnx-ui-button",
+                FaceId::UiButton.name(),
                 "publish",
                 "Push this branch and track it",
             );
@@ -293,7 +297,7 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
             out.text_button(
                 &mut b,
                 " Sync ",
-                "drgnx-ui-button",
+                FaceId::UiButton.name(),
                 "sync",
                 "Pull, then push",
             );
@@ -310,14 +314,14 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
     out.text_button(
         &mut b,
         &format!("  ✓ Commit on '{on}'  "),
-        "drgnx-ui-button-primary",
+        FaceId::UiButtonPrimary.name(),
         "commit",
         "Commit (Ctrl+Enter in the message)",
     );
     out.finish(b, json!({"kind": "commit", "root": root}));
     if st.merge.is_empty() && st.staged.is_empty() && st.changes.is_empty() {
         // wrapped to the side bar's width, never cut: the first row keyed `note⇥ROOT`, the next `note⇥ROOT⇥N`
-        let face = Some("drgnx-text-muted");
+        let face = Some(FaceId::TextMuted.name());
         for (i, line) in wrap(out.room, face, "  ", NO_CHANGES)
             .into_iter()
             .enumerate()
@@ -359,8 +363,8 @@ fn section(out: &mut Out, state: &ViewState, root: &str, s: Section, list: &[Cha
     let mut b = RowBuilder::new(k.clone());
     b.push(" ", None);
     chevron(out, &mut b, is_open);
-    b.push(s.title(), Some("drgnx-scm-section"));
-    b.push(&format!("  {}", list.len()), Some("drgnx-text-muted"));
+    b.push(s.title(), Some(FaceId::ScmSection.name()));
+    b.push(&format!("  {}", list.len()), Some(FaceId::TextMuted.name()));
     for (icon, alt, action, help) in buttons(s) {
         out.button(
             &mut b,
@@ -390,7 +394,7 @@ fn section(out: &mut Out, state: &ViewState, root: &str, s: Section, list: &[Cha
         let mut b = RowBuilder::new(key(&["many", root, s.id()]));
         b.push(
             &format!("    {} more not listed", list.len() - SECTION_MAX),
-            Some("drgnx-text-muted"),
+            Some(FaceId::TextMuted.name()),
         );
         out.finish(b, json!({"kind": "note", "root": root}));
     }
@@ -487,13 +491,13 @@ fn file_row(out: &mut Out, root: &str, s: Section, c: &Change, indent: usize, fo
     b.push(name, None);
     let end = b.pos();
     if c.letter == 'D' {
-        b.face(start, end, "drgnx-scm-deleted");
+        b.face(start, end, FaceId::ScmDeleted.name());
     }
     if folder && !dir.is_empty() {
-        b.push(&format!("  {dir}"), Some("drgnx-text-muted"));
+        b.push(&format!("  {dir}"), Some(FaceId::TextMuted.name()));
     }
     if let Some(o) = &c.orig {
-        b.push(&format!("  ← {o}"), Some("drgnx-text-muted"));
+        b.push(&format!("  ← {o}"), Some(FaceId::TextMuted.name()));
     }
     b.push("  ", None);
     let letter = c.letter.to_string();
@@ -519,36 +523,36 @@ fn graph_rows(out: &mut Out, state: &ViewState, r: &RepoState, root: &str, now: 
     let mut b = RowBuilder::new(k.clone());
     b.push(" ", None);
     chevron(out, &mut b, is_open);
-    b.push("Source Control Graph", Some("drgnx-scm-section"));
+    b.push("Source Control Graph", Some(FaceId::ScmSection.name()));
     out.finish(b, json!({"kind": "graph", "root": root, "key": k}));
     if !is_open {
         return;
     }
     let Some(g) = &r.graph else {
         let mut b = RowBuilder::new(key(&["gnote", root]));
-        b.push("    Reading…", Some("drgnx-text-muted"));
+        b.push("    Reading…", Some(FaceId::TextMuted.name()));
         out.finish(b, json!({"kind": "note", "root": root}));
         return;
     };
     for (c, lanes) in g.commits.iter().zip(&g.lanes) {
         let mut b = RowBuilder::new(key(&["c", root, &c.sha]));
         b.push("  ", None);
-        b.push(lanes, Some("drgnx-scm-lane"));
+        b.push(lanes, Some(FaceId::ScmLane.name()));
         b.push(" ", None);
         if g.incoming.contains(&c.sha) {
-            b.push("↓ ", Some("drgnx-scm-incoming"));
+            b.push("↓ ", Some(FaceId::ScmIncoming.name()));
         } else if g.outgoing.contains(&c.sha) {
-            b.push("↑ ", Some("drgnx-scm-outgoing"));
+            b.push("↑ ", Some(FaceId::ScmOutgoing.name()));
         }
         b.push(&c.subject, None);
         for r in &c.refs {
             let r = r.strip_prefix("HEAD -> ").unwrap_or(r);
             b.push(" ", None);
-            b.push(&format!(" {r} "), Some("drgnx-scm-ref"));
+            b.push(&format!(" {r} "), Some(FaceId::ScmRef.name()));
         }
         b.push(
             &format!("  {} · {}", c.author, graph::age(c.time, now)),
-            Some("drgnx-text-muted"),
+            Some(FaceId::TextMuted.name()),
         );
         out.finish(
             b,
@@ -561,7 +565,7 @@ fn graph_rows(out: &mut Out, state: &ViewState, r: &RepoState, root: &str, now: 
         out.text_button(
             &mut b,
             "Load more…",
-            "drgnx-text-muted",
+            FaceId::TextMuted.name(),
             "more",
             "The next 200 commits",
         );

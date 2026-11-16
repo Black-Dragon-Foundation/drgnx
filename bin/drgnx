@@ -609,6 +609,10 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
     # size; a laptop sets 4g or less); the results name this host, not the container's id
     if [ "$tier" = day ]; then mem="${DRGNX_TEST_DAY_MEMORY:-6g}"; DRGNX_PERF_MACHINE="${DRGNX_PERF_MACHINE:-$(hostname 2>/dev/null || echo unknown)}"; fi
     args=(--memory "$mem" --memory-swap "$mem" --security-opt seccomp=unconfined --security-opt label=disable)
+    # KWin 6.8's virtual backend composites only with a render device: without one it manages windows but answers no
+    # frame callback, so the presenter commits once and then holds every packet.  /dev/udmabuf (never /dev/dri) makes it
+    # use its software device, Mesa's llvmpipe, on any machine, as Nidhogg's test/gui.sh does
+    if [ "$comp" = kwin ] && [ -c /dev/udmabuf ]; then args+=(--device /dev/udmabuf); fi
     # DRGNX_PERF_CPUS=2|4: the machine shape of the workers' A/B (review M14), the cores the run may use (as `drgnx-perf-cpuset-args')
     # one thread of each of the first N physical cores (a 7900X: 0,1; a 4900HS, whose core's threads sit side by side: 0,2)
     case "${DRGNX_PERF_CPUS:-}" in
@@ -670,7 +674,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
   # the sessions' monitor size, count and scales
-  local v pass=(DRGNX_RATATOSKR_STALL_MS DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED NIDHOGG_WORKERS DRGNX_TEST_HUB_CHAOS DRGNX_TEST_GATE_SWAP DRGNX_TEST_ONLY DRGNX_TEST_SHUFFLE DRGNX_TEST_LEAKS DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_NIDHOGG_STRICT DRGNX_PERF_RESULTS
+  local v pass=(DRGNX_RATATOSKR_STALL_MS DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED NIDHOGG_WORKERS DRGNX_TEST_HUB_CHAOS DRGNX_TEST_GATE_SWAP DRGNX_TEST_ONLY DRGNX_TEST_SHUFFLE DRGNX_TEST_LEAKS DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_NIDHOGG_STRICT DRGNX_TEST_STRICT_FACES DRGNX_PERF_RESULTS
                 DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_PERF_MACHINE DRGNX_PERF_WORKERS DRGNX_PERF_LANDED
                 DRGNX_PERF_WATCHDOG DRGNX_PERF_PROFILE DRGNX_UITEST_SETTLE_SCALE DRGNX_UITEST_TICK DRGNX_UI_TEST_TIMEOUT DRGNX_UI_LEAKS DRGNX_TEST_FILE_LEAKS DRGNX_UI_PROFILE DRGNX_TEST_WAIT_PROFILE
                 DRGNX_UI_SIZE DRGNX_UI_MONITORS DRGNX_UI_SCALE DRGNX_UI_SCALES DRGNX_TEST_ALLOW_NO_MAGIT)

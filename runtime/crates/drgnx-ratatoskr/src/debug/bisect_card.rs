@@ -3,6 +3,7 @@
 //! it does now), a dot per state, then the result (the first bad state, who made it, its step and decision; the
 //! skipped and flaky states) with its actions, or why it stopped, and the hunks narrowing kept.
 
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{Row, RowBuilder};
 use serde_json::{Value, json};
 
@@ -44,7 +45,7 @@ pub fn author(a: &Value) -> Option<String> {
 
 fn action(r: &mut RowBuilder, label: &str, act: &str, help: &str) {
     let at = r.pos();
-    r.push(label, Some("drgnx-chip-accent"));
+    r.push(label, Some(FaceId::ChipAccent.name()));
     let end = r.pos();
     r.prop(at, end, "drgnx-debug-bisect-action", json!(act));
     r.prop(at, end, "help-echo", json!(help));
@@ -56,7 +57,7 @@ pub fn rows(state: &Value) -> Vec<Row> {
     let mut out = Vec::new();
     let est = &state["estimate"];
     let mut head = RowBuilder::new("head");
-    head.push("Bisect", Some("drgnx-debug-timeline-head"));
+    head.push("Bisect", Some(FaceId::DebugTimelineHead.name()));
     let doing = match state["state"].as_str().unwrap_or_default() {
         "checking-good" => "checking the good state".to_owned(),
         "running" => "running".to_owned(),
@@ -78,7 +79,7 @@ pub fn rows(state: &Value) -> Vec<Row> {
             plural(est["runs"].as_u64().unwrap_or(0), "run"),
             plural(est["slots"].as_u64().unwrap_or(1), "slot"),
         ),
-        Some("drgnx-debug-timeline-dim"),
+        Some(FaceId::DebugTimelineDim.name()),
     );
     out.push(head.finish());
 
@@ -91,17 +92,17 @@ pub fn rows(state: &Value) -> Vec<Row> {
                 lane.push(" ", None);
             }
             let (g, face) = match d["outcome"].as_str().unwrap_or_default() {
-                "good" => ("●", "drgnx-debug-bisect-good"),
-                "bad" => ("✕", "drgnx-debug-bisect-bad"),
-                "skip" => ("◌", "drgnx-debug-bisect-skip"),
-                _ => ("·", "drgnx-debug-timeline-step"),
+                "good" => ("●", FaceId::DebugBisectGood.name()),
+                "bad" => ("✕", FaceId::DebugBisectBad.name()),
+                "skip" => ("◌", FaceId::DebugBisectSkip.name()),
+                _ => ("·", FaceId::DebugTimelineStep.name()),
             };
             let at = lane.pos();
             let first = bad.is_some() && d["id"].as_str() == bad;
             lane.push(
                 g,
                 Some(if first {
-                    "drgnx-debug-timeline-current"
+                    FaceId::DebugTimelineCurrent.name()
                 } else {
                     face
                 }),
@@ -121,10 +122,10 @@ pub fn rows(state: &Value) -> Vec<Row> {
     if r.is_object() {
         let fb = &r["first_bad"];
         let mut line = RowBuilder::new("first-bad");
-        line.push("First bad: ", Some("drgnx-debug-timeline-head"));
+        line.push("First bad: ", Some(FaceId::DebugTimelineHead.name()));
         line.push(fb["label"].as_str().unwrap_or_default(), None);
         if let Some(a) = author(&fb["author"]) {
-            line.push(&format!(" · {a}"), Some("drgnx-debug-timeline-dim"));
+            line.push(&format!(" · {a}"), Some(FaceId::DebugTimelineDim.name()));
         }
         out.push(line.finish());
         let mut facts = Vec::new();
@@ -136,7 +137,7 @@ pub fn rows(state: &Value) -> Vec<Row> {
         }
         facts.push(fb["kind"].as_str().unwrap_or_default().replace('_', " "));
         let mut why = RowBuilder::new("why");
-        why.push(&facts.join(" · "), Some("drgnx-debug-timeline-dim"));
+        why.push(&facts.join(" · "), Some(FaceId::DebugTimelineDim.name()));
         out.push(why.finish());
         let skipped = r["skipped"].as_array().map_or(0, Vec::len) as u64;
         if skipped > 0 {
@@ -146,7 +147,7 @@ pub fn rows(state: &Value) -> Vec<Row> {
                     "Or one of the {} before it, which could not be judged",
                     plural(skipped, "state")
                 ),
-                Some("drgnx-status-warn"),
+                Some(FaceId::StatusWarn.name()),
             );
             out.push(s.finish());
         }
@@ -157,7 +158,7 @@ pub fn rows(state: &Value) -> Vec<Row> {
                     "Flaky: the two runs of {} disagreed",
                     f.as_str().unwrap_or_default()
                 ),
-                Some("drgnx-status-warn"),
+                Some(FaceId::StatusWarn.name()),
             );
             out.push(s.finish());
         }
@@ -198,7 +199,7 @@ pub fn rows(state: &Value) -> Vec<Row> {
             "needs-good" => format!("{why}: pick an earlier good state"),
             _ => why.to_owned(),
         };
-        s.push(&what, Some("drgnx-status-fail"));
+        s.push(&what, Some(FaceId::StatusFail.name()));
         out.push(s.finish());
     }
     if state["state"] == "narrowed" {
@@ -210,7 +211,7 @@ pub fn rows(state: &Value) -> Vec<Row> {
                 plural(hunks.len() as u64, "hunk"),
                 state["of"].as_u64().unwrap_or(0)
             ),
-            Some("drgnx-debug-timeline-head"),
+            Some(FaceId::DebugTimelineHead.name()),
         );
         out.push(s.finish());
         for (k, h) in hunks.iter().enumerate() {
@@ -228,7 +229,7 @@ pub fn rows(state: &Value) -> Vec<Row> {
                 .chars()
                 .take(HUNK_LINE)
                 .collect();
-            s.push(&format!("  {first}"), Some("drgnx-debug-timeline-dim"));
+            s.push(&format!("  {first}"), Some(FaceId::DebugTimelineDim.name()));
             out.push(s.finish());
         }
     }

@@ -108,6 +108,15 @@
 (defvar drgnx-work-space--view)
 (defvar drgnx-work-space--message)
 (defvar drgnx-work-map--filters)
+(defvar drgnx-work-map--list-or-graph)
+(declare-function drgnx-work-map--mode-for "drgnx-work-map")
+(defvar drgnx-work-recent-days)
+(declare-function drgnx-work-map--filters-wire "drgnx-work-map")
+(declare-function drgnx-work-map--show-for "drgnx-work-map")
+(declare-function drgnx-work-map--persist-state "drgnx-work-map")
+(declare-function drgnx-work-map--adopt-show "drgnx-work-map")
+(defvar drgnx-persist-state-functions)
+(defvar drgnx-persist-after-restore-functions)
 (declare-function drgnx-work-client-status "drgnx-work-client")
 (declare-function drgnx-work-client-set "drgnx-work-client")
 (declare-function drgnx-work-client-resubscribe "drgnx-work-client")
@@ -193,7 +202,8 @@ it (a notes repository with the code repositories inside it)."
               work-review work-second-reviewer work-review-accept work-review-reject
               work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
-              work-collapse-layer-5 work-collapse-layer-6 work-expand-layers work-show-finished work-search
+              work-collapse-layer-5 work-collapse-layer-6 work-collapse-layer-7 work-collapse-layer-8
+              work-expand-layers work-cycle-filter work-mode-list work-mode-graph work-mode-toggle work-search
               work-escape work-take-wheel work-files work-who-is-here
               work-diffs work-diff-quit work-diff-accept-hunk work-diff-reject-hunk)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
@@ -360,12 +370,14 @@ once per map and when the hub is up; when every folder answered, the map shows w
       (setq drgnx-work-space--adopting (max 0 (1- drgnx-work-space--adopting)))
       (when (and (zerop drgnx-work-space--adopting) (> found 0) drgnx-work-space--view)
         ;; the hub reads the store when a view subscribes: ask again, with the finished items shown
-        (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :finished t))
+        (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :show 'all))
         ;; the filters go with the new subscription, and again once it exists on the hub: a `work/map/set' sent first
         ;; would meet the old view, which the subscription replaces (the user's map stayed empty until it was set again)
-        (drgnx-work-client-set drgnx-work-space--view :filters (list :overlaps :false :finished t))
+        (drgnx-work-client-set drgnx-work-space--view :filters (list :overlaps :false :show "all"
+                                                                     :recent_days drgnx-work-recent-days))
         (drgnx-work-client-resubscribe drgnx-work-space--view)
-        (drgnx-work-client-set drgnx-work-space--view :filters (list :overlaps :false :finished t)))
+        (drgnx-work-client-set drgnx-work-space--view :filters (list :overlaps :false :show "all"
+                                                                     :recent_days drgnx-work-recent-days)))
       (drgnx-work-space--notice buffer))))
 
 (defun drgnx-work-space--buffer (workspace)
@@ -383,9 +395,14 @@ once per map and when the hub is up; when every folder answered, the map shows w
           ;; the hub lays the map out and draws it; an Emacs without Sjá cannot show its rows, and says so
           (if (drgnx-work-map-rows-p)
               (progn (drgnx-work-map-rows-attach (plist-get workspace :id))
+                     (setq drgnx-work-map--filters
+                           (list :show (drgnx-work-map--show-for (plist-get workspace :id)))
+                           drgnx-work-map--list-or-graph (drgnx-work-map--mode-for (plist-get workspace :id)))
                      (drgnx-work-client-open (plist-get workspace :id) workspace
                                              :width (drgnx-work-space--width-units)
-                                             :density (symbol-name drgnx-work-space-density)))
+                                             :density (symbol-name drgnx-work-space-density)
+                                             :mode (symbol-name drgnx-work-map--list-or-graph)
+                                             :filters (drgnx-work-map--filters-wire)))
             (setq drgnx-work-space--message drgnx-work-map-no-sja)
             (drgnx-view-attach 'work-map)
             (drgnx-view-touch drgnx-view))))
@@ -617,6 +634,10 @@ windows; the commands."
     (drgnx-work-client-connected)
     (dolist (b (drgnx-work-map-buffers)) (drgnx-work-space--adopt b) (drgnx-work-space--notice b)))
   (drgnx-module-hook 'drgnx-hub-disconnect-functions disconnected () (drgnx-work-client-disconnected))
+  ;; each project's Active · Completed · All choice is in the saved workbench
+  (require 'drgnx-persist)
+  (add-hook 'drgnx-persist-state-functions #'drgnx-work-map--persist-state)
+  (add-hook 'drgnx-persist-after-restore-functions #'drgnx-work-map--adopt-show)
   (drgnx-module-hook 'drgnx-frame-replaced-functions frame-replaced (old new)
     (drgnx-work-map--frame-replaced old new)
     (drgnx-work-code--frame-replaced old new))
@@ -733,8 +754,11 @@ windows; the commands."
                                                  drgnx-work-map-needs-you-here-previous "Cycle the strip's chips backwards")
                    (work-focus "Focus on the Chain" drgnx-work-map-focus "Hide what is not on the selection's chain; again for all")
                    (work-overlaps "Show Overlaps Only" drgnx-work-map-overlaps "Only the agents and branches that overlap")
+                   (work-mode-list "Show as a List" drgnx-work-map-mode-list "The map as nested rows: spec, plan, task")
+                   (work-mode-graph "Show as a Graph" drgnx-work-map-mode-graph "The map as layers and the edges between them")
+                   (work-mode-toggle "Switch Between List and Graph" drgnx-work-map-mode-toggle "m on the map does the same")
                    (work-expand-layers "Expand All Layers" drgnx-work-map-expand-layers "Every layer open again")
-                   (work-show-finished "Show Finished Items" drgnx-work-map-show-finished "Finished items too; again to hide them")
+                   (work-cycle-filter "Cycle Work Filter" drgnx-work-map-cycle-filter "Active, then Completed, then All")
                    (work-search "Narrow the Map" drgnx-work-map-search "Dim what does not match; Enter selects the first match")
                    (work-escape "Clear Search, Filters, then Close" drgnx-work-map-escape
                                 "Esc: the search first, then the filters, then the pane")))
@@ -749,7 +773,7 @@ windows; the commands."
                             :command (lambda () (interactive) (drgnx-work-needs-you n))
                             :map 'drgnx-work-lens-map
                             :doc "Jump to it (in the Flow: the Nth held task); nothing is approved or answered")))
-  (dotimes (i 6)
+  (dotimes (i 8)
     (let ((n (1+ i)))
       (drgnx-command-define (intern (format "work-collapse-layer-%d" n)) :category "Work"
                             :title (format "Collapse or Expand Layer %d" n)
@@ -765,6 +789,8 @@ windows; the commands."
   "tools/work-space's `:teardown': the edit history's tracking stops, the views close (the hub forgets them), the
 windows lose the layout motion's parameters and the map buffers go."
   (drgnx-history-mode -1)
+  (remove-hook 'drgnx-persist-state-functions #'drgnx-work-map--persist-state)
+  (remove-hook 'drgnx-persist-after-restore-functions #'drgnx-work-map--adopt-show)
   (drgnx-work-client-close-all)
   (dolist (b (drgnx-work-map-buffers))
     (drgnx-work-map-motion-clear b)
@@ -787,7 +813,7 @@ windows lose the layout motion's parameters and the map buffers go."
   (dolist (f (frame-list)) (set-frame-parameter f 'drgnx-work-space-shown nil)))
 
 (drgnx-module-define 'tools/work-space
-                     :doc "The Work space: one map of every live piece of agent work, in six layers, with the edges between them."
+                     :doc "The Work space: one map of every live piece of agent work, in eight layers, with the edges between them."
                      :stage 'startup :requires '(core/workbench)
                      :setup #'drgnx-work-space--setup :teardown #'drgnx-work-space--teardown)
 

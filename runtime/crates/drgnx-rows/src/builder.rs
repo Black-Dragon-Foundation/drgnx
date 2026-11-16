@@ -71,6 +71,13 @@ impl RowBuilder {
         self.push(" ", Some(face))
     }
 
+    /// A pad WIDTH device px wide here, in FACE (none: no face): a space of no height of its own (one placeholder
+    /// character in the text), as the kit's padding is.
+    pub fn pad(&mut self, width: u32, face: Option<&str>) -> &mut Self {
+        self.row.spaces.push((self.len, width, 0));
+        self.push(" ", face)
+    }
+
     pub fn height(&mut self, lines: u32, unit: u32) -> &mut Self {
         self.row.height = Some(RowHeight { lines, unit });
         self

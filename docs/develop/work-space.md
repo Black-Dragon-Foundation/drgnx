@@ -1,7 +1,9 @@
 # The Work space: how the map is built
 
-The Work space's map shows every live piece of a workspace's agent work in six fixed layers: you asked, specs, plans,
-agents, branches, files and machines. This page is for contributors. It describes the parts behind the map, from the
+The Work space's map shows every live piece of a workspace's agent work in eight fixed layers: you asked, specs, plans,
+tasks, agents, branches, files and machines ("Runs on"). `Kind::Task` is layer 4 and `Model::task_state` gives its
+`TaskState` (needs you, running, done, not started); a machine's jobs are `Item.chips`, each linking to its agent.
+In the layout a task sits over its first agent in the block's sub-row, a task with no agent as a chip of its block. This page is for contributors. It describes the parts behind the map, from the
 hub's facts to the drawing.
 
 ## The map core: `vegvisir`
@@ -20,7 +22,7 @@ let chain = core.model().chain(&vegvisir::ItemId("agent:S1".into()));
 
 | Event | Source | Meaning |
 |---|---|---|
-| `Graph(GraphFact)` | Urdr | an ask, spec, plan or task record, or an `asked` or `derives` link; idempotent, so an import that runs again changes nothing |
+| `Graph(GraphFact)` | Urdr | an ask, spec, plan or task record, or an `asked` or `derives` link; idempotent, so an import that runs again changes nothing. A task no plan holds is read under a "No plan" plan item (`plan:no-plan`), never skipped. The model doc gives each task node a `task_state` field |
 | `Session(SessionFact)` | hub sessions | a session's (or a Claude Code subagent's, `SID/TOOLID`) snapshot: state, task, branch, worktree, recorded base, machine, spend; it replaces the last one |
 | `Step(StepFact)` | timeline steps | a closed step: its class and a conclusion recorded there; the latest by step number wins |
 | `Changed { worktree, base, files }` | the edit history | a worktree's changed files (`REPO/PATH` → `(plus, minus)`), measured against `base`, untracked files included |
@@ -45,7 +47,7 @@ Everything the map shows is **derived** from the facts after each event:
 - **What is live.** An agent is live unless it finished and either its branch merged or its task is done. A branch is
   live while a live agent is on it, or a live branch was cut from it. A file is live while a live branch changes it or
   a live agent reads or edits it. Plans, specs and asks are live while a live agent is under them, and plans and
-  specs also while a live ask links them. A view with "show finished" also shows the items that are not live.
+  specs also while a live ask links them. What a view shows is its `Show` (`vegvisir::Show`: Active, Completed, All) read by `vegvisir::shown(item, filters, now)`: an item is `done` (a done task; a spec, plan or ask with nothing live and nothing waiting under it; an agent, branch or file that is not live) and `ready` (a spec, plan or task nothing has worked on yet). Active shows live, ready and recently touched items (`touched` is the latest change of the item or what is under it, within `Filters.recent_days`), Completed the done ones, All both with the done ones faded; `group` puts an Active row in "In progress" (live or needs you) or "Ready". List mode is `vegvisir::list` (`entries`: spec › plan › task rows, a task with its agent, machine and chips; `chain_gutter`; `list_next`, `list_prev`, `list_parent`); `ViewState.mode` (`MapMode`, List by default) and `list_collapsed` are the view's, and the hub draws the entries as plain text rows until the kit draws them.
 - **Blocks.** An agent's block is its task's plan; a subagent sits in its parent's block. A branch takes its first
   agent's block (by start order). A branch that is only a base takes the block of the first branch cut from it.
 - **The chain** of an item is everything reachable from it along "came from" edges up and "touches" edges down
@@ -865,6 +867,19 @@ milliseconds spent drawing (`work-live-draw` reads it).
 ### The workspace
 
 `drgnx-work-space-workspace` is the frame's selected window's project (`project-current`; none for a remote folder, a
-folder outside git or a scratch buffer). When that buffer is in no project (the Inbox, a bottom-panel tab and the Detail tile sit in `~`), the project of the first of the Explorer's folders that is in one stands in; only when there is none either does the empty map open. After the adoption answers, the map subscribes again with the finished filter and sets it once more on the new view (a `work/map/set` sent before the new subscription met the old view). Entities the old Lisp scanner made (`plan:/abs/path`, `spec:/abs/path`) whose file the importer holds (`plan:rec-…`, `data.records.file`) are not drawn (`legacy_duplicates` in `work/map.rs`), and `graph/put-parsed` no longer stores them: for a file the importer holds, the scanner's plan, spec, tasks and steps (with their links and updates) are left out and the stored ones retired (`norn::parsed`). The importer makes the plan's tasks (their done state from the checked steps) but no steps, and nothing yet turns a ledger's `Task N: complete (commits …)` into a done mark or commit links on its tasks: that, and the worktree and branch facts, are what the scanner's move to the hub still has to carry. A proposal card on the strip reads `Sign off: N tasks (JOB)` (`strip_text`; the strip's own prefix, said once), not its cost sentence cut to the chip's share. Its roots are `drgnx-work-space-roots` or the
+folder outside git or a scratch buffer). When that buffer is in no project (the Inbox, a bottom-panel tab and the Detail tile sit in `~`), the project of the first of the Explorer's folders that is in one stands in; only when there is none either does the empty map open. After the adoption answers, the map subscribes again showing All and sets it once more on the new view (a `work/map/set` sent before the new subscription met the old view). Entities the old Lisp scanner made (`plan:/abs/path`, `spec:/abs/path`) whose file the importer holds (`plan:rec-…`, `data.records.file`) are not drawn (`legacy_duplicates` in `work/map.rs`), and `graph/put-parsed` no longer stores them: for a file the importer holds, the scanner's plan, spec, tasks and steps (with their links and updates) are left out and the stored ones retired (`norn::parsed`). The importer makes the plan's tasks (their done state from the checked steps) but no steps, and nothing yet turns a ledger's `Task N: complete (commits …)` into a done mark or commit links on its tasks: that, and the worktree and branch facts, are what the scanner's move to the hub still has to carry. A proposal card on the strip reads `Sign off: N tasks (JOB)` (`strip_text`; the strip's own prefix, said once), not its cost sentence cut to the chip's share. Its roots are `drgnx-work-space-roots` or the
 default (the project's repository, and an enclosing repository with the repositories directly in it); its id is `workspace:` and 12 hex digits of the 64-bit FNV-1a hash over the sorted
 roots' first root commits (the path where git does not answer).
+
+## Changes by task
+
+`work/changes.rs` groups what the agents changed by the task each worked on: task, then file, then hunk, with a last group, "Your edits and others", for what no task owns (`group`; `by_task` reads each live session's edited files and their diffs from the edit history; `hunks_of` reads a diff's hunks). A hunk's agent is its session's, and its `reason` stays empty ("no reason recorded") until the history records the cause of an agent write. `view/changes.rs` builds the `changes` view's rows in that order as plain text; each hunk row carries the `drgnx-action` it offers (open the file at the hunk) and a `drgnx-hunk` property naming the path, op, index and agent for comment and revert. The Changes place that shows the view comes with the layout A shell.
+
+## The Agents side
+
+`view/agents_side.rs` is the Agents side's model: one `Card` per session (its mark, task, provider, state line, progress and one button: Answer for what needs you, Review for edits ready, Open otherwise), needs-you first, then running, then the rest by last activity; "Earlier" holds the five newest past sessions and an `All ›` row. A card is a few rows keyed `card:SESSION:N`, so one session's change patches only its card's rows. `agents_on(entries, path)` is the sessions working on a path, for the chip "an agent is working here". The rows are plain text until the kit draws the cards. `agents/side/subscribe`, `agents/side/set` (refresh) and `agents/side/close` serve the view: the live sessions come from the hub's table (a later start counts as more recent), the "Earlier" ones from the past-sessions index of Claude Code, Gemini CLI and Codex, and every session's emit patches the cards that changed.
+
+## Proposals in the viewed file
+
+The hub's `agents/buffer/watch` frame (and its deltas) carries `proposals` beside `agents` and `gutter`: for each live session working in its own worktree (not paired: a paired agent's writes are in the buffer itself), the hunks of its diff of that file against its base, each `{session, op, index, start_line, end_line, text, reason}` (`editor/proposals.rs`; `op` and `reason` stay empty until the edit history records the cause of an agent write). `drgnx-agent-proposals.el` holds them per buffer and gives `agents-proposal-accept` (`a`, a `review/mark accepted`, which reaches your checkout through the merge) and `agents-proposal-revert` (`D`, `history/revert/hunk` in the agent's worktree) at point in `drgnx-agent-proposals-mode`. The drawing of the proposals is the viewed-file task's.
+

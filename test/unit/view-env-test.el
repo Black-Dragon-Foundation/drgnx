@@ -64,6 +64,21 @@ the selected window (a GUI class) and torn down after."
       (should (= 1 (plist-get (nth 1 envs) :epoch)))
       (should (equal (list (plist-get (nth 1 envs) :class)) (drgnx-view-env-classes "v"))))))
 
+;; `drgnx-look-density' is ui/look's setting; bound here so the env reads it
+(defvar drgnx-look-density)
+
+(ert-deftest drgnx-view-env/density-change-is-an-epoch ()
+  ;; the user's density goes with the env, and a change of it is a new epoch, as a scale change is
+  (let ((drgnx-look-density 'comfortable))
+    (drgnx-view-env-test--with
+      (drgnx-view-env-register "v" buf)
+      (should (equal (plist-get (car (last (drgnx-view-env-test--envs))) :density) "comfortable"))
+      (setq drgnx-look-density 'roomy)
+      (drgnx-view-env-look-changed)
+      (let ((e (car (last (drgnx-view-env-test--envs)))))
+        (should (equal (plist-get e :density) "roomy"))
+        (should (= (plist-get e :epoch) 2))))))
+
 (ert-deftest drgnx-view-env/theme-change-sends-palette-once ()
   (drgnx-view-env-test--with
     (drgnx-view-env-register "v" buf)

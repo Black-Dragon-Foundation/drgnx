@@ -4,8 +4,8 @@
       "down": "branch:drgnx/as2-map",
       "left": null,
       "right": "agent:s01/toolu_a",
-      "then": "plan:agent-system-p2",
-      "up": "plan:agent-system-p2"
+      "then": "task:t01",
+      "up": "task:t01"
     },
     "agent:s01/toolu_a": {
       "down": null,
@@ -25,71 +25,71 @@
       "down": "branch:drgnx/as2-data",
       "left": "agent:s01/toolu_b",
       "right": "agent:s03",
-      "then": "plan:agent-system-p2",
-      "up": "plan:agent-system-p2"
+      "then": "task:t02",
+      "up": "task:t02"
     },
     "agent:s03": {
       "down": "branch:drgnx/as2-sources",
       "left": "agent:s02",
       "right": "agent:s04",
-      "then": "plan:agent-system-p2",
-      "up": "plan:agent-system-p2"
+      "then": "task:t03",
+      "up": "task:t03"
     },
     "agent:s04": {
       "down": "branch:drgnx/as2-wire",
       "left": "agent:s03",
       "right": "agent:s05",
-      "then": "plan:agent-system-p2",
-      "up": "plan:agent-system-p2"
+      "then": "task:t04",
+      "up": "task:t04"
     },
     "agent:s05": {
       "down": "branch:drgnx/as2-step",
       "left": "agent:s04",
       "right": "agent:s06",
-      "then": "plan:agent-system-p2",
-      "up": "plan:agent-system-p2"
+      "then": "task:t05",
+      "up": "task:t05"
     },
     "agent:s06": {
       "down": "branch:drgnx/as2-s4",
       "left": "agent:s05",
       "right": "agent:s07",
-      "then": "plan:agent-system-p2",
-      "up": "plan:agent-system-p2"
+      "then": "task:t06",
+      "up": "task:t06"
     },
     "agent:s07": {
       "down": "branch:drgnx/as2-s1",
       "left": "agent:s06",
       "right": "agent:s08",
-      "then": "plan:agent-system-p2",
-      "up": "plan:agent-system-p2"
+      "then": "task:t07",
+      "up": "task:t07"
     },
     "agent:s08": {
       "down": "branch:drgnx/as2-edits",
       "left": "agent:s07",
       "right": "agent:s09",
-      "then": "plan:agent-system-p2",
-      "up": "plan:agent-system-p2"
+      "then": "task:t08",
+      "up": "task:t08"
     },
     "agent:s09": {
       "down": "branch:drgnx/as2-core",
       "left": "agent:s08",
       "right": "agent:s10",
-      "then": "plan:agent-system-p2",
-      "up": "plan:agent-system-p2"
+      "then": "task:t09",
+      "up": "task:t09"
     },
     "agent:s10": {
       "down": "branch:drgnx/as2-trace",
       "left": "agent:s09",
       "right": "agent:s11",
-      "then": "plan:agent-system-p2",
-      "up": "plan:agent-system-p2"
+      "then": "task:t10",
+      "up": "task:t10"
     },
     "agent:s11": {
       "down": "branch:nidhogg/gl-mask",
       "left": "agent:s10",
       "right": "agent:s11/toolu_c",
-      "then": "plan:glitnir-p2-p4",
-      "up": "plan:glitnir-p2-p4"
+      "then": "task:t11",
+      "up": "task:t11"
     },
     "agent:s11/toolu_c": {
       "down": null,
@@ -102,50 +102,50 @@
       "down": "branch:nidhogg/gl-leg",
       "left": "agent:s11/toolu_c",
       "right": "agent:s13",
-      "then": "plan:glitnir-p2-p4",
-      "up": "plan:glitnir-p2-p4"
+      "then": "task:t12",
+      "up": "task:t12"
     },
     "agent:s13": {
       "down": "branch:nidhogg/gl-cards",
       "left": "agent:s12",
       "right": "agent:s14",
-      "then": "plan:glitnir-p2-p4",
-      "up": "plan:glitnir-p2-p4"
+      "then": "task:t13",
+      "up": "task:t13"
     },
     "agent:s14": {
       "down": "branch:nidhogg/gl-scroll",
       "left": "agent:s13",
       "right": "agent:s15",
-      "then": "plan:glitnir-p2-p4",
-      "up": "plan:glitnir-p2-p4"
+      "then": "task:t14",
+      "up": "task:t14"
     },
     "agent:s15": {
       "down": "branch:nidhogg/gl-pacer",
       "left": "agent:s14",
       "right": "agent:s16",
-      "then": "plan:glitnir-p2-p4",
-      "up": "plan:glitnir-p2-p4"
+      "then": "task:t15",
+      "up": "task:t15"
     },
     "agent:s16": {
       "down": "branch:nidhogg/gl-shell",
       "left": "agent:s15",
       "right": "agent:s17",
-      "then": "plan:glitnir-p2-p4",
-      "up": "plan:glitnir-p2-p4"
+      "then": "task:t16",
+      "up": "task:t16"
     },
     "agent:s17": {
       "down": "branch:nidhogg/gl-fonts",
       "left": "agent:s16",
       "right": "agent:s18",
-      "then": "plan:glitnir-p2-p4",
-      "up": "plan:glitnir-p2-p4"
+      "then": "task:t17",
+      "up": "task:t17"
     },
     "agent:s18": {
       "down": "branch:drgnx/rp-core",
       "left": "agent:s17",
       "right": "agent:s18/toolu_d",
-      "then": "plan:race-proof",
-      "up": "plan:race-proof"
+      "then": "task:t18",
+      "up": "task:t18"
     },
     "agent:s18/toolu_d": {
       "down": "file:drgnx/core/drgnx-hub-core.el",
@@ -158,43 +158,43 @@
       "down": "branch:drgnx/rp-hub",
       "left": "agent:s18/toolu_d",
       "right": "agent:s20",
-      "then": "plan:race-proof",
-      "up": "plan:race-proof"
+      "then": "task:t19",
+      "up": "task:t19"
     },
     "agent:s20": {
       "down": "branch:drgnx/rp-sweep",
       "left": "agent:s19",
       "right": "agent:s21",
-      "then": "plan:race-proof",
-      "up": "plan:race-proof"
+      "then": "task:t20",
+      "up": "task:t20"
     },
     "agent:s21": {
       "down": "branch:drgnx/rp-mods",
       "left": "agent:s20",
       "right": "agent:s22",
-      "then": "plan:race-proof",
-      "up": "plan:race-proof"
+      "then": "task:t21",
+      "up": "task:t21"
     },
     "agent:s22": {
       "down": "branch:drgnx/rp-install",
       "left": "agent:s21",
       "right": "agent:s23",
-      "then": "plan:race-proof",
-      "up": "plan:race-proof"
+      "then": "task:t22",
+      "up": "task:t22"
     },
     "agent:s23": {
       "down": "branch:org/jobq-plan",
       "left": "agent:s22",
       "right": "agent:s24",
-      "then": "plan:jobq",
-      "up": "plan:jobq"
+      "then": "task:t23",
+      "up": "task:t23"
     },
     "agent:s24": {
       "down": "branch:org/jobq-report",
       "left": "agent:s23",
       "right": "agent:s25",
-      "then": "plan:jobq",
-      "up": "plan:jobq"
+      "then": "task:t24",
+      "up": "task:t24"
     },
     "agent:s25": {
       "down": "branch:org/docs-brainstorm",
@@ -472,7 +472,7 @@
     "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": {
       "down": null,
       "left": "file:nidhogg/src/xdisp.c",
-      "right": "machine:desktop",
+      "right": null,
       "then": "branch:drgnx/as2-step",
       "up": "branch:drgnx/as2-step"
     },
@@ -492,10 +492,10 @@
     },
     "machine:desktop": {
       "down": null,
-      "left": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "left": null,
       "right": "machine:laptop",
       "then": "agent:s21",
-      "up": "agent:s21"
+      "up": "agent:s20"
     },
     "machine:laptop": {
       "down": null,
@@ -512,28 +512,28 @@
       "up": "agent:s24"
     },
     "plan:agent-system-p2": {
-      "down": "agent:s03",
+      "down": "task:t03",
       "left": null,
       "right": "plan:glitnir-p2-p4",
       "then": "spec:work-space",
       "up": "spec:work-space"
     },
     "plan:glitnir-p2-p4": {
-      "down": "agent:s14",
+      "down": "task:t14",
       "left": "plan:agent-system-p2",
       "right": "plan:race-proof",
       "then": "spec:glitnir",
       "up": "spec:glitnir"
     },
     "plan:jobq": {
-      "down": "agent:s24",
+      "down": "task:t24",
       "left": "plan:race-proof",
       "right": null,
       "then": "ask:4",
       "up": "ask:4"
     },
     "plan:race-proof": {
-      "down": "agent:s22",
+      "down": "task:t22",
       "left": "plan:glitnir-p2-p4",
       "right": "plan:jobq",
       "then": "spec:race-proof",
@@ -559,13 +559,181 @@
       "right": "spec:glitnir",
       "then": "ask:1",
       "up": "ask:1"
+    },
+    "task:t01": {
+      "down": "agent:s01",
+      "left": null,
+      "right": "task:t02",
+      "then": "plan:agent-system-p2",
+      "up": "plan:agent-system-p2"
+    },
+    "task:t02": {
+      "down": "agent:s02",
+      "left": "task:t01",
+      "right": "task:t03",
+      "then": "plan:agent-system-p2",
+      "up": "plan:agent-system-p2"
+    },
+    "task:t03": {
+      "down": "agent:s03",
+      "left": "task:t02",
+      "right": "task:t04",
+      "then": "plan:agent-system-p2",
+      "up": "plan:agent-system-p2"
+    },
+    "task:t04": {
+      "down": "agent:s04",
+      "left": "task:t03",
+      "right": "task:t05",
+      "then": "plan:agent-system-p2",
+      "up": "plan:agent-system-p2"
+    },
+    "task:t05": {
+      "down": "agent:s05",
+      "left": "task:t04",
+      "right": "task:t06",
+      "then": "plan:agent-system-p2",
+      "up": "plan:agent-system-p2"
+    },
+    "task:t06": {
+      "down": "agent:s06",
+      "left": "task:t05",
+      "right": "task:t07",
+      "then": "plan:agent-system-p2",
+      "up": "plan:agent-system-p2"
+    },
+    "task:t07": {
+      "down": "agent:s07",
+      "left": "task:t06",
+      "right": "task:t08",
+      "then": "plan:agent-system-p2",
+      "up": "plan:agent-system-p2"
+    },
+    "task:t08": {
+      "down": "agent:s08",
+      "left": "task:t07",
+      "right": "task:t09",
+      "then": "plan:agent-system-p2",
+      "up": "plan:agent-system-p2"
+    },
+    "task:t09": {
+      "down": "agent:s09",
+      "left": "task:t08",
+      "right": "task:t10",
+      "then": "plan:agent-system-p2",
+      "up": "plan:agent-system-p2"
+    },
+    "task:t10": {
+      "down": "agent:s10",
+      "left": "task:t09",
+      "right": "task:t11",
+      "then": "plan:agent-system-p2",
+      "up": "plan:agent-system-p2"
+    },
+    "task:t11": {
+      "down": "agent:s11",
+      "left": "task:t10",
+      "right": "task:t12",
+      "then": "plan:glitnir-p2-p4",
+      "up": "plan:glitnir-p2-p4"
+    },
+    "task:t12": {
+      "down": "agent:s12",
+      "left": "task:t11",
+      "right": "task:t13",
+      "then": "plan:glitnir-p2-p4",
+      "up": "plan:glitnir-p2-p4"
+    },
+    "task:t13": {
+      "down": "agent:s13",
+      "left": "task:t12",
+      "right": "task:t14",
+      "then": "plan:glitnir-p2-p4",
+      "up": "plan:glitnir-p2-p4"
+    },
+    "task:t14": {
+      "down": "agent:s14",
+      "left": "task:t13",
+      "right": "task:t15",
+      "then": "plan:glitnir-p2-p4",
+      "up": "plan:glitnir-p2-p4"
+    },
+    "task:t15": {
+      "down": "agent:s15",
+      "left": "task:t14",
+      "right": "task:t16",
+      "then": "plan:glitnir-p2-p4",
+      "up": "plan:glitnir-p2-p4"
+    },
+    "task:t16": {
+      "down": "agent:s16",
+      "left": "task:t15",
+      "right": "task:t17",
+      "then": "plan:glitnir-p2-p4",
+      "up": "plan:glitnir-p2-p4"
+    },
+    "task:t17": {
+      "down": "agent:s17",
+      "left": "task:t16",
+      "right": "task:t18",
+      "then": "plan:glitnir-p2-p4",
+      "up": "plan:glitnir-p2-p4"
+    },
+    "task:t18": {
+      "down": "agent:s18",
+      "left": "task:t17",
+      "right": "task:t19",
+      "then": "plan:race-proof",
+      "up": "plan:race-proof"
+    },
+    "task:t19": {
+      "down": "agent:s19",
+      "left": "task:t18",
+      "right": "task:t20",
+      "then": "plan:race-proof",
+      "up": "plan:race-proof"
+    },
+    "task:t20": {
+      "down": "agent:s20",
+      "left": "task:t19",
+      "right": "task:t21",
+      "then": "plan:race-proof",
+      "up": "plan:race-proof"
+    },
+    "task:t21": {
+      "down": "agent:s21",
+      "left": "task:t20",
+      "right": "task:t22",
+      "then": "plan:race-proof",
+      "up": "plan:race-proof"
+    },
+    "task:t22": {
+      "down": "agent:s22",
+      "left": "task:t21",
+      "right": "task:t23",
+      "then": "plan:race-proof",
+      "up": "plan:race-proof"
+    },
+    "task:t23": {
+      "down": "agent:s23",
+      "left": "task:t22",
+      "right": "task:t24",
+      "then": "plan:jobq",
+      "up": "plan:jobq"
+    },
+    "task:t24": {
+      "down": "agent:s24",
+      "left": "task:t23",
+      "right": null,
+      "then": "plan:jobq",
+      "up": "plan:jobq"
     }
   },
   "needs-you": [
     "agent:s04",
-    "agent:s20",
     "agent:s23",
-    "agent:s12"
+    "agent:s12",
+    "agent:s20"
   ],
   "outline": [
     "agent:s01",

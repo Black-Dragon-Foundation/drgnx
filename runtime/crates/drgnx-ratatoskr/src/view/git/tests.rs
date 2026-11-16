@@ -1,4 +1,5 @@
 use super::*;
+use drgnx_rows::faces::FaceId;
 
 fn files(pairs: &[(&str, Kind)]) -> BTreeMap<String, Kind> {
     pairs.iter().map(|(p, k)| ((*p).to_owned(), *k)).collect()
@@ -100,7 +101,7 @@ fn rollup_only_for_shown_folders() {
 fn letters_are_rows_with_their_faces() {
     let r = file_row("x.rs", Kind::Modified);
     assert_eq!((r.key.as_str(), r.text.as_str()), ("f:x.rs", "M"));
-    assert_eq!(r.runs, vec![(0, 1, "drgnx-git-modified".to_owned())]);
+    assert_eq!(r.runs, vec![(0, 1, FaceId::GitModified.name().to_owned())]);
     assert_eq!(r.props[0].2, "drgnx-git-status");
     assert_eq!(folder_row("a", Kind::Added).text, "●");
 }

@@ -53,7 +53,10 @@ and kept, hidden, between popups.")
           (,sess (drgnx-ui-own-session (plist-get s :name))))
      (unwind-protect
          (progn
+           ;; Open unfolded (it starts folded), as its user left it: the flows go through its rows
            (drgnx-ui-call ,sess (format "(progn (find-file %S) (drgnx-explorer-set-roots (list %S))
+                                                (when (drgnx-wb-section-collapsed-p 'buffers)
+                                                  (drgnx-wb-toggle-section 'buffers))
                                                 (drgnx-uitest--json (list :ok t)))"
                                         (expand-file-name "README.md" project) project))
            (drgnx-ui-measure ,sess nil)

@@ -78,6 +78,78 @@ pub struct ConclusionsParams {
     pub session: String,
 }
 
+/// A spec or plan edit under review: the document now, against its text before (`from`, the git blob id of that
+/// text in the document's repository).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DocChange {
+    pub doc: std::path::PathBuf,
+    pub from: String,
+}
+
+/// A code change under review: its files, relative to the repository, and its own branch (a task working on that
+/// branch is the change's author, not a task it reaches).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CodeChange {
+    pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+/// What `review/effects` looks at.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ChangeRef {
+    Doc(DocChange),
+    Code(CodeChange),
+}
+
+/// `review/effects`'s params.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EffectsParams {
+    pub change: ChangeRef,
+}
+
+/// Where a task the change reaches is: under way (running, waiting for an answer, in review) or queued in a run that
+/// goes on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskState {
+    Running,
+    NeedsInput,
+    InReview,
+    Queued,
+}
+
+/// What the change does to a task: it removes the task (or retires its plan or spec), changes its brief (its own text
+/// or the plan's shared text), or touches files its agent edits or reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Effect {
+    Stops,
+    BriefChanges,
+    Overlaps,
+}
+
+/// One task the change reaches, with the sentence the review shows ("Task 3 is running: it would stop.").
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskEffect {
+    /// `JOB#N`.
+    pub task: String,
+    pub task_title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// The name of the session working on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    pub state: TaskState,
+    pub effect: Effect,
+    pub why: String,
+}
+
 /// What a conclusion rests on: a file with optional lines, or a page.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -255,8 +327,36 @@ pub enum MapDensity {
     Roomy,
 }
 
-/// A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+/// Which items a map view shows: `.` cycles them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MapShow {
+    /// Agents running or waiting on you, what is not started, and what changed within `recent_days`.
+    #[default]
+    Active,
+    /// Finished items only.
+    Completed,
+    /// Both, the finished ones faded.
+    All,
+}
+
+/// How a map view is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MapMode {
+    /// Nested rows: spec, plan, task.
+    #[default]
+    List,
+    /// The layers and the edges between them.
+    Graph,
+}
+
+fn recent_days() -> u32 {
+    7
+}
+
+/// A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (Active, Completed or All).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MapFilters {
     /// An item id: only its chain.
@@ -265,7 +365,21 @@ pub struct MapFilters {
     #[serde(default)]
     pub overlaps: bool,
     #[serde(default)]
-    pub finished: bool,
+    pub show: MapShow,
+    /// Days a changed item stays in Active (`drgnx-work-recent-days`).
+    #[serde(default = "recent_days")]
+    pub recent_days: u32,
+}
+
+impl Default for MapFilters {
+    fn default() -> MapFilters {
+        MapFilters {
+            focus: None,
+            overlaps: false,
+            show: MapShow::default(),
+            recent_days: recent_days(),
+        }
+    }
 }
 
 /// `work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it
@@ -279,6 +393,9 @@ pub struct MapSubscribe {
     pub width_units: u32,
     #[serde(default)]
     pub density: MapDensity,
+    /// List (the default) or Graph.
+    #[serde(default)]
+    pub mode: MapMode,
     #[serde(default)]
     pub filters: MapFilters,
     /// Collapsed layers, 1 to 6.
@@ -375,6 +492,9 @@ pub struct MapSet {
     pub width_units: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub density: Option<MapDensity>,
+    /// List or Graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<MapMode>,
     /// False: hidden (nothing is sent); true again: its model and rows drawn anew (the model a reset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shown: Option<bool>,
@@ -417,8 +537,8 @@ fn check_view(view: &str) -> Result<(), Error> {
 }
 
 fn check_layers(collapsed: &[u8]) -> Result<(), Error> {
-    if collapsed.iter().any(|l| !(1..=6).contains(l)) {
-        return Err(invalid("collapsed", "layers 1 to 6"));
+    if collapsed.iter().any(|l| !(1..=8).contains(l)) {
+        return Err(invalid("collapsed", "layers 1 to 8"));
     }
     Ok(())
 }
@@ -661,6 +781,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "machines/list", MachinesList(Empty) -> MachinesList,
             classes: [User], writes: false,
             doc: "the machines the hub knows: local, and those reported and not yet expired",
+        ),
+        method!(
+            "review/effects", ReviewEffects(EffectsParams) -> Vec<TaskEffect>,
+            classes: [User], writes: false,
+            doc: "what a spec, plan or code change would do to the tasks under way or queued: a removed task (or a retired plan or spec) stops, a running task whose brief changes gets a steer, a task whose agent edits or reads a changed file would need to rebase; tasks not started or done are left out",
         ),
         method!(
             "work/conclusions", WorkConclusions(ConclusionsParams) -> Conclusions,

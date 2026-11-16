@@ -207,7 +207,7 @@ fn said(n: &crate::NeedsYou) -> String {
     }
 }
 
-/// The strip's entries, in the editor's strip's order: the cards (NEEDS, by id) but the huddles, then the agents among
+/// The strip's entries, in the editor's strip's order: the cards (NEEDS, most urgent first: `NeedsYou::urgency`) but the huddles, then the agents among
 /// ITEMS (the shown ones) that need you with no such card (by id; a huddle covers nobody), then the open huddles.
 pub fn strip_entries(needs: &[crate::NeedsYou], items: &BTreeMap<ItemId, Item>) -> Vec<StripEntry> {
     let (huddles, cards): (Vec<_>, Vec<_>) = needs
@@ -223,6 +223,8 @@ pub fn strip_entries(needs: &[crate::NeedsYou], items: &BTreeMap<ItemId, Item>) 
             .unwrap_or_else(|| ItemId(n.card.clone())),
     };
     let covered: BTreeSet<&ItemId> = cards.iter().flat_map(|c| &c.about).collect();
+    let mut cards = cards;
+    cards.sort_by(|a, b| (a.urgency(), &a.card).cmp(&(b.urgency(), &b.card)));
     let mut out: Vec<StripEntry> = cards.iter().map(|c| entry(c)).collect();
     out.extend(
         items

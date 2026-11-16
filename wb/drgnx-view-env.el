@@ -27,9 +27,11 @@
 (require 'drgnx-timer)
 (require 'drgnx-color)
 (require 'drgnx-pixels)
+(require 'drgnx-ui-kit)
 
 (defvar drgnx-hub--events)
 (defvar drgnx-look-motion)
+(defvar drgnx-look-density)
 (defvar text-scale-mode-amount)
 (defvar text-scale-mode-step)
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
@@ -161,6 +163,10 @@ in whichever buffer is current (the agent panel's maps `default' to `drgnx-ui-te
 (defun drgnx-view-env--palette ()
   (mapcar (lambda (r) (list (symbol-name (car r)) (drgnx-view-env--colour (cdr r)))) drgnx-view-env-palette-roles))
 
+(defun drgnx-view-env--kit-glyphs (frame)
+  "The kit's glyphs as FRAME draws them, ((NAME GLYPH)...): ASCII on a terminal that is not UTF-8 (`drgnx-face-glyph')."
+  (mapcar (lambda (n) (list (symbol-name n) (drgnx-face-glyph n frame))) (drgnx-ui-kit-glyph-names)))
+
 (defvar drgnx-view-env--tty-widths nil "The terminal width table as sent, computed once (`drgnx-view-env--tty-widths').")
 
 (defun drgnx-view-env--tty-widths ()
@@ -263,6 +269,9 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
                                   :tty_widths (let ((t-w (drgnx-view-env--tty-widths))) (if (eq t-w :none) nil t-w))
                                   :tz (format-time-string "%z")
                                   :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)
+                                  :glyphs (drgnx-view-env--kit-glyphs (window-frame w))
+                                  ;; the user's density: the kit's sizes that follow it (a change is a new epoch)
+                                  :density (symbol-name (or (bound-and-true-p drgnx-look-density) 'comfortable))
                                   ;; rows only read, never drawn: the hub fits them to no window
                                   :headless (if (gethash view drgnx-view-env--headless) t :false)))
                 classes))))
@@ -382,7 +391,8 @@ forgotten."
   (drgnx-view-env--update-all))
 
 (defun drgnx-view-env-look-changed ()
-  "The fonts or the scale changed outside a theme (the UI scale): one env per (view, class) whose look changed."
+  "The fonts, the scale or the density changed outside a theme (the UI scale): one env per (view, class) whose look
+changed."
   (drgnx-view-env--update-all))
 
 (defun drgnx-view-env--size-changed (&optional _frame)

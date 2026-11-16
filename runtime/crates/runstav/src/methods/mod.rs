@@ -6,6 +6,8 @@
 //! time, budgets and the supervisor ([`timeline`]); the Extensions view's catalog ([`extensions`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
+pub mod agents_side;
+pub mod changes;
 pub mod config;
 pub mod coord;
 pub mod debug;
@@ -274,6 +276,7 @@ params! {
     MachinesReport(work::MachineReport),
     MachinesList(Empty),
     WorkConclusions(work::ConclusionsParams),
+    ReviewEffects(work::EffectsParams),
     AgentsPresenceSubscribe(work::PresenceSubscribe),
     AgentsPresenceGet(work::PresenceGet),
     AgentsBufferWatch(editor::BufferWatch),
@@ -380,6 +383,12 @@ params! {
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
     GitLetters(git::LettersParams),
+    AgentsSideSubscribe(agents_side::Subscribe),
+    AgentsSideSet(agents_side::Set),
+    AgentsSideClose(agents_side::ViewId),
+    ChangesSubscribe(changes::Subscribe),
+    ChangesSet(changes::Set),
+    ChangesClose(changes::ViewId),
     ScmSubscribe(scm::Subscribe),
     ScmSet(scm::Set),
     ScmClose(scm::ViewId),
@@ -453,6 +462,7 @@ params! {
     HistoryTake(history::TakeParams),
     HistoryRedo(history::RedoParams),
     HistoryOpHunks(history::OpHunksParams),
+    HistoryProvenance(history::ProvenanceParams),
     HistoryRevertHunk(history::RevertHunkParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),
@@ -505,6 +515,8 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(editor::methods());
     v.extend(search::methods());
     v.extend(git::methods());
+    v.extend(agents_side::methods());
+    v.extend(changes::methods());
     v.extend(scm::methods());
     v.extend(runners::methods());
     v.extend(extensions::methods());

@@ -148,32 +148,47 @@ pub async fn role(f: &Front, c: &Caller, p: RoleParams) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// The manager's budget scope sits under its plan's, and that under its project's.
+/// The manager's budget scope sits under its run's (then the run's plan, spec and project), or with no job under its
+/// project's.
 async fn link_budget(f: &Front, sid: &str, job: Option<&str>, cwd: &Path) {
     let b = &f.core.budgets;
     let mine = session::scope_of(Role::Manager, sid);
     let project = match crate::graph::project_of(cwd).await {
         Ok(p) => p.map(|p| p.id),
-        // the budget links up to its plan only, and the log says why
+        // the budget links up to its run's plan or spec only, and the log says why
         Err(e) => {
             tracing::warn!(sid, "the manager's budget scope: {e}");
             None
         }
     };
-    let project = project.map(|p| BudgetScope::Project(Bounded(p)));
-    match (job, &project) {
-        (Some(j), Some(pr)) => {
-            let plan = BudgetScope::Plan(Bounded(format!("plan:{j}")));
-            b.link(&plan, pr);
-            b.link(&mine, &plan);
+    let loaded = match job {
+        Some(j) => runner::load(f, j, false)
+            .await
+            .map_err(|e| tracing::warn!(sid, "the manager's job: {}", e.message))
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    match (job, loaded) {
+        (Some(_), Some(l)) => {
+            let mut chain = vec![mine];
+            chain.extend(runner::budget_chain(f, &l.job, project).await);
+            b.link_up(&chain);
         }
-        (Some(j), None) => {
-            let plan = BudgetScope::Plan(Bounded(format!("plan:{j}")));
-            b.enroll(&plan);
-            b.link(&mine, &plan);
+        // a job the store does not know: its run alone
+        (Some(j), None) => match runstav::types::Id::new(j) {
+            Ok(id) => b.link_up(&[mine, BudgetScope::Run(id)]),
+            Err(_) => b.enroll(&mine),
+        },
+        (None, _) => {
+            let project = project.map(|p| BudgetScope::Project(Bounded(p)));
+            b.link_up(
+                &[Some(mine), project]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            );
         }
-        (None, Some(pr)) => b.link(&mine, pr),
-        (None, None) => b.enroll(&mine),
     }
 }
 

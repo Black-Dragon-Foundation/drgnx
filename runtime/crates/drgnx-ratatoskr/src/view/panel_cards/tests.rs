@@ -1,4 +1,5 @@
 use super::*;
+use drgnx_rows::faces::FaceId;
 use runstav::methods::view::Display;
 
 fn env(width: u32) -> ViewEnv {
@@ -15,6 +16,8 @@ fn env(width: u32) -> ViewEnv {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        glyphs: Vec::new(),
+        density: Default::default(),
         attach: false,
         rows_in_sja: false,
         headless: false,
@@ -71,7 +74,10 @@ fn a_pin_is_a_single_card_that_names_its_number() {
         "{:?}",
         r[0].text
     );
-    assert_eq!(shapes(&r), ["drgnx-card-single", "drgnx-card-single"]);
+    assert_eq!(
+        shapes(&r),
+        [FaceId::CardSingle.name(), FaceId::CardSingle.name()]
+    );
     assert!(
         r[1].props
             .iter()
@@ -103,10 +109,10 @@ fn the_to_do_list_counts_what_is_done() {
     assert_eq!(
         shapes(&r),
         [
-            "drgnx-card-top",
-            "drgnx-card-mid",
-            "drgnx-card-mid",
-            "drgnx-card-bottom"
+            FaceId::CardTop.name(),
+            FaceId::CardMid.name(),
+            FaceId::CardMid.name(),
+            FaceId::CardBottom.name()
         ]
     );
     assert_eq!(r[0].key, "p:todo:0");
@@ -147,7 +153,7 @@ fn the_ledger_counts_the_edits_since_you_looked_and_lists_on_demand() {
         closed[0]
             .runs
             .iter()
-            .any(|(_, _, f)| f == "drgnx-status-attention")
+            .any(|(_, _, f)| f == FaceId::StatusAttention.name())
     );
     assert!(
         closed[0]

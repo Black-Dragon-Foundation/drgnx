@@ -19,8 +19,7 @@ use norn::write::jobs::{pause_running, resume_job};
 use norn::write::tasks::force_status;
 use runstav::methods::agents::{AgentOp, DoParams, EntryType, SessionStatus, Snapshot, Transcript};
 use runstav::methods::jobs::{JobSummary, WithBudget};
-use runstav::methods::timeline::BudgetScope;
-use runstav::types::{Bounded, Id};
+use runstav::types::Id;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -255,13 +254,18 @@ pub async fn pause_job(front: &Front, job: &str, title: &str, data: Value) -> Op
         .ok()
 }
 
-/// The USD budget of JOB's plan scope: USD in all.  BIND books the gateway's spend of the job under it (the approval
-/// does; a resume keeps what the sessions bound).
+/// The USD budget of JOB's plan (across its runs; a job with no plan: its run): USD in all.  BIND books the gateway's
+/// spend of the job under its run (the approval does; a resume keeps what the sessions bound).
 pub(crate) fn set_budget(front: &Front, job: &Job, usd: f64, bind: bool) {
-    let plan = super::plan_scope(job);
-    let scope = BudgetScope::Plan(Bounded(plan));
+    let run = super::run_scope(job);
+    let scope = super::plan_scope(job).unwrap_or_else(|| run.clone());
     let b = &front.core.budgets;
-    b.enroll(&scope);
+    // the run spends from its plan's limit even before its approval links the rest of the chain
+    if scope == run {
+        b.enroll(&scope);
+    } else {
+        b.link_up(&[run.clone(), scope.clone()]);
+    }
     // with a subscription the two limits bind the measured and the estimated dollars together: one cap
     let subscription = super::has_subscription_profile(front, job);
     let limits = super::budget_limits(usd, subscription);
@@ -271,7 +275,7 @@ pub(crate) fn set_budget(front: &Front, job: &Job, usd: f64, bind: bool) {
         b.set(&scope, limits)
     };
     if bind {
-        b.bind_job(&job.id, &scope);
+        b.bind_job(&job.id, &run);
     }
     b.save();
     b.notify(hits);

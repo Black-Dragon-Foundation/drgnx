@@ -23,6 +23,7 @@
 (require 'drgnx-pixels)                 ; rows of an exact height, `drgnx-look-pixel-width'
 (require 'drgnx-icons)                  ; `drgnx-look-icon'
 (require 'drgnx-timer)                  ; the breadcrumb's symbol, on idle
+(require 'drgnx-save-ask)               ; Close Tab on a changed file
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function glitnir-active-p "glitnir")
 (declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
@@ -133,8 +134,7 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
   (interactive "e")
   (when-let* ((posn (event-start event)) (s (posn-string posn))
               (b (get-text-property (cdr s) 'drgnx-buffer (car s))) (w (posn-window posn)))
-    (drgnx-chrome--record-closed-position w b)
-    (drgnx-chrome--close w b)))
+    (drgnx-chrome--close-closing w b)))
 
 (defvar-local drgnx-chrome-tab-icon nil
   "The icon name (an `etc/icons' name, as `server') this buffer's tab shows; nil: the file kind of its file's or
@@ -501,11 +501,36 @@ An error here must never stop the kill."
           (drgnx-chrome--record-closed-position w b)
           (drgnx-chrome--close w b))))))
 
+(defvar server-buffer-clients)
+
+(defun drgnx-chrome--close-asked (w b)
+  "Whether Close Tab may take B out of W: t, nil (Cancel) or `discard' (closed, then B goes without its changes).
+B's last tab of a changed file asks Save / Don't Save / Cancel (`drgnx-save-ask'); Save writes it first.  No question
+when another group still has a tab of it (the edit stays in view), nor for a file an emacsclient waits for (closing
+its tab ends the edit, which asks as C-x # does: `drgnx-tty-frames')."
+  (if (not (and (buffer-modified-p b) (buffer-file-name b)
+                (not (and (boundp 'server-buffer-clients) (buffer-local-value 'server-buffer-clients b)))
+                (not (seq-some (lambda (o) (and (not (eq o w)) (eq (drgnx-chrome--role o) 'editor)
+                                                (or (eq (window-buffer o) b) (memq b (window-parameter o 'drgnx-tabs)))))
+                               (window-list-1 nil 'nomini t)))))
+      t
+    (pcase (drgnx-save-ask (buffer-name b))
+      ('save (with-current-buffer b (save-buffer)) t)
+      ('discard 'discard))))
+
+(defun drgnx-chrome--close-closing (w b)
+  "Close B's tab in W as the user asked (Close Tab, the tab's ×): asked first about unsaved changes
+\(`drgnx-chrome--close-asked'), recorded for Reopen Closed Tab."
+  (when-let* ((go (drgnx-chrome--close-asked w b)))
+    (drgnx-chrome--record-closed-position w b)
+    (drgnx-chrome--close w b)
+    (when (eq go 'discard) (drgnx-save-ask-discard b))))
+
 (defun drgnx-chrome-close-tab ()
-  "Close the shown tab (the buffer stays open; Close in the Buffers panel closes it)."
+  "Close the shown tab (the buffer stays open; Close in the Buffers panel closes it).  A changed file's last tab asks
+Save / Don't Save / Cancel first; Don't Save closes the buffer too."
   (interactive)
-  (drgnx-chrome--record-closed-position (selected-window) (window-buffer))
-  (drgnx-chrome--close (selected-window) (window-buffer)))
+  (drgnx-chrome--close-closing (selected-window) (window-buffer)))
 
 (defun drgnx-chrome--step (n)
   (let* ((tabs (drgnx-chrome-tabs (selected-window))) (i (seq-position tabs (window-buffer))))
@@ -515,6 +540,73 @@ An error here must never stop the kill."
 
 (defun drgnx-chrome-next-tab () "Show the next tab (wraps)." (interactive) (drgnx-chrome--step 1))
 (defun drgnx-chrome-previous-tab () "Show the previous tab (wraps)." (interactive) (drgnx-chrome--step -1))
+
+;;;; Open Previous Editor in Group (VS Code's Ctrl+Tab)
+
+(declare-function vertico-next "vertico" (&optional n))
+(defvar vertico--input)
+
+(defvar drgnx-chrome--recent-picker nil
+  "In Open Previous Editor's minibuffer (buffer-local there): (INDEX . NAMES), the row selected and the rows.")
+
+(defvar drgnx-keys-everywhere-here)          ; core/drgnx-keys.el's
+
+(defun drgnx-chrome-recent-editors (&optional w)
+  "W's editors (default: the selected window's tabs), most recently used first and the one it shows last: what
+Open Previous Editor in Group lists, the one used before the shown one on top."
+  (let* ((w (or w (selected-window))) (tabs (drgnx-chrome-tabs w)) (shown (window-buffer w))
+         (used (seq-filter (lambda (b) (and (memq b tabs) (not (eq b shown))))
+                           (window-parameter w 'drgnx-tab-history))))
+    (append used (seq-remove (lambda (b) (or (eq b shown) (memq b used))) tabs)
+            (and (memq shown tabs) (list shown)))))
+
+(defun drgnx-chrome--recent-move (n)
+  "Move Open Previous Editor's selection N rows (wraps): vertico's, else the minibuffer's text."
+  (if (and (fboundp 'vertico-next) (bound-and-true-p vertico--input))
+      (vertico-next n)
+    (pcase-let ((`(,i . ,names) drgnx-chrome--recent-picker))
+      (setq i (mod (+ i n) (length names)))
+      (setq drgnx-chrome--recent-picker (cons i names))
+      (delete-minibuffer-contents)
+      (insert (nth i names)))))
+
+(defun drgnx-chrome--recent-open (n)
+  "Open Previous Editor in Group; inside its list, move the selection N rows."
+  (if (and (minibufferp) drgnx-chrome--recent-picker)
+      (drgnx-chrome--recent-move n)
+    (let* ((w (selected-window)) (names (mapcar #'buffer-name (drgnx-chrome-recent-editors w))))
+      (if (< (length names) 2)
+          (message "No other editor in this group")
+        (let ((choice (minibuffer-with-setup-hook
+                          ;; after vertico's own setup, which sets `vertico--input'
+                          (:append (lambda ()
+                                     (setq-local drgnx-chrome--recent-picker (cons 0 names))
+                                     ;; the profile's keys for it (VS Code's C-<tab>, C-S-<tab>) go on working in
+                                     ;; the list, ahead of every mode's (`tab-bar-mode' binds C-<tab> to `tab-next')
+                                     (setq-local drgnx-keys-everywhere-here t)
+                                     ;; without vertico the minibuffer shows the selection as its text
+                                     (unless (bound-and-true-p vertico--input) (insert (car names)))))
+                        (completing-read "Open editor: "
+                                         (lambda (string pred action)
+                                           (if (eq action 'metadata)
+                                               '(metadata (category . drgnx-editor) (display-sort-function . identity)
+                                                          (cycle-sort-function . identity))
+                                             (complete-with-action action names string pred)))
+                                         nil t))))
+          (when-let* ((b (get-buffer choice)))
+            (set-window-buffer w b)
+            (drgnx-chrome-apply nil t)))))))
+
+(defun drgnx-chrome-recent-editor ()
+  "The group's editors, most recently used first, the one used before this selected: Return goes back to it.
+Pressed again while the list is open the selection moves down (hold Ctrl and tap Tab, as in VS Code)."
+  (interactive)
+  (drgnx-chrome--recent-open 1))
+
+(defun drgnx-chrome-recent-editor-up ()
+  "As `drgnx-chrome-recent-editor'; pressed while its list is open the selection moves up."
+  (interactive)
+  (drgnx-chrome--recent-open -1))
 
 ;;;; Breadcrumbs
 
@@ -867,7 +959,8 @@ or buffer changed (no new tabs while the minibuffer is active: those are preview
         (pcase (drgnx-chrome--role w)
           ;; the tabs it noted too: turned on, it notes each window's shown buffer (*scratch*), which no other
           ;; teardown would take back
-          ('editor (dolist (p '(tab-line-format header-line-format mode-line-format drgnx-tabs drgnx-tab-history drgnx-preview))
+          ('editor (dolist (p '(tab-line-format header-line-format mode-line-format drgnx-tabs drgnx-tab-history drgnx-preview
+                                                drgnx-chrome-symbol))
                      (set-window-parameter w p nil)))
           ((or 'dock 'area 'lane 'tile)
            (set-window-parameter w 'tab-line-format (or (window-parameter w 'drgnx-wb-island)

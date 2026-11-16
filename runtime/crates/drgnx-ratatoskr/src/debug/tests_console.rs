@@ -1,6 +1,7 @@
 //! The debug console's lines (`console.rs`): splitting, ANSI, counting, groups, the queue's cap.
 
 use super::console::{BATCH_BYTES, Console, QUEUE_CAP};
+use drgnx_rows::faces::FaceId;
 use serde_json::{Value, json};
 
 fn out(cat: &str, text: &str) -> Value {
@@ -49,7 +50,7 @@ fn ansi_sgr_becomes_face_runs() {
         l[0]["runs"],
         json!([
             [2, 4, "drgnx-debug-console-red"],
-            [2, 4, "drgnx-debug-console-bold"]
+            [2, 4, FaceId::DebugConsoleBold.name()]
         ])
     );
     assert_eq!(

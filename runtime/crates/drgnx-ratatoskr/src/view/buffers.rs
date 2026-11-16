@@ -8,6 +8,7 @@ use super::explorer::{INDENT, RowLook};
 use super::{Key, Views, git, icons, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::view::{BufferOp, BuffersSet};
 use runstav::wire::Error;
@@ -185,14 +186,14 @@ fn buffer_row(
     let ignored = mark == Some(git::Kind::Ignored);
     r.push(
         &super::explorer::display(&b.name),
-        ignored.then_some("drgnx-git-ignored"),
+        ignored.then_some(FaceId::GitIgnored.name()),
     );
     let end = r.pos();
     if let Some(k) = mark.filter(|_| !ignored) {
         r.prop(name, end, "drgnx-git-status", json!(k.name()));
     }
     if b.modified {
-        r.prop(name, end, "drgnx-buffers-modified", json!(true));
+        r.prop(name, end, FaceId::BuffersModified.name(), json!(true));
     }
     r.prop(0, end, "drgnx-work-id", json!(b.id));
     r.finish()

@@ -1,6 +1,7 @@
 use super::rows::{grep_doc_in, window_of};
 use super::run::{DIGEST_MAX, Mark, Snap, buffer_snap, match_id, snapshot};
 use super::*;
+use drgnx_rows::faces::FaceId;
 use runstav::methods::view::{Display, ViewEnv};
 
 const CONN: u64 = 1;
@@ -44,6 +45,8 @@ fn env(class: &str, epoch: u64) -> ViewEnv {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        glyphs: Vec::new(),
+        density: Default::default(),
         attach: false,
         rows_in_sja: false,
         headless: false,
@@ -354,8 +357,8 @@ fn replace_preview_runs() {
     assert_eq!(
         row.runs,
         vec![
-            (10, 16, "drgnx-replace-old".into()),
-            (16, 19, "drgnx-replace-new".into())
+            (10, 16, FaceId::ReplaceOld.name().into()),
+            (16, 19, FaceId::ReplaceNew.name().into())
         ]
     );
     assert_eq!(row.props[0].2, "drgnx-replace-box");
@@ -370,7 +373,10 @@ fn replace_preview_runs() {
     let Op::Replace(rows) = &patches[0].ops[0] else {
         panic!()
     };
-    assert_eq!(rows[0].runs, vec![(10, 16, "drgnx-replace-match".into())]);
+    assert_eq!(
+        rows[0].runs,
+        vec![(10, 16, FaceId::ReplaceMatch.name().into())]
+    );
 }
 
 /// [D] The old and new tints cover the changed characters only: what the match and its replacement share at the
@@ -381,19 +387,19 @@ fn a_preview_tints_only_the_changed_characters() {
     let row = |new: &str| rows::match_row(&query(), new, "m:1:0".into(), &mt, None);
     let r = row("needles");
     assert_eq!(r.text, "  [x] let needles;");
-    assert_eq!(r.runs, vec![(16, 17, "drgnx-replace-new".into())]);
+    assert_eq!(r.runs, vec![(16, 17, FaceId::ReplaceNew.name().into())]);
     let r = row("noodle");
     assert_eq!(r.text, "  [x] let neeoodle;");
     assert_eq!(
         r.runs,
         vec![
-            (11, 13, "drgnx-replace-old".into()),
-            (13, 15, "drgnx-replace-new".into())
+            (11, 13, FaceId::ReplaceOld.name().into()),
+            (13, 15, FaceId::ReplaceNew.name().into())
         ]
     );
     let r = row("need");
     assert_eq!(r.text, "  [x] let needle;");
-    assert_eq!(r.runs, vec![(14, 16, "drgnx-replace-old".into())]);
+    assert_eq!(r.runs, vec![(14, 16, FaceId::ReplaceOld.name().into())]);
 }
 
 #[test]
@@ -1445,7 +1451,10 @@ fn a_label_row_goes_above_each_definitions_first_match() {
         ]
     );
     assert_eq!(rows[1].text, "  ƒ outer");
-    assert_eq!(rows[1].runs, vec![(0, 9, "drgnx-replace-ctx".to_string())]);
+    assert_eq!(
+        rows[1].runs,
+        vec![(0, 9, FaceId::ReplaceCtx.name().to_string())]
+    );
     assert!(
         rows[1]
             .props
@@ -1705,14 +1714,14 @@ fn an_index_modes_rows_show_the_kind_the_signature_and_the_score() {
             .collect()
     };
     assert_eq!(rows[1].text, "  [x] ƒ fn parse(s: &str)");
-    assert_eq!(run(&rows[1], "drgnx-replace-kind"), [(6, 7)]);
-    assert_eq!(run(&rows[1], "drgnx-replace-match"), [(11, 16)]);
+    assert_eq!(run(&rows[1], FaceId::ReplaceKind.name()), [(6, 7)]);
+    assert_eq!(run(&rows[1], FaceId::ReplaceMatch.name()), [(11, 16)]);
     assert_eq!(
         rows[2].text,
         "  [x] ██   retry  fn retry(op: Op) {  (moved)"
     );
-    assert_eq!(run(&rows[2], "drgnx-replace-score"), [(6, 8)]);
-    assert_eq!(run(&rows[2], "drgnx-replace-kind"), [(11, 16)]);
+    assert_eq!(run(&rows[2], FaceId::ReplaceScore.name()), [(6, 8)]);
+    assert_eq!(run(&rows[2], FaceId::ReplaceKind.name()), [(11, 16)]);
     assert!(
         rows[2]
             .props
@@ -1731,7 +1740,7 @@ fn an_index_modes_rows_show_the_kind_the_signature_and_the_score() {
         assert!(
             r.props
                 .iter()
-                .any(|(_, _, n, _)| n == "drgnx-replace-match")
+                .any(|(_, _, n, _)| n == FaceId::ReplaceMatch.name())
         );
     }
 }
@@ -2249,7 +2258,7 @@ fn handed_rows_get_the_agents_bar_and_their_groups_a_chip() {
                 run.handed.insert(
                     match_id(run.id, n),
                     AgentMark {
-                        face: "drgnx-agent-2".into(),
+                        face: FaceId::Agent2.name().into(),
                         glyph: "◆".into(),
                         name: "Ada".into(),
                         handoff: "h:1".into(),
@@ -2270,7 +2279,7 @@ fn handed_rows_get_the_agents_bar_and_their_groups_a_chip() {
     };
     let m0 = row(&greps, "m:1:0");
     assert!(m0.text.starts_with("▎ [x] x needle"), "{:?}", m0.text);
-    assert_eq!(m0.runs[0], (0, 1, "drgnx-agent-2".to_owned()));
+    assert_eq!(m0.runs[0], (0, 1, FaceId::Agent2.name().to_owned()));
     assert!(m0.props.contains(&(0, 1, "help-echo".into(), json!("Ada"))));
     assert!(row(&greps, "m:1:2").text.starts_with("  [x]"));
     let head = row(&greps, "f:a.rs");
@@ -2282,11 +2291,16 @@ fn handed_rows_get_the_agents_bar_and_their_groups_a_chip() {
             .iter()
             .any(|(s, e, n, _)| (*s, *e) == (0, end) && n == "drgnx-work-id")
     );
-    assert!(head.runs.contains(&(at, end, "drgnx-pill-agent".into())));
     assert!(
-        head.props
-            .contains(&(at, end, "drgnx-search-agent".into(), json!("drgnx-agent-2")))
+        head.runs
+            .contains(&(at, end, FaceId::PillAgent.name().into()))
     );
+    assert!(head.props.contains(&(
+        at,
+        end,
+        "drgnx-search-agent".into(),
+        json!(FaceId::Agent2.name())
+    )));
     // the state moves: editing, one done
     greps
         .with(CONN, "s", id, |run| {
@@ -2322,16 +2336,16 @@ fn chips_leave_the_names_face_short_of_them() {
             run.handed.insert(
                 match_id(run.id, 0),
                 AgentMark {
-                    face: "drgnx-agent-1".into(),
+                    face: FaceId::Agent1.name().into(),
                     glyph: "●".into(),
                     name: "Ada".into(),
                     handoff: "h:1".into(),
                 },
             );
             let mut b = drgnx_rows::RowBuilder::new("s:x");
-            b.push("name", Some("drgnx-replace-symbol"));
+            b.push("name", Some(FaceId::ReplaceSymbol.name()));
             let at = b.pos();
-            b.push("  3", Some("drgnx-replace-dim"));
+            b.push("  3", Some(FaceId::ReplaceDim.name()));
             let end = b.pos();
             b.prop(0, end, "drgnx-work-id", json!("s:x"));
             rows::with_chips(run, b.finish(), at, [match_id(run.id, 0)].into_iter())
@@ -2339,8 +2353,11 @@ fn chips_leave_the_names_face_short_of_them() {
         .unwrap();
     assert_eq!(row.text, "name   ● Ada · sent 0/1   3");
     let n = row.text.chars().count() as u32;
-    assert_eq!(row.runs[0], (0, 4, "drgnx-replace-symbol".to_owned()));
-    assert_eq!(row.runs[1], (n - 3, n, "drgnx-replace-dim".to_owned()));
+    assert_eq!(row.runs[0], (0, 4, FaceId::ReplaceSymbol.name().to_owned()));
+    assert_eq!(
+        row.runs[1],
+        (n - 3, n, FaceId::ReplaceDim.name().to_owned())
+    );
     assert_eq!(
         row.props[0],
         (0, n, "drgnx-work-id".to_owned(), json!("s:x"))

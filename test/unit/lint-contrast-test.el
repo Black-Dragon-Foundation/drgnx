@@ -172,6 +172,20 @@ reach 4.5:1 on the editor, the panel and raised surfaces, and the panel stands o
                       (cons theme fails)))
         (should (>= card bar))))))
 
+(ert-deftest drgnx-lint/contrast-component-tokens ()
+  "Pattern D: the component tier meets the bars from the token table alone: a primary button's text on its fill 4.5:1
+\(7:1 in High Contrast), and the edges of a button, a key hint and a card that needs you 3:1 on the panel."
+  (let (fails)
+    (dolist (variant '(dark light hc))
+      (cl-flet ((check (fg bg bar)
+                  (let ((ratio (drgnx-color-contrast (drgnx-look-token fg variant) (drgnx-look-token bg variant))))
+                    (unless (>= ratio bar)
+                      (push (format "%s: %s on %s: %.2f, needs %s" variant fg bg ratio bar) fails)))))
+        (check 'button-primary-fg 'button-primary-bg (if (eq variant 'hc) 7.0 4.5))
+        (dolist (edge '(button-edge key-hint-edge card-needs-you-edge))
+          (check edge 'panel 3.0))))
+    (when fails (ert-fail (string-join (nreverse fails) "\n")))))
+
 (defun drgnx-lint-contrast--cycle (face kind &optional path)
   "A list of faces ending in FACE's repeat when FACE's `:inherit' chain on a KIND display loops, else nil."
   (cond ((memq face path) (reverse (cons face path)))
