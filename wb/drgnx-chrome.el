@@ -151,16 +151,20 @@ buffer's name (`drgnx-look-file-icon-name').  A remote terminal sets `server'.")
   "The title of buffer B's tab (audit G3): its own `drgnx-chrome-tab-title', else its name, with a special page's
 `*drgnx settings*' read as \"Settings\" (the stars and drgnx's prefix gone, each word capitalised: \"Keyboard
 Shortcuts\", \"Extensions\", the start page \"Welcome\").  A file's buffer keeps its name."
-  (let ((name (buffer-name b)))
-    (cond ((buffer-local-value 'drgnx-chrome-tab-title b))
-          ((buffer-file-name b) name)
-          ((string-match "\\`\\*\\(.+?\\)\\*\\(<[0-9]+>\\)?\\'" name)
-           (let ((words (match-string 1 name)) (n (match-string 2 name)))
-             (concat (or (cdr (assoc words drgnx-chrome--titles))
-                         (let ((w (string-remove-prefix "drgnx " words)))
-                           (if (let ((case-fold-search nil)) (string-match-p "[A-Z]" w)) w (upcase-initials w))))
-                     (if n (concat " " n) ""))))
-          (t name))))
+  (cond ((buffer-local-value 'drgnx-chrome-tab-title b))
+        ((buffer-file-name b) (buffer-name b))
+        (t (drgnx-chrome-title-of-name (buffer-name b)))))
+
+(defun drgnx-chrome-title-of-name (name)
+  "The tab title of a buffer called NAME that visits no file and names no title of its own (`drgnx-chrome-tab-title'):
+`*drgnx settings*' reads \"Settings\"; a name without stars stays."
+  (if (string-match "\\`\\*\\(.+?\\)\\*\\(<[0-9]+>\\)?\\'" name)
+      (let ((words (match-string 1 name)) (n (match-string 2 name)))
+        (concat (or (cdr (assoc words drgnx-chrome--titles))
+                    (let ((w (string-remove-prefix "drgnx " words)))
+                      (if (let ((case-fold-search nil)) (string-match-p "[A-Z]" w)) w (upcase-initials w))))
+                (if n (concat " " n) "")))
+    name))
 
 (defvar drgnx-chrome--tab-map
   (let ((m (make-sparse-keymap)))

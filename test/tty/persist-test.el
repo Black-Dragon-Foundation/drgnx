@@ -8,7 +8,7 @@
 
 (ert-deftest drgnx-tty-persist/a-terminal-session-never-writes-the-layout ()
   (drgnx-tty-session-with (s :size "120x40" :keys 'emacs)
-    (drgnx-tty-session-wait-screen s "\\*scratch\\* ×" 20)
+    (drgnx-tty-session-wait-tab s "×" 20)
     (should (drgnx-tty-session-eval s '(bound-and-true-p drgnx-persist-mode)))       ; else nothing is tested
     (should (memq 'drgnx-persist--on-exit (drgnx-tty-session-eval s 'kill-emacs-hook)))
     (let* ((file (drgnx-tty-session-eval s '(drgnx-persist--file)))

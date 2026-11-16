@@ -17,6 +17,7 @@
 (require 'project)
 (require 'drgnx-setting)
 (require 'drgnx-hub-client)
+(require 'json)                         ; a new launch.json's text
 (require 'drgnx-frame-kind)
 (declare-function drgnx-term-reattach-one "drgnx-term" (row &optional select))
 (declare-function drgnx-trust-folder "drgnx-trust")
@@ -138,8 +139,11 @@ project's settings never set this."
       (drgnx-debug-launch--show-error err)
       (user-error "launch.json does not read: %s" (plist-get err :message)))
     (unless configs
-      (user-error "No launch configuration for %s: add .vscode/launch.json, or open a file of a language drgnx debugs"
-                  (abbreviate-file-name root)))
+      ;; as VS Code's F5 with nothing to start: Select debugger, whose configurations become launch.json
+      (drgnx-debug-launch-create root)
+      (setq r (drgnx-debug-launch-configs root) configs (append (plist-get r :configs) nil))
+      (unless configs
+        (user-error "No launch configuration for %s: add one to .vscode/launch.json" (abbreviate-file-name root))))
     (let* ((rows (mapcar (lambda (c) (cons (plist-get c :name) c)) configs))
            (last (seq-find (lambda (c) (equal (plist-get c :id) (plist-get r :last))) configs))
            (completion-extra-properties
@@ -307,17 +311,53 @@ result is saved in settings.el; the ones that cannot be are named."
 ;;;; Install
 
 (declare-function drgnx-packs-adapters "drgnx-packs" ())
-(defun drgnx-debug-launch-installable (&optional table)
-  "The built-in adapters of TABLE (default etc/debug-adapters.eld and the built-in packs' `:adapters') drgnx can install,
-as (NAME . ID), read as data."
+(defun drgnx-debug-launch--table (&optional table)
+  "The adapters of TABLE (default etc/debug-adapters.eld and the built-in packs' `:adapters'), as plists, read as data."
   (let ((r (drgnx-file-read (or table (expand-file-name "etc/debug-adapters.eld" drgnx-dir)))))
     (unless (eq (plist-get r :status) 'ok)
       (user-error "etc/debug-adapters.eld does not read: %s" (or (plist-get (plist-get r :problem) :text)
                                                                  (plist-get r :status))))
-    (delq nil (mapcar (lambda (a)
-                        (when (and (plist-get a :install) (not (plist-get a :not-built-in)))
-                          (cons (plist-get a :name) (plist-get a :id))))
-                      (append (plist-get r :data) (and (null table) (progn (require 'drgnx-packs) (drgnx-packs-adapters))))))))
+    (append (plist-get r :data) (and (null table) (progn (require 'drgnx-packs) (drgnx-packs-adapters))))))
+
+(defun drgnx-debug-launch-installable (&optional table)
+  "The built-in adapters of TABLE (default etc/debug-adapters.eld and the built-in packs' `:adapters') drgnx can install,
+as (NAME . ID), read as data."
+  (delq nil (mapcar (lambda (a)
+                      (when (and (plist-get a :install) (not (plist-get a :not-built-in)))
+                        (cons (plist-get a :name) (plist-get a :id))))
+                    (drgnx-debug-launch--table table))))
+
+;;;; A new launch.json (VS Code's "Select debugger")
+
+(defun drgnx-debug-launch-debuggers (&optional table)
+  "The debuggers a new launch.json may start from: (NAME . CONFIGURATIONS) of each adapter of TABLE (as
+`drgnx-debug-launch-installable') with starting configurations (`:defaults'), in the table's order."
+  (delq nil (mapcar (lambda (a) (when-let* ((d (plist-get a :defaults))) (cons (plist-get a :name) d)))
+                    (drgnx-debug-launch--table table))))
+
+(defun drgnx-debug-launch--json (configs)
+  "The text of a launch.json holding CONFIGS (launch.json fields as plists), as VS Code writes a new one."
+  (let ((json-encoding-pretty-print t) (json-encoding-default-indentation "  "))
+    (concat (json-encode (list :version "0.2.0" :configurations (vconcat configs))) "\n")))
+
+(defun drgnx-debug-launch--empty-p (file)
+  "Non-nil when launch.json FILE holds no configuration and nothing else but its version (Open launch.json's)."
+  (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+    (string-match-p "\\`[ \t\n]*{[ \t\n]*\"version\"[ \t]*:[ \t]*\"[0-9.]+\"[ \t\n]*,[ \t\n]*\"configurations\"[ \t]*:[ \t]*\\[[ \t\n]*\\][ \t\n]*}[ \t\n]*\\'"
+                    text)))
+
+(defun drgnx-debug-launch-create (root &optional table)
+  "Ask which debugger (VS Code's \"Select debugger\"), and write its starting configurations to ROOT's
+.vscode/launch.json, when it has none or only Open launch.json's empty list; else open it to add one.  The file's path."
+  (let* ((file (expand-file-name ".vscode/launch.json" root))
+         (all (drgnx-debug-launch-debuggers table)))
+    (if (and (file-exists-p file) (not (drgnx-debug-launch--empty-p file)))
+        (progn (find-file file) (user-error "Add a configuration to launch.json"))
+      (let ((name (completing-read "Select debugger: " (mapcar #'car all) nil t)))
+        (make-directory (file-name-directory file) t)
+        (drgnx-file-write-text file (drgnx-debug-launch--json (cdr (assoc name all))))
+        (message "Made .vscode/launch.json for %s" name)
+        file))))
 
 (defun drgnx-debug-install-adapter (id)
   "Install the debug adapter ID: its pinned download, checked against its sha256, into drgnx's tools folder

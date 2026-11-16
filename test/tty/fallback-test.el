@@ -28,7 +28,7 @@
   "A new VTE client of S, once its frame shows; it has the fallback layer."
   (drgnx-tty-session-eval s (drgnx-tty-fallback-test--says "VTE(7800)"))
   (let ((c (drgnx-tty-session-client s :env drgnx-tty-fallback-test--vte)))
-    (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+    (drgnx-tty-session-wait-tab c nil 20)
     (should (equal (mapcar (lambda (k) (plist-get (drgnx-tty-keys-test--caps s c) k)) '(:id :keys)) '(vte legacy)))
     (should (drgnx-tty-session-eval s `(terminal-parameter (frame-terminal ,(drgnx-tty-keys-test--frame c)) 'drgnx-tty-fallback)))
     c))
@@ -269,7 +269,7 @@ so no stage rebinds it; the module stages are over first all the same."
   (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28")
     (let* ((c (drgnx-tty-session-client s :env (list (format "TMUX=%s,1,0" (plist-get s :tmux)))))
            (frame (drgnx-tty-keys-test--frame c)))
-      (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-tab c nil 20)
       (let ((caps (drgnx-tty-keys-test--caps s c)))
         (should (equal (list (plist-get caps :id) (plist-get caps :keys)) '(tmux mok)))
         (should (member "C-S-f" (plist-get caps :folded))))
@@ -290,7 +290,7 @@ so no stage rebinds it; the module stages are over first all the same."
     (let* ((l (drgnx-tty-fallback-test--legacy s))
            (m (progn (drgnx-tty-session-eval s (drgnx-tty-fallback-test--says "WezTerm 20240203-110809-5046fc22"))
                      (drgnx-tty-session-client s :env '("TERM=xterm-256color")))))
-      (drgnx-tty-session-wait-screen m "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-tab m nil 20)
       (should (equal (mapcar (lambda (k) (plist-get (drgnx-tty-keys-test--caps s m) k)) '(:id :keys :folded))
                      '(wezterm mok nil)))
       (should-not (drgnx-tty-session-eval s `(terminal-parameter (frame-terminal ,(drgnx-tty-keys-test--frame m)) 'drgnx-tty-fallback)))
@@ -319,7 +319,7 @@ so no stage rebinds it; the module stages are over first all the same."
         (drgnx-tty-session-wait-screen l "SEARCH")
         (drgnx-tty-keys-test--quit s l 'legacy)
         ;; K's ESC F: not Search; K's kkp C-S-f: Search
-        (drgnx-tty-session-wait-screen k "\\*scratch\\*")
+        (drgnx-tty-session-wait-tab k)
         (drgnx-tty-fallback-test--not-run s 'drgnx-wb-view-search "\eF" k)
         (drgnx-tty-session-key k "C-S-f" 'kkp)
         (drgnx-tty-keys-test--ran s 'drgnx-wb-view-search "C-S-f")
@@ -341,7 +341,7 @@ so no stage rebinds it; the module stages are over first all the same."
                      :size "100x30"
                      :command (format "env TERM=xterm-256color VTE_VERSION=7800 %s -a false -t -s %s; sh"
                                       (drgnx-ui--emacsclient) (shell-quote-argument (plist-get gui :socket)))))
-          (drgnx-tty-session-wait-screen tty "\\*drgnx start\\*" 30)   ; a fresh client opens on the start page
+          (drgnx-tty-session-wait-tab tty nil 30 '("*drgnx start*"))   ; a fresh client opens on the start page
           (let ((g '(seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
                 (tf '(seq-find (lambda (f) (and (not (display-graphic-p f)) (frame-parameter f 'client))) (frame-list))))
             (drgnx-tty-session-wait gui `(terminal-parameter (frame-terminal ,tf) 'drgnx-tty-fallback) 20)

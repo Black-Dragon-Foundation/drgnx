@@ -56,6 +56,8 @@ string-pixel-width uses)")
   :why "buffers are closed by the harness's cleanup between files (ert-kill-all-test-buffers); a hidden work buffer is no state")
  (:what "\\`frame-param drgnx-\\(?:wb-\\|intent-by\\|layouts-\\|look-\\|frame-role\\|monitor\\|platform-wm\\|work-space-shown\\)"
   :why "the workbench's own layout and look bookkeeping in the frame parameters: every file that opens a panel sets it; the look rows' drgnx-look-gui-check-clean reads what moves pixels")
+ (:what "\\`frame-param drgnx-popup-frame \\+nil\\'"
+  :why "the popup lane's slot on the frame, empty again: the row deleted the popup's frame (a frame parameter cannot be removed, only emptied)")
  (:what "\\`frame-param \\(?:glitnir--[a-z-]+\\|session-name\\) "
   :why "the renderer's and the session's own bookkeeping")
  (:what "\\`window-param \\(?:quit-restore\\|quit-restore-prev\\|internal-region-overlay\\|drgnx-uitest-id\\) "
