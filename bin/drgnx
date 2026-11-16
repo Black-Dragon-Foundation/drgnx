@@ -179,6 +179,11 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
   (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
         --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key) ||
     { rt_err "the build of drgnx-key failed"; return 1; }
+  # drgnx-term, next to the hub: the terminal's worker, which the hub runs from beside its own binary (term::worker_bin).
+  # Its engine (libghostty-vt) needs Zig: a failure only warns (drgnx runs, its terminal does not open)
+  (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
+        --manifest-path runtime/Cargo.toml -p drgnx-term --bin drgnx-term) ||
+    rt_err "warning: the terminal's worker (drgnx-term) did not build: drgnx's terminal does not open until it does (needs Zig: install.sh sets it up)"
   # the relay sidecar of a networked container job: static Linux musl, whatever the host (on a Mac it is cross-built with
   # Rust's self-contained musl and rust-lld: no C toolchain for Linux); a failure only warns (no network for jobs then)
   local pxarch pxtriple pxl pxenv
@@ -297,6 +302,13 @@ rt_install() { # [--prefix DIR] — the built binary to <data>/bin/ratatoskr by 
       { rt_err "could not install $n into $dir"; return 1; }
   else
     rt_err "no relay sidecar built at $px: container jobs get no network until drgnx runtime build runs"
+  fi
+  # the terminal's worker, beside the hub (it runs it from there)
+  if [[ -x "${built%/*}/drgnx-term" ]]; then
+    cp "${built%/*}/drgnx-term" "$dir/drgnx-term.new" && chmod 755 "$dir/drgnx-term.new" &&
+      mv -f "$dir/drgnx-term.new" "$dir/drgnx-term" || { rt_err "could not install drgnx-term into $dir"; return 1; }
+  else
+    rt_err "no drgnx-term built at ${built%/*}/drgnx-term: drgnx's terminal does not open until drgnx runtime build runs"
   fi
   # drgnx-key: native next to the hub (keyed jobs here), static as drgnx-key-<arch>-linux-musl (keyed container jobs)
   for n in drgnx-key "drgnx-key-$(rt_px_arch)-linux-musl"; do

@@ -540,7 +540,11 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
                        "t=; p=; for a; do [ \"$p\" = --target ] && t=$a/; p=$a; done\n"
                        "case \"$*\" in *'--bin drgnx-key'*) mkdir -p \"$CARGO_TARGET_DIR/${t}release\" &&"
                        " echo \"#!/bin/sh\" > \"$CARGO_TARGET_DIR/${t}release/drgnx-key\" &&"
-                       " chmod 755 \"$CARGO_TARGET_DIR/${t}release/drgnx-key\";; esac\n")
+                       " chmod 755 \"$CARGO_TARGET_DIR/${t}release/drgnx-key\";; esac\n"
+                       ;; the terminal's worker, beside the hub
+                       "case \"$*\" in *'--bin drgnx-term'*) mkdir -p \"$CARGO_TARGET_DIR/release\" &&"
+                       " echo \"#!/bin/sh\" > \"$CARGO_TARGET_DIR/release/drgnx-term\" &&"
+                       " chmod 755 \"$CARGO_TARGET_DIR/release/drgnx-term\";; esac\n")
                cargo-log))
       (set-file-modes (expand-file-name "cargo" tc) #o755)
       ;; the forwarder's musl target is added through the toolchain's rustup (a stub: never the host's)
@@ -567,6 +571,9 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
           (should (file-executable-p (expand-file-name "data/bin/drgnx-key" dir)))
           (should (file-executable-p (expand-file-name (format "data/bin/drgnx-key-%s-linux-musl" arch) dir)))
           (should (string-search (format "rustup target add %s-unknown-linux-musl" arch) log)))
+        ;; the terminal's worker: the hub runs it from beside its own binary (a daily install had no terminal)
+        (should (string-search "-j 4 --manifest-path runtime/Cargo.toml -p drgnx-term --bin drgnx-term RUSTUP_HOME=" log))
+        (should (file-executable-p (expand-file-name "data/bin/drgnx-term" dir)))
         (should (string-search (format "RUSTUP_HOME=%s/rh CARGO_HOME=%s/ch" dir dir) log))
         (should (string-search (format "TARGET=%s/cache/drgnx/ratatoskr-target COMMIT=%s CHECKOUT=%s/install" dir head dir) log))
         (should-not (string-search "WRONG" log))
