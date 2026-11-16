@@ -353,7 +353,7 @@ a shell command (`:w !cmd') or an append (`:w >> file')."
 
 (defun drgnx-evil-ex--quit ()
   "`:q' in the workbench.  In a dock (the sidebar, the panel): back to the editor you used last, never closing a
-group.  In an editor group: Close Tab when it has other tabs, else Close Editor Group when there is another group,
+group.  In an editor group: Close Tab when it has other tabs, else Close Tile when there is another group,
 else Close Window (which keeps a background drgnx running, and otherwise asks before quitting)."
   (drgnx-evil-ex--run (cond ((drgnx-evil-ex--in-dock-p) 'focus-editor)
                             ((cdr (drgnx-chrome-tabs (selected-window))) 'close-tab)
@@ -422,7 +422,7 @@ save when the buffer has changes, then `drgnx-evil-ex--quit'; evil's own without
   (if (drgnx-evil-ex--workbench-p) (drgnx-evil-ex--split 'split-editor-right args) (apply orig args)))
 
 (defun drgnx-evil-ex-close-group (orig &rest args)
-  "Advice around `evil-window-delete' (`C-w c', `:clo'): Close Editor Group.  In a dock it goes back to the editor
+  "Advice around `evil-window-delete' (`C-w c', `:clo'): Close Tile.  In a dock it goes back to the editor
 instead; an editor group is never closed from there."
   (cond ((not (drgnx-evil-ex--workbench-p)) (apply orig args))
         ((drgnx-evil-ex--in-dock-p) (drgnx-evil-ex--run 'focus-editor))

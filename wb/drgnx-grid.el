@@ -321,19 +321,22 @@ window is no atom any more."
       (when (and (window-valid-p sibling) (not (window-parameter (window-parent sibling) 'window-atom)))
         (walk-window-subtree (lambda (w) (set-window-parameter w 'window-atom nil)) sibling t)))))
 
+(defun drgnx-grid--tool-tile (w kinds frame horizontal)
+  "Make window W a tool tile holding KINDS on FRAME, its stack's front shown; its size along HORIZONTAL kept."
+  (set-window-parameter w 'drgnx-role 'tile)
+  (set-window-parameter w 'drgnx-pane-stack (copy-sequence kinds))
+  (dolist (p '((no-other-window . t) (mode-line-format . none) (delete-window . drgnx-grid--delete-window)
+               (quit-restore . nil)))
+    (set-window-parameter w (car p) (cdr p)))
+  (set-window-scroll-bars w nil nil nil nil t)
+  (drgnx-grid--put-buffer w (car kinds) frame)
+  ;; after the scroll bars: Emacs keeps the size only while it equals the body size it recorded
+  (window-preserve-size w (and horizontal t) t)
+  w)
+
 (defun drgnx-grid--make-tool-tile (dock kinds frame)
   "Split a new tool tile for DOCK holding KINDS on FRAME (`drgnx-grid-split-dock'), its stack's front shown."
-  (let* ((w (drgnx-grid-split-dock dock nil frame kinds)) (horizontal (drgnx-grid--horizontal-dock-p dock)))
-    (set-window-parameter w 'drgnx-role 'tile)
-    (set-window-parameter w 'drgnx-pane-stack (copy-sequence kinds))
-    (dolist (p '((no-other-window . t) (mode-line-format . none) (delete-window . drgnx-grid--delete-window)
-                 (quit-restore . nil)))
-      (set-window-parameter w (car p) (cdr p)))
-    (set-window-scroll-bars w nil nil nil nil t)
-    (drgnx-grid--put-buffer w (car kinds) frame)
-    ;; after the scroll bars: Emacs keeps the size only while it equals the body size it recorded
-    (window-preserve-size w (and horizontal t) t)
-    w))
+  (drgnx-grid--tool-tile (drgnx-grid-split-dock dock nil frame kinds) kinds frame (drgnx-grid--horizontal-dock-p dock)))
 
 (defun drgnx-grid--dock-of (kind)
   "The dock KIND lives at: its home (`left', `bottom', `right'), nil for an editor kind."
@@ -478,6 +481,56 @@ A docked tile's size is noted as its dock's `:sizes' intent.  The window, or nil
              (kind (or (car (plist-get memory :kinds)) (car (drgnx-pane-kinds dock)))))
         (when kind (drgnx-grid-show kind))))))
 
+;;;; Splitting tiles, the tile picker, Close Tile
+
+(defun drgnx-grid-tile-window-p (window)
+  "Non-nil when WINDOW belongs to a tool tile: the tile's window, or a part of its atom (a section, a companion)."
+  (and (window-live-p window) (or (drgnx-grid-tool-tile-p window) (window-parameter window 'drgnx-tile-part)) t))
+
+(defun drgnx-grid-split-tile (window side)
+  "A new window beside WINDOW's whole tile (its atom, `drgnx-grid--tile-root') on SIDE (`right', `below'), taking half
+of the tile, pixelwise; an id and `no-delete-other-windows'.  The caller gives it what it shows."
+  (let ((new (let ((drgnx-rules--placing t) (window-combination-limit nil) (window-combination-resize nil)
+                   (ignore-window-parameters t) (window-resize-pixelwise t))
+               (split-window (drgnx-grid--tile-root window) nil side t))))
+    (set-window-parameter new 'window-atom nil)
+    (set-window-parameter new 'no-delete-other-windows t)
+    (drgnx-grid-tile-id new)
+    new))
+
+(defun drgnx-grid--title (kind)
+  "KIND's title as its tab shows it."
+  (let ((title (or (plist-get (drgnx-pane-kind kind) :title) (capitalize (symbol-name kind)))))
+    (if (functionp title) (funcall title) title)))
+
+(defun drgnx-grid--make-editor (window)
+  "Make WINDOW an editor tile showing the most recent editor's buffer, and select it."
+  (set-window-buffer window (window-buffer (or (drgnx-state-editor-window (window-frame window))
+                                               (car (drgnx-grid-tiles (window-frame window) 'editor)))))
+  (set-window-parameter window 'drgnx-tabs nil)
+  (drgnx-grid--adopt window)
+  (select-window window)
+  window)
+
+(defun drgnx-grid-pick-kind (window)
+  "Ask what the new tile WINDOW shows, \"Editor\" or a pane kind by its title, and show it there: an editor tile, or a
+tool tile holding the kind (moved off its dock or tile when it shows elsewhere).  Quitting the question deletes WINDOW.
+For invoked commands only (`split-editor-right' and `split-editor-down' on a tool tile).  Returns `editor' or the kind."
+  (let* ((frame (window-frame window))
+         (choices (cons (cons "Editor" 'editor)
+                        (mapcar (lambda (k) (cons (drgnx-grid--title k) k))
+                                (seq-remove (lambda (k) (plist-get (drgnx-pane-kind k) :sidebar)) (drgnx-pane-kinds)))))
+         (picked nil))
+    (unwind-protect
+        (setq picked (cdr (assoc (completing-read "Show in this tile: " choices nil t) choices)))
+      (unless picked
+        (when (window-live-p window) (let ((ignore-window-parameters t)) (delete-window window)))))
+    (if (eq picked 'editor) (drgnx-grid--make-editor window)
+      (when (drgnx-pane-window picked frame) (drgnx-pane-hide picked))
+      (drgnx-grid--tool-tile window (list picked) frame (window-combined-p window t))
+      (drgnx-grid--put-row window))
+    picked))
+
 ;;;; The tab row (today's drawing; the kit's tab later)
 
 (defun drgnx-grid--tab-click (event)
@@ -502,8 +555,8 @@ A docked tile's size is noted as its dock's `:sizes' intent.  The window, or nil
          (kinds (seq-filter (lambda (k) (memq k stack)) (append (drgnx-pane-kinds) stack))))
     (concat
      (mapconcat (lambda (k)
-                  (let ((title (or (plist-get (drgnx-pane-kind k) :title) (capitalize (symbol-name k)))))
-                    (propertize (concat " " (if (functionp title) (funcall title) title) " ")
+                  (let ((title (drgnx-grid--title k)))
+                    (propertize (concat " " title " ")
                                 'face (if (eq k shown) 'tab-line-tab-current 'tab-line-tab-inactive)
                                 'drgnx-grid-kind k 'mouse-face 'highlight 'local-map drgnx-grid--tab-map
                                 'help-echo "Show this tab")))
@@ -530,7 +583,9 @@ A docked tile's size is noted as its dock's `:sizes' intent.  The window, or nil
 ;; the areas' tabs keep (their buffers, starts, points, placeholders, companions): with the grid on, those make and
 ;; delete their windows as tiles (`drgnx-grid-split-dock', `drgnx-grid-remove-dock', `drgnx-grid-add-part').  The
 ;; grid's own stack (`drgnx-grid-show') holds a kind moved off its dock.
-(defun drgnx-grid--docked-p (kind) (drgnx-grid--dock-of kind))
+(defun drgnx-grid--docked-p (kind)
+  "Non-nil when KIND lives in its dock (a home `left', `bottom' or `right'), not in a tile it was moved to."
+  (and (drgnx-grid--dock-of kind) (not (drgnx-grid--tile-of kind (selected-frame)))))
 (defun drgnx-grid--backend-show (kind buffer select)
   (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-show kind buffer select)
     (drgnx-grid-show kind :buffer buffer :select select)))
@@ -569,6 +624,39 @@ Their buffers' `window-size-fixed' is t for the call (Emacs balances around a fi
           (with-current-buffer b
             (if local (setq-local window-size-fixed value) (kill-local-variable 'window-size-fixed))))))))
 
+(defvar ediff-window-setup-function)
+(defvar ediff-after-quit-hook-internal)
+(declare-function ediff-setup-windows-plain "ediff-wind" (buffer-A buffer-B buffer-C control-buffer))
+
+(defvar drgnx-grid--ediff-previous nil
+  "`ediff-window-setup-function' before `drgnx-grid-mode' set it, as (VALUE), or nil when it was unbound.")
+
+(defun drgnx-grid--ediff-restore (tile before)
+  "ediff quit: TILE's frame is back to its windows BEFORE (those ediff added inside the tile go)."
+  (when (window-live-p tile)
+    (dolist (w (window-list (window-frame tile) 'nomini))
+      (unless (memq w before)
+        (let ((ignore-window-parameters t)) (ignore-errors (delete-window w)))))))
+
+(defun drgnx-grid-ediff-setup (buffer-A buffer-B buffer-C control-buffer)
+  "`ediff-window-setup-function' while the grid is on: ediff's windows (A, B, C and its control window) lay out inside
+the current editor tile, nested in it (`window-combination-limit'), and leave on quit; no other tile moves and no
+frame is made (the plain setup, never ediff's frames)."
+  (let* ((tile (if (drgnx-grid-editor-tile-p (selected-window)) (selected-window)
+                 (or (drgnx-state-editor-window) (car (drgnx-grid-tiles nil 'editor)))))
+         (before (window-list (window-frame tile) 'nomini)))
+    (select-window tile)
+    (let ((window-combination-limit t)
+          ;; the control window under the tile's own windows, not at the frame's bottom ("direction bottom")
+          (display-buffer-overriding-action
+           (list (lambda (buffer alist)
+                   (when (eq buffer control-buffer)
+                     (display-buffer-in-direction
+                      buffer `((direction . below) (window . ,(or (window-parent tile) tile)) ,@alist)))))))
+      (ediff-setup-windows-plain buffer-A buffer-B buffer-C control-buffer))
+    (with-current-buffer control-buffer
+      (add-hook 'ediff-after-quit-hook-internal (lambda () (drgnx-grid--ediff-restore tile before)) nil t))))
+
 ;; The side bar as one kind: the left dock with the current view's sections (the flow plan's places show it).
 (drgnx-pane-define-kind 'side-bar :title "Side Bar" :home 'left :sidebar t)
 
@@ -581,7 +669,14 @@ Off, they live in the docks again (`areas')."
         (setq drgnx-pane-backend 'grid)
         (drgnx-state-subscribe 'windows-changed #'drgnx-grid--windows-changed :lane 'now)
         (advice-add 'balance-windows :around #'drgnx-grid--balance-editors-only)
+        (unless (eq (bound-and-true-p ediff-window-setup-function) #'drgnx-grid-ediff-setup)
+          (setq drgnx-grid--ediff-previous (and (boundp 'ediff-window-setup-function) (list ediff-window-setup-function)))
+          (setq ediff-window-setup-function #'drgnx-grid-ediff-setup))
         (dolist (f (frame-list)) (drgnx-grid--adopt-editors f)))
+    (when (eq (bound-and-true-p ediff-window-setup-function) #'drgnx-grid-ediff-setup)
+      (if drgnx-grid--ediff-previous (setq ediff-window-setup-function (car drgnx-grid--ediff-previous))
+        (makunbound 'ediff-window-setup-function))
+      (setq drgnx-grid--ediff-previous nil))
     (setq drgnx-pane-backend 'areas)
     (drgnx-state-unsubscribe 'windows-changed #'drgnx-grid--windows-changed)
     (advice-remove 'balance-windows #'drgnx-grid--balance-editors-only)))

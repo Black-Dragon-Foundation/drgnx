@@ -338,8 +338,10 @@ pixels). With two editor groups or more, the selected group's card is ringed in 
 ### Editor groups
 
 Split the editor into **groups** — each an editor window with its own tabs — only by command: Split Editor Right /
-Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC w s`; the new group shows the same file),
-Close Editor Group (palette · `C-x 0` · `SPC w c`; the last group stays), Close All Editors in Group (`C-k w`; the
+Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC w s`; the new group shows the same file;
+in a tool tile — a dock, the panel, the right side — a new tile beside the whole tile asks what it shows: Editor or
+any pane, which moves there from its dock), Close Tile (palette · `C-x 0` · `SPC w c`; an editor group closes and the
+last one stays, a tool tile hides), Close All Editors in Group (`C-k w`; the
 palette in the Emacs and Vim profiles; its tabs go, the files stay open; the group closes, or, the last one, shows
 `*scratch*`), Focus Group 1–3 (`C-1`–`C-3` · `C-x o` · `SPC 1`–`SPC 3`; one past the last makes a group to the right),
 Move Editor into Next Group (`C-M-<right>` · palette · `SPC w m`; a group left without tabs closes, as in VS Code),

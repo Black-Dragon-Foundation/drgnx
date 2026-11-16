@@ -147,9 +147,9 @@ another buffer (BUFFER-NAME) is left as it was."
                        ;; Editor groups (made only by these commands).
                        (require 'drgnx-groups)
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((split-editor-right "Split Editor Right" drgnx-groups-split-right "A new editor group to the right, same file")
-                                        (split-editor-down "Split Editor Down" drgnx-groups-split-down "A new editor group below, same file")
-                                        (close-group "Close Editor Group" drgnx-groups-close "Close this group (its files stay open); the last one stays")
+                                      '((split-editor-right "Split Editor Right" drgnx-groups-split-right "A new editor group to the right, same file; on a tool tile, a new tile showing what you pick")
+                                        (split-editor-down "Split Editor Down" drgnx-groups-split-down "A new editor group below, same file; on a tool tile, a new tile showing what you pick")
+                                        (close-group "Close Tile" drgnx-groups-close "Close this tile: an editor group closes (its files stay open; the last one stays), a tool tile hides")
                                         (close-group-editors "Close All Editors in Group" drgnx-groups-close-all-editors "Close every tab of this group (its files stay open); the group closes unless it is the last")
                                         (focus-group-1 "Focus First Editor Group" drgnx-groups-focus-1 "Focus group 1")
                                         (focus-group-2 "Focus Second Editor Group" drgnx-groups-focus-2 "Focus group 2 (made if there is one group)")
