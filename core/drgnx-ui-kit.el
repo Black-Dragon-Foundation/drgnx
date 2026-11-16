@@ -304,5 +304,249 @@ bindings' tokens as colours through TOK (a token name → a colour), the edge as
                 ,@(and (plist-get b :edge) `(:box (:line-width (-1 . -1) :color ,(funcall tok (plist-get b :edge))))))))
           (drgnx-ui-kit-face-bindings table)))
 
+(defun drgnx-ui-kit-glyph-names (&optional table)
+  "The glyph names the components of TABLE (default the components file) draw (:tty :glyph and :twisty), in order, each
+once: the glyphs a view's env sends (`ViewEnv.glyphs') and the hub's table falls back on (`kit_gen::GLYPHS')."
+  (let (names)
+    (dolist (c (alist-get 'components (or table (drgnx-ui-kit-components))))
+      (let ((tty (plist-get (cdr c) :tty)))
+        (dolist (v (list (plist-get tty :glyph) (plist-get tty :twisty)))
+          (dolist (g (drgnx-ui-kit--glyphs-in v))
+            (unless (memq g names) (push g names))))))
+    (nreverse names)))
+
+(defun drgnx-ui-kit--glyphs-in (value)
+  "The glyph names in VALUE: a name, a list of names, or a (:by AXIS (V X)...) case of them."
+  (cond ((null value) nil)
+        ((symbolp value) (list value))
+        ((eq (car value) :by) (apply #'append (mapcar (lambda (c) (drgnx-ui-kit--glyphs-in (cadr c))) (cddr value))))
+        (t (cl-remove-if-not #'symbolp value))))
+
+;;;; The expansion: the hub's (drgnx_rows::kit), for Lisp-drawn chrome
+
+;; A component and its props (the hub's `Comp' JSON as a plist: `:c' "row", `:kind' "tree"...) expand to a row's
+;; pieces: its text, face runs, properties and spaces, exactly as the hub's expansion makes them; the conformance
+;; fixture (test/fixtures/kit) keeps the two equal.  Pads are spaces of device px at the scale, each part rounded half
+;; up (`drgnx-px'); on a terminal they are characters and glyphs take their terminal form.  Called per row: positional
+;; arguments, no `&key', no `apply', no closures.
+
+(defun drgnx-ui-kit--run (runs from to face)
+  "RUNS (newest first) with FACE over FROM..TO: the newest run extended when it ends at FROM in FACE (as the hub's
+`RowBuilder::push' merges), else a new run.  No FACE: RUNS."
+  (cond ((null face) runs)
+        ((and runs (eq (nth 2 (car runs)) face) (= (nth 1 (car runs)) from))
+         (setcar (cdar runs) to)
+         runs)
+        (t (cons (list from to face) runs))))
+
+(defun drgnx-ui-kit--glyph (name tty)
+  "Glyph NAME as TTY draws it: its ASCII form when TTY is `ascii', else its Unicode form (`drgnx-face-glyphs')."
+  (let ((g (or (alist-get name drgnx-face-glyphs) (alist-get name drgnx-ui--default-glyphs))))
+    (if (eq tty 'ascii) (cdr g) (car g))))
+
+(defun drgnx-ui-kit--face (id chosen)
+  "The face of component ID at CHOSEN ((AXIS . VALUE)...): the kit face of its most specific binding that CHOSEN all
+has and that exists, else `drgnx-kit-ID' when it exists, else nil (the surface's own face; the hub's `default')."
+  (let ((best nil) (best-n 0))
+    (dolist (b (plist-get (drgnx-ui-kit-component id) :bind))
+      (when (and (car b) (> (length (car b)) best-n)
+                 (let ((all t)) (dolist (v (car b)) (unless (rassq v chosen) (setq all nil))) all))
+        (let ((f (intern-soft (format "drgnx-kit-%s-%s" id (mapconcat #'symbol-name (car b) "-")))))
+          (when (facep f) (setq best f best-n (length (car b)))))))
+    (or best (let ((f (intern-soft (format "drgnx-kit-%s" id)))) (and (facep f) f)))))
+
+(defun drgnx-ui-kit--row (props scale tty)
+  "The `row' component of PROPS (:kind :depth :twisty :text :state :action) at SCALE, or on a terminal (TTY non-nil,
+`ascii' for ASCII glyphs): (TEXT RUNS PROPS SPACES), see `drgnx-ui-kit--expand'."
+  (let* ((entry (drgnx-ui-kit-component 'row))
+         (kind (or (intern-soft (or (plist-get props :kind) "list")) 'list))
+         (chosen (drgnx-ui-kit--chosen entry (list kind)))
+         (g (plist-get entry :geometry)) (tg (plist-get entry :tty))
+         (face (drgnx-ui-kit--face 'row chosen))
+         (depth (or (plist-get props :depth) 0))
+         (twisty (plist-get props :twisty))     ; t open, :false closed, nil none
+         (state (plist-get (drgnx-ui-kit-state (intern-soft (or (plist-get props :state) "rest"))) :face))
+         (action (plist-get props :action))
+         (hit (if (and action (not tty)) (drgnx-px (or (drgnx-ui-kit--value (plist-get g :hit) chosen) 0) nil scale) 0))
+         (pad (plist-get g :pad))
+         (pos 0) (runs nil) (spaces nil) (parts nil) start end)
+    ;; each part: (TEXT FACE) pushed in order, a space's placeholder noted in SPACES
+    (when (> hit 0)
+      (push (list pos hit 0) spaces) (push " " parts) (setq pos (1+ pos)))
+    (setq start pos)
+    (if tty
+        (let ((n (+ (or (plist-get tg :pad) 0) (* depth (or (drgnx-ui-kit--value (plist-get tg :indent) chosen) 0)))))
+          (when (> n 0)
+            (push (make-string n ?\s) parts) (setq runs (drgnx-ui-kit--run runs pos (+ pos n) face) pos (+ pos n))))
+      (let ((w (+ (drgnx-px (car pad) nil scale)
+                  (* depth (drgnx-px (or (drgnx-ui-kit--value (plist-get g :indent) chosen) 0) nil scale)))))
+        (when (> w 0)
+          (push (list pos w 0) spaces) (push " " parts)
+          (setq runs (drgnx-ui-kit--run runs pos (1+ pos) face) pos (1+ pos)))))
+    (when twisty
+      (let* ((names (drgnx-ui-kit--value (plist-get tg :twisty) chosen))
+             (s (concat (drgnx-ui-kit--glyph (if (eq twisty t) (cadr names) (car names)) tty) " ")))
+        (push s parts) (setq runs (drgnx-ui-kit--run runs pos (+ pos (length s)) face) pos (+ pos (length s)))))
+    (let ((s (or (plist-get props :text) "")))
+      (push s parts) (setq runs (drgnx-ui-kit--run runs pos (+ pos (length s)) face) pos (+ pos (length s))))
+    (if tty
+        (let ((n (or (plist-get tg :pad) 0)))
+          (when (> n 0)
+            (push (make-string n ?\s) parts) (setq runs (drgnx-ui-kit--run runs pos (+ pos n) face) pos (+ pos n))))
+      (let ((w (drgnx-px (cdr pad) nil scale)))
+        (when (> w 0)
+          (push (list pos w 0) spaces) (push " " parts)
+          (setq runs (drgnx-ui-kit--run runs pos (1+ pos) face) pos (1+ pos)))))
+    (setq end pos)
+    (when (> hit 0)
+      (push (list pos hit 0) spaces) (push " " parts) (setq pos (1+ pos)))
+    ;; the state's face under the component's (the hub's `RowBuilder::face', appended after the pushes)
+    (setq runs (nreverse runs))
+    (when state (setq runs (nconc runs (list (list start end state)))))
+    (list (mapconcat #'identity (nreverse parts) "") runs
+          (and action (list (list 0 pos 'drgnx-action (cons (plist-get action :kind) (plist-get action :args)))
+                            (list 0 pos 'mouse-face 'drgnx-hover)))
+          (nreverse spaces))))
+
+(defun drgnx-ui-kit--expand (component props scale tty)
+  "COMPONENT (a symbol) with PROPS at SCALE (TTY: on a terminal, `ascii' for ASCII glyphs) as (TEXT RUNS PROPS
+SPACES): RUNS ((FROM TO FACE)...), PROPS ((FROM TO NAME VALUE)...), SPACES ((POS WIDTH HEIGHT)...) in device px."
+  (pcase component
+    ('row (drgnx-ui-kit--row props scale tty))
+    (_ (error "drgnx-ui-kit: no component %s" component))))
+
+(defun drgnx-ui-kit--wire (v)
+  "V as the hub writes it: a symbol as its name, a list as a vector."
+  (cond ((and v (symbolp v)) (symbol-name v)) ((consp v) (vconcat v)) (t v)))
+
+(defun drgnx-ui-kit-expand (component props scale tty)
+  "COMPONENT (a symbol, e.g. `row') with PROPS (the hub's `Comp' JSON as a plist) at SCALE, on a terminal when TTY is
+non-nil (`ascii': glyphs in their ASCII form), as a row's pieces in the hub's shape: (:text S :runs [[FROM TO FACE]...]
+:props [[FROM TO NAME VALUE]...] :spaces [[POS W H]...]).  What the conformance test compares with the hub's."
+  (let ((e (drgnx-ui-kit--expand component props scale tty)) runs ps spaces)
+    (dolist (r (nth 1 e)) (push (vector (nth 0 r) (nth 1 r) (symbol-name (nth 2 r))) runs))
+    (dolist (p (nth 2 e)) (push (vector (nth 0 p) (nth 1 p) (symbol-name (nth 2 p)) (drgnx-ui-kit--wire (nth 3 p))) ps))
+    (dolist (s (nth 3 e)) (push (vconcat s) spaces))
+    (list :text (nth 0 e) :runs (vconcat (nreverse runs)) :props (vconcat (nreverse ps)) :spaces (vconcat (nreverse spaces)))))
+
+(defvar drgnx-ui-kit--pads (make-hash-table :test #'eql)
+  "Device px → the `display' spec of a pad that wide on a mode, header or tab line, made once.  Bounded by the widths
+the kit's pads take at the scales seen (a handful per component and scale).")
+
+(defun drgnx-ui-kit--pad (width where frame)
+  "The `display' of a pad WIDTH device px wide on WHERE in FRAME: in buffer text (`text') a width in FRAME's canonical
+characters, so one buffer is right on frames of two scales; on a line its px, the spec cached."
+  (if (eq where 'text)
+      `(space :width ,(/ (float width) (frame-char-width frame)))
+    (or (gethash width drgnx-ui-kit--pads)
+        (puthash width `(space :width (,width)) drgnx-ui-kit--pads))))
+
+(defun drgnx-ui-kit-string (component props where frame)
+  "COMPONENT with PROPS (as `drgnx-ui-kit-expand') as a propertized string for WHERE (`text', `header-line',
+`mode-line' or `tab-line') on FRAME (nil: the selected one), at FRAME's scale or as its terminal draws it.  A click
+on an action (PROPS :action) runs `kit-activate' (the kind's map, `drgnx-ui-kit-action-map')."
+  (let* ((gui (display-graphic-p frame))
+         (e (drgnx-ui-kit--expand component props (if gui (drgnx-pixels-scale frame) 1.0)
+                                  (cond (gui nil) ((drgnx-ui-ascii-frame-p frame) 'ascii) (t t))))
+         (s (nth 0 e)))
+    (dolist (r (nth 1 e)) (add-face-text-property (nth 0 r) (nth 1 r) (nth 2 r) t s))
+    (dolist (p (nth 2 e))
+      (put-text-property (nth 0 p) (nth 1 p) (nth 2 p) (nth 3 p) s)
+      (when (eq (nth 2 p) 'drgnx-action)
+        (put-text-property (nth 0 p) (nth 1 p) (if (eq where 'text) 'keymap 'local-map)
+                           (drgnx-ui-kit-action-map (car (nth 3 p))) s)))
+    (dolist (sp (nth 3 e)) (put-text-property (car sp) (1+ (car sp)) 'display (drgnx-ui-kit--pad (nth 1 sp) where frame) s))
+    s))
+
+;;;; Actions: what a click or RET on a component does
+
+;; A component's action is a `drgnx-action' property, (KIND ARGS...), over the component and its hit padding (from the
+;; hub, or `drgnx-ui-kit-string').  Each KIND has one keymap, built once, put where the property is, whose keys run
+;; `kit-activate': it reads the property and calls the kind's function with ARGS.  No closure per row.
+
+(declare-function drgnx-modules--recording-p "drgnx-modules")
+(declare-function drgnx-modules-push-undo "drgnx-modules")
+
+(defvar drgnx-ui-kit--actions (make-hash-table :test #'eq)
+  "Action KIND (a symbol) → (FUNCTION KEYS MAP): `drgnx-ui-kit-define-action'.")
+
+(defvar drgnx-ui-kit-action-base-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [mouse-1] #'drgnx-ui-kit-activate)
+    (define-key m [header-line mouse-1] #'drgnx-ui-kit-activate)
+    (define-key m [mode-line mouse-1] #'drgnx-ui-kit-activate)
+    (define-key m [tab-line mouse-1] #'drgnx-ui-kit-activate)
+    m)
+  "The keymap every action kind's map inherits: a click runs `drgnx-ui-kit-activate'; the profiles bind its keys
+\(`kit-activate', RET by default).  An unknown kind's property gets this map.")
+
+(defun drgnx-ui-kit-define-action (kind function keys)
+  "Define the action KIND (a symbol): `kit-activate' on a `drgnx-action' (KIND ARGS...) calls FUNCTION with the list
+ARGS.  KEYS: ((KEY . ARGS-TRANSFORM)...) more keys of the kind's map (`kbd' strings), each calling FUNCTION with
+\(funcall ARGS-TRANSFORM ARGS), or nil.  Defined by a module's setup, it is undefined with the module.  Returns KIND."
+  (let ((m (make-sparse-keymap)))
+    (set-keymap-parent m drgnx-ui-kit-action-base-map)
+    (dolist (k keys) (define-key m (kbd (car k)) #'drgnx-ui-kit-activate))
+    (puthash kind (list function keys m) drgnx-ui-kit--actions)
+    (when (and (fboundp 'drgnx-modules--recording-p) (drgnx-modules--recording-p))
+      (drgnx-modules-push-undo (format "action kind %s" kind) (lambda () (drgnx-ui-kit-undefine-action kind))))
+    kind))
+
+(defun drgnx-ui-kit-undefine-action (kind)
+  "Remove the action KIND; its properties then say it is unknown.  Returns KIND when it was defined."
+  (when (gethash kind drgnx-ui-kit--actions)
+    (remhash kind drgnx-ui-kit--actions)
+    kind))
+
+(defun drgnx-ui-kit-action-map (kind)
+  "The keymap of the action KIND (a symbol or its name; never interned): its own, or for a kind not defined
+`drgnx-ui-kit-action-base-map', so `kit-activate' says so."
+  (let ((k (if (stringp kind) (intern-soft kind) kind)))
+    (or (and k (nth 2 (gethash k drgnx-ui-kit--actions))) drgnx-ui-kit-action-base-map)))
+
+(defun drgnx-ui-kit--action-at ()
+  "The `drgnx-action' where the last input event was: at the click (in a line's string or the buffer), else at point."
+  (let* ((ev last-input-event) (posn (and (consp ev) (event-start ev))))
+    (cond ((and posn (posn-string posn))
+           (get-text-property (or (cdr (posn-string posn)) 0) 'drgnx-action (car (posn-string posn))))
+          ((and posn (windowp (posn-window posn)) (posn-point posn))
+           (with-current-buffer (window-buffer (posn-window posn)) (get-text-property (posn-point posn) 'drgnx-action)))
+          (t (get-text-property (point) 'drgnx-action)))))
+
+(defun drgnx-ui-kit-activate ()
+  "Run the action of the component at point or at the click: its `drgnx-action' (KIND ARGS...) calls KIND's function
+with ARGS (transformed when a key of KIND's own ran it).  A KIND not defined is an error naming it."
+  (interactive)
+  (let ((a (drgnx-ui-kit--action-at)))
+    (unless a (user-error "No action here"))
+    (let* ((name (car a)) (k (if (stringp name) (intern-soft name) name))
+           (def (and k (gethash k drgnx-ui-kit--actions)))
+           (args (cdr a)))
+      (unless def (user-error "No action kind %s (its module is off?)" name))
+      (let ((keys (this-command-keys-vector)))
+        (dolist (key (nth 1 def))
+          (when (equal (kbd (car key)) keys) (setq args (funcall (cdr key) args)))))
+      (funcall (car def) args))))
+
+;;;; Focus-visible: the focus ring after a key, not after a click
+
+(defvar drgnx-ui-kit--focus-visible nil
+  "Non-nil when the last command came from a key (not the mouse): the focus ring shows.")
+
+(defun drgnx-ui-kit-focus-visible-p ()
+  "Non-nil when the focus ring shows (spec §7.3): after a key event, not after a mouse event."
+  drgnx-ui-kit--focus-visible)
+
+(defun drgnx-ui-kit--note-input ()
+  "`pre-command-hook' of `drgnx-ui-kit-focus-mode': a key event shows the focus ring, a mouse event hides it."
+  (setq drgnx-ui-kit--focus-visible (not (consp last-input-event))))
+
+(define-minor-mode drgnx-ui-kit-focus-mode
+  "Track whether the focus ring shows: after a key event, not a mouse event (`drgnx-ui-kit-focus-visible-p')."
+  :global t :group 'drgnx
+  (if drgnx-ui-kit-focus-mode
+      (add-hook 'pre-command-hook #'drgnx-ui-kit--note-input)
+    (remove-hook 'pre-command-hook #'drgnx-ui-kit--note-input)))
+
 (provide 'drgnx-ui-kit)
 ;;; drgnx-ui-kit.el ends here

@@ -13,9 +13,11 @@ pub enum CompId {
     Row,
 }
 
-/// A state of the state table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// A state of the state table (on the wire, its name: `"selected-inactive"`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum State {
+    #[default]
     /// `rest`
     Rest,
     /// `hover`
@@ -61,9 +63,20 @@ pub struct Geom {
     pub indent: u16,
     /// Padding on a terminal, in characters.
     pub tty_pad: u8,
+    /// The indent of one level on a terminal, in characters (tree rows).
+    pub tty_indent: u8,
     /// The glyph a terminal draws, by its name in `drgnx-face-glyphs`.
     pub glyph: Option<&'static str>,
+    /// The twisty's glyphs, closed and open, by their names in `drgnx-face-glyphs`.
+    pub twisty: Option<(&'static str, &'static str)>,
 }
+
+/// The glyphs the components name: `(name, Unicode, ASCII)`, from the standard table (`drgnx-ui--default-glyphs`);
+/// the env's glyphs (`KitEnv::glyphs`) take precedence.
+pub const GLYPHS: [(&str, &str, &str); 2] = [
+    ("chevron-right", "›", ">"),
+    ("chevron-down", "⌄", "v"),
+];
 
 const DENSITIES: [&str; 3] = ["compact", "comfortable", "roomy"];
 
@@ -83,19 +96,19 @@ const ROW_AXES: &[&[&str]] = &[&["list", "tree", "map"]];
 const ROW_DEFAULTS: &[usize] = &[0];
 const ROW_GEOM: [[Geom; 3]; 3] = [
     [
-        Geom { height: 22, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, glyph: None },
-        Geom { height: 26, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, glyph: None },
-        Geom { height: 30, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, glyph: None },
+        Geom { height: 22, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 30, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
     ],
     [
-        Geom { height: 22, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 12, tty_pad: 1, glyph: None },
-        Geom { height: 26, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 12, tty_pad: 1, glyph: None },
-        Geom { height: 30, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 14, tty_pad: 1, glyph: None },
+        Geom { height: 22, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 12, tty_pad: 1, tty_indent: 2, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 12, tty_pad: 1, tty_indent: 2, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 30, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 14, tty_pad: 1, tty_indent: 2, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
     ],
     [
-        Geom { height: 22, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, glyph: None },
-        Geom { height: 26, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, glyph: None },
-        Geom { height: 30, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, glyph: None },
+        Geom { height: 22, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 30, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
     ],
 ];
 const ROW_LABEL: [Option<&str>; 3] = [None, None, None];

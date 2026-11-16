@@ -145,5 +145,137 @@
                             (plist-get (drgnx-faces--clause-plist (car f) 'gui) :box)))))))
       (mapc #'disable-theme custom-enabled-themes))))
 
+;;;; The expansion: one with the hub's (test/fixtures/kit, runtime/crates/drgnx-rows/tests/kit_conformance.rs)
+
+(require 'ert-x)
+(require 'drgnx-view)
+(require 'drgnx-view-sja)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+
+(defun ui-kit-test--json (name type)
+  "The fixture test/fixtures/kit/NAME, arrays read as TYPE (`list' or `array')."
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name (concat "test/fixtures/kit/" name) drgnx-dir))
+    (json-parse-buffer :object-type 'plist :array-type type :null-object nil :false-object :false)))
+
+(ert-deftest drgnx-ui-kit/conformance ()
+  ;; each case through `drgnx-ui-kit-expand' equals the hub's expansion of it, as expected.json holds it (the hub's at
+  ;; the comfortable density, its default)
+  (require 'drgnx-look-density (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir))
+  (let* ((drgnx-look-density 'comfortable)
+         (cases (ui-kit-test--json "cases.json" 'list))
+         (want (ui-kit-test--json "expected.json" 'array))
+         (drgnx-face-glyphs drgnx-ui--default-glyphs) (i 0) (fails nil))
+    (dolist (e (plist-get cases :envs))
+      (dolist (c (plist-get cases :comps))
+        (let* ((w (aref want i))
+               (comp (plist-get c :comp))
+               (got (drgnx-ui-kit-expand (intern (plist-get comp :c)) comp (float (plist-get e :scale))
+                                         (and (eq (plist-get e :tty) t) (if (eq (plist-get e :ascii) t) 'ascii t)))))
+          (should (equal (plist-get w :name) (format "%s/%s" (plist-get e :name) (plist-get c :name))))
+          (dolist (k '(:text :runs :props :spaces))
+            (unless (equal (plist-get got k) (plist-get w k))
+              (push (list (plist-get w :name) k (plist-get got k) (plist-get w k)) fails)))
+          (setq i (1+ i)))))
+    (should (= i (length want)))
+    (should-not (nreverse fails))))
+
+(ert-deftest drgnx-ui-kit/buffer-text-uses-canonical-widths ()
+  ;; in buffer text a pad is a width in canonical characters, so one buffer is right at two scales
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+            ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 1.25))
+            ((symbol-function 'frame-char-width) (lambda (&optional _) 10)))
+    (let* ((s (drgnx-ui-kit-string 'row '(:c "row" :kind "list" :text "a") 'text nil))
+           (pad (get-text-property 0 'display s)))
+      (should (equal pad '(space :width 0.8)))           ; 6 px at 1.25 = 8 device px = 0.8 of a 10 px column
+      (should (equal (substring-no-properties s) " a ")))))
+
+(ert-deftest drgnx-ui-kit/line-pads-follow-the-frame-scale ()
+  ;; on a line a pad is device px at the frame's scale, its spec made once per width
+  (let ((scale 1))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+              ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) scale)))
+      (clrhash drgnx-ui-kit--pads)
+      (let ((a (drgnx-ui-kit-string 'row '(:c "row" :kind "list" :text "a") 'header-line nil)))
+        (setq scale 1.25)
+        (let ((b (drgnx-ui-kit-string 'row '(:c "row" :kind "list" :text "a") 'header-line nil)))
+          (should (equal (get-text-property 0 'display a) '(space :width (6))))
+          (should (equal (get-text-property 0 'display b) '(space :width (8))))
+          ;; the same spec object for the same width, from the cache
+          (should (eq (get-text-property 0 'display b) (get-text-property 2 'display b)))
+          (should (= (hash-table-count drgnx-ui-kit--pads) 2)))))))
+
+(ert-deftest drgnx-ui-kit/action-prop-gets-its-kind-map ()
+  ;; a hub row's `drgnx-action' gets its kind's keymap from both dress functions, and RET runs the kind's function
+  (let ((got nil))
+    (unwind-protect
+        (progn
+          (drgnx-ui-kit-define-action 'kit-test (lambda (args) (setq got args)) nil)
+          (let* ((map (drgnx-ui-kit-action-map "kit-test"))
+                 (state (drgnx-view-patch--make :view "v" :class "c" :epoch 1))
+                 (a (drgnx-view-patch--dress state "k" (list :text "ab" :props '((0 2 "drgnx-action" ("kit-test" 1))))
+                                             (copy-sequence "ab\n")))
+                 (b (drgnx-view-sja--dress state (copy-sequence "ab\n") [] (vector 0 2 "drgnx-action" '("[\"kit-test\",1]")) [])))
+            (should (keymapp map))
+            (should-not (eq map (drgnx-ui-kit-action-map "kit-other")))
+            (should (eq (get-text-property 0 'keymap a) map))
+            (should (eq (get-text-property 1 'keymap b) map))
+            (should-not (get-text-property 2 'keymap a))
+            ;; a click runs `kit-activate' (RET is the profiles' key for it, in the map this one inherits)
+            (should (eq (lookup-key map [mouse-1]) #'drgnx-ui-kit-activate))
+            (should (eq (keymap-parent map) drgnx-ui-kit-action-base-map))
+            (with-temp-buffer
+              (insert a)
+              (goto-char 1)
+              (let ((last-input-event ?\r))
+                (call-interactively #'drgnx-ui-kit-activate))
+              (should (equal got '(1))))))
+      (drgnx-ui-kit-undefine-action 'kit-test))))
+
+(ert-deftest drgnx-ui-kit/unknown-action-kind-says-so ()
+  (with-temp-buffer
+    (insert (propertize "x" 'drgnx-action '("kit-no-such-kind" 1)))
+    (goto-char 1)
+    (let* ((last-input-event ?\r)
+           (err (should-error (drgnx-ui-kit-activate) :type 'user-error)))
+      (should (string-match-p "kit-no-such-kind" (cadr err))))))
+
+(ert-deftest drgnx-ui-kit/action-kinds-undefined-on-teardown ()
+  ;; a module's setup defines a kind; turning the module off undefines it
+  (ert-with-temp-directory dir
+                           (let ((file (expand-file-name "fake-kit-actions.el" dir)))
+                             (with-temp-file file
+                               (insert ";;; fake-kit-actions.el --- a fake module -*- lexical-binding: t -*-\n"
+                                       "(drgnx-module-define 'test/kit-actions :doc \"an action kind\"\n"
+                                       "  :setup (lambda () (drgnx-ui-kit-define-action 'kit-fake #'ignore nil)))\n"))
+                             (drgnx-test-with-modules (list file) :strict t
+                                                      (should (gethash 'kit-fake drgnx-ui-kit--actions)))
+                             (should-not (gethash 'kit-fake drgnx-ui-kit--actions)))))
+
+(ert-deftest drgnx-ui-kit/focus-visible-follows-keys-not-the-mouse ()
+  (let ((drgnx-ui-kit--focus-visible nil))
+    (let ((last-input-event ?a)) (drgnx-ui-kit--note-input))
+    (should (drgnx-ui-kit-focus-visible-p))
+    (let ((last-input-event `(mouse-1 ,(posn-at-point (point-min))))) (drgnx-ui-kit--note-input))
+    (should-not (drgnx-ui-kit-focus-visible-p))
+    (let ((last-input-event 'tab)) (drgnx-ui-kit--note-input))
+    (should (drgnx-ui-kit-focus-visible-p))
+    ;; the mode puts the named function on `pre-command-hook' and takes it off
+    (unwind-protect
+        (progn (drgnx-ui-kit-focus-mode 1)
+               (should (memq #'drgnx-ui-kit--note-input (default-value 'pre-command-hook))))
+      (drgnx-ui-kit-focus-mode -1))
+    (should-not (memq #'drgnx-ui-kit--note-input (default-value 'pre-command-hook)))))
+
+(ert-deftest drgnx-ui-kit/row-call-allocates-no-closure ()
+  ;; a header-line pad, drawn per redisplay: after a warm-up, 1000 calls make no vector (no closure, no table)
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+            ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 1.25)))
+    (let ((props '(:c "row" :kind "list" :text "a")))
+      (drgnx-ui-kit-string 'row props 'header-line nil)
+      (let ((before (nth 2 (memory-use-counts))))
+        (dotimes (_ 1000) (drgnx-ui-kit-string 'row props 'header-line nil))
+        (should (= (- (nth 2 (memory-use-counts)) before) 0))))))
+
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

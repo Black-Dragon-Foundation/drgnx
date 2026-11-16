@@ -536,12 +536,15 @@ text (nothing is loaded): files in name order, forms in file order.  Faces made 
   (let* ((g (plist-get entry :geometry)) (tty (plist-get entry :tty))
          (get (lambda (key) (drgnx-design--resolve (plist-get g key) chosen density)))
          (pad (or (funcall get :pad) '(0 . 0)))
-         (glyph (drgnx-design--resolve (plist-get tty :glyph) chosen density)))
-    (format "Geom { height: %d, pad: (%d, %d), gap: %d, boxed: %s, radius: %d, hit: %d, indent: %d, tty_pad: %d, glyph: %s }"
+         (glyph (drgnx-design--resolve (plist-get tty :glyph) chosen density))
+         (twisty (drgnx-design--resolve (plist-get tty :twisty) chosen density)))
+    (format "Geom { height: %d, pad: (%d, %d), gap: %d, boxed: %s, radius: %d, hit: %d, indent: %d, tty_pad: %d, tty_indent: %d, glyph: %s, twisty: %s }"
             (or (funcall get :height) 0) (car pad) (cdr pad) (or (funcall get :gap) 0)
             (if (funcall get :box) "true" "false") (or (funcall get :radius) 0) (or (funcall get :hit) 0)
             (or (funcall get :indent) 0) (or (plist-get tty :pad) 0)
-            (drgnx-design--rust-str (and glyph (symbol-name glyph))))))
+            (or (drgnx-design--resolve (plist-get tty :indent) chosen density) 0)
+            (drgnx-design--rust-str (and glyph (symbol-name glyph)))
+            (if twisty (format "Some((%S, %S))" (symbol-name (car twisty)) (symbol-name (cadr twisty))) "None"))))
 
 (defun drgnx-design--kit-face (id entry chosen)
   "The kit face of component ID (ENTRY) at CHOSEN ((AXIS . VALUE)...): of the bindings whose values CHOSEN all has and
@@ -568,7 +571,10 @@ that have a face of their own, the one naming the most values; else the componen
      "/// A component of the kit.\n#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]\n#[non_exhaustive]\npub enum CompId {\n"
      (mapconcat (lambda (c) (format "    /// `%s`\n    %s," (car c) (drgnx-design--camel (car c)))) components "\n")
      "\n}\n\n"
-     "/// A state of the state table.\n#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]\npub enum State {\n"
+     "/// A state of the state table (on the wire, its name: `\"selected-inactive\"`).\n"
+     "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]\n"
+     "#[serde(rename_all = \"kebab-case\")]\npub enum State {\n"
+     "    #[default]\n"
      (mapconcat (lambda (s) (format "    /// `%s`\n    %s," s (drgnx-design--camel s))) drgnx-ui-kit-states "\n")
      "\n}\n\n"
      (format "/// Each state but rest, with the semantic face that draws it.\npub const STATES: [(State, FaceId); %d] = [\n%s\n];\n\n"
@@ -586,7 +592,16 @@ that have a face of their own, the one naming the most values; else the componen
      "    /// Action-carrying padding at each side.\n    pub hit: u16,\n"
      "    /// The indent of one level (tree rows).\n    pub indent: u16,\n"
      "    /// Padding on a terminal, in characters.\n    pub tty_pad: u8,\n"
-     "    /// The glyph a terminal draws, by its name in `drgnx-face-glyphs`.\n    pub glyph: Option<&'static str>,\n}\n\n"
+     "    /// The indent of one level on a terminal, in characters (tree rows).\n    pub tty_indent: u8,\n"
+     "    /// The glyph a terminal draws, by its name in `drgnx-face-glyphs`.\n    pub glyph: Option<&'static str>,\n"
+     "    /// The twisty's glyphs, closed and open, by their names in `drgnx-face-glyphs`.\n"
+     "    pub twisty: Option<(&'static str, &'static str)>,\n}\n\n"
+     (let ((names (drgnx-ui-kit-glyph-names table)))
+       (format "/// The glyphs the components name: `(name, Unicode, ASCII)`, from the standard table (`drgnx-ui--default-glyphs`);\n/// the env's glyphs (`KitEnv::glyphs`) take precedence.\npub const GLYPHS: [(&str, &str, &str); %d] = [\n%s\n];\n\n"
+               (length names)
+               (mapconcat (lambda (n) (let ((g (alist-get n drgnx-ui--default-glyphs)))
+                                        (format "    (%S, %S, %S)," (symbol-name n) (car g) (cdr g))))
+                          names "\n")))
      "const DENSITIES: [&str; 3] = [\"compact\", \"comfortable\", \"roomy\"];\n\n"
      "/// The index of VARIANT's combination of AXES (each axis's DEFAULTS where VARIANT names none of its values),\n"
      "/// the last axis varying fastest, and the density's index.\n"

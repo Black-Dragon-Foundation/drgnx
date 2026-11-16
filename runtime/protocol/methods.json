@@ -43578,6 +43578,24 @@
             },
             "type": "array"
           },
+          "glyphs": {
+            "default": [],
+            "description": "`[name, glyph]`: the kit's glyphs (those `etc/ui/components.eld` names) as `drgnx-face-glyph` draws them on the\nclass's frame, ASCII on a terminal that is not UTF-8; a name missing here is drawn in its Unicode form\n(`drgnx_rows::kit`).",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
           "headless": {
             "description": "The view is in no window: its rows are read, never drawn (the git letters), so the hub does not fit them to\n`width_px`, the selected window's.",
             "type": "boolean"

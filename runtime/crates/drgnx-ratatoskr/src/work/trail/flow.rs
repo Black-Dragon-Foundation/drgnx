@@ -2197,6 +2197,7 @@ mod tests {
             tty_widths: vec![],
             tz: String::new(),
             reduced_motion: false,
+            glyphs: Vec::new(),
             attach: false,
             rows_in_sja: false,
             headless: false,

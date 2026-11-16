@@ -17,6 +17,7 @@ pub mod fit;
 pub mod fit_row;
 pub mod fit_tty;
 pub mod image;
+pub mod kit;
 #[rustfmt::skip]
 pub mod kit_gen;
 mod patch;

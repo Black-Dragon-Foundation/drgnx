@@ -14,7 +14,8 @@
 ;;   GEOM, all logical px: :height :pad (START . END) :gap :box :radius :line-height :hit (action-carrying padding each
 ;;   side) :indent.  A value may be (:by AXIS (VALUE X)...) where variants differ, or (density KEY): the size
 ;;   `drgnx-look-density-value' gives KEY at the user's density.
-;;   TTY: :glyph GLYPH-NAME (of `drgnx-face-glyphs'), :twisty (CLOSED OPEN) glyph names, :pad CHARS.
+;;   TTY: :glyph GLYPH-NAME (of `drgnx-face-glyphs'), :twisty (CLOSED OPEN) glyph names, :pad CHARS, :indent CHARS a
+;;   level (tree rows); :indent may be a (:by AXIS ...) case.
 ;;   LABEL: the word a screen reader speaks, a string or (:by AXIS (VALUE "word")...).
 ;;   BINDINGS: (((VARIANT-VALUE...) :bg TOKEN :fg TOKEN :edge TOKEN :inherit (STANDARD-FACE...))...); the binding
 ;;   of () is the component's own face `drgnx-kit-ID', another one `drgnx-kit-ID-VALUE...', made only where its
@@ -32,5 +33,5 @@
   (row :variants ((kind list tree map)) :defaults (kind list)
        :geometry (:height (density tree-row) :pad (6 . 6) :gap 0 :box nil :radius 6 :hit 0
                           :indent (:by kind (list 0) (tree (density tree-indent)) (map 0)))
-       :tty (:pad 1 :twisty (chevron-right chevron-down))
+       :tty (:pad 1 :indent (:by kind (list 0) (tree 2) (map 0)) :twisty (chevron-right chevron-down))
        :label nil :bind nil :replaces nil :helpers nil :lint nil)))

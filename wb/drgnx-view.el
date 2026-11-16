@@ -24,6 +24,7 @@
 (require 'drgnx-color)
 (require 'drgnx-wb)
 (require 'drgnx-state)                  ; whether a view shows: the workbench state store
+(require 'drgnx-ui-kit)                 ; an action's keymap (`drgnx-ui-kit-action-map')
 
 (defvar drgnx-signal-errors)            ; drgnx-signal, when loaded
 (declare-function drgnx-gc-gap "drgnx-gc" ())
@@ -2189,6 +2190,9 @@ put on it, in STATE; returns TEXT."
         (put-text-property (nth 0 p) (nth 1 p) name
                            (if (eq name 'mouse-face) (and (stringp (nth 3 p)) (drgnx-view-patch--face (nth 3 p))) (nth 3 p))
                            text)
+        ;; a kit component's action: its kind's one keymap (`kit-activate' reads the property)
+        (when (eq name 'drgnx-action)
+          (put-text-property (nth 0 p) (nth 1 p) 'keymap (drgnx-ui-kit-action-map (car-safe (nth 3 p))) text))
         (when (eq name drgnx-view-patch-id-prop)        ; the rows that hold a node, for the class step
           (let ((ids (drgnx-view-patch-ids state)) (keys (drgnx-view-patch-keys state)))
             (unless (member key (gethash (nth 3 p) ids)) (push key (gethash (nth 3 p) ids)))

@@ -133,6 +133,7 @@ fn extensions_kinds_are_lucide_icons_on_a_graphical_display() {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        glyphs: Vec::new(),
         attach: false,
         rows_in_sja: false,
         headless: false,
