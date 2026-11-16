@@ -2799,11 +2799,27 @@ chrome faces, frame metrics, windows, modules."
                (x1 (- right (window-right-divider-width window) (window-scroll-bar-width window) own)))
     (list (- x1 (plist-get (window-parameter window 'glitnir-ruler) :width)) top x1 bottom)))
 
+(defvar drgnx-palette-frame--frame)
+
+(defun drgnx-look-scene--covering (rect frame)
+  "The visible child frame of FRAME that lies over RECT (L T R B, FRAME's pixels), or nil: a strip there cannot be seen."
+  (seq-find (lambda (f)
+              (and (eq (frame-parent f) frame) (frame-visible-p f)
+                   (pcase-let ((`(,x . ,y) (frame-position f)) (`(,l ,top ,r ,b) rect))
+                     (and (< x r) (> (+ x (frame-pixel-width f)) l)
+                          (< y b) (> (+ y (frame-pixel-height f)) top)))))
+            (frame-list)))
+
+(defun drgnx-look-scene--expected-cover-p (f)
+  "Whether child frame F is one a scene opens on purpose (the floating palette); any other cover, a toast say, is an
+error, so an unexpected child frame still fails the scene."
+  (and (boundp 'drgnx-palette-frame--frame) (eq f drgnx-palette-frame--frame)))
+
 (defun drgnx-look-scene-scrollbars (file)
   "Every scrollable surface shown has the scroll bar: each window `drgnx-scrollbar-window-p' names has its
 `glitnir-ruler' with the fringe widened, and on the root frame the strip draws something exactly when the window
-shows only part of its content (a snapshot with the strips, one without them, compared on each strip).  What was seen
-goes to FILE."
+shows only part of its content (a snapshot with the strips, one without them, compared on each strip; a strip under the
+palette's child frame is not judged, one under any other child frame is an error).  What was seen goes to FILE."
   (let (log)
     (drgnx-look-scene--try "scrollbars"
       (let* ((ws (drgnx-look-scene--scrollbar-windows))
@@ -2821,19 +2837,27 @@ goes to FILE."
         (dolist (w ws)
           (let* ((spec (window-parameter w 'glitnir-ruler))
                  (over (drgnx-look-scene--overflows-p w))
-                 (drawn (and spec without (not (frame-parent (window-frame w)))
+                 (cover (and spec (not (frame-parent (window-frame w)))
+                             (drgnx-look-scene--covering (drgnx-look-scene--strip-rect w) (window-frame w))))
+                 (covered (and cover (drgnx-look-scene--expected-cover-p cover)))
+                 (drawn (and spec without (not covered) (not (frame-parent (window-frame w)))
                              (not (drgnx-uitest-region-equal-p with without (drgnx-look-scene--strip-rect w)
                                                                :tolerance 2 :ignore-alpha t))))
                  (fact (list :buffer (buffer-name (window-buffer w))
                              :mode (buffer-local-value 'major-mode (window-buffer w))
                              :strip (and spec t) :span (plist-get spec :span) :overflows over
-                             :drawn (if without drawn 'unchecked))))
+                             :drawn (cond (covered 'covered) (without drawn) (t 'unchecked)))))
             (push fact log)
             (cond ((not spec)
                    (push (format "scrollbars: %s (%s) has no scroll bar" (buffer-name (window-buffer w))
                                  (plist-get fact :mode))
                          drgnx-look-scene--errors))
-                  ((and without (not (eq (and over t) (and drawn t))))
+                  ((and cover (not covered))
+                   (push (format "scrollbars: %s (%s): the strip is under an unexpected child frame (%s)"
+                                 (buffer-name (window-buffer w)) (plist-get fact :mode)
+                                 (buffer-name (window-buffer (frame-root-window cover))))
+                         drgnx-look-scene--errors))
+                  ((and without (not covered) (not (eq (and over t) (and drawn t))))
                    (push (format "scrollbars: %s (%s): content %s but the strip %s"
                                  (buffer-name (window-buffer w)) (plist-get fact :mode)
                                  (if over "runs past the window" "fits") (if drawn "draws" "draws nothing"))

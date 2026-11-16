@@ -13,6 +13,11 @@
 ;; SHAPE nil (a bar) or `dot' (a breakpoint's), END a position the mark runs to (a hunk's last line).  The ruler asks
 ;; its producers again when one says its marks changed (`drgnx-ruler-refresh') and, debounced, after an edit.
 ;;
+;; Each mark has a kind (`drgnx-ruler-kinds': a change, a problem, a search hit, a breakpoint, a bookmark…), from its
+;; face or its producer.  On Nidhogg the owner hands each kind's marks, once per change of that kind, to the buffer
+;; text's line model (`nidhogg-lines-set-marks', Hlidskjalf), which shifts them with every edit and answers the
+;; next-mark keys and the counts (core/drgnx-marks.el) without a scan; the strip then measures visible lines.
+;;
 ;; Nidhogg draws it (Glitnir's overview ruler, the window parameter `glitnir-ruler'): the fringe is widened by the
 ;; strip while it is on, next to the text, and keeps that width while the strip hides (nothing reflows when the
 ;; content grows past the window).  The fringe's own pixels stay outermost, so the card edge's drag
@@ -33,6 +38,8 @@
 (declare-function glitnir-ruler-position "glitnir" (posn))
 (declare-function glitnir-ruler-fraction "glitnir" (posn))
 (declare-function drgnx-look-edge-drag "drgnx-look" (event))
+(declare-function nidhogg-lines-enable "nidhogg-lines" (&optional buffer wait))
+(declare-function nidhogg-lines-set-marks "nidhogg-lines" (buffer kind marks))
 
 (defgroup drgnx-minimap nil "The scroll bar, the minimap and their marks." :group 'drgnx)
 
@@ -41,6 +48,11 @@
 (defun drgnx-ruler--setting-changed (&rest _)
   "A scroll bar setting changed: every window's strip again, now."
   (when drgnx-scrollbar-mode (drgnx-scrollbar-refresh-all)))
+
+(defun drgnx-ruler--kinds-changed (&rest _)
+  "The kinds shown changed: every buffer's marks asked again."
+  (dolist (b (buffer-list))
+    (when (buffer-local-value 'drgnx-ruler-mode b) (drgnx-ruler-refresh b))))
 
 (drgnx-defsetting drgnx-minimap-ruler t
   "Non-nil: every scrollable window has the scroll bar, a strip at its right edge with the thumb and the file's
@@ -51,6 +63,26 @@ marks.  Nil: only windows whose buffer has marks (a debugger's breakpoints) show
   "Non-nil: the scroll bar hides while the window shows all of its content (it comes back once the content runs
 past the window; the text keeps its width either way)."
   :type 'boolean :group 'drgnx-minimap :scope 'global :apply #'drgnx-ruler--setting-changed)
+
+(defconst drgnx-ruler-kinds '(change error warning info hit breakpoint bookmark symbol agent pin other)
+  "The marks' kinds; a kind's index is its number in the line model (`nidhogg-lines-set-marks').")
+
+(drgnx-defsetting drgnx-marks-kinds drgnx-ruler-kinds
+  "The kinds of marks the scroll bar and the next-mark keys show (`drgnx-ruler-kinds'): changes, errors, warnings,
+notes, search hits, breakpoints, bookmarks, symbol uses, agent edits, pinned regions, and any other producer's."
+  :type '(set (const change) (const error) (const warning) (const info) (const hit) (const breakpoint)
+              (const bookmark) (const symbol) (const agent) (const pin) (const other))
+  :group 'drgnx-minimap :scope 'global :apply #'drgnx-ruler--kinds-changed)
+
+(defvar drgnx-ruler-owner-kinds
+  '((hunks . change) (search . hit) (debug . breakpoint) (bookmarks . bookmark) (symbol . symbol) (agent . agent)
+    (pins . pin))
+  "Each producer's kind of marks (`drgnx-ruler-source''s OWNER), unless the mark's face names one
+\(`drgnx-ruler-face-kinds').")
+
+(defvar drgnx-ruler-face-kinds
+  '((drgnx-marks-error . error) (drgnx-marks-warning . warning) (drgnx-marks-info . info))
+  "The kinds a mark's face names, over its producer's (a producer of problems gives each severity its face).")
 
 (defface drgnx-ruler-view '((t :inherit default))
   "The scroll bar's thumb over the part of the content the window shows: its foreground, at 26 % (minimap.css
@@ -69,7 +101,11 @@ past the window; the text keeps its width either way)."
 (defconst drgnx-ruler--dot '(3 9 6 3) "A `dot' mark (a breakpoint): its x range, height and radius, logical pixels.")
 
 (defvar-local drgnx-ruler--sources nil "This buffer's producers: an alist OWNER → FUNCTION (no arguments) → marks.")
-(defvar-local drgnx-ruler--marks nil "The marks as last asked, drawn in this order: (POS LANE FACE PRIORITY …) each.")
+(defvar-local drgnx-ruler--marks nil
+  "The marks as last asked, drawn in this order: (POS LANE FACE PRIORITY SHAPE END KIND) each.")
+(defvar-local drgnx-ruler--sent nil
+  "The marks the line model was last given: an alist KIND → their vectors; t after an edit (the model has moved
+them, so the next sync gives every kind again).")
 
 (defvar-local drgnx-ruler-span-function nil
   "Nil, or a function of no arguments giving the buffer's rows as a part of a view: (FROM LENGTH TOTAL), the buffer
@@ -120,11 +156,37 @@ marked `drgnx-minimap-exclude' (the peek card's, the sticky header's)."
         (if drgnx-ruler-mode (drgnx-ruler-refresh) (drgnx-ruler-mode 1))
       (when drgnx-ruler-mode (drgnx-ruler-mode -1)))))
 
+(defun drgnx-ruler--kind (owner m)
+  "The kind of OWNER's mark M: its face's (`drgnx-ruler-face-kinds'), else OWNER's, else `other'."
+  (or (alist-get (nth 2 m) drgnx-ruler-face-kinds) (alist-get owner drgnx-ruler-owner-kinds) 'other))
+
 (defun drgnx-ruler--ask ()
-  "The producers' marks, the highest PRIORITY last (drawn on top)."
+  "The producers' marks of the kinds shown (`drgnx-marks-kinds'), each with its kind, the highest PRIORITY last
+\(drawn on top)."
   (let (marks)
-    (pcase-dolist (`(,_ . ,f) drgnx-ruler--sources) (setq marks (nconc (copy-sequence (funcall f)) marks)))
+    (pcase-dolist (`(,owner . ,f) drgnx-ruler--sources)
+      (dolist (m (funcall f))
+        (let ((kind (drgnx-ruler--kind owner m)))
+          (when (memq kind drgnx-marks-kinds)
+            (push (list (nth 0 m) (nth 1 m) (nth 2 m) (nth 3 m) (nth 4 m) (nth 5 m) kind) marks)))))
     (sort marks (lambda (a b) (< (or (nth 3 a) 0) (or (nth 3 b) 0))))))
+
+(defun drgnx-ruler--sync ()
+  "Give the buffer text's line model each kind's marks whose set changed since it was last given them (Nidhogg)."
+  (when (fboundp 'nidhogg-lines-set-marks)
+    (let (by-kind)
+      (dolist (m drgnx-ruler--marks)
+        (push (vector (nth 0 m) (nth 5 m) (cl-position (nth 1 m) '(left middle right full)) 0 (or (nth 3 m) 0))
+              (alist-get (nth 6 m) by-kind)))
+      (when (or by-kind drgnx-ruler--sent)
+        (nidhogg-lines-enable)
+        (let ((all (eq drgnx-ruler--sent t)))
+          (when all (setq drgnx-ruler--sent nil))
+          (dolist (k drgnx-ruler-kinds)
+            (let ((new (sort (alist-get k by-kind) (lambda (a b) (< (aref a 0) (aref b 0))))))
+              (unless (and (not all) (equal new (alist-get k drgnx-ruler--sent)))
+                (nidhogg-lines-set-marks nil (cl-position k drgnx-ruler-kinds) new)
+                (setf (alist-get k drgnx-ruler--sent nil 'remove) new)))))))))
 
 (defun drgnx-ruler--mark (m frame)
   "Mark M, (POS LANE FACE PRIORITY [SHAPE END]), as `glitnir-ruler' takes it for FRAME: (POS X0 X1 FACE HEIGHT
@@ -187,7 +249,9 @@ or a setting changed."
 (defun drgnx-ruler-refresh (&optional buffer)
   "Ask BUFFER's producers again (default current), and give every window showing it the marks."
   (with-current-buffer (or buffer (current-buffer))
-    (when drgnx-ruler-mode (setq drgnx-ruler--marks (drgnx-ruler--ask)))
+    (when drgnx-ruler-mode
+      (setq drgnx-ruler--marks (drgnx-ruler--ask))
+      (drgnx-ruler--sync))
     (drgnx-ruler-update)))
 
 (defun drgnx-ruler--buffer-changed (frame-or-window)
@@ -200,7 +264,8 @@ loses the strip."
         (drgnx-ruler--hide w)))))
 
 (defun drgnx-ruler--changed (&rest _)
-  "`after-change-functions': the marks are asked again once the typing rests."
+  "`after-change-functions': the marks are asked again once the typing rests, and given to the line model again."
+  (when drgnx-ruler--sent (setq drgnx-ruler--sent t))
   (drgnx-timer-debounce (cons 'ruler (current-buffer)) 0.3 #'drgnx-ruler-refresh :args (list (current-buffer))
                         :owner (current-buffer)))
 
@@ -275,6 +340,7 @@ the button comes up (Lisp per motion only while the button is held); off the str
     (remove-hook 'kill-buffer-hook #'drgnx-ruler--off t)
     (drgnx-timer-cancel (cons 'ruler (current-buffer)))
     (setq drgnx-ruler--marks nil drgnx-ruler--sources nil)
+    (drgnx-ruler--sync)
     (mapc #'drgnx-ruler--place (get-buffer-window-list nil nil t))
     (unless (or drgnx-scrollbar-mode
                 (seq-some (lambda (b) (and (not (eq b (current-buffer))) (buffer-local-value 'drgnx-ruler-mode b)))

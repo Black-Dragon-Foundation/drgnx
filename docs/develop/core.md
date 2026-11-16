@@ -1601,7 +1601,22 @@ lists at each publish.
   - A higher PRIORITY is drawn on top.
   - Producers (`core/drgnx-marks.el`): the change bars (left lane, one mark per run of lines), Flymake
     (right lane, set once per report after 100 ms), isearch hits (middle lane, the whole buffer once per search
-    string), the Problems list's error and warning rows; the debug column (breakpoints, the stopped line).
+    string), the Problems list's error and warning rows, bookmarks in the file (a variable watcher on
+    `bookmark-alist`, debounced), the symbol at point's uses (`drgnx-marks-symbol-uses`, a 400 ms idle timer), agent
+    edits (the edit history's `drgnx-history-drained-functions`, origin `agent:…`, kept as at most
+    `drgnx-marks-agent-max` marker pairs); the debug column (breakpoints as `dot`s, the stopped line).
+- **Kinds and the line model.** Each mark has a kind (`drgnx-ruler-kinds`; its index is the line model's number):
+  its face's (`drgnx-ruler-face-kinds`, a problem's severity), else its producer's (`drgnx-ruler-owner-kinds`), else
+  `other`. `drgnx-marks-kinds` filters them. On Nidhogg, `drgnx-ruler--sync` gives the buffer text's line model
+  (`nidhogg-lines-set-marks`, Nidhogg's Hlidskjalf) each kind's marks as `[POS END LANE CLASS PRIORITY]` vectors, only
+  the kinds whose set changed; after an edit (the model has moved them) every kind once more. The model shifts them on
+  every edit, and the strip then measures visible lines.
+- **Next and previous.** `drgnx-marks-step KINDS DIR` goes to the next mark after the current line (or the previous
+  before it), wrapping, and says `drgnx-marks-announcement`: "KIND N of M[: MESSAGE], line L" (a problem's message
+  is Flymake's first line). The line model answers (`nidhogg-lines-next-mark`, `nidhogg-lines-counts`); without it,
+  the marks as last asked. Commands (module `editor/minimap`): `mark-next`/`-previous`, `change-next`/`-previous`,
+  `bookmark-next`/`-previous`, `agent-edit-next`/`-previous`; `code-next-problem`/`-previous` (module `lang`) go
+  through `drgnx-marks-next-problem`, which falls back to Flymake's own when the buffer has no problem marks.
 - **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
   8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
   at 26 %; all through `drgnx-px`.
@@ -1622,7 +1637,8 @@ lists at each publish.
 - **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler`, or in a terminal
   (`drgnx-ruler-available-p`).
 - **Checks.** `ruler-test.el` and `marks-test.el` (batch); the look scenes check every scrollable window of every
-  scene (`drgnx-look-scene-scrollbars`: the strip is set, and drawn exactly when the content runs past the window);
+  scene (`drgnx-look-scene-scrollbars`: the strip is set, and drawn exactly when the content runs past the window; a strip under the palette's child frame is not
+  judged, one under any other child frame, a toast say, is an error);
   Nidhogg's `glitnir-gui/the-ruler-*` rows check the pixels.
 - **Perf.** `debug-ruler-scroll` (10,000 lines, 200 marks) against `debug-ruler-baseline`, the same scroll with the
   ruler off (docs/develop/perf.md, "The overview ruler"). The margin version this

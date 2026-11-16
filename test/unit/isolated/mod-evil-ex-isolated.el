@@ -172,7 +172,7 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
                        ("[ d" . code-previous-problem) ("C-w h" . focus-left) ("C-w j" . focus-down)
                        ("C-w k" . focus-up) ("C-w l" . focus-right)))
           (should (eq (key-binding (kbd (car row))) (fn (cdr row)))))
-        (should (eq (fn 'code-next-problem) #'flymake-goto-next-error)))
+        (should (eq (fn 'code-next-problem) #'drgnx-marks-next-problem)))
       ;; the conflict report stays clean: none of these keys is reported, and nothing is a problem
       (should-not (plist-get drgnx-keys-last :problems))
       (dolist (c (plist-get drgnx-keys-last :conflicts))

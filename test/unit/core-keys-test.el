@@ -1448,6 +1448,7 @@ The commands of modules that need no installed package are in it, the later stag
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste
                               code-next-problem code-previous-problem ; M12d: F8 / S-F8
+                              change-next change-previous bookmark-next bookmark-previous ; the minimap plan's mark keys
                               quick-help quick-help-close             ; M12f's quick help
                               close-pane                              ; M12f's Esc and q in a pane
                               settings-lisp-files-open           ; settings Task 28: RET on the Lisp files page
