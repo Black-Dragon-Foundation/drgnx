@@ -1314,6 +1314,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/history/rescan` | user | `{}` | `{sessions: natnum}` | no |
 | `agents/history/resume` | user | `{id: string, profile?: string, provider: "claude" \| "gemini" \| "codex", route: "copy" \| "original"}` | `{route: "copy" \| "original", session: string}` | yes |
 | `agents/history/search` | user | `{query: string}` | `{hits?: [PastHit]}` | no |
+| `agents/history/status` | user | `{}` | `{drift?: [PastDrift], on: boolean, sessions: natnum}` | no |
 | `agents/history/subscribe` | user | `{limit?: natnum, query?: string, view: string, workspace?: AbsPath}` | `boolean` | no |
 | `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
 | `agents/huddle/start` | user | `{clash?: string, sessions?: [Id]}` | `Huddle` | yes |
@@ -2041,7 +2042,10 @@ size, mtime and the offset read to) and an FTS5 table `turn` of each entry's tex
   places it after its own rows: its buffer keeps its Lisp view and attaches the hub view with
   `drgnx-view-patch-attach … :keep t` and an apply function of its own (`drgnx-agent-panel-list--past-apply`). `agents/history/open` reads the file whole and publishes the transcript on
   `agent-history/PROVIDER:ID` with the agent panel's row builder (16 kept), and answers the terminal's resume argv.
-  `agents/history/search` answers the hits (title matches first, then FTS, 50 at most); `rescan` scans now.
+  `agents/history/status` answers `{on, sessions, drift}`: `drift` lists, per CLI, the files whose share of lines of a type
+  minni has never heard of (`Reader::unknown`; the types skipped on purpose are `minni::known_skipped`) is 20% or more over at
+  least 10 lines (the `session` table's `lines` and `unknown` columns); the doctor's `past-sessions` check shows it. An
+  index made before those columns is dropped and read again (it is a cache). `agents/history/search` answers the hits (title matches first, then FTS, 50 at most); `rescan` scans now.
 - **Resume**: `agents/history/resume {provider, id, route}` checks the file (`checked_file`: a regular file, its true
   name under the root), records a `Grant` for the new session id and starts the session on the provider's profile with
   `Attach::Resume(ID)`. The sandbox (`resume_grant`) then puts the file where the CLI looks under the jail's empty

@@ -74,6 +74,7 @@ pub struct Reader {
     offset: u64,
     entries: Vec<Value>,
     skipped: BTreeMap<String, u64>,
+    lines: u64,
     id: Option<String>,
     cwd: Option<String>,
     branch: Option<String>,
@@ -107,6 +108,7 @@ pub fn parse_whole(provider: Provider, bytes: &[u8]) -> Reader {
         for m in &msgs {
             r.gemini(m);
         }
+        r.lines = msgs.len() as u64 + 1;
         r.offset = bytes.len() as u64;
         return r;
     }
@@ -116,6 +118,25 @@ pub fn parse_whole(provider: Provider, bytes: &[u8]) -> Reader {
         r.offset = bytes.len() as u64;
     }
     r
+}
+
+/// The line types each provider's reader skips on purpose (they hold nothing a transcript shows), as `skip` names them.
+/// Anything else skipped, and every unreadable line, counts as unknown ([`Reader::unknown`]).
+pub fn known_skipped(p: Provider) -> &'static [&'static str] {
+    match p {
+        Provider::Claude => &[
+            "meta",
+            "system",
+            "file-history-snapshot",
+            "queue-operation",
+            "progress",
+            "attachment",
+            "permission-mode",
+            "last-prompt",
+        ],
+        Provider::Codex => &["event_msg", "turn_context", "state"],
+        Provider::Gemini => &["$patch"],
+    }
 }
 
 fn str_at<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
@@ -155,6 +176,7 @@ impl Reader {
             offset: 0,
             entries: Vec::new(),
             skipped: BTreeMap::new(),
+            lines: 0,
             id: None,
             cwd: None,
             branch: None,
@@ -197,6 +219,22 @@ impl Reader {
     /// The lines skipped, by their type (`unreadable` for a line that is no JSON object).
     pub fn skipped(&self) -> &BTreeMap<String, u64> {
         &self.skipped
+    }
+
+    /// The lines read so far (blank lines not counted).
+    pub fn lines(&self) -> u64 {
+        self.lines
+    }
+
+    /// The lines read whose type this crate has never heard of: the skipped ones except the types [`known_skipped`]
+    /// ignores on purpose, and the unreadable ones.  A rising share means the CLI changed its format.
+    pub fn unknown(&self) -> u64 {
+        let known = known_skipped(self.provider);
+        self.skipped
+            .iter()
+            .filter(|(what, _)| !known.contains(&what.as_str()))
+            .map(|(_, n)| n)
+            .sum()
     }
 
     pub fn meta(&self) -> Meta {
@@ -277,6 +315,7 @@ impl Reader {
         if raw.iter().all(u8::is_ascii_whitespace) {
             return;
         }
+        self.lines += 1;
         match serde_json::from_slice::<Value>(raw) {
             Ok(v @ Value::Object(_)) => match self.provider {
                 Provider::Claude => self.claude(&v),

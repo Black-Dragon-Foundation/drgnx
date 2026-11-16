@@ -677,7 +677,8 @@ indexed. No agent tool, no search index and no embedder reaches the sessions or 
 to a model only when you press Resume Here, and only to the CLI it came from. `drgnx-agents-history` (on by default)
 turns it all off and deletes `history.db`; `drgnx-agents-history-providers` names the CLIs read (all three by
 default). `drgnx-agents-history-days` (180) skips sessions whose file is older than that many days: they are not
-listed or searched and leave the index; 0 reads all of them.
+listed or searched and leave the index; 0 reads all of them. If a CLI changes its file format, `drgnx doctor` warns
+("History: 3 Claude Code files had 40% unknown lines; update drgnx"): a file counts at 20% unknown lines or more.
 
 ## Agents outside drgnx
 

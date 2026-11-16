@@ -162,6 +162,19 @@ ANSWER) with `search/embedders' and, inside a project, `search/status' of it; or
                   :status (and root (drgnx-hub-call-sync "search/status" (list :root root) 3))))))
     (error (list :error (error-message-string err)))))
 
+;; Past sessions (the hub's reader of the other CLIs' session files): `agents/history/status' says whether it is on and
+;; which CLIs' files read with many lines this build does not know (a format change).  A failure becomes a fact (:error).
+(defun drgnx-doctor--past-sessions ()
+  "The facts of the `past-sessions' check: (:hub nil) when no hub runs, else `agents/history/status' as a plist
+\(:hub t :on :sessions :drift); or (:error MESSAGE)."
+  (condition-case err
+      (progn
+        (require 'drgnx-hub-client)
+        (if (not (drgnx-hub-running-p))
+            (list :hub nil)
+          (cons :hub (cons t (drgnx-hub-call-sync "agents/history/status" nil 3)))))
+    (error (list :error (error-message-string err)))))
+
 ;; The terminal the doctor runs in (see `drgnx-tty-facts'): from the environment of this process, never from a
 ;; terminal.  Inside tmux, the one process is `tmux show' (1 s).  A failure becomes a fact (:error), never a crash.
 (cl-defun drgnx-doctor-terminal-facts (&optional frame &key caps (fallbacks nil fallbacks-p))
@@ -532,6 +545,7 @@ which runs `tmux'): for a caller that shows no check reading them, whose rows ar
            :work-plans (drgnx-doctor--work-plans)
            :ai-up (drgnx-doctor--ai-up)
            :search (drgnx-doctor--search)
+           :past-sessions (drgnx-doctor--past-sessions)
            :terminal (unless (memq :terminal skip) (drgnx-doctor-terminal-facts))
            :window-manager (drgnx-platform-doctor-facts)
            ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
@@ -1355,6 +1369,28 @@ built-in model once it is ready (its device)."
                                                                                 (plist-get status :files) (if (eql (plist-get status :files) 1) "" "s"))
                                                                ""))
                                                  nil)))))))
+
+(drgnx-doctor-define 'past-sessions :group "drgnx"
+                     :doc "Past sessions of the other agent CLIs: whether their files still read as this build expects"
+                     :check (lambda (f)
+                              (let* ((s (plist-get f :past-sessions))
+                                     (drift (plist-get s :drift)))
+                                (cond ((not (plist-member f :past-sessions)) (list 'info "not checked" nil))
+                                      ((plist-get s :error) (list 'warn (format "could not check: %s" (plist-get s :error)) "run drgnx doctor again"))
+                                      ((or (not (plist-get s :hub)) (not (plist-get s :on))) (list 'ok "not reading past sessions" nil))
+                                      (drift
+                                       (list 'warn (mapconcat (lambda (d)
+                                                                (format "History: %d %s file%s had %d%% unknown lines; update drgnx"
+                                                                        (plist-get d :files)
+                                                                        (pcase (plist-get d :provider) ("claude" "Claude Code") ("codex" "Codex")
+                                                                               ("gemini" "Gemini CLI") (p (format "%s" p)))
+                                                                        (if (eql (plist-get d :files) 1) "" "s")
+                                                                        (plist-get d :unknown_pct)))
+                                                              drift "; ")
+                                             "drgnx update"))
+                                      (t (list 'ok (format "%d past session%s read" (plist-get s :sessions)
+                                                           (if (eql (plist-get s :sessions) 1) "" "s"))
+                                               nil))))))
 
 (drgnx-doctor-define 'work :group "drgnx" :doc "The work tracker (SQLite in Emacs; SVG for its graph)"
                      :check (lambda (f)

@@ -185,6 +185,7 @@ pub async fn serve(
         Params::PastSearch(p) => answer(crate::agents::past::search(f, c, p).await),
         Params::PastOpen(p) => answer(crate::agents::past::open(f, c, p).await),
         Params::PastResume(p) => answer(crate::agents::past::resume(f, c, p).await),
+        Params::PastStatus(p) => answer(crate::agents::past::status(f, c, p).await),
         Params::PastRescan(p) => answer(crate::agents::past::rescan(f, c, p).await),
         Params::RecordsStatus(p) => answer(records::status(f, c, p).await),
         Params::RecordsConflict(p) => answer(records::conflict(f, c, p).await),

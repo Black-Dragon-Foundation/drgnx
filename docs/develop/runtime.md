@@ -397,7 +397,7 @@ tier needs it: its helper starts a session itself (GL-T8-1). Either way the chil
 (`sessions/YYYY/MM/DD/rollout-*.jsonl`) into the hub's transcript entries (`user`, `agent`, `thought`, `tool`,
 `notice`) and a `Meta` (id, cwd, title, branch, dates, turns). Pure parsing, no I/O: `Reader::feed(bytes)` takes what
 was appended and keeps a partial last line for the next feed (`offset()` is what was consumed), so the hub reads a
-growing file on from where it stopped. Unknown line types are counted (`skipped()`), never an error: the formats
+growing file on from where it stopped. Unknown line types are counted (`skipped()`; `lines()` and `unknown()` give the drift share, `known_skipped` lists the types ignored on purpose), never an error: the formats
 change between the CLIs' versions. The tests' fixtures are hand-written, with no real session's content.
 
 ## mimir: the MCP server

@@ -23,7 +23,10 @@ fn thread_cpu() -> Duration {
 
 fn write_files(home: &Path) {
     for p in 0..100 {
-        let dir = home.join(".claude").join("projects").join(format!("-w-proj{p}"));
+        let dir = home
+            .join(".claude")
+            .join("projects")
+            .join(format!("-w-proj{p}"));
         std::fs::create_dir_all(&dir).unwrap();
         for s in 0..50 {
             let id = format!("{p:03}{s:03}00-0000-4000-8000-000000000000");

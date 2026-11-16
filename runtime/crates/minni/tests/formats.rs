@@ -247,3 +247,44 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn types_skipped_on_purpose_are_not_unknown_but_an_invented_one_is() {
+    let claude = minni::parse(Provider::Claude, CLAUDE.as_bytes());
+    assert_eq!(claude.lines(), 7);
+    assert_eq!(claude.skipped().get("file-history-snapshot"), Some(&1));
+    assert_eq!(claude.unknown(), 0, "a snapshot is ignored on purpose");
+    let odd = concat!(
+        r#"{"type":"future-kind","x":1}"#,
+        "\n",
+        "not json\n",
+        r#"{"type":"user","message":{"content":"hi"}}"#,
+        "\n"
+    );
+    let r = minni::parse(Provider::Claude, odd.as_bytes());
+    assert_eq!((r.lines(), r.unknown()), (3, 2));
+}
+
+#[test]
+fn codex_and_gemini_skips_on_purpose_are_not_unknown() {
+    let codex = concat!(
+        r#"{"timestamp":"2026-11-03T07:00:00Z","type":"event_msg","payload":{}}"#,
+        "\n",
+        r#"{"timestamp":"2026-11-03T07:00:00Z","type":"turn_context","payload":{}}"#,
+        "\n",
+        r#"{"record_type":"state"}"#,
+        "\n",
+        r#"{"timestamp":"2026-11-03T07:00:01Z","type":"never_heard_of","payload":{}}"#,
+        "\n"
+    );
+    let r = minni::parse(Provider::Codex, codex.as_bytes());
+    assert_eq!((r.lines(), r.unknown()), (4, 1));
+    let gemini = concat!(
+        r#"{"$patch":[]}"#,
+        "\n",
+        r#"{"id":"m1","type":"quirk","content":"x"}"#,
+        "\n"
+    );
+    let g = minni::parse(Provider::Gemini, gemini.as_bytes());
+    assert_eq!((g.lines(), g.unknown()), (2, 1));
+}

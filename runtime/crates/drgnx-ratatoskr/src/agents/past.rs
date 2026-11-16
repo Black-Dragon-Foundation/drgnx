@@ -17,8 +17,8 @@ use drgnx_rows::{Row, RowBuilder};
 use minni::{Provider, Reader};
 use runstav::methods::agents::{Entry, EntryType};
 use runstav::methods::past::{
-    PastHit, PastHits, PastOpened, PastProvider, PastRef, PastResume, PastResumed, PastRoute,
-    PastScanned, PastSearch, PastSession, PastSubscribe,
+    PastDrift, PastHit, PastHits, PastOpened, PastProvider, PastRef, PastResume, PastResumed,
+    PastRoute, PastScanned, PastSearch, PastSession, PastStatus, PastSubscribe,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -239,7 +239,8 @@ const SCHEMA: &str = "
 create table if not exists session (
   key text primary key, provider text not null, sid text not null, path text not null unique, cwd text,
   title text not null, branch text, started text, updated text, turns integer not null, size integer not null,
-  mtime integer not null, off integer not null, entries integer not null);
+  mtime integer not null, off integer not null, entries integer not null, lines integer not null,
+  unknown integer not null);
 create virtual table if not exists turn using fts5(key unindexed, idx unindexed, text);
 ";
 
@@ -258,6 +259,24 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     f.set_permissions(std::fs::Permissions::from_mode(0o600))
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let c = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // the index is a cache: one from before the format-drift columns is dropped and read again
+    let old: bool = c
+        .query_row(
+            "select count(*) = 0 from pragma_table_info('session') where name = 'unknown'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?
+        && c.query_row(
+            "select count(*) > 0 from pragma_table_info('session')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if old {
+        c.execute_batch("drop table session; drop table turn;")
+            .map_err(|e| e.to_string())?;
+    }
     c.execute_batch(SCHEMA)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(c)
@@ -284,6 +303,10 @@ fn index_text(e: &Value) -> Option<String> {
     let t = t.trim();
     (!t.is_empty()).then(|| crate::agents::transcript::redact(t))
 }
+
+/// A file counts as drifted from the format at this share of unknown lines, over at least this many lines.
+const DRIFT_PCT: i64 = 20;
+const DRIFT_LINES: i64 = 10;
 
 /// What a shown History list asked for: its workspace, its query and, for a section of another list, its limit.
 type Asked = (Option<String>, Option<String>, Option<usize>);
@@ -471,10 +494,37 @@ impl History {
             known_map.insert(r.path.clone(), r);
         }
         let list = list_of(db)?;
-        let n = list.len() as u64;
+        let n = known_map.len() as u64;
         *lock(&self.list) = list;
         *listed = true;
         Ok((n, true))
+    }
+
+    /// The CLIs whose files read with a share of lines this build does not know: per provider, how many files had at
+    /// least `DRIFT_PCT` percent unknown lines over at least `DRIFT_LINES` lines, and the share over those files.
+    pub fn drift(&self) -> Result<Vec<PastDrift>, String> {
+        let i = lock(&self.inner);
+        let Some(db) = i.db.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let mut st = db
+            .prepare(
+                "select provider, count(*), sum(unknown), sum(lines) from session
+                 where lines >= ?1 and unknown * 100 >= lines * ?2 group by provider order by provider",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = st
+            .query_map((DRIFT_LINES, DRIFT_PCT), |r| {
+                let provider: String = r.get(0)?;
+                let (unknown, lines): (i64, i64) = (r.get(2)?, r.get(3)?);
+                Ok(PastDrift {
+                    provider: past_of(Provider::from_name(&provider).unwrap_or(Provider::Claude)),
+                    files: r.get::<_, i64>(1)? as u64,
+                    unknown_pct: (unknown * 100 / lines.max(1)) as u64,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
     }
 
     /// The sessions whose title or transcript hold every word of QUERY, best first.
@@ -661,9 +711,10 @@ fn index_one(
         .unwrap_or_else(|| "(untitled)".into());
     tx.execute(
         "insert into session (key, provider, sid, path, cwd, title, branch, started, updated, turns, size, mtime, off,
-           entries) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+           entries, lines, unknown) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          on conflict(key) do update set path = ?4, cwd = ?5, title = ?6, branch = ?7, started = ?8, updated = ?9,
-           turns = ?10, size = ?11, mtime = ?12, off = ?13, entries = ?14",
+           turns = ?10, size = ?11, mtime = ?12, off = ?13, entries = ?14, lines = ?15,
+           unknown = ?16",
         (
             &key,
             f.provider.name(),
@@ -679,6 +730,8 @@ fn index_one(
             f.mtime,
             rd.offset() as i64,
             entries.len() as i64,
+            rd.lines() as i64,
+            rd.unknown() as i64,
         ),
     )
     .map_err(|e| e.to_string())?;
@@ -1197,6 +1250,31 @@ pub async fn rescan(
 ) -> Result<PastScanned, Error> {
     Ok(PastScanned {
         sessions: scan_now(f).await?,
+    })
+}
+
+/// Whether past sessions are on, how many are indexed, and the CLIs whose files drift from the formats read.
+pub async fn status(
+    f: &Front,
+    _: &Caller,
+    _: runstav::methods::Empty,
+) -> Result<PastStatus, Error> {
+    if !ready(f)? {
+        return Ok(PastStatus {
+            on: false,
+            sessions: 0,
+            drift: Vec::new(),
+        });
+    }
+    let me = f.core.past.clone();
+    let drift = crate::clock::blocking(move || me.drift())
+        .await
+        .map_err(|e| internal(format!("the status: {e}")))?
+        .map_err(internal)?;
+    Ok(PastStatus {
+        on: true,
+        sessions: lock(&f.core.past.list).len() as u64,
+        drift,
     })
 }
 

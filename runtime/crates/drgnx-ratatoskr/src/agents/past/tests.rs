@@ -359,7 +359,7 @@ fn the_history_methods_are_the_users_alone() {
         .iter()
         .filter(|m| m.name.starts_with("agents/history/"))
         .collect();
-    assert_eq!(ours.len(), 5);
+    assert_eq!(ours.len(), 6);
     for m in ours {
         assert_eq!(m.classes, [runstav::registry::Class::User], "{}", m.name);
     }
@@ -471,4 +471,42 @@ fn a_session_older_than_the_cap_is_neither_listed_nor_searchable() {
     let roots = h.history.roots().unwrap().within(0);
     h.history.configure(h.state.join(DB), roots);
     assert_eq!(h.history.scan().unwrap(), 2);
+}
+
+#[test]
+fn a_file_of_unknown_line_types_is_drift_and_ignored_types_are_not() {
+    let h = Home::new();
+    // 12 lines: 2 known, 10 of a type no reader has heard of
+    let mut odd = claude_lines("odd1", "/w/orchard", "count the apples");
+    for i in 0..10 {
+        odd.push_str(&format!("{}\n", json!({"type":"brand-new-kind","n":i})));
+    }
+    h.write(&format!("{CLAUDE_PROJECTS}/-w-orchard/odd1.jsonl"), &odd);
+    // 12 lines of types skipped on purpose
+    let mut quiet = claude_lines("quiet1", "/w/orchard", "count the pears");
+    for i in 0..10 {
+        quiet.push_str(&format!(
+            "{}\n",
+            json!({"type":"file-history-snapshot","n":i})
+        ));
+    }
+    h.write(
+        &format!("{CLAUDE_PROJECTS}/-w-orchard/quiet1.jsonl"),
+        &quiet,
+    );
+    // few lines: too small to say
+    h.write(
+        &format!("{CLAUDE_PROJECTS}/-w-orchard/tiny1.jsonl"),
+        &format!("{}\n", json!({"type":"brand-new-kind"})),
+    );
+    h.history.scan().unwrap();
+    let d = h.history.drift().unwrap();
+    assert_eq!(
+        d,
+        vec![PastDrift {
+            provider: PastProvider::Claude,
+            files: 1,
+            unknown_pct: 83
+        }]
+    );
 }
