@@ -8,6 +8,6 @@
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed", "estimate": {"usd": "$number", "unit": "usd-est", "tokens": "$number", "unpriced": [], "forecast": {"cost": [{"unit": "usd-est", "estimate": true}], "prices_as_of": "2026-11-01"}}}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "forecast/get", "params": {"job": "$job"}}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"tasks": [{"n": 1, "basis": {"level": "profile", "n": 5, "label": "5 implement tasks on claude"}}, {"n": 2, "basis": {"level": "profile", "n": 5}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"tasks": [{"n": 1, "basis": {"level": "profile", "n": 5, "label": "5 implement tasks on claude"}, "start": {"p50": "$number", "p90": "$number"}, "finish": {"p50": "$number", "p90": "$number"}}, {"n": 2, "basis": {"level": "profile", "n": 5}, "start": {"p50": "$number", "p90": "$number"}, "finish": {"p50": "$number", "p90": "$number"}}]}}, "within_ms": 10000}
 {"do": "sql_expect", "sql": "select count(*) from card where job = '$job' and kind = 'proposal' and title like '%tokens%' and title not like '%0.00%' and title like '%approve to start'", "rows": [[1]]}
 {"do": "sql_expect", "sql": "select count(*) from forecast_made where job = '$job'", "rows": [[3]]}

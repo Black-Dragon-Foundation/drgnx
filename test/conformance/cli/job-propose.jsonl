@@ -5,7 +5,7 @@
 {"do": "start", "hub": "h"}
 {"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo", "--budget", "5"], "expect_code": 0, "expect_stdout": "Task 2: Check the note  — review on"}
 {"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo"], "expect_code": 0, "expect_stdout": "Approve with: drgnx job approve job-"}
-{"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo", "--budget", "5", "--json"], "expect_code": 0, "expect_stdout": {"id": "$string", "status": "proposed", "budget": 5.0, "repo": "$string", "tasks": [{"n": 1, "status": "ready"}, {"n": 2, "status": "pending"}]}}
+{"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo", "--budget", "5", "--json"], "expect_code": 0, "expect_stdout": {"id": "$string", "status": "proposed", "limits": [{"amount": 5.0, "unit": "usd"}], "repo": "$string", "tasks": [{"n": 1, "status": "ready"}, {"n": 2, "status": "pending"}]}}
 {"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--budget", "lots"], "expect_code": 2, "expect_stderr": "--budget"}
 {"do": "run", "args": ["job", "propose"], "expect_code": 2, "expect_stderr": "needs a plan"}
 {"do": "run", "args": ["job", "propose", "$ROOT/none.md", "--nope"], "expect_code": 2}

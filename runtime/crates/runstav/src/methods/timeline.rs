@@ -63,6 +63,14 @@ pub struct StepDetail {
     pub origin: String,
 }
 
+/// A machine's slots: in use, and in all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Slots {
+    pub used: u32,
+    pub total: u32,
+}
+
 /// One row of the `step` table.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -116,6 +124,12 @@ pub struct Step {
     /// What the step read, searched or fetched (tool steps).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<StepDetail>,
+    /// The machine the step ran on (none: the hub's own, or not known).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// A machine-queue step: the slots in use and in all when the wait began.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<Slots>,
     /// The agent conversation (ACP session id) the step ran in: a session runs another one after a revert.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acp: Option<String>,
@@ -196,6 +210,11 @@ pub struct Rollup {
     #[serde(default, deserialize_with = "null_as_empty")]
     pub cost: Vec<Limit>,
     pub tokens: Tokens,
+    /// The first step's start and the last step's end, seconds since the epoch; `last` is none while a step is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<f64>,
 }
 
 /// At most 500 steps a call; `next` continues.
@@ -236,6 +255,35 @@ pub enum BudgetScope {
     Manager(Id),
     /// A worker session.
     Worker(Id),
+}
+
+/// Where a scope stands against its limits (and those above it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum BudgetState {
+    /// Within its limits.
+    Ok,
+    /// 80 % or more of the binding limit is spent: the unit whose remaining share is the least.
+    Nearing,
+    /// A limit is reached.
+    Reached,
+    /// No limit on the scope or above it.
+    None,
+}
+
+/// The `budget` event: a scope's spend moved (at most once a second per scope; the last value wins).  `burn_per_hour`
+/// is what it spent per hour over the last hour, in each unit, empty until 10 minutes of spend were seen.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetEvent {
+    pub scope: BudgetScope,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub spent: Vec<Limit>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub remaining: Vec<Limit>,
+    pub state: BudgetState,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub burn_per_hour: Vec<Limit>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -326,20 +374,25 @@ pub struct SupervisorEvent {
     pub text: String,
 }
 
-fn check_budget_set(p: &BudgetSetParams) -> Result<(), Error> {
-    let mut units: Vec<Unit> = p.limits.iter().map(|l| l.unit).collect();
+/// A set of limits as a budget takes them: one per unit, each a finite amount of 0 or more.
+pub(crate) fn check_limits(limits: &[Limit]) -> Result<(), Error> {
+    let mut units: Vec<Unit> = limits.iter().map(|l| l.unit).collect();
     units.sort();
     units.dedup();
-    if units.len() != p.limits.len() {
+    if units.len() != limits.len() {
         return Err(invalid("limits", "one limit per unit"));
     }
-    if p.limits
+    if limits
         .iter()
         .any(|l| !(l.amount.is_finite() && l.amount >= 0.0))
     {
         return Err(invalid("limits", "a limit: a finite amount, 0 or more"));
     }
     Ok(())
+}
+
+fn check_budget_set(p: &BudgetSetParams) -> Result<(), Error> {
+    check_limits(&p.limits)
 }
 
 pub(crate) fn methods() -> Vec<Method> {

@@ -353,6 +353,7 @@
   "work/map/close": ["user"],
   "work/map/set": ["user"],
   "work/map/subscribe": ["user"],
+  "work/target/set": ["user"],
   "work/trail/close": ["user"],
   "work/trail/subscribe": ["user"]
 }

@@ -11,5 +11,5 @@
 {"do": "run", "args": ["job", "approve", "job-nope"], "expect_code": 1, "expect_stderr": "ratatoskr job:"}
 {"do": "run", "args": ["job", "approve", "$job", "--budget", "5"], "expect_code": 0, "expect_stdout": "budget 5.0 USD"}
 {"do": "file", "path": "$ROOT/w.log", "contains": "\"prompt\"", "within_ms": 90000}
-{"do": "run", "args": ["job", "status", "$job", "--json"], "expect_code": 0, "expect_stdout": {"id": "$job", "status": "running", "budget": 5.0, "agents": [{"status": "$string"}]}}
+{"do": "run", "args": ["job", "status", "$job", "--json"], "expect_code": 0, "expect_stdout": {"id": "$job", "status": "running", "limits": [{"amount": 5.0, "unit": "usd"}], "agents": [{"status": "$string"}]}}
 {"do": "run", "args": ["job", "stop", "$job"], "expect_code": 0, "expect_stdout": "[stopped]"}

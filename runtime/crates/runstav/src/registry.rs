@@ -20,7 +20,7 @@ pub const PROTO_MIN: u32 = 1;
 /// The records layout: 2 is JSON (design 4.5).
 pub const RECORDS: u32 = 2;
 /// The work.db schema this code knows (the hub makes it, or migrates an older file to it at start).
-pub const SCHEMA: u32 = 12;
+pub const SCHEMA: u32 = 13;
 
 /// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
 /// `service` nothing.
@@ -526,6 +526,7 @@ mod tests {
         "budget/set",
         "records/import",
         "records/resolve",
+        "work/target/set",
     ];
 
     /// Every method is the hub's own: each name decodes to a `Params` variant of its own, and every variant is some

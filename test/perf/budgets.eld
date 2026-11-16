@@ -332,4 +332,8 @@
  (agents-typing-none (:input :p95) 16) (agents-typing-none (:stalls) 0)
  (agents-follow (:input :p95) 16) (agents-follow (:stalls) 0)
  (agent-panel-stream (:input :p95) 16) (agent-panel-stream (:stalls) 0)
- (pair-typing (:input :p95) 16) (pair-typing (:stalls) 0))
+ (pair-typing (:input :p95) 16) (pair-typing (:stalls) 0)
+ ;; the budget event (budget plan H4): a scope has at most one `budget' event a second, and one flush (30 agents spending)
+ ;; costs at most 4 ms p95 -- the hub's bench `budget_event' (docs/develop/perf.md), judged in the perf lane
+ (budget-event (:events-per-scope-per-sec) 1) (budget-event-patch (:patch :p95) 4)
+)

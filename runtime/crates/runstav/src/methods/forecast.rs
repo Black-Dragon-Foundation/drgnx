@@ -17,6 +17,12 @@ pub struct Range {
     pub p90: f64,
 }
 
+impl Default for Range {
+    fn default() -> Self {
+        Range { p50: 0.0, p90: 0.0 }
+    }
+}
+
 /// A cost range in one unit.  `estimate` is true for `usd-est`: tokens at API prices, not a measured bill.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -76,6 +82,12 @@ pub struct TaskForecast {
     /// Empty for a profile with no price: unpriced, never zero.
     #[serde(default, deserialize_with = "null_as_empty")]
     pub cost: Vec<CostRange>,
+    /// When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs
+    /// (a manager's row has none: zeros).
+    #[serde(default)]
+    pub start: Range,
+    #[serde(default)]
+    pub finish: Range,
 }
 
 /// The cold wakes in a forecast: "of which", already inside the totals (the history holds its wakes).

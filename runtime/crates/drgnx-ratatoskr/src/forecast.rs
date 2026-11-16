@@ -476,6 +476,8 @@ async fn build(
             tokens: shown(tokens),
             active_secs: shown(active),
             cost,
+            start: wire_range(t.start),
+            finish: wire_range(t.finish),
         });
         made.push(Made {
             job: job_key.to_owned(),
@@ -664,6 +666,8 @@ fn manager_line(front: &Front, rows: &[&SampleRow]) -> Option<wire::TaskForecast
         tokens,
         active_secs: active,
         cost,
+        start: wire::Range::default(),
+        finish: wire::Range::default(),
     })
 }
 
@@ -1265,6 +1269,8 @@ mod tests {
                             snapshot: None,
                             log_version: None,
                             acp: None,
+                            machine: None,
+                            slots: None,
                         },
                     )?;
                     close(

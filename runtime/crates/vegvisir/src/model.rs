@@ -26,6 +26,13 @@ pub enum GraphFact {
         #[serde(default)]
         updated: u64,
     },
+    /// A spec's or plan's target date (`spec:ID` or `plan:ID`; none: no target).
+    Target { item: String, at: Option<Instant> },
+    /// A spec's, plan's, task's or agent's budget (`spec:ID`, `plan:ID`, `task:ID` or `agent:ID`; none: no limit).
+    Budget {
+        item: String,
+        budget: Option<ItemBudget>,
+    },
     /// `plan:ID`; `rank` orders the plans (and so their blocks).
     Plan {
         id: String,
@@ -257,6 +264,23 @@ pub struct RefFact {
     pub merged: bool,
 }
 
+/// A number that compares by its bits, so the fields stay `Eq`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Num(pub f64);
+impl Eq for Num {}
+
+/// What an item has spent against its binding limit (the unit whose remaining share is least; the hub's
+/// `BudgetState` as `ok`, `nearing`, `reached` or `none`).  `limit` is none when only an ancestor's limit counts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemBudget {
+    pub spent: Num,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Num>,
+    pub unit: String,
+    pub state: String,
+}
+
 /// What a card's fields show (design §5.3); only what the item's kind has is set.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fields {
@@ -278,10 +302,16 @@ pub struct Fields {
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spend: Option<String>,
+    /// Spec, plan, task and agent items: spend against the binding limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<ItemBudget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress: Option<(u32, u32)>,
+    /// A spec's or plan's target date, seconds since the epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_at: Option<Instant>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -319,6 +349,13 @@ pub struct Fields {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<JobFact>,
 }
+
+/// A point in time, in seconds since the epoch (a finite number: the wire refuses the others), ordered by value.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Instant(pub f64);
+
+impl Eq for Instant {}
 
 /// One item of the map.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -498,6 +535,10 @@ struct Facts {
     asks: BTreeMap<Sym, String>,
     specs: BTreeMap<Sym, String>,
     plans: BTreeMap<Sym, PlanF>,
+    /// spec or plan → its target date
+    targets: BTreeMap<Sym, Instant>,
+    /// spec, plan, task or agent → its budget
+    budgets: BTreeMap<Sym, ItemBudget>,
     /// spec, plan and task → when its record last changed (minutes)
     stamps: BTreeMap<Sym, u64>,
     /// task → (plan, title, done)
@@ -768,14 +809,21 @@ impl Model {
         let mut chips = Vec::new();
         let label = match d.kind {
             Kind::Ask => f.asks.get(&y).cloned().unwrap_or_default(),
-            Kind::Spec => f.specs.get(&y).cloned().unwrap_or_default(),
+            Kind::Spec => {
+                fields.target_at = f.targets.get(&y).copied();
+                fields.budget = f.budgets.get(&y).cloned();
+                f.specs.get(&y).cloned().unwrap_or_default()
+            }
             Kind::Plan => {
                 let (title, _, progress) = &f.plans[&y];
                 fields.progress = *progress;
+                fields.target_at = f.targets.get(&y).copied();
+                fields.budget = f.budgets.get(&y).cloned();
                 title.clone()
             }
             Kind::Task => {
                 fields.task_state = Some(self.task_state(&self.names.id(y)));
+                fields.budget = f.budgets.get(&y).cloned();
                 f.tasks[&y].1.clone()
             }
             Kind::Agent | Kind::Subagent => {
@@ -784,6 +832,7 @@ impl Model {
                 fields.minutes = Some(f.minute.saturating_sub(s.fact.since));
                 fields.model = (!s.fact.model.is_empty()).then(|| s.fact.model.clone());
                 fields.spend = s.fact.spend.clone();
+                fields.budget = f.budgets.get(&y).cloned();
                 fields.age = s.fact.age;
                 fields.worktree = s
                     .fact
@@ -974,6 +1023,35 @@ impl Model {
                     }
                     f.plans.insert(y, v);
                     f.stamps.insert(y, updated);
+                    touched.insert(y);
+                }
+                GraphFact::Target { item, at } => {
+                    let (kind, id) = item
+                        .split_once(':')
+                        .filter(|(k, _)| matches!(*k, "spec" | "plan"))?;
+                    let y = n.intern_as(kind, id);
+                    let now = at;
+                    if f.targets.get(&y).copied() == now {
+                        return None;
+                    }
+                    match now {
+                        Some(a) => f.targets.insert(y, a),
+                        None => f.targets.remove(&y),
+                    };
+                    touched.insert(y);
+                }
+                GraphFact::Budget { item, budget } => {
+                    let (kind, id) = item
+                        .split_once(':')
+                        .filter(|(k, _)| matches!(*k, "spec" | "plan" | "task" | "agent"))?;
+                    let y = n.intern_as(kind, id);
+                    if f.budgets.get(&y) == budget.as_ref() {
+                        return None;
+                    }
+                    match budget {
+                        Some(b) => f.budgets.insert(y, b),
+                        None => f.budgets.remove(&y),
+                    };
                     touched.insert(y);
                 }
                 GraphFact::Task {

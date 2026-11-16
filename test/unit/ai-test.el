@@ -219,6 +219,18 @@ LOG/security.calls."
       (should-error (drgnx-ai-store-key 'openrouter "") :type 'user-error)
       (should-not (file-exists-p (concat log "secret-tool.argv"))))))
 
+(ert-deftest drgnx-ai/a-secret-call-never-loses-the-tail-of-its-output ()
+  ;; the call returns when the process is gone; output it wrote last must have been read by then (the Keychain's
+  ;; read-back compared an empty string with the key when it had not: "did not give the key back", under load only)
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--with-fake-store 'darwin bin log
+      (let ((want (concat (make-string 3000 ?k) "\n")))
+        (with-temp-file (concat bin "security")
+          (insert "#!/bin/sh\nprintf '%s\\n' " (shell-quote-argument (substring want 0 -1)) "\nexit 0\n"))
+        (set-file-modes (concat bin "security") #o755)
+        (dotimes (_ 1000)
+          (should (equal (drgnx-ai--security-call '("find-internet-password")) (cons 0 want))))))))
+
 (ert-deftest drgnx-ai/a-stored-key-is-found-again ()
   (drgnx-ai-test--with root
     (dolist (case '((darwin macos-keychain-internet) (gnu/linux default)))

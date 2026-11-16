@@ -26,6 +26,6 @@
 {"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/get", "params": {"id": "$sid"}}}
 {"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": {"paused": true}}}}
 {"do": "sql_expect", "sql": "select count(*), min(state) from card where job = '$job' and kind = 'budget'", "rows": [[1, "open"]]}
-{"do": "send", "conn": "c", "json": {"id": 7, "method": "job/resume", "params": {"id": "$job", "budget": 50}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "job/resume", "params": {"id": "$job", "limits": [{"amount": 50, "unit": "usd"}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 7, "result": {"id": "$job", "status": "running"}}, "within_ms": 10000}
 {"do": "sql_expect", "sql": "select count(*), min(state) from card where job = '$job' and kind = 'budget'", "rows": [[1, "settled"]]}

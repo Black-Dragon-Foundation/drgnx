@@ -326,6 +326,8 @@ mod after_a_step {
                 snapshot: None,
                 log_version: Some(log_version),
                 acp: None,
+                machine: None,
+                slots: None,
             },
         )
         .unwrap()

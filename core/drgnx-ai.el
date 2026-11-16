@@ -479,6 +479,8 @@ output, gathered in a string (never a buffer); its standard error is discarded."
             (while (and (process-live-p proc) (< (float-time) deadline))
               (accept-process-output proc 0.1)))
           (if (process-live-p proc) (list 'timeout)
+            ;; the process is gone, but its last output may still be in the pipe, unread: take it, until nothing comes
+            (while (accept-process-output proc 0.02))
             (cons (process-exit-status proc) (setq out (apply #'concat (reverse chunks))))))
       (dolist (c chunks) (unless (eq c out) (clear-string c)))   ; the caller clears OUTPUT
       (when (process-live-p proc) (delete-process proc))

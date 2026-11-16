@@ -580,6 +580,27 @@ fn check_map_subscribe(p: &MapSubscribe) -> Result<(), Error> {
     check_layers(&p.collapsed)
 }
 
+/// `work/target/set`'s params: the target date of a spec or a plan (null clears it).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TargetSetParams {
+    /// `spec:ID` or `plan:ID`.
+    pub item: super::graph::ParsedId,
+    /// Seconds since the epoch; null removes the target.
+    pub target_at: Option<f64>,
+}
+
+fn check_target_set(p: &TargetSetParams) -> Result<(), Error> {
+    let item = p.item.as_str();
+    if !(item.starts_with("spec:") || item.starts_with("plan:")) {
+        return Err(invalid("item", "a spec: or plan: id"));
+    }
+    if p.target_at.is_some_and(|t| !t.is_finite()) {
+        return Err(invalid("target_at", "a finite number of seconds, or null"));
+    }
+    Ok(())
+}
+
 fn check_map_set(p: &MapSet) -> Result<(), Error> {
     check_view(&p.view)?;
     if let Some(w) = p.width_units {
@@ -858,6 +879,12 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_map_set,
         ),
         method!(
+            "work/target/set", WorkTargetSet(TargetSetParams) -> bool,
+            classes: [User], writes: true,
+            doc: "set (or with null clear) the target date of a spec or a plan; true when the item exists",
+            check: check_target_set,
+        ),
+        method!(
             "work/map/close", WorkMapClose(MapClose) -> bool,
             classes: [User], writes: false,
             doc: "end one map view of this connection (a connection's views end with it)",
@@ -946,5 +973,17 @@ mod tests {
             flow(json!({"view": "v/rules", "map": "v", "rules": true, "detail": "J#5"})).is_ok()
         );
         assert!(flow(json!({"view": "v/rules", "map": "v", "rules": true, "detail": ""})).is_err());
+    }
+
+    /// A target is set on a spec or a plan only, with a finite time or null.
+    #[test]
+    fn a_task_id_is_refused_as_a_target_item() {
+        let t = |v: serde_json::Value| {
+            let (p, _) = crate::registry::decode_params::<TargetSetParams>(&v)?;
+            check_target_set(&p)
+        };
+        assert!(t(json!({"item": "plan:p1", "target_at": 1.8e9})).is_ok());
+        assert!(t(json!({"item": "spec:s1", "target_at": null})).is_ok());
+        assert!(t(json!({"item": "task:t1", "target_at": 1.8e9})).is_err());
     }
 }

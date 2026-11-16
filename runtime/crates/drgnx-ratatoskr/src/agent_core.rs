@@ -239,6 +239,7 @@ pub async fn serve(
         Params::AgentsBufferUnwatch(p) => answer(crate::editor::unwatch(f, c, p)),
         Params::WorkMapSubscribe(p) => answer(work::map::subscribe(f, c, p).await),
         Params::WorkMapSet(p) => answer(work::map::set(f, c, p)),
+        Params::WorkTargetSet(p) => answer(work::map::target_set(f, c, p).await),
         Params::WorkMapClose(p) => answer(work::map::close(f, c, p)),
         Params::WorkTrailSubscribe(p) => answer(work::trail::subscribe(f, c, p).await),
         Params::WorkTrailClose(p) => answer(work::trail::close(f, c, p)),
