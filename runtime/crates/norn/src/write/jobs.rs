@@ -589,7 +589,9 @@ mod tests {
         assert_eq!(
             resumed(
                 &mut s,
-                Some(json!([{"amount": 7.0, "unit": "usd"}, {"amount": 0.15, "unit": "limit-share"}]))
+                Some(
+                    json!([{"amount": 7.0, "unit": "usd"}, {"amount": 0.15, "unit": "limit-share"}])
+                )
             ),
             Ok(())
         );
