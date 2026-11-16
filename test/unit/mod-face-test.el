@@ -636,10 +636,13 @@ the string made last, and allocates nothing; a renamed buffer or another project
         (should (equal calls '(open)))))))
 
 (ert-deftest drgnx-face/the-menu-command-is-in-every-profile ()
-  (dolist (p '("vscode" "emacs" "vim"))
+  "Every profile names the menu command: VS Code keys it on a lone Alt; the others leave it to F10's remap."
+  (pcase-dolist (`(,p . ,entry) '(("vscode" . "(face-menu \"<lone-alt>\")")
+                                  ("emacs" . "(face-menu :none \"F10 (remap of menu-bar-open)\")")
+                                  ("vim" . "(face-menu :none \"F10 (remap of menu-bar-open)\")")))
     (with-temp-buffer
       (insert-file-contents (expand-file-name (format "keys/%s.eld" p) drgnx-dir))
-      (should (search-forward "(face-menu :none \"F10 (remap of menu-bar-open)\")" nil t)))))
+      (should (search-forward entry nil t)))))
 
 (ert-deftest drgnx-face/the-toggle-command-flips-the-menu-bar ()
   (drgnx-face-test--with

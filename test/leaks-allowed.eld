@@ -64,8 +64,6 @@ string-pixel-width uses)")
   :why "the renderer's and the session's own bookkeeping")
  (:what "\\`window-param \\(?:quit-restore\\|quit-restore-prev\\|internal-region-overlay\\|drgnx-uitest-id\\) "
   :why "what Emacs and the harness note on a window that showed a buffer, was cloned or was driven; none of it draws anything")
- (:what "\\`window-param drgnx-tab\\(?:s\\|-history\\) \\+\\\\(\\\\#<buffer\\\\ \\*scratch\\*>\\\\)\\'"
-  :why "the editor chrome noting the session's own *scratch* as its window's tab once a test's view in that window is killed and *scratch* shows again (the Work rows' 30-agent map): the store observes the change in a later redisplay, after any teardown could put the tabs back; only *scratch*, never a test's buffer")
  (:what "\\`window-param [^ ]+ \\+nil\\'"
   :why "a parameter set to nil: absent, as Emacs cannot remove one")
  (:what "\\`hook mini-frame-advice-functions \\+"
