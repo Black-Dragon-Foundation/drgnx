@@ -555,7 +555,14 @@ hub for the window further on, and its rows then hold entries past the first win
                                  (with-current-buffer tw
                                    (> (car (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'window "order")) 0)))
                                :secs 20 :what "the hub's window moved by the twin's scroll")
-              (should (eq tw (cdr drgnx-explorer--window-asker)))          ; the twin asked, not the Explorer's buffer
+              (unless (eq tw (cdr drgnx-explorer--window-asker))           ; the twin asked, not the Explorer's buffer
+                (ert-fail (list "not the twin's ask" :asker-from (car drgnx-explorer--window-asker)
+                                :asker-is-main (eq b (cdr drgnx-explorer--window-asker))
+                                :asker-live (buffer-live-p (cdr drgnx-explorer--window-asker))
+                                :tw-live (buffer-live-p tw) :tw-in-w (eq tw (window-buffer w))
+                                :main-window (with-current-buffer b (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'window "order"))
+                                :main-height (window-body-height (get-buffer-window b))
+                                :main-rows (with-current-buffer b (drgnx-view-row-count drgnx-view)))))
               (drgnx-test-wait (lambda () (with-current-buffer tw (string-match-p "f2[0-9][0-9]" (buffer-string))))
                                :secs 20 :what "the twin's rows past the first window")
               (drgnx-rows-fit-ui-test--report

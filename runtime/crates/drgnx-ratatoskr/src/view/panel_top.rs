@@ -79,9 +79,7 @@ pub fn rows(s: &Snapshot, cx: &Cx) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut images = Vec::new();
     let head = header(s, cx, &mut images);
     let mut rows = vec![head];
-    if let Some(chips) = chips(s, cx) {
-        rows.push(chips);
-    }
+    rows.extend(chips(s, cx));
     rows.extend(strip(cx));
     (rows, images)
 }
@@ -264,14 +262,14 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
     b.finish()
 }
 
-/// The disclosure strip (agent-panel.html `.disc`): "Open:" and a pill for each step type, the open ones raised, a click
+/// The disclosure strip (agent-panel.html `.disc`): "Expand steps:" and a pill for each step type, the open ones raised, a click
 /// flips one (`type:NAME`); "make default" at the right end of the line it fits on (`default`).  The pills go on as many
 /// rows as the width needs, the later ones indented under the first pill.
 fn strip(cx: &Cx) -> Vec<Row> {
     let env = cx.env;
     let gui = env.display == Display::Gui;
     let cell = env.cell.0.max(1);
-    let open = " Open: ";
+    let open = " Expand steps: ";
     let default = "make default";
     let width = |face: &str, t: &str| text_width(cx, Some(face), t);
     let room = i64::from(env.width_px) - i64::from(px(env, 12.0));
@@ -346,6 +344,15 @@ fn strip(cx: &Cx) -> Vec<Row> {
                     "help-echo",
                     json!("M: what is open now is what new panels open"),
                 );
+            } else if let Some(t) = action.strip_prefix("type:") {
+                b.prop(
+                    start,
+                    end,
+                    "help-echo",
+                    json!(format!(
+                        "Click to expand or collapse the detail of every {t} step"
+                    )),
+                );
             }
         }
         rows.push(b.finish());
@@ -353,9 +360,9 @@ fn strip(cx: &Cx) -> Vec<Row> {
     rows
 }
 
-/// The chips the snapshot feeds (the context the agent has used, what the session cost, its mode); none when it
-/// feeds none.
-fn chips(s: &Snapshot, cx: &Cx) -> Option<Row> {
+/// The chips the snapshot feeds (the context the agent has used, what the session cost, its mode), none when it
+/// feeds none, in as many rows as the panel's width asks: the first row is `CHIPS`, the next ones `p:chips:1`, ….
+fn chips(s: &Snapshot, cx: &Cx) -> Vec<Row> {
     // (what a click explains, or none; text)
     let mut list: Vec<(Option<&str>, String)> = Vec::new();
     if let Some(m) = s.model.as_deref().filter(|m| !m.is_empty()) {
@@ -410,23 +417,36 @@ fn chips(s: &Snapshot, cx: &Cx) -> Option<Row> {
             format!("{n} checkpoint{}", if n == 1 { "" } else { "s" }),
         ));
     }
-    if list.is_empty() {
-        return None;
-    }
+    let room = cx.env.width_px.saturating_sub(px(cx.env, 12.0));
+    let gap = text_width(cx, None, " ");
+    let mut out = Vec::new();
     let mut b = RowBuilder::new(CHIPS);
     b.push(" ", None);
-    for (n, (kind, text)) in list.iter().enumerate() {
-        if n > 0 {
+    let mut used = gap;
+    for (kind, text) in &list {
+        let label = format!(" {text} ");
+        let w = text_width(cx, Some("drgnx-agent-panel-chip"), &label);
+        if used > gap && used + w > room {
+            out.push(b.finish());
+            b = RowBuilder::new(format!("{CHIPS}:{}", out.len()));
             b.push(" ", None);
+            used = gap;
+        } else if used > gap {
+            b.push(" ", None);
+            used += gap;
         }
         let start = b.pos();
-        b.push(&format!(" {text} "), Some("drgnx-agent-panel-chip"));
+        b.push(&label, Some("drgnx-agent-panel-chip"));
         let end = b.pos();
         if let Some(kind) = kind {
             b.prop(start, end, "drgnx-agent-panel-chip", json!(kind));
         }
+        used += w;
     }
-    Some(b.finish())
+    if used > gap {
+        out.push(b.finish());
+    }
+    out
 }
 
 #[cfg(test)]

@@ -83,6 +83,8 @@ jsonc-parser.workspace = true
 drgnx-px = { path = "../drgnx-px", version = "0.1.0" }  # the networked container job's relay sidecar
 urdr = { path = "../urdr", version = "0.1.0" }
 saga = { path = "../saga", version = "0.1.0" }
+minni = { path = "../minni", version = "0.1.0" }  # other CLIs' session files, read for the past sessions
+rusqlite.workspace = true  # the past sessions' index (history.db)
 gleipnir = { path = "../gleipnir", version = "0.1.0" }
 eitri = { path = "../eitri", version = "0.1.0" }
 mimir = { path = "../mimir", version = "0.1.0" }

@@ -1310,6 +1310,11 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
 | `agents/grants` | user | `{id: Id}` | `{grants: [Grant]}` | no |
 | `agents/grants/revoke` | user | `{grant: string, id: Id}` | `{agent_rule: "cleared" \| "kept", grant: string, restart: boolean}` | yes |
+| `agents/history/open` | user | `{id: string, provider: "claude" \| "gemini" \| "codex"}` | `{argv?: [string], resume_here: boolean, session: PastSession, view: string}` | no |
+| `agents/history/rescan` | user | `{}` | `{sessions: natnum}` | no |
+| `agents/history/resume` | user | `{id: string, profile?: string, provider: "claude" \| "gemini" \| "codex", route: "copy" \| "original"}` | `{route: "copy" \| "original", session: string}` | yes |
+| `agents/history/search` | user | `{query: string}` | `{hits?: [PastHit]}` | no |
+| `agents/history/subscribe` | user | `{limit?: natnum, query?: string, view: string, workspace?: AbsPath}` | `boolean` | no |
 | `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
 | `agents/huddle/start` | user | `{clash?: string, sessions?: [Id]}` | `Huddle` | yes |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
@@ -2010,6 +2015,36 @@ Every string goes through `runstav::secrets::looks_like_secret` first: a private
 other hit the word (or the line) with `[redacted: KIND]`. Beside it: `<sid>.queue.json` (the held queue and the
 pause, unredacted because the prompts are still to be sent; removed when empty) and `<sid>.meta.json` (a brainstorm's
 topic note and design document, so that a resumed brainstorm keeps its write fence).
+
+### Past sessions (`history.db`)
+
+`agents/past.rs` reads the other agent CLIs' session files (Claude Code, Gemini CLI, Codex; formats in the `minni`
+crate, [runtime.md](runtime.md#minni-other-clis-session-files)) and indexes them in `<state>/hub/history.db` (0600,
+opened `O_NOFOLLOW`): a `session` table (key `PROVIDER:ID`, path, cwd, title, branch, dates, turns, and the file's
+size, mtime and the offset read to) and an FTS5 table `turn` of each entry's text, redacted like transcripts.
+
+- **Roots** (`Roots::of`): `$CLAUDE_CONFIG_DIR` or `~/.claude`, `$CODEX_HOME` or `~/.codex`, `$GEMINI_CLI_HOME/.gemini`
+  or `~/.gemini`, narrowed by `drgnx-agents-history-providers`; the walk never follows a link. The same folders are
+  on norn's deny list (`cli_session_dirs`), hard tier.
+- **Scan**: `follow` scans every 2 s on a blocking thread; a file whose size and mtime are unchanged is skipped, a
+  grown one is read on from its offset with the kept `minni::Reader` (32 kept), a shrunk or unknown one is read whole,
+  a gone one dropped. Polling, not a watch: Hrafn's inotify watch reports no in-place modify, and Codex appends to a
+  file it keeps open. A scan writes nothing in the roots (a test holds bytes, mtimes and modes equal).
+- **Views**: `agents/history/subscribe {view, workspace?, query?}` makes VIEW the list (rows keyed `h:PROVIDER:ID`
+  with a `drgnx-past` prop `{provider, id}`; the workspace's sessions under "This workspace" first); every scan builds
+  the shown lists again. With `limit` the rows are a section of another list: a "Past sessions" header (`h:past`), at
+  most LIMIT sessions and an `h:more` row counting the rest. The Agents list asks for one (`agents-list-past`) and
+  places it after its own rows: its buffer keeps its Lisp view and attaches the hub view with
+  `drgnx-view-patch-attach … :keep t` and an apply function of its own (`drgnx-agent-panel-list--past-apply`). `agents/history/open` reads the file whole and publishes the transcript on
+  `agent-history/PROVIDER:ID` with the agent panel's row builder (16 kept), and answers the terminal's resume argv.
+  `agents/history/search` answers the hits (title matches first, then FTS, 50 at most); `rescan` scans now.
+- **Resume**: `agents/history/resume {provider, id, route}` checks the file (`checked_file`: a regular file, its true
+  name under the root), records a `Grant` for the new session id and starts the session on the provider's profile with
+  `Attach::Resume(ID)`. The sandbox (`resume_grant`) then puts the file where the CLI looks under the jail's empty
+  session folder: route `copy` copies it (0600; Claude's `subagents/` too), route `original` binds that one file
+  read-write over an empty stand-in. All five methods are class `user` only.
+- **Off**: with `drgnx-agents-history` nil every method but subscribe refuses, nothing is read, and `history.db` is
+  deleted.
 
 ### Steps
 
@@ -2919,9 +2954,12 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   `view/window` sends the model and the rows again, the rows it dropped removed and the ones it added inserted. The
   editor moves the window on a key at its edge (`drgnx-view-nav`) and on a scroll within a page of the rows' ends
   (`drgnx-explorer--rows-scrolled`, half the window), and after a draw that leaves a window at the rows' top or end
-  (no scroll can run above the buffer's start). `around` (a reveal) names an entry the next listing's window must
+  (no scroll can run above the buffer's start; a window another of the view's buffers, a twin, asked for is never
+  asked back after a draw). `around` (a reveal) names an entry the next listing's window must
   hold: when it falls outside, the window starts at the root while the entry fits in the first window (the tree above
-  it shows), else it moves to hold the entry a quarter of the way down. Each path is listed once: a root given twice
+  it shows), else it moves to hold the entry a quarter of the way down. A window that starts below the root draws the
+  folders above its first entry (root → … → parent) as its first rows, outside `order`, so a deep reveal never shows
+  a slice with nothing above it (`window_shown`). Each path is listed once: a root given twice
   is listed the first time only, and a root inside another is its own top row, not listed again inside that one.
 - **Row,** per display class (`view/env`): the key is the path. On a terminal, the indent guides (`│ ` per level below
   the first) and the chevron (`▾ `, `▸ `, or two spaces for a file) in `drgnx-explorer-guide`. On a graphical display
@@ -2989,7 +3027,8 @@ by the hub (`runtime/crates/drgnx-ratatoskr/src/view/scm.rs` and `view/scm/`; th
   object: kind, root, path, section, untracked, letter, sha, branch) and a button `drgnx-scm-action`. Sections are
   Merge Changes, Staged Changes and Changes (git's X letter is staged, Y unstaged, `?` is U); the graph starts folded
   and draws lanes with ● │ ╮ ╯, the commits ahead and behind the upstream marked. An empty tree says "No changes.
-  Your working tree matches HEAD."
+  Your working tree matches HEAD.", wrapped to the view's width (measured in the face's font, as the fit measures) on
+  `note⇥ROOT`, then `note⇥ROOT⇥1`, …, never cut with `…`.
 - **Commands.** `git/stage` (`add -A --`), `git/unstage` (`restore --staged`, or `rm --cached` before the first commit),
   `git/discard` (`restore --worktree`; untracked files are the editor's: it moves them to the trash), `git/commit
   {root, message, all, amend}` (the message on stdin, `add -A` first with ALL; answers `{sha}`), `git/undo-commit`

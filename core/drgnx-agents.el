@@ -142,6 +142,26 @@ commands name.  Read when a session starts."
   :group 'drgnx :scope 'global
   :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
 
+(drgnx-defsetting drgnx-agents-history t
+  "Non-nil: the hub reads your past Claude Code, Gemini CLI and Codex sessions from their own folders (read-only, on
+this machine only) so Agents: Past Sessions lists, searches and resumes them.  Nil: nothing is read and the hub's
+index of them (history.db) is deleted."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "bool" :schema 'boolean)
+
+(drgnx-defsetting drgnx-agents-history-providers '("claude" "gemini" "codex")
+  "The CLIs whose past sessions the hub reads (`drgnx-agents-history'): \"claude\" (Claude Code), \"gemini\" (Gemini
+CLI), \"codex\" (Codex).  A CLI taken out of the list is no longer read and its sessions leave the index."
+  :type '(repeat (choice (const "claude") (const "gemini") (const "codex")))
+  :group 'drgnx :scope 'global
+  :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-agents-history-resume-writes-original nil
+  "Non-nil: Resume Here on a past session starts with \"write the original\" chosen, so the jailed agent may write
+that one CLI session file and your own CLI sees the continuation.  Nil: it starts on a copy (the default).  You still
+choose per resume."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :agents 'never)
+
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
@@ -288,6 +308,25 @@ not installed (starting it says so) is left as it is."
 
 (defun drgnx-agents-profile-names ()
   (delete-dups (mapcar #'car (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles))))
+
+(defun drgnx-agents-profile-installed-p (name)
+  "Non-nil when profile NAME's program can be found: on the path, or the file it names."
+  (when-let* ((cmd (plist-get (cdr (assoc name (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles)))
+                              :command))
+              (prog (car (drgnx-agents-command cmd))))
+    (and (stringp prog) (or (executable-find prog) (and (file-name-absolute-p prog) (file-executable-p prog))) t)))
+
+(defun drgnx-agents-profile-read (prompt)
+  "Read a profile name with PROMPT; the ones whose program is not installed say so (and where to set them up)."
+  (let ((names (drgnx-agents-profile-names)))
+    (completing-read prompt
+                     (lambda (str pred action)
+                       (if (eq action 'metadata)
+                           `(metadata (annotation-function
+                                       . ,(lambda (n) (unless (drgnx-agents-profile-installed-p n)
+                                                        "  not installed (Onboarding: Agents sets it up)"))))
+                         (complete-with-action action names str pred)))
+                     nil t nil nil (drgnx-agents-default-profile))))
 
 (defun drgnx-agents-default-profile ()
   "The profile New Agent Session offers on Return: `drgnx-agents-default' when it names a profile, else claude."

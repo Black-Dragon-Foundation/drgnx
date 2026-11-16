@@ -401,6 +401,8 @@ edit skipped with why; an unedited buffer whose file changed on disk is read aga
 (defface drgnx-replace-old '((t :inherit diff-removed :strike-through t)) "The text a replacement takes out." :group 'drgnx)
 (defface drgnx-replace-new '((t :inherit diff-added)) "The text a replacement puts in." :group 'drgnx)
 (defface drgnx-replace-dim '((t :inherit shadow)) "Folders, the status line, reasons, toggles that are off." :group 'drgnx)
+(defface drgnx-replace-chip '((t :inherit drgnx-chip-quiet)) "A button of the form that is off: a flat chip." :group 'drgnx)
+(defface drgnx-replace-chip-on '((t :inherit drgnx-chip-accent :weight bold)) "A toggle or scope of the form that is on." :group 'drgnx)
 (defface drgnx-replace-on '((t :inherit lazy-highlight :weight bold)) "A toggle that is on." :group 'drgnx)
 (defface drgnx-replace-ctx '((t :inherit drgnx-replace-dim))
   "A context label row: the definition the matches below it are in." :group 'drgnx)
@@ -627,9 +629,19 @@ own keys under its prefixes, made again after each apply of the keys).  The undo
                                   ""))
         drgnx-replace--widgets))
 
+(defvar widget-push-button-prefix)
+(defvar widget-push-button-suffix)
+(defun drgnx-replace--chip-value-create (widget)
+  "Draw WIDGET as a flat chip: a space each side, not the push button's [brackets]."
+  (let ((widget-push-button-prefix " ") (widget-push-button-suffix " "))
+    (widget-push-button-value-create widget)))
+
+(define-widget 'drgnx-replace-chip 'push-button "A button of the Search view's form, drawn as a flat chip."
+  :value-create #'drgnx-replace--chip-value-create)
+
 (defun drgnx-replace--insert-button (name label help action)
   "A button NAME (a toggle or a scope when NAME is one; nil for a plain button) showing LABEL; ACTION when pressed."
-  (let ((w (widget-create 'push-button :button-face (drgnx-replace--button-face name) :help-echo help
+  (let ((w (widget-create 'drgnx-replace-chip :button-face (drgnx-replace--button-face name) :help-echo help
                           :notify (lambda (&rest _) (funcall action))
                           label)))
     (when name (push (cons name w) drgnx-replace--widgets))
@@ -639,9 +651,9 @@ own keys under its prefixes, made again after each apply of the keys).  The undo
 (defun drgnx-replace--button-face (name)
   "The face of button NAME: on or off, for toggles and scopes."
   (cond ((memq name '(:symbol :case :word :regexp :pattern :lines))
-         (if (drgnx-replace--opt name) 'drgnx-replace-on 'drgnx-replace-dim))
-        ((assq name drgnx-replace--scopes) (if (eq (drgnx-replace--opt :scope) name) 'drgnx-replace-on 'drgnx-replace-dim))
-        (t 'widget-button)))
+         (if (drgnx-replace--opt name) 'drgnx-replace-chip-on 'drgnx-replace-chip))
+        ((assq name drgnx-replace--scopes) (if (eq (drgnx-replace--opt :scope) name) 'drgnx-replace-chip-on 'drgnx-replace-chip))
+        (t 'drgnx-replace-chip)))
 
 (defun drgnx-replace--restyle (name)
   "Draw button NAME again in the face its state gives."
@@ -1038,6 +1050,7 @@ why."
   (drgnx-replace--insert-toggles)
   (widget-insert "\n")
   (pcase-dolist (`(,scope ,_ ,help) drgnx-replace--scopes)
+    (when (eq scope 'changed) (widget-insert "\n"))   ; two short lines: one would pass the side bar's edge
     (drgnx-replace--insert-button scope (drgnx-replace--scope-label scope) help
                                   (if (eq scope 'branch) #'drgnx-replace--branch-pressed
                                     (lambda () (drgnx-replace--set-scope scope)))))

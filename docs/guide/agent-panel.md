@@ -109,7 +109,7 @@ when the hub sends the first rows. The panel draws no steps of its own.
 
 ## What opens
 
-The strip under the chips reads **Open:** and has a pill for each step type (thinking, read, search, edit, execute,
+The strip under the chips reads **Expand steps:** and has a pill for each step type (thinking, read, search, edit, execute,
 fetch, other), a ring, filled when it is on; **make default** is at its right end. In a narrow panel the pills go on as
 many lines as they need, and they follow the panel's width when you resize it. A type that is on shows the detail of its
 steps; a click on its pill or `T` flips one, `TAB` opens or folds the step at point whatever the toggles say.
@@ -159,7 +159,7 @@ What the agent changed and what it asks sit under the transcript as cards.
   agent is told, in a queued message, to take it back. The panel never writes to an agent's worktree and keeps no queue
   of its own; both keys are the review view's own functions (module `tools/work-space`).
 - **Permission cards:** a request the agent waits on: what it asks, on the attention tint and ringed in the attention
-  colour, and under it the buttons **Allow ↵**, **Always A** and **Deny D**. `RET` allows it once, `A` always, `D`
+  colour, and under it the buttons **Allow**, **Always** and **Deny** (their keys are in the buttons' hover text). `RET` allows it once, `A` always, `D`
   denies it. The card goes when the hub's next snapshot no longer holds the request. A chat (an agent that is not a
   worker or a manager) never edits or runs commands in its project outside Pair: the permission matrix answers such a
   request itself (`code.edit` is Never for chat in every preset), so no card shows and the agent hears "rejected".

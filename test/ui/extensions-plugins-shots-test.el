@@ -51,6 +51,18 @@
          (drgnx-plugins--rows plugins)
          (default-value-on '("deny-rm")))
     (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) nil))
+              ;; the page's row is the hub-fed list's (Sjá's model, `drgnx-extensions-list-row'); none is fed here, so
+              ;; the list's model answers with the plugin's row as the hub would (the replaced Lisp list is gone)
+              ((symbol-function 'drgnx-extensions-list-row)
+               (lambda (id)
+                 (when-let* (((string-prefix-p "plugin:" id))
+                             (r (seq-find (lambda (r) (equal (concat "plugin:" (plist-get r :name)) id)) plugins)))
+                   ;; the hub's list says an approved plugin is on or off (runstav's extensions State)
+                   (list :id id :name (plist-get r :name) :kind 'plugin
+                         :state (if (equal (plist-get r :state) "approved")
+                                    (if (member (plist-get r :name) default-value-on) 'on 'off)
+                                  (intern (plist-get r :state)))
+                         :version (plist-get r :version)))))
               ;; the page is shown as it is with the Extensions module on
               ((symbol-function 'drgnx-module-running-p) (lambda (m) (eq m 'tools/extensions)))
               ((default-value 'drgnx-agents-plugins) default-value-on))

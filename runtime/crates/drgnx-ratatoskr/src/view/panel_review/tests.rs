@@ -148,7 +148,11 @@ fn a_request_is_a_ringed_line_over_allow_always_and_deny() {
         action_of(&rows[1], "card:"),
         ["card:allow:7", "card:always:7", "card:deny:7"]
     );
-    assert!(text(&rows[1]).contains("Allow ↵"));
+    assert!(text(&rows[1]).contains("Allow"));
+    // the key hints are in the buttons' help, not jammed onto their labels (audit A3)
+    for hint in ["Allow ↵", "Always A", "Deny D"] {
+        assert!(!text(&rows[1]).contains(hint), "{hint}");
+    }
 }
 
 // pattern: D

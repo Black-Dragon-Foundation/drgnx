@@ -74,7 +74,10 @@ impl Conn {
         spec: draugr::Spec,
         opts: ConnOpts,
     ) -> Result<(Conn, mpsc::Receiver<Event>), Error> {
-        let mut child = draugr::spawn_pinned(spec).await.map_err(Error::Spawn)?;
+        let program = spec.program.to_string_lossy().into_owned();
+        let mut child = draugr::spawn_pinned(spec)
+            .await
+            .map_err(|e| Error::Spawn(program, e))?;
         let (Some(mut stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
             return Err(Error::Closed);
         };

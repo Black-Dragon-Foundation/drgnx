@@ -13,7 +13,7 @@
 
 (defun drgnx-tty-layout-test--ready (sess)
   "Wait until SESS's frame has been laid out (the layout has seen its size)."
-  (drgnx-tty-session-wait-screen sess "\\*scratch\\* ×" 20)
+  (drgnx-tty-session-wait-tab sess "×" 20)
   (drgnx-tty-session-wait sess '(frame-parameter nil 'drgnx-tty-layout-size) 10))
 
 (defun drgnx-tty-layout-test--resize (sess size)
@@ -45,7 +45,7 @@
 
 (ert-deftest drgnx-tty-layout/a-daemon-client-starts-the-same ()
   (drgnx-tty-session-with (s :daemon t :size "120x40")
-    (drgnx-tty-session-wait-screen s "\\*scratch\\* ×" 20)
+    (drgnx-tty-session-wait-tab s "×" 20)
     (drgnx-tty-session-wait-screen s drgnx-tty-session-explorer-heading)
     (should (cadddr (drgnx-tty-session-eval
                      s `(with-selected-frame (car (seq-filter (lambda (f) (frame-parameter f 'client)) (frame-list)))
@@ -143,7 +143,7 @@
     (drgnx-tty-layout-test--ready s)
     (should (drgnx-tty-session-wait s '(= 0 (window-header-line-height (drgnx-wb-editor-window))) 5))
     ;; the tab line stays
-    (drgnx-tty-session-wait-screen s "\\*scratch\\* ×")
+    (drgnx-tty-session-wait-tab s "×")
     ;; room again: the row is back
     (drgnx-tty-layout-test--resize s "120x40")
     (should (drgnx-tty-session-wait s '(> (window-header-line-height (drgnx-wb-editor-window)) 0) 5))))

@@ -53,7 +53,10 @@ failure, `leak FILE-test.el`, naming each leftover (and the file that defined it
 processes, buffers, features, the default `mode-line-format`, `header-line-format` and `tab-line-format`, the global
 keymap (`current-global-map` and every binding in it; a prefix bound to an autoloaded keymap, like `kmacro-keymap`, is
 one binding, not walked: the scan loads no library), `minor-mode-map-alist`, and the selected frame's parameters and
-the number of frames. The allowlist is the census's (`test/leaks-allowed.eld`); native compilation's `Compiling:`
+the frames themselves (each by its name, child frames too) and the number of root frames (not of child frames: a
+pooled child frame the allowlist names, like quick help's card, would still count). A test that turns on a package
+whose child frames it shows (corfu, eldoc-box, posframe, mini-frame) deletes them in its teardown; the package makes
+them again. The allowlist is the census's (`test/leaks-allowed.eld`); native compilation's `Compiling:`
 jobs are on it, any other process is named. It works in one Emacs or per file, in any
 launcher: it reads state, not how the session was started. The fixtures `test/fixtures/file-leaks/` and the rows
 `drgnx-run-ert/a-file-that-...` show it red (a file that leaks a mode-line entry, a key, a header line, a frame
@@ -582,7 +585,7 @@ a radius, go through `drgnx-px` ([core.md](core.md#logical-and-device-pixels-drg
 | `(drgnx-uitest-region-equal-p A B RECT &key tolerance ignore-alpha)` | non-nil when every channel differs by at most `tolerance` (default 0) on RECT; nil for different sizes |
 | `(drgnx-uitest-darker-p A B X Y)` | A's pixel has the lower luma (0.2126 R + 0.7152 G + 0.0722 B) |
 | `(drgnx-uitest-bare-frame)` | scroll bars, tool bar, menu bar and `blink-cursor-mode` off, so a snapshot and an export can be equal |
-| `(drgnx-uitest-pointer-set X Y)` | moves the compositor's pointer to the layout position X, Y (logical pixels): `t` when it moved, `failed` when sway refused, `unsupported` anywhere but sway (`swaymsg "seat - cursor set X Y"`), so a row that needs a real pointer (hover) skips there; a hover row runs in the `--compositor sway` pass. Headless sway has no input devices, so its seat has no pointer and `cursor set` reaches no client: the first call makes a virtual pointer (`zwlr_virtual_pointer_manager_v1`, the Wayland wire protocol spoken from Lisp over the session's socket, kept open for the session), which gives the seat a pointer; `failed` when the compositor offers none |
+| `(drgnx-uitest-pointer-set X Y)` | moves the compositor's pointer to the layout position X, Y (logical pixels): `t` when it moved, `failed` when sway refused, `unsupported` anywhere but sway (`swaymsg "seat - cursor set X Y"`), so a row that needs a real pointer (hover) skips there; a hover row runs in the `--compositor sway` pass. Headless sway has no input devices, so its seat has no pointer and `cursor set` reaches no client: the first call makes a virtual pointer (`zwlr_virtual_pointer_manager_v1`, the Wayland wire protocol spoken from Lisp over the session's socket, kept open until the test file ends: `drgnx-run-ert-file-end-hook` closes it before the leak census reads the file), which gives the seat a pointer; `failed` when the compositor offers none |
 | `(drgnx-uitest-pointer-available-p)` | non-nil when the session's compositor is mutter with its RemoteDesktop service on the session bus, so a real pointer can be driven |
 | `(drgnx-uitest-pointer-move X Y)` | moves mutter's virtual pointer to the frame position X, Y: to the top-left corner, then relative motion, corrected up to four times from `mouse-pixel-position` |
 | `(drgnx-uitest-pointer-click X Y &optional UNTIL TIMEOUT)` | a real press and release of the left button at X, Y through mutter's RemoteDesktop (`NotifyPointerButton` 272), then reads the key sequences the clicks make and runs their commands, as the command loop would (a nested `recursive-edit` reads no real events in a test run from the server); the keys are kept in `drgnx-uitest-pointer-keys`; it stops when UNTIL returns non-nil or after TIMEOUT seconds |

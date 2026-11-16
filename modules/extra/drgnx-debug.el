@@ -210,12 +210,11 @@ as projects the user selected in, cleared by the module's teardown.")
     (drgnx-debug-launch-start root (drgnx-debug--config root) t)))
 
 (defun drgnx-debug-open-launch-json ()
-  "Open this project's .vscode/launch.json, made with an empty list of configurations when there is none."
+  "Open this project's .vscode/launch.json; when there is none, ask which debugger (VS Code's \"Select debugger\") and
+make it with that debugger's starting configurations (`drgnx-debug-launch-create')."
   (interactive)
-  (let ((file (expand-file-name ".vscode/launch.json" (drgnx-debug-launch-root))))
-    (unless (file-exists-p file)
-      (make-directory (file-name-directory file) t)
-      (drgnx-file-write-text file "{\n  \"version\": \"0.2.0\",\n  \"configurations\": [\n  ]\n}\n"))
+  (let* ((root (drgnx-debug-launch-root)) (file (expand-file-name ".vscode/launch.json" root)))
+    (unless (file-exists-p file) (drgnx-debug-launch-create root))
     (find-file file)
     (goto-char (point-min))
     (when (search-forward "\"configurations\": [" nil t) (forward-line 1))))
@@ -372,6 +371,7 @@ console's tab shows without taking the focus."
                               ;; to define, as for Review's
                               (when (fboundp 'drgnx-wb-define-tab)
                                 (drgnx-wb-define-tab 'panel 'debug-console :title "Debug Console" :icon 'terminal
+                                                     :content #'drgnx-debug-console--buffer
                                                      :actions #'drgnx-debug-console-tab-actions))
                               (let ((in-console (lambda () (derived-mode-p 'drgnx-debug-console-mode))))
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-console-commands)
@@ -397,7 +397,8 @@ console's tab shows without taking the focus."
                                                           :map 'drgnx-debug-view-mode-map :when in-view))))
                               ;; the heap graph (drgnx-debug-heap.el): the panel's Graph tab, its key in its own map
                               (when (fboundp 'drgnx-wb-define-tab)
-                                (drgnx-wb-define-tab 'panel 'debug-graph :title "Graph"))
+                                (drgnx-wb-define-tab 'panel 'debug-graph :title "Heap Graph" :contextual t
+                                                     :empty "No graph yet. Stop at a breakpoint and choose Show as Graph on a variable to draw its objects here."))
                               (drgnx-command-define 'debug-heap-select :category "Debug" :title "Graph: Select Card"
                                                     :command #'drgnx-debug-heap-select
                                                     :doc "Ring the card at point and show its references"

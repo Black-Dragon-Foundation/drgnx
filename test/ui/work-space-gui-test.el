@@ -617,6 +617,44 @@ pinned perf island's (harness/drgnx-perf-work.el)."
                                (drgnx-work-gui--med times) (drgnx-work-gui--p95 times) (apply #'max times) (nth 2 sent))
           (should (<= (drgnx-work-gui--p95 times) (+ ref drgnx-work-gui--leg-key-allowance))))))))
 
+(defvar drgnx-work-gui--held nil "The hub's answers to the map's filters, held back by the slow-answer row: arg lists.")
+
+(defun drgnx-work-gui--hold-answer (_fn &rest args)
+  "`:around' `drgnx-work-map--answered': keep the answer's ARGS in `drgnx-work-gui--held' instead of handling it."
+  (push args drgnx-work-gui--held))
+
+(ert-deftest drgnx-work-gui/a-slow-answer-still-moves ()
+  "A layout the user asked for moves however long the hub takes to answer (a loaded machine, 30 agents streaming):
+nothing but the answer (or the call's own failure) ends the wait.  The answer is held back while every timer the map
+started runs as if its time had come; then it is let through and the window is told what moved.  (Before: a one-second
+expiry dropped the capture under a slow answer, the layout jumped, and `keys-stay-fast-during-a-leg' failed with no
+motion.)"
+  (skip-unless (and (drgnx-work-gui--rows-p) (drgnx-work-gui--leg-p)))
+  (drgnx-work-gui--with-map
+    (let ((drgnx-work-gui--held nil))
+      (unwind-protect
+          (progn
+            (advice-add 'drgnx-work-map--answered :around #'drgnx-work-gui--hold-answer)
+            (with-current-buffer buf (drgnx-work-map-collapse-layer 1))
+            (should (window-parameter win 'glitnir-layout-capture))
+            (redisplay t)
+            (drgnx-test-wait (lambda () (redisplay t) (glitnir-layout-captured-p win)) :secs 10
+                             :what "the presenter holds the old picture")
+            (drgnx-test-wait (lambda () drgnx-work-gui--held) :secs 30 :what "the hub's answer (held back)")
+            ;; the time a slow answer takes: each one-shot timer the map owns runs now
+            (pcase-dolist (`(,key ,owner ,kind) (drgnx-timer-pending))
+              (let ((entry (gethash key drgnx-timer--table)))
+                (when (and (eq owner buf) (eq kind 'start) (not (drgnx-timer--entry-repeat entry)))
+                  (drgnx-work-gui--log "slow answer: fired early %S" key)
+                  (drgnx-timer--fire entry))))
+            (should (buffer-local-value 'drgnx-work-map--motion buf))
+            (should (window-parameter win 'glitnir-layout-capture)))
+        (advice-remove 'drgnx-work-map--answered #'drgnx-work-gui--hold-answer))
+      (apply #'drgnx-work-map--answered (car drgnx-work-gui--held))
+      (drgnx-test-wait (lambda () (null (buffer-local-value 'drgnx-work-map--motion buf))) :secs 30
+                       :what "the held answer drawn")
+      (should (window-parameter win 'glitnir-layout-motion)))))
+
 ;;;; Scenes: the 30-agent map, dark, light and high contrast
 
 (defun drgnx-work-gui--scene-shoot (theme)

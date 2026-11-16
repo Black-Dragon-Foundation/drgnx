@@ -458,8 +458,8 @@ move each old file to .drgnx/migrated-DATE/.  Returns the number of entries writ
 
 (defun drgnx-settings-page--button (label fn &optional help)
   "A button with LABEL that calls FN."
-  (make-text-button (format "[%s]" label) nil 'action (lambda (_) (funcall fn)) 'follow-link t
-                    'help-echo (or help label) 'face 'link))
+  (make-text-button (format " %s " label) nil 'action (lambda (_) (funcall fn)) 'follow-link t
+                    'help-echo (or help label) 'face 'drgnx-chip-quiet))
 
 (defun drgnx-settings-page--visit (file line)
   "Open FILE at LINE."
@@ -475,7 +475,6 @@ move each old file to .drgnx/migrated-DATE/.  Returns the number of entries writ
                    (concat "  " (drgnx-settings-page--button
                                  (format "%s:%d" (file-name-nondirectory file) line)
                                  (lambda () (drgnx-settings-page--visit file line)) "Open at the line")))
-                  (file "  line unknown")
                   (t "")))))
 
 (defun drgnx-settings-page--override-text (row)

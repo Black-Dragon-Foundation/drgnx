@@ -134,7 +134,23 @@ chip of the session the input evaluates in (a click picks another; none without 
         (setq drgnx-debug-console--end (copy-marker (point-min)))
         (setq drgnx-debug-console--closed (make-hash-table :test #'equal))
         (drgnx-debug-console--prompt)
+        (drgnx-debug-console--hint t)
         (current-buffer))))
+
+(defconst drgnx-debug-console-empty
+  "Nothing here yet. The output of a debug session appears here; type an expression after › to evaluate it in the stopped frame."
+  "What the console says while it holds no output (VS Code's empty console).")
+
+(defvar-local drgnx-debug-console--hint-overlay nil "The overlay that says `drgnx-debug-console-empty'.")
+
+(defun drgnx-debug-console--hint (on)
+  "Say `drgnx-debug-console-empty' above the prompt when ON (the console holds no output), else take it away."
+  (when (overlayp drgnx-debug-console--hint-overlay) (delete-overlay drgnx-debug-console--hint-overlay))
+  (setq drgnx-debug-console--hint-overlay nil)
+  (when on
+    (setq drgnx-debug-console--hint-overlay (make-overlay (point-min) (point-min) nil t))
+    (overlay-put drgnx-debug-console--hint-overlay 'before-string
+                 (propertize (concat drgnx-debug-console-empty "\n") 'face 'shadow))))
 
 (defun drgnx-debug-console--prompt ()
   "The input's prompt after the output: read-only, not to be typed before."
@@ -208,6 +224,7 @@ chip of the session the input evaluates in (a click picks another; none without 
     (let ((inhibit-read-only t)
           (windows (seq-filter (lambda (w) (>= (window-point w) (drgnx-debug-console--input-start)))
                                (get-buffer-window-list nil nil t))))
+      (when (or lines (and skipped (> skipped 0))) (drgnx-debug-console--hint nil))
       (save-excursion
         (when (and skipped (> skipped 0))
           (drgnx-debug-console--line (list :text (format "%d lines skipped" skipped) :category "console")))
@@ -264,7 +281,8 @@ chip of the session the input evaluates in (a click picks another; none without 
       (setq drgnx-debug-console--lines 0)
       (clrhash drgnx-debug-console--closed)
       (when drgnx-debug-console--last (set-marker (car drgnx-debug-console--last) nil))
-      (setq drgnx-debug-console--last nil))))
+      (setq drgnx-debug-console--last nil)
+      (drgnx-debug-console--hint t))))
 
 (defun drgnx-debug-console-output (data)
   "A `debug-output' event's DATA: its lines inserted, its session remembered by name."

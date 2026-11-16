@@ -45,6 +45,14 @@ hub tells which it refused (shown with the reason). The scan itself leaves out f
 denies, and a `**Spec:**` that names one (also through a link into `~/org`); see
 [Personal notes](security.md#personal-notes). The editor only reads `work.db`, and never creates it.
 
+## The first open of the map
+
+Opening the Work map adopts each of its folders' specs, plans, ledgers and other records into the graph
+(`records/import`; a copy of the files and of the graph is kept the first time). While that runs, a line above the map
+says so; when it is done the map shows the records (it turns on "show finished", `.`, since a spec or plan is live
+only while an agent works under it) and you can turn that off again. A map that cannot load says why on that line too:
+no hub, or the hub's rows have not come yet. A gate waiting for your approval is a chip on the strip led by "Sign off:", so it says what it is even when its forecast is cut to the chip's width.
+
 ## Recording commits
 
 Agent sessions and jobs can work on a task — any tracker node id, such as `task:/path/plan.md#3`:

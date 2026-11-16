@@ -28,6 +28,7 @@ use runstav::methods::scm::{
     Branch, Branches, Checkout, Commit, Committed, DeleteBranch, Paths, Remote, RemoteEvent,
     RemoteId, RemoteOp, Root, Set, Stash, StashOp, Subscribe, ViewAs, ViewId,
 };
+use runstav::methods::view::Display;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -180,8 +181,16 @@ impl Views {
             return false;
         };
         let now = crate::clock::wall_secs() as i64;
-        self.publish_built(f, key, |env, _| {
-            rows::rows(&state, &RowLook::of(env, INDENT, 1), now)
+        self.publish_built(f, key, |env, fonts| {
+            let width = |face: Option<&str>, text: &str| match env.display {
+                Display::Gui => drgnx_rows::fit::width_in(fonts, face, text),
+                Display::Tty => (text.chars().count() as u32 * env.cell.0.max(1)) as f32,
+            };
+            let room = rows::Room {
+                width: &width,
+                px: env.width_px as f32 - drgnx_rows::fit::SLACK,
+            };
+            rows::rows(&state, &RowLook::of(env, INDENT, 1), &room, now)
         });
         true
     }
@@ -533,6 +542,24 @@ fn repo_root(root: &str) -> Result<PathBuf, Error> {
     Ok(p)
 }
 
+/// Run git ARGS in ROOT as WHO on a blocking thread (STDIN, DEADLINE); no view reads the repository again.
+async fn git_quiet(
+    root: &Path,
+    who: As,
+    args: Vec<String>,
+    stdin: Option<Vec<u8>>,
+    deadline: Duration,
+) -> Result<Vec<u8>, Error> {
+    let r = root.to_path_buf();
+    crate::clock::blocking(move || {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        run::git(&r, who, &args, stdin.as_deref(), Some(deadline), None)
+    })
+    .await
+    .map_err(|e| failed(e.to_string()))?
+    .map_err(failed)
+}
+
 /// Run the user's git ARGS in ROOT on a blocking thread (STDIN, DEADLINE), then have the views showing it read it.
 async fn user_git(
     f: &Front,
@@ -541,15 +568,9 @@ async fn user_git(
     stdin: Option<Vec<u8>>,
     deadline: Duration,
 ) -> Result<Vec<u8>, Error> {
-    let r = root.clone();
-    let out = crate::clock::blocking(move || {
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        run::git(&r, As::User, &args, stdin.as_deref(), Some(deadline), None)
-    })
-    .await
-    .map_err(|e| failed(e.to_string()))?;
+    let out = git_quiet(&root, As::User, args, stdin, deadline).await;
     reread_everywhere(f, &root);
-    out.map_err(failed)
+    out
 }
 
 fn with_paths(head: &[&str], paths: &[String]) -> Vec<String> {
@@ -611,18 +632,18 @@ pub async fn discard(f: &Front, p: Paths) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// `git/commit`.
+/// `git/commit`.  The views read the repository once, after the commit and the read of its sha (each `user_git` would
+/// make them read it, and the status is read per repository: the second read only repeated the first).
 pub async fn commit(f: &Front, p: Commit) -> Result<Committed, Error> {
     let root = repo_root(p.root.as_str())?;
+    let done = commit_quiet(&root, &p).await;
+    reread_everywhere(f, &root);
+    done
+}
+
+async fn commit_quiet(root: &Path, p: &Commit) -> Result<Committed, Error> {
     if p.all {
-        user_git(
-            f,
-            root.clone(),
-            vec!["add".into(), "-A".into()],
-            None,
-            LOCAL,
-        )
-        .await?;
+        git_quiet(root, As::User, vec!["add".into(), "-A".into()], None, LOCAL).await?;
     }
     let mut args: Vec<String> = vec!["commit".into(), "-q".into()];
     if p.amend {
@@ -635,10 +656,10 @@ pub async fn commit(f: &Front, p: Commit) -> Result<Committed, Error> {
     if stdin.is_some() {
         args.extend(["-F".into(), "-".into()]);
     }
-    user_git(f, root.clone(), args, stdin, run::COMMIT).await?;
-    let sha = user_git(
-        f,
+    git_quiet(root, As::User, args, stdin, run::COMMIT).await?;
+    let sha = git_quiet(
         root,
+        As::Reader,
         vec!["rev-parse".into(), "HEAD".into()],
         None,
         LOCAL,

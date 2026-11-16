@@ -1506,6 +1506,13 @@ open_ensure_window() { # drgnx's daemon is running and has a window; under the l
   fi
 }
 
+open_warm_hub() { # the window is up: start the hub in the background, so the Explorer finds it running (audit L4); never waits, never fails
+  local bin="${DRGNX_RATATOSKR_BIN:-$(drgnx_dir data)/bin/ratatoskr}"
+  [[ -z "${DRGNX_NO_HUB_START:-}" && -x "$bin" ]] || return 0
+  detach env "DRGNX_EMACS=$(emacs_bin || echo false)" "DRGNX_DIR=$here" "$bin" ensure --timeout 5
+  return 0
+}
+
 open_gtk_theme() { # GTK_THEME for a daemon this starts: the title bar's variant from face.eld, else the environment's own
   [[ -n "${GTK_THEME:-}" ]] && return 0
   local file variant theme
@@ -1702,6 +1709,7 @@ cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: t
   fi
   open_ensure_window || return 1
   open_unlock
+  open_warm_hub
   client -n -e '(drgnx-session-raise)' >/dev/null 2>&1 || true
   client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # once per daemon, from a timer
   if [[ -n "$wait" ]]; then client -- "${files[@]}" >/dev/null; return; fi   # no -n: until C-x # (drgnx as $EDITOR)

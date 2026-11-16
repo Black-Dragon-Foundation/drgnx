@@ -19,6 +19,8 @@
 (require 'drgnx-setting)
 (require 'drgnx-settings-area)
 (require 'drgnx-registry)
+(require 'drgnx-file)
+(require 'drgnx-icons)
 
 (defvar server-name)
 (defvar server-process)
@@ -93,16 +95,89 @@ this to decide whether `drgnx PATH' needs a new window."
     (select-frame-set-input-focus f)
     f))
 
+;;;; Open Folder…: Browse… and the recent folders
+
+(defvar drgnx-session-recent-folders-file nil
+  "The file of the recent folders, or nil for recent-folders.eld in `drgnx-state-dir'.")
+
+(defconst drgnx-session-recent-folders-max 10
+  "How many folders Open Folder… remembers.")
+
+(defconst drgnx-session--browse "Browse…"
+  "Open Folder…'s first row: choose the folder in the desktop's folder dialog.")
+
+(defun drgnx-session--recent-file ()
+  "The file the recent folders are kept in."
+  (or drgnx-session-recent-folders-file (expand-file-name "recent-folders.eld" (drgnx-state-dir))))
+
+(defun drgnx-session-recent-folders ()
+  "The folders opened last, newest first (abbreviated, each ending in a slash), those that still exist."
+  (let ((data (plist-get (drgnx-file-read (drgnx-session--recent-file)) :data)))
+    (seq-filter (lambda (d) (and (stringp d) (file-directory-p d))) (and (listp data) data))))
+
+(defun drgnx-session--remember-folder (dir)
+  "Put DIR first in the recent folders, at most `drgnx-session-recent-folders-max' of them.
+A state folder that cannot be written loses the list, never the opening."
+  (let ((dir (abbreviate-file-name (file-name-as-directory dir))))
+    (condition-case nil
+        (drgnx-file-write (drgnx-session--recent-file)
+                          (seq-take (cons dir (delete dir (drgnx-session-recent-folders))) drgnx-session-recent-folders-max))
+      (file-error nil))))
+
+(defun drgnx-session--folder-affix (cands)
+  "Open Folder…'s rows as the palette draws them: Browse… with the open-folder icon, then each folder's icon and name,
+its parent in the subtle colour."
+  (mapcar (lambda (c)
+            (if (equal c drgnx-session--browse)
+                (list (concat (drgnx-look-icon 'folder-open 'drgnx-text-muted) " " c) ""
+                      (concat "  " (propertize "Choose a folder" 'face 'drgnx-text-subtle)))
+              (let ((dir (directory-file-name c)))
+                (list (concat (drgnx-look-icon 'folder 'drgnx-text-muted) " " (file-name-nondirectory dir)) ""
+                      (concat "  " (propertize (abbreviate-file-name (or (file-name-directory dir) "/"))
+                                               'face 'drgnx-text-subtle))))))
+          cands))
+
+(defun drgnx-session--browse-folder ()
+  "The folder chosen in the desktop's folder dialog (`x-file-dialog', which on Nidhogg asks the file chooser portal and
+falls back to the minibuffer); in a terminal frame, the minibuffer's folder prompt."
+  (if (and (display-graphic-p) (fboundp 'x-file-dialog))
+      (x-file-dialog "Open Folder" default-directory nil t t)
+    (read-directory-name "Open folder: " nil nil t)))
+
+(defun drgnx-session-read-folder ()
+  "Ask for the folder File → Open Folder… opens, as VS Code does: Browse… (the folder dialog), then the recent folders,
+in the palette's frame (category `drgnx-folder').  A typed path to a folder is taken as it is."
+  (let* ((recent (drgnx-session-recent-folders))
+         (cands (cons drgnx-session--browse recent))
+         ;; a word typed matches inside a path (`beta' finds ~/src/proj-beta/), as Quick Open's: the styles that only
+         ;; match at the start (Emacs's default) get `substring' first; orderless, or the user's own entry, is left alone
+         (completion-category-defaults
+          (if (or (memq 'orderless completion-styles) (assq 'drgnx-folder completion-category-overrides))
+              completion-category-defaults
+            (cons '(drgnx-folder (styles substring partial-completion basic)) completion-category-defaults)))
+         (choice (completing-read
+                  "Open Folder: "
+                  (lambda (string pred action)
+                    (if (eq action 'metadata)
+                        '(metadata (category . drgnx-folder) (display-sort-function . identity)
+                                   (cycle-sort-function . identity) (affixation-function . drgnx-session--folder-affix))
+                      (complete-with-action action cands string pred))))))
+    (cond ((equal choice drgnx-session--browse) (drgnx-session--browse-folder))
+          ((member choice recent) choice)
+          ((and (not (string-empty-p choice)) (file-directory-p choice)) choice)
+          (t (user-error "Not a folder: %s" choice)))))
+
 (defun drgnx-session-open-folder (dir)
   "Show DIR in front as the Explorer's first folder (`drgnx DIR'), the Explorer selected — as VS Code after
 `code DIR' — with DIR as its `default-directory', so quick open and project search work in DIR's project.
 DIR replaces the folder the Explorer took by itself at the start (the editor's folder): the folders you opened stay,
-and every window showing the Explorer shows DIR's row at its top.
+and every window showing the Explorer shows DIR's row at its top.  DIR goes first in the recent folders.
 Without the workbench (drgnx safe), DIR opens in dired.
 In a terminal frame (`drgnx -t DIR', or the command typed there) DIR opens in that frame: the graphical window
-is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
-  (interactive (list (read-directory-name "Open folder: " nil nil t)))
+is not raised.  As File → Open Folder… it asks for DIR (`drgnx-session-read-folder'); bin/drgnx's call never asks."
+  (interactive (list (drgnx-session-read-folder)))
   (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (drgnx-session--remember-folder dir)
     (when (memq (drgnx-state-frame-kind (selected-frame)) '(gui initial))
       (drgnx-session-raise))
     (if (not (fboundp 'drgnx-explorer-set-roots))

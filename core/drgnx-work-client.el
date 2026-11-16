@@ -98,8 +98,9 @@ subscription.  Never signals: a hub that is not there is the reconnecting view's
   (apply #'drgnx-work-client-set-then id #'ignore params))
 
 (defun drgnx-work-client-set-then (id callback &rest params)
-  "`drgnx-work-client-set' of view ID with PARAMS, and CALLBACK called with (RESULT ERR) when the hub answers.  The
-hub sends what the change makes (the view's patches) before its answer, on the same connection."
+  "`drgnx-work-client-set' of view ID with PARAMS, and CALLBACK called with (RESULT ERR) once: when the hub answers
+(or the call fails: its deadline, a lost connection), or at once with an ERR when it could not be asked (no
+connection).  The hub sends what the change makes (the view's patches) before its answer, on the same connection."
   (when-let* ((view (drgnx-work-client--get id)))
     (let ((saved (drgnx-work-client--view-params view)))
       (cl-loop for (k v) on params by #'cddr
@@ -107,7 +108,8 @@ hub sends what the change makes (the view's patches) before its answer, on the s
       (setf (drgnx-work-client--view-params view) saved))
     (when (plist-member params :shown)
       (setf (drgnx-work-client--view-shown view) (not (memq (plist-get params :shown) '(nil :false)))))
-    (ignore-errors (drgnx-work-client--call "work/map/set" (append (list :view id) params) callback))
+    (unless (ignore-errors (drgnx-work-client--call "work/map/set" (append (list :view id) params) callback))
+      (funcall callback nil "not connected to the hub"))
     id))
 
 (defun drgnx-work-client-close (id)
@@ -121,6 +123,12 @@ hub sends what the change makes (the view's patches) before its answer, on the s
 (defun drgnx-work-client-close-all ()
   "Close every view (the module's teardown)."
   (dolist (id (drgnx-work-client-views)) (drgnx-work-client-close id)))
+
+(defun drgnx-work-client-resubscribe (id)
+  "Ask the hub for view ID's rows again, with what it saved: the hub reads its store when a view subscribes."
+  (when-let* ((view (drgnx-work-client--get id)))
+    (condition-case nil (drgnx-work-client--subscribe view)
+      (error (drgnx-work-client--status view 'reconnecting)))))
 
 (defun drgnx-work-client-connected ()
   "A `drgnx-hub-connected-functions' handler: every view subscribes again (the hub kept nothing)."

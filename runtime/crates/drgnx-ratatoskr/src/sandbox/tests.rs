@@ -905,3 +905,256 @@ fn a_refused_starts_exit_is_always_the_setup_failure() {
     );
     assert_eq!(refused_start_exit(None), None);
 }
+
+// ---- a resumed past session's one file (`agents::past`)
+
+/// A Claude login dir under the fixture's home with past session `A` of project `proj` (a sibling `B`, A's subagent
+/// file, another project's session), the shape of a chat in `proj`, and its scratch: (dir, project, shape, scratch).
+fn past_fixture(fx: &Fx, sid: &str) -> (PathBuf, PathBuf, SessionShape, PathBuf) {
+    let dir = fx.p("home/.claude");
+    let project = crate::agents::lock::claude_project(&dir, &fx.p("home/proj")).unwrap();
+    fs::create_dir_all(project.join("A/subagents")).unwrap();
+    fs::write(project.join("A.jsonl"), "{\"a\":1}\n").unwrap();
+    fs::write(project.join("B.jsonl"), "{\"b\":1}\n").unwrap();
+    fs::write(project.join("A/subagents/agent-1.jsonl"), "{\"s\":1}\n").unwrap();
+    fs::create_dir_all(dir.join("projects/-other")).unwrap();
+    fs::write(dir.join("projects/-other/C.jsonl"), "{\"c\":1}\n").unwrap();
+    let shape = SessionShape {
+        sid: sid.into(),
+        cwd: fx.p("home/proj"),
+        write: vec![fx.p("t")],
+        read: vec![],
+        net: crate::agents::launch::NetCell::ProviderOnly,
+        sockets: vec![],
+        browser: None,
+    };
+    let scratch = fx.p(&format!("t/{sid}"));
+    fs::create_dir_all(&scratch).unwrap();
+    (dir, project, shape, scratch)
+}
+
+fn grant_past(sid: &str, dir: &Path, file: PathBuf, route: runstav::methods::past::PastRoute) {
+    crate::agents::past::put_grant(
+        sid,
+        crate::agents::past::Grant {
+            provider: minni::Provider::Claude,
+            root: dir.to_path_buf(),
+            file,
+            route,
+        },
+    );
+}
+
+#[test]
+fn a_resume_on_the_original_binds_that_one_file_and_nothing_beside_it() {
+    let fx = Fx::new();
+    let (dir, project, shape, scratch) = past_fixture(&fx, "P1");
+    grant_past(
+        "P1",
+        &dir,
+        project.join("A.jsonl"),
+        runstav::methods::past::PastRoute::Original,
+    );
+    let g =
+        login_grants(&dir, &shape, &scratch, Target::LinuxBwrap).unwrap_or_else(|r| panic!("{r}"));
+    // the empty folder over the project first, then A alone over its stand-in there
+    let at = |dest: &Path| g.binds.iter().position(|b| b.dest == dest);
+    let folder = at(&project).expect("the empty folder bound over the project");
+    let file = at(&project.join("A.jsonl")).expect("A bound");
+    assert!(folder < file);
+    assert_eq!(g.binds[folder].source, scratch.join("claude-project"));
+    assert_eq!(g.binds[file].source, project.join("A.jsonl"));
+    assert_eq!(g.binds[file].mode, Mode::Rw);
+    // nothing else of the real folder is granted
+    let real: Vec<_> = g
+        .binds
+        .iter()
+        .map(|b| &b.source)
+        .chain(&g.read)
+        .chain(&g.write)
+        .filter(|p| p.starts_with(dir.join("projects")))
+        .collect();
+    assert_eq!(real, [&project.join("A.jsonl")]);
+}
+
+#[test]
+fn a_resume_on_a_copy_writes_only_the_jails_own_folder() {
+    let fx = Fx::new();
+    let (dir, project, shape, scratch) = past_fixture(&fx, "P2");
+    grant_past(
+        "P2",
+        &dir,
+        project.join("A.jsonl"),
+        runstav::methods::past::PastRoute::Copy,
+    );
+    let g =
+        login_grants(&dir, &shape, &scratch, Target::LinuxBwrap).unwrap_or_else(|r| panic!("{r}"));
+    let own = scratch.join("claude-project");
+    assert_eq!(
+        fs::read_to_string(own.join("A.jsonl")).unwrap(),
+        "{\"a\":1}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(own.join("A/subagents/agent-1.jsonl")).unwrap(),
+        "{\"s\":1}\n"
+    );
+    assert!(!own.join("B.jsonl").exists());
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        fs::metadata(own.join("A.jsonl"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert!(
+        g.binds
+            .iter()
+            .all(|b| !b.source.starts_with(dir.join("projects"))),
+        "{:?}",
+        g.binds
+    );
+    // a copy needs the namespace's bind: elsewhere it is refused, never a grant of the real file
+    grant_past(
+        "P2",
+        &dir,
+        project.join("A.jsonl"),
+        runstav::methods::past::PastRoute::Copy,
+    );
+    assert!(login_grants(&dir, &shape, &scratch, Target::LinuxReduced).is_err());
+}
+
+#[test]
+fn a_link_or_a_file_outside_the_clis_folder_is_never_granted() {
+    let fx = Fx::new();
+    let (dir, project, shape, scratch) = past_fixture(&fx, "P3");
+    let link = project.join("L.jsonl");
+    std::os::unix::fs::symlink(fx.p("home/proj"), &link).unwrap();
+    grant_past(
+        "P3",
+        &dir,
+        link,
+        runstav::methods::past::PastRoute::Original,
+    );
+    assert!(login_grants(&dir, &shape, &scratch, Target::LinuxBwrap).is_err());
+    fs::write(fx.p("home/proj/x.jsonl"), "{}\n").unwrap();
+    grant_past(
+        "P3",
+        &dir,
+        fx.p("home/proj/x.jsonl"),
+        runstav::methods::past::PastRoute::Original,
+    );
+    assert!(login_grants(&dir, &shape, &scratch, Target::LinuxBwrap).is_err());
+    grant_past(
+        "P3",
+        &dir,
+        project
+            .join("../")
+            .join(project.file_name().unwrap())
+            .join("A.jsonl"),
+        runstav::methods::past::PastRoute::Original,
+    );
+    assert!(login_grants(&dir, &shape, &scratch, Target::LinuxBwrap).is_err());
+}
+
+/// The original route's binds for real, in bwrap (`ctr.sh --sandbox`): the home hidden and read-only as the jail
+/// has it, the grant's binds in their order, and a probe that tries every way past the one file.  Then, outside: A was read and
+/// written; B, the subagent file, the other project and the folder are as they were.
+#[test]
+#[ignore = "bwrap: run in podman with ctr.sh --sandbox"]
+fn the_original_route_reaches_that_one_file_in_a_real_jail() {
+    let fx = Fx::new();
+    let (dir, project, shape, scratch) = past_fixture(&fx, "P4");
+    grant_past(
+        "P4",
+        &dir,
+        project.join("A.jsonl"),
+        runstav::methods::past::PastRoute::Original,
+    );
+    let g =
+        login_grants(&dir, &shape, &scratch, Target::LinuxBwrap).unwrap_or_else(|r| panic!("{r}"));
+    let mut args: Vec<String> = [
+        "--unshare-all",
+        "--unshare-user",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+    ]
+    .map(String::from)
+    .to_vec();
+    args.push(fx.s("home"));
+    for b in &g.binds {
+        args.push(
+            if b.mode == Mode::Rw {
+                "--bind"
+            } else {
+                "--ro-bind"
+            }
+            .into(),
+        );
+        args.push(b.source.to_str().unwrap().into());
+        args.push(b.dest.to_str().unwrap().into());
+    }
+    // the home read-only, as in the jail (the binds under it keep their own modes)
+    args.push("--remount-ro".into());
+    args.push(fx.s("home"));
+    let p = project.to_str().unwrap();
+    let probe = format!(
+        r#"set -u
+fail=0
+ok() {{ "$@" >/dev/null 2>&1 || {{ echo "FAILED: $*"; fail=1; }}; }}
+no() {{ "$@" >/dev/null 2>&1 && {{ echo "REACHED: $*"; fail=1; }}; true; }}
+ok cat {p}/A.jsonl
+ok sh -c 'echo "{{\"more\":1}}" >> {p}/A.jsonl'
+[ "$(ls -A {p})" = "A.jsonl" ] || {{ echo "LISTED: $(ls -A {p})"; fail=1; }}
+no cat {p}/B.jsonl
+no cat {p}/A/subagents/agent-1.jsonl
+no cat {p}/../-other/C.jsonl
+no cat {p}/../../projects/-other/C.jsonl
+no ln {p}/A.jsonl {p}/../hard.jsonl
+no ln {p}/A.jsonl /tmp/hard.jsonl
+no sh -c 'echo x > {d}/projects/new.jsonl'
+exit $fail"#,
+        p = p,
+        d = dir.to_str().unwrap()
+    );
+    let out = std::process::Command::new("bwrap")
+        .args(&args)
+        .args(["sh", "-c", &probe])
+        .output()
+        .expect("bwrap runs");
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // outside: the one file changed, nothing else of the real folder
+    assert_eq!(
+        fs::read_to_string(project.join("A.jsonl")).unwrap(),
+        "{\"a\":1}\n{\"more\":1}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("B.jsonl")).unwrap(),
+        "{\"b\":1}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("A/subagents/agent-1.jsonl")).unwrap(),
+        "{\"s\":1}\n"
+    );
+    let mut names: Vec<_> = fs::read_dir(&project)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["A", "A.jsonl", "B.jsonl"]);
+    assert!(!dir.join("projects/hard.jsonl").exists() && !dir.join("projects/new.jsonl").exists());
+}

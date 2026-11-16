@@ -394,6 +394,59 @@ its rows, asks `view/window' half back at once: there is no scroll above the buf
       (drgnx-view-draw-now drgnx-view)
       (should (equal (list (list "view/window" :view view :list "order" :from 70)) sent)))))
 
+(ert-deftest drgnx-explorer-rows/the-selection-stays-on-point-s-row-through-a-patch ()
+  "Pattern D (the user's Explorer, 2026-11-16, 7.png): after a wheel scroll paged the window, the selection's fill sat
+a row above the clicked row, as wide as that row's name, and the clicked row had only its tail drawn selected.  A
+patch found the buffer's point a row off the window's and put the fill there; the fill follows Sjá's selection."
+  (drgnx-explorer-rows-nav-test--with
+    (let* ((ids (lambda (from) (cl-loop for i from from below (+ from 60) collect (format "/r/f%03d" i))))
+           (model (lambda (from)
+                    (json-serialize
+                     (list :ops (vector (list :reset
+                                              (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                      :lists ["order"] :classes ["selected" "match" "dim" "ticked"]
+                                                                      :flags ["expanded"] :forms [] :start "order")
+                                                    :nodes (vconcat (list (list :id "/r" :kind "root" :flags 1
+                                                                                :fields [["label" "R"] ["path" "/r"] ["dir" 1]]))
+                                                                    (mapcar (lambda (id) (list :id id :kind "file" :flags 0 :parent "/r"
+                                                                                               :fields (vector (vector "label" id) (vector "path" id) (vector "dir" 0))))
+                                                                            (funcall ids from)))
+                                                    :edges []
+                                                    :lists (vector (list :name "order" :ids (vconcat (funcall ids from))
+                                                                         :total 200 :from from)))))))))
+           (rows (lambda (from) (mapcar (lambda (id) (list :key id :text id :props (list (list 0 (length id) "drgnx-work-id" id))))
+                                        (funcall ids from))))
+           (on-point-row (lambda ()
+                           (let ((o drgnx-wb--selected-overlay))
+                             (and (overlayp o) (overlay-buffer o)
+                                  (= (overlay-start o) (pos-bol)) (= (overlay-end o) (pos-eol)))))))
+      (setq-local drgnx-wb-selection-unfocused t)
+      (set-window-buffer (selected-window) (current-buffer))
+      (drgnx-view-model-event (list :view view :hub 7 :base 1 :version 2 :reset t :model (funcall model 100)))
+      (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 2
+                                    :ops (list (list :reset (funcall rows 100)))))
+      (drgnx-view-draw-now drgnx-view)
+      (drgnx-explorer--rows-select "/r/f120")          ; the click: Sjá's selection, point and the fill on its row
+      (should (funcall on-point-row))
+      (should (equal "/r/f120" (get-text-property (pos-bol) 'drgnx-work-id)))
+      ;; the buffer's point as a process filter finds it, a row above the window's (the editor has the focus: only the
+      ;; window's point followed the click)
+      (forward-line -1)
+      ;; the window pages back (a wheel scroll up): the hub's diff puts rows above, takes the ones below away and
+      ;; draws again the rows whose look changed (here point's row and the one above it)
+      (drgnx-view-model-event (list :view view :hub 7 :base 2 :version 3 :reset t :model (funcall model 70)))
+      (drgnx-view-apply-patch
+       (list :view view :class "c" :hub 7 :base 2 :version 3 :env_epoch 0 :model 3
+             :ops (list (list :insert (list :after :null :rows (cl-subseq (funcall rows 70) 0 30)))
+                        (list :remove (vconcat (cl-loop for i from 130 below 160 collect (format "/r/f%03d" i))))
+                        (list :replace (vconcat (mapcar (lambda (id) (list :key id :text (concat id " ")
+                                                                           :props (list (list 0 (length id) "drgnx-work-id" id))))
+                                                        '("/r/f119" "/r/f120")))))))
+      (drgnx-view-draw-now drgnx-view)
+      (let ((o drgnx-wb--selected-overlay))
+        (should (equal "/r/f120" (get-text-property (overlay-start o) 'drgnx-work-id)))
+        (should (= (overlay-end o) (save-excursion (goto-char (overlay-start o)) (pos-eol))))))))
+
 (ert-deftest drgnx-explorer-rows/a-twin-s-scroll-pages-the-view-s-window ()
   "Pattern D: the Explorer's twin (its buffer in another display class: a dock on a second monitor) pages the hub's
 window when it scrolls, as the Explorer does: a scroll within a page of its rows' end asks `view/window' further on.
@@ -443,8 +496,28 @@ does."
                                              (seq-filter (lambda (c) (equal "view/window" (car c))) sent)))))
                 (set-window-buffer w main)        ; runs its `window-scroll-functions': the rows moved under it
                 (should (equal '(30) (funcall asks)))            ; the twin's ask alone
-                ;; the user's own scroll after that, at the top of its rows: half a window back
-                (drgnx-explorer--rows-scrolled w (point-min))
+                ;; more patches of its rows (tails, git marks) ask nothing back either: only its user's scroll does
+                ;; (the twin-pages GUI row's flake, 2026-11-16: the second patch took the window back from the twin)
+                (drgnx-explorer--rows-patched drgnx-view nil)
+                (drgnx-explorer--rows-patched drgnx-view nil)
+                (should (equal '(30) (funcall asks)))
+                ;; nor does redisplay running its `window-scroll-functions' again at the same start (the GUI row's
+                ;; second cause: the window-from 150 asked back to 75)
+                (run-hook-with-args 'window-scroll-functions w (window-start w))
+                (should (equal '(30) (funcall asks)))
+                ;; nor when its start moved because its rows were patched (rows that go and come move it): the GUI row
+                ;; asked back from a start a patch had moved
+                (drgnx-explorer--rows-patched drgnx-view nil)
+                (run-hook-with-args 'window-scroll-functions w
+                                    (save-excursion (goto-char (point-min)) (forward-line 2) (point)))
+                (should (equal '(30) (funcall asks)))
+                ;; nor while the twin's next ask is on its way (the window not moved to it yet): the GUI row's third
+                ;; cause, the twin asked 225 while the window was at 150 and the Explorer's buffer asked 75 back
+                (setq drgnx-explorer--window-asker (cons 60 tw))
+                (drgnx-explorer--rows-patched drgnx-view nil)
+                (should (equal '(30) (funcall asks)))
+                ;; the user's own scroll after that, a line from the top of its rows: half a window back
+                (drgnx-explorer--rows-scrolled w (save-excursion (goto-char (point-min)) (forward-line 1) (point)))
                 (should (equal '(0 30) (funcall asks)))))))
       (kill-buffer tw))))
 

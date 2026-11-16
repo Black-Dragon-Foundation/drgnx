@@ -100,34 +100,23 @@ owned) and torn down after (the watchers go, the memo empties)."
       (should-not (memq 'tab-line inh))))
   (should (memq 'bold (face-attribute 'drgnx-topline-strong :inherit nil nil))))
 
-(ert-deftest drgnx-topline/shows-project-branch-and-the-three-keys ()
+(ert-deftest drgnx-topline/shows-the-project-switcher-and-the-search-box ()
+  "A terminal's row: the project and its chevron, then the search box with Quick Open's key, no branch."
   (drgnx-topline-test--with 'vscode
     (setq-local vc-mode " Git-main")
     (let ((text (drgnx-topline-test--text)))
-      (should (string-match-p "◆ proj · main" text))
-      (should (string-match-p "⌕ C-p files · C-S-p commands · C-k C-r all keys" text))
-      ;; in this order: the project at the left, the hint after it
-      (should (< (string-match "proj" text) (string-match "C-p" text))))
-    ;; no branch (no git): the project alone; no project: the name of the framework
-    (setq-local vc-mode nil)
-    (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))
-    (setq-local drgnx-chrome--root nil)                    ; a cache miss
-    (should (string-match-p "◆ drgnx +⌕" (drgnx-topline-test--text)))))
+      (should (string-match-p "◆ +proj ⌄ " text))
+      (should-not (string-match-p "main" text))
+      (should (string-match-p "\\[Ctrl P search\\]" text))
+      ;; in this order: the project at the left, the search after it
+      (should (< (string-match "proj" text) (string-match "search" text))))
+    (setq-local drgnx-chrome--root nil)                    ; a cache miss: the name of the framework
+    (should (string-match-p "◆ +drgnx ⌄ " (drgnx-topline-test--text)))))
 
-(ert-deftest drgnx-topline/emacs-profile-shows-its-keys ()
+(ert-deftest drgnx-topline/a-profile-without-a-quick-open-key-shows-the-box-bare ()
   (drgnx-topline-test--with 'emacs
-    ;; Quick Open has no key of its own in this profile (`:none', Emacs's own C-x p f): a command without a key is
-    ;; left out, and a stock Emacs key that runs the command is shown
-    (let ((text (drgnx-topline-test--text)))
-      (should (string-match-p "⌕ C-S-p commands · C-h C-k all keys" text))
-      (should-not (string-match-p "files" text)))
-    (setf (drgnx-cmd-command (drgnx-commands-get 'go-quick-open)) 'project-find-file)
-    (should (string-match-p "⌕ C-x p f files · C-S-p commands · C-h C-k all keys" (drgnx-topline-test--text)))
-    ;; no key for any: no hint at all, just the place
-    (dolist (id '(go-quick-open palette keys-sheet))
-      (setf (drgnx-cmd-bound (drgnx-commands-get id)) nil))
-    (setf (drgnx-cmd-command (drgnx-commands-get 'go-quick-open)) #'drgnx-topline-test-files)
-    (should-not (string-match-p "⌕" (drgnx-topline-test--text)))))
+    (should (string-match-p "\\[search\\]" (drgnx-topline-test--text)))   ; Quick Open has no key of its own here
+    (should-not (string-match-p "Ctrl" (drgnx-topline-test--text)))))
 
 (ert-deftest drgnx-topline/a-users-tab-bar-format-is-kept ()
   (drgnx-topline-test--with 'vscode
@@ -240,36 +229,38 @@ owned) and torn down after (the watchers go, the memo empties)."
           (let ((wide (drgnx-topline--line)))
             (should-not (equal-including-properties narrow wide))
             (should-not (equal narrow wide))
-            ;; centred: the hint starts where the same number of columns is left on both sides
+            ;; centred: the search box starts where the same number of columns is left on both sides
             (let* ((text (mapconcat (lambda (i) (substring-no-properties (nth 2 i))) wide ""))
-                   (start (string-match "⌕" text))
-                   (hint-w (- (string-width (string-trim-right text)) start)))
+                   (start (string-match "\\[" text))
+                   (hint-w (string-width (nth 2 (seq-find (lambda (i) (eq (car i) 'drgnx-topline-search)) wide)))))
               (should (<= (abs (- start (- width hint-w start))) 1)))))))))
 
 (ert-deftest drgnx-topline/a-click-runs-the-item-it-carries ()
   "A tab-bar click carries its item (the caption's `menu-item', as Emacs's tab bar and Nidhogg's native shell attach
 it): the release runs that item's command, a press runs nothing but a drag of the empty part, and a click that carries
-no item runs nothing (the x is never used to guess one)."
+no item runs nothing on a window (the x is never used to guess one), and on a terminal, whose tab-bar click has no
+caption, runs the item whose columns hold the click's column."
   (drgnx-topline-test--with 'vscode
     (drgnx-topline--on)
     (should (eq 'drgnx-topline-mouse-up (lookup-key tab-bar-map [mouse-1])))
     (let* ((items (drgnx-topline--line))
-           (before (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-palette (mapcar #'car items)))))
+           (before (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-project (mapcar #'car items)))))
            (at (lambda (kind key)
                  (let ((caption (and key (propertize "x" 'menu-item
                                                      (list key (nth 3 (drgnx-topline-test--item key)) nil)))))
                    (list kind (append (list (selected-window) 'tab-bar (cons (1+ before) 0) 0)
                                       (and caption (list (cons caption 0)))))))))
-      (drgnx-topline-mouse-down (funcall at 'down-mouse-1 'drgnx-topline-palette))
-      (should-not drgnx-topline-test--ran)
-      (drgnx-topline-mouse-up (funcall at 'mouse-1 'drgnx-topline-palette))
-      (should (equal drgnx-topline-test--ran '(palette)))
-      (drgnx-topline-mouse-up (funcall at 'mouse-1 nil))          ; no item carried: nothing, though x is the palette's
-      (should (equal drgnx-topline-test--ran '(palette)))
-      (should (eq (car (drgnx-topline--event-item (funcall at 'mouse-1 'drgnx-topline-keys-sheet)))
-                  'drgnx-topline-keys-sheet))
-      (drgnx-topline-mouse-up (funcall at 'mouse-1 'drgnx-topline-keys-sheet))
-      (should (equal drgnx-topline-test--ran '(keys palette))))
+      (cl-letf (((symbol-function 'drgnx-topline-project-switch) (lambda () (interactive) (push 'switch drgnx-topline-test--ran))))
+        (drgnx-topline-mouse-down (funcall at 'down-mouse-1 'drgnx-topline-project))
+        (should-not drgnx-topline-test--ran)
+        (drgnx-topline-mouse-up (funcall at 'mouse-1 'drgnx-topline-project))
+        (should (equal drgnx-topline-test--ran '(switch)))
+        ;; no item carried, as a terminal's click: the item whose columns hold the click's (here the project's)
+        (drgnx-topline-mouse-up (funcall at 'mouse-1 nil))
+        (should (equal drgnx-topline-test--ran '(switch switch))))
+      (should (eq (car (drgnx-topline--event-item (funcall at 'mouse-1 'drgnx-topline-search))) 'drgnx-topline-search))
+      (drgnx-topline-mouse-up (funcall at 'mouse-1 'drgnx-topline-search))
+      (should (equal drgnx-topline-test--ran '(files switch switch))))
     (drgnx-topline--off)
     (should-not (eq 'drgnx-topline-mouse-up (lookup-key tab-bar-map [mouse-1])))))
 
@@ -306,8 +297,8 @@ a leading space unless told to keep it)."
     (let* ((mark (nth 2 (drgnx-topline--mark-pixels (current-buffer))))
            (pos (text-property-not-all 0 (length mark) 'drgnx-topline-px nil mark)))
       (should (equal (get-text-property pos 'drgnx-topline-px mark) 7)))
-    (should (equal (plist-get (nthcdr 4 (car (last (drgnx-topline--build-pixels (current-buffer) 1426 nil)))) :drgnx-px)
-                   1)))
+    ;; the row's end (`drgnx-topline--right-room' ends in it): 8 px from the window's side, less the edge
+    (should (equal (plist-get (nthcdr 4 (car (last (drgnx-topline--right-room nil)))) :drgnx-px) 1)))
   ;; the maximise square is the design's size, smaller than the minus and the cross
   (should (string-match-p "width=\"12\" height=\"12\"" (drgnx-topline--control-svg 'square)))
   (should (string-match-p "width=\"16\" height=\"16\"" (drgnx-topline--control-svg 'x))))
@@ -330,24 +321,18 @@ hover colour.  The hover face has no box (a box would ring the square)."
         ;; is one glyph, and the hover would run two glyphs past it (onto the row's end)
         (should (= 2 (length s)))))))
 
-(ert-deftest drgnx-topline/the-hint-runs-the-command ()
+(ert-deftest drgnx-topline/the-search-box-runs-quick-open ()
   (drgnx-topline-test--with 'vscode
-    (dolist (spec '((drgnx-topline-go-quick-open . files) (drgnx-topline-palette . palette) (drgnx-topline-keys-sheet . keys)))
-      (let ((item (drgnx-topline-test--item (car spec))))
-        (should item)
-        ;; what the tab bar's mouse command calls on a press
-        (call-interactively (nth 3 item))
-        (should (eq (car drgnx-topline-test--ran) (cdr spec)))))
-    ;; the clickable text is the key and its label, nothing more
-    (should (equal (substring-no-properties (nth 2 (drgnx-topline-test--item 'drgnx-topline-palette))) "C-S-p commands"))))
+    (let ((item (drgnx-topline-test--item 'drgnx-topline-search)))
+      (should item)
+      ;; what the tab bar's mouse command calls on a press
+      (call-interactively (nth 3 item))
+      (should (equal drgnx-topline-test--ran '(files))))
+    ;; the text is the key and the word, nothing more
+    (should (equal (substring-no-properties (nth 2 (drgnx-topline-test--item 'drgnx-topline-search))) "[Ctrl P search]"))))
 
 (ert-deftest drgnx-topline/a-terminal-shows-the-key-it-can-send ()
   (drgnx-topline-test--with 'vscode
-    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil))
-              ((symbol-function 'drgnx-tty-sendable-key)
-               (lambda (_frame key) (if (equal key "C-S-p") "M-P" key))))
-      (should (string-match-p "M-P commands" (drgnx-topline-test--text))))
-    (drgnx-memo-forget 'topline)
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
               ((symbol-function 'drgnx-tty-sendable-key) (lambda (_frame _key) (error "not on a window"))))
       ;; a window's row is the design's: Quick Open's key as it is bound, on the search box's keycap
@@ -357,23 +342,21 @@ hover colour.  The hover face has no box (a box would ring the square)."
 
 (ert-deftest drgnx-topline/glyphs-have-an-ascii-form ()
   (drgnx-topline-test--with 'vscode
-    (setq-local vc-mode " Git-main")
     (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) t)))
-      (should (string-match-p "\\`<> proj | main" (string-trim-left (drgnx-topline-test--text))))
-      (should (string-match-p "/ C-p files | C-S-p commands" (drgnx-topline-test--text))))
+      (should (string-match-p "\\`<> +proj v " (string-trim-left (drgnx-topline-test--text)))))
     ;; the glyph table changed: made again
     (let ((drgnx-face-glyphs (cons '(diamond "X" . "x") drgnx-face-glyphs)))
-      (should (string-match-p "X proj" (drgnx-topline-test--text))))))
+      (should (string-match-p "X " (drgnx-topline-test--text))))))
 
 (ert-deftest drgnx-topline/never-wider-than-its-frame ()
   (drgnx-topline-test--with 'vscode
-    (setq-local vc-mode " Git-a-very-long-branch-name-that-goes-on-and-on")
-    (dolist (w '(120 70 40 12))
+    (setq-local drgnx-chrome--root (cons default-directory "/x/a-very-long-project-name-that-goes-on-and-on/"))
+    (dolist (w '(120 70 40 24))
       (cl-letf (((symbol-function 'frame-text-cols) (lambda (&optional _) w)))
         (let ((text (drgnx-topline-test--text)))
           (should (<= (string-width text) w))
-          ;; the hint goes before the place is cut
-          (when (< w 70) (should-not (string-match-p "⌕" text))))))))
+          ;; the search box goes before the project's name is cut
+          (when (< w 40) (should-not (string-match-p "\\[" text))))))))
 
 (ert-deftest drgnx-topline/redisplay-never-looks-a-project-up ()
   ;; the first lookup for a directory walks the file system: it is the editor-changed edge's job, the line only reads
@@ -516,7 +499,6 @@ hover colour.  The hover face has no box (a box would ring the square)."
 
 (ert-deftest drgnx-topline/reads-cached-state-only-and-is-memoized ()
   (drgnx-topline-test--with 'vscode
-    (setq-local vc-mode " Git-main")
     (let ((first (drgnx-topline--line)))
       ;; nothing ran git or any process: and nothing is made again while nothing changed
       (cl-letf (((symbol-function 'call-process) (lambda (&rest _) (error "ran a process")))
@@ -524,122 +506,34 @@ hover colour.  The hover face has no box (a box would ring the square)."
                 ((symbol-function 'start-process) (lambda (&rest _) (error "ran a process")))
                 ((symbol-function 'drgnx-topline--build) (lambda (&rest _) (error "built again"))))
         (should (eq first (drgnx-topline--line))))
-      ;; the branch changed, a new profile bound the keys, the frame got wider: made again
-      (setq-local vc-mode " Git-other")
+      ;; a new profile bound the keys, the frame got wider: made again
+      (setf (drgnx-cmd-bound (drgnx-commands-get 'go-quick-open)) (list (cons "<f1>" nil)))
       (let ((second (drgnx-topline--line)))
         (should-not (eq first second))
-        (should (string-match-p "other" (drgnx-topline-test--text)))
-        (setf (drgnx-cmd-bound (drgnx-commands-get 'palette)) (list (cons "<f1>" nil)))
-        (should-not (eq second (drgnx-topline--line)))
-        (should (string-match-p "<f1> commands" (drgnx-topline-test--text)))
+        (should (string-match-p "\\[F1 search\\]" (drgnx-topline-test--text)))
         (let ((third (drgnx-topline--line)))
           (cl-letf (((symbol-function 'frame-text-cols) (lambda (&optional _) 100)))
             (should-not (eq third (drgnx-topline--line)))))))))
 
-(ert-deftest drgnx-topline/the-branch-comes-from-the-git-cache-the-status-bar-reads ()
-  "An untracked file has no branch in `vc-mode'; the status bar shows it from drgnx's git cache, so does the line."
-  (drgnx-topline-test--with 'vscode
-    (let ((drgnx-git--roots (make-hash-table :test #'equal))
-          (root "/tmp/drgnx-tl-repo/"))
-      (drgnx-cache--clear 'git-status)
-      (setq-local buffer-file-name "/tmp/drgnx-tl-repo/src/new.el")
-      (setq-local vc-mode nil)
-      (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))   ; the cache has not read it yet
-      ;; the cache finds the repository, then a status run reads its branch (`drgnx-git-changed-functions', with the
-      ;; status bar off the line's own hook moves the epoch `git'): the line is made again each time
-      (puthash "/tmp/drgnx-tl-repo/src/" root drgnx-git--roots)
-      (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))
-      (drgnx-cache-put 'git-status root (list :branch (list :head "main")))
-      (drgnx-topline--git-changed root)
-      (should (string-match-p "◆ proj · main" (drgnx-topline-test--text)))
-      (drgnx-cache-put 'git-status root (list :branch (list :head "feature")))
-      (drgnx-topline--git-changed root)
-      (should (string-match-p "◆ proj · feature" (drgnx-topline-test--text)))
-      ;; `vc-mode' is only the fallback (the same as the status bar's)
-      (setq-local vc-mode " Git-other")
-      (should (string-match-p "· feature" (drgnx-topline-test--text)))
-      (drgnx-cache-put 'git-status root (list :branch (list :head nil :detached t)))
-      (drgnx-topline--git-changed root)
-      (should (string-match-p "· (detached)" (drgnx-topline-test--text)))
-      ;; no cache entry: vc-mode's branch
-      (drgnx-cache-remove 'git-status root)
-      (drgnx-topline--git-changed root)
-      (should (string-match-p "· other" (drgnx-topline-test--text))))))
-
 (ert-deftest drgnx-topline/a-memo-hit-allocates-nothing ()
   ;; the tab bar asks for the items about 40 times per keystroke in some flows
   (drgnx-topline-test--with 'vscode
-    (setq-local vc-mode " Git-main")
     (drgnx-test-use-editor (selected-window))                ; as in a session: else the window is searched for
     (setq-local buffer-file-name "/tmp/drgnx-tl-repo/a.el")
     ;; the line and everything it calls on a hit, compiled (interpreted code conses for its own bookkeeping): nothing
     ;; at all is allocated, and the git cache is not read
     (let ((first (drgnx-topline--line)))
-      (cl-letf (((symbol-function 'drgnx-git-branch) (lambda (_) (error "read the git cache")))
-                ((symbol-function 'drgnx-git-cached-root) (lambda (_) (error "read the git cache"))))
+      (progn
         (should (= 0 (drgnx-memo-fixture-alloc #'drgnx-topline--line
                                                'drgnx-topline--line 'drgnx-topline--failing-p
                                                'drgnx-topline--drawn-title-p 'drgnx-face-drawn-title-p
                                                'drgnx-state-editor-window 'drgnx-state--record 'drgnx-commands-get
                                                'drgnx-cmd-command 'drgnx-cmd-bound 'drgnx-topline--hint-command
-                                               'drgnx-topline--hint-bound 'drgnx-git-roots-known
+                                               'drgnx-topline--hint-bound 'drgnx-topline--shown 'drgnx-topline--menus-p
                                                'drgnx-statusbar--layout-key 'drgnx-look-density-value
                                                'drgnx-topline--attention-count
                                                'drgnx-topline--agents-count)))
         (should (eq first (drgnx-topline--line)))))))
-
-(ert-deftest drgnx-topline/a-git-change-rebuilds-the-line ()
-  "The branch is read when the epoch `git' moves, not per redisplay: a status run that read it moves the epoch (the
-status bar's hook while it is on, only for a new branch; the line's own while it is off)."
-  (drgnx-topline-test--with 'vscode
-    (let ((drgnx-git--roots (make-hash-table :test #'equal))
-          (root "/tmp/drgnx-tl-repo/"))
-      (drgnx-cache--clear 'git-status)
-      (setq-local buffer-file-name "/tmp/drgnx-tl-repo/a.el")
-      (setq-local vc-mode nil)
-      (puthash "/tmp/drgnx-tl-repo/" root drgnx-git--roots)
-      (drgnx-cache-put 'git-status root (list :branch (list :head "main")))
-      (drgnx-topline--git-changed root)
-      (let* ((tab-bar-mode nil) (_ (drgnx-topline--on)) (first (drgnx-topline--line)))
-        (should (string-match-p "· main" (drgnx-topline-test--text)))
-        ;; the cache changed, nobody said so: the line is not made again (it does not read the cache)
-        (drgnx-cache-put 'git-status root (list :branch (list :head "feature")))
-        (should (eq first (drgnx-topline--line)))
-        ;; the status bar is on: it moves the epoch, for a new branch only; the line's hook leaves it alone
-        (let ((drgnx-statusbar-mode t) (before (drgnx-epoch 'git)))
-          (run-hook-with-args 'drgnx-git-changed-functions root)
-          (should (eq first (drgnx-topline--line)))
-          (should (eql before (drgnx-epoch 'git))))
-        ;; the status bar is off: the status run's hook moves the epoch, and the line shows the new branch
-        (let ((drgnx-statusbar-mode nil))
-          (run-hook-with-args 'drgnx-git-changed-functions root))
-        (let ((second (drgnx-topline--line)))
-          (should-not (eq first second))
-          (should (string-match-p "· feature" (drgnx-topline-test--text)))
-          ;; the bump the status bar makes rebuilds it too
-          (drgnx-cache-put 'git-status root (list :branch (list :head "other")))
-          (drgnx-epoch-bump 'git root)
-          (should-not (eq second (drgnx-topline--line)))
-          (should (string-match-p "· other" (drgnx-topline-test--text))))
-        (drgnx-topline--off)
-        (should-not (memq #'drgnx-topline--git-changed drgnx-git-changed-functions))))))
-
-(ert-deftest drgnx-topline/a-vc-mode-change-rebuilds-the-line ()
-  "`vc-mode' is not a key: setting it moves the epoch `buffer-look' of its buffer (a watcher), which rebuilds the
-line."
-  (drgnx-topline-test--with 'vscode
-    (setq-local vc-mode " Git-main")
-    (let ((first (drgnx-topline--line)))
-      (should (string-match-p "· main" (drgnx-topline-test--text)))
-      (should (eq first (drgnx-topline--line)))
-      (setq-local vc-mode " Git-other")
-      (let ((second (drgnx-topline--line)))
-        (should-not (eq first second))
-        (should (string-match-p "· other" (drgnx-topline-test--text)))
-        ;; another buffer's `vc-mode' moves only that buffer's epoch
-        (with-temp-buffer
-          (setq-local vc-mode " Git-elsewhere"))
-        (should (eq second (drgnx-topline--line)))))))
 
 (ert-deftest drgnx-topline/the-tab-bar-sizes-no-tabs ()
   (drgnx-topline-test--with 'vscode
@@ -672,10 +566,10 @@ line."
           (drgnx-topline--resized (list :frame frame :old (list :cols 80 :lines 40) :new (list :cols 100 :lines 40)))
           (should (= 1 updates))
           (drgnx-topline--line)                              ; the tab bar asked: made for 100
-          (should (string-match-p "⌕" (drgnx-topline-test--text)))
+          (should (string-match-p "\\[" (drgnx-topline-test--text)))
           (should (= 0 param-sets)))))))
 
-(ert-deftest drgnx-topline/the-mark-leaves-room-for-the-controls ()
+(ert-deftest drgnx-topline/the-project-leaves-room-for-the-controls ()
   (drgnx-topline-test--with 'vscode
     (setq-local drgnx-chrome--root (cons default-directory "/x/a-very-long-project-name-for-the-cut-test/"))
     (cl-letf (((symbol-function 'frame-text-cols) (lambda (&optional _) 40))
@@ -824,16 +718,14 @@ line."
         (should-not timer-list)
         (should-not drgnx-topline--error)))))
 
-;;; mod-topline-test.el ends here
-
 (ert-deftest drgnx-topline/keys-come-from-the-label ()
-  ;; the hint's keys are `drgnx-surfaces-key-label' of the starter list's ids (any key, the keymap kept)
+  ;; the search box's key is `drgnx-surfaces-key-label' of Quick Open
   (drgnx-topline-test--with 'vscode
     (let (asked)
       (cl-letf (((symbol-function 'drgnx-surfaces-key-label)
-                 (lambda (cmd &rest args) (push (cons (drgnx-cmd-id cmd) args) asked) (format "K-%s" (drgnx-cmd-id cmd)))))
-        (let ((text (drgnx-topline-test--text)))
-          (should (string-match-p "K-go-quick-open files · K-palette commands · K-keys-sheet all keys" text))))
-      (should (equal (reverse asked)
-                     (mapcar (lambda (row) (list (car row) :any t)) drgnx-surfaces-starter-commands))))
+                 (lambda (id &rest args) (push (cons id args) asked) "C-p")))
+        (should (string-match-p "\\[Ctrl P search\\]" (drgnx-topline-test--text))))
+      (should (member '(go-quick-open :short t) asked)))
     (should-not (fboundp 'drgnx-topline--key))))
+
+;;; mod-topline-test.el ends here

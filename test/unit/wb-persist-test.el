@@ -642,3 +642,17 @@ frame is a graphical workbench frame for the store."
     (should (drgnx-wb-sidebar-showing-p))
     (should (eq 'results (drgnx-wb-area-tab 'panel)))
     (should (eql 18 (frame-parameter nil 'drgnx-wb-dock-px)))))
+
+(ert-deftest drgnx-persist/a-page-in-front-does-not-lose-the-last-file ()
+  "Audit C3: with a page that is no file (the start page) in front, the save names the file shown before it, and a
+restore brings that file back, not the start page."
+  (drgnx-persist-test--with dir
+    (switch-to-buffer (drgnx-persist-test--file dir "a.txt"))
+    (switch-to-buffer (drgnx-persist-test--file dir "b.txt"))
+    (switch-to-buffer (get-buffer-create "*drgnx-test-page*"))
+    (drgnx-chrome-apply nil t)
+    (drgnx-persist-save)
+    (drgnx-persist-test--reset)
+    (drgnx-persist-restore)
+    (should (equal (buffer-file-name (window-buffer (selected-window))) (expand-file-name "b.txt" dir)))
+    (kill-buffer "*drgnx-test-page*")))

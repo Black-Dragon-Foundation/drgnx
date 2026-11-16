@@ -171,4 +171,19 @@ registration (:url :token)."
       (let ((env (drgnx-ai-agent-env (list :kind 'claude-moonshot :model "kimi-k3") gw)))
         (should (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_AUTH_TOKEN") (plist-get gw :token)))))))
 
+;; audit A2: New Agent Session says which profiles' programs are not installed.
+(ert-deftest drgnx-agents-profile/not-installed-says-so ()
+  (let* ((drgnx-agents-profiles '(("here" :command ("sh")) ("gone" :command ("drgnx-no-such-agent-binary"))))
+         (ann nil))
+    (should (drgnx-agents-profile-installed-p "here"))
+    (should-not (drgnx-agents-profile-installed-p "gone"))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_p coll &rest _)
+                 (setq ann (funcall (alist-get 'annotation-function (cdr (funcall coll "" nil 'metadata)))
+                                    "gone"))
+                 (should-not (funcall (alist-get 'annotation-function (cdr (funcall coll "" nil 'metadata))) "here"))
+                 "here")))
+      (should (equal "here" (drgnx-agents-profile-read "Agent profile: "))))
+    (should (string-search "Onboarding: Agents" ann))))
+
 ;;; agents-profiles-test.el ends here

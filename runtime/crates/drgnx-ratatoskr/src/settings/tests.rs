@@ -216,8 +216,9 @@ fn only_runtime_names_decode() {
     // the names a module may add to a session's environment; and part 2's providers whose shell steps are traced; and
     // the runners' eight per-project settings; and the proxies' pinned names; and Hrafn's 6; and the agent browser's 8;
     // and the model price table; and the plugin list with the hook rules and their off list; and search's base
-    // checkout and ignore rules; and a Mac runner's Homebrew packages and toolchains)
-    assert_eq!(RUNTIME_NAMES.len(), 53);
+    // checkout and ignore rules; and a Mac runner's Homebrew packages and toolchains; and the past sessions' switch
+    // and their CLIs)
+    assert_eq!(RUNTIME_NAMES.len(), 55);
     assert!(RUNTIME_NAMES.iter().all(|n| {
         n.starts_with("drgnx-agents-")
             || n.starts_with("drgnx-ai-")

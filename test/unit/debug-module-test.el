@@ -209,14 +209,47 @@ session and answers once it comes; nothing without a stopped session or on an er
       (should-not calls))))
 
 (ert-deftest drgnx-debug/open-launch-json-makes-one-when-there-is-none ()
-  (let ((dir (file-name-as-directory (make-temp-file "dl" t))))
+  "With none, it asks which debugger (VS Code's \"Select debugger\") and starts from that debugger's configurations."
+  (let ((dir (file-name-as-directory (make-temp-file "dl" t))) asked)
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-debug-launch-root) (lambda () dir)))
+        (cl-letf (((symbol-function 'drgnx-debug-launch-root) (lambda () dir))
+                  ((symbol-function 'completing-read)
+                   (lambda (prompt names &rest _) (setq asked prompt) (car (member "Python (debugpy)" names)))))
           (drgnx-debug-open-launch-json)
+          (should (equal asked "Select debugger: "))
           (should (equal buffer-file-name (expand-file-name ".vscode/launch.json" dir)))
           (should (string-search "\"configurations\": [" (buffer-string)))
+          (should (string-search "\"type\": \"debugpy\"" (buffer-string)))
           (should (file-exists-p buffer-file-name))
           (kill-buffer))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-debug/start-with-no-configuration-selects-a-debugger ()
+  "Audit R1: F5 where nothing can start (no launch.json, no file of a language drgnx debugs) asks which debugger, as
+VS Code's \"Select debugger\", writes its configurations to launch.json (replacing Open launch.json's empty list) and
+offers them; it never stops at an error."
+  (let* ((dir (file-name-as-directory (make-temp-file "dl" t))) (file (expand-file-name ".vscode/launch.json" dir))
+         (asked nil) (reads 0))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (write-region "{\n  \"version\": \"0.2.0\",\n  \"configurations\": [\n  ]\n}\n" nil file nil 'silent)
+          (cl-letf (((symbol-function 'drgnx-debug-launch-configs)
+                     (lambda (_root)
+                       (setq reads (1+ reads))
+                       (if (= reads 1) (list :configs [])
+                         (list :configs (vector (list :id "l:0" :name "Python: Current File" :type "debugpy"))))))
+                    ((symbol-function 'completing-read)
+                     (lambda (prompt names &rest _)
+                       (push prompt asked)
+                       (if (equal prompt "Select debugger: ") (car (member "Python (debugpy)" names))
+                         (caar names)))))
+            (should (equal (drgnx-debug-launch-read-config dir) "l:0"))
+            (should (equal (reverse asked) '("Select debugger: " "Debug configuration: ")))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (should (string-search "\"name\": \"Python: Current File\"" (buffer-string)))
+              (should (string-search "\"version\": \"0.2.0\"" (buffer-string))))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-debug/every-spec-command-has-its-keys ()

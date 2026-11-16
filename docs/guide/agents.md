@@ -10,7 +10,7 @@ when the profile asks for it and the agent supports it. Only **Stop** cancels.
 
 ## Sessions
 
-Agents: New Agent Session… (palette) starts a **profile** in the current project; Show Agents (`C-k a`, ⌘K A on a
+Agents: New Agent Session… (palette) starts a **profile** in the current project (a profile whose program is not installed says so beside its name: "not installed (Onboarding: Agents sets it up)"; starting it anyway names the program in the error); Show Agents (`C-k a`, ⌘K A on a
 Mac) opens the Agents tab. Profiles are the setting `drgnx-agents-profiles` in
 `settings.el` in your config folder ([settings.md](settings.md); [where drgnx keeps its files](files.md#where-drgnx-keeps-its-files)); this file used to be `agents.eld`, and drgnx moved its
 keys into `settings.el` once ([Moving from the old files](settings.md#moving-from-the-old-files)):
@@ -631,6 +631,52 @@ refused. The card's title is the hub's ("s1 suggests magit (MELPA)"); `why` is k
 most 280 characters. One open card per package, the sessions' quotes on it; at most three suggestions a session;
 a session's quotes leave the cards when it ends, and a card with none left is withdrawn. Only sessions drgnx runs may
 use it; an agent outside drgnx is refused.
+
+## Past sessions
+
+Show Past Sessions (`sessions-view`, in the palette; the Agents list says where) lists the sessions your other agent
+CLIs left in their own folders: Claude Code (the `projects` folder in `~/.claude`), Gemini CLI (`~/.gemini/tmp/`) and Codex
+(`~/.codex/sessions/` and `archived_sessions/`), each where its own variable moves it (`CLAUDE_CONFIG_DIR`,
+`GEMINI_CLI_HOME`, `CODEX_HOME`). The sessions run in this workspace come first, then the others; each row shows the
+CLI, the first thing you asked, the project, the date, the number of turns and the branch. The hub reads the files
+again every few seconds, so a session you are running in a terminal grows in the list as it goes.
+
+The Agents list shows them too: under your drgnx sessions, a **Past sessions** section with the latest eight, this
+workspace's first, and a last line saying how many more Show Past Sessions has. The keys below work on those rows as
+well (RET opens one; `/` narrows the section by the same search).
+
+In the list:
+
+| Key (VS Code, Emacs) | Vim | Command | Does |
+|---|---|---|---|
+| `/` | `/` | Search Past Sessions… (`sessions-search`) | narrows the list to the sessions whose title or transcript holds every word you type, best first, with the matching words; empty shows all again |
+| `RET` | `RET` | Open Past Session (`sessions-open`) | the transcript, read-only, drawn as the agent panel draws one |
+| `r` | `r` | Resume Past Session Here… (`sessions-resume`) | continues it as a drgnx agent (below) |
+| `t` | `t` | Resume Past Session in Terminal (`sessions-resume-in-terminal`) | runs the CLI's own resume command (`claude --resume ID`, `gemini --resume ID`, `codex resume ID`) in a drgnx terminal in the session's folder, outside the sandbox |
+| `g` | `g r` | Rescan Past Sessions (`sessions-rescan`) | reads the folders again now |
+
+The same keys work in an open transcript, on its session.
+
+**Resume Here** starts a drgnx agent on the CLI's profile, in the session's folder, jailed like any other, attached
+to that session. The jail cannot see your CLI's session folders, so you choose each time how it gets the one file:
+
+- **On a copy** (the default): the file is copied into the jail's own folder, where the CLI looks for it (Claude
+  Code's subagent files come too). The agent continues the copy; your own CLI never sees the continuation.
+- **Write the original**: lets the jailed agent write this one CLI session file. Exactly that file is bound into the
+  jail, read-write, and nothing else of the folder: not its neighbours, not the project's other sessions, not the
+  subagent files. Your own CLI then sees the continuation. A file that is a link, or that is not where its CLI keeps
+  sessions, is refused.
+
+`drgnx-agents-history-resume-writes-original` makes "write the original" the choice offered first. A session whose
+CLI has no agent profile, or whose folder is gone, can still be resumed in a terminal.
+
+**What stays private.** The files are only read; drgnx never writes in those folders (the one exception is "write
+the original", by the agent you resumed, on the file you chose). The hub keeps its index in `history.db` in its state
+folder, mode 0600, on this machine only; what looks like a key is replaced by `[redacted: KIND]` before it is
+indexed. No agent tool, no search index and no embedder reaches the sessions or the index, and a transcript is sent
+to a model only when you press Resume Here, and only to the CLI it came from. `drgnx-agents-history` (on by default)
+turns it all off and deletes `history.db`; `drgnx-agents-history-providers` names the CLIs read (all three by
+default).
 
 ## Agents outside drgnx
 

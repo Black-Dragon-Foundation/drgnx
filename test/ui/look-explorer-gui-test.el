@@ -2,9 +2,9 @@
 ;; test-class: cond
 ;; test-pattern: handshake
 
-;; Pattern D: every picture is taken after `drgnx-test-wait-presented'.  The hover row moves a real pointer
-;; (`drgnx-uitest-pointer-set': sway only), so it skips elsewhere and the integration's sway pass must report it
-;; passed.  The Explorer buffer is shown in the selected window of a bare frame, over a temporary folder; its rows come
+;; Pattern D: every picture is taken after `drgnx-test-wait-presented'.  The hover rows move a real pointer (sway's
+;; `drgnx-uitest-pointer-set'; the pointer-down rows also mutter's RemoteDesktop pointer), so they skip elsewhere and
+;; the real-compositor lane must report them passed.  The Explorer buffer is shown in the selected window of a bare frame, over a temporary folder; its rows come
 ;; from a real hub (`drgnx-rows-demo-with': a test-hooks build), and every row first checks there are rows to look at.
 
 (require 'ert)
@@ -25,6 +25,12 @@
 (load (expand-file-name "modules/ui/drgnx-look-fonts" drgnx-ui-look-explorer--repo) nil t)
 (load (expand-file-name "modules/ui/drgnx-look-density" drgnx-ui-look-explorer--repo) nil t)
 (load (expand-file-name "themes/drgnx-theme-gen" drgnx-ui-look-explorer--repo) nil t)
+(load (expand-file-name "test/fixtures/ui-hub-fixture" drgnx-ui-look-explorer--repo) nil t)   ; the docked row's hub
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-ui-look-explorer--repo) nil t)
+(load (expand-file-name "modules/ui/drgnx-look" drgnx-ui-look-explorer--repo) nil t)
+(require 'drgnx-buffers)
+(require 'drgnx-state)
+(defvar drgnx-look-echo-row)                ; drgnx-look loads drgnx-look-echo above
 
 (defmacro drgnx-ui-look-explorer--with (root &rest body)
   "BODY with the Explorer rooted at ROOT (a temporary folder with a.txt, b.txt and c.txt, all `modified' in git) shown
@@ -204,6 +210,169 @@ the row, and again after the pointer leaves."
       (drgnx-test-wait-presented)
       (skip-unless (cadr (mouse-pixel-position)))
       (should (funcall has-fg)))))
+
+(defun drgnx-ui-look-explorer--pointer-kind ()
+  "The real pointer this session can move: `sway' (`drgnx-uitest-pointer-set'), `mutter' (RemoteDesktop,
+`drgnx-uitest-pointer-move'), or nil."
+  (cond ((eq t (drgnx-uitest-pointer-set 0 0)) 'sway)
+        ((drgnx-uitest-pointer-available-p) 'mutter)))
+
+(defmacro drgnx-ui-look-explorer--with-sensors (&rest body)
+  "BODY with Nidhogg's mouse sensors on, as the product runs (the Open rows' hover, extra/buffers, turns them on)."
+  `(let ((old (symbol-value 'mouse-sensor-enabled)))
+     (set 'mouse-sensor-enabled t)
+     (unwind-protect (progn ,@body) (set 'mouse-sensor-enabled old))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-pointer-moved-down-the-rows-leaves-one-lit ()
+  "Pattern D (sway, mutter; the user's Explorer, 2026-11-16, 8.png: ten rows in a run drawn with the hover's box and
+⋯ after the pointer went down the list).  The pointer moves down ten rows one by one; drawn after, only the row
+under it has the hover's tint."
+  :tags '(:compositor)
+  (skip-unless (display-graphic-p))
+  (skip-unless (boundp 'mouse-sensor-enabled))
+  (let ((kind (drgnx-ui-look-explorer--pointer-kind)))
+    (skip-unless kind)
+    (drgnx-ui-look-explorer--with-sensors
+     (drgnx-ui-look-explorer--with root (drgnx-ui-look-explorer--pointer-down-rows (selected-window) root kind)))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-pointer-swept-down-the-rows-leaves-one-lit ()
+  "Pattern D (sway, mutter; 8.png as the user moves): the pointer sweeps down ten rows without a settle between moves."
+  :tags '(:compositor)
+  (skip-unless (display-graphic-p))
+  (skip-unless (boundp 'mouse-sensor-enabled))
+  (let ((kind (drgnx-ui-look-explorer--pointer-kind)))
+    (skip-unless kind)
+    (drgnx-ui-look-explorer--with-sensors
+     (drgnx-ui-look-explorer--with root (drgnx-ui-look-explorer--pointer-down-rows (selected-window) root kind 'fast)))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-pointer-moved-down-patched-rows-leaves-one-lit ()
+  "Pattern D (sway, mutter; 8.png with the hub's patches): each move also changes a file, so the rows are patched
+under the pointer."
+  :tags '(:compositor)
+  (skip-unless (display-graphic-p))
+  (skip-unless (boundp 'mouse-sensor-enabled))
+  (let ((kind (drgnx-ui-look-explorer--pointer-kind)))
+    (skip-unless kind)
+    (drgnx-ui-look-explorer--with-sensors
+     (drgnx-ui-look-explorer--with root
+       (drgnx-ui-look-explorer--pointer-down-rows (selected-window) root kind nil 'touch)))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-pointer-swept-down-the-docked-explorer-leaves-one-lit ()
+  "Pattern D (mutter, the user's compositor; 8.png as the product runs): the Explorer docked in the workbench beside
+the Open section, ui/look on (cards, decoration boxes, the look's hover), Open's mouse sensors on through its own
+setup; the pointer sweeps down ten rows; only the row under it has the hover's tint.  Not under sway: ui/look's
+teardown leaves headless sway's frame 2 pixels shorter (reported), which every later row would fail on."
+  :tags '(:compositor)
+  (skip-unless (display-graphic-p))
+  (skip-unless (boundp 'mouse-sensor-enabled))
+  (let ((kind (drgnx-ui-look-explorer--pointer-kind)))
+    (skip-unless (eq kind 'mutter))
+    (let* ((root (drgnx-uitest-root-frame))
+           (dir (file-name-as-directory (make-temp-file "look-explorer-dock" t)))
+           (config (with-selected-frame root (current-window-configuration)))
+           (themes custom-enabled-themes) (state-was (bound-and-true-p drgnx-state-mode))
+           (sensors (symbol-value 'mouse-sensor-enabled))
+           (size (list (frame-pixel-width root) (frame-pixel-height root)))
+           (drgnx-wb--sections nil)
+           (drgnx-explorer--roots (list dir)) (drgnx-explorer-compact-folders nil)
+           (drgnx-explorer--expanded (make-hash-table :test #'equal)) (drgnx-explorer--window-asker nil)
+           ;; the classic echo row: with the box, ui/look's setup and teardown would each swap the root frame
+           (drgnx-look-echo-row 'classic))
+      (dotimes (i 15) (write-region "" nil (expand-file-name (format "m%02d.txt" i) dir) nil 'silent))
+      (unwind-protect
+          (with-selected-frame root
+            (delete-other-windows)
+            (mapc #'disable-theme custom-enabled-themes)
+            (load-theme 'drgnx-dark t)
+            (drgnx-state-mode 1)
+            (drgnx-ui-hub-start drgnx-ui-look-explorer--repo)
+            (drgnx-test-with-modules '(ui/look)
+              (let ((drgnx-modules--current 'look-explorer-dock-row) (drgnx-modules--setup-load load-file-name))
+                (drgnx-buffers-setup)
+                (drgnx-explorer-setup))
+              (drgnx-wb-show-sidebar)
+              (drgnx-view-env-update drgnx-explorer-hub-view-name)
+              (drgnx-test-wait (lambda () (and (get-buffer drgnx-explorer-buffer-name)
+                                               (with-current-buffer drgnx-explorer-buffer-name
+                                                 (string-match-p "m14" (buffer-string)))))
+                               :secs 20 :what "the docked Explorer's rows from the hub")
+              (drgnx-test-wait-presented)
+              (let ((w (get-buffer-window drgnx-explorer-buffer-name root)))
+                (should w)
+                (drgnx-ui-look-explorer--pointer-down-rows w dir kind 'fast))))
+        (drgnx-wb-hide-sidebar)
+        (dolist (u (alist-get 'look-explorer-dock-row drgnx-modules--stacks)) (funcall (cdr u)))
+        (setf (alist-get 'look-explorer-dock-row drgnx-modules--stacks nil t) nil)
+        ;; the setups' focus functions (core/workbench's teardown removes them; this row is not that module)
+        (remove-function after-focus-change-function #'drgnx-buffers--focus-changed)
+        (remove-function after-focus-change-function #'drgnx-explorer--focus-changed)
+        (set 'mouse-sensor-enabled sensors)
+        (drgnx-ui-hub-stop)
+        (drgnx-state-mode (if state-was 1 -1))
+        (mapc #'disable-theme custom-enabled-themes)
+        (dolist (th (reverse themes)) (enable-theme th))
+        (with-selected-frame root (set-window-configuration config))
+        (dolist (b (list drgnx-buffers-buffer-name drgnx-explorer-buffer-name)) (when (get-buffer b) (kill-buffer b)))
+        (delete-directory dir t)
+        ;; the compositor gives the frame its size back after ui/look goes (the next row checks it)
+        (drgnx-test-wait (lambda () (equal size (list (frame-pixel-width root) (frame-pixel-height root))))
+                         :secs 5 :what "the frame's size from before ui/look")))))
+
+(defun drgnx-ui-look-explorer--pointer-down-rows (w root kind &optional fast touch)
+  "Move the KIND pointer (`drgnx-ui-look-explorer--pointer-kind') down rows 3 to 12 of the Explorer in window W
+\(rooted at ROOT), then check only row 12 has the hover's tint.  FAST moves without a settle between moves; TOUCH
+writes a file each move (the hub patches the rows).  A row is lit when the middle of its empty stretch has the
+hover's tint (`drgnx-hover''s background); point stays on the first row, so no row below is selected.  Under mutter
+the pointer is placed on the first row, then goes down by a row's height (relative motion, as a hand moves it)."
+  (with-current-buffer (window-buffer w)
+    (unless (string-match-p "m11" (buffer-string))
+      (dotimes (i 12) (write-region "" nil (expand-file-name (format "m%02d.txt" i) root) nil 'silent))))
+  (drgnx-test-wait (lambda () (with-current-buffer (window-buffer w) (string-match-p "m11" (buffer-string))))
+                   :secs 20 :what "the twelve new rows")
+  (with-current-buffer (window-buffer w) (goto-char (point-min)))
+  (set-window-point w (with-current-buffer (window-buffer w) (point-min)))
+  (drgnx-test-wait-presented)
+  (let* ((frame (window-frame w)) (s (drgnx-uitest-device-scale frame)) (e (window-body-pixel-edges w))
+         (lys (with-current-buffer (window-buffer w)
+                (save-excursion
+                  (cl-loop for line from 1 to 12
+                           collect (progn (goto-char (point-min)) (forward-line (1- line))
+                                          (+ (nth 1 e) (cadr (pos-visible-in-window-p (point) w t))
+                                             (/ (line-pixel-height) 2)))))))
+         (ys (mapcar (lambda (y) (round (* s y))) lys))
+         (mid (round (* s (/ (+ (nth 0 e) (nth 2 e)) 2.0))))         ; right of the short names, left of the tails
+         (ltail (- (nth 2 e) 27))
+         (logical (/ (frame-scale-factor frame) s))                  ; Lisp pixels per logical one (mutter's motion)
+         (tint (mapcar (lambda (c) (round (* 255 c))) (color-name-to-rgb (face-background 'drgnx-hover frame t))))
+         (lit (lambda (snap line)
+                (cl-every (lambda (p c) (<= (abs (- p c)) 6)) (cdr (drgnx-uitest-pixel snap mid (nth (1- line) ys))) tint))))
+    ;; the pointer starts on the first row (the point row, left out), wherever an earlier row left it
+    (pcase kind
+      ('sway (should (eq t (drgnx-uitest-pointer-set (round (/ (* s ltail) (drgnx-pixels-scale)))
+                                                     (round (/ (* s (car lys)) (drgnx-pixels-scale))))))
+             (drgnx-uitest-run nil))
+      (_ (drgnx-uitest-pointer-move ltail (car lys) frame)))
+    (drgnx-test-wait-presented)
+    ;; the probe tells: at rest no row below the first has the tint
+    (let ((snap (drgnx-uitest-snapshot)))
+      (should-not (cl-loop for line from 3 to 12 when (funcall lit snap line) collect line)))
+    (cl-loop for line from 3 to 12
+             for prev = (car lys) then ly
+             for ly = (nth (1- line) lys)
+             do (pcase kind
+                  ('sway (should (eq t (drgnx-uitest-pointer-set (round (/ (* s ltail) (drgnx-pixels-scale)))
+                                                                 (round (/ (* s ly) (drgnx-pixels-scale)))))))
+                  (_ (drgnx-uitest--pointer-by 0 (/ (- ly prev) logical))))
+             (when touch (write-region (format "%d" line) nil (expand-file-name "m00.txt" root) nil 'silent))
+             (cond (fast (redisplay))                                ; the next move comes as soon as it is drawn
+                   ((eq kind 'mutter) (drgnx-uitest--pointer-seen frame) (drgnx-test-wait-presented))
+                   (t (drgnx-uitest-run nil) (drgnx-test-wait-presented))))
+    (if (eq kind 'mutter) (drgnx-uitest--pointer-seen frame) (drgnx-uitest-run nil))   ; mutter's motion is read here
+    (drgnx-test-wait-presented)
+    (unless (cadr (mouse-pixel-position)) (ert-skip "no pointer position"))
+    (let ((snap (drgnx-uitest-snapshot)))
+      (should (funcall lit snap 12))                            ; the probe tells: the row under the pointer is lit
+      (should-not (cl-loop for line from 3 to 11 when (funcall lit snap line) collect line)))))
 
 (drgnx-look-gui-deftest drgnx-ui-look-explorer/the-pointer-on-a-row-tail-tints-the-whole-row ()
   "Pattern D (sway, LOOK-FIX-OPEN-HOVER-TINT-1): with the pointer on a row's tail (where its ⋯ is), the hover tint

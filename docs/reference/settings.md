@@ -250,6 +250,62 @@ The profile New Agent Session offers on Return: a profile's name, or nil for cla
 | `:agents` | `never` |
 | `:schema` | `(or null string)` |
 
+## drgnx-agents-history
+
+Non-nil: the hub reads your past Claude Code, Gemini CLI and Codex sessions from their own folders (read-only, on
+this machine only) so Agents: Past Sessions lists, searches and resumes them.  Nil: nothing is read and the hub's
+index of them (history.db) is deleted.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"bool"` |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-agents-history-providers
+
+The CLIs whose past sessions the hub reads (`drgnx-agents-history'): "claude" (Claude Code), "gemini" (Gemini
+CLI), "codex" (Codex).  A CLI taken out of the list is no longer read and its sessions leave the index.
+
+| Key | Value |
+| --- | --- |
+| Default | `("claude" "gemini" "codex")` |
+| Type | `(repeat (choice (const "claude") (const "gemini") (const "codex")))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-agents-history-resume-writes-original
+
+Non-nil: Resume Here on a past session starts with "write the original" chosen, so the jailed agent may write
+that one CLI session file and your own CLI sees the continuation.  Nil: it starts on a copy (the default).  You still
+choose per resume.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
 ## drgnx-agents-hook-rules
 
 Rules the hub checks at the hook points, before any plugin: each is a plist with :point, :verdict (deny or annotate)
@@ -732,6 +788,61 @@ plist each (`:type', `:request', `:name', `:program' …), `${…}' variables as
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | - |
+
+## drgnx-editing-font-size
+
+The size of the code font in pixels (VS Code's editor.fontSize).  13.5 is drgnx's own code size; the code font
+role (`drgnx-look-font-code') still sets a size of its own on top.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `13.5` |
+| Type | `number` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-editing--apply-font-size` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(pred drgnx-editing--font-size-p "a size in pixels from 6 to 72")` |
+
+## drgnx-editing-tab-size
+
+How many columns a tab character, and one level of indent where the mode has none of its own, take (VS Code's
+editor.tabSize).  A change applies at once.  A mode that sets its own indent keeps it.
+
+| Key | Value |
+| --- | --- |
+| Default | `4` |
+| Type | `integer` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-editing--apply-tab-size` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(pred drgnx-editing--tab-size-p "a number of columns from 1 to 16")` |
+
+## drgnx-editing-word-wrap
+
+Whether a line longer than its window continues on the next row, breaking at a word (`on'), or runs off the edge
+(`off'), as VS Code's editor.wordWrap.  drgnx wraps by default.  Toggle Word Wrap flips it for one buffer.  A change
+applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `on` |
+| Type | `(choice (const on) (const off))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-editing--apply-word-wrap` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum on off)` |
 
 ## drgnx-extensions-check-updates
 

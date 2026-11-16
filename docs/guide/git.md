@@ -12,7 +12,8 @@ waits for it, whatever the size of the repository.
 
 - **The commit box** is at the top: type a message and press `Ctrl+Enter` (Emacs and Vim: `C-c C-c`), or **Git:
   Commit**. It commits what is staged; with nothing staged it asks once whether to stage every change (Always sets
-  `drgnx-scm-smart-commit`). The commit runs the repository's hooks; a hook that fails shows its text in a notice. The
+  `drgnx-scm-smart-commit`). The box empties as the commit starts; if the commit fails, your message comes back. The
+  commit runs the repository's hooks; a hook that fails shows its text in a notice. The
   placeholder names the branch, and the repository when there are several: the box acts on the repository whose row
   you used last, else the one of the file you are editing.
 - **The changes** are in sections: Merge Changes, Staged Changes, Changes, each file with its letter (M, A, D, R, U).

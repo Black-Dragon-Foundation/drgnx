@@ -872,3 +872,26 @@ fn the_new_mark_survives_the_cut_of_a_long_conclusion() {
     assert!(r.text.contains("new"), "{r:?}");
     assert!(r.runs.iter().any(|x| x.2 == "drgnx-work-new"), "{r:?}");
 }
+
+/// [D] A strip chip says what it is before its text, so one cut at the chip's width still does (the user's two chips
+/// read "2 tasks, about 0.00 USD (some ..." and nothing said they were gates to approve).
+#[test]
+fn a_cut_gate_chip_still_says_what_it_is() {
+    let f: Frame = serde_json::from_str(include_str!(
+        "../../../../test/fixtures/work-space/frame.json"
+    ))
+    .unwrap();
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let pal = palette();
+    let s = scene(&items, &edges, &layout, &new);
+    let gate = NeedsYou {
+        about: vec![],
+        kind: vegvisir::CardKind::SignOff,
+        text: "2 tasks, about 0.00 USD (some costs unknown): approve to start".into(),
+        ..f.needs_you[0].clone()
+    };
+    let row = render::strip(&s, &[gate.clone(), gate], &[], &[], &gui(&pal), &Cols).0;
+    assert!(row.text.contains("⚑ Sign off: 2 tasks"), "{:?}", row.text);
+    assert!(row.text.contains("g2"), "{:?}", row.text);
+}

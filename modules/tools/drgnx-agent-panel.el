@@ -130,6 +130,8 @@ Set with `setopt' or Customize, open panels draw again at once."
 (declare-function drgnx-agent-panel-explain-setup "drgnx-agent-panel-explain")
 (declare-function drgnx-agent-panel-huddle-setup "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-list-setup "drgnx-agent-panel-list")
+(declare-function drgnx-agent-history-setup "drgnx-agent-history")
+(declare-function drgnx-agent-history-teardown "drgnx-agent-history")
 (declare-function drgnx-agent-panel-explain-load-grants "drgnx-agent-panel-explain")
 (defvar drgnx-agent-panel-list-buffer-name)
 (declare-function drgnx-agent-panel-huddle-teardown "drgnx-agent-panel-huddle")
@@ -154,6 +156,8 @@ Set with `setopt' or Customize, open panels draw again at once."
   (load (expand-file-name "drgnx-agent-panel-huddle" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-list)
   (load (expand-file-name "drgnx-agent-panel-list" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-agent-history)
+  (load (expand-file-name "drgnx-agent-history" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-steps)
   (load (expand-file-name "drgnx-agent-panel-steps" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
@@ -633,12 +637,14 @@ class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same b
     (drgnx-agent-panel-huddle--event event data))
   (drgnx-agent-panel-cards-setup)
   (drgnx-agent-panel-list-setup)
+  (drgnx-agent-history-setup)
   (drgnx-agent-panel-sync-windows))
 
 (defun drgnx-agent-panel--teardown ()
   "Every panel gives its subscription back and goes."
   (drgnx-agent-panel-steps-teardown)
   (drgnx-agent-panel-huddle-teardown)
+  (drgnx-agent-history-teardown)
   (when-let* ((b (get-buffer drgnx-agent-panel-list-buffer-name))) (kill-buffer b))
   (dolist (b (drgnx-agent-panel-buffers)) (kill-buffer b)))
 

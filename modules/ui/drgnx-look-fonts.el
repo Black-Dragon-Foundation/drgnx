@@ -284,13 +284,24 @@ size and family and weight, the others' family and weight, whichever face names 
     (when-let* ((ans (plist-get drgnx-look-fonts--desktop (if (memq role '(code code-small terminal)) :code :ui))))
       (list :family (car ans) :size (drgnx-look-fonts-px-to-ratio (cdr ans)) :where "the desktop"))))
 
+(defvar drgnx-editing-font-size)
+
+(defun drgnx-look-fonts--with-font-size (role attrs)
+  "ATTRS, the setting layer of ROLE, with the code role's size from `drgnx-editing-font-size' (VS Code's
+editor.fontSize) unless the role setting gave a size of its own: nil when there is nothing to say."
+  (if (and (eq role 'code) (boundp 'drgnx-editing-font-size) (numberp drgnx-editing-font-size)
+           (not (plist-member attrs :size)) (/= drgnx-editing-font-size drgnx-type-code-px))
+      (plist-put (copy-sequence attrs) :size (drgnx-look-fonts-px-to-ratio drgnx-editing-font-size))
+    attrs))
+
 (defun drgnx-look-fonts--layers (role)
   "ROLE's layers, an alist (SOURCE . PLIST), highest source first; the sources with nothing to say are left out."
   (let ((default (cdr (assq role drgnx-type-defaults))))
     (delq nil
           (list (when-let* ((l (drgnx-look-fonts--lisp-attrs role))) (cons 'lisp l))
                 (when-let* ((l (drgnx-look-fonts--customize-attrs role))) (cons 'customize l))
-                (when-let* ((l (drgnx-look-fonts--setting-attrs role (drgnx-look-fonts--value role))))
+                (when-let* ((l (drgnx-look-fonts--with-font-size
+                                role (drgnx-look-fonts--setting-attrs role (drgnx-look-fonts--value role)))))
                   (cons 'setting (plist-put l :where "settings.el")))
                 (when-let* ((l (drgnx-look-fonts--theme-attrs role))) (cons 'theme l))
                 (when-let* ((l (drgnx-look-fonts--desktop-attrs role))) (cons 'desktop l))

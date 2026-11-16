@@ -189,6 +189,8 @@ repositories are kept.  `test/unit/git-letters-test.el` covers the rows with no 
 
 ### Buffers panel
 
+**Save with focus in a view.** Save (`Ctrl+S`) with the cursor in the Explorer, Outline, Search or a panel page saves the editor you work in, as VS Code does; it never asks a name for a view, and a view cannot be saved to a file (`set-visited-file-name` refuses). With no editor open it says "Nothing to save: no editor is open".
+
 Save All (`C-k s` · palette — `C-x s` stays Emacs' asking save · `SPC f S`), Close Saved (`C-k u` · palette · `SPC b u`), Close All (`C-k C-w` · palette ·
 `SPC b A`), Close Others (right-click · `o` · `O`) — the three close only rows shown, never buffers the filter
 hides —, a live name filter (`C-M-f` · `/` · `/`), middle-click closes a
@@ -267,6 +269,12 @@ the entry is back.
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
 | `other-group` | diffs and logs: another editor group (the one used last), else this one |
+
+**Empty tabs say why.** A panel tab with nothing in it shows one muted line saying what appears there (no blank page
+with a cursor box). **Contextual tabs** (Heap Graph, Branch Review, Research Trail, Rules) are in the tab row only
+while shown or holding something, so the row is the same on a fresh start and after a reopen: Problems, Output,
+Results, Terminal, Help and Debug Console. The Output tab shows its channel (Messages, Warnings, Backtrace, …) as a
+chip at the right of the row; click it, or run **Output: Select Channel…**, to pick another.
 
 A warning never opens the panel by itself, as VS Code's Output does not: it is logged in `*Warnings*` and counted on the
 status bar as a notice, whose button opens `*Warnings*` (an emergency still shows at once).

@@ -1232,7 +1232,8 @@ pub async fn import_core(
             fresh.push(f);
         }
     }
-    let backup_dir = if dry || found.is_empty() {
+    // the first adoption of a file backs up (every call, a backup of everything: opening Work imports each time)
+    let backup_dir = if dry || fresh.is_empty() {
         None
     } else {
         let dir = backup(hub, root, &found, now())?;
@@ -1742,9 +1743,14 @@ mod tests {
             rusqlite_open(&b.join("work.db")) > 0,
             "the store copy has its tables"
         );
-        // a second import makes a second backup, never overwriting the first
+        // opening Work imports every time: a second import with nothing new backs nothing up (a backup of every
+        // record file per open would fill the disk), and one with a new file backs up again, never over the first
         let r2 = f.import(None, false).await;
-        assert_ne!(r2.backup.unwrap(), b.to_string_lossy());
+        assert!(r2.backup.is_none(), "{:?}", r2.backup);
+        std::fs::create_dir_all(f.root.join("docs/specs")).unwrap();
+        std::fs::write(f.root.join("docs/specs/new.md"), "# New spec\n\nText.\n").unwrap();
+        let r3 = f.import(None, false).await;
+        assert_ne!(r3.backup.unwrap(), b.to_string_lossy());
     }
 
     #[tokio::test]

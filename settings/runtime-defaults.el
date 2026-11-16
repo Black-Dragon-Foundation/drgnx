@@ -81,6 +81,8 @@
  (drgnx-agents-allow-unsandboxed nil)
  (drgnx-agents-start-env-names nil)
  (drgnx-agents-trace-opens ("claude"))
+ (drgnx-agents-history t)
+ (drgnx-agents-history-providers ("claude" "gemini" "codex"))
  (drgnx-agents-matrix (:preset balanced))
  (drgnx-agents-away-after 600)
  (drgnx-agents-wait-refusals 3)

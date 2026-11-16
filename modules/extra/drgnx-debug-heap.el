@@ -66,7 +66,7 @@
 
 (define-derived-mode drgnx-debug-heap-mode special-mode "Graph"
   "A variable's objects, or a frame's locals, as cards and their references as edges, read again at each stop."
-  (setq-local truncate-lines t)
+  (setq-local truncate-lines t cursor-type nil)
   (buffer-disable-undo)
   (add-hook 'kill-buffer-hook #'drgnx-debug-heap--closed nil t))
 

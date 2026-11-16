@@ -1035,6 +1035,8 @@ changes inside)."
             (drgnx-explorer--rows-tail key (point) (pos-eol)))
           (forward-line 1))))))
 
+(defvar-local drgnx-explorer--rows-tick 0 "Counts the patches drawn in this buffer (`drgnx-explorer--rows-patched').")
+
 (defun drgnx-explorer--rows-patched (view keys)
   "`drgnx-view-patch-patched-functions' of the Explorer: the drawn rows KEYS get their tail at the right edge (the ⋯
 control and the hover, the git mark of the status the hub put on the name: a file's letter, ● for a folder with
@@ -1042,6 +1044,7 @@ changes inside) and their who-is-here badge after the name (`drgnx-explorer--row
 rather than made again.  A tail goes with its row's text (`evaporate'): a removed or redrawn row's is gone, and a
 redrawn row gets a new one; a badge of a row that went is deleted here."
   (when drgnx-explorer--waiting (delete-overlay drgnx-explorer--waiting) (setq drgnx-explorer--waiting nil))
+  (setq drgnx-explorer--rows-tick (1+ drgnx-explorer--rows-tick))
   (let ((tails (or drgnx-explorer--tails (setq drgnx-explorer--tails (make-hash-table :test #'equal))))
         (spans (drgnx-wb-shown-spans)))
     (dolist (key keys)
@@ -1064,9 +1067,14 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
     (when-let* ((file drgnx-explorer--reveal-pending) ((drgnx-view-row-start view file)))
       (setq drgnx-explorer--reveal-pending nil)
       (drgnx-explorer--rows-select file))
-    ;; a reset put point back on the selection (`drgnx-view-nav-class-step'): the selected row follows it
-    (let ((o drgnx-wb--selected-overlay))
-      (when (and (overlayp o) (overlay-buffer o) (/= (overlay-start o) (pos-bol))) (drgnx-wb-selection-sync)))
+    ;; the fill follows Sjá's selection: a reset put point back on it (`drgnx-view-nav-class-step'), and a patch that
+    ;; comes while another window has the focus finds the buffer's point where a filter left it, which can be a row
+    ;; off the window's (the user's Explorer after a wheel scroll and a click: the fill a row above the clicked one)
+    (let ((o drgnx-wb--selected-overlay)
+          (at (when-let* ((id (drgnx-view-nav-selection))) (drgnx-view-row-start view id))))
+      (when (and (overlayp o) (overlay-buffer o) (/= (overlay-start o) (or at (pos-bol))))
+        (when at (goto-char at))
+        (drgnx-wb-selection-sync)))
     (when drgnx-explorer--badges        ; a few rows at most: the badges of rows that went
       (maphash (lambda (key o) (unless (drgnx-view-row-start view key) (delete-overlay o) (remhash key drgnx-explorer--badges)))
                drgnx-explorer--badges))
@@ -1074,7 +1082,7 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
     ;; buffer's start no scroll can run, so a window of the listing drawn from its middle would never show the rows
     ;; before it
     (dolist (w (get-buffer-window-list (current-buffer) nil t))
-      (drgnx-explorer--rows-scrolled w (window-start w)))))
+      (drgnx-explorer--rows-scrolled w (window-start w) t))))
 
 (defun drgnx-explorer--rows-twin (class)
   "The Explorer's buffer in display CLASS (a dock on a monitor at another scale; `drgnx-view-patch-twin-function'), made
@@ -1127,18 +1135,28 @@ Explorer buffer's: the twin's kill leaves them."
 (defvar-local drgnx-explorer--asked-from nil "The `from' the last `view/window' the scroll asked for named.")
 
 (defvar-local drgnx-explorer--seen-from nil "The window's `from' at this buffer's last scroll.")
+(defvar-local drgnx-explorer--seen-start nil
+  "The window start at this buffer's last scroll: redisplay runs `window-scroll-functions' again at the same start,
+which is no scroll of its user's.")
+(defvar-local drgnx-explorer--seen-tick nil
+  "`drgnx-explorer--rows-tick' at this buffer's last scroll: a start that moved with patches drawn since was moved by
+them (rows that go and come), not by its user.")
 
 (defvar drgnx-explorer--window-asker nil
   "(FROM . BUFFER): the last `view/window' an Explorer buffer (the Explorer's or a twin) asked for, and which.  The
 hub holds one window per view, so another buffer's scroll moves this one's rows too; its scroll then asks nothing.")
 
-(defun drgnx-explorer--rows-scrolled (window start)
+(defun drgnx-explorer--rows-scrolled (window start &optional patched)
   "`window-scroll-functions' on the rows path: WINDOW scrolled to START.  The rows near it without a tail get one
 \(`drgnx-explorer--rows-tails-in').  Within a page of the end of the rows held
 (past which the listing has more) the hub is asked for the window half of it further on; within a page of their start
 (with entries before them), half of it back.  Each `from' is asked once; the rows that go and come keep the shown ones
 in place (window starts are markers).  The window is the view's: when another of its buffers (a twin) moved it, the
-first scroll after asks nothing (`drgnx-explorer--window-asker'), so two displays never ask each other back."
+first scroll after asks nothing (`drgnx-explorer--window-asker'), so two displays never ask each other back.
+PATCHED: called because rows were drawn, not by a scroll: a window another buffer asked for is never asked back, and
+the first scroll after still counts as the first.  Nor is it asked back from the start the move was seen at
+\(`drgnx-explorer--seen-start'): redisplay calls this again there; nor from a start that patches moved
+\(`drgnx-explorer--seen-tick').  Only a scroll of its user's asks it back."
   (with-current-buffer (window-buffer window)
     (drgnx-explorer--rows-tails-in window start)
     (when-let* ((drgnx-view-patch) (h (drgnx-view-patch-handle drgnx-view-patch))
@@ -1147,9 +1165,15 @@ first scroll after asks nothing (`drgnx-explorer--window-asker'), so two display
              (page (window-body-height window)) (step (max 1 (/ len 2)))
              ;; another buffer of the view (the Explorer in another class) asked for this window: these rows moved
              ;; under this window, which keeps them; asking back would take that buffer's away
-             (moved (and (eql from (car drgnx-explorer--window-asker))
-                         (not (eq (cdr drgnx-explorer--window-asker) (current-buffer)))
-                         (not (eql from drgnx-explorer--seen-from))))
+             (other (let ((b (cdr drgnx-explorer--window-asker))) (and b (not (eq b (current-buffer))) (buffer-live-p b))))
+             ;; a draw never asks back a window another buffer asked for, nor one it asked for and the hub has not
+             ;; moved to yet; a scroll only when it is its user's
+             (moved (and other
+                         (or patched
+                             (and (eql from (car drgnx-explorer--window-asker))
+                                  (or (not (eql from drgnx-explorer--seen-from))
+                                      (eql start drgnx-explorer--seen-start)
+                                      (not (eql drgnx-explorer--rows-tick drgnx-explorer--seen-tick)))))))
              (want (cond (moved nil)
                          ((and (< (+ from len) total)
                                (save-excursion (goto-char start) (/= 0 (forward-line (* 2 page)))))
@@ -1157,7 +1181,9 @@ first scroll after asks nothing (`drgnx-explorer--window-asker'), so two display
                          ((and (> from 0)
                                (save-excursion (goto-char start) (/= 0 (forward-line (- page)))))
                           (max 0 (- from step))))))
-        (setq drgnx-explorer--seen-from from)
+        (unless patched
+          (setq drgnx-explorer--seen-from from drgnx-explorer--seen-start start
+                drgnx-explorer--seen-tick drgnx-explorer--rows-tick))
         (when (and want (/= want from) (not (eql want drgnx-explorer--asked-from)))
           (setq drgnx-explorer--asked-from want
                 drgnx-explorer--window-asker (cons want (current-buffer))

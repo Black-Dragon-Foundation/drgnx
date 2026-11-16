@@ -72,7 +72,7 @@
 
 (define-derived-mode drgnx-debug-view-mode special-mode "Run and Debug"
   "The Run and Debug view: variables, watches, the call stack and the breakpoints of the project's sessions."
-  (setq-local truncate-lines t)
+  (setq-local truncate-lines t cursor-type nil)   ; a row is selected by its highlight: no cursor box on a chevron
   (buffer-disable-undo)
   (setq-local header-line-format '(:eval (drgnx-debug-view--header))))
 

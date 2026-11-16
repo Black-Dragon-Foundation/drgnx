@@ -123,16 +123,21 @@ errors first, then by place."
   (require 'project)
   (when-let* ((p (project-current nil))) (expand-file-name (project-root p))))
 
-;;;###autoload
-(defun drgnx-problems-show ()
-  "Show the Problems view: the errors and warnings of this project, by file, in the panel."
-  (interactive)
+(defun drgnx-problems-buffer ()
+  "The Problems view's buffer, made if need be and listing this project's problems now (the panel's Problems tab shows it)."
   (let ((root (drgnx-problems--root-here))
         (buffer (get-buffer-create drgnx-problems-buffer-name)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'drgnx-problems-mode) (drgnx-problems-mode))
       (setq drgnx-problems--root root)
       (drgnx-problems--revert))
+    buffer))
+
+;;;###autoload
+(defun drgnx-problems-show ()
+  "Show the Problems view: the errors and warnings of this project, by file, in the panel."
+  (interactive)
+  (let ((buffer (drgnx-problems-buffer)))
     (pop-to-buffer buffer)
     buffer))
 

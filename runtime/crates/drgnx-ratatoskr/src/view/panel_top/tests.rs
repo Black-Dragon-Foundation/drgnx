@@ -218,7 +218,19 @@ fn a_terminal_header_has_no_images() {
 fn the_strip_has_a_pill_per_step_type_the_open_ones_raised() {
     let rows = build(&snap(json!({})), 1000, None).0;
     let strip = rows.iter().find(|r| r.key == STRIP).expect("the strip");
-    assert!(strip.text.starts_with(" Open: "), "{:?}", strip.text);
+    assert!(
+        strip.text.starts_with(" Expand steps: "),
+        "{:?}",
+        strip.text
+    );
+    // each pill says what a click does, so the strip reads as a switch, not a label
+    let helps = props(strip, "help-echo");
+    assert!(
+        helps.iter().any(|(v, _)| v
+            .as_str()
+            .is_some_and(|h| h.starts_with("Click to expand or collapse"))),
+        "{helps:?}"
+    );
     for t in STEP_TYPES {
         assert!(strip.text.contains(&format!(" {t} ")), "{:?}", strip.text);
     }
@@ -283,12 +295,19 @@ fn the_chips_say_the_sandbox_the_files_and_the_checkpoints_when_the_hub_knows() 
             checkpoints: Some(1),
         },
     );
-    let chips = rows.iter().find(|r| r.key == CHIPS).expect("chips");
-    assert!(chips.text.contains("sandboxed"), "{}", chips.text);
-    assert!(chips.text.contains("3 files"), "{}", chips.text);
-    assert!(chips.text.contains("1 checkpoint "), "{}", chips.text);
+    let chip_rows: Vec<_> = rows.iter().filter(|r| r.key.starts_with(CHIPS)).collect();
+    let all: String = chip_rows.iter().map(|r| r.text.as_str()).collect();
+    assert!(all.contains("sandboxed"), "{all}");
+    assert!(all.contains("3 files"), "{all}");
+    assert!(all.contains("1 checkpoint "), "{all}");
     // only the context chip explains itself on a click
-    assert_eq!(props(chips, "drgnx-agent-panel-chip").len(), 1);
+    assert_eq!(
+        chip_rows
+            .iter()
+            .map(|r| props(r, "drgnx-agent-panel-chip").len())
+            .sum::<usize>(),
+        1
+    );
 }
 
 // pattern: D
@@ -319,4 +338,40 @@ fn the_chips_say_the_model_and_the_mcp_servers_and_both_explain_themselves() {
     assert_eq!(kinds, ["model", "mcp"]);
     // the model comes first, as the mockup has it
     assert!(chips.text.find("opus") < chips.text.find("MCP"));
+}
+
+// pattern: D
+#[test]
+fn chips_that_do_not_fit_one_row_wrap_to_the_next_never_cut_audit_a3() {
+    let (e, f, l) = (env(300), fonts(), lens());
+    let s = snap(json!({"enforced": true, "model": "opus", "mcp": ["a", "b"],
+                        "usage": {"used": 100, "size": 1000, "cost": 1.5}}));
+    let (rows, _) = rows(
+        &s,
+        &Cx {
+            env: &e,
+            fonts: &f,
+            lens: &l,
+            open: &BTreeSet::new(),
+            busy_since: None,
+            now: 0.0,
+            files_edited: Some(3),
+            checkpoints: Some(12),
+        },
+    );
+    let chip_rows: Vec<_> = rows.iter().filter(|r| r.key.starts_with(CHIPS)).collect();
+    assert!(chip_rows.len() > 1, "one row of {} chips", chip_rows.len());
+    assert_eq!(chip_rows[0].key, CHIPS);
+    let all: String = chip_rows.iter().map(|r| r.text.as_str()).collect();
+    for w in [
+        "opus",
+        "10%",
+        "$1.50",
+        "sandboxed",
+        "MCP 2",
+        "3 files",
+        "12 checkpoints",
+    ] {
+        assert!(all.contains(w), "{w} in {all}");
+    }
 }

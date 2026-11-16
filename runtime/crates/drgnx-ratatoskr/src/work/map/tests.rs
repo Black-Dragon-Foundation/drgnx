@@ -1383,3 +1383,24 @@ fn the_detail_head_says_testing_and_the_run_age() {
     assert!(lines[0].1.ends_with("\ttesting"), "{:?}", lines[0]);
     assert!(lines[1].1.contains("running 47 min"), "{:?}", lines[1]);
 }
+
+/// [D] A gate's chip on the strip says what it is first: its text is a forecast ("2 tasks, about 0.00 USD ..."), and a
+/// chip cut at its width left nothing to say it was a plan to approve.
+#[test]
+fn a_gate_chip_on_the_strip_says_sign_off() {
+    let mut core = core_with(1);
+    core.step(Event::Card(CardFact {
+        id: "g1".into(),
+        kind: CardKind::SignOff,
+        about: Vec::new(),
+        text: "2 tasks, about 0.00 USD (some costs unknown): approve to start".into(),
+        open: true,
+    }));
+    let v = rows_view(core.model(), 226);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    assert!(
+        rows[0].text.contains("Sign off: 2 tasks"),
+        "{}",
+        rows[0].text
+    );
+}

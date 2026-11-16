@@ -129,7 +129,31 @@ pub struct DenyList {
     notes: PathBuf,
     opt_ins: Vec<PathBuf>,
     user: Vec<UserEntry>,
+    /// The other agent CLIs' session folders ([`cli_session_dirs`]): hard tier, never indexed or carried.
+    sessions: Vec<PathBuf>,
     warnings: Vec<String>,
+}
+
+/// The folders where Claude Code, Codex and Gemini CLI keep every past session, the user's own words: Claude's
+/// `projects/` (under `$CLAUDE_CONFIG_DIR`, else `HOME/.claude`), Codex's `sessions/` and `archived_sessions/` (under
+/// `$CODEX_HOME`, else `HOME/.codex`) and Gemini's `tmp/` (under `$GEMINI_CLI_HOME/.gemini`, else `HOME/.gemini`).
+/// Only the user reads them, through the hub's past sessions; no indexer and no record reaches them.
+pub fn cli_session_dirs(home: &Path, var: impl Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+    let dir = |v: &str| var(v).filter(|s| !s.is_empty()).map(PathBuf::from);
+    let claude = dir("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude"));
+    let codex = dir("CODEX_HOME").unwrap_or_else(|| home.join(".codex"));
+    let gemini = dir("GEMINI_CLI_HOME")
+        .map(|h| h.join(".gemini"))
+        .unwrap_or_else(|| home.join(".gemini"));
+    [
+        claude.join("projects"),
+        codex.join("sessions"),
+        codex.join("archived_sessions"),
+        gemini.join("tmp"),
+    ]
+    .into_iter()
+    .map(|p| resolve(&p).unwrap_or(p))
+    .collect()
 }
 
 impl DenyList {
@@ -151,6 +175,7 @@ impl DenyList {
             org,
             opt_ins: Vec::new(),
             user: Vec::new(),
+            sessions: cli_session_dirs(home, |v| std::env::var(v).ok()),
             warnings: Vec::new(),
         };
         if list.load_user_entries(home, config_dir) {
@@ -217,6 +242,11 @@ impl DenyList {
         if inside(&self.org) {
             denied.push(self.org.clone());
         }
+        for s in &self.sessions {
+            if inside(s) && s.exists() {
+                denied.push(s.clone());
+            }
+        }
         for entry in &self.user {
             match entry.kind {
                 EntryKind::File | EntryKind::Folder => {
@@ -263,6 +293,9 @@ impl DenyList {
         let p = fold(path);
         if self.user_hit(&p) {
             return denied("personal notes (your deny list)", Tier::Hard);
+        }
+        if self.sessions.iter().any(|s| p.starts_with(&*fold(s))) {
+            return denied("another agent CLI's past sessions", Tier::Hard);
         }
         let Ok(rel) = p.strip_prefix(&*fold(&self.org)) else {
             return Verdict::Allowed;
@@ -1232,6 +1265,51 @@ mod tests {
             if !sig.starts_with("pub fn load(") {
                 assert!(!sig.contains("-> DenyList"), "another constructor: {sig}");
             }
+        }
+    }
+
+    /// Claude Code's sessions folder under a home.
+    const CLAUDE_PROJECTS: &str = ".claude/projects";
+
+    #[test]
+    fn the_clis_past_sessions_are_never_reached() {
+        let h = Home::new();
+        let claude = format!("{CLAUDE_PROJECTS}/-w/a1.jsonl");
+        h.file(&claude);
+        h.file(".codex/sessions/2026/11/03/rollout-x.jsonl");
+        h.file(".gemini/tmp/ab12/chats/session-x.jsonl");
+        h.file(".claude/settings.json");
+        let list = h.load();
+        for p in [
+            claude.as_str(),
+            ".codex/sessions/2026/11/03/rollout-x.jsonl",
+            ".gemini/tmp/ab12/chats/session-x.jsonl",
+        ] {
+            assert!(
+                matches!(
+                    list.check(&h.home.join(p)),
+                    Verdict::Denied {
+                        tier: Tier::Hard,
+                        ..
+                    }
+                ),
+                "{p}"
+            );
+        }
+        assert_eq!(
+            list.check(&h.home.join(".claude/settings.json")),
+            Verdict::Allowed
+        );
+        match list.check_root(&h.home) {
+            RootVerdict::Contains { denied } => {
+                for p in [".claude/projects", ".codex/sessions", ".gemini/tmp"] {
+                    assert!(
+                        denied.contains(&h.home.join(p).canonicalize().unwrap()),
+                        "{p}: {denied:?}"
+                    );
+                }
+            }
+            other => panic!("{other:?}"),
         }
     }
 }

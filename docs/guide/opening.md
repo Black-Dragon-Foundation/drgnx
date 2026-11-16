@@ -58,8 +58,12 @@ chunks (or in the mode you chose for it before), with a header line that switche
 that chunk ([large-files.md](large-files.md)).
 
 Inside drgnx, **File → Open Folder…** (palette; `C-k C-o` in the VS Code profile, `SPC f o` in Vim's) asks for a
-folder and shows it the same way. The prompt starts at your home folder; type a path that starts with `/` or `~`
-and it replaces that start, so the input reads `/tmp`, not `~//tmp`.
+folder and shows it the same way. It opens in the palette's box, as VS Code's does: **Browse…** first (your
+desktop's folder dialog; in a terminal frame, a folder prompt), then the ten folders you opened last, newest first,
+each with its parent folder beside it. You can also type a path to a folder and press Enter. The recent folders are
+kept in `recent-folders.eld` in drgnx's state folder; a folder that no longer exists drops off the list. In the
+folder prompt, a path you type that starts with `/` or `~` replaces the prompt's start, so the input reads `/tmp`,
+not `~//tmp`.
 
 ## In a terminal: `drgnx -t`
 

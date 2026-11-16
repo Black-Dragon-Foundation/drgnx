@@ -5,6 +5,7 @@
 ;; migrate (a live view; :until names the task that rewrites it), recovery (the view core's own reset).
 ;; Counts can only fall: the task that rewrites a site deletes its entry.  A branch merged later adds its sites.
 (
+ (:file "modules/ui/drgnx-inbox.el" :in drgnx-inbox--render :what erase-buffer :kind document :why "the inbox is a few rows, drawn whole when the notice model changes (a drop-down or a tab, not a streaming view)")
  (:file "modules/tools/drgnx-agents-session.el" :in drgnx-agents-session-job-log :what erase-buffer :kind document :why "the job log is shown on the user's action")
  (:file "modules/tools/drgnx-live.el" :in drgnx-live--render-notes :what delete-region :kind migrate :why "the notes below the live page are cut and redrawn on a state change (no render task owns this file: the manager assigns one)" :until "phase 2 (live browser notes)")
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--render-old :what erase-buffer :kind listing :why "Explorer is styled by jit-lock and rebuilt on a root change (spec non-goal)")

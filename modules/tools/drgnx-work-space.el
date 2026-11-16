@@ -107,6 +107,10 @@
 (declare-function drgnx-work-map-motion-clear "drgnx-work-map")
 (defvar drgnx-work-space--view)
 (defvar drgnx-work-space--message)
+(defvar drgnx-work-map--filters)
+(declare-function drgnx-work-client-status "drgnx-work-client")
+(declare-function drgnx-work-client-set "drgnx-work-client")
+(declare-function drgnx-work-client-resubscribe "drgnx-work-client")
 (declare-function drgnx-hub-start-for-command "drgnx-hub-client" (on-fail))
 (defvar drgnx-work-map-no-sja)
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -274,6 +278,83 @@ labels' margin (84 px) and 12 px of padding, in logical pixels.  A terminal fram
     (drgnx-view-touch drgnx-view)
     (current-buffer)))
 
+;;;; What a map says while it has nothing (more) to draw
+
+(defvar-local drgnx-work-space--roots nil "The workspace's folders this map spans.")
+(defvar-local drgnx-work-space--adopting nil
+  "Non-nil once this map asked the hub to adopt its folders' records (`drgnx-work-space--adopt'); then the number of
+folders whose answer is still to come.")
+(defvar-local drgnx-work-space--adopt-failure nil "Why a folder's records could not be adopted, or nil.")
+(defvar drgnx-work-space--hub-error nil
+  "Why the hub could not be had for the Work space (`drgnx-hub-start-for-command''s reason), or nil.")
+
+(defun drgnx-work-space--hub-up-p ()
+  "Whether this Emacs's subscribed connection to the hub is up."
+  (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
+
+(defun drgnx-work-space--notice (buffer)
+  "Say in BUFFER's header line what its map waits for, or clear the line.  The mode line says it too, but a blank map
+must say why itself: the hub is not there, its rows have not come, the folders' records are being adopted."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let* ((status (and drgnx-work-space--view (drgnx-work-client-status drgnx-work-space--view)))
+             (blank (= (point-min) (point-max)))
+             (text+face
+              (cond ((and drgnx-work-space--adopting (> drgnx-work-space--adopting 0))
+                     (cons "Adopting this folder's specs and plans into the Work graph; they are drawn when done..." 'shadow))
+                    (drgnx-work-space--hub-error
+                     (cons (format "The Work map cannot load: %s" drgnx-work-space--hub-error) 'error))
+                    (drgnx-work-space--adopt-failure
+                     (cons (format "The folder's records could not be adopted: %s" drgnx-work-space--adopt-failure) 'error))
+                    ((and (equal status "reconnecting") blank)
+                     (cons "Waiting for the hub: the map is drawn from its rows (reconnecting)..." 'shadow)))))
+        (setq header-line-format
+              (and text+face (propertize (concat " " (replace-regexp-in-string "%" "%%" (car text+face)))
+                                         'face (cdr text+face))))
+        (force-mode-line-update)))))
+
+(defun drgnx-work-space--no-hub (why)
+  "`drgnx-hub-start-for-command''s ON-FAIL: no hub can be had because of WHY; every map says so."
+  (setq drgnx-work-space--hub-error why)
+  (message "The Work space has no hub: %s" why)
+  (mapc #'drgnx-work-space--notice (drgnx-work-map-buffers)))
+
+(defun drgnx-work-space--adopt (buffer)
+  "Adopt BUFFER's folders' specs, plans and other records into the graph (`records/import': \"drgnx takes over\"),
+once per map and when the hub is up; when every folder answered, the map shows what it found: finished items too
+\(specs and plans are live only under an agent) and reads the store again.  Progress and failure are on the map."
+  (when (and (buffer-live-p buffer) (drgnx-work-space--hub-up-p)
+             (not (buffer-local-value 'drgnx-work-space--adopting buffer))
+             (buffer-local-value 'drgnx-work-space--roots buffer))
+    (with-current-buffer buffer
+      (let ((roots drgnx-work-space--roots))
+        (setq drgnx-work-space--adopting (length roots) drgnx-work-space--adopt-failure nil)
+        (drgnx-work-space--notice buffer)
+        (let ((found 0))
+          (dolist (root roots)
+            (condition-case err
+                (drgnx-hub-call "records/import" (list :root (directory-file-name root))
+                                (lambda (result error)
+                                  (cl-incf found (length (plist-get result :files)))
+                                  (drgnx-work-space--adopted buffer found error))
+                                :deadline 120)
+              (error (drgnx-work-space--adopted buffer found (error-message-string err))))))))))
+
+(defun drgnx-work-space--adopted (buffer found error)
+  "A folder of BUFFER's map answered its adoption: FOUND record files so far, ERROR a string or a hub error."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when error
+        (setq drgnx-work-space--adopt-failure
+              (if (stringp error) error (format "%s" (or (plist-get error :message) error)))))
+      (setq drgnx-work-space--adopting (max 0 (1- drgnx-work-space--adopting)))
+      (when (and (zerop drgnx-work-space--adopting) (> found 0) drgnx-work-space--view)
+        ;; the hub reads the store when a view subscribes: ask again, with the finished items shown
+        (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :finished t))
+        (drgnx-work-client-set drgnx-work-space--view :filters (list :overlaps :false :finished t))
+        (drgnx-work-client-resubscribe drgnx-work-space--view))
+      (drgnx-work-space--notice buffer))))
+
 (defun drgnx-work-space--buffer (workspace)
   "The map buffer of WORKSPACE (a plist :id :roots, or nil), made and subscribed when there is none."
   (if (null workspace)
@@ -283,6 +364,7 @@ labels' margin (84 px) and 12 px of padding, in logical pixels.  A terminal fram
         (unless (equal drgnx-work-space--view (plist-get workspace :id))
           (drgnx-work-map-mode)
           (setq default-directory (car (plist-get workspace :roots))
+                drgnx-work-space--roots (plist-get workspace :roots)
                 drgnx-work-space--view (plist-get workspace :id) drgnx-work-space--message nil)
           (add-hook 'kill-buffer-hook #'drgnx-work-space--killed nil t)
           ;; the hub lays the map out and draws it; an Emacs without Sjá cannot show its rows, and says so
@@ -304,8 +386,11 @@ and subscribes to nothing."
   (interactive)
   ;; the map's events come back on the subscribed connection: the hub is started when none runs, and dialled
   (require 'drgnx-hub-client)
-  (drgnx-hub-start-for-command (lambda (why) (message "The Work space has no hub: %s" why)))
+  (setq drgnx-work-space--hub-error nil)
+  (drgnx-hub-start-for-command #'drgnx-work-space--no-hub)
   (let ((buffer (drgnx-work-space--buffer (or workspace (drgnx-work-space-workspace)))))
+    (drgnx-work-space--adopt buffer)
+    (drgnx-work-space--notice buffer)
     (unless no-display
       (pop-to-buffer buffer)
       (when (and (display-graphic-p) (buffer-local-value 'drgnx-work-space--view buffer))
@@ -342,7 +427,7 @@ selects; nothing is approved, pushed, merged or answered."
   (if-let* ((map (car (drgnx-work-map-buffers)))) (drgnx-work-detail-buffer map) (get-buffer-create "*drgnx work detail*")))
 
 (defvar drgnx-work-space--panel-trail nil
-  "The trail buffer the panel's Trail tab shows: the one of the agent last selected on a map.")
+  "The trail buffer the panel's Research Trail tab shows: the one of the agent last selected on a map.")
 
 (defun drgnx-work-space--trail-buffer ()
   "The buffer pane kind `work-trail' shows: the trail of the map's selected agent, else a line asking for one."
@@ -350,6 +435,7 @@ selects; nothing is approved, pushed, merged or answered."
       drgnx-work-space--panel-trail
     (with-current-buffer (get-buffer-create "*drgnx work trail*")
       (when (zerop (buffer-size)) (insert "Select an agent to follow its trail.\n"))
+      (setq-local cursor-type nil)
       (current-buffer))))
 
 (declare-function drgnx-work-trail-open "drgnx-work-trail")
@@ -377,7 +463,11 @@ it (its trail is made when there is none, the panel shows it while a Work lens i
 (defun drgnx-work-space--rules-buffer ()
   "The buffer pane kind `work-rules' shows: the Rules tile of the newest Flow."
   (or (seq-some (lambda (flow) (drgnx-work-flow-rules-buffer flow)) (drgnx-work-flow-buffers))
-      (get-buffer-create "*drgnx work rules*")))
+      (with-current-buffer (get-buffer-create "*drgnx work rules*")
+        (when (zerop (buffer-size))
+          (insert "No rules yet. The rules of a flow, and what each one holds back, appear here.\n"))
+        (setq-local cursor-type nil)
+        (current-buffer))))
 
 (defun drgnx-work-space-sync-shown ()
   "Tell the hub which maps a window shows now: a hidden one gets nothing, a shown one is drawn anew.  Runs on the
@@ -431,7 +521,8 @@ a lens is shown moves anything, so a dock you change while a lens is shown stays
   (when-let* ((buffer (drgnx-work-map-buffer view-id)))
     (with-current-buffer buffer
       (setq-local mode-name (if (equal status "reconnecting") "Work map (reconnecting)" "Work map"))
-      (force-mode-line-update))))
+      (force-mode-line-update))
+    (drgnx-work-space--notice buffer)))
 
 ;;;; Saved state: what the selection, view and filters are, for the layout to keep
 
@@ -508,7 +599,10 @@ which the hub's wheel protocol drives.  It has no key of its own."
 (defun drgnx-work-space--setup ()
   "tools/work-space's setup: the hub client's connection and disconnection reach the map client; the map follows the
 windows; the commands."
-  (drgnx-module-hook 'drgnx-hub-connected-functions connected () (drgnx-work-client-connected))
+  (drgnx-module-hook 'drgnx-hub-connected-functions connected ()
+    (setq drgnx-work-space--hub-error nil)
+    (drgnx-work-client-connected)
+    (dolist (b (drgnx-work-map-buffers)) (drgnx-work-space--adopt b) (drgnx-work-space--notice b)))
   (drgnx-module-hook 'drgnx-hub-disconnect-functions disconnected () (drgnx-work-client-disconnected))
   (drgnx-module-hook 'drgnx-frame-replaced-functions frame-replaced (old new)
     (drgnx-work-map--frame-replaced old new)
@@ -551,8 +645,10 @@ windows; the commands."
                         :doc "Name the agents in the file you are visiting, with their lines, and select it on the map")
   (when (fboundp 'drgnx-pane-define-kind)
     (drgnx-pane-define-kind 'work-detail :title " Detail" :home 'right :buffer #'drgnx-work-space--detail-buffer)
-    (drgnx-pane-define-kind 'work-trail :title " Trail" :home 'bottom :buffer #'drgnx-work-space--trail-buffer)
-    (drgnx-pane-define-kind 'work-rules :title " RULES" :home 'bottom :buffer #'drgnx-work-space--rules-buffer))
+    (drgnx-pane-define-kind 'work-trail :title " Research Trail" :home 'bottom :contextual t
+                            :buffer #'drgnx-work-space--trail-buffer)
+    (drgnx-pane-define-kind 'work-rules :title " Rules" :home 'bottom :contextual t
+                            :buffer #'drgnx-work-space--rules-buffer))
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((work-left "Select the Previous Item" drgnx-work-map-left "Along the layer, to the left")
                    (work-right "Select the Next Item" drgnx-work-map-right "Along the layer, to the right")

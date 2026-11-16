@@ -276,12 +276,14 @@ the runs are forgotten and the Review tab is closed."
       (let ((kill-buffer-query-functions nil)) (kill-buffer b)))))
 
 (drgnx-module-define 'tools/review
-                     :doc "Review Branch: the review route's agent reads this branch's diff; findings in the Review tab."
+                     :doc "Review Branch: the review route's agent reads this branch's diff; findings in the Branch Review tab."
                      :stage 'idle :requires '(tools/diff) :teardown #'drgnx-review--teardown
                      :setup
                      (lambda ()
                        (add-hook 'drgnx-agents-changed-functions #'drgnx-review--changed)
-                       (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'panel 'review :title "Review"))
+                       (when (fboundp 'drgnx-wb-define-tab)
+                         (drgnx-wb-define-tab 'panel 'review :title "Branch Review" :contextual t
+                                              :empty "No review yet. Review Branch has an agent read this branch's diff; its findings appear here."))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((review-branch "Review Branch" drgnx-review-branch "An agent reviews this branch before you push")
                                         (review-view "Review: Show Findings" drgnx-review-view "The Review tab")
