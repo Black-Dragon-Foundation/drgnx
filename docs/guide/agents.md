@@ -953,8 +953,9 @@ grants are gone gets nothing and you get a card.
 
 ## Budgets
 
-A budget is a limit with a unit, set on a project, a plan, a manager or a worker (`budget/set`, read back with
-`budget/get`). Units never mix: `usd` is what the gateway measured, `usd-est` what an agent reported at API prices
+A budget is a limit with a unit, set on a project, a spec, a plan, a run, a task, a manager or a worker (`budget/set`,
+read back with `budget/get`; the scope is `{project: ID}`, `{spec: ID}`, `{plan: ID}`, `{run: JOB}`, `{task: ID}`,
+`{manager: SESSION}` or `{worker: SESSION}`). Units never mix: `usd` is what the gateway measured, `usd-est` what an agent reported at API prices
 (counted per conversation, so a manager's rotation or a fresh start after a restart adds to what the session spent),
 `tokens` and `count` are what they say, and `limit-share` is a share (0 to 1) of a subscription's usage window.
 `usd-est` and `limit-share` are estimates and are labelled so, in the budget card and in `pace/get`. A limit in one
@@ -964,13 +965,18 @@ counts what the gateway measured plus what the subscription's agents estimated, 
 not $20 of each; the gateway may spend only what that sum leaves, and the card for the limit says it is an estimate
 ([jobs.md](jobs.md#routes-and-the-estimate)).
 
-Budgets nest. What a worker spends counts against the worker, its manager, its plan and its project, and what it may
-still spend is the least remaining over that chain. The gateway admits `usd` against the same minimum: a session on a
+Budgets nest. What a worker spends counts against the worker, its task, its run (one job), its plan, the plan's spec and
+the project, and what it may still spend is the least remaining over that chain (a worker a manager started counts
+against the manager, and the manager against its run). A plan's budget is the plan's, not one run's: every run of the
+plan counts toward it, so a second run spends what the first left, and `budget/get` on a run gives that run's own
+share. A spec's budget covers every plan that derives from it; a plan with no spec counts toward its project, as does a
+job with no plan. The gateway admits `usd` against the same minimum: a session on a
 gateway profile gets a token whose budget is its spend so far plus what remains, kept current as its siblings spend, so
 a request over the limit is refused with `budget_exceeded`.
 
 Reaching a limit counts. Every session at or below the scope is paused after its current tool call (its queue is held;
-send a message to go on) and one `budget` card says which scope and unit, the limit and the spend. Raising the limit
+send a message to go on) and one `budget` card says which scope and unit, the limit and the spend. Under a plan or a
+spec every run below pauses, each with its own card on its job. Raising the limit
 with `budget/set` reports again if it is still reached.
 
 Subscription windows (Claude's `_claude/rateLimit`, Codex's rate-limit window) are read from the agent, never from
