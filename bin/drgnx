@@ -609,6 +609,10 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
     # size; a laptop sets 4g or less); the results name this host, not the container's id
     if [ "$tier" = day ]; then mem="${DRGNX_TEST_DAY_MEMORY:-6g}"; DRGNX_PERF_MACHINE="${DRGNX_PERF_MACHINE:-$(hostname 2>/dev/null || echo unknown)}"; fi
     args=(--memory "$mem" --memory-swap "$mem" --security-opt seccomp=unconfined --security-opt label=disable)
+    # KWin 6.8's virtual backend composites only with a render device: without one it manages windows but answers no
+    # frame callback, so the presenter commits once and then holds every packet.  /dev/udmabuf (never /dev/dri) makes it
+    # use its software device, Mesa's llvmpipe, on any machine, as Nidhogg's test/gui.sh does
+    if [ "$comp" = kwin ] && [ -c /dev/udmabuf ]; then args+=(--device /dev/udmabuf); fi
     # DRGNX_PERF_CPUS=2|4: the machine shape of the workers' A/B (review M14), the cores the run may use (as `drgnx-perf-cpuset-args')
     # one thread of each of the first N physical cores (a 7900X: 0,1; a 4900HS, whose core's threads sit side by side: 0,2)
     case "${DRGNX_PERF_CPUS:-}" in

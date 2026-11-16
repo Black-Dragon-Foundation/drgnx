@@ -873,7 +873,9 @@ session launcher         systemd         # or detached (process group, no system
   copies, as for every local test image, so worktrees with other inputs never share a tag), built from
   `test/container/Containerfile.wm` (fedora:45 + `emacs-pgtk kwin niri sway dbus-daemon mesa-dri-drivers procps-ng
   util-linux`, ~2.3 GB; `kwin_wayland` and `sway` lose their `cap_sys_nice` file capability, which the container does
-  not grant), with the same cap and security options. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
+  not grant), with the same cap and security options. A KWin run gets `/dev/udmabuf` (never `/dev/dri`): KWin 6.8's
+  virtual backend composites only on a render device, and udmabuf gives it Mesa's llvmpipe on any machine; without
+  it KWin answers no frame callback and the presenter holds every packet after its first commit. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
   too. `DRGNX_TEST_WM_IMAGE` uses a prebuilt one (`DRGNX_TEST_GUI_IMAGE` does not apply: that image has neither).
 - **A local run builds an image only when it must.** `bin/drgnx test --container` takes the image `NAME:TAG` (TAG as
   above) from the local store when it is there; else pulls `ghcr.io/black-dragon-foundation/NAME:TAG` (CI's copy of the
