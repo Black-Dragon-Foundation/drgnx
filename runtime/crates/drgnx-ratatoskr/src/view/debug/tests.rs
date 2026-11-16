@@ -617,6 +617,51 @@ fn a_value_no_wider_than_the_ellipsis_is_never_cut_to_it() {
     }
 }
 
+/// [D] A value the editor measured is fitted by its width as drawn, with no slack kept for an estimate's error: a narrow
+/// Run and Debug pane cut `'nut-m6'` to `'nut-m…` with room for it.
+#[test]
+fn a_measured_value_that_fits_is_drawn_whole() {
+    use super::rows::{Room, rows};
+    use crate::view::explorer::RowLook;
+    let sessions = [session(2, vec![v("sku", "'nut-m6'", 0)])];
+    let ls = lines(&Input {
+        sessions: &sessions,
+        selected: None,
+        watches: &[],
+        bps: &Bps::default(),
+        opened: &Opened::default(),
+        prev: &HashMap::new(),
+    })
+    .0;
+    let gui = RowLook {
+        gui: Some((12, 16, 6)),
+        one_root: false,
+    };
+    // every char 8 px: the value 64
+    let mut fonts = drgnx_rows::fit::FontSet::new();
+    fonts.set_role(drgnx_rows::fit::UI, None, 8.0);
+    let row = |width: u32| {
+        let room = Room {
+            width,
+            cell: None,
+            fonts: &fonts,
+        };
+        let (rs, _) = rows(&ls, &gui, &room);
+        rs.into_iter()
+            .find(|r| r.key == "v:s1:Locals/sku")
+            .unwrap()
+            .text
+    };
+    // the widest row whose summed fit cuts the value (it comes within the slack of its room)
+    let w = (1..=400)
+        .rev()
+        .find(|&w| !row(w).ends_with("sku: 'nut-m6'"))
+        .unwrap();
+    fonts.measured(drgnx_rows::fit::UI, "'nut-m6'", 64.0);
+    let text = row(w);
+    assert!(text.ends_with("sku: 'nut-m6'"), "{w} px: {text:?}");
+}
+
 /// Filter on typing: only the rows whose name or value contains the text (any case), with the rows above them and
 /// every section's header.
 #[test]

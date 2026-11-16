@@ -362,12 +362,14 @@ pub(crate) fn advance(m: &dyn Measure, role: &str, c: char) -> f32 {
 }
 
 /// TEXT in ROLE fitted to WIDTH px minus [`SLACK`]: whole when it fits, else cut with an ellipsis between grapheme
-/// clusters; whole too when it is no wider than the ellipsis (a cut would draw no narrower).
+/// clusters; whole too when it is no wider than the ellipsis (a cut would draw no narrower), or when the editor measured
+/// it no wider than WIDTH (its width as drawn: no error to keep the slack for).
 pub fn fit(m: &dyn Measure, role: &str, text: &str, width_px: f32) -> String {
     let budget = width_px - SLACK;
     let whole = width(m, role, text);
     let ellipsis = advance(m, role, ELLIPSIS);
-    if whole <= budget || whole <= ellipsis {
+    let drawn = m.measured(role, text).is_some();
+    if whole <= budget || (drawn && whole <= width_px) || whole <= ellipsis {
         return text.to_owned();
     }
     let room = budget - ellipsis;
