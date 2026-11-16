@@ -496,8 +496,28 @@ does."
                                              (seq-filter (lambda (c) (equal "view/window" (car c))) sent)))))
                 (set-window-buffer w main)        ; runs its `window-scroll-functions': the rows moved under it
                 (should (equal '(30) (funcall asks)))            ; the twin's ask alone
-                ;; the user's own scroll after that, at the top of its rows: half a window back
-                (drgnx-explorer--rows-scrolled w (point-min))
+                ;; more patches of its rows (tails, git marks) ask nothing back either: only its user's scroll does
+                ;; (the twin-pages GUI row's flake, 2026-11-16: the second patch took the window back from the twin)
+                (drgnx-explorer--rows-patched drgnx-view nil)
+                (drgnx-explorer--rows-patched drgnx-view nil)
+                (should (equal '(30) (funcall asks)))
+                ;; nor does redisplay running its `window-scroll-functions' again at the same start (the GUI row's
+                ;; second cause: the window-from 150 asked back to 75)
+                (run-hook-with-args 'window-scroll-functions w (window-start w))
+                (should (equal '(30) (funcall asks)))
+                ;; nor when its start moved because its rows were patched (rows that go and come move it): the GUI row
+                ;; asked back from a start a patch had moved
+                (drgnx-explorer--rows-patched drgnx-view nil)
+                (run-hook-with-args 'window-scroll-functions w
+                                    (save-excursion (goto-char (point-min)) (forward-line 2) (point)))
+                (should (equal '(30) (funcall asks)))
+                ;; nor while the twin's next ask is on its way (the window not moved to it yet): the GUI row's third
+                ;; cause, the twin asked 225 while the window was at 150 and the Explorer's buffer asked 75 back
+                (setq drgnx-explorer--window-asker (cons 60 tw))
+                (drgnx-explorer--rows-patched drgnx-view nil)
+                (should (equal '(30) (funcall asks)))
+                ;; the user's own scroll after that, a line from the top of its rows: half a window back
+                (drgnx-explorer--rows-scrolled w (save-excursion (goto-char (point-min)) (forward-line 1) (point)))
                 (should (equal '(0 30) (funcall asks)))))))
       (kill-buffer tw))))
 

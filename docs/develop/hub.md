@@ -2919,7 +2919,8 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   `view/window` sends the model and the rows again, the rows it dropped removed and the ones it added inserted. The
   editor moves the window on a key at its edge (`drgnx-view-nav`) and on a scroll within a page of the rows' ends
   (`drgnx-explorer--rows-scrolled`, half the window), and after a draw that leaves a window at the rows' top or end
-  (no scroll can run above the buffer's start). `around` (a reveal) names an entry the next listing's window must
+  (no scroll can run above the buffer's start; a window another of the view's buffers, a twin, asked for is never
+  asked back after a draw). `around` (a reveal) names an entry the next listing's window must
   hold: when it falls outside, the window starts at the root while the entry fits in the first window (the tree above
   it shows), else it moves to hold the entry a quarter of the way down. A window that starts below the root draws the
   folders above its first entry (root → … → parent) as its first rows, outside `order`, so a deep reveal never shows
