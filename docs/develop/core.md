@@ -1584,7 +1584,8 @@ lists at each publish.
   `right`), popup lanes and child frames' windows. Never the minibuffer, chrome (the status bar and other roles), a
   package's side window, or a window with the parameter `drgnx-minimap-exclude`.
 - **Hidden while it fits.** With `drgnx-minimap-hide-short` the spec carries `:hide-short`, and C draws nothing while
-  the window's first row starts the text and a row ends it. The fringe keeps the strip's width, so nothing reflows
+  the window's first row starts the text and a row reaches its end (a window fitted to its lines, the agent panel's
+  header, has no row for the final newline's empty line). The fringe keeps the strip's width, so nothing reflows
   when the content grows past the window.
 - **Views the hub sends a window of.** A buffer that holds rows FROM to FROM + LENGTH of a view of TOTAL rows names
   them through `drgnx-ruler-span-function` (Sjá's buffers: `drgnx-view-sja-ruler-span`, the window of
@@ -1617,6 +1618,13 @@ lists at each publish.
   the marks as last asked. Commands (module `editor/minimap`): `mark-next`/`-previous`, `change-next`/`-previous`,
   `bookmark-next`/`-previous`, `agent-edit-next`/`-previous`; `code-next-problem`/`-previous` (module `lang`) go
   through `drgnx-marks-next-problem`, which falls back to Flymake's own when the buffer has no problem marks.
+- **The hub's layers.** What the hub knows of a file that the line model does not (labels, fold ranges for buffers no
+  parser folds, heat, a huge file's density buckets) goes to Nidhogg's Sjá as a `view-model` line whose data holds
+  `minimap` (`view::minimap::line` in Ratatoskr: file, layer `labels`, `folds`, `heat:SOURCE` or `density`, version,
+  items; null items remove the layer). The framed reader hands it to Sjá whole, so no Lisp string is made of it; Sjá
+  keeps the newest version of each layer by file, and the line model and the minimap layer read it there
+  (`nidhogg-view-minimap` from Lisp). The fixture `tests/fixtures/minimap-push.json` is the hub's lines, and Sjá's
+  test loads the same file.
 - **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
   8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
   at 26 %; all through `drgnx-px`.

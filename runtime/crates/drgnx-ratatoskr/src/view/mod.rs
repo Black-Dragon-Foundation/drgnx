@@ -25,6 +25,7 @@ pub mod files;
 pub mod fonts;
 pub mod git;
 pub mod icons;
+pub mod minimap;
 pub mod model;
 pub mod outline;
 pub mod panel;
