@@ -281,3 +281,24 @@
 
 (provide 'term-settings-test)
 ;;; term-settings-test.el ends here
+
+;; audit F19 (2026-11-16): a new terminal started in the open file's folder (or a client's), where VS Code starts at
+;; the workspace folder
+(ert-deftest drgnx-term-settings/a-new-terminal-starts-in-the-workspace-folder ()
+  ;; nil: the innermost Explorer folder that holds what you look at, else its project, else its folder; `file': its
+  ;; folder; a remote folder stays as it is
+  (cl-letf (((symbol-function 'drgnx-explorer-roots) (lambda () '("/w/a/" "/w/a/sub/" "/x")))
+            ((symbol-function 'project-current)
+             (lambda (&rest _) (and (string-prefix-p "/p/" default-directory) (cons 'transient "/p/")))))
+    (let ((drgnx-term-working-directory nil))
+      (should (equal (drgnx-term-start-directory "/w/a/sub/deep/") "/w/a/sub/"))
+      (should (equal (drgnx-term-start-directory "/w/a/b/") "/w/a/"))
+      (should (equal (drgnx-term-start-directory "/x/y/") "/x/"))
+      (should (equal (drgnx-term-start-directory "/w/ab/") "/w/ab/"))          ; a sibling's prefix is no folder of it
+      (should (equal (drgnx-term-start-directory "/p/q/") "/p/"))              ; in no Explorer folder: its project
+      (should (equal (drgnx-term-start-directory "/elsewhere/") "/elsewhere/"))
+      (should (equal (drgnx-term-start-directory "/ssh:h:/w/a/b/") "/ssh:h:/w/a/b/")))
+    (let ((drgnx-term-working-directory 'file))
+      (should (equal (drgnx-term-start-directory "/w/a/sub/deep/") "/w/a/sub/deep/")))
+    (let ((drgnx-term-working-directory 'home))
+      (should (equal (drgnx-term-start-directory "/w/a/") "~/")))))
