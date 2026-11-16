@@ -532,17 +532,6 @@ hub for the window further on, and its rows then hold entries past the first win
            (drgnx-explorer--expanded (make-hash-table :test #'equal)) (drgnx-explorer--window-asker nil)
            (px (aref (font-info (face-font 'default)) 2)) (frame nil))
       (dotimes (i 400) (write-region "" nil (expand-file-name (format "f%03d.txt" i) dir) nil 'silent))
-      (defvar tw-trace nil) (setq tw-trace nil)
-      (advice-add 'drgnx-explorer--rows-scrolled :around
-                  (lambda (f w st &optional p)
-                    (let ((before drgnx-explorer--window-asker))
-                      (prog1 (funcall f w st p)
-                        (with-current-buffer (window-buffer w)
-                          (push (list (buffer-name) :p p :st st :seen-st drgnx-explorer--seen-start
-                                      :tick drgnx-explorer--rows-tick :seen-tick drgnx-explorer--seen-tick
-                                      :asker-before (car before) :asked (not (eq before drgnx-explorer--window-asker)))
-                                tw-trace)))))
-                  '((name . tw-trace)))
       (unwind-protect
           (let* ((b (drgnx-explorer--buffer))
                  (rows-p (lambda (buf) (with-current-buffer buf
@@ -573,14 +562,12 @@ hub for the window further on, and its rows then hold entries past the first win
                                 :tw-live (buffer-live-p tw) :tw-in-w (eq tw (window-buffer w))
                                 :main-window (with-current-buffer b (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'window "order"))
                                 :main-height (window-body-height (get-buffer-window b))
-                                :main-rows (with-current-buffer b (drgnx-view-row-count drgnx-view))
-                                :trace (seq-take tw-trace 12))))
+                                :main-rows (with-current-buffer b (drgnx-view-row-count drgnx-view)))))
               (drgnx-test-wait (lambda () (with-current-buffer tw (string-match-p "f2[0-9][0-9]" (buffer-string))))
                                :secs 20 :what "the twin's rows past the first window")
               (drgnx-rows-fit-ui-test--report
                (format "the Explorer's twin (%s): window from %S" (cadr made)
                        (with-current-buffer tw (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'window "order"))))))
-        (advice-remove 'drgnx-explorer--rows-scrolled 'tw-trace)
         (when (frame-live-p frame) (delete-frame frame))
         (when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (kill-buffer b))
         (delete-directory dir t)))))

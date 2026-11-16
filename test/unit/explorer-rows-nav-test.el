@@ -511,6 +511,11 @@ does."
                 (run-hook-with-args 'window-scroll-functions w
                                     (save-excursion (goto-char (point-min)) (forward-line 2) (point)))
                 (should (equal '(30) (funcall asks)))
+                ;; nor while the twin's next ask is on its way (the window not moved to it yet): the GUI row's third
+                ;; cause, the twin asked 225 while the window was at 150 and the Explorer's buffer asked 75 back
+                (setq drgnx-explorer--window-asker (cons 60 tw))
+                (drgnx-explorer--rows-patched drgnx-view nil)
+                (should (equal '(30) (funcall asks)))
                 ;; the user's own scroll after that, a line from the top of its rows: half a window back
                 (drgnx-explorer--rows-scrolled w (save-excursion (goto-char (point-min)) (forward-line 1) (point)))
                 (should (equal '(0 30) (funcall asks)))))))

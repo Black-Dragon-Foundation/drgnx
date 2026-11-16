@@ -1165,11 +1165,15 @@ the first scroll after still counts as the first.  Nor is it asked back from the
              (page (window-body-height window)) (step (max 1 (/ len 2)))
              ;; another buffer of the view (the Explorer in another class) asked for this window: these rows moved
              ;; under this window, which keeps them; asking back would take that buffer's away
-             (moved (and (eql from (car drgnx-explorer--window-asker))
-                         (not (eq (cdr drgnx-explorer--window-asker) (current-buffer)))
-                         (or patched (not (eql from drgnx-explorer--seen-from))
-                             (eql start drgnx-explorer--seen-start)
-                             (not (eql drgnx-explorer--rows-tick drgnx-explorer--seen-tick)))))
+             (other (let ((b (cdr drgnx-explorer--window-asker))) (and b (not (eq b (current-buffer))) (buffer-live-p b))))
+             ;; a draw never asks back a window another buffer asked for, nor one it asked for and the hub has not
+             ;; moved to yet; a scroll only when it is its user's
+             (moved (and other
+                         (or patched
+                             (and (eql from (car drgnx-explorer--window-asker))
+                                  (or (not (eql from drgnx-explorer--seen-from))
+                                      (eql start drgnx-explorer--seen-start)
+                                      (not (eql drgnx-explorer--rows-tick drgnx-explorer--seen-tick)))))))
              (want (cond (moved nil)
                          ((and (< (+ from len) total)
                                (save-excursion (goto-char start) (/= 0 (forward-line (* 2 page)))))
