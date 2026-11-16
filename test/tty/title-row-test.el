@@ -14,8 +14,9 @@
   (car (split-string (drgnx-tty-session-screen s) "\n")))
 
 (defun drgnx-title-row-tty-test--col (s regexp)
-  "The 1-based column the first match of REGEXP starts at on the top line, or nil."
-  (when (string-match regexp (drgnx-title-row-tty-test--top s)) (1+ (match-beginning 0))))
+  "The 1-based screen column the first match of REGEXP starts at on the top line, or nil."
+  (let ((top (drgnx-title-row-tty-test--top s)))
+    (when (string-match regexp top) (1+ (string-width (substring top 0 (match-beginning 0)))))))
 
 (ert-deftest drgnx-title-row-tty/the-row-is-text-in-the-designs-order ()
   (drgnx-tty-session-with (s :size "140x40")
@@ -40,7 +41,7 @@
         (drgnx-tty-session-click s col 1)
         (ert-info ((format "the screen:\n%s" (drgnx-tty-session-screen s)))
           (should (drgnx-tty-session-wait s '(not (drgnx-wb-sidebar-showing-p)) 10)))
-        (drgnx-tty-session-click s col 1)
+        (drgnx-tty-session-click s (drgnx-title-row-tty-test--col s "◧") 1)   ; the row was drawn again: look again
         (should (drgnx-tty-session-wait s '(drgnx-wb-sidebar-showing-p) 10))))))
 
 (ert-deftest drgnx-title-row-tty/a-click-on-the-pill-shows-the-inbox-tab ()

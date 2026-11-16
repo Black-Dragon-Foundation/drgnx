@@ -121,20 +121,23 @@
             buttons)))
 
 (defun drgnx-inbox--row (item answer)
-  "The text of the row for ITEM: dot, title, detail and its kind's buttons; ANSWER, a label, when it was answered."
-  (let* ((key (drgnx-inbox--key item)) (text (or (plist-get item :text) "")) (lines (split-string text "\n"))
+  "The text of the row for ITEM: dot, title and its source (muted, after a ·), the detail lines (the command or file, in
+the code font) and its kind's buttons, the first one primary; ANSWER, a label, when it was answered."
+  (let* ((key (drgnx-inbox--key item)) (lines (split-string (or (plist-get item :text) "") "\n"))
          (faded (or answer (member key drgnx-inbox--read)))
          (title (propertize (truncate-string-to-width (car lines) 44 nil nil "…") 'face (if faded 'drgnx-text-muted 'drgnx-ui-text)))
-         (detail (propertize (or (and (cdr lines) (string-join (cdr lines) " "))
-                                 (format "%s" (or (plist-get item :source) (car-safe key) "")))
-                             'face 'drgnx-text-subtle))
+         (source (propertize (format " · %s" (or (plist-get item :source) (car-safe key) "")) 'face 'drgnx-text-subtle))
+         (more (or (plist-get item :detail) (and (cdr lines) (string-join (cdr lines) " "))))
+         (detail (and more (propertize (truncate-string-to-width more 52 nil nil "…")
+                                       'face '(drgnx-code-small drgnx-text-subtle))))
          (buttons (if answer
                       (propertize (format "%s" answer) 'face 'drgnx-text-subtle)
                     (string-join (cl-loop for (id label) in (cdr (assq (drgnx-inbox--kind item) drgnx-inbox-kinds))
-                                          collect (drgnx-inbox--button id label key))
+                                          for first = t then nil
+                                          collect (drgnx-inbox--button id label key first))
                                  " "))))
-    (propertize (concat (propertize "● " 'face (if faded 'drgnx-text-subtle 'drgnx-status-needs-you)) title "\n"
-                        "  " detail "\n"
+    (propertize (concat (propertize "● " 'face (if faded 'drgnx-text-subtle 'drgnx-status-needs-you)) title source "\n"
+                        (and detail (concat "  " detail "\n"))
                         "  " buttons "\n")
                 'drgnx-inbox-key key)))
 
@@ -169,7 +172,9 @@
               (setq found (cons at end))
             (setq at end))))
       (when found
-        (setq drgnx-inbox--overlay (make-overlay (car found) (cdr found)))
+        ;; the title and detail lines only: the tint under the buttons would hide the primary one's fill
+        (setq drgnx-inbox--overlay
+              (make-overlay (car found) (save-excursion (goto-char (cdr found)) (forward-line -1) (point))))
         (overlay-put drgnx-inbox--overlay 'face 'drgnx-selected-quiet)))))
 
 (defun drgnx-inbox--buffer ()
@@ -200,7 +205,7 @@
               (parent (frame-parent frame)))
     (let* ((width (drgnx-px drgnx-inbox-width parent)) (frame-resize-pixelwise t) (window-min-height 1) (window-min-width 1)
            (text (cdr (window-text-pixel-size win nil nil width 10000)))
-           (height (min (+ text (* 2 (frame-internal-border-width frame))) (drgnx-px drgnx-inbox-max-height parent)))
+           (height (min (+ text (frame-char-height frame) (* 2 (frame-internal-border-width frame))) (drgnx-px drgnx-inbox-max-height parent)))
            (span (and (fboundp 'drgnx-topline-item-span) (with-selected-frame parent (drgnx-topline-item-span 'drgnx-topline-attention))))
            (right (if span (cdr span) (frame-pixel-width parent)))
            (x (max 0 (min (- right width) (- (frame-pixel-width parent) width)))))
