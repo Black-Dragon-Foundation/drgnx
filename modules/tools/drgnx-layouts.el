@@ -54,13 +54,12 @@
   '((agent :left explorer :right agents :panel nil :editor editor+agent)
     (editor :left explorer :right nil :panel keep :editor one)
     (zen :left nil :right nil :panel nil :editor zen)
-    (browser :left nil :right nil :panel nil :editor editor+browser)
-    (work :left nil :right work-detail :panel work-trail :editor work :px (:right (logical 340) :panel (logical 250))))
+    (browser :left nil :right nil :panel nil :editor editor+browser))
   "The built-in layouts, in the order Next Layout cycles them: NAME → (:left VIEW :right TAB :panel TAB
 :editor SHAPE).  An area's value nil hides it and `keep' leaves it as it was; SHAPE is a key of
 `drgnx-layouts-shapes'.  Your own layouts (layouts.eld) follow them.")
 
-(defvar drgnx-layouts-returning '(zen work)
+(defvar drgnx-layouts-returning '(zen)
   "The layouts that keep the arrangement they were entered from (frame parameter `drgnx-layouts-zen-return'):
 leaving one for a layout not used yet builds that layout from it, and `drgnx-layouts-back' with no layout picked
 before puts it back as it was.")

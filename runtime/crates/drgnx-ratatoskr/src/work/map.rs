@@ -673,10 +673,11 @@ fn view_rows(
     let palette = Palette(env.palette.clone());
     let renv = render_env(env, &palette);
     let drawn = render::rows(&scene, &render::Index::of(&scene), &renv, fonts);
+    // the strip's load chips: the machines the map does not draw itself (one chip for each, UX audit W3)
     let machines: Vec<vegvisir::Item> = m
         .items()
         .into_values()
-        .filter(|it| it.kind == Kind::Machine)
+        .filter(|it| it.kind == Kind::Machine && !items.contains_key(&it.id))
         .collect();
     let (strip, mut images) = render::strip(&scene, &m.needs_you(), &machines, extra, &renv, fonts);
     let mut rows = vec![strip];

@@ -524,12 +524,15 @@ fn state_word(f: &Fields) -> String {
 }
 
 /// What an agent is doing, in words: a step class as its participle (`test` is `testing`), a finished run waiting
-/// for you as `done · ready`, else the class as it is, else the state's words.
+/// for you as `done · ready`, else the class as it is, else the state's words.  The step class is what a running agent
+/// does; once its turn ends (waiting, needs you, paused…) the card says the state, never its last step (UX audit W4:
+/// "thinking · 0 min" stayed after the turn).
 pub fn activity(f: &Fields) -> String {
     if f.state == Some(State::Review) {
         return "done · ready".into();
     }
-    match f.activity.as_deref() {
+    let running = matches!(f.state, None | Some(State::Running));
+    match f.activity.as_deref().filter(|_| running) {
         Some(c) => match c {
             "test" => "testing".into(),
             "edit" => "editing".into(),
@@ -1511,5 +1514,21 @@ mod tests {
         assert!(!chip_line(&machine("ready", false)).text().contains("macOS"));
         assert_eq!(dot(&machine("sleeping", true)).1, "drgnx-runners-subtle");
         assert_eq!(dot(&machine("unreachable", true)).1, "drgnx-runners-error");
+    }
+
+    /// [D] UX audit W4: the last step's class is the card's words only while the agent runs; a turn that ended says
+    /// the state ("waiting"), never "thinking".
+    #[test]
+    fn the_activity_is_the_step_only_while_running() {
+        let at = |state| Fields {
+            state,
+            activity: Some("think".into()),
+            ..Fields::default()
+        };
+        assert_eq!(activity(&at(Some(State::Running))), "thinking");
+        assert_eq!(activity(&at(None)), "thinking");
+        assert_eq!(activity(&at(Some(State::Waiting))), "waiting");
+        assert_eq!(activity(&at(Some(State::NeedsYou))), "needs you");
+        assert_eq!(activity(&at(Some(State::Review))), "done · ready");
     }
 }

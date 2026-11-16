@@ -89,7 +89,13 @@ appears in the needs-you strip; its key jumps to the agents in it.
   in the same window, and the selection comes along: each view shows the nearest thing it can represent. It replaces
   the editor's tabs while a view of the Work space is shown: the Work space's own tab ("Work · drgnx", the
   workspace's folder), the views with the shown one marked, and the view's own keys as chips (the Flow's `evidence e`
-  and `rules R`).
+  and `rules R`). A click on a view's name switches to it, and a click on a chip runs it, as its key does.
+- A machine the map draws in its bottom layer has no second chip on the strip; the strip's right keeps the load of
+  the machines the map does not draw.
+- An agent's card says what it does while it runs ("editing", "thinking"); once its turn ends it says its state
+  ("waiting", "needs you"), never its last step.
+- A Work command run from the palette outside the Work space (for example "Work: Open", which opens the map's
+  selection) says to open the Work space first.
 - The **Flow** shows a plan run as the hub's gates see it: a row per task and a column per gate (Brief, Red first,
   Build, Author check, Merge batch, Review), each cell a chip (green when it passed, accent while it runs, amber when it
   holds the task with a lock, red when it failed, an empty ring while it waits). Under the tasks is the merge batch.

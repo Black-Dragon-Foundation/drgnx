@@ -252,52 +252,39 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should-not (drgnx-wb-sidebar-showing-p))
       (should-not (memq #'drgnx-layouts--zen-resize window-size-change-functions)))))
 
-(ert-deftest drgnx-layouts/work-shows-its-tiles-and-back-gives-everything-back ()
-  ;; Work (entered with no layout picked) hides the sidebar and shows its two tiles; going back puts the panel's own
-  ;; tab, the sidebar and the right dock back as they were, as leaving Zen does
-  (drgnx-layouts-test--with
-    (drgnx-wb-define-tab 'right 'work-detail :title "Detail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-a*")))
-    (drgnx-wb-define-tab 'panel 'work-trail :title "Trail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
-    (drgnx-wb-show-sidebar)
-    (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
-    (should-not (drgnx-layouts-current))
-    (drgnx-layouts-apply 'work)
-    (should (eq (drgnx-layouts-current) 'work))
-    (should-not (drgnx-wb-sidebar-showing-p))
-    (should (eq (drgnx-wb-area-tab 'right) 'work-detail))
-    (should (eq (drgnx-wb-area-tab 'panel) 'work-trail))
-    (drgnx-layouts-back)
-    (should-not (drgnx-layouts-current))
-    (should (drgnx-wb-sidebar-showing-p))
-    (should (eq (drgnx-wb-area-tab 'panel) 'output))
-    (should-not (drgnx-wb-area-window 'right))))
+(ert-deftest drgnx-layouts/work-is-a-view-never-a-layout ()
+  ;; S1-1 (UX audit 2026-11-16; the user's decision): the Work space is a view in the editor, never a full-window
+  ;; layout that hides the Explorer and the editor groups
+  (should-not (assq 'work drgnx-layouts))
+  (should-not (memq 'work drgnx-layouts-returning)))
 
-(ert-deftest drgnx-layouts/a-shown-work-lens-enters-work-and-its-going-leaves-it ()
-  ;; tools/work-space: a Work lens shown in the editor enters Work (that lens still in front); once no lens is shown
-  ;; the frame goes back to where it came from; a layout picked while a lens is shown stays
+(ert-deftest drgnx-layouts/a-shown-work-lens-keeps-the-explorer-and-a-file-opened-shows ()
+  ;; tools/work-space: a Work lens shown in an editor window keeps the layout, the sidebar and the groups, and shows
+  ;; its Detail in the right dock; a file opened over it shows in that window, and the Detail goes with the lens
   (drgnx-layouts-test--with
     (drgnx-wb-define-tab 'right 'work-detail :title "Detail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-a*")))
     (drgnx-wb-define-tab 'panel 'work-trail :title "Trail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
     (drgnx-wb-show-sidebar)
-    (let ((lens (get-buffer-create "*drgnx-layouts-proc*")) (frame (selected-frame)))
+    (let ((lens (get-buffer-create "*drgnx-layouts-proc*")) (frame (selected-frame)) (code (drgnx-layouts-test--code)))
       (with-current-buffer lens (drgnx-work-flow-mode))
       (unwind-protect
-          (cl-letf (((symbol-function 'drgnx-module-running-p) (lambda (m) (eq m 'tools/layouts))))
+          (cl-letf (((symbol-function 'drgnx-pane-show)
+                     (lambda (kind &rest _) (drgnx-wb-area-show 'right kind))))
             (drgnx-work-space--follow-layout frame)
-            (should-not (drgnx-layouts-current))
+            (should-not (drgnx-wb-area-window 'right))
             (set-window-buffer (drgnx-wb-editor-window) lens)
             (drgnx-work-space--follow-layout frame)
-            (should (eq (drgnx-layouts-current) 'work))
-            (should-not (drgnx-wb-sidebar-showing-p))
+            (should-not (drgnx-layouts-current))
+            (should (drgnx-wb-sidebar-showing-p))
             (should (eq (window-buffer (drgnx-wb-editor-window)) lens))
-            (drgnx-layouts-apply 'editor)
+            (should (eq (drgnx-wb-area-tab 'right) 'work-detail))
+            (should (drgnx-wb-area-window 'right))
+            ;; Ctrl+P over it: the file is in that window and stays there
+            (set-window-buffer (drgnx-wb-editor-window) code)
             (drgnx-work-space--follow-layout frame)
-            (should (eq (drgnx-layouts-current) 'editor))
-            (drgnx-layouts-apply 'work)
-            (set-window-buffer (drgnx-wb-editor-window) (drgnx-layouts-test--code))
-            (drgnx-work-space--follow-layout frame)
-            (should (eq (drgnx-layouts-current) 'editor))
-            (should (drgnx-wb-sidebar-showing-p)))
+            (should (eq (window-buffer (drgnx-wb-editor-window)) code))
+            (should (drgnx-wb-sidebar-showing-p))
+            (should-not (drgnx-wb-area-window 'right)))
         (set-frame-parameter frame 'drgnx-work-space-shown nil)))))
 
 (ert-deftest drgnx-layouts/agent-zen-editor-builds-editor-from-before-zen ()
@@ -502,20 +489,6 @@ problems.  The shape and filler registries are restored afterwards."
     (drgnx-layouts-test--with (ignore))
     (read-event nil nil 0.01)                           ; a terminal frame takes its new size at the next wait
     (should (equal (cons (frame-width) (frame-height)) size))))
-
-(ert-deftest drgnx-layouts/work-shows-the-trail-under-the-map ()
-  ;; work-space-dark.html: the Work layout is the map full width, the Detail island at its right and the trail
-  ;; under it (the Flow shows its Rules tile there on demand)
-  (let ((def (alist-get 'work drgnx-layouts)))
-    (should (eq (plist-get def :panel) 'work-trail))
-    (should (eq (plist-get def :right) 'work-detail))
-    (should-not (plist-get def :left))
-    ;; the Detail island is the mockup's 340 px, so the map has the width for four agents in a row
-    (should (equal '(logical 340) (plist-get (plist-get def :px) :right)))
-    (should (eql (drgnx-px 340) (plist-get (plist-get (drgnx-layouts--target def nil) :right) :px)))
-    ;; the trail tile is the mockup's 250 px tall, so the map keeps the rest and its rows fill it
-    (should (equal '(logical 250) (plist-get (plist-get def :px) :panel)))
-    (should (eql (drgnx-px 250) (plist-get (plist-get (drgnx-layouts--target def nil) :panel) :px)))))
 
 (ert-deftest drgnx-layouts/a-size-in-logical-pixels-is-scaled-to-the-frame ()
   "A built-in layout may give an area's size as `(logical N)': it is N logical pixels, scaled to the frame
