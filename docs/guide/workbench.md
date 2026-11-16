@@ -189,6 +189,8 @@ repositories are kept.  `test/unit/git-letters-test.el` covers the rows with no 
 
 ### Buffers panel
 
+**Save with focus in a view.** Save (`Ctrl+S`) with the cursor in the Explorer, Outline, Search or a panel page saves the editor you work in, as VS Code does; it never asks a name for a view, and a view cannot be saved to a file (`set-visited-file-name` refuses). With no editor open it says "Nothing to save: no editor is open".
+
 Save All (`C-k s` · palette — `C-x s` stays Emacs' asking save · `SPC f S`), Close Saved (`C-k u` · palette · `SPC b u`), Close All (`C-k C-w` · palette ·
 `SPC b A`), Close Others (right-click · `o` · `O`) — the three close only rows shown, never buffers the filter
 hides —, a live name filter (`C-M-f` · `/` · `/`), middle-click closes a

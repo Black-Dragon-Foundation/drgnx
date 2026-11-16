@@ -41,6 +41,34 @@ none.  It survives a change of major mode (Change Language Mode).")
       (setq buffer-offer-save t)          ; Quit and Save All offer it: typed text is never dropped unasked
       b)))
 
+;;;; A view is never saved (audit: Ctrl+S in the Explorer wrote its rows to a file called " *drgnx explorer*")
+
+(defun drgnx-basics-view-buffer-p (&optional buffer)
+  "Non-nil when BUFFER (default: the current one) is one of drgnx's views, not a file or an untitled editor: a buffer
+that visits no file and is a hub-fed view, a special-mode page or one named for drgnx's own (`*drgnx …*')."
+  (with-current-buffer (or buffer (current-buffer))
+    (and (not buffer-file-name) (not drgnx-untitled-p)
+         (or (bound-and-true-p drgnx-view-patch)
+             (derived-mode-p 'special-mode)
+             (string-match-p "\\` ?\\*drgnx" (buffer-name))))))
+
+(defun drgnx-basics--save-from-view (orig &rest args)
+  "Around `save-buffer': in a view (the Explorer, Outline, a panel page) it saves the editor the user works in, as
+VS Code's Ctrl+S does with focus in a side view; with no editor to save it says so.  It never asks for a file name."
+  (if (not (drgnx-basics-view-buffer-p))
+      (apply orig args)
+    (let* ((w (and (fboundp 'drgnx-state-editor-window) (drgnx-state-editor-window)))
+           (b (and w (window-buffer w))))
+      (if (and b (or (buffer-file-name b) (buffer-local-value 'drgnx-untitled-p b)))
+          (with-current-buffer b (apply orig args))
+        (message "Nothing to save: no editor is open")
+        nil))))
+
+(defun drgnx-basics--no-file-for-view (&rest _)
+  "Before `set-visited-file-name': a view never visits a file."
+  (when (drgnx-basics-view-buffer-p)
+    (user-error "%s is a view: it is not saved to a file" (buffer-name))))
+
 (drgnx-module-define 'core/basics
                      :doc "Quiet, predictable defaults and the basic file and view commands."
                      :stage 'startup
@@ -56,6 +84,10 @@ none.  It survives a change of major mode (Change Language Mode).")
                        (drgnx-module-set 'native-comp-async-report-warnings-errors 'silent)
                        ;; Trusted folders and the guards for files from the others, before any file opens
                        (drgnx-trust-setup)
+                       (drgnx-module-advice #'save-buffer :around save-from-view (orig &rest args)
+                         (apply #'drgnx-basics--save-from-view orig args))
+                       (drgnx-module-advice #'set-visited-file-name :before no-file-for-view (&rest args)
+                         (apply #'drgnx-basics--no-file-for-view args))
                        (drgnx-command-define 'open-file :category "File" :title "Open File…" :command #'find-file
                                              :doc "Open a file")
                        (drgnx-command-define 'save-file :category "File" :title "Save" :command #'save-buffer
