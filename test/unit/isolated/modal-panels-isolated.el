@@ -122,7 +122,8 @@
   (declare (indent 0))
   `(drgnx-test-with-gated-hub
      (drgnx-test-with-state
-       (let ((drgnx-wb--sections nil) (extra nil) (dir (make-temp-file "drgnx-modal-buffers" t)))
+       (let ((drgnx-wb--sections nil) (extra nil) (dir (make-temp-file "drgnx-modal-buffers" t))
+             (drgnx-wb--collapsed (list (cons 'buffers nil))))   ; Open unfolded (it starts folded), as its user left it
          (unwind-protect
              (progn
                (delete-other-windows)

@@ -10719,6 +10719,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10727,6 +10742,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -10797,6 +10839,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10805,6 +10862,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -10955,6 +11039,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -10963,6 +11062,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -11091,6 +11217,21 @@
               },
               {
                 "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
                 "properties": {
                   "plan": {
                     "maxLength": 4352,
@@ -11099,6 +11240,33 @@
                 },
                 "required": [
                   "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
                 ],
                 "type": "object"
               },
@@ -11444,6 +11612,94 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a Changes view is shown no more",
+      "name": "changes/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view id: `changes/close`.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "ViewId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a change to a Changes view: refresh reads the sessions' edits again",
+      "name": "changes/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`changes/set`: a change to VIEW: REFRESH reads the sessions' edits again.",
+        "properties": {
+          "refresh": {
+            "default": false,
+            "type": "boolean"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Set",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a hub-fed view shows what the agents changed, grouped by the task each worked on (task, file, hunk; the hunks no task owns last), as rows",
+      "name": "changes/subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`changes/subscribe`: VIEW shows what the agents changed, by task; its rows come as `view-patch` per display class.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Subscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [

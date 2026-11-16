@@ -357,14 +357,15 @@ under the title row's pill; with the drop-down open, close it."
   '((inbox-open "Show What Needs You" drgnx-inbox-open "Open the inbox: a drop-down under the pill, or its tab in the right side bar once pinned" nil)
     (inbox-pin "Pin the Inbox as a Side Bar" drgnx-inbox-pin "Move the inbox into a tab of the right side bar" nil)
     (inbox-unpin "Unpin the Inbox" drgnx-inbox-unpin "Back to the drop-down" nil)
-    (inbox-allow-once "Inbox: Allow Once" drgnx-inbox-allow-once "Allow what the agent asks, this once" t)
-    (inbox-allow-session "Inbox: Always for This Session" drgnx-inbox-allow-session "Allow what the agent asks, and requests like it, for this session" t)
-    (inbox-deny "Inbox: Deny" drgnx-inbox-deny "Refuse what the agent asks" t)
-    (inbox-show "Inbox: Show" drgnx-inbox-show "Go to what the item is about" t)
-    (inbox-mark-all-read "Inbox: Mark All Read" drgnx-inbox-mark-all-read "Fade the items now waiting" t)
-    (inbox-clear-answered "Inbox: Clear Answered" drgnx-inbox-clear-answered "Forget the answered rows of the tab" t)
-    (inbox-all-notices "Inbox: All Notices" drgnx-inbox-all-notices "Open the Notices list" t))
-  "The inbox's registry commands: (ID TITLE FUNCTION DOC IN-MODE).")
+    (inbox-allow-once "Allow Once" drgnx-inbox-allow-once "Allow what the agent asks, this once" t)
+    (inbox-allow-session "Always for This Session" drgnx-inbox-allow-session "Allow what the agent asks, and requests like it, for this session" t)
+    (inbox-deny "Deny" drgnx-inbox-deny "Refuse what the agent asks" t)
+    (inbox-show "Show" drgnx-inbox-show "Go to what the item is about" t)
+    (inbox-mark-all-read "Mark All Read" drgnx-inbox-mark-all-read "Fade the items now waiting" t)
+    (inbox-clear-answered "Clear Answered" drgnx-inbox-clear-answered "Forget the answered rows of the tab" t)
+    (inbox-all-notices "All Notices" drgnx-inbox-all-notices "Open the Notices list" t))
+  "The inbox's registry commands: (ID TITLE FUNCTION DOC IN-MODE).  A title leaves out the category: the palette
+shows them as \"Inbox: Allow Once\" (`drgnx-commands-label').")
 
 (defun drgnx-inbox-setup ()
   "The inbox's commands, pane kind and hook (called by the module ui/face; `drgnx-inbox-off' undoes them)."

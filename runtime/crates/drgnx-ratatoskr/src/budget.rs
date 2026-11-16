@@ -1,5 +1,5 @@
-//! Budgets, units and pace (Task 20; `docs/guide/agents.md`, "Budgets"): limits on a project, plan, manager or
-//! worker, each in a named unit, the remaining amount the least over its ancestors; the gateway admits `usd` against
+//! Budgets, units and pace (Task 20; `docs/guide/agents.md`, "Budgets"): limits on a project, spec, plan, run, task,
+//! manager or worker, each in a named unit, the remaining amount the least over its ancestors; the gateway admits `usd` against
 //! the nested minimum; subscription meters (`_claude/rateLimit`, Codex's window) as `limit-share` estimates; at a
 //! limit the agent is paused with a `budget` card.  Methods `budget/get`, `budget/set`, `pace/get`.
 //!
@@ -8,9 +8,12 @@
 //!   `count`); nothing is converted.  `usd-est` and `limit-share` are estimates and are labelled so.  The one join:
 //!   a plan's dollar budget on a plan with a subscription profile ([`Budgets::set_joint`]) binds `usd` and `usd-est`
 //!   summed, one limit, reported as an estimate.
-//! - **Nesting.**  A spend counts against the spending scope and every ancestor (`link`: worker under manager, manager
-//!   or worker under plan, plan under project); what remains is the least over the chain.  A session is a scope from
-//!   its start; the plan runner (Task 16a) and the manager role (Task 25) link the upper levels.
+//! - **Nesting.**  A spend counts against the spending scope and every ancestor; what remains is the least over the
+//!   chain.  The chain is worker → task → run → plan → spec → project ([`Budgets::link_up`]; a worker a manager started
+//!   sits under the manager, a manager under its run).  A plan is the plan document: every run (one job) of it links
+//!   under it, so a second run spends what the first left, and `budget/get` on a run gives that run's own share.  A
+//!   plan with no spec sits under its project, a run with no plan too.  A session is a scope from its start; the plan
+//!   runner links a worker's chain when it starts it and a run's when its job is approved, the manager role its own.
 //! - **Reaching a limit counts** (as the gateway's `over`): every session at or below the scope is paused after its
 //!   tool call (`Hub::cancel_after_tool`) and one `budget` card is made per scope and unit, until the limit is set
 //!   again.  The gateway's registration of a session carries `job spend + remaining usd`, kept current as siblings
@@ -75,7 +78,10 @@ type Key = String;
 pub fn key(s: &BudgetScope) -> Key {
     match s {
         BudgetScope::Project(i) => format!("project:{}", i.as_str()),
+        BudgetScope::Spec(i) => format!("spec:{}", i.as_str()),
         BudgetScope::Plan(i) => format!("plan:{}", i.as_str()),
+        BudgetScope::Run(i) => format!("run:{}", i.as_str()),
+        BudgetScope::Task(i) => format!("task:{}", norn::write::tasks::task_key(i.as_str())),
         BudgetScope::Manager(i) => format!("manager:{}", i.as_str()),
         BudgetScope::Worker(i) => format!("worker:{}", i.as_str()),
     }
@@ -204,9 +210,16 @@ struct St {
     joint: BTreeSet<Key>,
 }
 
+/// The version of [`Saved`] this build writes.  Before 2 a `plan` scope was one job (now a `run`): such a state's
+/// plan scopes are dropped on load (no back-compat before launch).
+const SAVED_VERSION: u32 = 2;
+
 /// What `runtime.db` keeps.
 #[derive(Default, Serialize, Deserialize)]
 struct Saved {
+    /// [`SAVED_VERSION`] when written; a row saved before has none.
+    #[serde(default)]
+    version: u32,
     limits: Vec<(BudgetScope, Vec<Limit>)>,
     spent: Vec<(BudgetScope, Vec<Limit>)>,
     parents: Vec<(BudgetScope, BudgetScope)>,
@@ -363,14 +376,32 @@ impl Budgets {
     pub async fn open_store(&self, db: urdr::Handle) {
         if let Some(text) = crate::gateway::kv_get(&db, KV).await {
             match serde_json::from_str::<Saved>(&text) {
-                Ok(s) => self.restore(s),
+                Ok(s) => {
+                    self.restore(s);
+                }
                 Err(e) => tracing::warn!("the saved budgets do not read: {e}"),
             }
         }
         let _ = self.0.db.set(db);
     }
 
-    fn restore(&self, s: Saved) {
+    /// Read S back; the number of entries dropped (an old state's `plan` scopes, which were jobs).
+    fn restore(&self, mut s: Saved) -> usize {
+        let mut dropped = 0;
+        if s.version < SAVED_VERSION {
+            let old = |sc: &BudgetScope| matches!(sc, BudgetScope::Plan(_));
+            let before = s.limits.len() + s.spent.len() + s.parents.len() + s.joint.len();
+            s.limits.retain(|(sc, _)| !old(sc));
+            s.spent.retain(|(sc, _)| !old(sc));
+            s.parents.retain(|(c, p)| !old(c) && !old(p));
+            s.joint.retain(|sc| !old(sc));
+            dropped = before - (s.limits.len() + s.spent.len() + s.parents.len() + s.joint.len());
+            if dropped > 0 {
+                tracing::info!(
+                    "the saved budgets kept {dropped} entries of jobs under `plan` scopes (now `run`): dropped"
+                );
+            }
+        }
         let mut st = self.st();
         for (scope, ls) in s.limits {
             let k = key(&scope);
@@ -403,12 +434,14 @@ impl Budgets {
             meter.resets_at = m.resets_at;
             st.meters.insert(m.provider, meter);
         }
+        dropped
     }
 
     fn saved(&self) -> Saved {
         let st = self.st();
         let scope = |k: &Key| st.scopes.get(k).cloned();
         Saved {
+            version: SAVED_VERSION,
             limits: st
                 .limits
                 .iter()
@@ -494,6 +527,33 @@ impl Budgets {
         st.scopes.insert(c.clone(), child.clone());
         st.scopes.insert(p.clone(), parent.clone());
         st.parent.insert(c, p);
+    }
+
+    /// Each of SCOPES counts toward the next: a chain from the spender up, e.g. worker, task, run, plan, spec,
+    /// project.  The last is enrolled (it may be a top).
+    pub fn link_up(&self, scopes: &[BudgetScope]) {
+        for w in scopes.windows(2) {
+            self.link(&w[0], &w[1]);
+        }
+        if let Some(top) = scopes.last() {
+            self.enroll(top);
+        }
+    }
+
+    /// The session scope OLD continues as NEW (an agent moved to another session): NEW counts toward what OLD counted
+    /// toward (its task, run and plan above), and the gateway jobs booked under OLD are booked under NEW.
+    pub fn rekey(&self, old: &BudgetScope, new: &BudgetScope) {
+        let (ok, nk) = (key(old), key(new));
+        let mut st = self.st();
+        st.scopes.insert(nk.clone(), new.clone());
+        if let Some(p) = st.parent.get(&ok).cloned() {
+            st.parent.insert(nk.clone(), p);
+        }
+        for k in st.jobs.values_mut() {
+            if *k == ok {
+                *k = nk.clone();
+            }
+        }
     }
 
     /// SCOPE exists (a session, from its start).
@@ -645,14 +705,23 @@ impl Budgets {
             .collect()
     }
 
-    /// The gateway jobs bound at or below SCOPE.
+    /// The jobs at or below SCOPE: the runs under it (linked at approval, before any session spends), and the
+    /// gateway jobs bound under it.
     pub fn jobs_under(&self, scope: &BudgetScope) -> Vec<String> {
         let st = self.st();
         let k = key(scope);
-        st.jobs
+        let runs = st.scopes.iter().filter_map(|(sk, s)| match s {
+            BudgetScope::Run(j) if chain(&st, sk).contains(&k) => Some(j.as_str().to_owned()),
+            _ => None,
+        });
+        let bound = st
+            .jobs
             .iter()
             .filter(|(_, jk)| chain(&st, jk).contains(&k))
-            .map(|(j, _)| j.clone())
+            .map(|(j, _)| j.clone());
+        runs.chain(bound)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect()
     }
 
@@ -846,7 +915,7 @@ async fn reached_limit(f: &Front, h: &Hit) {
         unit.as_str().unwrap_or("?"),
         if h.estimate() { " (estimate)" } else { "" }
     );
-    // below a plan run: the run pauses and the card is the job's
+    // below a run (a plan's, a spec's): each run pauses and the card is its job's
     let jobs = f.core.budgets.jobs_under(&h.scope);
     if !jobs.is_empty() {
         for j in jobs {

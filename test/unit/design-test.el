@@ -124,7 +124,9 @@
 (ert-deftest drgnx-design/every-component-page-shows-its-shots-dark-and-light ()
   (let ((dir (expand-file-name "docs/design/components/" drgnx-dir)))
     (dolist (page (directory-files dir t "\\.md\\'"))
-      (unless (equal (file-name-nondirectory page) "index.md")
+      ;; the kit's pages (one per component of etc/ui/components.eld) show their sheets: the next test
+      (unless (or (equal (file-name-nondirectory page) "index.md")
+                  (assq (intern (file-name-base page)) (alist-get 'components (drgnx-ui-kit-components))))
         (let ((text (with-temp-buffer (insert-file-contents page) (buffer-string)))
               (name (file-name-sans-extension (file-name-nondirectory page))))
           (should (assoc name drgnx-design-shots))
@@ -134,6 +136,27 @@
     ;; and no shot without a page
     (dolist (shot drgnx-design-shots)
       (should (file-exists-p (expand-file-name (format "%s.md" (car shot)) dir))))))
+
+(ert-deftest drgnx-design/component-pages-from-components-eld ()
+  ;; each component of etc/ui/components.eld has a generated page with its geometry, terminal form, label, colours and
+  ;; states, and its sheets' pictures dark, light and hc; a geometry change changes the page (so --check catches it)
+  (let* ((table (drgnx-ui-kit-components)) (pages (drgnx-design--component-pages table)))
+    (dolist (c (alist-get 'components table))
+      (let ((text (cdr (assoc (format "components/%s.md" (car c)) pages))))
+        (should text)
+        (dolist (theme '("dark" "light" "hc"))
+          (should (string-search (format "](../img/kit-%s-%s.png)" (car c) theme) text))
+          (should (file-exists-p (expand-file-name (format "docs/design/img/kit-%s-%s.png" (car c) theme) drgnx-dir))))
+        (should (string-search "## Geometry" text))
+        (should (string-search "| selected-inactive |" text))))
+    (let ((row (cdr (assoc "components/row.md" pages))))
+      (should (string-search "| tree | roomy | 30 | 6 / 6 | 0 | no | 6 | 0 | 14 |" row))
+      (should (string-search "`⌄` open" row)))
+    ;; a geometry change shows
+    (let* ((changed (copy-tree table)) (row (assq 'row (alist-get 'components changed))))
+      (setcdr row (plist-put (cdr row) :geometry (plist-put (copy-sequence (plist-get (cdr row) :geometry)) :pad '(8 . 8))))
+      (should (string-search "| list | comfortable | 26 | 8 / 8 |"
+                             (cdr (assoc "components/row.md" (drgnx-design--component-pages changed))))))))
 
 (ert-deftest drgnx-design/a-shot-is-cut-where-the-table-says ()
   (skip-unless (executable-find "magick"))

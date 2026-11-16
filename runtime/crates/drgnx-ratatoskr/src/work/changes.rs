@@ -17,6 +17,8 @@ pub struct HunkRef {
     pub start_line: u32,
     pub end_line: u32,
     pub agent: Option<String>,
+    /// The session that wrote it (its worktree is where a revert goes).
+    pub session: Option<String>,
     pub reason: Option<String>,
 }
 
@@ -100,7 +102,7 @@ pub fn group(sessions: Vec<SessionEdits>) -> Vec<TaskGroup> {
 
 /// The hunks of a unified DIFF (`@@ -a,b +c,d @@`), numbered from 0, each by the lines it holds in the new file;
 /// AGENT is the one that wrote them.
-pub fn hunks_of(diff: &str, agent: &str) -> Vec<HunkRef> {
+pub fn hunks_of(diff: &str, agent: &str, session: &str) -> Vec<HunkRef> {
     let mut out = Vec::new();
     for line in diff.lines().filter(|l| l.starts_with("@@")) {
         let new = line
@@ -118,6 +120,7 @@ pub fn hunks_of(diff: &str, agent: &str) -> Vec<HunkRef> {
             start_line: start,
             end_line: start + len.saturating_sub(1),
             agent: Some(agent.to_owned()),
+            session: Some(session.to_owned()),
             reason: None,
         });
     }
@@ -139,7 +142,7 @@ pub async fn by_task(f: &Front) -> Result<Vec<TaskGroup>, Error> {
                 .await
                 .unwrap_or_default();
             files.push(FileGroup {
-                hunks: hunks_of(&diff, &name),
+                hunks: hunks_of(&diff, &name, &sid),
                 path: c.path,
                 plus: c.plus,
                 minus: c.minus,
@@ -165,6 +168,7 @@ mod tests {
             start_line: 10 * i + 1,
             end_line: 10 * i + 5,
             agent: Some(a.into()),
+            session: Some(format!("s-{a}")),
             reason: reason.map(Into::into),
         }
     }
@@ -266,7 +270,7 @@ mod tests {
     #[test]
     fn hunks_are_read_from_a_diff() {
         let diff = "--- a\n+++ b\n@@ -1,2 +1,3 @@\n a\n+b\n c\n@@ -10 +11,4 @@\n+x\n";
-        let hs = hunks_of(diff, "agent");
+        let hs = hunks_of(diff, "agent", "s1");
         assert_eq!(
             hs.iter()
                 .map(|h| (h.index, h.start_line, h.end_line))
