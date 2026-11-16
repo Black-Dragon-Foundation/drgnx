@@ -198,7 +198,9 @@ window parameter `drgnx-wb-island' the chrome reads.  Call it when the sidebar s
         (dolist (w windows)
           (let ((value (and (eq w (car windows)) head)))
             (set-window-parameter w 'drgnx-wb-island value)
-            (set-window-parameter w 'tab-line-format (or value 'none))))))))
+            (set-window-parameter w 'tab-line-format (or value 'none))
+            ;; a folded section keeps its one row under the header it gained or lost
+            (when (window-parameter w 'drgnx-folded) (drgnx-wb--fold-shrink w))))))))
 
 ;;;; Rows: the UI font, git marks at the right edge, the selected row, the hover-revealed ⋯
 
@@ -588,12 +590,13 @@ killing it would delete the folded windows of the other frames (they are dedicat
       (drgnx-wb--fold-shrink w))))
 
 (defun drgnx-wb--fold-shrink (w)
-  "Make folded section window W one row tall (its section below, or the one above, takes the rest).  The fold at the
-sidebar's showing can leave it taller, the dock's other windows not yet at their sizes; the store's `windows-changed'
+  "Make folded section window W one row tall (its section below, or the one above, takes the rest, or gives the row
+back).  The fold at the sidebar's showing can leave it taller, the dock's other windows not yet at their sizes; the
+island header put on it after the fold (`drgnx-wb-island-refresh') leaves it no row; the store's `windows-changed'
 and `frame-resized' (`drgnx-wb--rows-frame-changed') call this again.  A second call changes nothing."
   (let ((window-resize-pixelwise t) (window-min-height 1)
         (delta (- (drgnx-wb--row-px (window-frame w)) (window-body-height w t))))
-    (when (< delta 0)
+    (unless (zerop delta)
       (ignore-errors (window-resize w delta nil nil t)))))
 
 (defun drgnx-wb--unfold-window (w name)
