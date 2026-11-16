@@ -560,15 +560,19 @@ fn the_binding_unit_is_the_least_remaining_share() {
 
 #[test]
 fn events_coalesce_to_one_a_second_per_scope() {
-    // ten spends before the flush are one change per scope of the chain, whatever the amounts
+    // ten spends inside one second: one event for the run and one for its plan, the last value; the next second,
+    // with nothing spent, none
     let b = Budgets::default();
     let (p, r) = (run_scope("p2"), run_scope("r2"));
     b.link(&r, &p);
     for _ in 0..10 {
         b.spend(&r, Unit::Usd, 0.1);
     }
-    let got = b.take_changed();
-    assert_eq!(got.len(), 2, "{got:?}");
-    let e = b.event_of(&r, 0.0);
-    assert!((e.spent[0].amount - 1.0).abs() < 1e-9);
+    let events = b.flush(0.0);
+    assert_eq!(events.len(), 2, "{events:?}");
+    let run = events.iter().find(|e| e.scope == r).unwrap();
+    assert!((run.spent[0].amount - 1.0).abs() < 1e-9);
+    assert!(b.flush(1.0).is_empty(), "nothing moved: no event");
+    b.spend(&r, Unit::Usd, 0.1);
+    assert_eq!(b.flush(2.0).len(), 2);
 }

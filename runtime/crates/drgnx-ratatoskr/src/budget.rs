@@ -692,6 +692,15 @@ impl Budgets {
             .collect()
     }
 
+    /// One flush: the events of every scope whose spend moved since the last flush, one each however many spends it
+    /// took (the hub calls it once a second).
+    pub fn flush(&self, now: f64) -> Vec<BudgetEvent> {
+        self.take_changed()
+            .iter()
+            .map(|s| self.event_of(s, now))
+            .collect()
+    }
+
     /// SCOPE's `budget` event as of NOW.
     pub fn event_of(&self, scope: &BudgetScope, now: f64) -> BudgetEvent {
         let v = self.view(scope);
@@ -1031,12 +1040,11 @@ pub async fn broadcast_changes(f: Arc<Front>) {
     let mut tick = crate::clock::interval(std::time::Duration::from_secs(1));
     loop {
         tick.tick().await;
-        for scope in f.core.budgets.take_changed() {
-            let e = f.core.budgets.event_of(&scope, now());
+        for e in f.core.budgets.flush(now()) {
             f.broadcast("budget", serde_json::to_value(&e).unwrap_or(Value::Null));
-            // the map's items carry their budget: they read it again
-            f.writer.signals.map.notify_one();
         }
+        // the map's items carry their budget: they read it again
+        f.writer.signals.map.notify_one();
     }
 }
 
