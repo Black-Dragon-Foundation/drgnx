@@ -432,6 +432,70 @@ colour, 6 logical pixels wide; under Glitnir its corners are rounded (the corner
       (when (and (fboundp 'glitnir-active-p) (glitnir-active-p))
         (should-not (funcall near left (round (* s (+ (nth 1 e) top))) 'sel))))))
 
+(defun drgnx-ui-look-explorer--line-of (name)
+  "The Explorer's line (1-based) whose row is NAME, or nil."
+  (with-current-buffer drgnx-explorer-buffer-name
+    (save-excursion
+      (goto-char (point-min))
+      (when (re-search-forward (concat "[▸▾ ]" (regexp-quote name) "$") nil t) (line-number-at-pos)))))
+
+(defun drgnx-ui-look-explorer--command-on (name command)
+  "Put point on NAME's row and run COMMAND there as the command loop would (its post-command hook after)."
+  (with-current-buffer drgnx-explorer-buffer-name
+    (goto-char (point-min)) (forward-line (1- (drgnx-ui-look-explorer--line-of name)))
+    (set-window-point (get-buffer-window (current-buffer)) (point))
+    (setq this-command command)
+    (when command (call-interactively command))
+    (run-hooks 'post-command-hook)))
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/an-expanded-folder-keeps-the-selection-on-its-row ()
+  "Pattern D (the user's Explorer, 2026-11-16, 11.png: etc/ expanded, then etc/shell/ selected and expanded; the
+selected fill's tail was drawn six rows lower, on harness, and stayed).  After the expand only the selected folder's
+row is drawn in the selection: in the buffer (no other row's tail is painted selected) and on the screen (no other
+row's stretch has the selection's fill)."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-explorer--with root
+    (dolist (f '("etc/images/x.png" "etc/shell/_drgnx" "etc/shell/drgnx.bash" "etc/shell/drgnx.fish"
+                 "etc/shell/drgnx.zsh" "etc/drgnx.lock.eld" "harness/h.el" "init/i.el" "keys/k.eld" "modules/m.el"))
+      (make-directory (file-name-directory (expand-file-name f root)) t)
+      (write-region "" nil (expand-file-name f root) nil 'silent))
+    (drgnx-test-wait (lambda () (drgnx-ui-look-explorer--line-of "modules")) :secs 20 :what "the folders' rows")
+    (drgnx-test-wait-presented)
+    (drgnx-ui-look-explorer--command-on "etc" #'drgnx-explorer-toggle)
+    (drgnx-test-wait (lambda () (drgnx-ui-look-explorer--line-of "shell")) :secs 20 :what "etc's rows")
+    (drgnx-test-wait-presented)
+    (drgnx-ui-look-explorer--command-on "shell" nil)
+    (drgnx-test-wait-presented)
+    (drgnx-ui-look-explorer--command-on "shell" #'drgnx-explorer-toggle)
+    (drgnx-test-wait (lambda () (drgnx-ui-look-explorer--line-of "drgnx.zsh")) :secs 20 :what "shell's rows")
+    (drgnx-test-wait-presented)
+    (let* ((shell (drgnx-ui-look-explorer--line-of "shell"))
+           ;; read before `drgnx-ui-look-explorer--row-y', which moves the (selected) window's point
+           (point (with-current-buffer drgnx-explorer-buffer-name
+                    (line-number-at-pos (window-point (get-buffer-window (current-buffer))))))
+           (painted (with-current-buffer drgnx-explorer-buffer-name
+                      (sort (delete-dups
+                             (cl-loop for o in (overlays-in (point-min) (point-max))
+                                      when (and (overlay-get o 'drgnx-row-tail) (overlay-get o 'drgnx-row-face))
+                                      collect (line-number-at-pos (overlay-start o))))
+                            #'<)))
+           (snap (drgnx-uitest-snapshot)) (s (drgnx-uitest-device-scale (selected-frame)))
+           (e (window-body-pixel-edges))
+           (mid (round (* s (/ (+ (nth 0 e) (nth 2 e)) 2.0))))
+           (sel (mapcar (lambda (c) (round (* 255 c))) (drgnx-color-rgb (drgnx-look-token 'sel 'dark))))
+           (lines (with-current-buffer drgnx-explorer-buffer-name (count-lines (point-min) (point-max))))
+           (filled (cl-loop for line from 2 to lines
+                            for y = (round (* s (+ (nth 1 e) (drgnx-ui-look-explorer--row-y line))))
+                            when (cl-every (lambda (p c) (<= (abs (- p c)) 6)) (cdr (drgnx-uitest-pixel snap mid y)) sel)
+                            collect line)))
+      ;; point (the window's) on shell, and the selection's paint on its row alone
+      (should (equal (list :point point
+                           :selected (with-current-buffer drgnx-explorer-buffer-name
+                                       (and (overlayp drgnx-wb--selected-overlay)
+                                            (line-number-at-pos (overlay-start drgnx-wb--selected-overlay))))
+                           :painted painted :filled filled)
+                     (list :point shell :selected shell :painted (list shell) :filled (list shell)))))))
+
 (drgnx-look-gui-deftest drgnx-ui-look-explorer/the-focused-row-is-ringed ()
   "Pattern D, window-dark.html `.row.sel.focus' (`box-shadow: inset 0 0 0 1px var(--focus)'): with the Explorer
 focused, the selected row is ringed in the focus colour on its left, top and right (the right side at the text
