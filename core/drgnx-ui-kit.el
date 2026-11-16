@@ -60,7 +60,11 @@ that is not UTF-8: an icon's glyph says less than its picture.  The icon names t
      (fail "✕" . "X") (stopped "■" . "#") (dismiss "×" . "x") (unqueue "−" . "-")
      (info "ℹ" . "i") (warn "⚠" . "!") (cloud "☁" . "c")
      (package "⬡" . "P") (plugin "◆" . "&") (module "▣" . "M")
-     (refused "⛔" . "X") (note "✎" . "n") (changed "↻" . "~") (hook-busy "⏳" . "..."))
+     (refused "⛔" . "X") (note "✎" . "n") (changed "↻" . "~") (hook-busy "⏳" . "...")
+     ;; the find bar's previous and next match buttons and its Symbol toggle
+     (match-previous "↑" . "^") (match-next "↓" . "v") (rename-symbol "⟨⟩" . "<>")
+     ;; the Search view's: a chip that opens a menu, Changed Lines Only, Save This Search and a saved search
+     (dropdown "▾" . "v") (changed-lines "±" . "+-") (save-search "☆" . "*"))
    drgnx-ui--icon-glyphs)
   "The standard glyph table: the default of `drgnx-face-glyphs', and where a name the option lacks is found.")
 

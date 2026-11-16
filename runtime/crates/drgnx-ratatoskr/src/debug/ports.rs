@@ -251,6 +251,11 @@ fn joinable(port: u16) -> Result<bool, String> {
     // SAFETY: socket(2), setsockopt(2), bind(2), fcntl(2) and close(2) on a descriptor made and closed here; the sockaddr
     // is zeroed, then set.
     unsafe {
+        // close-on-exec at creation where the system has it (a bound socket another thread's fork/exec would inherit
+        // could outlive this check)
+        #[cfg(target_os = "linux")]
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+        #[cfg(not(target_os = "linux"))]
         let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
         if fd < 0 {
             return Err(format!(

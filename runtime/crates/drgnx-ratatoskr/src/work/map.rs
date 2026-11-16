@@ -1854,14 +1854,13 @@ fn card_kind(k: &str) -> CardKind {
 /// An open card: id, job, kind, title.
 type Card = (String, String, String, String);
 
-/// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
 /// A card's words on the strip: a proposal's title (`2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min: approve to
-/// start`) is cut to its share of the strip, which keeps only what every proposal says, so it becomes `approve 2
-/// tasks (JOB)`: what to approve, and which job it is.  Other cards are as titled.
+/// start`) is cut to its share of the strip, which keeps only what every proposal says, so it becomes `Sign off: 2
+/// tasks (JOB)` (the strip's own prefix, said once): what to approve, and which job it is.  Other cards are as titled.
 fn strip_text(job: &str, title: &str) -> String {
     match title.strip_suffix(": approve to start") {
         Some(head) => format!(
-            "approve {} ({job})",
+            "Sign off: {} ({job})",
             head.split(", ").next().unwrap_or(head)
         ),
         None => title.to_string(),
@@ -1882,6 +1881,7 @@ fn legacy_duplicates<'a>(
     .collect()
 }
 
+/// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
 async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
     f.writer
         .db
@@ -1916,7 +1916,8 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
             {
                 let mut q = c.prepare(
                     "select id, kind, coalesce(title, ''), coalesce(status, ''), \
-                     coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file') \
+                     coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file'), \
+                     json_extract(data, '$.ledger.done') \
                      from entity where retired_tx is null and kind in ('ask', 'spec', 'plan', 'task') order by n",
                 )?;
                 let all = q
@@ -1928,12 +1929,13 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                             r.get::<_, String>(3)?,
                             r.get::<_, String>(4)?,
                             r.get::<_, Option<String>>(5)?,
+                            r.get::<_, Option<bool>>(6)?.unwrap_or(false),
                         ))
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
                 let hidden = legacy_duplicates(all.iter().map(|r| (r.0.as_str(), r.5.as_deref())));
                 plan_of.retain(|_, plan| !hidden.contains(plan));
-                for (rank, (id, kind, title, status, text, _)) in all.into_iter().enumerate() {
+                for (rank, (id, kind, title, status, text, _, ledger_done)) in all.into_iter().enumerate() {
                     if hidden.contains(&strip(&id)) {
                         continue;
                     }
@@ -1958,7 +1960,7 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                                 id: strip(&id),
                                 plan: plan.clone(),
                                 title,
-                                done: status == "done",
+                                done: status == "done" || ledger_done,
                             })
                         }
                     });
