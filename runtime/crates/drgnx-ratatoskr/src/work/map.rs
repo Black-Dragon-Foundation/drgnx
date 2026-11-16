@@ -21,7 +21,7 @@ use runstav::methods::work::{
     PresenceMode, Workspace,
 };
 use runstav::wire::{Error, ErrorCode};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -28,6 +28,7 @@
 {"do": "send", "conn": "c", "json": {"id": 16, "method": "job/approve", "params": {"id": "$jb"}}}
 {"do": "expect", "conn": "c", "json": {"id": 16, "result": {"id": "$jb"}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"event": "budget-limit", "data": {"data": {"scope": {"spec": "spec:$ROOT/spec.md"}, "unit": "usd-est"}}}, "within_ms": 90000}
+{"do": "expect", "conn": "e", "json": {"event": "budget-limit", "data": {"data": {"scope": {"spec": "spec:$ROOT/spec.md"}, "unit": "usd-est"}}}, "within_ms": 90000}
 {"do": "poll", "conn": "c", "json": {"id": 17, "method": "job/status", "params": {"id": "$ja"}}, "expect": {"id": 17, "result": {"id": "$ja", "status": "paused"}}, "within_ms": 10000, "every_ms": 200}
 {"do": "poll", "conn": "c", "json": {"id": 18, "method": "job/status", "params": {"id": "$jb"}}, "expect": {"id": 18, "result": {"id": "$jb", "status": "paused"}}, "within_ms": 10000, "every_ms": 200}
 {"do": "sql_expect", "sql": "select job, count(*) from card where kind = 'budget' group by job order by job = '$ja' desc", "rows": [["$ja", 1], ["$jb", 1]]}

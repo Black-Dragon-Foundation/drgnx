@@ -98,6 +98,9 @@ fn budget_tree() {
     }
     times.sort();
     let p95 = times[(times.len() * 95).div_ceil(100) - 1];
-    println!("budget-tree-open: first page p95 {p95:?} over {} scopes", 1 + 9 + 90 + runs);
+    println!(
+        "budget-tree-open: first page p95 {p95:?} over {} scopes",
+        1 + 9 + 90 + runs
+    );
     assert!(p95 < Duration::from_millis(20), "first page p95 {p95:?}");
 }
