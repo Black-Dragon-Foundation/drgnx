@@ -185,6 +185,11 @@ is on by default is in :disabled when off."
 the one it was defined with) is `off' and it is not in :enabled.  :disabled wins."
   (drgnx-modules--disabled-in (drgnx-modules-read-state) module default))
 
+(defun drgnx-module-chosen-p (module)
+  "Non-nil if MODULE is defined and chosen to run (not disabled), whether its stage has come or not.  A module that
+yields a shared command to another one asks this, so the start order of the two does not matter."
+  (and (assq module drgnx-modules--table) (not (drgnx-module-disabled-p module))))
+
 (defun drgnx-modules-set-enabled (module on)
   "Choose MODULE on or off in modules.eld.  A module that is off until chosen: ON adds it to :enabled and
 takes it out of :disabled; off takes it out of :enabled.  One that is on by default: ON takes it out of

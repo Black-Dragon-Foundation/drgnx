@@ -748,6 +748,27 @@ impl Front {
                 crate::view::panel::look(self, &caller, p).map(|b| json!(b))
             }
             Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
+            // the Source Control view and the git commands it runs (view::scm)
+            Params::ScmSubscribe(p) => {
+                crate::view::scm::subscribe(self, &caller, p).map(|b| json!(b))
+            }
+            Params::ScmSet(p) => crate::view::scm::set(self, &caller, p).map(|b| json!(b)),
+            Params::ScmClose(p) => crate::view::scm::close(self, &caller, p).map(|b| json!(b)),
+            Params::GitStage(p) => crate::view::scm::stage(self, p).await.map(|b| json!(b)),
+            Params::GitUnstage(p) => crate::view::scm::unstage(self, p).await.map(|b| json!(b)),
+            Params::GitDiscard(p) => crate::view::scm::discard(self, p).await.map(|b| json!(b)),
+            Params::GitCommit(p) => crate::view::scm::commit(self, p).await.map(|r| json!(r)),
+            Params::GitUndoCommit(p) => crate::view::scm::undo_commit(self, p)
+                .await
+                .map(|b| json!(b)),
+            Params::GitRemote(p) => crate::view::scm::remote(self, &caller, p).map(|r| json!(r)),
+            Params::GitRemoteStop(p) => crate::view::scm::remote_stop(self, p).map(|b| json!(b)),
+            Params::GitBranches(p) => crate::view::scm::branches(p).await.map(|r| json!(r)),
+            Params::GitCheckout(p) => crate::view::scm::checkout(self, p).await.map(|b| json!(b)),
+            Params::GitStash(p) => crate::view::scm::stash(self, p).await.map(|b| json!(b)),
+            Params::GitDeleteBranch(p) => crate::view::scm::delete_branch(self, p)
+                .await
+                .map(|b| json!(b)),
             // the Search view's search streaming rows to it (`search/run`, `search/grep-*`)
             Params::SearchRun(p) => crate::view::search::run(self, &caller, p).map(|r| json!(r)),
             Params::SearchBuffer(p) => crate::view::search::buffer(self, &caller, p)

@@ -2167,8 +2167,11 @@ Click the line endings in the status bar for it."
   (force-mode-line-update))
 
 (defun drgnx-statusbar--click-branch ()
+  "Source Control (command `scm-view': the side bar's view, else magit's or VC's status), else VC's status."
   (interactive)
-  (if (fboundp 'magit-status) (call-interactively 'magit-status) (call-interactively 'vc-dir)))
+  (if-let* ((cmd (drgnx-commands-get 'scm-view)))
+      (call-interactively (drgnx-cmd-command cmd))
+    (call-interactively 'vc-dir)))
 
 (declare-function drgnx-problems-show "drgnx-problems")
 

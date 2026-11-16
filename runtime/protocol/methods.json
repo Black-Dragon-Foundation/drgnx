@@ -3478,6 +3478,70 @@
     {
       "data": {
         "$defs": {
+          "RemoteOp": {
+            "description": "A remote command.",
+            "oneOf": [
+              {
+                "enum": [
+                  "push",
+                  "pull",
+                  "fetch"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "sync",
+                "description": "Pull, then push.",
+                "type": "string"
+              },
+              {
+                "const": "publish",
+                "description": "Push a branch with no upstream, setting it (`push -u origin HEAD`).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The event `scm-remote`: remote command ID in ROOT is running, done, failed (git's ERROR) or stopped.",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "op": {
+            "$ref": "#/$defs/RemoteOp"
+          },
+          "root": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "root",
+          "op",
+          "state"
+        ],
+        "title": "RemoteEvent",
+        "type": "object"
+      },
+      "doc": "a git/remote command (push, pull, fetch, sync, publish) is running, done, failed (git's complaint) or stopped; to the asking connection only",
+      "name": "scm-remote"
+    },
+    {
+      "data": {
+        "$defs": {
           "SearchEdit": {
             "additionalProperties": false,
             "description": "One edit of a file: its id (a match's `m:RUN:N`, `e:K` for the K-th given edit), its range\nas lines (from 1) and character columns (from 0) for the editor and as UTF-8 byte offsets for the hub, the text it\nexpects there and the text it puts in.",
@@ -20254,6 +20318,273 @@
       "classes": [
         "user"
       ],
+      "doc": "a repository's branches for the picker: local, then remote, each newest first",
+      "name": "git/branches",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The repository at ROOT: `git/branches`, `git/undo-commit`.",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "Root",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Branch": {
+            "additionalProperties": false,
+            "description": "A branch for the picker.",
+            "properties": {
+              "current": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              },
+              "remote": {
+                "type": "boolean"
+              },
+              "time": {
+                "description": "Its last commit's time, seconds since the epoch.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "remote",
+              "current",
+              "time"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/branches`' answer: local branches, then remote ones, each newest first.",
+        "properties": {
+          "branches": {
+            "items": {
+              "$ref": "#/$defs/Branch"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "branches"
+        ],
+        "title": "Branches",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "switch a repository to a branch (create: a new one from HEAD; a remote one: a local branch tracking it)",
+      "name": "git/checkout",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/checkout`: switch ROOT to BRANCH (CREATE: a new branch from HEAD; a remote branch `origin/x`: a local `x`\ntracking it).",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "create": {
+            "default": false,
+            "type": "boolean"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "branch"
+        ],
+        "title": "Checkout",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "commit what is staged (all: every change first; amend: rewrite the last commit) with the message on stdin; the repository's hooks run as in a terminal, and their output is the error",
+      "name": "git/commit",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/commit`: commit what is staged in ROOT with MESSAGE; ALL stages every change first; AMEND rewrites the last\ncommit.",
+        "properties": {
+          "all": {
+            "default": false,
+            "type": "boolean"
+          },
+          "amend": {
+            "default": false,
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "message"
+        ],
+        "title": "Commit",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A commit made: its id.",
+        "properties": {
+          "sha": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha"
+        ],
+        "title": "Committed",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "delete a local branch of a repository (force: also when it is not merged)",
+      "name": "git/delete-branch",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/delete-branch`: delete the local BRANCH of ROOT (FORCE: also when it is not merged).",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "force": {
+            "default": false,
+            "type": "boolean"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "branch"
+        ],
+        "title": "DeleteBranch",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "discard the unstaged changes of tracked paths (git restore --worktree, from the index); untracked files are the editor's to move to the trash",
+      "name": "git/discard",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The repository at ROOT and PATHS in it (relative, no `..`): `git/stage`, `git/unstage`, `git/discard`.",
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "paths"
+        ],
+        "title": "Paths",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "read a repository's git status on a thread and give a hub-fed view its rows (a letter per changed path, a mark per shown folder with a change, the branch): the view-patch follows, only what changed after the first",
       "name": "git/letters",
       "params": {
@@ -20305,6 +20636,154 @@
       "classes": [
         "user"
       ],
+      "doc": "push, pull, fetch, sync (pull then push) or publish a repository on a thread: answers its id at once; the event scm-remote says it ended; git/remote-stop stops it; a password prompt is refused (the user's credential helper and ssh agent are used)",
+      "name": "git/remote",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "RemoteOp": {
+            "description": "A remote command.",
+            "oneOf": [
+              {
+                "enum": [
+                  "push",
+                  "pull",
+                  "fetch"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "sync",
+                "description": "Pull, then push.",
+                "type": "string"
+              },
+              {
+                "const": "publish",
+                "description": "Push a branch with no upstream, setting it (`push -u origin HEAD`).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/remote`: run OP in ROOT; answers at once with its id, the event `scm-remote` says how it ended.",
+        "properties": {
+          "op": {
+            "$ref": "#/$defs/RemoteOp"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "op"
+        ],
+        "title": "Remote",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A remote command's id.",
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "RemoteId",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stop a running git/remote command",
+      "name": "git/remote-stop",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A remote command's id.",
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "RemoteId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stage paths of a repository (git add), on a thread, with a deadline",
+      "name": "git/stage",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The repository at ROOT and PATHS in it (relative, no `..`): `git/stage`, `git/unstage`, `git/discard`.",
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "paths"
+        ],
+        "title": "Paths",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "stage one hunk of the editor's tracked buffer against HEAD in git's index (git apply --cached); the work tree is untouched",
       "name": "git/stage-hunk",
       "params": {
@@ -20346,6 +20825,133 @@
         ],
         "title": "Staged",
         "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stash a repository's changes (untracked files too), or pop the last stash",
+      "name": "git/stash",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "StashOp": {
+            "description": "A stash command.",
+            "enum": [
+              "push",
+              "pop"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/stash`: OP in ROOT (push takes untracked files too).",
+        "properties": {
+          "op": {
+            "$ref": "#/$defs/StashOp"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "op"
+        ],
+        "title": "Stash",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "undo the last commit, keeping its changes staged (git reset --soft HEAD~1)",
+      "name": "git/undo-commit",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The repository at ROOT: `git/branches`, `git/undo-commit`.",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "Root",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "unstage paths of a repository (git restore --staged), on a thread, with a deadline",
+      "name": "git/unstage",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The repository at ROOT and PATHS in it (relative, no `..`): `git/stage`, `git/unstage`, `git/discard`.",
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "paths"
+        ],
+        "title": "Paths",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": true
     },
@@ -33657,6 +34263,211 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a Source Control view is shown no more: its repositories are no longer watched",
+      "name": "scm/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view id: `scm/close`.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "ViewId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a change to a Source Control view: the editor's file, a repository shown or hidden, list or tree, a section, folder or graph folded or unfolded, more of a graph",
+      "name": "scm/set",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Select": {
+            "additionalProperties": false,
+            "description": "A repository shown (ON) or hidden in the view.",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              },
+              "root": {
+                "$ref": "#/$defs/AbsPath"
+              }
+            },
+            "required": [
+              "root",
+              "on"
+            ],
+            "type": "object"
+          },
+          "ViewAs": {
+            "description": "How a view lists each section's files: one row per file, or grouped in their folders.",
+            "enum": [
+              "list",
+              "tree"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`scm/set`: a change to VIEW: the editor's file (ACTIVE), a repository shown or hidden (SELECT), list or tree\n(VIEW_AS), a section, folder or the graph folded or unfolded (TOGGLE: its row's key), more of a graph (MORE: the\nrepository's root).",
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "more": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refresh": {
+            "default": false,
+            "description": "Read every shown repository again (Refresh, the editor's frame taking the focus).",
+            "type": "boolean"
+          },
+          "select": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Select"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "toggle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "view_as": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ViewAs"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Set",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a hub-fed view shows the Source Control of every repository under the workspace's folders (nested ones and linked worktrees too, at most 200): the repositories, each shown one's branch, staged, unstaged and conflicted changes and its commit graph, as rows; each repository is watched and read again on a thread after its changes",
+      "name": "scm/subscribe",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "ViewAs": {
+            "description": "How a view lists each section's files: one row per file, or grouped in their folders.",
+            "enum": [
+              "list",
+              "tree"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`scm/subscribe`: VIEW shows the Source Control of the repositories under ROOTS (the workspace's folders: each\nrepository in or under one, nested ones and linked worktrees too, at most 200). ACTIVE: the file in the editor\n(its repository is selected at first, with every one that has changes).",
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "roots": {
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          },
+          "view_as": {
+            "$ref": "#/$defs/ViewAs",
+            "default": "list"
+          }
+        },
+        "required": [
+          "view",
+          "roots"
+        ],
+        "title": "Subscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [

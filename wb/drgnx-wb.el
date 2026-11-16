@@ -660,7 +660,8 @@ edge moves (the section below takes the rest).  A second call changes nothing."
               (row (drgnx-wb--row-px frame))
               ((> row 0))
               ((window-in-direction 'below w t)))
-    (let* ((rows (drgnx-wb--section-rows (window-buffer w)))
+    (let* ((rows (max (or (plist-get (alist-get (window-parameter w 'drgnx-section) drgnx-wb--sections) :min-rows) 0)
+                      (drgnx-wb--section-rows (window-buffer w))))
            ;; the window's lines as they are drawn, not its height less its body: a window squeezed below its tab and
            ;; header lines (fitted before its island header's font was measured, which made the header taller) has no
            ;; body, so that would be its whole height, and the fit would leave it short by what its lines lack
@@ -721,7 +722,8 @@ them sets the line)."
 (defun drgnx-wb-define-section (name &rest spec)
   "Define dock section NAME: SPEC is (:slot N :title STRING-OR-FUNCTION-RETURNING-ONE
 :buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :fit FRACTION: as tall as the buffer's
-lines, at most that fraction of the frame (`drgnx-wb-fit-sections') :collapsed t: folded to its header until
+lines, at most that fraction of the frame (`drgnx-wb-fit-sections') :min-rows N: a fitted section is never fewer
+rows tall (an empty input box keeps its line) :collapsed t: folded to its header until
 it is toggled (`drgnx-wb-toggle-section', a click on the header) :own-header t: no section header, the
 buffer's own header line shows :on-show FUNCTION-OF-THE-WINDOW
 :on-focus FUNCTION-OF-THE-WINDOW, run when `drgnx-wb-focus-section' focuses it,
