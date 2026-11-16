@@ -356,6 +356,15 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (should (plist-get (drgnx-shortcuts-test--row 'sc-a) :conflicts))
     (should-not (plist-get (drgnx-shortcuts-test--row 'sc-k) :conflicts))))
 
+(ert-deftest drgnx-shortcuts/a-chord-under-the-profile-s-prefix-asks-nothing ()
+  "The profile made C-k a prefix (Kappa's C-k C-q, as VS Code's C-k chords): recording C-k C-9 for a command finds
+no clash with Emacs' C-k, `kill-line', which the profile's keys sit over."
+  (drgnx-shortcuts-test--with
+    (drgnx-shortcuts)
+    (drgnx-shortcuts-test--goto 'sc-n)
+    (let ((unread-command-events (list ?\C-k ?\C-9))) (drgnx-shortcuts-change))   ; a question would fail here
+    (should (equal (drgnx-shortcuts-test--keys 'sc-n) '("C-k C-9")))))
+
 (ert-deftest drgnx-shortcuts/filter-as-you-type ()
   (drgnx-shortcuts-test--with
     (drgnx-shortcuts)
