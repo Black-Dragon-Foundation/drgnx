@@ -440,6 +440,19 @@ mod tests {
         ]);
         // one hunk staged in git's index
         want.extend(["git/stage-hunk"]);
+        // the Source Control view's: the index, the working tree, commits, branches, stashes and the remotes
+        want.extend([
+            "git/checkout",
+            "git/commit",
+            "git/delete-branch",
+            "git/discard",
+            "git/remote",
+            "git/remote-stop",
+            "git/stage",
+            "git/stash",
+            "git/undo-commit",
+            "git/unstage",
+        ]);
         // a revert to here: the files, the steps, the conversation and a commit; and one hunk of a record
         want.extend(["history/revert/apply", "history/revert/hunk"]);
         // a fork from here, its drop, and the text taken across or redone

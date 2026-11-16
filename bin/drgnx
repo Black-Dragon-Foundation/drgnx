@@ -777,7 +777,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
       args+=(-v "$gmount")
     fi
   fi
-  if [ "$tier" = ui ]; then
+  if [ "$tier" = ui ] || [ "$tier" = scenario ]; then
     # the run's screenshots (every PNG the harness exports, `drgnx-uitest--export') are copied to /evidence as they are
     # taken: DRGNX_UI_EVIDENCE_DIR (default .claude/tmp/ui-evidence/<time> in the checkout); a session's own folder is
     # removed when the session stops

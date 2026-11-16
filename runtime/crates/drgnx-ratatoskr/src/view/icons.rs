@@ -10,9 +10,9 @@ use std::sync::OnceLock;
 const FILES: &str = include_str!("../../../../../etc/icons/files.eld");
 
 /// The icons a row can show, by name: the Explorer's and the Buffers list's (file kinds), the Work space's Flow (its
-/// columns and chips), the Extensions list's kinds, the Outline's notice, the agent panel's header and review rows, and
-/// the debug views' rows.
-const SVGS: [(&str, &str); 31] = [
+/// columns and chips), the Extensions list's kinds, the Outline's notice, the agent panel's header and review rows,
+/// the debug views' rows, and the Source Control view's buttons.
+const SVGS: [(&str, &str); 37] = [
     ("bot", include_str!("../../../../../etc/icons/bot.svg")),
     ("pin", include_str!("../../../../../etc/icons/pin.svg")),
     (
@@ -106,6 +106,24 @@ const SVGS: [(&str, &str); 31] = [
     (
         "file-archive",
         include_str!("../../../../../etc/icons/file-archive.svg"),
+    ),
+    ("plus", include_str!("../../../../../etc/icons/plus.svg")),
+    ("minus", include_str!("../../../../../etc/icons/minus.svg")),
+    (
+        "rotate-ccw",
+        include_str!("../../../../../etc/icons/rotate-ccw.svg"),
+    ),
+    (
+        "refresh-cw",
+        include_str!("../../../../../etc/icons/refresh-cw.svg"),
+    ),
+    (
+        "square",
+        include_str!("../../../../../etc/icons/square.svg"),
+    ),
+    (
+        "git-commit-horizontal",
+        include_str!("../../../../../etc/icons/git-commit-horizontal.svg"),
     ),
 ];
 

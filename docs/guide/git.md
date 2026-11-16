@@ -2,8 +2,37 @@
 
 What drgnx adds for git, module by module. Each is a module (Preferences: Modules; `modules.eld` turns one off).
 The one that needs a package names it: `drgnx sync` installs it ([packages.md](packages.md)), and until then the
-module waits. Source Control itself (magit when installed, else Emacs' VC) and the changed lines in the gutter are
-described in [modules.md](modules.md) (`extra/magit`, `tools/vc`, `extra/hunks`).
+module waits. The changed lines in the gutter are described in [modules.md](modules.md) (`extra/hunks`).
+
+## Source Control
+
+**View: Show Source Control** (`Ctrl+Shift+G`; Vim `SPC g s`; a click on the branch in the status bar) opens the
+Source Control view in the side bar (module `tools/scm`), as VS Code's. Git runs in the hub, so the editor never
+waits for it, whatever the size of the repository.
+
+- **The commit box** is at the top: type a message and press `Ctrl+Enter` (Emacs and Vim: `C-c C-c`), or **Git:
+  Commit**. It commits what is staged; with nothing staged it asks once whether to stage every change (Always sets
+  `drgnx-scm-smart-commit`). The commit runs the repository's hooks; a hook that fails shows its text in a notice. The
+  placeholder names the branch, and the repository when there are several: the box acts on the repository whose row
+  you used last, else the one of the file you are editing.
+- **The changes** are in sections: Merge Changes, Staged Changes, Changes, each file with its letter (M, A, D, R, U).
+  A click on a file opens its diff ([the diff view](#the-diff-view)); the buttons on a row stage (`+`), unstage (`−`)
+  or discard it, and on a section's header do it for all. Keys in the view: `RET` open, `s` stage, `u` unstage, `k`
+  discard (Vim `x`), `TAB` fold. **Discard asks first**: a tracked file goes back to its last staged text, an
+  untracked one goes to the trash, never deleted for good.
+- **Several repositories** (a folder holding nested repositories, or a repository with linked worktrees) are listed
+  under Repositories first; click one to show its changes. Each has its branch and its ahead/behind counts.
+- **Branch and remote:** the branch row switches branches (**Git: Checkout to…**); its sync button pulls then pushes,
+  or publishes a branch that has no upstream. **Git: Push**, **Pull**, **Sync**, **Fetch**, **Publish Branch** and
+  **Stop Push or Pull** are in the palette; they run in the background and say when they are done or why they failed.
+- **The graph** (folded at first) shows the branch's commits with their lanes, the commits not pushed and not pulled
+  marked; **Load more…** reads 200 more.
+- **Source Control: Toggle Tree View** lists the changes in their folders. **Git: Stash**, **Pop Stash**, **Undo Last
+  Commit**, **Create Branch…**, **Delete Branch…**, **Stage/Unstage/Discard All Changes** and the file-level ones work
+  from the palette. Magit stays for everything else: **Git: Open in Magit**.
+
+With `tools/scm` off, Source Control is magit's status when magit is installed, else Emacs' VC (`extra/magit`,
+`tools/vc` in [modules.md](modules.md)).
 
 ## The diff view
 

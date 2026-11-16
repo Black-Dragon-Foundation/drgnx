@@ -1126,6 +1126,10 @@ foreground once (`serve --foreground --parent-pid`, ended with the session), con
 waits for the hub's rows of the new fixture's root with the editor's file revealed (30 s, setup only: the error names
 the root, the file and the rows drawn). Without a hub binary the driver says so instead of drawing nothing.
 
+**Screenshots.** `--container --scenario` mounts the evidence folder as `--container --ui` does
+(`DRGNX_UI_EVIDENCE_DIR`, default `.claude/tmp/ui-evidence/<time>`): every screenshot the harness exports is copied
+there, and a scenario may copy its own (the Source Control one names a file per step and scale).
+
 **Known reds.** `test/scenario/known-red.eld` lists, per configuration, scenarios expected to fail
 (`((gryphn drgnx-scenario/explorer-click-stays …))`). Such a scenario counts as expected only if it fails an
 assertion made with `drgnx-scenario-check`, which carries the jank report's trace — so every known red explains

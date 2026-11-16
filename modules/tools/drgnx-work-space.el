@@ -370,7 +370,7 @@ it (its trail is made when there is none, the panel shows it while a Work lens i
            (trail (drgnx-work-trail-open buffer sid)))
       (with-current-buffer trail (drgnx-work-trail-panel-title label))
       (setq drgnx-work-space--panel-trail trail)
-      (when (drgnx-work-space--lens-window)
+      (when (and (fboundp 'drgnx-pane-show) (drgnx-work-space--lens-window))
         (drgnx-pane-show 'work-trail :buffer trail)
         (drgnx-wb-area-redraw 'panel)))))
 
@@ -412,8 +412,9 @@ layout Work (`drgnx-work-space--follow-layout')."
   "FRAME's Work tiles follow its Work lens.  The Work space is a view in the editor, never a layout of its own (UX
 audit S1-1): when an editor window starts showing a lens, the right dock shows its Detail beside the Explorer and the
 editor groups, which stay; once no lens is shown, a right dock still on the Detail is hidden.  Only a change of whether
-a lens is shown moves anything, so a dock you change while a lens is shown stays."
-  (when (frame-live-p frame)
+a lens is shown moves anything, so a dock you change while a lens is shown stays.  Without the workbench's panes
+\(a bare session) nothing moves."
+  (when (and (frame-live-p frame) (fboundp 'drgnx-pane-show))
     (let ((lens (drgnx-work-space--lens-window frame)))
       (unless (eq (and lens t) (frame-parameter frame 'drgnx-work-space-shown))
         (set-frame-parameter frame 'drgnx-work-space-shown (and lens t))
