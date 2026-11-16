@@ -194,6 +194,53 @@ async fn a_kernel_is_ready_when_it_answers_kernel_info_and_publishes_a_status() 
     assert!(!folder.join("kernel-c.json").exists());
 }
 
+/// A status published before the hub's SUB took hold is lost (a slow joiner): the hub must ask again until one arrives, not stop at the reply.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_status_lost_before_the_subscription_took_hold_is_asked_for_again() {
+    let d = tmp();
+    let folder = private_folder(&d.path().join("s")).unwrap();
+    let mut peer = bind(&folder, "c").await;
+    let key = key_of_later(&folder, "c");
+    tokio::spawn(async move {
+        let key = key.await;
+        let mut first = true;
+        loop {
+            let f = frames(peer.shell.recv().await.unwrap());
+            let req = wire::decode(&key, &f).unwrap();
+            let mut rep = Message::request("kernel", "kernel_info_reply", json!({"status": "ok"}));
+            rep.parent = serde_json::to_value(&req.header).unwrap();
+            rep.idents = vec![f[0].clone()];
+            peer.shell.send(zmq(&key, &rep)).await.unwrap();
+            if !std::mem::take(&mut first) {
+                let st = Message::request("kernel", "status", json!({"execution_state": "idle"}));
+                peer.iopub.send(zmq(&key, &st)).await.unwrap();
+            }
+        }
+    });
+    let t = Timeouts {
+        ready: Duration::from_secs(5),
+        ..quick()
+    };
+    let k = Kernel::start(
+        &spec("sleep 600", Interrupt::Signal),
+        &folder,
+        "c",
+        d.path(),
+        t,
+    )
+    .await
+    .expect("ready once a later status arrives");
+    k.shutdown().await;
+}
+
+fn key_of_later(
+    folder: &Path,
+    id: &str,
+) -> impl std::future::Future<Output = Key> + Send + 'static {
+    let (folder, id) = (folder.to_path_buf(), id.to_string());
+    async move { key_of(&folder, &id).await }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_kernel_killed_from_outside_is_reported_as_exited() {
     let d = tmp();
