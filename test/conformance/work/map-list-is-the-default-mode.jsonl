@@ -1,0 +1,18 @@
+{"scenario": "work/map-list-is-the-default-mode", "requires": ["v1", "test-hooks"], "doc": "A map subscribed with no mode is a list: its model's descriptor says list, and `work/map/set {mode: graph}` makes a graph, the model a reset again. Pattern B."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && git init -q -b main && echo one > a.rs && git add a.rs && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "m", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [8, 17], "width_px": 1000, "palette": [["accent", "#123456"], ["edge", "#654321"]], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m", "reset": true, "model": {"ops": {"$contains": [{"reset": {"descriptor": {"mode": "list"}}}]}}, "hub": "$capture:hub"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"hub": "$hub", "version": "$number"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "work/map/set", "params": {"view": "m", "mode": "graph"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m", "reset": true, "model": {"ops": {"$contains": [{"reset": {"descriptor": {"mode": "graph"}}}]}}, "hub": "$hub"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"version": "$number"}}, "within_ms": 10000}

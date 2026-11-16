@@ -8,6 +8,8 @@
 (require 'drgnx-surfaces)
 (require 'drgnx-memo)
 (declare-function drgnx-signal-mode "drgnx-signal")
+(declare-function drgnx-grid-mode "drgnx-grid")
+(declare-function drgnx-grid-full-size-toggle "drgnx-grid" (&optional window))
 (declare-function drgnx-state-mode "drgnx-state")
 (declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-state-intent--user-resized "drgnx-state-intent")
@@ -116,6 +118,18 @@ another buffer (BUFFER-NAME) is left as it was."
                        (drgnx-rules-mode 1)
                        ;; The bottom panel and the right dock; popups borrow the panel.
                        (require 'drgnx-area)
+                       ;; The tiled grid: the side bar, the panel and the right side are tiles of the window tree,
+                       ;; not side windows (docs/develop/core.md, "The grid").
+                       (require 'drgnx-grid)
+                       (drgnx-grid-mode 1)
+                       (drgnx-command-define 'tile-full-size :category "View" :title "Full-Size Tile" :scope 'window
+                                             :command #'drgnx-grid-full-size-toggle
+                                             :doc "Show this tile alone, at the grid's full size; again to put every tile back as it was")
+                       ;; Emacs's and Vim's "this window only" keys (C-x 1, C-w o, C-w _, C-w |) toggle full size:
+                       ;; the other tiles come back, where `delete-other-windows' would lose the layout
+                       (dolist (cmd '(delete-other-windows evil-window-delete-others evil-window-set-height
+                                                           evil-window-set-width))
+                         (drgnx-module-define-key 'global-map (vector 'remap cmd) #'drgnx-grid-full-size-toggle))
                        (require 'drgnx-popup)
                        ;; A warning is logged and counted on the status bar, never shown by itself (as VS Code's Output)
                        (drgnx-module-advice 'display-warning :around quiet-warning (fn type message &optional level buffer-name)
@@ -144,9 +158,9 @@ another buffer (BUFFER-NAME) is left as it was."
                        ;; Editor groups (made only by these commands).
                        (require 'drgnx-groups)
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((split-editor-right "Split Editor Right" drgnx-groups-split-right "A new editor group to the right, same file")
-                                        (split-editor-down "Split Editor Down" drgnx-groups-split-down "A new editor group below, same file")
-                                        (close-group "Close Editor Group" drgnx-groups-close "Close this group (its files stay open); the last one stays")
+                                      '((split-editor-right "Split Editor Right" drgnx-groups-split-right "A new editor group to the right, same file; on a tool tile, a new tile showing what you pick")
+                                        (split-editor-down "Split Editor Down" drgnx-groups-split-down "A new editor group below, same file; on a tool tile, a new tile showing what you pick")
+                                        (close-group "Close Tile" drgnx-groups-close "Close this tile: an editor group closes (its files stay open; the last one stays), a tool tile hides")
                                         (close-group-editors "Close All Editors in Group" drgnx-groups-close-all-editors "Close every tab of this group (its files stay open); the group closes unless it is the last")
                                         (focus-group-1 "Focus First Editor Group" drgnx-groups-focus-1 "Focus group 1")
                                         (focus-group-2 "Focus Second Editor Group" drgnx-groups-focus-2 "Focus group 2 (made if there is one group)")

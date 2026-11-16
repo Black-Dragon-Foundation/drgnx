@@ -341,8 +341,12 @@ pixels). With two editor groups or more, the selected group's card is ringed in 
 ### Editor groups
 
 Split the editor into **groups** — each an editor window with its own tabs — only by command: Split Editor Right /
-Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC w s`; the new group shows the same file),
-Close Editor Group (palette · `C-x 0` · `SPC w c`; the last group stays), Close All Editors in Group (`C-k w`; the
+Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC w s`; the new group shows the same file;
+in a tool tile — a dock, the panel, the right side — a new tile beside the whole tile asks what it shows: Editor or
+any pane, which moves there from its dock), Close Tile (palette · `C-x 0` · `SPC w c`; an editor group closes and the
+last one stays, a tool tile hides), Full-Size Tile (`C-k C-m` · `C-x w m`, also `C-x 1` · `C-w o`, `C-w _`, `C-w |`:
+this tile alone, its tab row saying "Full size · 1 of N · KEY back"; again, or any other tile command, puts every tile
+back exactly where it was; Zen is the same plus centred text), Close All Editors in Group (`C-k w`; the
 palette in the Emacs and Vim profiles; its tabs go, the files stay open; the group closes, or, the last one, shows
 `*scratch*`), Focus Group 1–3 (`C-1`–`C-3` · `C-x o` · `SPC 1`–`SPC 3`; one past the last makes a group to the right),
 Move Editor into Next Group (`C-M-<right>` · palette · `SPC w m`; a group left without tabs closes, as in VS Code),
@@ -578,8 +582,8 @@ type in the minibuffer it may grow (icomplete-vertical, fido-vertical).
 **Closing.** Every help pane, popup and side pane has a **×** in its header: at the right end of the panel's and the
 right dock's tab row and of the popup lane's header; the left dock has Close Sidebar on its island header's ⋯; `x` where the terminal is not UTF-8,
 and the panel, the right dock and the popup lane close with `Esc` or `q` (**Close Pane**, bound in all three key
-profiles): the panel and the right dock hide (size and tabs kept), a popup ends, and focus goes to the editor you
-used last. The keys only act where you read, not where you type: in a buffer you can edit `q` types a `q`, `Esc` is the Meta
+profiles): the panel and the right dock hide (size and tabs kept), a popup ends, a tile of the grid hides, and focus
+goes to the editor you used last. The keys only act where you read, not where you type: in a buffer you can edit `q` types a `q`, `Esc` is the Meta
 prefix (`Esc x` is `M-x`) and, in the Vim profile, still leaves insert state, and a terminal tab (`comint`,
 `eshell`, `term`, `vterm`; `drgnx-close-input-modes`), a live page you are driving and the minibuffer keep
 both keys. A mode that takes the keyboard for itself joins by adding a predicate to `drgnx-close-input-functions`. In a terminal frame `Esc` stays the Meta prefix, so use
@@ -622,7 +626,8 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
   has its own, so a file chosen in one frame's dock opens in that frame's editor. Moving between two windows on one
   file changes the editor but not the file, so the Explorer and the Outline stay as they are.
 - **Roles** (`wb/drgnx-wb.el`): each window is an `editor` or a `dock` window (window parameter `drgnx-role`). The
-  dock is side windows with a pixel width kept across hide/show, no scroll bars, and titles in the
+  dock is one tile of the grid (its sections move, hide and show as one; side windows when `drgnx-grid-mode` is
+  off) with a pixel width kept across hide/show, no scroll bars, and titles in the
   `header-line-format` *window parameter*, where no mode can erase them. Showing the dock never takes focus; files
   chosen in it go to the most recently used editor window, never splitting it. Sections are registered with
   `drgnx-wb-define-section` (slot, title, height, buffer, `:on-show`); a title may be a function, asked each time

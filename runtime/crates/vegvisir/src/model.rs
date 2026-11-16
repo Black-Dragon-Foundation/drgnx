@@ -573,9 +573,19 @@ pub struct Model {
 impl Model {
     /// Applies one fact (never a view event) and derives the model again.
     pub(crate) fn apply(&mut self, ev: Event) -> Change {
-        let Some((touched, card)) = self.ingest(ev) else {
+        let Some((mut touched, card)) = self.ingest(ev) else {
             return Change::default();
         };
+        // a task's row says its agents' state: it changes when they do
+        let tasks: Vec<Sym> = touched
+            .iter()
+            .filter_map(|y| self.facts.sessions.get(y))
+            .filter_map(|s| {
+                s.task
+                    .or_else(|| s.parent.and_then(|p| self.facts.sessions.get(&p)?.task))
+            })
+            .collect();
+        touched.extend(tasks);
         let new = self.derive();
         let old = std::mem::replace(&mut self.d, new);
         let mut change = Change {

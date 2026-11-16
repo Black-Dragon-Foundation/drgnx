@@ -634,7 +634,7 @@ or the session, and a checkout with no cargo, or a run without CI's hub binary, 
             (should (eql 0 (car (drgnx-ui-compositor-test--bin-call
                                  dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman"
                                            "DRGNX_TEST_GUI_IMAGE=an-image" "DRGNX_TEST_GUI_MEMORY" "DRGNX_TEST_WM_IMAGE"
-                                           "DRGNX_TEST_BUILD_MEMORY")
+                                           "DRGNX_TEST_BUILD_MEMORY" "DRGNX_TEST_UDMABUF=/dev/null")
                                  "test" "--container" "--ui" "--compositor" c))))
             (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
                    (build (cdr (member "build" args)))
@@ -648,11 +648,24 @@ or the session, and a checkout with no cargo, or a run without CI's hub binary, 
               (should (equal (cadr (member "--memory-swap" build)) "3g"))
               (should (equal (cadr (member "--memory" run)) "3g"))
               (should (equal (cadr (member "--memory-swap" run)) "3g"))
-              (should (equal (last run 5) (list "bin/drgnx" "test" "--ui" "--compositor" c)))))
+              (should (equal (last run 5) (list "bin/drgnx" "test" "--ui" "--compositor" c)))
+              ;; KWin gets its render device (DRGNX_TEST_UDMABUF stands in for /dev/udmabuf), niri none
+              (should (equal (cadr (member "--device" run)) (and (equal c "kwin") "/dev/null")))))
+          ;; no udmabuf on the host: a KWin run is refused with the reason, before any container (it would answer no
+          ;; frame callback, and a presented wait could pass on a picture that never went out)
+          (when (file-exists-p log) (delete-file log))
+          (let ((r (drgnx-ui-compositor-test--bin-call
+                    dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_WM_IMAGE=wm-image"
+                              (concat "DRGNX_TEST_UDMABUF=" dir "/no-udmabuf"))
+                    "test" "--container" "--ui" "--compositor" "kwin")))
+            (should (eql (car r) 2))
+            (should (string-match-p "udmabuf" (cdr r)))
+            (should-not (file-exists-p log)))
           ;; its own prebuilt override
           (delete-file log)
           (drgnx-ui-compositor-test--bin-call
-           dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_WM_IMAGE=wm-image")
+           dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_WM_IMAGE=wm-image"
+                     "DRGNX_TEST_UDMABUF=/dev/null")
            "test" "--container" "--ui" "--compositor" "kwin")
           (let ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t)))
             (should-not (member "build" args))

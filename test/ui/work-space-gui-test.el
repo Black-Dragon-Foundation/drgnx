@@ -602,14 +602,25 @@ on the row it was on, the selection stays, and nothing moves (no capture, no mot
         (should-not (window-parameter win 'glitnir-layout-capture))
         (should-not (window-parameter win 'glitnir-layout-motion))))))
 
+(defun drgnx-work-gui--run-ns ()
+  "Nanoseconds the thread running Lisp has run on a CPU (/proc/thread-self/schedstat's first field): its own work,
+without the time it waited for a CPU (the second field), which is what a loaded machine adds."
+  (with-temp-buffer
+    (insert-file-contents "/proc/thread-self/schedstat")
+    (string-to-number (car (split-string (buffer-string))))))
+
 (defun drgnx-work-gui--key-times ()
-  "Milliseconds of 40 map keys (the selection right, then left), each with its redisplay."
-  (let ((times nil))
+  "The main thread's run time, in milliseconds, of 40 map keys (the selection right, then left), each with its
+redisplay (`drgnx-work-gui--run-ns'); the wall times go to the log."
+  (let ((times nil) (walls nil))
     (dotimes (i 40)
-      (let ((t0 (float-time)))
+      (let ((t0 (float-time)) (r0 (drgnx-work-gui--run-ns)))
         (if (cl-evenp i) (drgnx-work-map-right) (drgnx-work-map-left))
         (redisplay t)
-        (push (drgnx-work-gui--ms t0) times)))
+        (push (/ (- (drgnx-work-gui--run-ns) r0) 1e6) times)
+        (push (drgnx-work-gui--ms t0) walls)))
+    (drgnx-work-gui--log "map keys: run med=%.2f p95=%.2f | wall med=%.2f p95=%.2f" (drgnx-work-gui--med times)
+                         (drgnx-work-gui--p95 times) (drgnx-work-gui--med walls) (drgnx-work-gui--p95 walls))
     times))
 
 (defconst drgnx-work-gui--leg-key-allowance 8.0
@@ -620,9 +631,11 @@ during a leg came out up to 5.6 ms above the one without, and as often below it.
 (ert-deftest drgnx-work-gui/keys-stay-fast-during-a-leg ()
   "Measured on a long leg: a key on the map (the selection moves, rows are refaced) with its redisplay, 40 times
 before the leg, during it and after it: the leg adds no cost, its p95 within `drgnx-work-gui--leg-key-allowance' of
-the larger p95 without a leg.  The reference is this run's own, before and after, as the GUI tier shares a loaded
-machine and the live patches of the agents streaming land in the keys' redisplays; the absolute key budget is the
-pinned perf island's (harness/drgnx-perf-work.el)."
+the larger p95 without a leg.  The reference is this run's own, before and after, and what is measured is the main
+thread's own run time (`drgnx-work-gui--key-times'): the GUI tier shares a loaded machine, and the time a key waits
+for a CPU there is the machine's, not the leg's (2026-11-17: under 3 of 4 CPUs burning, run-queue waits of up to 20 ms
+made the wall time red while the work was the same).  The absolute key budget is the pinned perf island's
+\(harness/drgnx-perf-work.el)."
   :tags '(:timing)
   (skip-unless (and (drgnx-work-gui--rows-p) (drgnx-work-gui--leg-p)))
   (drgnx-work-gui--with-map
@@ -637,7 +650,7 @@ pinned perf island's (harness/drgnx-perf-work.el)."
                          :what "the leg's end")
         (setq after (drgnx-work-gui--key-times))
         (let ((ref (max (drgnx-work-gui--p95 before) (drgnx-work-gui--p95 after))))
-          (drgnx-work-gui--log "motion keys: before p95=%.2f after p95=%.2f | during a leg med=%.2f p95=%.2f max=%.2f leg=%S"
+          (drgnx-work-gui--log "motion keys (run ms): before p95=%.2f after p95=%.2f | during a leg med=%.2f p95=%.2f max=%.2f leg=%S"
                                (drgnx-work-gui--p95 before) (drgnx-work-gui--p95 after)
                                (drgnx-work-gui--med times) (drgnx-work-gui--p95 times) (apply #'max times) (nth 2 sent))
           (should (<= (drgnx-work-gui--p95 times) (+ ref drgnx-work-gui--leg-key-allowance))))))))

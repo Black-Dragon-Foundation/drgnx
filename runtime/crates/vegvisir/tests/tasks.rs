@@ -148,3 +148,34 @@ fn a_job_chip_links_to_its_agent() {
     assert_eq!(machine.chips[0].links_to, Some(ItemId("agent:a1".into())));
     assert_eq!(machine.chips[0].name, "tests");
 }
+
+#[test]
+fn a_session_changing_state_changes_its_tasks_row() {
+    use vegvisir::{Effect, ViewKey, ViewOp, ViewState};
+    let mut c = core(vec![
+        plan("p"),
+        task("t", "p", false),
+        Event::Session(sess("a1", Some("t"), State::Running)),
+    ]);
+    let key = ViewKey {
+        conn: 1,
+        view: "v".into(),
+    };
+    c.step(Event::View(ViewOp::Open {
+        view: key,
+        state: ViewState::default(),
+        shown: true,
+    }));
+    // the agent waits on you: the task's row says so, so the task is among what changed
+    let effects = c.step(Event::Session(sess("a1", Some("t"), State::NeedsYou)));
+    let changed: Vec<String> = effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Delta { delta, .. } => Some(delta.changed.iter().map(|i| i.0.clone())),
+            Effect::Relayout { .. } => None,
+        })
+        .flatten()
+        .collect();
+    assert!(changed.contains(&"agent:a1".to_owned()), "{changed:?}");
+    assert!(changed.contains(&"task:t".to_owned()), "{changed:?}");
+}

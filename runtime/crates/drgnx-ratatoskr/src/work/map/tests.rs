@@ -1761,3 +1761,29 @@ fn strip_text_is_not_truncated() {
     let words = "x".repeat(300);
     assert_eq!(strip_text("J#1", &words), words);
 }
+
+/// [D] A session's spend reaches the map whether its usage carries the cost as a number or as an object with an
+/// `amount` (the agent's usage update): a turn's end then changes its card, and the map patches.
+#[test]
+fn a_cost_object_is_the_sessions_spend() {
+    for cost in [json!(0.01), json!({"amount": 0.01, "currency": "USD"})] {
+        let snap: Snapshot = serde_json::from_value(
+            json!({"id": "s1", "name": "a", "usage": {"used": 10.0, "size": 100.0, "cost": cost}}),
+        )
+        .expect("a snapshot");
+        let sess = Sess {
+            snap,
+            kids: Vec::new(),
+            place: None,
+            seq: 1,
+            state: State::Running,
+            since: 0,
+            job: None,
+        };
+        let spend = sess.facts().into_iter().find_map(|e| match e {
+            vegvisir::Event::Session(s) => s.spend,
+            _ => None,
+        });
+        assert_eq!(spend.as_deref(), Some("$0.01"), "{cost}");
+    }
+}
