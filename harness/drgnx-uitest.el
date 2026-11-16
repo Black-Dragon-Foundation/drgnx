@@ -401,14 +401,23 @@ the hub (the debug timeline's `find-file-hook' did, about one row in seven at sc
     (setq drgnx-uitest--timer (run-with-timer 0 drgnx-uitest-tick #'drgnx-uitest--tick)))
   (length drgnx-uitest--queue))
 
+(defun drgnx-uitest--stop ()
+  "Stop the tick: the queue is empty."
+  (when (timerp drgnx-uitest--timer) (cancel-timer drgnx-uitest--timer))
+  (setq drgnx-uitest--timer nil
+        drgnx-uitest--pointer nil))
+
+(defun drgnx-uitest-unqueue (pred)
+  "Take the queued entries PRED accepts out of the queue; with none left, stop the tick now, so a test's end leaves no
+timer for its file's leak check (the tick would only stop itself on its next run)."
+  (setq drgnx-uitest--queue (seq-remove pred drgnx-uitest--queue))
+  (unless drgnx-uitest--queue (drgnx-uitest--stop)))
+
 (defun drgnx-uitest--tick ()
   "Deliver the next queued event, or wait out a pause; stop the timer when empty."
   (let ((ev (car drgnx-uitest--queue)))
     (cond
-     ((null ev)
-      (when (timerp drgnx-uitest--timer) (cancel-timer drgnx-uitest--timer))
-      (setq drgnx-uitest--timer nil
-            drgnx-uitest--pointer nil))
+     ((null ev) (drgnx-uitest--stop))
      ((eq (car-safe ev) 'drgnx-uitest-pause)
       (setcar drgnx-uitest--queue (cons 'drgnx-uitest-until (+ (float-time) (cdr ev)))))
      ((eq (car-safe ev) 'drgnx-uitest-until)
@@ -424,7 +433,15 @@ the hub (the debug timeline's `find-file-hook' did, about one row in seven at sc
                                                 (drgnx-uitest-posn (nth 3 ev) (nth 4 ev))))))
       (drgnx-uitest--note-pointer ev)
       (setq unread-command-events (append unread-command-events (list ev))
-            drgnx-uitest--last-delivery (float-time))))))
+            drgnx-uitest--last-delivery (float-time))
+      ;; the last event out: stop now, so a test that ends on its last key leaves no tick for its file's leak check.
+      ;; A mouse event keeps one more tick: its pointer position stands until the command it runs has read it.
+      (unless (or drgnx-uitest--queue (drgnx-uitest--mouse-event-p ev))
+        (drgnx-uitest--stop))))))
+
+(defun drgnx-uitest--mouse-event-p (ev)
+  "Non-nil when EV is a mouse event (its pointer position is `drgnx-uitest--pointer')."
+  (and (consp ev) (symbolp (car ev)) (string-match-p "mouse" (symbol-name (car ev)))))
 
 (defun drgnx-uitest-busy-p ()
   "Non-nil while input is queued or not yet read."

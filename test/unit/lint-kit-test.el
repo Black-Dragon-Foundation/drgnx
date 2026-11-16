@@ -140,7 +140,12 @@ in a comment, a raw string or a lifetime's neighbour does not."
   "Face names of a domain (syntax, diff refine, ANSI, the debugger, notebooks), never a kit role's.")
 
 (defconst drgnx-lint-kit--not-yet
-  '()
+  '(;; row (Task 9): the state faces themselves, and selections and hovers no task has moved onto the kit yet
+    ("core/drgnx-faces.el" row 7) ("modules/tools/drgnx-replace.el" row 1) ("modules/tools/drgnx-term.el" row 1)
+    ("modules/tools/drgnx-work-space.el" row 1) ("modules/ui/drgnx-decor.el" row 1) ("modules/ui/drgnx-statusbar.el" row 1)
+    ("modules/ui/drgnx-topline.el" row 1) ("runtime/crates/drgnx-ratatoskr/src/notebook/views.rs" row 1)
+    ("runtime/crates/drgnx-ratatoskr/src/notebook/views/tests.rs" row 2) ("wb/drgnx-chrome.el" row 1)
+    ("wb/drgnx-explorer.el" row 3) ("wb/drgnx-view-nav.el" row 1) ("wb/drgnx-view.el" row 1))
   "((FILE ID COUNT)...): the forms of a role that is on, left in FILE (only falls).  A branch merged later adds its
 files' counts in its merge commit.")
 

@@ -85,6 +85,7 @@ epoch is held until a reset (else applied: a terminal's faces repaint in place).
     (let ((s (drgnx-view-patch--make :view view :class class :epoch (or epoch 0) :ack ack :epoch-reset epoch-reset
                                      :sja delay)))
       (setq-local drgnx-view-patch s)
+      (drgnx-ui-kit-focus-remap-enable)            ; the selection follows the window's focus
       (drgnx-view-model--open s)
       (nidhogg-view-rows (drgnx-view-patch-handle s) 'on (if epoch-reset 1 0) class)
       (setf (drgnx-view-patch-beg s) (copy-marker (or start (point-min)))

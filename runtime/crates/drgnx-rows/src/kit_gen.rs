@@ -112,7 +112,7 @@ const ROW_GEOM: [[Geom; 3]; 3] = [
     ],
 ];
 const ROW_LABEL: [Option<&str>; 3] = [None, None, None];
-const ROW_FACE: [FaceId; 3] = [FaceId::Default, FaceId::Default, FaceId::Default];
+const ROW_FACE: [FaceId; 3] = [FaceId::KitRow, FaceId::KitRow, FaceId::KitRow];
 
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {

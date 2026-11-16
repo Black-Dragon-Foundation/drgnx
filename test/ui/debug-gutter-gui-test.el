@@ -123,7 +123,10 @@ middle."
       (with-selected-frame root
         (set-window-configuration config)
         ;; the region drawn on line 7 left its (deleted) overlay on the window
-        (set-window-parameter nil 'internal-region-overlay nil))
+        (set-window-parameter nil 'internal-region-overlay nil)
+        ;; the breakpoint's ruler strip is gone (`drgnx-ruler--hide'), but Glitnir drops what it derived from it
+        ;; (`glitnir--ruler', `glitnir--ruler-key') only when the frame next publishes
+        (drgnx-test-wait-presented))
       (delete-directory dir t))))
 
 (provide 'debug-gutter-gui-test)

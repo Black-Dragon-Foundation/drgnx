@@ -40,7 +40,9 @@ None: the row's own text is what a screen reader speaks.
 
 ## Colours
 
-No colours of its own: it draws on the surface it is in, with the states' faces.
+| Binding | Face | Fill | Text | Edge |
+|---|---|---|---|---|
+| own | `drgnx-kit-row` | - | - | - |
 
 ## States
 

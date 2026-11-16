@@ -149,7 +149,7 @@ it (a notes repository with the code repositories inside it)."
 (defface drgnx-work-title '((t :inherit drgnx-ui-caption :weight semibold)) "An agent card's name line." :group 'drgnx-work-space)
 (defface drgnx-work-meta '((t :inherit drgnx-code-small)) "An agent card's line of minutes, spend and progress: the code font (it names no box: a card's box runs on)."
   :group 'drgnx-work-space)
-(defface drgnx-work-selected '((t :inherit drgnx-selected)) "The selected item." :group 'drgnx-work-space)
+(defface drgnx-work-selected '((t :inherit drgnx-row-selected)) "The selected item." :group 'drgnx-work-space)
 (defface drgnx-work-chain '((t :inherit drgnx-accent)) "Items on the selection's chain." :group 'drgnx-work-space)
 (defface drgnx-work-overlap '((t :inherit warning)) "An overlap's flag and its edge." :group 'drgnx-work-space)
 (defface drgnx-work-needs-you '((t :inherit drgnx-status-attention)) "A thing that needs you." :group 'drgnx-work-space)
