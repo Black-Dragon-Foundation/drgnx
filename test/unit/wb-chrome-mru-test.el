@@ -5,6 +5,7 @@
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-chrome)
 (require 'drgnx-groups)
+(defvar drgnx-close-discarded)
 
 (defmacro drgnx-chrome-test--with (dir &rest body)
   "BODY with chrome on, one editor window, a temp DIR for files."
@@ -134,3 +135,49 @@
       (should (equal (window-parameter (selected-window) 'drgnx-tab-history) (list c a)))
       (drgnx-chrome-test--show a)
       (should (equal (window-parameter (selected-window) 'drgnx-tab-history) (list a c))))))
+
+(ert-deftest drgnx-chrome/closing-a-changed-file-asks-to-save ()
+  "Close Tab on the last tab of a changed file asks Save / Don't Save / Cancel (`drgnx-save-ask'): Save writes it and
+closes, Don't Save closes and drops the changes (the buffer goes, its text kept in `drgnx-close-discarded'), Cancel
+leaves the tab.  An unchanged file, or one another group still shows a tab of, closes without a question."
+  (drgnx-chrome-test--with dir
+    (let* ((answer nil) (asked 0) (drgnx-close-discarded nil)
+           (a (drgnx-chrome-test--open dir "a.txt")) (b (drgnx-chrome-test--open dir "b.txt")))
+      (cl-letf (((symbol-function 'drgnx-save-ask) (lambda (_name) (cl-incf asked) answer)))
+        (drgnx-chrome-test--show b)
+        (drgnx-chrome-close-tab)                            ; unchanged: no question
+        (should (= 0 asked))
+        (should (equal (drgnx-chrome-tabs (selected-window)) (list a)))
+        (drgnx-chrome-test--show b)                         ; its tab again (the buffer stayed open)
+        (with-current-buffer b (insert "kept? "))
+        (setq answer 'cancel)
+        (drgnx-chrome-close-tab)
+        (should (= 1 asked))
+        (should (eq (window-buffer) b))
+        (should (memq b (drgnx-chrome-tabs (selected-window))))
+        (should (buffer-modified-p b))
+        (setq answer 'save)
+        (drgnx-chrome-close-tab)
+        (should (= 2 asked))
+        (should-not (memq b (drgnx-chrome-tabs (selected-window))))
+        (should-not (buffer-modified-p b))
+        (should (equal "kept? x\n" (with-temp-buffer (insert-file-contents (expand-file-name "b.txt" dir))
+                                                     (buffer-string))))
+        (drgnx-chrome-test--show b)
+        (with-current-buffer b (goto-char (point-min)) (insert "dropped "))
+        (setq answer 'discard)
+        (drgnx-chrome-close-tab)
+        (should (= 3 asked))
+        (should-not (buffer-live-p b))
+        (should (equal "dropped kept? x\n" (plist-get (car drgnx-close-discarded) :text)))
+        (should (equal "kept? x\n" (with-temp-buffer (insert-file-contents (expand-file-name "b.txt" dir))
+                                                     (buffer-string))))
+        ;; a tab of it in another group: the edit stays in view, no question
+        (setq b (drgnx-chrome-test--open dir "b.txt"))
+        (with-current-buffer b (insert "two groups "))
+        (let ((w2 (split-window nil nil 'right)))
+          (set-window-parameter w2 'drgnx-tabs (list b))
+          (drgnx-chrome-close-tab)
+          (should (= 3 asked))
+          (should (buffer-live-p b))
+          (should (buffer-modified-p b)))))))
