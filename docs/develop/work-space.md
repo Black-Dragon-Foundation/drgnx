@@ -286,7 +286,9 @@ document as first stored). The agent's folder is never asked.
   document store does not hold, so they are not listed.
 - `work/hunks {session, path} -> {diff}`: the unified diff of one path, base text to current (`Hub::diff_against_base`),
   empty when it changed nothing. In a shared tree, the diff of its own hunks (`Hub::session_diff`): your lines
-  are context only.
+  are context only. Proved by the conformance row `edit-history/agent-edits-never-list-your-changes` and, on the real
+  panel, the GUI row `test/ui/agent-panel-edits-gui-test.el` (your line plus an untracked file, then the agent's edit:
+  the ledger lists only its hunk, and Reject keeps your line).
 - `work/file-at {session, path, seq} -> {bytes, seq}`: the file's bytes (base64) after the session's newest record at or
   before step `seq` (`Hub::file_at_step`, which reads the records' cause); a file the session never touched is the base
   commit's. `seq` is that record's step, 0 before the session's first. A missing path or a path leaving the worktree is
