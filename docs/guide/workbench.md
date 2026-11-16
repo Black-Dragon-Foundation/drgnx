@@ -579,8 +579,8 @@ type in the minibuffer it may grow (icomplete-vertical, fido-vertical).
 **Closing.** Every help pane, popup and side pane has a **×** in its header: at the right end of the panel's and the
 right dock's tab row and of the popup lane's header; the left dock has Close Sidebar on its island header's ⋯; `x` where the terminal is not UTF-8,
 and the panel, the right dock and the popup lane close with `Esc` or `q` (**Close Pane**, bound in all three key
-profiles): the panel and the right dock hide (size and tabs kept), a popup ends, and focus goes to the editor you
-used last. The keys only act where you read, not where you type: in a buffer you can edit `q` types a `q`, `Esc` is the Meta
+profiles): the panel and the right dock hide (size and tabs kept), a popup ends, a tile of the grid hides, and focus
+goes to the editor you used last. The keys only act where you read, not where you type: in a buffer you can edit `q` types a `q`, `Esc` is the Meta
 prefix (`Esc x` is `M-x`) and, in the Vim profile, still leaves insert state, and a terminal tab (`comint`,
 `eshell`, `term`, `vterm`; `drgnx-close-input-modes`), a live page you are driving and the minibuffer keep
 both keys. A mode that takes the keyboard for itself joins by adding a predicate to `drgnx-close-input-functions`. In a terminal frame `Esc` stays the Meta prefix, so use

@@ -25,6 +25,14 @@
   ;; a lone tile is a tree too (full size)
   (should (drgnx-grid-valid-tree-p '(editor :px nil :share 1.0 :id 1 :tabs nil :shown nil :point 1 :start 1))))
 
+(ert-deftest drgnx-grid-tree/valid-accepts-instance-entries ()
+  ;; a kind's instance (an agent panel's session) is (KIND . KEY) in a tile's stack
+  (should (drgnx-grid-valid-tree-p '(tile :px nil :share 1.0 :id 1
+                                          :kinds ((agent-panel . "s2") agent-panel (agent-panel . 3))
+                                          :shown (agent-panel . "s2"))))
+  (dolist (bad '(((agent-panel . ("x"))) (("k" . "s")) ((nil . "s"))))
+    (should-not (drgnx-grid-valid-tree-p `(tile :px nil :share 1.0 :id 1 :kinds ,bad :shown nil)))))
+
 (ert-deftest drgnx-grid-tree/valid-rejects-junk ()
   (dolist (junk (list nil 42 "row" '(tile :px "x")
                       '(tile :px 0 :share 0.5 :id 1 :kinds (a) :shown a)       ; px out of range

@@ -286,7 +286,7 @@ module it belongs to was turned off, and on again, while the area stayed up."
 ;;;; The API
 
 (cl-defun drgnx-pane-define-kind (kind &key title buffer placeholder home size view slot height fill on-show
-                                       on-focus stack companions contextual sidebar)
+                                       on-focus stack companions contextual sidebar instance instance-key)
   "Define pane KIND (a symbol); re-defining replaces.  Returns KIND.
 HOME is `left', `bottom', `right' or `editor' (default `bottom').  TITLE is a string (a left kind's may be a
 function).  BUFFER: a function returning the kind's buffer, or a buffer, or a buffer name (made when
@@ -303,6 +303,10 @@ their own (a `right' kind; `drgnx-wb-define-tab').
 CONTEXTUAL: a bottom or right kind's tab is in its area's tab row only while shown (`drgnx-wb-define-tab').
 SIDEBAR: a `left' kind that is the whole side bar (the grid's `side-bar'): it shows, hides and sizes the left dock
 with the current view's sections, and has no section of its own.
+INSTANCE and INSTANCE-KEY: a kind with one buffer per key (the agent panel's sessions).  INSTANCE is a function of a
+KEY returning its buffer; INSTANCE-KEY a function of a buffer returning its KEY, or nil for none of them.  With the
+grid on, a shown buffer of a second key gets a tile of its own, whose stack holds the entry (KIND . KEY); from the
+third on they stack (`drgnx-grid--show-instance').  The docks show one at a time, as before.
 Called from a module's setup, the definition records the module as the kind's owner (`drgnx-state-kind-owner')
 and its undo \"pane kind KIND\": KIND hidden `:by teardown' where it shows (its size, front tab and places
 are kept as intent), then the previous definition put back or `drgnx-pane-undefine-kind' — only while KIND is
@@ -311,7 +315,8 @@ still the one defined here.  Defining a new KIND that is in front in an area tha
     (unless (memq home drgnx-pane--homes) (user-error "Bad pane home %s" home))
     (let ((spec (list :title title :buffer buffer :placeholder placeholder :home home :size size :view view
                       :slot slot :height height :fill fill :on-show on-show :on-focus on-focus :stack stack
-                      :companions companions :contextual contextual :sidebar sidebar))
+                      :companions companions :contextual contextual :sidebar sidebar
+                      :instance instance :instance-key instance-key))
           (old (drgnx-pane-kind kind)) (old-owner (drgnx-state-kind-owner kind)))
       (drgnx-pane--call :define kind spec old)         ; first: an error leaves the kinds as they were
       (if old (setf (alist-get kind drgnx-pane--kinds) spec)       ; a new kind goes last, a redefined one stays put

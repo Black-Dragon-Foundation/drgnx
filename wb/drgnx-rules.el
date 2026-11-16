@@ -20,6 +20,15 @@
 (require 'drgnx-notice)
 (require 'drgnx-modules-helpers)
 
+(declare-function drgnx-grid-temporary-tile "drgnx-grid" (buffer alist))
+(declare-function drgnx-grid-split-tile "drgnx-grid" (window side))
+(declare-function drgnx-grid--adopt "drgnx-grid" (window))
+
+(defcustom drgnx-rules-never-cover-modes '(drgnx-work-map-mode)
+  "Modes (and the modes derived from them) whose editor window a file never covers (work-space §9.3): the Work map.
+A file goes to another editor tile, else, with the grid on, to a new one split from the map's right."
+  :type '(repeat symbol) :group 'drgnx)
+
 (defvar drgnx-rules--table nil
   "Rules, tried first to last: (MATCHER PLACE . PROPS).  `drgnx-wb-place' puts new ones first.")
 (defvar drgnx-rules--places nil "Alist PLACE → function (BUFFER ALIST PROPS) → window or nil.")
@@ -180,10 +189,13 @@ the panel keep their size (finder balances the frame)."
 (defun drgnx-rules--side-window (orig buffer alist)
   "Around `display-buffer-in-side-window': a package calling it directly (which-key does) for a
 buffer a rule places goes to that place; any other buffer gets a slot of its own, so it never
-takes over a dock's or the panel's window (Emacs reuses a same-slot side window)."
+takes over a dock's or the panel's window (Emacs reuses a same-slot side window).  With the grid
+on, a temporary tile of its own (`drgnx-grid-temporary-tile'): no tile is ever a side window."
   (cond
    (drgnx-rules--placing (funcall orig buffer alist))
    ((drgnx-wb-rule-for buffer (cons nil alist)) (drgnx-rules--display buffer alist))
+   ;; the grid has no side windows: a tile of its own, temporary (never saved)
+   ((drgnx-wb-grid-p) (drgnx-grid-temporary-tile buffer alist))
    (t
     (let* ((side (or (cdr (assq 'side alist)) 'bottom))
            (ours (seq-filter (lambda (w) (and (eq (window-parameter w 'window-side) side)
@@ -210,12 +222,29 @@ not the selected one when ALIST says `inhibit-same-window' and another exists."
         (seq-find ok (window-list nil 'nomini))
         (and avoid (drgnx-rules--free-p avoid) avoid))))     ; one editor: it (never a split)
 
+(defun drgnx-rules--covers-p (w)
+  "Non-nil when editor window W shows a buffer no file may cover (`drgnx-rules-never-cover-modes')."
+  (apply #'provided-mode-derived-p (buffer-local-value 'major-mode (window-buffer w)) drgnx-rules-never-cover-modes))
+
+(defun drgnx-rules--uncovered (w buffer)
+  "W, unless it shows the Work map and BUFFER is another buffer: then another free editor, else (the grid on) a new
+editor tile split from W's right; else W."
+  (if (or (not w) (eq (window-buffer w) buffer) (not (drgnx-rules--covers-p w))) w
+    (or (seq-find (lambda (o) (and (drgnx-rules--free-p o) (not (drgnx-rules--covers-p o)))) (window-list nil 'nomini))
+        (and (drgnx-wb-grid-p)
+             (let ((new (drgnx-grid-split-tile w 'right)))
+               (set-window-dedicated-p new nil)
+               (drgnx-grid--adopt new)
+               new))
+        w)))
+
 (defun drgnx-rules--editor (buffer alist _props)
-  "A window already showing BUFFER in the editor area, else the editor used last; never a split.
+  "A window already showing BUFFER in the editor area, else the editor used last; never a split, except that a file
+never covers the Work map (`drgnx-rules-never-cover-modes', `drgnx-rules--uncovered').
 Nil when every editor is locked (C-x w d): Emacs' own actions decide then."
   (let ((w (or (seq-find (lambda (w) (and (eq (window-buffer w) buffer) (drgnx-signal-editor-window-p w)))
                          (window-list nil 'nomini))
-               (drgnx-rules--editor-window alist))))
+               (drgnx-rules--uncovered (drgnx-rules--editor-window alist) buffer))))
     (when w (window--display-buffer buffer w 'reuse alist))))
 
 (defun drgnx-rules--current (buffer alist props)

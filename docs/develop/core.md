@@ -3146,7 +3146,7 @@ its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) an
 ## Pane kinds (`wb/drgnx-panes.el`)
 
 Every pane (Explorer, agents, terminal, help, …) is one data definition, a kind, made with
-`(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack :companions)`.
+`(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack :companions :instance :instance-key)`.
 `:home` is `left`, `bottom`, `right` or `editor`; `:title` may be left out (a `left` kind's section header then shows
 only its ✕). Callers show and find panes by kind and never use the dock, area
 or section API directly: `drgnx-pane-show` (`:buffer`, `:select`), `drgnx-pane-hide`, `drgnx-pane-toggle`,
@@ -3244,8 +3244,10 @@ undo stack and saved layouts, and it is applied by rebuilding windows, never by 
 **The format.** A `TREE` is one of:
 
 - `(row :px N :share F CHILD…)`: children side by side; `(col :px N :share F CHILD…)`: children stacked;
-- `(tile :px N :share F :id I :kinds (KIND…) :shown KIND :dock DOCK :state PLIST)`: a tool tile, its stack of kinds,
-  the one shown, its dock (`left`, `right`, `bottom` or nil) and its kinds' own state;
+- `(tile :px N :share F :id I :kinds (ENTRY…) :shown ENTRY :dock DOCK :state PLIST)`: a tool tile, its stack, the
+  entry shown, its dock (`left`, `right`, `bottom` or nil) and its kinds' own state. An entry is a kind, or
+  `(KIND . KEY)`, one instance of a kind (an agent panel's session; KEY a string, number or symbol:
+  `drgnx-grid-tree-entry-p`);
 - `(editor :px N :share F :id I :tabs (FILE…) :shown FILE :point P :start S)`: an editor tile and its tabs by file.
 
 `:px` is logical pixels (`drgnx-pixels-scale`) along the parent's direction, nil at the root; `:share` is the node's
@@ -3291,6 +3293,35 @@ dock toggled — leaves full size first, then acts. The full tile's tab line sta
 `C-x 1` and those Vim keys never lose the layout. Zen is full size plus centred text: View: Zen (`drgnx-look-zen`) and
 the Zen layout (`drgnx-layouts--zen`, its way back the layout's own: `drgnx-grid-forget-full-size`).
 Tests: `test/unit/grid-tree-live-test.el`, `test/ui/grid-full-size-gui-test.el`.
+
+**Placement on tiles** (work-space §9.3). With the grid on:
+
+- **a file** goes to the editor tile you used last; it never covers the Work map (`drgnx-rules-never-cover-modes`,
+  default `drgnx-work-map-mode`): another editor tile takes it, else a new one split from the map's right
+  (`drgnx-rules--uncovered`);
+- **a kind with instances** (`:instance` KEY → buffer, `:instance-key` buffer → KEY or nil; the agent panel's
+  sessions, `drgnx-agent-panel--session-of`): the first shows as the kind always did (the right dock); a second key's
+  buffer gets a tile of its own left of it, its stack holding `(KIND . KEY)`; from the third on they stack onto the last
+  instance tile; a key that has a tile comes back to it (`drgnx-grid--show-instance`). Each instance's tab is titled
+  by its buffer. A tile of the grid's own shows its kind's `:companions` as parts of its atom, fitted to their text
+  (`drgnx-grid--companions`); `delete-window` on a part hides the tile;
+- **the first show of a kind in `drgnx-grid-placements`** while the map shows (default: the Research Trail): a tile
+  below the map, or, when the frame is narrower than `drgnx-grid-narrow-px` (1200 logical px) and the `:narrow` kind
+  (Detail) shows, stacked onto its tile or split below its dock (`drgnx-grid--place`);
+- **a package's own `display-buffer-in-side-window`** for a buffer no rule places: a **temporary tile** on that side
+  of the grid (`drgnx-grid-temporary-tile`: `drgnx-tile-temporary` t, sized by the call's `window-width` or
+  `window-height`, else a quarter), never a side window; `delete-window` deletes it;
+- **the popup lane** borrows the panel when it shows and is not selected, else it is a temporary row under the grid
+  (`drgnx-grid-popup-row`, role `popup`, no tile); ending it leaves the grid as it was, to the pixel
+  (`drgnx-grid-end-popup-row`).
+
+While a temporary window shows, `drgnx-grid-tree` answers the tree from before the first of them (frame parameter
+`drgnx-grid--good`, the last good tree): temporary windows are never saved. **A grid a package collapsed** — two or
+more tiles gone in one change, past the grid's own hides (a package's `delete-other-windows` with
+`ignore-window-parameters`, or `set-window-configuration`) — is pushed as it was on the frame's layout undo stack
+(`drgnx-grid-push`, frame parameter `drgnx-grid-stack`, newest first, at most 20; `drgnx-grid--watch-foreign` on the
+store's `windows-changed`). Close Pane (`Esc`, `q`) on a tool tile hides it.
+Tests: `test/unit/grid-rules-test.el` (`drgnx-grid-rules/`).
 
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 

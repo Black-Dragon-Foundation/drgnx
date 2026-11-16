@@ -16,7 +16,7 @@
     (set-window-parameter nil p nil))
   (set-window-dedicated-p nil nil)
   (dolist (p '(drgnx-grid-memory drgnx-grid-next-id drgnx-intent-by drgnx-wb-panel-px drgnx-wb-right-px
-                                 drgnx-wb-dock-px drgnx-wb-areas))
+                                 drgnx-wb-dock-px drgnx-wb-areas drgnx-grid-stack drgnx-grid--good))
     (set-frame-parameter nil p nil))
   (remhash (selected-frame) drgnx-grid--kinds))
 

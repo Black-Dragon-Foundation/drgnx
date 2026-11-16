@@ -7,8 +7,10 @@
 ;; layout undo stack and saved layouts.  Pure functions, safe in batch.  A TREE is one of:
 ;;   (row :px N :share F CHILD...)   children side by side
 ;;   (col :px N :share F CHILD...)   children stacked
-;;   (tile :px N :share F :id I :kinds (KIND...) :shown KIND :dock DOCK :state PLIST)
+;;   (tile :px N :share F :id I :kinds (ENTRY...) :shown ENTRY :dock DOCK :state PLIST)
 ;;   (editor :px N :share F :id I :tabs (FILE...) :shown FILE :point P :start S)
+;; An ENTRY is a pane kind (a symbol) or (KIND . KEY), one instance of a kind (an agent panel's session: KEY a string,
+;; number or symbol).
 ;; :px is logical pixels along the parent's direction (nil at the root), :share the node's part of its parent, in
 ;; (0, 1].  A restored tree is checked by `drgnx-grid-valid-tree-p' before anything is built from it.
 ;; See docs/develop/core.md, "The grid".
@@ -25,6 +27,11 @@
   "Non-nil when PLIST is a proper list of keyword and value pairs."
   (and (proper-list-p plist) (cl-evenp (length plist))
        (cl-loop for (k _v) on plist by #'cddr always (keywordp k))))
+
+(defun drgnx-grid-tree-entry-p (x)
+  "Non-nil when X is a tile's stack entry: a kind (a symbol), or (KIND . KEY), KEY a string, number or symbol."
+  (or (symbolp x)
+      (and (consp x) (car x) (symbolp (car x)) (or (stringp (cdr x)) (numberp (cdr x)) (symbolp (cdr x))))))
 
 (defun drgnx-grid-tree--plain-p (x depth)
   "Non-nil when X holds only plain data (numbers, strings, symbols, conses), no deeper than DEPTH: never a buffer, a
@@ -67,7 +74,8 @@ marker, a window, a frame, a process or any other object that cannot be written 
            (throw 'bad nil))
          (if (eq type 'tile)
              (let ((kinds (plist-get p :kinds)))
-               (unless (and (proper-list-p kinds) (cl-every #'symbolp kinds) (symbolp (plist-get p :shown))
+               (unless (and (proper-list-p kinds) (cl-every #'drgnx-grid-tree-entry-p kinds)
+                            (drgnx-grid-tree-entry-p (plist-get p :shown))
                             (memq (plist-get p :dock) '(nil left right bottom))
                             (drgnx-grid-tree--plist-p (plist-get p :state)))
                  (throw 'bad nil)))
