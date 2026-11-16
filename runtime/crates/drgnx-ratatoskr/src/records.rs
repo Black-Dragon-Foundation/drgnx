@@ -794,8 +794,19 @@ impl Views {
         Ok((f, acts))
     }
 
-    /// [`Views::sync`], with the ids it newly flagged.
+    /// [`Views::sync`], with the ids it newly flagged.  A plan and its ledger (`<plan>.ledger.md`) are two files that
+    /// say one thing: whichever synced, the plan's tasks' `ledger` data is read from the ledger again.
     async fn sync_flagged(
+        &self,
+        db: &CoordDb,
+        path: &Path,
+    ) -> Result<(Flush, u64, Vec<String>), Error> {
+        let r = self.sync_inner(db, path).await?;
+        ledger_marks(db, path).await?;
+        Ok(r)
+    }
+
+    async fn sync_inner(
         &self,
         db: &CoordDb,
         path: &Path,
@@ -933,6 +944,80 @@ impl Views {
             old.abort();
         }
     }
+}
+
+/// The plan file and its ledger when PATH is either (`X.md` and `X.ledger.md`).
+fn plan_and_ledger(path: &Path) -> Option<(PathBuf, PathBuf)> {
+    let name = path.file_name()?.to_str()?;
+    let stem = name.strip_suffix(".ledger.md").or_else(|| {
+        let s = name.strip_suffix(".md")?;
+        path.with_file_name(format!("{s}.ledger.md"))
+            .is_file()
+            .then_some(s)
+    })?;
+    Some((
+        path.with_file_name(format!("{stem}.md")),
+        path.with_file_name(format!("{stem}.ledger.md")),
+    ))
+}
+
+/// What the plan's ledger says of each of its tasks, kept on the task as `data.ledger` (`done`, `commits` as written,
+/// `ahead`: the ledger says done while the plan's steps are not all checked, and the file of the ledger).  A task the
+/// ledger does not mark has none.  It is data beside the task, never its status: the status is the plan's steps, which
+/// the sync writes back into the plan's text, and a ledger must not tick a plan's boxes.  The map reads both.
+async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
+    let Some((plan, ledger)) = plan_and_ledger(path) else {
+        return Ok(());
+    };
+    let marks = std::fs::read_to_string(&ledger)
+        .map(|t| saga::ledger::done_marks(&t))
+        .unwrap_or_default();
+    let file = ledger.to_string_lossy().into_owned();
+    let tasks: Vec<Piece> = pieces(db, &plan)
+        .await?
+        .into_iter()
+        .filter(|p| p.role == "task")
+        .collect();
+    let mut changes: Vec<(i64, Value)> = Vec::new();
+    for t in &tasks {
+        let Some(number) = t.data["number"].as_str() else {
+            continue;
+        };
+        let want = marks
+            .iter()
+            .find(|m| m.tasks.iter().any(|n| n == number))
+            .map(|m| {
+                let steps = t.data["steps"].as_array();
+                let ticked = steps.is_some_and(|s| {
+                    !s.is_empty() && s.iter().all(|x| x["done"].as_bool() == Some(true))
+                });
+                json!({"done": true, "commits": m.commits, "ahead": !ticked, "file": file})
+            })
+            .unwrap_or(Value::Null);
+        let have = t.data.get("ledger").cloned().unwrap_or(Value::Null);
+        if have != want {
+            changes.push((t.n, want));
+        }
+    }
+    if changes.is_empty() {
+        return Ok(());
+    }
+    db.write(meta(), move |tx| {
+        for (n, want) in changes {
+            entity::update(
+                tx,
+                n,
+                None,
+                Changes {
+                    data_patch: Some(json!({ "ledger": want })),
+                    ..Default::default()
+                },
+            )?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(fail)
 }
 
 /// M's acts carried out on the graph, and its pieces put in its order.  How many acts.
@@ -1873,6 +1958,68 @@ mod tests {
         assert_eq!(row_status(&f, "M1-1%").await, "done");
         assert_eq!(row_status(&f, "M1-2%").await, "open");
         assert_eq!(row_status(&f, "M2-1%").await, "done");
+    }
+
+    /// A task's `data.ledger` (as text), or "none".
+    async fn ledger_of(f: &Fix, number: &'static str) -> String {
+        f.db.read(move |c| {
+            Ok(c.query_row(
+                "select coalesce(json_extract(data, '$.ledger'), 'none') from entity \
+                 where kind = 'task' and json_extract(data, '$.number') = ?1 and retired_tx is null \
+                 and json_extract(data, '$.records.file') like '%/pair.md'",
+                [number],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_ledger_marks_its_plans_tasks_without_ticking_the_plan() {
+        let f = fix();
+        let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [x] b\n\n### Task 3: three\n\n- [ ] c\n";
+        let ledger = "# SDD ledger — plan: pair.md\nTask 1: complete (commit abc1234, tests ok)\nTask 2: complete (commits 1111111..2222222)\n";
+        let (pp, lp) = (
+            f.root.join("docs/plans/drgnx/pair.md"),
+            f.root.join("docs/plans/drgnx/pair.ledger.md"),
+        );
+        std::fs::write(&pp, plan).unwrap();
+        std::fs::write(&lp, ledger).unwrap();
+        f.import(Some(RecordKind::Plans), false).await;
+        f.import(Some(RecordKind::Ledgers), false).await;
+        // task 1: the ledger is ahead of its unchecked steps; task 2: both agree; task 3: unmarked
+        let one: Value = serde_json::from_str(&ledger_of(&f, "1").await).unwrap();
+        assert_eq!(one["done"], true);
+        assert_eq!(one["ahead"], true);
+        assert_eq!(one["commits"], json!(["abc1234"]));
+        let two: Value = serde_json::from_str(&ledger_of(&f, "2").await).unwrap();
+        assert_eq!(
+            (two["done"].clone(), two["ahead"].clone()),
+            (json!(true), json!(false))
+        );
+        assert_eq!(two["commits"], json!(["1111111", "2222222"]));
+        assert_eq!(ledger_of(&f, "3").await, "none");
+        // the ledger never ticks the plan's boxes, and a second import changes nothing
+        assert_eq!(std::fs::read_to_string(&pp).unwrap(), plan);
+        let again = f.import(None, false).await;
+        assert!(
+            again
+                .files
+                .iter()
+                .filter(|r| r.path.contains("/pair"))
+                .all(|r| r.ops == 0),
+            "{again:?}"
+        );
+        // the ledger loses its first line: that task has no mark any more, found by a sync of the ledger alone
+        std::fs::write(
+            &lp,
+            "# SDD ledger — plan: pair.md\nTask 2: complete (commits 1111111..2222222)\n",
+        )
+        .unwrap();
+        f.sync(&lp).await;
+        assert_eq!(ledger_of(&f, "1").await, "none");
+        assert_ne!(ledger_of(&f, "2").await, "none");
     }
 
     #[tokio::test]

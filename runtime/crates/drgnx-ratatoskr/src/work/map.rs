@@ -1916,7 +1916,8 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
             {
                 let mut q = c.prepare(
                     "select id, kind, coalesce(title, ''), coalesce(status, ''), \
-                     coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file') \
+                     coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file'), \
+                     json_extract(data, '$.ledger.done') \
                      from entity where retired_tx is null and kind in ('ask', 'spec', 'plan', 'task') order by n",
                 )?;
                 let all = q
@@ -1928,12 +1929,13 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                             r.get::<_, String>(3)?,
                             r.get::<_, String>(4)?,
                             r.get::<_, Option<String>>(5)?,
+                            r.get::<_, Option<bool>>(6)?.unwrap_or(false),
                         ))
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
                 let hidden = legacy_duplicates(all.iter().map(|r| (r.0.as_str(), r.5.as_deref())));
                 plan_of.retain(|_, plan| !hidden.contains(plan));
-                for (rank, (id, kind, title, status, text, _)) in all.into_iter().enumerate() {
+                for (rank, (id, kind, title, status, text, _, ledger_done)) in all.into_iter().enumerate() {
                     if hidden.contains(&strip(&id)) {
                         continue;
                     }
@@ -1958,7 +1960,7 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                                 id: strip(&id),
                                 plan: plan.clone(),
                                 title,
-                                done: status == "done",
+                                done: status == "done" || ledger_done,
                             })
                         }
                     });
