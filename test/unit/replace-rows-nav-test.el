@@ -346,6 +346,20 @@ text); the numbers of the lines kept are still the file's."
               (drgnx-replace--hunk-lines "" (list :header "@@ -9,4 +9,4 @@" :lines '(" " "-a x" "+a y" " b" " "))))))
     (should (equal out "  10 - a x\n  10 + a y\n  11   b\n"))))
 
+(ert-deftest drgnx-replace-rows/the-preview-and-sheet-are-ascii-on-an-ascii-terminal ()
+  "On a terminal that does not write UTF-8 a skipped match's reason, an unticked line's note, a group that matched
+nothing and the sheet's counts are ASCII (`drgnx-face-glyph''s dash, arrow-left, empty-set and minus); a batch
+Emacs is such a terminal."
+  (dolist (s (list (drgnx-replace--preview '(:before "a " :text "x" :after " b" :reason "changed on disk") "")
+                   (drgnx-replace--hunk-lines "" (list :header "@@ -9,2 +9,2 @@" :lines '(" a x" " b")) nil '(9))
+                   (drgnx-replace--groups-line "" '((:id 1 :groups ["one" :null])))
+                   (drgnx-replace--sheet-tail '(:path "/nonexistent/x.txt" :edits nil) nil)))
+    (should-not (string-match-p "[^[:ascii:]]" (substring-no-properties s))))
+  (should (string-search " -- changed on disk"
+                         (drgnx-replace--preview '(:before "a " :text "x" :after " b" :reason "changed on disk") "")))
+  (should (string-search "<- unticked, kept"
+                         (drgnx-replace--hunk-lines "" (list :header "@@ -9,1 +9,1 @@" :lines '(" a x")) nil '(9)))))
+
 (ert-deftest drgnx-replace-rows/a-hunks-tints-stop-at-the-card ()
   "Pattern A: with a stop, a diff line's tint ends at it (a stretch in the line's face), and its newline carries no
 tint, so nothing extends to the window's edge (the mockup's `.dl' margin)."

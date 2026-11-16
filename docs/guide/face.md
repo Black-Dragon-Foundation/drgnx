@@ -176,6 +176,8 @@ shows in the icon's place. They are not in the table below.
 | `diamond` | ◆ | `<>` | `search` | ⌕ | `/` |
 | `minimize` | – | `-` | `maximize` | ▢ | `[]` |
 | `bullet` | • | `>` | `newline` | ⏎ | `\n` |
+| `dash` | — | `--` | `arrow-left` | ← | `<-` |
+| `empty-set` | ∅ | `{}` | | | |
 | `fail` | ✕ | `X` | `stopped` | ■ | `#` |
 | `dismiss` | × | `x` | `unqueue` | − | `-` |
 | `info` | ℹ | `i` | `warn` | ⚠ | `!` |
