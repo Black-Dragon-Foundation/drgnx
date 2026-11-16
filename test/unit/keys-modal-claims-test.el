@@ -105,7 +105,9 @@ registered as test commands of scope `window'.")
   ;; A window command on the C-w leader (Vim's C-w h, Focus Left), a window-scope command: in the mixed stack an extra key.
   (drgnx-keys-claims-test--with r drgnx-keys-claims-test--mixed
     (should (member '("C-w" . global-map) (drgnx-keys-claims-test--binds r 'close-tab)))
-    (should (equal (drgnx-keys-claims-test--binds r 'focus-left) '(("C-w h" . drgnx-modal-leader-map))))
+    ;; and VS Code's own (C-k C-<left>, the tiles' Focus Tile Left) from its window layer
+    (should (equal (drgnx-keys-claims-test--binds r 'focus-left)
+                   '(("C-k C-<left>" . global-map) ("C-w h" . drgnx-modal-leader-map))))
     (let* ((cs (drgnx-keys-claims-test--conflicts r "C-w" 'global-map)) (c (car cs)))
       (should (= (length cs) 1))
       (should (eq (plist-get c :kind) 'claim))

@@ -574,11 +574,20 @@ A docked tile's size is noted as its dock's `:sizes' intent.  The window, or nil
   "Non-nil when WINDOW belongs to a tool tile: the tile's window, or a part of its atom (a section, a companion)."
   (and (window-live-p window) (or (drgnx-grid-tool-tile-p window) (window-parameter window 'drgnx-tile-part)) t))
 
+(defun drgnx-grid-room-p (window side)
+  "Non-nil when WINDOW's whole tile can split in two along SIDE, each half at least the least tile size
+\(`drgnx-grid-min-size')."
+  (let ((horizontal (and (memq side '(left right)) t)))
+    (>= (window-size (drgnx-grid--tile-root window) horizontal t)
+        (* 2 (drgnx-grid-min-size (window-frame window) horizontal)))))
+
 (defun drgnx-grid-split-tile (window side)
   "A new window beside WINDOW's whole tile (its atom, `drgnx-grid--tile-root') on SIDE (`right', `below'), taking half
 of the tile, pixelwise; an id and `no-delete-other-windows'.  The caller gives it what it shows.  A tile shown full
-size comes back first, with every other tile."
+size comes back first, with every other tile.  No room for two tiles (`drgnx-grid-room-p'): nothing changes, a
+`user-error' \"No room there\"."
   (drgnx-grid-leave-full-size (window-frame window))
+  (unless (drgnx-grid-room-p window side) (user-error "No room there"))
   (let ((new (let ((drgnx-rules--placing t) (window-combination-limit nil) (window-combination-resize nil)
                    (ignore-window-parameters t) (window-resize-pixelwise t))
                (split-window (drgnx-grid--tile-root window) nil side t))))
@@ -704,8 +713,9 @@ For invoked commands only (`split-editor-right' and `split-editor-down' on a too
       (cond ((and beside (eq (window-parameter beside 'drgnx-role) 'tile))
              (set-window-parameter beside 'drgnx-pane-stack (cons kind (window-parameter beside 'drgnx-pane-stack)))
              (drgnx-grid--bring-to-front beside kind frame))
-            (beside (drgnx-grid--new-tile beside 'below (list kind)))
-            ((plist-get place :below-map) (drgnx-grid--new-tile map 'below (list kind)))))))
+            ((and beside (drgnx-grid-room-p beside 'below)) (drgnx-grid--new-tile beside 'below (list kind)))
+            ((and (plist-get place :below-map) (drgnx-grid-room-p map 'below))
+             (drgnx-grid--new-tile map 'below (list kind)))))))
 
 (defun drgnx-grid--instance-windows (kind frame)
   "The windows on FRAME showing an instance of KIND: its docked window, then the tiles holding its instances."
@@ -728,6 +738,8 @@ of its own, left of the first; from the third on they stack onto the last instan
       (cond ((drgnx-grid--tile-of entry frame) (drgnx-grid-show entry :buffer buffer :select select))
             ;; none shows, or the dock shows this one or none: the kind's own way (one agent: the right dock)
             ((or (null windows) (and docked (member (funcall key-fn (window-buffer docked)) (list nil key)))) nil)
+            ;; one shows and there is no room beside it: the kind's own way (the dock shows this one)
+            ((and (null (cdr windows)) (not (drgnx-grid-room-p (car windows) 'left))) nil)
             (t (let ((w (if (cdr windows)
                             (let ((last (car (last windows))))
                               (set-window-parameter last 'drgnx-pane-stack
@@ -766,7 +778,7 @@ of its own, left of the first; from the third on they stack onto the last instan
 (setf (alist-get 'grid drgnx-pane--backends)
       (list :define #'drgnx-grid--define :show #'drgnx-grid--backend-show :hide #'drgnx-grid--backend-hide
             :window #'drgnx-grid--backend-window :focus #'drgnx-grid--backend-focus
-            :resize #'drgnx-grid--backend-resize))
+            :resize #'drgnx-grid--backend-resize :move #'drgnx-grid--backend-move :stack #'drgnx-grid--backend-stack))
 
 ;;;; Packages' window calls
 
@@ -1246,4 +1258,5 @@ Off, they live in the docks again (`areas')."
     (advice-remove 'balance-windows #'drgnx-grid--balance-editors-only)))
 
 (provide 'drgnx-grid)
+(require 'drgnx-grid-ops)               ; moving tiles: it needs this file first
 ;;; drgnx-grid.el ends here

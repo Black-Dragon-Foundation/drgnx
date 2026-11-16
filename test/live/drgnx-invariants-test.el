@@ -258,3 +258,37 @@ settled within 250 ms."
                 (should (= 0 (plist-get r :guard_violations)))))))
       (drgnx-ui-stop (plist-get s :name))
       (delete-directory root t))))
+
+(defconst drgnx-inv--tile-of-window
+  "(drgnx-uitest--json
+   (list :map (vconcat (mapcar (lambda (w) (format \"%s=%s\" (drgnx-uitest-window-id w)
+                                                     (window-parameter (drgnx-grid-tile-main w) 'drgnx-tile-id)))
+                               (window-list (drgnx-wb-frame) 'nomini)))))"
+  "Each window's report id and its tile's id, \"wN=ID\".")
+
+(ert-deftest drgnx-inv/i11-moves-touch-three-tiles-at-most ()
+  ;; Each of the twelve key moves (move, swap, stack × four directions, the VS Code profile's C-k keys) changes at
+  ;; most three tiles: the one moved, the one it left its space to and the one it landed on.  A move with no tile
+  ;; there or no room changes nothing.
+  (drgnx-inv--with sess
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
+    (drgnx-ui-call sess "(progn (drgnx-groups-split-right) (drgnx-uitest--json (list :ok t)))")
+    (let (bad)
+      (dolist (keys '("C-k <left>" "C-k <right>" "C-k <up>" "C-k <down>"
+                      "C-k S-<left>" "C-k S-<right>" "C-k S-<up>" "C-k S-<down>"
+                      "C-k M-<left>" "C-k M-<right>" "C-k M-<up>" "C-k M-<down>"))
+        ;; from a quiet state: the last move's "No tile there" leaving the echo area is no part of this one
+        (drgnx-ui-call sess "(progn (message nil) (redisplay t) (drgnx-uitest--json (list :ok t)))")
+        (let* ((before (plist-get (drgnx-ui-call sess drgnx-inv--tile-of-window) :map))
+               (r (drgnx-ui-measure sess (list (list :keys keys))))
+               (after (plist-get (drgnx-ui-call sess drgnx-inv--tile-of-window) :map))
+               (tile-of (lambda (id) (let ((hit (seq-find (lambda (m) (string-prefix-p (concat id "=") m))
+                                                          (append after before nil))))
+                                       (if hit (substring hit (1+ (length id))) id))))
+               (tiles (delete-dups (mapcar tile-of (append (plist-get r :collateral) nil)))))
+          (unless (and (<= (length tiles) 2) (= 0 (plist-get r :guard_violations)))
+            (push (list keys :collateral (plist-get r :collateral) :tiles tiles :guard (plist-get r :guard)
+                        :before before :after after :trace (plist-get r :trace))
+                  bad))))
+      (when bad (let ((print-length nil) (print-level nil)) (message "I11 bad: %S" bad)))
+      (should-not bad))))

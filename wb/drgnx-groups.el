@@ -29,6 +29,7 @@
 (declare-function drgnx-grid-pick-kind "drgnx-grid" (window))
 (declare-function drgnx-grid--adopt "drgnx-grid" (window))
 (declare-function drgnx-grid-leave-full-size "drgnx-grid" (&optional frame))
+(declare-function drgnx-grid-room-p "drgnx-grid" (window side))
 
 (defun drgnx-groups--on-tile-p ()
   "Non-nil when the grid is on and the selected window belongs to a tool tile (a dock, the panel, a moved kind)."
@@ -45,7 +46,8 @@ size comes back first, with every other tile."
         (drgnx-chrome-apply nil t)
         new)
     (let* ((g (drgnx-groups--current)) (b (window-buffer g))
-           (new (split-window g nil side)))
+           (new (progn (when (and (drgnx-wb-grid-p) (not (drgnx-grid-room-p g side))) (user-error "No room there"))
+                       (split-window g nil side))))
       (set-window-parameter new 'drgnx-tabs nil)
       (set-window-buffer new b)
       (when (drgnx-wb-grid-p) (drgnx-grid--adopt new))

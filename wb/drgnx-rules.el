@@ -23,6 +23,7 @@
 (declare-function drgnx-grid-temporary-tile "drgnx-grid" (buffer alist))
 (declare-function drgnx-grid-split-tile "drgnx-grid" (window side))
 (declare-function drgnx-grid--adopt "drgnx-grid" (window))
+(declare-function drgnx-grid-room-p "drgnx-grid" (window side))
 
 (defcustom drgnx-rules-never-cover-modes '(drgnx-work-map-mode)
   "Modes (and the modes derived from them) whose editor window a file never covers (work-space §9.3): the Work map.
@@ -231,7 +232,7 @@ not the selected one when ALIST says `inhibit-same-window' and another exists."
 editor tile split from W's right; else W."
   (if (or (not w) (eq (window-buffer w) buffer) (not (drgnx-rules--covers-p w))) w
     (or (seq-find (lambda (o) (and (drgnx-rules--free-p o) (not (drgnx-rules--covers-p o)))) (window-list nil 'nomini))
-        (and (drgnx-wb-grid-p)
+        (and (drgnx-wb-grid-p) (drgnx-grid-room-p w 'right)
              (let ((new (drgnx-grid-split-tile w 'right)))
                (set-window-dedicated-p new nil)
                (drgnx-grid--adopt new)
