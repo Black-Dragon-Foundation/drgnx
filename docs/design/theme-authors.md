@@ -32,7 +32,8 @@ the first graphical frame of a daemon appears:
   (1.10:1 dark, 1.20:1 light); on a black editor the gap stays black and the panel moves on instead. Raised, popups and
   the quiet selection are the panel moved another 3 %.
 - **Text.** Muted and subtle text take the theme's `shadow` colour, moved toward the text colour until it reads at 4.5:1
-  on the editor, the panel and raised surfaces.
+  on the editor, the panel and raised surfaces. When the `shadow` colour had to move, one notice (source `look`) says
+  so; the next theme change updates or clears it.
 - **Accent and focus.** Both take the colour of `link`; the hidden control takes the panel colour.
 - **Agents.** Agents 1 to 6 take the foregrounds of the function, keyword, string, type, constant and builtin faces,
   each only if it is at least 30 degrees of hue and a delta E of 15 away from the others and from the cursor (a grey

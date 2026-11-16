@@ -93,6 +93,16 @@ tokens in it with it; the pages must not depend on the Emacs that makes them, so
 
 ;;;; Tokens
 
+(defconst drgnx-design--component-ids '("button" "key-hint" "card" "progress")
+  "The ids of the components the component tier names (until etc/ui/components.eld lists them).")
+
+(defun drgnx-design-token-tier (name)
+  "The tier of token NAME: `component' when its name starts with a kit component's id and a dash, else `semantic'."
+  (let ((s (symbol-name name)))
+    (if (seq-some (lambda (id) (string-prefix-p (concat id "-") s)) drgnx-design--component-ids)
+        'component
+      'semantic)))
+
 (defun drgnx-design--percent (alpha) (format "%s %%" (let ((p (* 100 alpha))) (if (= p (round p)) (round p) p))))
 
 (defun drgnx-design--definition (value)
@@ -115,12 +125,12 @@ tokens in it with it; the pages must not depend on the Emacs that makes them, so
   (let ((faces (drgnx-design-faces variant)) (entries (alist-get variant (drgnx-design--table))))
     (concat
      (format "## %s\n\n" (alist-get variant drgnx-design-variants))
-     "| Swatch | Token | Value | Definition | Faces |\n|---|---|---|---|---|\n"
+     "| Swatch | Token | Value | Definition | Tier | Faces |\n|---|---|---|---|---|---|\n"
      (mapconcat (lambda (entry)
                   (let ((used (drgnx-design--faces-using (car entry) faces)))
-                    (format "| <span class=\"swatch\" style=\"background: %s\"></span> | `%s` | `%s` | %s | %s |"
+                    (format "| <span class=\"swatch\" style=\"background: %s\"></span> | `%s` | `%s` | %s | %s | %s |"
                             (drgnx-look-token (car entry) variant) (car entry) (drgnx-look-token (car entry) variant)
-                            (drgnx-design--definition (cdr entry))
+                            (drgnx-design--definition (cdr entry)) (drgnx-design-token-tier (car entry))
                             (if used (mapconcat (lambda (f) (format "`%s`" f)) used ", ") "-"))))
                 entries "\n")
      "\n")))
@@ -133,6 +143,9 @@ tokens in it with it; the pages must not depend on the Emacs that makes them, so
    "Every colour drgnx draws is one of these tokens, in one of three variants. A face names a token (never a colour), "
    "a theme turns the token table into faces, and nothing outside `themes/` holds a colour literal. "
    "*Definition* says how the table builds a token: a tint is a colour at an alpha over the editor surface. "
+   "*Tier* is `semantic` for a role (a surface, text, border, state, status or agent colour) and `component` for a "
+   "value one component of the kit needs of its own (named after the component, always a reference to a semantic "
+   "token). "
    "*Faces* are the faces the theme generator gives the token to; faces that inherit them (the semantic ones) "
    "carry the colour further, see [faces](../guide/face.md). "
    "The same values, as CSS custom properties, are in [tokens.css](tokens.css).\n\n"

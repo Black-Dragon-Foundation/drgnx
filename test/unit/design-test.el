@@ -156,6 +156,38 @@
         (should (string-match-p (format "^| <span class=\"swatch\" style=\"background: %s\"></span> | `%s` |" hex token)
                                 section))))))
 
+;;; Token tiers: the semantic tier, and a component tier of references
+
+(defconst design-test--component-seed
+  '(button-primary-bg button-primary-fg button-edge key-hint-edge card-needs-you-edge progress-track)
+  "The component-tier tokens the kit starts with.")
+
+(defun design-test--reference-p (value)
+  "Non-nil when VALUE, a token table entry, names tokens only: a token, or a tint or over of tokens."
+  (pcase value
+    ((pred symbolp) t)
+    (`(tint ,colour . ,(pred numberp)) (symbolp colour))
+    (`(over ,(pred symbolp) ,colour . ,(pred numberp)) (symbolp colour))))
+
+(ert-deftest drgnx-design/component-tokens-are-references ()
+  ;; a component token says which semantic token it uses (tinted or not), never which colour
+  (dolist (variant '(dark light hc))
+    (let ((entries (alist-get variant (drgnx-design--table))))
+      (dolist (token design-test--component-seed)
+        (should (assq token entries))
+        (should (eq 'component (drgnx-design-token-tier token))))
+      (dolist (entry entries)
+        (when (eq 'component (drgnx-design-token-tier (car entry)))
+          (should-not (when-let* ((bad (and (not (design-test--reference-p (cdr entry))) entry)))
+                        (list variant bad))))))))
+
+(ert-deftest drgnx-design/tokens-page-shows-the-tier ()
+  (let ((section (drgnx-design--section (design-test--page "tokens.md") 'dark)))
+    (should (string-search "| Swatch | Token | Value | Definition | Tier | Faces |" section))
+    (should (eq 'semantic (drgnx-design-token-tier 'sel)))
+    (should (string-match-p "^| <span[^|]*</span> | `sel` | [^|]* | [^|]* | semantic |" section))
+    (should (string-match-p "^| <span[^|]*</span> | `button-edge` | [^|]* | [^|]* | component |" section))))
+
 (defvar drgnx-theme--box-fit)
 (defvar drgnx-theme--box-fit-pad)
 

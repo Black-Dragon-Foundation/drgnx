@@ -13,6 +13,22 @@ with it.
 | `components/*.md` | by hand; each has a dark and a light picture in `img/` cut from the look scenes |
 | `index.md`, `app-icon.md`, `theme-authors.md`, `book.css` | by hand (`book.css` only reads the custom properties of the generated `tokens.css`) |
 
+## Token tiers
+
+The token table has two tiers. The **semantic** tier is the roles: surfaces, text, borders, hover, selection, focus,
+status and agent colours, named by the faces in `core/drgnx-faces.el`. The **component** tier holds only what one
+component of the kit needs of its own, named `COMPONENT-SLOT[-STATE]` with the component's id first
+(`button-primary-bg`, `key-hint-edge`), and its value is always a reference to the semantic tier: a token,
+`(tint TOKEN . ALPHA)` or `(over BASE TOKEN . ALPHA)`, never a literal. `drgnx-design-token-tier` says which tier a
+token is in, and the tokens page has a *Tier* column. The tests hold the tier to that
+(`drgnx-design/component-tokens-are-references`) and to the contrast bars (`drgnx-lint/contrast-component-tokens`:
+text on a primary button 4.5:1, 7:1 in high contrast; the edges a control is found by 3:1 on the panel, which is why
+dark and light build them from `subtle` rather than the 1.3:1 separator borders).
+
+Under a third-party theme `drgnx-look-derive` solves the colours the theme does not give; when it has to move one of
+the theme's own (a `shadow` too faint for muted text), it clamps it to the bar and says so in one notice of the `look`
+source, which the next run updates or clears, never a second one and never a prompt.
+
 ## Regenerating
 
 ```sh
