@@ -61,6 +61,8 @@
 (declare-function drgnx-groups-move-to-next "drgnx-groups")
 (declare-function drgnx-chrome-close-tab "drgnx-chrome")
 (declare-function drgnx-chrome-next-tab "drgnx-chrome")
+(declare-function drgnx-chrome-recent-editor "drgnx-chrome")
+(declare-function drgnx-chrome-recent-editor-up "drgnx-chrome")
 (declare-function drgnx-chrome-previous-tab "drgnx-chrome")
 (declare-function drgnx-wb-toggle-panel "drgnx-area")
 (declare-function drgnx-wb-focus-panel "drgnx-area")
@@ -202,6 +204,12 @@ another buffer (BUFFER-NAME) is left as it was."
                                              :command #'drgnx-chrome-next-tab :doc "Show the next tab of this editor group")
                        (drgnx-command-define 'previous-tab :category "View" :title "Previous Tab" :scope 'window
                                              :command #'drgnx-chrome-previous-tab :doc "Show the previous tab of this editor group")
+                       (drgnx-command-define 'editor-recent :category "View" :title "Open Previous Editor in Group"
+                                             :scope 'window :command #'drgnx-chrome-recent-editor
+                                             :doc "This group's editors, most recently used first: the one used before this selected (again moves down)")
+                       (drgnx-command-define 'editor-recent-up :category "View" :title "Open Previous Editor in Group (Up)"
+                                             :scope 'window :command #'drgnx-chrome-recent-editor-up
+                                             :doc "As Open Previous Editor in Group; while its list is open, move the selection up")
                        (drgnx-command-define 'wb-unrouted :category "View" :title "Show Unrouted Buffers" :scope 'window
                                              :command #'drgnx-wb-show-unrouted :doc "Buffers no placement rule matched (each one is a rule to add)")
                        (drgnx-command-define 'toggle-sidebar :category "View" :title "Toggle Sidebar" :scope 'window
