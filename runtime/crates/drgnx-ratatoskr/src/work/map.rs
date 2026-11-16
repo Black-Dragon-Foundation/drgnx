@@ -316,9 +316,13 @@ impl Sess {
             .and_then(|u| Some((u.used?, u.size?)))
             .filter(|(_, size)| *size > 0.0)
             .map(|(used, size)| (used / size * 100.0).clamp(0.0, 100.0) as u8);
+        // the cost is a number, or an object with an `amount` (what the agent's usage update carries)
         let spend = usage
             .and_then(|u| u.cost.as_ref())
-            .and_then(Value::as_f64)
+            .and_then(|c| {
+                c.as_f64()
+                    .or_else(|| c.get("amount").and_then(Value::as_f64))
+            })
             .map(|c| format!("${c:.2}"));
         let mut out = vec![Event::Session(SessionFact {
             id: s.id.clone(),
