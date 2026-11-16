@@ -157,7 +157,8 @@ fn history_of(f: &Front, session: &str) -> Result<(std::sync::Arc<Hub>, Tree), E
     f.core.history.of_tree(&state, &worktree)
 }
 
-/// The session's changed files now, for the map's `Changed` fact.
+/// The session's changed files now, for the map's `Changed` fact: what its tree holds against the base (the clash and
+/// merge rules read the tree, whoever wrote it).
 pub async fn changed(f: &Front, session: &str) -> Result<Option<Changed>, Error> {
     let (hub, tree) = history_of(f, session)?;
     let found = crate::clock::blocking(move || from_history(&hub, &tree))
@@ -167,9 +168,49 @@ pub async fn changed(f: &Front, session: &str) -> Result<Option<Changed>, Error>
     Ok(found.map(|(base, files)| Changed { base, files }))
 }
 
+/// The files the session's agent edited, for the lists you act on (`work/files`: the panel's ledger, the review). In a
+/// tree it shares with you (your checkout: your uncommitted and untracked files, your typing) only its own records
+/// count; in a tree of its own, the branch against its base.
+pub async fn edited(f: &Front, session: &str) -> Result<Option<Changed>, Error> {
+    let (hub, tree) = history_of(f, session)?;
+    let (sid, now) = (session.to_owned(), crate::clock::wall_secs());
+    let found = crate::clock::blocking(move || {
+        if hub.shared_with(&tree, &sid).map_err(|e| e.to_string())? {
+            let base = hub.base_commit(&tree).map_err(|e| e.to_string())?;
+            let files = hub
+                .session_edits(&tree, &sid, now)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|c| FileCount {
+                    path: c.path,
+                    plus: c.plus,
+                    minus: c.minus,
+                    untracked: c.untracked,
+                })
+                .collect();
+            return Ok(Some((base.unwrap_or_default(), files)));
+        }
+        from_history(&hub, &tree)
+    })
+    .await
+    .map_err(|e| fail(e.to_string()))?
+    .map_err(fail)?;
+    Ok(found.map(|(base, files)| Changed { base, files }))
+}
+
+/// Whether SESSION works in a tree it shares with you ([`crate::history::Hub::shared_with`]).
+pub async fn shared(f: &Front, session: &str) -> Result<bool, Error> {
+    let (hub, tree) = history_of(f, session)?;
+    let sid = session.to_owned();
+    crate::clock::blocking(move || hub.shared_with(&tree, &sid))
+        .await
+        .map_err(|e| fail(e.to_string()))?
+        .map_err(|e| fail(e.to_string()))
+}
+
 /// `work/files`.
 pub async fn files(f: &Front, _: &Caller, p: EditedFiles) -> Result<EditedFilesList, Error> {
-    let files = changed(f, p.session.as_str())
+    let files = edited(f, p.session.as_str())
         .await?
         .map(|c| c.files)
         .unwrap_or_default()
@@ -190,10 +231,17 @@ pub async fn hunks(f: &Front, _: &Caller, p: HunksParams) -> Result<Hunks, Error
     let path = p.path.into_inner();
     check_path(&path).map_err(fail)?;
     let (hub, tree) = history_of(f, p.session.as_str())?;
-    let diff = crate::clock::blocking(move || hub.diff_against_base(&tree, &path))
-        .await
-        .map_err(|e| fail(e.to_string()))?
-        .map_err(|e| fail(e.to_string()))?;
+    let (sid, now) = (p.session.as_str().to_owned(), crate::clock::wall_secs());
+    let diff = crate::clock::blocking(move || {
+        if hub.shared_with(&tree, &sid)? {
+            hub.session_diff(&tree, &path, &sid, now)
+        } else {
+            hub.diff_against_base(&tree, &path)
+        }
+    })
+    .await
+    .map_err(|e| fail(e.to_string()))?
+    .map_err(|e| fail(e.to_string()))?;
     Ok(Hunks { diff })
 }
 
@@ -365,6 +413,43 @@ mod tests {
             f.hub.file_at_step(&f.tree, "none.txt", "s1", 5).unwrap(),
             None
         );
+    }
+
+    /// S1-2 (UX audit 2026-11-16): in a tree the agent shares with you, your uncommitted change and your untracked
+    /// file are never its edits, and a file you both changed shows only its lines (yours stay context).
+    #[test]
+    fn shared_tree_lists_only_the_sessions_own_lines() {
+        let f = fx(&[("a.txt", "one\ntwo\n")]);
+        // yours before the session: a changed line and an untracked file, as the watcher records them
+        std::fs::write(f.repo.path().join("a.txt"), "one\ntwo\nmine\n").unwrap();
+        f.hub.on_disk_change(&f.tree, "a.txt", 5.0).unwrap();
+        std::fs::write(f.repo.path().join("NOTES.txt"), "new\n").unwrap();
+        f.hub.on_disk_change(&f.tree, "NOTES.txt", 6.0).unwrap();
+        // the agent's line below yours
+        write(&f, "a.txt", "one\ntwo\nmine\nagent\n", "1", 10.0);
+        assert!(f.hub.shared_with(&f.tree, "s1").unwrap());
+        let e = f.hub.session_edits(&f.tree, "s1", 20.0).unwrap();
+        let e: Vec<_> = e
+            .iter()
+            .map(|c| (c.path.as_str(), c.plus, c.minus))
+            .collect();
+        assert_eq!(e, [("a.txt", 1, 0)]);
+        let d = f.hub.session_diff(&f.tree, "a.txt", "s1", 20.0).unwrap();
+        assert!(d.contains("+agent\n") && d.contains(" mine\n"), "{d}");
+        assert!(!d.contains("+mine"), "{d}");
+        let notes = f
+            .hub
+            .session_diff(&f.tree, "NOTES.txt", "s1", 20.0)
+            .unwrap();
+        assert!(notes.is_empty(), "{notes}");
+    }
+
+    /// A tree only the agent wrote is its own: its edits stay the branch against the base.
+    #[test]
+    fn own_tree_is_not_shared() {
+        let f = fx(&[("a.txt", "one\n")]);
+        write(&f, "a.txt", "one\ntwo\n", "1", 10.0);
+        assert!(!f.hub.shared_with(&f.tree, "s1").unwrap());
     }
 
     /// Pattern D: a file the agent created after the base is listed, marked new, and counted by its lines.

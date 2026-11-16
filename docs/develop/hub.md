@@ -3044,7 +3044,8 @@ ledger (`p:ledger:N`) are the hub's rows too (`view/panel_cards.rs`), each a car
 12 px. The state split: what is pinned (the cards' texts, oldest first), whether the ledger is open and the ledger's mark
 are per-(connection, view) user state in the hub's `Chosen`; the editor sends `pins` and `ledger_open` in
 `agents/panel/look`, and the hub sets the mark to the entry count less one when the ledger opens. The plan comes from the
-session; the ledger's files and a paired chat's hunks the hub reads itself (`work/files`, `history/op/hunks`) when the
+session; the ledger's files and the hunks of a paired chat or a session in a tree it shares with you (`work::edits::shared`)
+the hub reads itself (`work/files`, `history/op/hunks`) when the
 count of finished edits changes. A card's buttons are `card:*` values of `drgnx-agent-panel-action`, which the editor's
 click dispatcher (`drgnx-agent-panel-act`) answers by calling the existing command. The hub orders every row of the
 panel; the editor inserts them in that order, with no key prefix or special case.

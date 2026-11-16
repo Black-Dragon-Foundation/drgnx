@@ -278,11 +278,15 @@ the project's `history.db`, its documents against the branch's base commit (`His
 document as first stored). The agent's folder is never asked.
 
 - `work/files {session} -> {files: [{path, plus, minus, untracked, read_at?}]}`: per changed file the lines added and
-  removed (`Hub::edits_against_base`); `untracked` is a file the base commit lacks. No branch yet: an empty list.
+  removed (`Hub::edits_against_base`); `untracked` is a file the base commit lacks. A session in a tree it shares with
+  you (`Hub::shared_with`: the branch holds an edit, write or disk change by anyone else, e.g. your checkout with your
+  uncommitted and untracked files) counts only its own records instead (`Hub::session_edits`: the text now against the
+  text with its hunks taken back), so your changes are never its edits. No branch yet: an empty list.
   `read_at` is not filled yet. Text files only: binary, large, generated and lock files are whole-file versions the
   document store does not hold, so they are not listed.
 - `work/hunks {session, path} -> {diff}`: the unified diff of one path, base text to current (`Hub::diff_against_base`),
-  empty when it changed nothing.
+  empty when it changed nothing. In a shared tree, the diff of its own hunks (`Hub::session_diff`): your lines
+  are context only.
 - `work/file-at {session, path, seq} -> {bytes, seq}`: the file's bytes (base64) after the session's newest record at or
   before step `seq` (`Hub::file_at_step`, which reads the records' cause); a file the session never touched is the base
   commit's. `seq` is that record's step, 0 before the session's first. A missing path or a path leaving the worktree is
