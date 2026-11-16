@@ -253,6 +253,7 @@
   "records/status": ["user"],
   "reports/get": ["user"],
   "restart": ["user"],
+  "review/effects": ["user"],
   "review/mark": ["user"],
   "runners/add": ["user"],
   "runners/audit": ["user"],

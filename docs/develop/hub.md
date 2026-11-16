@@ -1547,6 +1547,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
+| `review/effects` | user | `{change: ChangeRef}` | `[TaskEffect]` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
 | `runners/add` | user | `{accept?: "all" \| "heavy", allow_admin?: boolean, allow_own_account?: boolean, host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
@@ -2257,6 +2258,28 @@ overlays from it):
   read from disk, and such a frame is `approximate`. Base texts are kept by (base tree, path), the 256 last used. While
   the user types, a watch is answered from the frame already built; the file is projected again after the quiet.
 - **Test hooks:** `__test_buffer_views` answers `{views, built}`: the views open and the frame bodies built so far.
+
+### The effect on tasks
+
+`review/effects {change}` (`work/task_effects.rs`, user, read-only) says what a change under review would do to the
+tasks under way: a run's task that is claimed or running (`running`), `needs-input`, `in-review`, or ready or pending in
+a run that goes on (`queued`). Tasks not started (a proposed run) or done are left out. The answer is one `TaskEffect
+{task, task_title, plan?, agent?, state, effect, why}` per task reached, in task order; `agent` is the name of the
+session the task's `works_on` link comes from.
+
+- **A spec or plan edit**, `{doc, from}`: `doc` is the document's absolute path and `from` the git blob id of its text
+  before (40 or 64 hex digits), read with `git cat-file` in the main checkout of the document's repository, never in an
+  agent's tree. The text after is the file now; no file is a retired document. For a plan (the runs whose plan file
+  is `doc`), the old and new tasks are aligned: by text first (title and body without the number, so a renumbered task
+  is the same task), then by number with a similar text, then by the most similar text (`similar`'s line ratio, at
+  least 0.5). A task with no match was removed: `stops` ("Task 3 is running: it would stop.", "Task 2 is queued: it
+  would not start."). A running task whose own text changed, or every running task when the plan's shared text changed
+  (the sections before, between and after the tasks), `brief-changes` ("… its brief changes; the agent gets a steer.").
+  A plan retired (no text, or a `**Status:**` line that says dropped, superseded or rejected) stops all its tasks. For a
+  spec, retiring it stops every task of the plans that `derive` from it.
+- **A code change**, `{paths, branch?}`: `paths` relative to the repository. A task under way whose agent edited one
+  (`work::edits::edited`) or is in one now (the presence model) `overlaps` ("Task 5 edits session.rs: it would need to
+  rebase."). `branch`, the change's own branch, leaves out the task the runner made it for (`job/JOB-N`).
 
 ### The Work map
 

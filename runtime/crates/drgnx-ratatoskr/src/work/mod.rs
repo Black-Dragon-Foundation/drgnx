@@ -13,6 +13,7 @@
 //!   "reads through shell commands").
 //! - [`subagents`]: Claude Code's subagents, grouped under their parent by the `Task` call that started them.
 //! - [`specs`]: a spec an agent writes becomes a `spec` entity at once.
+//! - [`task_effects`]: what a spec, plan or code change would do to the tasks under way (`review/effects`).
 //! - [`trace`]: the files a shell step's processes opened, from Gleipnir's tracer (layer 2), labelled and kept within
 //!   the trace budget.
 
@@ -29,5 +30,6 @@ pub mod presence;
 pub mod shell_read;
 pub mod specs;
 pub mod subagents;
+pub mod task_effects;
 pub mod trace;
 pub mod trail;
