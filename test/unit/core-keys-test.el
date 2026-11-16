@@ -1070,6 +1070,16 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
        (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
        (should (equal (cdr drgnx-keys--everywhere-map) nil))))))
 
+(ert-deftest drgnx-keys/vscode-ctrl-tab-beats-the-tab-bar ()
+  ;; F14: the top line is `tab-bar-mode', which, turned on before the keys are bound, binds C-<tab> to `tab-next' in its
+  ;; own keymap (`tab-bar--define-keys': unless the global map has it), ahead of the global map: C-<tab> went to a
+  ;; next tab-bar tab there is none of, and did nothing.  VS Code's C-<tab> (the recent editors) is a key that works in
+  ;; every mode.
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)))))
+    (should (seq-find (lambda (b) (and (eq (plist-get b :id) 'go-recent) (equal (plist-get b :key) "C-<tab>")
+                                       (plist-get b :everywhere)))
+                      (plist-get r :bindings)))))
+
 (ert-deftest drgnx-keys/vscode-c-j-toggles-the-panel-in-every-mode ()
   ;; VS Code's Toggle Panel (C-j) is not shadowed by lisp-interaction or Org mode; the Emacs profile leaves it alone.
   (drgnx-keys-test--live
@@ -1115,7 +1125,8 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window))
                                      :user '(:bind ((toggle-panel "C-`" :everywhere "C-j" :map org-mode-map))))))
     (should (seq-find (lambda (p) (string-search ":everywhere" p)) (plist-get r :problems)))
-    (should-not (seq-find (lambda (b) (plist-get b :everywhere)) (plist-get r :bindings)))))
+    (should-not (seq-find (lambda (b) (and (plist-get b :everywhere) (eq (plist-get b :id) 'toggle-panel)))
+                          (plist-get r :bindings)))))
 
 (ert-deftest drgnx-keys/user-mode-map-key-beats-everywhere ()
   ;; I1: keys.eld binds C-j in a mode map: that wins there, the profile's global C-j stays, and the sheet says so.
@@ -1131,7 +1142,7 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
      (with-temp-buffer
        (fundamental-mode)
        (should (eq (key-binding (kbd "C-j")) panel)))
-     (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
+     (should-not (keymap-lookup drgnx-keys--everywhere-map "C-j"))   ; C-<tab> keeps the layer (F14)
      (should c)
      (should (eq (plist-get c :kind) 'same-key))
      (should (eq (plist-get (plist-get c :winner) :id) 'palette))

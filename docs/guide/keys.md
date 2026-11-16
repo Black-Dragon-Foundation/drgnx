@@ -551,7 +551,8 @@ until you take them away.
 The sheet says one thing for each key, and it is what `key-binding` answers: yours is the top layer of the resolver,
 so a key of yours (or a key under a command of yours, `C-k x` when `C-k` is yours) is one line, never a profile key
 shown winning while yours wins. A lambda or closure is printed as `a lambda`, never its body. A key a minor mode's map
-takes over in a buffer (tab-bar-mode's `C-<tab>`) is not covered yet.
+takes over in a buffer is not covered yet; the VS Code profile's `C-<tab>` (Go to Recent) is a key that works in every
+mode, ahead of tab-bar-mode's own `C-<tab>` (`tab-next`, which the top line would otherwise give it).
 
 Keys you bound from the keyboard, `M-:` or `emacsclient --eval` stay for the session, as in any Emacs; they are never
 written to a file. **Keyboard Shortcuts** lists your keys on their
