@@ -2311,7 +2311,11 @@ A view whose rows Sjá holds never reads a patch in Lisp. The editor asks for it
 `term/attach` for a terminal, `view/env` for the others), and the hub sends each patch on the raw `view-model` line
 `{view, rows: PATCH}`. Sjá's push decides it by the rows' rules and keeps the rows, styles and images; its answer
 `(VIEW VERSION DECISION CLASS)` goes to `drgnx-view-sja-pushed`. An applied patch arms the draw and is acknowledged,
-a resync is asked for, a held one dims the view, and a broken store fails a `render` condition.
+a resync is asked for, a held one dims the view, and a broken store (three resyncs within 10 s) fails a `render`
+condition. A broken store starts over once, `drgnx-view-sja-revive-delay` (30 s) after it broke: Sjá forgets its books,
+which closes its breaker, and the hub is asked for a reset from nothing (`view/resync` at version 0); the first patch
+that applies again clears the condition. A store that breaks again waits again, so a bad stream costs the hub one reset
+every 30 s, not a loop.
 
 The draw (`drgnx-view-sja-draw`) asks Sjá for the edits that turn the region into the rows, `nidhogg-view-rows`
 `draw`, and inserts them in one batch:

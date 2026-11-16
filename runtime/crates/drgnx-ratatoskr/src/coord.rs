@@ -56,8 +56,9 @@ pub struct Signals {
     pub answers: tokio::sync::watch::Sender<u64>,
 }
 
-/// The proposal tools' door into the records: the proposal ID, `None` to read it or `Some(accept)` to decide it,
-/// and the session asking (always an agent: the user decides through `records/decide`); the answer is the tool's text.
+/// The conflict tools' door into the records: the conflicted record's ID, `None` to read it or `Some(keep_file)` to
+/// resolve it, and the session asking (always an agent: the user resolves through `records/resolve`); the answer is the
+/// tool's text.
 pub type RecordsTool = Arc<
     dyn Fn(String, Option<bool>, Option<String>) -> BoxFuture<'static, Result<String, String>>
         + Send

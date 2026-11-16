@@ -9,6 +9,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-uitest)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defconst drgnx-ui-panel-edits--repo
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
@@ -33,13 +34,6 @@
 (declare-function drgnx-view-patch-teardown "drgnx-view" ())
 (declare-function drgnx-agent-panel-ledger "drgnx-agent-panel-cards" ())
 (declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards" ())
-
-(defun drgnx-ui-panel-edits--wait (secs pred)
-  "Wait up to SECS for PRED, reading the hub's output; PRED's value."
-  (let ((end (+ (float-time) secs)) v)
-    (while (and (not (setq v (funcall pred))) (< (float-time) end))
-      (accept-process-output nil 0.05))
-    v))
 
 (defun drgnx-ui-panel-edits--git (dir &rest args)
   (let ((default-directory (file-name-as-directory dir)))
@@ -75,17 +69,17 @@
                    (lambda () "say looking\\ntool:edit a.txt\\nsay done")))
           (save-window-excursion
             (setq panel (drgnx-panel-replay-up (drgnx-rows-demo--bin)))
-            (should (drgnx-ui-panel-edits--wait
-                     30 (lambda () (with-temp-buffer (insert-file-contents a)
-                                                     (string-search "edited by ratatoskr-mock" (buffer-string))))))
+            (drgnx-test-wait (lambda () (with-temp-buffer (insert-file-contents a)
+                                                          (string-search "edited by ratatoskr-mock" (buffer-string))))
+                             :secs 30 :what "the agent's edit of a.txt")
             ;; the ledger opens and lists the agent's hunk in a.txt only
-            (should (drgnx-ui-panel-edits--wait 30 (lambda () (string-search "Edits ·" (drgnx-ui-panel-edits--text panel)))))
+            (drgnx-test-wait (lambda () (string-search "Edits ·" (drgnx-ui-panel-edits--text panel)))
+                             :secs 30 :what "the panel's Edits card")
             (with-current-buffer panel
               (goto-char (point-min)) (search-forward "Edits ·") (drgnx-agent-panel-ledger))
-            (should (drgnx-ui-panel-edits--wait
-                     15 (lambda () (with-current-buffer panel
-                                     (text-property-any (point-min) (point-max) 'drgnx-agent-panel-op-hunk nil)
-                                     (next-single-property-change (point-min) 'drgnx-agent-panel-op-hunk)))))
+            (drgnx-test-wait (lambda () (with-current-buffer panel
+                                          (next-single-property-change (point-min) 'drgnx-agent-panel-op-hunk)))
+                             :secs 15 :what "the ledger's hunk rows")
             (let ((text (drgnx-ui-panel-edits--text panel)))
               (should (string-search "Edits · 1 file" text))
               (should-not (string-search "NOTES.txt" text))
@@ -94,9 +88,9 @@
             (with-current-buffer panel
               (goto-char (next-single-property-change (point-min) 'drgnx-agent-panel-op-hunk))
               (drgnx-agent-panel-reject))
-            (should (drgnx-ui-panel-edits--wait
-                     15 (lambda () (equal "one\ntwo\nmine\n"
-                                          (with-temp-buffer (insert-file-contents a) (buffer-string))))))
+            (drgnx-test-wait (lambda () (equal "one\ntwo\nmine\n"
+                                               (with-temp-buffer (insert-file-contents a) (buffer-string))))
+                             :secs 15 :what "the Reject taking back only the agent's line")
             (should (file-exists-p notes))))
       (drgnx-panel-replay-down)
       (drgnx-view-env-teardown)

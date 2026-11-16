@@ -32,6 +32,7 @@ hub's, drawn by Sjá), and a temp DIR for files."
      (drgnx-test-with-state
        (let* ((,dir (file-name-as-directory (make-temp-file "drgnx-buffers" t)))
               (drgnx-wb--sections nil) (drgnx-buffers--filter nil) (drgnx-buffers-all-windows nil)
+              (drgnx-wb--collapsed (list (cons 'buffers nil)))   ; Open unfolded, as its user left it
               (drgnx-buffers--ids (make-hash-table :test #'eq :weakness 'key))
               (drgnx-buffers--by-id (make-hash-table :test #'equal :weakness 'value))
               (drgnx-buffers--sent (make-hash-table :test #'eq :weakness 'key))

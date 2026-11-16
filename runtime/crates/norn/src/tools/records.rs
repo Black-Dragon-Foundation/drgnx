@@ -1,11 +1,11 @@
-//! The view-proposal tools (agent system part 1, Task 14b): `proposal_read` (a hand edit's diff and graph ops) and
-//! `proposal_decide` (accept or reject, under the matrix's `graph.change`; a user-only field is never a manager's to
-//! accept), in `runstav::methods::records`'s shapes.  The hub does the work ([`super::Hub::proposal`]).
+//! The record-conflict tools: `record_conflict_read` (a conflicted record's file text and graph version) and
+//! `record_conflict_resolve` (keep one, under the matrix's `graph.change`), in `runstav::methods::records`'s shapes.
+//! The hub does the work ([`super::Hub::proposal`]).
 
 use mimir::BoxFuture;
 use mimir::Tool;
 use runstav::methods::exec::ById;
-use runstav::methods::records::DecideParams;
+use runstav::methods::records::{Keep, ResolveParams};
 
 use super::guard::{CoordTool, guarded};
 use super::{Coord, Ctx, Identity};
@@ -17,13 +17,13 @@ fn session(who: &Identity) -> Option<String> {
     }
 }
 
-pub struct ProposalRead;
+pub struct ConflictRead;
 
-impl CoordTool for ProposalRead {
+impl CoordTool for ConflictRead {
     type Args = ById;
-    const NAME: &'static str = "proposal_read";
+    const NAME: &'static str = "record_conflict_read";
     const DESCRIPTION: &'static str =
-        "A hand edit to a record view: its diff and the graph operations it would apply.";
+        "A record both its file and the graph changed: the file's text and the graph's version.";
     fn run<'a>(
         &'a self,
         coord: &'a Coord,
@@ -36,26 +36,27 @@ impl CoordTool for ProposalRead {
     }
 }
 
-pub struct ProposalDecide;
+pub struct ConflictResolve;
 
-impl CoordTool for ProposalDecide {
-    type Args = DecideParams;
-    const NAME: &'static str = "proposal_decide";
-    const DESCRIPTION: &'static str =
-        "Accept or reject a view proposal (needs the matrix's graph.change).";
+impl CoordTool for ConflictResolve {
+    type Args = ResolveParams;
+    const NAME: &'static str = "record_conflict_resolve";
+    const DESCRIPTION: &'static str = "Resolve a conflicted record: keep the file's text or the graph's version (needs the matrix's graph.change).";
     fn run<'a>(
         &'a self,
         coord: &'a Coord,
         who: &'a Identity,
-        args: DecideParams,
+        args: ResolveParams,
     ) -> BoxFuture<'a, Result<String, String>> {
-        coord
-            .hub()
-            .proposal(args.id.as_str().to_owned(), Some(args.accept), session(who))
+        coord.hub().proposal(
+            args.id.as_str().to_owned(),
+            Some(args.keep == Keep::File),
+            session(who),
+        )
     }
 }
 
 /// This file's tools.
 pub fn tools() -> Vec<Box<dyn Tool<Ctx>>> {
-    vec![guarded(ProposalRead), guarded(ProposalDecide)]
+    vec![guarded(ConflictRead), guarded(ConflictResolve)]
 }

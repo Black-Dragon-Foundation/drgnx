@@ -24,16 +24,16 @@ arrangement you had. Zen Mode (module `ui/look`) still works on its own.
 **Browser:** the editor with a web page beside it ([browser.md](browser.md)), every other area hidden. In an Emacs
 without WebKit the right half says so and pages open in your system browser.
 
-**Work:** the Work space ([work-space.md](work-space.md)) as its own card filling the window, the lens bar on top,
-the detail tile on the right and the Rules tile below. You don't pick it: showing a Work lens (opening the Work
-space, or the Flow) enters it, and once no Work lens is shown any more you are back where you came from, as when
-leaving Zen. Picked by hand (Next Layout), it opens the Work space.
+The Work space ([work-space.md](work-space.md)) is not a layout: it is a view in the editor, a tab like a file.
+Opening it (or the Flow) keeps the Explorer, your editor groups and the panel where they are, and shows its Detail in
+the right dock; opening a file (Ctrl+P, the Explorer) over it shows that file, and the Detail goes when no Work view
+is on screen.
 
 ## Switching
 
 | Command | VS Code | Emacs | Vim |
 |---|---|---|---|
-| View: Next Layout — Agent, Editor, Zen, Browser, Work, then yours, and around | `C-k C-l` | the palette | `SPC l n` |
+| View: Next Layout — Agent, Editor, Zen, Browser, then yours, and around | `C-k C-l` | the palette | `SPC l n` |
 | View: Layout… — pick one by name | the palette | the palette | `SPC l l` |
 | View: Layout Agent / Editor / Zen / Browser | the palette | the palette | the palette |
 | View: Save Layout As… | the palette | the palette | the palette |

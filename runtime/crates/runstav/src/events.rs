@@ -1,6 +1,6 @@
 //! The events a hub sends unasked, `{event, data}`: the nine the old Lisp backend broadcast and the front's own `challenge`, `notice`,
 //! `gateway/need-keys`, `gateway/keys-changed`, `settings/proposed` and `settings/explain` (the agents' settings tools, to the editor),
-//! and the agent core's `agent-step`, `exec-done`, `supervisor`, `view-written` and `view-proposal` (agent system
+//! and the agent core's `agent-step`, `exec-done`, `supervisor`, `view-written` and `records-notice` (agent system
 //! part 1).  The hub sends them all; `card` and `lease-released` were the Lisp backend's, and no one sends them now.
 
 use crate::methods::agents::{Entry, Snapshot};
@@ -293,9 +293,14 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "the hub wrote a record view file (never committed)"
         ),
         event!(
-            "view-proposal",
-            crate::methods::records::ViewProposal,
-            "a hand edit to a view became a proposal (Records: Review Proposal)"
+            "records-conflict",
+            crate::methods::records::RecordsConflict,
+            "records both their file and the graph changed: the file keeps its text, Records: Resolve Conflict"
+        ),
+        event!(
+            "records-notice",
+            crate::methods::records::RecordsNotice,
+            "a project's record files were adopted: the files drgnx keeps in step from now on, and the backup"
         ),
         event!(
             "say-proposal",
@@ -529,7 +534,8 @@ mod tests {
                     "exec-done",
                     "supervisor",
                     "view-written",
-                    "view-proposal",
+                    "records-notice",
+                    "records-conflict",
                     // agent system part 2
                     "machines-changed",
                     "runners-changed",
@@ -596,7 +602,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 61);
+        assert_eq!(events().len(), 62);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

@@ -483,11 +483,40 @@ pub struct Decor {
     pub here: Arc<Here>,
 }
 
-/// The marks of ENTRIES from STATUSES, each a repository's root and its last read status.
-pub fn marks_of(entries: &[Entry], statuses: &[(PathBuf, Arc<git::Status>)]) -> Marks {
+/// Whether PATH is inside the folder DIR (both ids, `root_id`'s form).
+fn inside(path: &str, dir: &str) -> bool {
+    (dir == "/" && path != "/") || path.strip_prefix(dir).is_some_and(|r| r.starts_with('/'))
+}
+
+/// The folders of ENTRIES that are repositories of their own (they hold a `.git`).
+pub fn nested_repos(entries: &[Entry]) -> BTreeSet<String> {
+    entries
+        .iter()
+        .filter(|e| e.dir && Path::new(&e.path).join(".git").exists())
+        .map(|e| e.path.clone())
+        .collect()
+}
+
+/// The marks of ENTRIES from STATUSES, each a repository's root and its last read status.  A repository inside
+/// another (one of NESTED, the folders holding a `.git`, or another root of STATUSES) has its folder and entries to
+/// itself: the outer status marks none of them (it sees the inner repository as one untracked or ignored folder), the
+/// inner one's, once read, does.
+pub fn marks_of(
+    entries: &[Entry],
+    statuses: &[(PathBuf, Arc<git::Status>)],
+    nested: &BTreeSet<String>,
+) -> Marks {
     let mut marks = Marks::new();
+    let repos: BTreeSet<String> = statuses
+        .iter()
+        .map(|(r, _)| root_id(r))
+        .chain(nested.iter().cloned())
+        .collect();
     for (root, st) in statuses {
         let root = root_id(root);
+        // the repositories inside this one: their entries are theirs
+        let inner: Vec<&String> = repos.iter().filter(|r| inside(r, &root)).collect();
+        let theirs = |p: &str| inner.iter().any(|r| p == r.as_str() || inside(p, r));
         let rel = |p: &str| -> Option<String> {
             if p == root {
                 Some(".".into())
@@ -505,6 +534,9 @@ pub fn marks_of(entries: &[Entry], statuses: &[(PathBuf, Arc<git::Status>)]) -> 
         let folders = git::rollup(&st.files, &shown);
         for e in entries {
             let Some(r) = rel(&e.path) else { continue };
+            if theirs(&e.path) {
+                continue;
+            }
             // an ignored or untracked folder's entries are not listed one by one: they take its status
             let mut above = r.as_str();
             let inherited = loop {
@@ -1029,7 +1061,11 @@ impl Views {
     /// The decor of CONN's listing of ENTRIES: the marks from CONN's statuses, and who is here.
     fn explorer_decor(&self, conn: u64, entries: &[Entry]) -> Decor {
         Decor {
-            git: marks_of(entries, &self.letters.statuses(conn)),
+            git: marks_of(
+                entries,
+                &self.letters.statuses(conn),
+                &nested_repos(entries),
+            ),
             here: self.explorers.here(conn),
         }
     }

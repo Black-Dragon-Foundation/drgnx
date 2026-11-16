@@ -3046,6 +3046,65 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "The `records-conflict` event: records of a file both its file and the graph changed, newly flagged.",
+        "properties": {
+          "ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "RecordsConflict",
+        "type": "object"
+      },
+      "doc": "records both their file and the graph changed: the file keeps its text, Records: Resolve Conflict",
+      "name": "records-conflict"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The `records-notice` event: a project's record files were adopted, once per root; the hub rewrites none of them\nbefore it is sent.",
+        "properties": {
+          "backup": {
+            "description": "Where the files and the graph store were copied first.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "RecordsNotice",
+        "type": "object"
+      },
+      "doc": "a project's record files were adopted: the files drgnx keeps in step from now on, and the backup",
+      "name": "records-notice"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "description": "One request the gateway forwarded, and what it cost.",
         "properties": {
           "agent": {
@@ -4931,44 +4990,17 @@
     },
     {
       "data": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "description": "The `view-proposal` event: a hand edit became (or replaced) a proposal.",
-        "properties": {
-          "by": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "id": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "path"
-        ],
-        "title": "ViewProposal",
-        "type": "object"
-      },
-      "doc": "a hand edit to a view became a proposal (Records: Review Proposal)",
-      "name": "view-proposal"
-    },
-    {
-      "data": {
         "$defs": {
           "RecordKind": {
             "description": "A kind of record file.",
             "enum": [
+              "specs",
               "plans",
               "ledgers",
               "deferred",
               "build-board",
-              "board"
+              "board",
+              "decisions"
             ],
             "type": "string"
           }
@@ -30817,8 +30849,8 @@
       "classes": [
         "user"
       ],
-      "doc": "a proposal accepted (its ops applied if its base still holds, else stale) or rejected (the edit backed up); then the view is rewritten",
-      "name": "records/decide",
+      "doc": "a conflicted record: the file's text and the graph's version",
+      "name": "records/conflict",
       "params": {
         "$defs": {
           "Id": {
@@ -30830,78 +30862,56 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
-          "accept": {
-            "type": "boolean"
-          },
           "id": {
             "$ref": "#/$defs/Id"
           }
         },
         "required": [
-          "id",
-          "accept"
+          "id"
         ],
-        "title": "DecideParams",
+        "title": "ById",
         "type": "object"
       },
       "result": {
-        "$defs": {
-          "ProposalStatus": {
-            "description": "Where a proposal is.",
-            "oneOf": [
-              {
-                "enum": [
-                  "open",
-                  "accepted",
-                  "rejected"
-                ],
-                "type": "string"
-              },
-              {
-                "const": "stale",
-                "description": "The records it touches changed since it was read: read the file again.",
-                "type": "string"
-              }
-            ]
-          }
-        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "What a decision did: the proposal's new status, the note its unmapped parts became, the backup of a rejected edit.",
+        "description": "A conflicted record, both versions.",
         "properties": {
-          "backup": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "at": {
+            "format": "double",
+            "type": "number"
+          },
+          "file": {
+            "description": "The file's text of the record, and the graph's.",
+            "type": "string"
+          },
+          "graph": {
+            "type": "string"
           },
           "id": {
             "type": "string"
           },
-          "note": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "status": {
-            "$ref": "#/$defs/ProposalStatus"
+          "path": {
+            "type": "string"
           }
         },
         "required": [
           "id",
-          "status"
+          "path",
+          "file",
+          "graph",
+          "at"
         ],
-        "title": "Decided",
+        "title": "Conflict",
         "type": "object"
       },
-      "writes": true
+      "writes": false
     },
     {
       "classes": [
         "user"
       ],
-      "doc": "the org folder's record files into the graph (a backup of each first; idempotent), their views written; the hub never commits",
+      "doc": "a project's record files adopted into the graph (the files and the store backed up first; idempotent; the notice sent once per root); the hub never commits",
       "name": "records/import",
       "params": {
         "$defs": {
@@ -30914,11 +30924,13 @@
           "RecordKind": {
             "description": "A kind of record file.",
             "enum": [
+              "specs",
               "plans",
               "ledgers",
               "deferred",
               "build-board",
-              "board"
+              "board",
+              "decisions"
             ],
             "type": "string"
           }
@@ -30996,11 +31008,13 @@
           "RecordKind": {
             "description": "A kind of record file.",
             "enum": [
+              "specs",
               "plans",
               "ledgers",
               "deferred",
               "build-board",
-              "board"
+              "board",
+              "decisions"
             ],
             "type": "string"
           }
@@ -31038,183 +31052,96 @@
       "classes": [
         "user"
       ],
-      "doc": "the proposals hand edits to views became (a view's, or every open one)",
-      "name": "records/proposals",
+      "doc": "a conflicted record resolved: the file's text becomes the record's, or the graph's version is written back to the file",
+      "name": "records/resolve",
       "params": {
         "$defs": {
-          "AbsPath": {
-            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
-            "maxLength": 4096,
-            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
             "type": "string"
+          },
+          "Keep": {
+            "description": "Which version of a conflicted record stays.",
+            "oneOf": [
+              {
+                "const": "file",
+                "description": "The file's text becomes the record's.",
+                "type": "string"
+              },
+              {
+                "const": "graph",
+                "description": "The graph's version is written back into the file.",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AbsPath"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "One view's file; none: every view."
+          "id": {
+            "$ref": "#/$defs/Id",
+            "description": "The conflicted record."
+          },
+          "keep": {
+            "$ref": "#/$defs/Keep"
           }
         },
-        "title": "ByPath",
+        "required": [
+          "id",
+          "keep"
+        ],
+        "title": "ResolveParams",
         "type": "object"
       },
       "result": {
         "$defs": {
-          "Proposal": {
-            "additionalProperties": false,
-            "description": "A hand edit to a view, read back.",
-            "properties": {
-              "at": {
-                "format": "double",
-                "type": "number"
-              },
-              "base_version": {
-                "description": "The graph version it was read against.",
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "by": {
-                "description": "Who edited it, when known.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "diff": {
-                "description": "A unified diff of the edited file against the view.",
-                "type": "string"
-              },
-              "id": {
-                "type": "string"
-              },
-              "ops": {
-                "default": [],
-                "items": {
-                  "$ref": "#/$defs/ProposedOp"
-                },
-                "type": "array"
-              },
-              "path": {
-                "type": "string"
-              },
-              "status": {
-                "$ref": "#/$defs/ProposalStatus"
-              },
-              "unmapped": {
-                "default": [],
-                "description": "Byte ranges of the edited file that map to no operation (they become a note on accept).",
-                "items": {
-                  "maxItems": 2,
-                  "minItems": 2,
-                  "prefixItems": [
-                    {
-                      "format": "uint64",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    {
-                      "format": "uint64",
-                      "minimum": 0,
-                      "type": "integer"
-                    }
-                  ],
-                  "type": "array"
-                },
-                "type": "array"
-              }
-            },
-            "required": [
-              "id",
-              "path",
-              "status",
-              "diff",
-              "base_version",
-              "at"
-            ],
-            "type": "object"
-          },
-          "ProposalStatus": {
-            "description": "Where a proposal is.",
+          "Keep": {
+            "description": "Which version of a conflicted record stays.",
             "oneOf": [
               {
-                "enum": [
-                  "open",
-                  "accepted",
-                  "rejected"
-                ],
+                "const": "file",
+                "description": "The file's text becomes the record's.",
                 "type": "string"
               },
               {
-                "const": "stale",
-                "description": "The records it touches changed since it was read: read the file again.",
+                "const": "graph",
+                "description": "The graph's version is written back into the file.",
                 "type": "string"
               }
             ]
-          },
-          "ProposedOp": {
-            "additionalProperties": false,
-            "description": "A graph operation a proposal would apply, as the user reads it.",
-            "properties": {
-              "entity": {
-                "type": "string"
-              },
-              "fields": {
-                "default": [],
-                "description": "The fields it sets, by name (`status`, `title`, `body`, …).",
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "op": {
-                "description": "`create`, `update`, `link` or `unlink`.",
-                "type": "string"
-              },
-              "user_only": {
-                "description": "A field only the user may set (a plan's `matrix`): a manager cannot accept it.",
-                "type": [
-                  "boolean",
-                  "null"
-                ]
-              }
-            },
-            "required": [
-              "op",
-              "entity"
-            ],
-            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "What resolving did.",
         "properties": {
-          "proposals": {
-            "default": [],
-            "items": {
-              "$ref": "#/$defs/Proposal"
-            },
-            "type": "array"
+          "id": {
+            "type": "string"
+          },
+          "keep": {
+            "$ref": "#/$defs/Keep"
+          },
+          "path": {
+            "type": "string"
           }
         },
-        "title": "Proposals",
+        "required": [
+          "id",
+          "keep",
+          "path"
+        ],
+        "title": "Resolved",
         "type": "object"
       },
-      "writes": false
+      "writes": true
     },
     {
       "classes": [
         "user"
       ],
-      "doc": "the view files: when each was written, whether it changed by hand, the proposal holding it",
+      "doc": "the record files: when each was written, whether it changed since, its conflicted records",
       "name": "records/status",
       "params": {
         "$defs": {
@@ -31247,11 +31174,13 @@
           "RecordKind": {
             "description": "A kind of record file.",
             "enum": [
+              "specs",
               "plans",
               "ledgers",
               "deferred",
               "build-board",
-              "board"
+              "board",
+              "decisions"
             ],
             "type": "string"
           },
@@ -31262,6 +31191,14 @@
               "changed": {
                 "description": "The file differs from what the hub last wrote.",
                 "type": "boolean"
+              },
+              "conflicts": {
+                "default": [],
+                "description": "The records of the view both sides changed: the file's text is kept, the graph's version stays the record's\nuntil one is chosen (`records/resolve`).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "entity": {
                 "description": "The entity the view shows.",
@@ -31278,13 +31215,6 @@
               },
               "path": {
                 "type": "string"
-              },
-              "pending": {
-                "description": "The open proposal holding the view (it is not rewritten while one is open).",
-                "type": [
-                  "string",
-                  "null"
-                ]
               },
               "written": {
                 "description": "When the hub last wrote it, and the hash it wrote.",

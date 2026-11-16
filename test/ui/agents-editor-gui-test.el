@@ -22,6 +22,17 @@
 (load (expand-file-name "modules/ui/drgnx-decor" agents-editor-gui--repo) nil t)
 
 (declare-function drgnx-decor-box "drgnx-decor")
+(defvar drgnx-panel-replay-prefix)
+(defvar drgnx-view-patch--buffers)
+(defvar drgnx-view-patch--hooked)
+(defvar drgnx-view-env--views)
+(defvar drgnx-view-env--sent)
+(defvar drgnx-view-env--glyphs)
+(defvar drgnx-view-env--hooked)
+(declare-function drgnx-panel-replay-up "panel-replay-fixture" (bin &optional old))
+(declare-function drgnx-panel-replay-down "panel-replay-fixture" ())
+(declare-function drgnx-rows-demo--bin "rows-demo-fixture" ())
+(declare-function drgnx-rows-demo-settle "rows-demo-fixture" (buffer &optional what))
 
 ;;;; Prototype: the faces, bitmaps and the visible-rows rebuild
 
@@ -417,32 +428,39 @@ in the dark, the light and the high-contrast theme: pictures, the gutter and tin
 subagent's step) in the dark, the light and the high-contrast theme: a picture of each (`p3-panel-VARIANT.png' in the
 evidence folder) and a check that text was drawn in the window (more than one colour of pixels).  The verdict on the look
 waits for the gate, by eye."
+  ;; Since the panel's docks the transcript is the hub's Sjá view (agent-panel/SESSION): a real hub and the mock agent
+  ;; (test/fixtures/panel-replay-fixture.el) fill it, as test/ui/agent-panel-docks-gui-test.el's rows do.  Lisp-side
+  ;; snapshots and entries draw nothing any more.
   (skip-unless (display-graphic-p))
+  ;; the fixture loads Nidhogg's views (`nidhogg-view-rows'), which a Sjá view needs
+  (load (expand-file-name "test/fixtures/rows-demo-fixture" agents-editor-gui--repo) nil t)
+  (skip-unless (fboundp 'nidhogg-view-rows))
   (drgnx-uitest-bare-frame)
   (load (expand-file-name "modules/ui/drgnx-look-derive" agents-editor-gui--repo) nil t)
-  (add-to-list 'load-path (expand-file-name "modules/tools" agents-editor-gui--repo))
-  (require 'drgnx-agent-panel)
-  (let ((win (selected-window)) buf)
-    (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) 1)))
-      (setq buf (drgnx-agent-panel-buffer "s1"))
+  (load (expand-file-name "test/fixtures/panel-replay-fixture" agents-editor-gui--repo) nil t)
+  (let* ((load-path (cons (expand-file-name "modules/tools" agents-editor-gui--repo) load-path))
+         (drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
+         (drgnx-view-env--views (make-hash-table :test #'equal)) (drgnx-view-env--sent (make-hash-table :test #'equal))
+         (drgnx-view-env--glyphs (make-hash-table :test #'equal)) (drgnx-view-env--hooked nil)
+         (drgnx-panel-replay-prefix 3)
+         (win (selected-window)) buf)
+    (progn
       (unwind-protect
-          (with-current-buffer buf
-            (drgnx-agent-panel--take-snapshot
-             (list :id "s1" :name "Opus" :status "waiting" :mode "default" :model "opus" :context 42
-                   :permissions (list (list :id 7 :title "Run make test" :tool (list :id "t2")
-                                            :options (list (list :optionId "allow" :kind "allow_once")
-                                                           (list :optionId "always" :kind "allow_always")
-                                                           (list :optionId "no" :kind "reject_once"))))))
-            (drgnx-agent-panel--take-entries
-             (list (list 0 (list :type "user" :text "make the tests pass"))
-                   (list 1 (list :type "tool" :id "t1" :title "Read src/main.el" :kind "read" :status "completed"))
-                   (list 2 (list :type "tool" :id "t2" :title "Run make test" :kind "execute" :status "pending"))
-                   (list 3 (list :type "agent" :text "Two tests fail; looking at the first."))))
+          (save-window-excursion
+            (delete-other-windows)
+            (setq buf (drgnx-panel-replay-up (drgnx-rows-demo--bin)))
             (set-window-buffer win buf)
+            (drgnx-view-env-update (with-current-buffer buf (drgnx-view-patch-view drgnx-view-patch)))
+            (drgnx-test-wait (lambda () (with-current-buffer buf
+                                          (and (> (drgnx-view-row-count nil) 2)
+                                               (not (drgnx-view-patch-stale drgnx-view-patch)))))
+                             :secs 30 :what "the hub's rows of the panel")
+            (drgnx-rows-demo-settle buf)
             (pcase-dolist (`(,variant . ,theme) agents-editor-gui--themes)
               (agents-editor-gui--theme theme)
               (when (fboundp 'drgnx-look-derive) (drgnx-look-derive))
-              (drgnx-view-draw-now drgnx-view)
+              (drgnx-rows-demo-settle buf)
+              (with-current-buffer buf (drgnx-view-draw-now nil))
               (redisplay t)
               (drgnx-test-wait-presented)
               (agents-editor-gui--png (format "p3-panel-%s" variant))
@@ -454,8 +472,13 @@ waits for the gate, by eye."
                 (agents-editor-gui--note "P3 panel %s scale=%S: %d colours sampled" variant
                                          (drgnx-uitest-device-scale (selected-frame)) (hash-table-count seen))
                 (should (> (hash-table-count seen) 1)))))
-        (when (buffer-live-p buf) (kill-buffer buf))
-        (mapc #'disable-theme custom-enabled-themes)))))
+        (drgnx-panel-replay-down)
+        (drgnx-view-env-teardown)
+        (drgnx-view-patch-teardown)
+        (set-window-parameter win 'drgnx-view-sja-pinned nil)
+        (mapc #'disable-theme custom-enabled-themes)
+        ;; the agent faces the derive set follow the theme back
+        (when (fboundp 'drgnx-look-derive) (drgnx-look-derive))))))
 
 (provide 'agents-editor-gui-test)
 ;;; agents-editor-gui-test.el ends here

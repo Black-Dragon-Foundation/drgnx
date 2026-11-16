@@ -37,13 +37,16 @@ buffer shows."
           (nhwl-menu--live-frames)))
 
 (defun drgnx-ui-menubar--open-and-look (id)
-  "Open menu ID, look at it while it is open, choose its first row; what was seen."
-  (let (seen)
+  "Open menu ID, look at it while it is open, choose its first row; what was seen.  The menu's own reads get the
+keys: the first, once the menu is drawn, looks at it; a menu that reads on past its keys is a failure, never a hang."
+  (let ((seen nil) (keys (list 'down 'return)) (idle 0))
     ;; a menu opened by a click has no row selected: Down selects the first, Enter runs it
-    (run-at-time 0.8 nil (lambda ()
-                           (setq seen (drgnx-ui-menubar--seen))
-                           (setq unread-command-events (list 'down 'return))))
-    (with-timeout (15 (error "The %s menu never closed" id))   ; a red fails, never hangs
+    (cl-letf (((symbol-function 'read-event)
+               (lambda (&rest _)
+                 (cond (keys (unless seen (redisplay t) (setq seen (drgnx-ui-menubar--seen)))
+                             (pop keys))
+                       ((< (cl-incf idle) 50) nil)   ; "nothing came": the drain after the menu closes
+                       (t (error "The %s menu read on past its keys" id))))))
       (drgnx-menubar-open id))
     (car (last seen))))
 

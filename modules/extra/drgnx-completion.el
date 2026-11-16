@@ -21,6 +21,7 @@
 (declare-function drgnx-palette-frame-after-candidates "drgnx-palette-frame")
 (declare-function drgnx-palette-frame-minibuffer-rows "drgnx-palette-frame")
 (declare-function vertico-mode "vertico")
+(declare-function vertico-directory-tidy "vertico-directory")
 (declare-function marginalia-mode "marginalia")
 (declare-function global-corfu-mode "corfu")
 (declare-function corfu-quit "corfu")
@@ -119,7 +120,8 @@ every pause in a .txt file was a \"Corfu detected an error\" backtrace from `isp
                      :teardown #'drgnx-completion--teardown
                      :setup (lambda ()
                               (require 'vertico) (require 'orderless) (require 'marginalia) (require 'corfu)
-                              (require 'vertico-multiform) (require 'vertico-buffer) (require 'drgnx-palette-frame)
+                              (require 'vertico-multiform) (require 'vertico-buffer) (require 'vertico-directory)
+                              (require 'drgnx-palette-frame)
                               (pcase-dolist (`(,var ,value) '((completion-styles (orderless basic))
                                                               (completion-category-overrides ((file (styles partial-completion))))
                                                               (corfu-auto t) (corfu-auto-delay 0.2) (corfu-auto-prefix 2)))
@@ -132,6 +134,10 @@ every pause in a .txt file was a \"Corfu detected an error\" backtrace from `isp
                               ;; and so does Quick Open, the palette's files mode (category drgnx-file)
                               (drgnx-module-alist-put 'vertico-multiform-categories 'drgnx-file
                                                       drgnx-palette-frame-multiform)
+                              ;; a path typed after the prompt's folder (~/ then /tmp) replaces it, as VS Code's path
+                              ;; box does: the shadowed ~/ goes, so the input reads /tmp, not ~//tmp
+                              (drgnx-module-hook 'rfn-eshadow-update-overlay-hook tidy-path ()
+                                (vertico-directory-tidy))
                               (drgnx-module-hook 'minibuffer-exit-hook palette-frame-hide ()
                                 (drgnx-palette-frame-hide))
                               ;; the floating palette: its hint ends the input row, and the box fits its rows

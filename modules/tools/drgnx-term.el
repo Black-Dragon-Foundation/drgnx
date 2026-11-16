@@ -32,6 +32,8 @@
 (require 'drgnx-notice)
 (require 'drgnx-state)
 (require 'url-util)
+(require 'project)                      ; a new terminal's workspace folder
+(declare-function drgnx-explorer-roots "drgnx-explorer" ())
 (require 'drgnx-color)
 (require 'drgnx-memo)
 (require 'drgnx-pixels)
@@ -1637,11 +1639,27 @@ that host (`drgnx-term-remote-command'); a COMMAND runs in a local folder only."
     buffer))
 
 (defun drgnx-term-start-directory (dir)
-  "Where New Terminal starts when asked from DIR: `drgnx-term-working-directory' (`home' or a folder), else DIR."
+  "Where New Terminal starts when asked from DIR, by `drgnx-term-working-directory': nil, the workspace folder of DIR
+\(`drgnx-term--workspace-folder', as VS Code's); `file', DIR; `home'; or a folder."
   (pcase drgnx-term-working-directory
     ('home "~/")
+    ('file dir)
     ((and (pred stringp) d) d)
-    (_ dir)))
+    (_ (drgnx-term--workspace-folder dir))))
+
+(defun drgnx-term--workspace-folder (dir)
+  "The workspace folder that holds DIR: the innermost of the Explorer's folders, else DIR's project, else DIR.  A
+remote DIR is DIR (no project lookup on a host)."
+  (if (file-remote-p dir) dir
+    (let* ((d (file-name-as-directory (expand-file-name dir)))
+           (roots (and (fboundp 'drgnx-explorer-roots)
+                       (mapcar (lambda (r) (file-name-as-directory (expand-file-name r)))
+                               (seq-remove #'file-remote-p (drgnx-explorer-roots)))))
+           (in (seq-filter (lambda (r) (string-prefix-p r d)) roots)))
+      (or (car (sort in (lambda (a b) (> (length a) (length b)))))
+          (when-let* ((p (let ((default-directory d)) (project-current))))
+            (file-name-as-directory (expand-file-name (project-root p))))
+          dir))))
 
 (defun drgnx-term--confirm-close ()
   "`kill-buffer-query-functions' of a terminal buffer (`drgnx-term-confirm-close-surface'): a command you run asks

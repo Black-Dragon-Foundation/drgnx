@@ -63,6 +63,35 @@ menu also holds the keys sheet, so both doors stay reachable."
     (should (equal (mapcar #'car shown) '("Map" "Board" "Timeline" "Flow" "Keys")))
     (should (eq (cdr (car (last shown))) 'drgnx-work-keys-sheet))))
 
+(ert-deftest drgnx-work-flow/a-click-on-a-lens-or-a-chip-runs-it ()
+  "UX audit W2: the lens names and the key chips lit on hover and did nothing on a click.  A click on each runs its
+registered command, from the tab line or a header line."
+  (let ((s (drgnx-work-lens-string 'flow "drgnx" '(("evidence" . "e") ("rules" . "R")))) ran)
+    (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran))))
+      (pcase-dolist (`(,label . ,id) '(("Map" . work-view-map) ("Board" . work-view-board)
+                                       ("Timeline" . work-view-timeline) ("Flow" . work-view-flow)
+                                       ("evidence" . work-flow-evidence) ("rules" . work-flow-rules)))
+        (setq ran nil)
+        (let ((map (get-text-property (string-search label s) 'keymap s)))
+          (should (keymapp map))
+          (funcall (lookup-key map [tab-line mouse-1]) `(mouse-1 (,(selected-window) tab-line (0 . 0) 0)))
+          (should (equal ran (list id)))
+          (should (eq (lookup-key map [header-line mouse-1]) (lookup-key map [tab-line mouse-1]))))))))
+
+(ert-deftest drgnx-work-flow/a-map-command-outside-a-map-never-blames-sja ()
+  "UX audit W1: the palette's \"Work: Open\" run in a file said this Emacs had no Sjá, on a Nidhogg with it.  Outside
+a map the error says to open the Work space; a map waiting for its rows says it is loading; only a map in an Emacs
+without Sjá names Sjá."
+  (let ((said (lambda () (condition-case e (progn (drgnx-work-map--require-sja) nil) (user-error (cadr e))))))
+    (with-temp-buffer
+      (should (string-match-p "open the Work space" (funcall said)))
+      (should-not (string-match-p "Sjá" (funcall said)))
+      (drgnx-work-map-mode)
+      (cl-letf (((symbol-function 'drgnx-work-map-rows-p) #'always))
+        (should (string-match-p "loading" (funcall said))))
+      (cl-letf (((symbol-function 'drgnx-work-map-rows-p) #'ignore))
+        (should (equal (funcall said) drgnx-work-map-no-sja))))))
+
 (ert-deftest drgnx-work-flow/its-window-shows-the-lens-bar ()
   "The Flow's window shows the lens bar as its tab line (the chrome keeps a buffer's own) and no header: its strip
 (what needs you, the machines' load) is the hub's, in its rows."

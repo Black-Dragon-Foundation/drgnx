@@ -900,6 +900,34 @@ fn the_strip_and_the_needs_you_list_line_up() {
     );
 }
 
+/// [D] UX audit W3: a machine the map draws (its layer) has no second chip on the strip; one it does not draw keeps
+/// its load at the strip's right.
+#[test]
+fn a_machine_on_the_map_is_not_repeated_on_the_strip() {
+    let mut core = core_with(1);
+    let local = Machine {
+        machine: "local".into(),
+        slots: Vec::new(),
+        local: true,
+    };
+    core.step(Event::Machines(vec![machine_fact(&local, None)]));
+    let v = rows_view(core.model(), 226);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let drawn = v.sent.contains(&ItemId("machine:local".into()));
+    let shown = rows
+        .iter()
+        .map(|r| r.text.matches("local").count())
+        .sum::<usize>();
+    assert!(drawn, "the map draws the machine");
+    assert_eq!(
+        shown,
+        1,
+        "{:?}",
+        rows.iter().map(|r| &r.text).collect::<Vec<_>>()
+    );
+    assert!(!rows[0].text.contains("local"), "{}", rows[0].text);
+}
+
 /// [D] An open huddle is a needs-you entry of the map: the strip says "huddle: CLASH", `g N` reaches the first of its
 /// agents the view shows, and its agents are not marked as needing you (a huddle that talks waits for nobody); a
 /// decided or closed one leaves.

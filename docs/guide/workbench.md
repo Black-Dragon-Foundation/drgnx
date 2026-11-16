@@ -10,7 +10,8 @@ restart.
 **How the dock looks.** The sidebar is one island on the panel surface (`drgnx-surface-panel`). Its top row is the
 island header: the Explorer's first folder's name, then **+** (New File), a magnifier (Find in Explorer) and **⋯**, a
 menu with Close Sidebar, Save All, Close Saved Editors and Close All Editors (`drgnx-wb-island-menu`). The three sections
-below it are headed **Open** (the Buffers panel), **Files** (the Explorer) and **Outline** (folded to its header at first; a click on a section's header folds or unfolds it, and focusing the Outline opens it; a second window's sidebar folds it there too, leaving the first window's as it was): a chevron and the title in
+below it are headed **Open** (the Buffers panel, folded to its header at first as VS Code's Open Editors, so a file you
+open moves nothing under the pointer), **Files** (the Explorer) and **Outline** (folded to its header at first; a click on a section's header folds or unfolds it, and focusing the Outline opens it; a second window's sidebar folds it there too, leaving the first window's as it was): a chevron and the title in
 `drgnx-wb-section` (small, semibold, muted), in sentence case, with nothing else on the row. **Open** is as tall as
 its rows (no empty rows under the last open buffer; with none open, the title and one blank line), at most 30% of the window, past
 which it scrolls; Files takes the rest, so its title stays put when the window is resized. Their rows are drawn in the UI font at the density's
@@ -166,7 +167,8 @@ Refresh overtook is not shown. A remote folder is listed as before.
 **Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, at the row's right edge in
 the colours of your theme's version-control faces; the name itself stays in the text colour. A folder with changes
 inside shows `●` (also one whose only change is a new file; a new folder itself shows `U`), and so does a root;
-ignored files are dimmed.
+ignored files are dimmed. A folder holding its own repository (its own `.git`) shows that repository's status, as VS
+Code does: a repository around it that ignores it doesn't dim it.
 
 **Rows**: an icon, 6 px of room, then the name. With one root the tree starts at the root's entries (the sidebar's
 header names the project); with several, each root has a row with its name as it is. One background `git status` per
@@ -265,6 +267,9 @@ the entry is back.
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
 | `other-group` | diffs and logs: another editor group (the one used last), else this one |
+
+A warning never opens the panel by itself, as VS Code's Output does not: it is logged in `*Warnings*` and counted on the
+status bar as a notice, whose button opens `*Warnings*` (an emergency still shows at once).
 
 ### Chrome
 

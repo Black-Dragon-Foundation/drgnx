@@ -209,6 +209,25 @@ decision."
     (should (= 1 (length (view-sja-test--sent "view/resync"))))
     (should (equal 1 (plist-get (cdar (view-sja-test--sent "view/resync")) :version)))))
 
+;; the user's Explorer, 2026-11-16: resets that held a key twice tripped the breaker, and the view stayed empty until
+;; Emacs restarted
+(ert-deftest rows-sja/a-broken-view-asks-for-a-reset-later ()
+  ;; a broken store is started over once, a while after it broke (not on every push that finds it broken): its books
+  ;; forgotten and a reset asked for from nothing
+  (view-sja-test--with
+    (let ((dup (lambda () (view-sja-test--push view (list (list :reset (list (view-sja-test--row "a" "1")
+                                                                             (view-sja-test--row "a" "2"))))))))
+      (funcall dup) (funcall dup)
+      (should (eq 'broken (funcall dup)))
+      (let ((key (cons 'drgnx-view-sja-revive buf)))
+        (should (drgnx-timer-active-p key))
+        (funcall dup)                                     ; broken again: the same pending timer, not a new one
+        (should (drgnx-timer-active-p key))
+        (setq view-sja-test--sent nil)
+        (drgnx-view-sja--revive buf)
+        (should (equal '(0) (mapcar (lambda (s) (plist-get (cdr s) :version)) (view-sja-test--sent "view/resync"))))
+        (should-not (drgnx-view-patch-version drgnx-view-patch))))))
+
 (ert-deftest rows-sja/paused-patches-apply-on-resume ()
   ;; a paused view keeps its patches in Sjá (nothing drawn or acknowledged); resuming draws them and acknowledges the last
   (view-sja-test--with

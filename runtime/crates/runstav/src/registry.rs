@@ -508,7 +508,7 @@ mod tests {
         "brief/set",
         "budget/set",
         "records/import",
-        "records/decide",
+        "records/resolve",
     ];
 
     /// Every method is the hub's own: each name decodes to a `Params` variant of its own, and every variant is some

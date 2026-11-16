@@ -209,6 +209,23 @@ and no list buffer; the list's buffer, view type and hook are gone after."
   (drgnx-test-with-modules '(core/workbench)
     (should (eq (car (drgnx-wb-rule-for drgnx-notices-buffer-name)) 'panel))))
 
+;; audit D3 (2026-11-16): a *Warnings* buffer jumped into the panel's Output tab by itself
+(ert-deftest drgnx-notices/a-warning-is-a-notice-not-a-window ()
+  ;; a warning is logged in *Warnings* and counted on the status bar (a notice), and takes no window, as VS Code's
+  ;; Output never opens by itself; an emergency still shows
+  (drgnx-test-with-modules '(core/workbench)
+    (let ((noninteractive nil) (warning-minimum-level :warning) (warning-minimum-log-level :warning)
+          (key '(wb warning . drgnx-notices-test)))
+      (unwind-protect
+          (progn
+            (display-warning 'drgnx-notices-test "boom")
+            (should (with-current-buffer "*Warnings*" (save-excursion (goto-char (point-min)) (search-forward "boom" nil t))))
+            (should-not (get-buffer-window "*Warnings*" t))
+            (should (gethash key drgnx-notice--table))
+            (should (eq 'warn (plist-get (gethash key drgnx-notice--table) :severity))))
+        (drgnx-notice-clear 'wb '(warning . drgnx-notices-test))
+        (when (get-buffer "*Warnings*") (kill-buffer "*Warnings*"))))))
+
 ;;;; The mode-line pair
 
 (ert-deftest drgnx-notice-mode-line/two-texts-in-global-mode-string ()

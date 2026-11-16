@@ -103,6 +103,15 @@ build/ ignored (with build/out.o)."
   (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
     (should-not (drgnx-git-letter 'ignored))))
 
+(ert-deftest drgnx-git/an-ignored-file-is-only-dimmed-on-a-graphical-frame ()
+  ;; VS Code greys an ignored file, no italic: on a display that says it has no italic, Emacs's `italic' face draws
+  ;; an underline, and the .elc rows read as links (audit E1); a terminal keeps the italic, its cue beside the colour
+  (let ((spec (face-default-spec 'drgnx-git-ignored)))
+    (cl-letf (((symbol-function 'window-system) (lambda (&rest _) 'x)))
+      (should (equal (face-spec-choose spec) '(:inherit shadow))))
+    (cl-letf (((symbol-function 'window-system) (lambda (&rest _) nil)))
+      (should (memq 'italic (ensure-list (plist-get (face-spec-choose spec) :inherit)))))))
+
 (ert-deftest drgnx-git/huge-ignored-lists-are-skipped ()
   ;; Ignored files only dim rows; past the limit they are not parsed (a build tree inside tracked folders).
   (let ((drgnx-git-ignored-limit 3))
