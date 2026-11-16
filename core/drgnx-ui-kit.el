@@ -19,6 +19,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-file)
 (require 'drgnx-registry)
+(require 'drgnx-modules-helpers)        ; the aliases' face specs (`drgnx-module-face-spec')
 (require 'drgnx-surfaces)
 (require 'drgnx-faces)
 (require 'drgnx-type-faces)
@@ -303,6 +304,27 @@ bindings' tokens as colours through TOK (a token name → a colour), the edge as
                 ,@(and (plist-get b :fg) `(:foreground ,(funcall tok (plist-get b :fg))))
                 ,@(and (plist-get b :edge) `(:box (:line-width (-1 . -1) :color ,(funcall tok (plist-get b :edge))))))))
           (drgnx-ui-kit-face-bindings table)))
+
+(defun drgnx-ui-kit-replaced-faces (&optional table)
+  "The faces the landed components of TABLE (default the components file; `:lint t') replace: drgnx's themes no
+longer style them, their kit faces do."
+  (let (out)
+    (dolist (c (alist-get 'components (or table (drgnx-ui-kit-components))) (nreverse out))
+      (when (eq (plist-get (cdr c) :lint) t)
+        (dolist (r (plist-get (cdr c) :replaces)) (push (car r) out))))))
+
+
+(defun drgnx-ui-kit-define-aliases (&optional table)
+  "Each face a component of TABLE (default the components file) `:replaces' inherits its kit face: its default spec
+becomes ((t :inherit KIT-FACE)), set through `drgnx-module-face-spec' (undone with the module that calls this).  The
+`defface' stays where it is, so what the user customized on the old name still applies.  Faces not defined yet are
+skipped.  Returns the faces it set."
+  (let (done)
+    (dolist (c (alist-get 'components (or table (drgnx-ui-kit-components))) (nreverse done))
+      (pcase-dolist (`(,old . ,kit) (plist-get (cdr c) :replaces))
+        (when (facep old)
+          (drgnx-module-face-spec old `((t :inherit ,kit)))
+          (push old done))))))
 
 (defun drgnx-ui-kit-glyph-names (&optional table)
   "The glyph names the components of TABLE (default the components file) draw (:tty :glyph and :twisty), in order, each

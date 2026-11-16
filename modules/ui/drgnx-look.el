@@ -698,6 +698,8 @@ only the one remap is reapplied."
                        (drgnx-look-echo-apply)
                        ;; the kit: the focus ring after a key, not a click; a component's action on RET or a click
                        (drgnx-ui-kit-focus-mode 1)
+                       ;; the faces a component replaces inherit its kit face (undone with the module)
+                       (drgnx-ui-kit-define-aliases)
                        (drgnx-command-define 'kit-activate :category "View" :title "Activate the Component at Point"
                                              :command #'drgnx-ui-kit-activate :map 'drgnx-ui-kit-action-base-map
                                              :when (lambda () (get-text-property (point) 'drgnx-action))

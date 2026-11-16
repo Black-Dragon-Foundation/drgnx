@@ -45,6 +45,33 @@ stale code file as it does a stale page, and `drgnx-design/code-files-are-curren
 `runtime/crates/drgnx-rows/tests/faces.rs` checks every face's name reads back and the kit tables answer. The check
 runner's `cargo` stage runs `drgnx-rows`' clippy and tests.
 
+## The kit's lint
+
+Once a component lands, it owns its role, and the old ways of drawing that role may only decrease. `drgnx-lint/kit-roles` (`test/unit/lint-kit-test.el`) checks this.
+
+- **Switching a role on.** A role (`drgnx-lint-kit-roles`) is on when its component's entry in `etc/ui/components.eld` has `:lint t`. The roles are:
+  - `row`: selected and hover faces;
+  - `button`, `chip`, `card` and `tab`;
+  - `section-header`;
+  - `key-hint`;
+  - `status-dot`, with the literal `"●"`.
+
+  Each component's task sets `:lint t` when it lands.
+- **What is counted.** For a role that is on, the lint counts, per file in `core/`, `wb/` and `modules/` (not `core/drgnx-ui-kit.el`):
+  - a `defface` whose name matches the role's regexp;
+  - a use of a face the entry `:replaces`;
+  - a call of one of its `:helpers`;
+  - a string holding one of the role's literals (not in docstrings).
+
+  In Rust it counts uses of a replaced face's `FaceId` variant, outside `drgnx-rows/src/kit.rs` and the generated enum.
+- **What is never counted.** Domain faces (syntax, diff refine, ANSI, the debugger, notebooks) never match a role.
+- **The allowlist.** The counts are checked against `drgnx-lint-kit--not-yet`, rows of `(FILE ID COUNT)`. The lint fails when a file's count is:
+  - above its row ("above": draw it with the kit);
+  - below its row ("below": lower or remove the row).
+
+  A branch merged later adds its counts in its merge commit.
+- **Aliases.** `(drgnx-ui-kit-define-aliases)`, called by `ui/look`'s setup, makes each replaced face inherit its kit face. It sets the default spec to `((t :inherit KIT-FACE))` through `drgnx-module-face-spec`. The `defface` stays where it is, so a user's customization of the old name still applies. drgnx's themes stop styling a face once its component has landed (`drgnx-ui-kit-replaced-faces`).
+
 ## Regenerating
 
 ```sh

@@ -109,6 +109,24 @@
                       ((same) :bg panel :fg fg :inherit (highlight))))))
   "A component with a variant whose colours differ from its own and one whose colours do not.")
 
+(defface ui-kit-test-old-face '((t :weight bold)) "A face a test component replaces." :group 'drgnx)
+
+(ert-deftest drgnx-ui-kit/replaced-faces-inherit-the-kit-face ()
+  ;; the old face's default spec inherits the kit face; the user's own spec on the old name still applies; drgnx's
+  ;; themes stop styling it once its component has landed (:lint t)
+  (let ((table '((state-table) (components (row :lint t :replaces ((ui-kit-test-old-face . drgnx-hover))))))
+        (saved (get 'ui-kit-test-old-face 'face-defface-spec)))
+    (unwind-protect
+        (progn
+          (should (equal (drgnx-ui-kit-define-aliases table) '(ui-kit-test-old-face)))
+          (should (equal (get 'ui-kit-test-old-face 'face-defface-spec) '((t :inherit drgnx-hover))))
+          (custom-set-faces '(ui-kit-test-old-face ((t :underline t))))
+          (should (eq (face-attribute 'ui-kit-test-old-face :underline nil t) t))
+          (should (equal (drgnx-ui-kit-replaced-faces table) '(ui-kit-test-old-face)))
+          (should-not (drgnx-ui-kit-replaced-faces '((components (row :lint nil :replaces ((a . b))))))))
+      (dolist (p '(theme-face saved-face customized-face face-modified)) (put 'ui-kit-test-old-face p nil))
+      (face-spec-set 'ui-kit-test-old-face saved 'face-defface-spec))))
+
 (ert-deftest drgnx-ui-kit/kit-faces-only-where-colours-differ ()
   (let ((made (mapcar #'car (drgnx-ui-kit-face-bindings ui-kit-test--fixture))))
     (should (equal made '(drgnx-kit-zz-probe drgnx-kit-zz-probe-loud))))
