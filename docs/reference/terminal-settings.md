@@ -55,7 +55,7 @@ They shape the program a terminal starts, so a change applies to the terminals o
 \| `input` \| `drgnx-term-input` \| Text typed into a new terminal as soon as it starts, as if from the keyboard; nil: none \|
 \| `env` \| `drgnx-term-env` \| Environment entries of new terminals' programs, "NAME=VALUE" each, over drgnx's own; "NAME" alone unsets it. Applies to new terminals \|
 \| `term` \| `drgnx-term-term` \| The TERM a new terminal's program sees \|
-\| `working-directory` \| `drgnx-term-working-directory` \| Where New Terminal starts: nil, the folder of what you are looking at; `home', your home folder; or a folder. Applies to new terminals \|
+\| `working-directory` \| `drgnx-term-working-directory` \| Where New Terminal starts: nil, the workspace folder of what you are looking at (the Explorer's folder that holds it, else its project, as VS Code); `file', the folder of what you are looking at; `home', your home folder; or a folder \|
 \| `shell-integration` \| `drgnx-term-shell-integration` \| Which shell integration a new terminal loads: `detect' (from the shell's name: bash, zsh, fish, elvish), one of those, or `none' \|
 \| `shell-integration-features` \| `drgnx-term-shell-integration-features` \| The features of the shell integration a new terminal turns on (Ghostty's names: "cursor", "title", "sudo", "path") \|
 \| `linux-cgroup-memory-limit` \| `drgnx-term-linux-cgroup-memory-limit` \| The most memory a new terminal (its program and all it starts) may use, in systemd's form ("4G", "512M"); nil: no limit \|

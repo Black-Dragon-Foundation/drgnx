@@ -73,6 +73,23 @@
 (declare-function drgnx-buffers-save-all "drgnx-buffers")
 (declare-function drgnx-buffers-close-saved "drgnx-buffers")
 (declare-function drgnx-buffers-close-all "drgnx-buffers")
+(require 'warnings)
+(require 'drgnx-notice)
+
+(defun drgnx-workbench--warning (fn type message level buffer-name)
+  "Around `display-warning' (FN): a warning to *Warnings* is logged there and posted as a notice (the status bar
+counts it; its button opens *Warnings*), and takes no window by itself.  An `:emergency' still shows; a warning to
+another buffer (BUFFER-NAME) is left as it was."
+  (if (or buffer-name (eq level :emergency))
+      (funcall fn type message level buffer-name)
+    (let ((warning-minimum-level :emergency))
+      (funcall fn type message level buffer-name))
+    (unless (or noninteractive (warning-suppress-p type warning-suppress-log-types)
+                (< (warning-numeric-level (or level :warning)) (warning-numeric-level warning-minimum-log-level)))
+      (let ((type (if (consp type) (car type) type)))
+        (drgnx-notify 'wb (if (eq level :error) 'fail 'warn)
+                      (format "%s: %s" type (car (split-string (format "%s" message) "\n")))
+                      :id (cons 'warning type) :command '(pop-to-buffer "*Warnings*"))))))
 
 (drgnx-module-define 'core/workbench
                      :doc "The workbench: the change bus, the left dock (Buffers, Explorer) and editor windows."
@@ -97,6 +114,9 @@
                        ;; The bottom panel and the right dock; popups borrow the panel.
                        (require 'drgnx-area)
                        (require 'drgnx-popup)
+                       ;; A warning is logged and counted on the status bar, never shown by itself (as VS Code's Output)
+                       (drgnx-module-advice 'display-warning :around quiet-warning (fn type message &optional level buffer-name)
+                         (drgnx-workbench--warning fn type message level buffer-name))
                        ;; A frame replaced by one like it (the echo box's swap): the panes and the popup lanes move.
                        (drgnx-module-hook 'drgnx-frame-replaced-functions frame-replaced (old new)
                          (when (featurep 'drgnx-panes) (drgnx-pane--frame-replaced old new))

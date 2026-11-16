@@ -266,6 +266,9 @@ the entry is back.
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
 | `other-group` | diffs and logs: another editor group (the one used last), else this one |
 
+A warning never opens the panel by itself, as VS Code's Output does not: it is logged in `*Warnings*` and counted on the
+status bar as a notice, whose button opens `*Warnings*` (an emergency still shows at once).
+
 ### Chrome
 
 Every window's chrome is decided by its **role**, never by its buffer: an **editor** window has a tab line and a
