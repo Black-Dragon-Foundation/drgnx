@@ -597,7 +597,8 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   state's words.
 - **Work is a view, not a layout** (UX audit S1-1, 2026-11-16): a lens is a tab in an editor group beside the Explorer;
   `drgnx-work-space--follow-layout` shows the Detail pane in the right dock while a lens is on screen and hides it once
-  none is, and a file opened over a lens shows in that window. The trail is the panel's Trail tab. The Detail tile and the trail tile draw their own title row in the area's row
+  none is, and a file opened over a lens shows in that window; in a session without the workbench's panes (a bare GUI
+  test) neither it nor the trail's follow moves anything. The trail is the panel's Trail tab. The Detail tile and the trail tile draw their own title row in the area's row
   (`drgnx-area-own-title` as a string, with the area's close): "Detail", and "Trail · AGENT | Agent · AGENT | following ▾".
   The trail follows the map's selection (`drgnx-work-space--follow-trail`: the trail of the selected agent, made when
   there is none, shown in the panel while a lens is on screen); the Flow still shows its Rules tile on demand. The lens bar is
