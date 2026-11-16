@@ -6,6 +6,7 @@
 //! time, budgets and the supervisor ([`timeline`]); the Extensions view's catalog ([`extensions`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
+pub mod changes;
 pub mod config;
 pub mod coord;
 pub mod debug;
@@ -380,6 +381,9 @@ params! {
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
     GitLetters(git::LettersParams),
+    ChangesSubscribe(changes::Subscribe),
+    ChangesSet(changes::Set),
+    ChangesClose(changes::ViewId),
     ScmSubscribe(scm::Subscribe),
     ScmSet(scm::Set),
     ScmClose(scm::ViewId),
@@ -505,6 +509,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(editor::methods());
     v.extend(search::methods());
     v.extend(git::methods());
+    v.extend(changes::methods());
     v.extend(scm::methods());
     v.extend(runners::methods());
     v.extend(extensions::methods());

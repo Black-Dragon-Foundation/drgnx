@@ -629,6 +629,8 @@ pub struct Views {
     outlines: outline::Outlines,
     /// The Source Control views (`scm/subscribe`).
     scms: scm::Scms,
+    /// The Changes views (`changes/subscribe`): what the agents changed, by task.
+    changes: changes::Changes,
     /// The Run and Debug views (`debug/view`).
     pub debugs: debug::DebugViews,
     /// The agent panels' rows (`agent-panel/SESSION`).
@@ -654,6 +656,7 @@ impl Default for Views {
             buffers: buffers::Buffers::default(),
             outlines: outline::Outlines::default(),
             scms: scm::Scms::default(),
+            changes: changes::Changes::default(),
             debugs: debug::DebugViews::default(),
             panels: Arc::default(),
             front: OnceLock::new(),
@@ -693,6 +696,7 @@ impl Views {
             || self.buffers_build(f, key)
             || self.outline_build(f, key)
             || self.scm_build(f, key)
+            || self.changes_build(f, key)
             || self.debugs.env_build(f, key)
             || f.core.presence.here_build(f, key.0, &key.1)
             || f.notebooks.views.env_build(key.0, &key.1)
@@ -1030,6 +1034,7 @@ impl Views {
         self.buffers.gone(conn);
         self.outlines.gone(conn);
         self.scms.gone(conn);
+        self.changes.gone(conn);
         self.debugs.gone(conn);
         self.panels.gone(conn, None);
         lock(&self.sja).retain(|(c, _, _)| *c != conn);

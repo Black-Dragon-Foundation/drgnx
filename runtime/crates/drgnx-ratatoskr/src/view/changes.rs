@@ -3,9 +3,83 @@
 //! actions the place offers as the text property `drgnx-action`: `open` (the file at the hunk), `comment` (a steer to
 //! the hunk's agent, anchored to the hunk) and `revert` (`history/revert/hunk`).
 
+use crate::dispatch::Caller;
+use crate::front::Front;
+use crate::view::{Key, Views};
 use crate::work::changes::TaskGroup;
 use drgnx_rows::{Row, RowBuilder};
+use runstav::methods::changes::{Set, Subscribe, ViewId};
+use runstav::wire::{Error, ErrorCode};
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{Mutex, MutexGuard};
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The Changes views of every connection: the groups each last read.
+#[derive(Default)]
+pub struct Changes {
+    views: Mutex<HashMap<(u64, String), Vec<TaskGroup>>>,
+}
+
+impl Changes {
+    pub(super) fn gone(&self, conn: u64) {
+        lock(&self.views).retain(|(c, _), _| *c != conn);
+    }
+}
+
+impl Views {
+    /// The rows of KEY's Changes view for its class; false when the view is none.
+    pub(super) fn changes_build(&self, f: &Front, key: &Key) -> bool {
+        let Some(groups) = lock(&self.changes.views)
+            .get(&(key.0, key.1.clone()))
+            .cloned()
+        else {
+            return false;
+        };
+        self.publish_built(f, key, |_, _| (rows(&groups), Vec::new()));
+        true
+    }
+
+    /// CONN's VIEW shows GROUPS now: every class gets the rows that changed.
+    fn changes_show(&self, f: &Front, conn: u64, view: &str, groups: Vec<TaskGroup>) {
+        lock(&self.changes.views).insert((conn, view.to_owned()), groups.clone());
+        self.publish_rows(f, conn, view, rows(&groups));
+    }
+}
+
+/// `changes/subscribe`: the view shows what the agents changed, by task.
+pub async fn subscribe(f: &Front, c: &Caller, p: Subscribe) -> Result<bool, Error> {
+    let groups = crate::work::changes::by_task(f).await?;
+    f.core.views.changes_show(f, c.conn_id, &p.view, groups);
+    Ok(true)
+}
+
+/// `changes/set`: refresh reads the sessions' edits again.
+pub async fn set(f: &Front, c: &Caller, p: Set) -> Result<bool, Error> {
+    let known = lock(&f.core.views.changes.views).contains_key(&(c.conn_id, p.view.clone()));
+    if !known {
+        return Err(Error {
+            code: ErrorCode::InvalidParams,
+            message: "not a Changes view (changes/subscribe first)".into(),
+            path: Some("view".into()),
+        });
+    }
+    if p.refresh {
+        let groups = crate::work::changes::by_task(f).await?;
+        f.core.views.changes_show(f, c.conn_id, &p.view, groups);
+    }
+    Ok(true)
+}
+
+/// `changes/close`.
+pub fn close(f: &Front, c: &Caller, p: ViewId) -> Result<bool, Error> {
+    Ok(lock(&f.core.views.changes.views)
+        .remove(&(c.conn_id, p.view))
+        .is_some())
+}
 
 /// The rows of GROUPS: a task row, its file rows, each file's hunk rows, in that order.
 pub fn rows(groups: &[TaskGroup]) -> Vec<Row> {
@@ -52,7 +126,7 @@ pub fn rows(groups: &[TaskGroup]) -> Vec<Row> {
                     0,
                     end,
                     "drgnx-hunk",
-                    json!({"path": f.path, "op": h.op, "index": h.index, "agent": h.agent}),
+                    json!({"path": f.path, "op": h.op, "index": h.index, "agent": h.agent, "session": h.session}),
                 );
                 out.push(b.finish());
             }
@@ -83,6 +157,7 @@ mod tests {
                         start_line: 2,
                         end_line: 6,
                         agent: Some("a".into()),
+                        session: Some("s1".into()),
                         reason: Some("fixed the race".into()),
                     },
                     HunkRef {
@@ -91,6 +166,7 @@ mod tests {
                         start_line: 9,
                         end_line: 9,
                         agent: Some("a".into()),
+                        session: Some("s1".into()),
                         reason: None,
                     },
                 ],
