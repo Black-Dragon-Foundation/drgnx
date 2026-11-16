@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use urdr::graph::entity::{self, Changes, EntityNew, Origin};
+use urdr::graph::link;
 use urdr::graph::{Class, TxMeta};
 
 /// The quiet time after the last change of a file's records (or of the file) before the two are merged.
@@ -999,20 +1000,205 @@ async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
             changes.push((t.n, want));
         }
     }
-    if changes.is_empty() {
+    if !changes.is_empty() {
+        db.write(meta(), move |tx| {
+            for (n, want) in changes {
+                entity::update(
+                    tx,
+                    n,
+                    None,
+                    Changes {
+                        data_patch: Some(json!({ "ledger": want })),
+                        ..Default::default()
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(fail)?;
+    }
+    // git is asked again only when the ledger or the plan's task numbers changed since the last time
+    let stamp = {
+        let text = std::fs::read_to_string(&ledger).unwrap_or_default();
+        let ids: Vec<String> = tasks
+            .iter()
+            .map(|t| format!("{}:{}", t.n, t.data["number"].as_str().unwrap_or("")))
+            .collect();
+        view::digest(&format!("{text}\0{}", ids.join(",")))
+    };
+    let key = format!("ledger-commits:{file}");
+    let k = key.clone();
+    let seen = db.read(move |c| Ok(kv_get(c, &k))).await.map_err(fail)?;
+    if seen.as_deref() == Some(stamp.as_str()) {
         return Ok(());
     }
+    ledger_commits(db, &plan, &ledger, &marks, &tasks).await?;
+    kv_put(db, vec![(key, Some(stamp))]).await
+}
+
+/// A commit a ledger names: its full sha, its time and its subject.
+struct GitCommit {
+    sha: String,
+    date: i64,
+    subject: String,
+}
+
+/// What `git ARGS` prints in REPO, or none when it fails.
+fn git_out(repo: &Path, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// The main checkout of the repository DIR is in (never a linked worktree, which may go).
+fn main_repo(dir: &Path) -> Option<PathBuf> {
+    let common = git_out(
+        dir,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let common = PathBuf::from(common);
+    Some(if common.file_name().is_some_and(|n| n == ".git") {
+        common.parent()?.to_path_buf()
+    } else {
+        common
+    })
+}
+
+fn git_log(repo: &Path, args: &[&str]) -> Vec<GitCommit> {
+    let mut a = vec!["log", "--format=%H%x09%ct%x09%s"];
+    a.extend_from_slice(args);
+    git_out(repo, &a)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let mut p = l.splitn(3, '\t');
+            Some(GitCommit {
+                sha: p.next()?.to_owned(),
+                date: p.next()?.parse().ok()?,
+                subject: p.next().unwrap_or("").to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// The commits a mark names (`A..B`: the commits after A up to B; one sha: that commit) in the first of REPOS that has
+/// them: (the repo, the commits).  None when no repository has them (the range is stale).
+fn resolve_commits(repos: &[PathBuf], named: &[String]) -> Option<(PathBuf, Vec<GitCommit>)> {
+    repos.iter().find_map(|repo| {
+        let has =
+            |sha: &str| git_out(repo, &["cat-file", "-e", &format!("{sha}^{{commit}}")]).is_some();
+        match named {
+            [a, b] if has(a) && has(b) => {
+                Some((repo.clone(), git_log(repo, &[&format!("{a}..{b}")])))
+            }
+            [one] if has(one) => Some((repo.clone(), git_log(repo, &["-1", one]))),
+            _ => None,
+        }
+    })
+}
+
+/// A ledger's commits as links: for each mark that names commits, the commits (entities `commit:SHA`) `implements` the
+/// mark's first task, inferred, with the ledger as the link's source; a link this ledger made before and no mark makes now
+/// is retired.  The range is read in the repository of the plan, so git runs here, in the hub.
+async fn ledger_commits(
+    db: &CoordDb,
+    plan: &Path,
+    ledger: &Path,
+    marks: &[saga::ledger::DoneMark],
+    tasks: &[Piece],
+) -> Result<(), Error> {
+    let source = ledger.to_string_lossy().into_owned();
+    let dir = plan.parent().unwrap_or(Path::new("/")).to_path_buf();
+    let wants: Vec<(i64, Vec<String>)> = marks
+        .iter()
+        .filter_map(|m| {
+            let first = m.tasks.first()?;
+            let t = tasks
+                .iter()
+                .find(|t| t.data["number"].as_str() == Some(first.as_str()))?;
+            Some((t.n, m.commits.clone()))
+        })
+        .collect();
+    let task_ns: Vec<i64> = tasks.iter().map(|t| t.n).collect();
+    let resolved = crate::clock::blocking(move || {
+        let repos: Vec<PathBuf> = main_repo(&dir).into_iter().collect();
+        wants
+            .into_iter()
+            .map(|(n, named)| {
+                let r = if named.is_empty() {
+                    None
+                } else {
+                    resolve_commits(&repos, &named)
+                };
+                (n, r)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| err(format!("git: {e}")))?;
     db.write(meta(), move |tx| {
-        for (n, want) in changes {
-            entity::update(
-                tx,
-                n,
-                None,
-                Changes {
-                    data_patch: Some(json!({ "ledger": want })),
-                    ..Default::default()
-                },
+        let mut keep: Vec<(i64, i64)> = Vec::new();
+        for (task, found) in resolved {
+            let Some((repo, commits)) = found else {
+                continue;
+            };
+            let project = entity::by_n(tx.sql(), task)?.and_then(|t| t.project);
+            let repo_s = format!("{}/", repo.to_string_lossy().trim_end_matches('/'));
+            for c in commits {
+                let id = format!("commit:{}", c.sha);
+                let data = json!({"sha": c.sha, "date": c.date, "repo": repo_s, "path": repo_s});
+                let n = match entity::by_id(tx.sql(), &id)? {
+                    Some(cur) => {
+                        entity::unretire(tx, cur.n)?;
+                        cur.n
+                    }
+                    None => {
+                        entity::create(
+                            tx,
+                            EntityNew {
+                                id,
+                                kind: "commit".into(),
+                                project,
+                                title: Some(c.subject.clone()),
+                                status: None,
+                                body: None,
+                                priority: None,
+                                assignee: None,
+                                data,
+                                origin: Origin::Parsed,
+                                source: Some("commit".into()),
+                            },
+                        )?
+                        .n
+                    }
+                };
+                link::add(tx, n, "implements", task, None, Origin::Inferred, Some(&source))?;
+                keep.push((n, task));
+            }
+        }
+        // what this ledger linked before and no mark links now
+        let old: Vec<(i64, i64)> = {
+            let mut st = tx.sql().prepare(
+                "select src, dst from link where kind = 'implements' and source = ?1 and tx_to = ?2",
             )?;
+            st.query_map((source.as_str(), urdr::graph::schema::SENTINEL), |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<Result<_, _>>()?
+        };
+        for (src, dst) in old {
+            if task_ns.contains(&dst) && !keep.contains(&(src, dst)) {
+                link::retire(tx, src, "implements", dst)?;
+            }
         }
         Ok(())
     })
@@ -2020,6 +2206,77 @@ mod tests {
         f.sync(&lp).await;
         assert_eq!(ledger_of(&f, "1").await, "none");
         assert_ne!(ledger_of(&f, "2").await, "none");
+    }
+
+    /// The live `implements` links: (commit id, task title, origin, source).
+    async fn implements_of(f: &Fix) -> Vec<(String, String, String, String)> {
+        f.db.read(|c| {
+            let mut st = c.prepare(
+                "select a.id, t.title, l.origin, l.source from link l join entity a on a.n = l.src \
+                 join entity t on t.n = l.dst where l.kind = 'implements' and l.tx_to = ?1 \
+                 and a.retired_tx is null and t.retired_tx is null",
+            )?;
+            Ok(st
+                .query_map([urdr::graph::schema::SENTINEL], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_ledgers_commits_become_implements_links_of_the_importers_task() {
+        let f = fix();
+        let repo = f.root.clone();
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t.invalid"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "git {args:?}: {o:?}");
+            String::from_utf8_lossy(&o.stdout).trim().to_owned()
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("a"), "1").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "first"]);
+        let first = git(&["rev-parse", "HEAD"]);
+        std::fs::write(repo.join("a"), "2").unwrap();
+        git(&["commit", "-q", "-am", "second"]);
+        let second = git(&["rev-parse", "HEAD"]);
+        let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n";
+        let ledger = format!(
+            "# SDD ledger — plan: pair.md\nTask 1: complete (commits {}..{}, tests ok)\n",
+            &first[..9],
+            &second[..9]
+        );
+        let (pp, lp) = (
+            f.root.join("docs/plans/drgnx/pair.md"),
+            f.root.join("docs/plans/drgnx/pair.ledger.md"),
+        );
+        std::fs::write(&pp, plan).unwrap();
+        std::fs::write(&lp, &ledger).unwrap();
+        f.import(Some(RecordKind::Plans), false).await;
+        f.import(Some(RecordKind::Ledgers), false).await;
+        // the range A..B is the commits after A up to B: the second commit, on task 1, from the ledger
+        let got = implements_of(&f).await;
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].0, format!("commit:{second}"));
+        assert!(got[0].1.starts_with("1 "), "{got:?}");
+        assert_eq!(got[0].2, "inferred");
+        assert_eq!(got[0].3, lp.to_string_lossy());
+        // a second import asks nothing and changes nothing
+        f.import(None, false).await;
+        assert_eq!(implements_of(&f).await.len(), 1);
+        // the ledger no longer names it: the link goes
+        std::fs::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
+        f.sync(&lp).await;
+        assert!(implements_of(&f).await.is_empty());
     }
 
     #[tokio::test]
