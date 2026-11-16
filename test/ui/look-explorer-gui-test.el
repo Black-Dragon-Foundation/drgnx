@@ -205,6 +205,74 @@ the row, and again after the pointer leaves."
       (skip-unless (cadr (mouse-pixel-position)))
       (should (funcall has-fg)))))
 
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-pointer-moved-down-the-rows-leaves-one-lit ()
+  "Pattern D (sway; the user's Explorer, 2026-11-16, 8.png: ten rows in a run drawn with the hover's box and ⋯ after
+the pointer went down the list).  The pointer moves down ten rows one by one; drawn after, only the row under it
+shows its ⋯ (the point row, which always shows it, is the first and is left out)."
+  :tags '(:compositor)
+  (skip-unless (display-graphic-p))
+  (skip-unless (eq t (drgnx-uitest-pointer-set 0 0)))
+  (skip-unless (boundp 'mouse-sensor-enabled))
+  ;; as the product runs: the Open rows' hover (extra/buffers) turns Nidhogg's mouse sensors on
+  (let ((old (symbol-value 'mouse-sensor-enabled)))
+    (set 'mouse-sensor-enabled t)
+    (unwind-protect (drgnx-ui-look-explorer--pointer-down-rows) (set 'mouse-sensor-enabled old))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-pointer-swept-down-the-rows-leaves-one-lit ()
+  "Pattern D (sway; 8.png as the user moves): the pointer sweeps down ten rows without a settle between moves."
+  :tags '(:compositor)
+  (skip-unless (display-graphic-p))
+  (skip-unless (eq t (drgnx-uitest-pointer-set 0 0)))
+  (skip-unless (boundp 'mouse-sensor-enabled))
+  (let ((old (symbol-value 'mouse-sensor-enabled)))
+    (set 'mouse-sensor-enabled t)
+    (unwind-protect (drgnx-ui-look-explorer--pointer-down-rows 'fast) (set 'mouse-sensor-enabled old))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-pointer-moved-down-patched-rows-leaves-one-lit ()
+  "Pattern D (sway; 8.png with the hub's patches): each move also changes a file, so the rows are patched under
+the pointer."
+  :tags '(:compositor)
+  (skip-unless (display-graphic-p))
+  (skip-unless (eq t (drgnx-uitest-pointer-set 0 0)))
+  (skip-unless (boundp 'mouse-sensor-enabled))
+  (let ((old (symbol-value 'mouse-sensor-enabled)))
+    (set 'mouse-sensor-enabled t)
+    (unwind-protect (drgnx-ui-look-explorer--pointer-down-rows nil 'touch) (set 'mouse-sensor-enabled old))))
+
+(defun drgnx-ui-look-explorer--pointer-down-rows (&optional fast touch)
+  "The body of `drgnx-ui-look-explorer/a-pointer-moved-down-the-rows-leaves-one-lit': FAST moves without a settle
+between moves; TOUCH writes a file each move (the hub patches the rows).  A row is lit when the middle of its empty
+stretch has the hover's tint (`drgnx-hover''s background); point stays on the first row, so no row below is selected."
+  (drgnx-ui-look-explorer--with root
+    (dotimes (i 12) (write-region "" nil (expand-file-name (format "m%02d.txt" i) root) nil 'silent))
+    (drgnx-test-wait (lambda () (with-current-buffer drgnx-explorer-buffer-name (string-match-p "m11" (buffer-string))))
+                     :secs 20 :what "the twelve new rows")
+    (let* ((s (drgnx-uitest-device-scale (selected-frame))) (e (window-body-pixel-edges))
+           (ys (cl-loop for line from 1 to 12 collect (round (* s (+ (nth 1 e) (drgnx-ui-look-explorer--row-y line))))))
+           (_ (with-current-buffer drgnx-explorer-buffer-name (goto-char (point-min))))
+           (mid (round (* s (/ (+ (nth 0 e) (nth 2 e)) 2.0))))         ; right of the short names, left of the tails
+           (tail (round (* s (- (nth 2 e) 27))))
+           (tint (mapcar (lambda (c) (round (* 255 c))) (color-name-to-rgb (face-background 'drgnx-hover nil t))))
+           (lit (lambda (snap line)
+                  (cl-every (lambda (p c) (<= (abs (- p c)) 6)) (cdr (drgnx-uitest-pixel snap mid (nth (1- line) ys))) tint))))
+      (drgnx-test-wait-presented)
+      ;; the probe tells: at rest no row below the first has the tint
+      (let ((snap (drgnx-uitest-snapshot)))
+        (should-not (cl-loop for line from 3 to 12 when (funcall lit snap line) collect line)))
+      (cl-loop for line from 3 to 12
+               do (should (eq t (drgnx-uitest-pointer-set (round (/ tail (drgnx-pixels-scale) 1.0))
+                                                          (round (/ (nth (1- line) ys) (drgnx-pixels-scale) 1.0)))))
+               (when touch (write-region (format "%d" line) nil (expand-file-name "m00.txt" root) nil 'silent))
+               (if fast (redisplay)                                    ; the next move comes as soon as it is drawn
+                 (drgnx-uitest-run nil)
+                 (drgnx-test-wait-presented)))
+      (drgnx-uitest-run nil)
+      (drgnx-test-wait-presented)
+      (unless (cadr (mouse-pixel-position)) (ert-skip "no pointer position"))
+      (let ((snap (drgnx-uitest-snapshot)))
+        (should (funcall lit snap 12))                            ; the probe tells: the row under the pointer is lit
+        (should-not (cl-loop for line from 3 to 11 when (funcall lit snap line) collect line))))))
+
 (drgnx-look-gui-deftest drgnx-ui-look-explorer/the-pointer-on-a-row-tail-tints-the-whole-row ()
   "Pattern D (sway, LOOK-FIX-OPEN-HOVER-TINT-1): with the pointer on a row's tail (where its ⋯ is), the hover tint
 reaches the row's first glyph too: the row and the tail its after-string draws are one lit run (Nidhogg)."

@@ -145,9 +145,16 @@ it never ends a run."
                  drgnx-run-ert--leaks)
            nil)))
 
+(defvar drgnx-run-ert-file-end-hook nil
+  "Run when the census ends a test file, before it reads what the file left: the harness's own state that a session
+keeps across a file's tests (the virtual pointer, `drgnx-uitest-pointer-set') goes here.  A file's GUI session ends
+with its file, so this is that session's teardown.")
+
 (defun drgnx-run-ert--census-leave-file ()
-  "End the current file: the full fingerprint against the one at its start, then its test buffers go."
+  "End the current file: `drgnx-run-ert-file-end-hook', the full fingerprint against the one at its start, then its
+test buffers go."
   (when drgnx-run-ert--census-start
+    (drgnx-run-ert--census-guard :null drgnx-run-ert--census-file (lambda () (run-hooks 'drgnx-run-ert-file-end-hook)))
     (drgnx-run-ert--census-guard
      :null drgnx-run-ert--census-file
      (lambda ()

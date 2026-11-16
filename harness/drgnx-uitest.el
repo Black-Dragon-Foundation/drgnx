@@ -163,6 +163,16 @@ t when there is one (made now or before), nil when the compositor offers no such
                 (setq drgnx-uitest--vpointer proc)
                 t)))))))
 
+(defun drgnx-uitest--vpointer-release ()
+  "End this session's virtual pointer (`drgnx-uitest--sway-vpointer'): run at a test file's end
+\(`drgnx-run-ert-file-end-hook'), so the leak census finds no process left; the next row that moves the pointer makes
+a new one."
+  (when drgnx-uitest--vpointer
+    (when (process-live-p drgnx-uitest--vpointer) (delete-process drgnx-uitest--vpointer))
+    (setq drgnx-uitest--vpointer nil)))
+
+(add-hook 'drgnx-run-ert-file-end-hook #'drgnx-uitest--vpointer-release)
+
 (defun drgnx-uitest-pointer-set (x y)
   "Move the compositor's pointer to the layout position X, Y (logical pixels): t when it moved.
 Only sway can be told: the session's seat gets a virtual pointer first (`drgnx-uitest--sway-vpointer', or no client
