@@ -1287,7 +1287,10 @@ bin/drgnx test --container --tty              # in a Fedora 45 container, Emacs 
 SIGPIPE ignored, in a temp directory of its own; the environment is the caller's (the sessions start theirs with
 `env -i`). `DRGNX_TEST_SELECTOR` narrows it. In a container the image `drgnx-test-tty:TAG` (`test/container/image-tag.sh`) is built from
 `test/container/Containerfile.tty` with `--build-arg FEDORA=NN`; the image has tmux, plus kitty and mutter for the exit
-test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label=disable`) and `--memory 3g`.
+test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label=disable`) and `--memory 3g
+--memory-swap 3g`; with `DRGNX_TEST_JOBS` of 3 or more, 1.5 GB a file (`6144m` for 4: four files at 3g met the cap
+dozens of times a run and swapped, and their waits timed out at random; they peak near 4.4 GB), and
+`DRGNX_TEST_TTY_MEMORY` sets another size.
 `DRGNX_USER_ELPA` (a directory holding the pinned kkp, and corfu, unpacked) is mounted read-only as `/elpa`, so the
 kkp tests and the kitty exit test run there too; without it they skip. Every `--container` tier mounts it the same
 way, so the batch tests that load a package (the extras teardown) run in a container too.

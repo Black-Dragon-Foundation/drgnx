@@ -36,7 +36,10 @@
         (drgnx-tty-session-key s "C-c")
         (drgnx-test-wait (lambda ()
                            (or (not (drgnx-tty-session--pane-alive-p s))
-                               (progn (when (drgnx-tty-session-find s "\\((yes or no)\\|(y or n)\\)")        ; whatever Emacs asks before it exits
+                               ;; whatever Emacs asks before it exits; the pane can go between the look above and
+                               ;; this one (Emacs exited): the capture's error is that, and the next look sees it
+                               (progn (when (condition-case nil (drgnx-tty-session-find s "\\((yes or no)\\|(y or n)\\)")
+                                              (drgnx-ui-error nil))
                                         (drgnx-tty-session-send s "yes\r"))
                                       nil)))
                          :secs 20 :what "Emacs to exit")
