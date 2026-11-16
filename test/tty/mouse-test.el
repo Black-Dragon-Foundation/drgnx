@@ -15,7 +15,7 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
     (with-temp-file (expand-file-name "b.txt" dir)
       (dotimes (i 300) (insert (format "line %d\n" (1+ i)))))
     (with-temp-file (expand-file-name "src/c.el" dir) (insert "(defun c () 1)\n"))
-    (drgnx-tty-session-wait-screen sess "\\*scratch\\* ×" 20)
+    (drgnx-tty-session-wait-tab sess "×" 20)
     (drgnx-tty-session-hub sess)                  ; the Explorer's rows are the hub's listing
     (drgnx-tty-session-eval sess `(progn (drgnx-explorer-set-roots (list ,dir))
                                          (drgnx-wb-show-sidebar)
@@ -239,7 +239,7 @@ tab before b.txt replaces it.  Tabs are apart by a gap of spaces (wb/drgnx-chrom
 (ert-deftest drgnx-tty-mouse/a-daemon-client-gets-the-mouse ()
   ;; the client's terminal asks for mouse reports; the daemon's own initial terminal is no terminal to ask
   (drgnx-tty-session-with (s :daemon t :size "120x40")
-    (drgnx-tty-session-wait-screen s "\\*scratch\\* ×" 20)
+    (drgnx-tty-session-wait-tab s "×" 20)
     (should (eq (drgnx-tty-mouse-test--flag s 1) 1))
     (drgnx-tty-session-eval s '(progn (customize-set-variable 'drgnx-tty-mouse nil) t))
     (should (eq (drgnx-tty-mouse-test--flag s 0) 0))))

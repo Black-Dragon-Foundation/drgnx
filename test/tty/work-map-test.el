@@ -23,7 +23,7 @@ what its buffer holds is on the screen."
   (let ((bin (getenv "DRGNX_RATATOSKR_BIN")))
     (skip-unless (and bin (file-executable-p bin)))
     (drgnx-tty-session-with (s :size "160x48" :env (list (concat "DRGNX_RATATOSKR_BIN=" bin)))
-      (drgnx-tty-session-wait-screen s "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-tab s nil 20)
       (skip-unless (drgnx-tty-session-eval s '(fboundp 'nidhogg-view--call)))
       (drgnx-tty-session-eval
        s `(progn
