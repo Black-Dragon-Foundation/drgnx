@@ -17,6 +17,7 @@
   "agents/history/rescan": ["user"],
   "agents/history/resume": ["user"],
   "agents/history/search": ["user"],
+  "agents/history/status": ["user"],
   "agents/history/subscribe": ["user"],
   "agents/huddle/get": ["user"],
   "agents/huddle/start": ["user"],

@@ -668,6 +668,20 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
            (should (default-value 'indent-tabs-mode)))
        (setq-default indent-tabs-mode orig)))))
 
+(defvar nidhogg-lone-modifier-events)
+
+(ert-deftest drgnx-keys/the-vscode-profile-turns-on-lone-alt-for-the-menu ()
+  "VS Code's lone Alt opens the menu: the profile binds `<lone-alt>' to the menu (☰) and turns on Nidhogg's lone Alt
+\(`nidhogg-lone-modifier-events'); the other profiles leave it as it was."
+  (drgnx-keys-test--live
+   (let ((nidhogg-lone-modifier-events nil))     ; bound here: the batch Emacs may be one without it
+     (drgnx-keys-use '((emacs app editing window)))
+     (should-not nidhogg-lone-modifier-events)
+     (drgnx-keys-use '((vscode app editing window)))
+     (should (equal nidhogg-lone-modifier-events '(alt)))
+     (drgnx-keys-use '((emacs app editing window)))
+     (should-not nidhogg-lone-modifier-events))))
+
 (defvar drgnx-keys-test-late-map (make-sparse-keymap))
 
 (ert-deftest drgnx-keys/deferred-bindings-of-an-old-setup-never-apply ()
@@ -853,6 +867,24 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
                                 :layers '((vim app editing window)) :defaults drgnx-keys-test--defaults)))
      (should (equal (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'test-git)) (plist-get r :bindings)) :map)
                     'drgnx-modal-leader-map)))))
+
+(ert-deftest drgnx-keys/the-vscode-profile-keys-the-menu-on-lone-alt ()
+  "The shipped VS Code profile, resolved with the menu command registered (as ui/face does): `<lone-alt>' runs it.
+The profile's own entries are what resolves, not the first one an `assq' finds."
+  (drgnx-keys-test--with-core-commands
+   (drgnx-command-define 'face-menu :category "View" :title "Open the Menu" :command #'ignore :doc "test")
+   (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-test--profiles
+                                :layers '((vscode app editing window)) :defaults drgnx-keys-test--defaults)))
+     (should (equal (drgnx-keys-test--keys r 'face-menu) '("<lone-alt>"))))))
+
+(ert-deftest drgnx-keys/a-profile-names-each-command-once ()
+  "A command listed twice in one profile takes its keys from the later entry alone, silently: never allowed."
+  (pcase-dolist (`(,profile . ,spec) drgnx-keys-test--profiles)
+    (let ((seen nil) (twice nil))
+      (dolist (entry (plist-get spec :bind))
+        (when (consp entry)
+          (if (memq (car entry) seen) (push (car entry) twice) (push (car entry) seen))))
+      (should (equal (list profile nil) (list profile (nreverse twice)))))))
 
 (ert-deftest drgnx-keys/prefix-clashes-between-drgnx-bindings ()
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :user '(:bind ((line-numbers "C-k"))))))
@@ -1443,7 +1475,7 @@ The commands of modules that need no installed package are in it, the later stag
                               ;; the Extensions list: its open key and its own keys
                               extensions-open extensions-search extensions-details extensions-install extensions-update
                               extensions-update-all extensions-uninstall extensions-toggle-project extensions-refresh
-                              extensions-cancel extensions-show-log
+                              extensions-cancel extensions-show-log extensions-toggle-section extensions-disable-module
                               extensions-trust-install extensions-trust-cancel ; the trust card's own keys
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste
@@ -1498,7 +1530,8 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-inline-breakpoint ; Shift+F9, as in VS Code
                               debug-run-no-debug ; Run Without Debugging's C-F5
                               inbox-open inbox-next inbox-previous inbox-press inbox-escape ; the inbox
-                              terminal-toggle))   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
+                              terminal-toggle   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
+                              face-menu))       ; a lone Alt opens the menu (Nidhogg's `lone-alt')
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
@@ -1506,6 +1539,7 @@ The commands of modules that need no installed package are in it, the later stag
                    drgnx-keys-test--linux-snapshot))
     (should (equal (drgnx-keys-test--keys r 'edit-line-start) '("<home>")))
     (should (equal (drgnx-keys-test--keys r 'edit-word-left) '("C-<left>")))
+    (should (equal (drgnx-keys-test--keys r 'face-menu) '("<lone-alt>")))   ; ui/face's own command, set up for real
     (should-not (drgnx-keys-test--keys r 'quit))
     (should-not (drgnx-keys-test--keys r 'preferences))))
 

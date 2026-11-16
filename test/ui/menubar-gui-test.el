@@ -97,5 +97,56 @@ the button's left edge, below the title row."
       (setq nhwl-menu--frames nil)
       (kill-buffer buf))))
 
+(defun drgnx-ui-menubar--measure (id)
+  "Open menu ID, measure its card while it is open (as `drgnx-ui-menubar--open-and-look'), close it by Esc: a plist of
+the menu text's face family, its first row's height and its frame's ring, in the menu frame's pixels."
+  (let ((seen nil) (keys (list 'down 'escape)) (idle 0))
+    (cl-letf (((symbol-function 'read-event)
+               (lambda (&rest _)
+                 (cond (keys (unless seen
+                               (redisplay t)
+                               (let* ((f (car (last (nhwl-menu--live-frames)))) (win (frame-root-window f)))
+                                 (setq seen
+                                       (with-current-buffer (window-buffer win)
+                                         (list :family (face-attribute 'nhwl-menu :family f t)
+                                               :height (face-attribute 'nhwl-menu :height f t)
+                                               :row (cdr (window-text-pixel-size win (point-min)
+                                                                                 (save-excursion (goto-char (point-min)) (line-end-position))))
+                                               :ring (frame-parameter f 'child-frame-border-width)
+                                               :frame f)))))
+                             (pop keys))
+                       ((< (cl-incf idle) 50) nil)
+                       (t (error "The %s menu read on past its keys" id))))))
+      (drgnx-menubar-open id))
+    seen))
+
+(drgnx-look-gui-deftest drgnx-ui-menubar/the-menus-follow-the-look ()
+  "The menu cards (the menu button's list, the context menus) are the look's: the UI sans at the UI size, rows at least
+28 logical pixels high, the modal card's ring; not the stock fixed-pitch 13 px with rows one text line high."
+  (skip-unless (and (display-graphic-p) (fboundp 'nhwl-menu--live-frames)))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*menubar-look*")) (main (selected-frame))
+        (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (progn
+          (drgnx-command-define 'file-new :title "New File" :category "File" :command #'drgnx-ui-menubar--new)
+          (drgnx-menubar-setup)
+          (when (fboundp 'drgnx-menu-look-setup) (drgnx-menu-look-setup))
+          (drgnx-topline-setup)
+          (drgnx-test-wait-presented)
+          (let ((m (drgnx-ui-menubar--measure 'file)))
+            (should m)
+            (should (equal (plist-get m :family) (face-attribute 'drgnx-ui-text :family main t)))
+            (should (>= (plist-get m :row) (1- (drgnx-px 28 main))))
+            ))
+      (advice-remove 'nhwl-menu--buffer (intern "drgnx-ui/face--menu-look-rows"))   ; the module's undo is not here
+      (advice-remove 'nhwl-menu--locate (intern "drgnx-ui/face--menu-look-locate"))
+      (drgnx-topline--off)
+      (drgnx-menubar-off)
+      (mapc (lambda (f) (delete-frame f t)) (nhwl-menu--live-frames))
+      (setq nhwl-menu--frames nil)
+      (kill-buffer buf))))
+
 (provide 'menubar-gui-test)
 ;;; menubar-gui-test.el ends here

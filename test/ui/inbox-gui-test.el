@@ -119,6 +119,12 @@ three buttons, the footer."
                    "Allow once" "Always for this session" "Deny" "All notices"))
         (should (string-match-p (regexp-quote s) text)))
       ;; under the pill: its right edge is the pill's, its top below the title row
+      ;; every row and the footer are whole in the card: nothing is cut at its bottom edge
+      (let ((win (frame-root-window drgnx-inbox--frame)))
+        (with-current-buffer drgnx-inbox-buffer-name
+          (goto-char (point-min)) (search-forward "All notices")
+          (let ((v (pos-visible-in-window-p (point) win t)))   ; t or (X Y): whole; (X Y RTOP RBOT …): cut off
+            (should (or (eq t v) (= 2 (length v)))))))
       ;; the card's right edge is the pill's (or the frame's, when the pill is nearer the edge than the card is wide)
       (let ((at (frame-position drgnx-inbox--frame)))
         (should (<= (+ (car at) (frame-pixel-width drgnx-inbox--frame))

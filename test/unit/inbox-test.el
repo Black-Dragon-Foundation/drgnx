@@ -29,7 +29,8 @@ calls recorded, the inbox's state file in a temporary folder and nothing of the 
                    ((symbol-function 'drgnx-agents--remote)
                     (lambda (_s method params &optional _r) (push (cons method params) drgnx-inbox-test--hub))))
            (drgnx-agents--take-attention
-            (list :at_work 1 :items (vector (list :session "s1" :id 7 :text "claude · fix-explorer wants to run a command"))))
+            (list :at_work 1 :items (vector (list :session "s1" :id 7 :text "claude · fix-explorer wants to run a command"
+                                                  :detail "cargo test -p explorer"))))
            ,@body)
        (drgnx-agents--take-attention (list :at_work 0 :items (vector)))
        (when (get-buffer drgnx-inbox-buffer-name) (kill-buffer drgnx-inbox-buffer-name))
@@ -106,6 +107,32 @@ calls recorded, the inbox's state file in a temporary folder and nothing of the 
   (dolist (kind drgnx-inbox-kinds)
     (dolist (b (cdr kind))
       (should (assq (intern (car b)) drgnx-inbox--commands)))))
+
+(ert-deftest drgnx-inbox/a-row-has-its-source-on-the-title-line-and-the-detail-in-the-code-font ()
+  (drgnx-inbox-test--with
+    (let ((text (drgnx-inbox-test--text)))
+      (should (string-match-p "^● claude · fix-explorer wants to run a command · agents$" text))
+      (should-not (string-match-p "^ *agents$" text))               ; the source has no line of its own
+      (should (string-match-p "^  cargo test -p explorer$" text)))
+    (with-current-buffer drgnx-inbox-buffer-name
+      (goto-char (point-min)) (search-forward "cargo test")
+      (should (memq 'drgnx-code-small (ensure-list (get-text-property (1- (point)) 'face)))))))
+
+(ert-deftest drgnx-inbox/the-first-button-is-the-primary-one ()
+  (drgnx-inbox-test--with
+    (drgnx-inbox-test--text)
+    (with-current-buffer drgnx-inbox-buffer-name
+      (let ((face (lambda (label) (goto-char (point-min)) (search-forward label)
+                    (ensure-list (get-text-property (1- (point)) 'face)))))
+        (should (memq 'drgnx-ui-button-primary (funcall face "Allow once")))
+        (should-not (memq 'drgnx-ui-button-primary (funcall face "Deny")))))))
+
+(ert-deftest drgnx-inbox/the-card-lists-as-many-items-as-the-pill-counts ()
+  (drgnx-inbox-test--with
+    (drgnx-notice-set 'wb (list (list :id 'job-1 :text "build failed" :command 'ignore)))
+    (should (= (drgnx-needs-you-count) (length (drgnx-needs-you-items))))
+    (should (= 2 (length (seq-filter (lambda (l) (string-prefix-p "● " l)) (split-string (drgnx-inbox-test--text) "\n")))))
+    (drgnx-notice-set 'wb nil)))
 
 (provide 'inbox-test)
 ;;; inbox-test.el ends here

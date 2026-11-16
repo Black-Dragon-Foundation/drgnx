@@ -999,6 +999,23 @@ fn a_resume_on_a_copy_writes_only_the_jails_own_folder() {
         "{\"s\":1}\n"
     );
     assert!(!own.join("B.jsonl").exists());
+    // the copy's folder is bound where claude-agent-acp's Claude Code reads the conversation: the config dir's
+    // projects/<cwd, every non-alphanumeric as ->, spelled here as the adapter does, not by the hub's own helper
+    let folder: String = shape
+        .cwd
+        .to_str()
+        .unwrap()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let read_from = dir.join("projects").join(folder);
+    assert!(
+        g.binds
+            .iter()
+            .any(|b| b.source == own && b.dest == read_from),
+        "{:?}",
+        g.binds
+    );
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(
         fs::metadata(own.join("A.jsonl"))

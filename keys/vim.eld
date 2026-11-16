@@ -687,6 +687,8 @@
               (extensions-update "u" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
               (extensions-update-all "U" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
               (extensions-uninstall "d d" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
+              (extensions-toggle-section "TAB" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
+              (extensions-disable-module "D" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
               (extensions-toggle-project "p" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
               (extensions-refresh "g r" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
               (extensions-cancel "x" :map (drgnx-extensions-list . drgnx-extensions-mode-map))

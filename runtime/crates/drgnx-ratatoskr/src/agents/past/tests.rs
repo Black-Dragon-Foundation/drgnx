@@ -359,7 +359,7 @@ fn the_history_methods_are_the_users_alone() {
         .iter()
         .filter(|m| m.name.starts_with("agents/history/"))
         .collect();
-    assert_eq!(ours.len(), 5);
+    assert_eq!(ours.len(), 6);
     for m in ours {
         assert_eq!(m.classes, [runstav::registry::Class::User], "{}", m.name);
     }
@@ -404,4 +404,221 @@ fn a_cli_taken_out_leaves_the_index_and_off_deletes_it() {
     assert!(h.list().is_empty());
     assert_eq!(h.history.scan().unwrap(), 0, "nothing is read while off");
     assert!(!h.state.join(DB).exists());
+}
+
+#[test]
+fn an_unchanged_scan_opens_no_file_and_writes_nothing() {
+    let h = Home::new();
+    h.claude("c1", "count the apples");
+    h.claude("c2", "count the pears");
+    assert_eq!(h.history.scan_changed().unwrap(), (2, true));
+    let reads = h.history.reads();
+    assert_eq!(reads, 2);
+    let db = h.state.join(DB);
+    let before = std::fs::metadata(&db).unwrap().modified().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let (n, changed) = h.history.scan_changed().unwrap();
+    assert_eq!((n, changed), (2, false), "nothing changed");
+    assert_eq!(h.history.reads(), reads, "no file was opened");
+    assert_eq!(
+        std::fs::metadata(&db).unwrap().modified().unwrap(),
+        before,
+        "the index was not written"
+    );
+    // a changed file is read again, and only that one
+    let p = h.claude("c1", "count the apples and the plums");
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&p)
+        .unwrap()
+        .write_all(b"\n")
+        .unwrap();
+    assert!(h.history.scan_changed().unwrap().1);
+    assert_eq!(h.history.reads(), reads + 1);
+    // a file gone is dropped and reported
+    std::fs::remove_file(&p).unwrap();
+    assert_eq!(h.history.scan_changed().unwrap(), (1, true));
+}
+
+#[test]
+fn a_session_older_than_the_cap_is_neither_listed_nor_searchable() {
+    let h = Home::new();
+    let old = h.claude("old1", "count the quinces");
+    let fresh = h.claude("new1", "count the quinces");
+    let back = |p: &Path, days: u64| {
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    };
+    back(&old, 200);
+    back(&fresh, 10);
+    // no cap: both
+    assert_eq!(h.history.scan().unwrap(), 2);
+    // the cap of 180 days: the old one leaves the index, the 10-day one stays
+    let roots = h.history.roots().unwrap().within(180);
+    h.history.configure(h.state.join(DB), roots);
+    assert_eq!(h.history.scan().unwrap(), 1);
+    let ids: Vec<String> = h.list().into_iter().map(|s| s.id).collect();
+    assert_eq!(ids, ["new1"]);
+    let hits = h.history.search("quinces").unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].session.id, "new1");
+    // 0 is no cap
+    let roots = h.history.roots().unwrap().within(0);
+    h.history.configure(h.state.join(DB), roots);
+    assert_eq!(h.history.scan().unwrap(), 2);
+}
+
+#[test]
+fn a_file_of_unknown_line_types_is_drift_and_ignored_types_are_not() {
+    let h = Home::new();
+    // 12 lines: 2 known, 10 of a type no reader has heard of
+    let mut odd = claude_lines("odd1", "/w/orchard", "count the apples");
+    for i in 0..10 {
+        odd.push_str(&format!("{}\n", json!({"type":"brand-new-kind","n":i})));
+    }
+    h.write(&format!("{CLAUDE_PROJECTS}/-w-orchard/odd1.jsonl"), &odd);
+    // 12 lines of types skipped on purpose
+    let mut quiet = claude_lines("quiet1", "/w/orchard", "count the pears");
+    for i in 0..10 {
+        quiet.push_str(&format!(
+            "{}\n",
+            json!({"type":"file-history-snapshot","n":i})
+        ));
+    }
+    h.write(
+        &format!("{CLAUDE_PROJECTS}/-w-orchard/quiet1.jsonl"),
+        &quiet,
+    );
+    // few lines: too small to say
+    h.write(
+        &format!("{CLAUDE_PROJECTS}/-w-orchard/tiny1.jsonl"),
+        &format!("{}\n", json!({"type":"brand-new-kind"})),
+    );
+    h.history.scan().unwrap();
+    let d = h.history.drift().unwrap();
+    assert_eq!(
+        d,
+        vec![PastDrift {
+            provider: PastProvider::Claude,
+            files: 1,
+            unknown_pct: 83
+        }]
+    );
+}
+
+/// A past Claude session resumed through the mock `claude-agent-acp` (`ratatoskr-mock acp --as claude`, a real
+/// process) on each route: the hub sends `session/resume` with the CLI's own id (never a drgnx one) and the session's
+/// cwd, and the mock, which resumes only a conversation that is where Claude Code reads it, starts the session.
+async fn resume_through_the_mock(route: PastRoute) {
+    use crate::agents::session::attach_tests::Fx;
+    let fx = Fx::new();
+    let id = "5f0c1e2a-0000-4000-8000-0000000000aa";
+    let cwd = fx.work();
+    // where claude-agent-acp's Claude Code reads it: the config dir's projects/<cwd as a folder name>/<id>.jsonl
+    let folder: String = cwd
+        .to_str()
+        .unwrap()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let file = fx
+        .dir
+        .path()
+        .join("home")
+        .join(".claude")
+        .join("projects")
+        .join(&folder)
+        .join(format!("{id}.jsonl"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        claude_lines(id, cwd.to_str().unwrap(), "count the apples"),
+    )
+    .unwrap();
+    fx.front.refresh_settings().await;
+    assert_eq!(scan_now(&fx.front).await.unwrap(), 1);
+    let caller = Caller {
+        class: runstav::registry::Class::User,
+        sid: None,
+        job: None,
+        conn_id: 1,
+    };
+    let done = resume(
+        &fx.front,
+        &caller,
+        PastResume {
+            provider: PastProvider::Claude,
+            id: runstav::types::Bounded(id.into()),
+            route,
+            profile: Some(runstav::types::Bounded("mock-claude".into())),
+        },
+    )
+    .await
+    .expect("the resume starts a session");
+    assert_ne!(done.session, id, "the drgnx id is not the CLI's");
+    let logged = fx.logged("a.log", "session/resume");
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    assert_eq!(logged[0]["sessionId"], json!(id), "the CLI's own id");
+    assert_eq!(
+        logged[0]["cwd"],
+        json!(cwd.to_str().unwrap()),
+        "the session's cwd"
+    );
+    assert!(
+        fx.logged("a.log", "session/new").is_empty(),
+        "never a fresh session"
+    );
+}
+
+#[tokio::test]
+async fn a_past_claude_session_resumes_through_the_mock_on_a_copy() {
+    resume_through_the_mock(PastRoute::Copy).await;
+}
+
+#[tokio::test]
+async fn a_past_claude_session_resumes_through_the_mock_on_the_original() {
+    resume_through_the_mock(PastRoute::Original).await;
+}
+
+#[test]
+fn a_cold_folder_is_read_again_when_it_changes_or_on_the_31st_walk() {
+    let h = Home::new();
+    let back = |p: &Path| {
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+        std::fs::File::options()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    };
+    let a = h.claude("cold1", "count the apples");
+    let b = h.claude("cold2", "count the pears");
+    back(&a);
+    back(&b);
+    // walk 1 reads the folder, which holds nothing changed within the hour: walk 2 takes it as it was
+    assert_eq!(h.history.scan_changed().unwrap(), (2, true));
+    assert_eq!(h.history.scan_changed().unwrap(), (2, false));
+    let reads = h.history.reads();
+    // an append to a cold file (its folder's change time does not move) is not seen by the next walks...
+    let mut f = std::fs::OpenOptions::new().append(true).open(&a).unwrap();
+    f.write_all(b"{\"type\":\"user\",\"message\":{\"content\":\"more\"}}\n")
+        .unwrap();
+    drop(f);
+    back(&a);
+    for _ in 0..28 {
+        assert!(!h.history.scan_changed().unwrap().1);
+    }
+    assert_eq!(h.history.reads(), reads);
+    // ...until the next full walk (every 30th)
+    assert!(h.history.scan_changed().unwrap().1);
+    assert_eq!(h.history.reads(), reads + 1);
+    // a file taken away changes its folder's change time: seen at once
+    std::fs::remove_file(&b).unwrap();
+    assert_eq!(h.history.scan_changed().unwrap(), (1, true));
 }

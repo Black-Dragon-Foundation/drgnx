@@ -25,7 +25,8 @@
 (require 'drgnx-keys-modal)
 
 (defvar drgnx-keys-profiles nil
-  "Alist PROFILE → plist (:name :doc :bind :claims :map :mac-cmd :claims-defaults :modal :indent-tabs-mode).")
+  "Alist PROFILE → plist (:name :doc :bind :claims :map :mac-cmd :claims-defaults :modal :indent-tabs-mode
+:lone-modifiers).")
 
 (defvar drgnx-keys-problems nil "Problems found while loading profiles or keys.eld.")
 
@@ -1199,6 +1200,7 @@ drgnx writes no other map, so there is nothing else to undo."
   (drgnx-keys--fill-foreign nil)
   (drgnx-keys--detach-all)
   (drgnx-keys--profile-indent nil)
+  (drgnx-keys--profile-lone nil)
   (drgnx-keys--uninstall-global))
 
 (defvar drgnx-keys--indent-orig 'unset
@@ -1217,6 +1219,26 @@ with none, put back what it was before."
           ((not (eq drgnx-keys--indent-orig 'unset))
            (setq-default indent-tabs-mode drgnx-keys--indent-orig
                          drgnx-keys--indent-orig 'unset)))))
+
+(defvar nidhogg-lone-modifier-events)
+
+(defvar drgnx-keys--lone-orig 'unset
+  "`nidhogg-lone-modifier-events' before a profile set it (`unset': none did).")
+
+(defun drgnx-keys--profile-lone (layers)
+  "Give Nidhogg's `nidhogg-lone-modifier-events' the modifiers the profiles in LAYERS ask for (`:lone-modifiers' in
+a spec, VS Code's (alt): a modifier pressed and released alone is an event, `lone-alt', which the profile binds); with
+none, put back what it was before.  On an Emacs without the variable, nothing."
+  (when (boundp 'nidhogg-lone-modifier-events)
+    (let ((want (delete-dups (apply #'append (mapcar (lambda (l) (copy-sequence
+                                                                  (plist-get (alist-get (car l) drgnx-keys-profiles)
+                                                                             :lone-modifiers)))
+                                                     layers)))))
+      (cond (want (when (eq drgnx-keys--lone-orig 'unset) (setq drgnx-keys--lone-orig nidhogg-lone-modifier-events))
+                  (setq nidhogg-lone-modifier-events want))
+            ((not (eq drgnx-keys--lone-orig 'unset))
+             (setq nidhogg-lone-modifier-events drgnx-keys--lone-orig
+                   drgnx-keys--lone-orig 'unset))))))
 
 (defvar drgnx-keys--everywhere-map (make-sparse-keymap)
   "The keys of `:everywhere' entries; above every major and minor mode map, so a profile's key works in any mode.")
@@ -1643,6 +1665,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                                                       (drgnx-keys-modal-engine-maps 'evil drgnx-keys-profiles)))))
           (drgnx-keys--set-mac-modifiers layers (plist-get user :mac-option))
           (drgnx-keys--profile-indent layers)
+          (drgnx-keys--profile-lone layers)
           (dolist (c (drgnx-commands-all)) (setf (drgnx-cmd-bound c) nil))
           (dolist (b (plist-get r :bindings))
             (let ((cmd (drgnx-commands-get (plist-get b :id))))

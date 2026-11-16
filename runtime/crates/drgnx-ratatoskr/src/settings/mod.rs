@@ -87,6 +87,7 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     ),
     setting("drgnx-agents-trace-opens", "Vec<String>", OnError::Strict),
     setting("drgnx-agents-history", "bool", OnError::Strict),
+    setting("drgnx-agents-history-days", "u32", OnError::Strict),
     setting(
         "drgnx-agents-history-providers",
         "Vec<String>",
@@ -216,6 +217,7 @@ pub struct RuntimeValues {
     pub agents_history: bool,
     /// The CLIs whose past sessions are read: "claude", "gemini", "codex".
     pub agents_history_providers: Vec<String>,
+    pub agents_history_days: u32,
     /// The user's providers, each replacing the preset of its id.
     pub ai_providers: Vec<ProviderEntry>,
     /// The user's role chains (a role not named here has its shipped chain, [`Defaults::roles`]).
@@ -500,6 +502,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-trace-opens" => values.agents_trace_opens = de(node)?,
         "drgnx-agents-history" => values.agents_history = de(node)?,
         "drgnx-agents-history-providers" => values.agents_history_providers = de(node)?,
+        "drgnx-agents-history-days" => values.agents_history_days = de(node)?,
         "drgnx-ai-providers" => values.ai_providers = providers::entries(node)?,
         "drgnx-ai-roles" => values.ai_roles = providers::roles(node)?,
         "drgnx-agents-matrix" => {

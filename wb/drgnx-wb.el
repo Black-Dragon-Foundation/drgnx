@@ -367,13 +367,16 @@ so Emacs runs the box on into the tail at the end instead of closing it after th
 (defun drgnx-wb-row-tail-overlay (eol mark face &optional control reuse sensor)
   "Put the tail (see `drgnx-wb-row-tail') of the row ending at EOL in an overlay over the row that remembers MARK,
 FACE and CONTROL and carries the row's mouse face (Emacs lights an overlay's string with its text: one run).  On the
-selected row (the selection overlay's, `drgnx-wb-selection-sync') it is drawn in the selection's face, and becomes
-the tail the next sync draws plain again when the selection moves.  REUSE, an overlay of an earlier call, is moved
+selected row (the selection overlay's, `drgnx-wb-selection-sync') it is drawn in the selection's face and becomes
+the selected tail (the one before is drawn plain now); the next sync draws it plain again when the selection moves.
+Text inserted at the row's start goes before the overlay, never into it.  REUSE, an overlay of an earlier call, is moved
 there instead of making a new one (drawn again only when its tail changed).  SENSOR, a list of functions, is the
 row's `mouse-sensor-functions' (Nidhogg): on the overlay and on every tail drawn, so the row and its tail are one run."
   (let* ((bol (save-excursion (goto-char eol) (pos-bol)))
          (tail (list mark face control sensor))
-         (o (if (and (overlayp reuse) (overlay-buffer reuse)) (move-overlay reuse bol eol) (make-overlay bol eol)))
+         ;; front-advance: rows a patch inserts at the row's start go before it, never inside (a tail that took them
+         ;; in spanned them, and drew its stretch, the selection's too, at the last one's end)
+         (o (if (and (overlayp reuse) (overlay-buffer reuse)) (move-overlay reuse bol eol) (make-overlay bol eol nil t)))
          (sel drgnx-wb--selected-overlay)
          (row (and (overlayp sel) (eq (overlay-buffer sel) (current-buffer)) (= bol (overlay-start sel))
                    (overlay-get sel 'face))))
@@ -382,7 +385,11 @@ row's `mouse-sensor-functions' (Nidhogg): on the overlay and on every tail drawn
     (unless (equal tail (overlay-get o 'drgnx-row-tail)) (overlay-put o 'after-string nil))
     (overlay-put o 'drgnx-row-tail tail)
     (drgnx-wb--tail-paint o row)
-    (when row (setq drgnx-wb--selected-tail o))
+    ;; one selected tail: a new one draws the one before plain, and a reused one that left the selected row is not it
+    (cond ((and row (not (eq o drgnx-wb--selected-tail)))
+           (drgnx-wb--tail-paint drgnx-wb--selected-tail nil)
+           (setq drgnx-wb--selected-tail o))
+          ((and (not row) (eq o drgnx-wb--selected-tail)) (setq drgnx-wb--selected-tail nil)))
     o))
 
 (defun drgnx-wb--tail-paint (o row)
@@ -463,7 +470,9 @@ no selection without focus."
     (unless (eq face (overlay-get drgnx-wb--selected-newline 'face))
       (overlay-put drgnx-wb--selected-newline 'face face))
     (dolist (o (overlays-in beg (min (point-max) (1+ end))))   ; post-command: a primitive loop, no closure
-      (when (and (not tail) (or (overlay-get o 'drgnx-row-tail) (overlay-get o 'drgnx-row-end))) (setq tail o)))
+      ;; the row's own: one that starts above it is another row's
+      (when (and (not tail) (>= (overlay-start o) beg) (or (overlay-get o 'drgnx-row-tail) (overlay-get o 'drgnx-row-end)))
+        (setq tail o)))
     (let ((after (and (not tail) (cddr entry))))
       (unless (eq after (overlay-get drgnx-wb--selected-overlay 'after-string))
         (overlay-put drgnx-wb--selected-overlay 'after-string after)))

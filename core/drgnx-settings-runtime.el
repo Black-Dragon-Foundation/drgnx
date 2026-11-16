@@ -244,6 +244,7 @@ The column is `{role|agent|provider: X}'."
     (drgnx-agents-trace-opens . drgnx-settings-runtime--strings)
     (drgnx-agents-history . drgnx-settings-runtime--bool)
     (drgnx-agents-history-providers . drgnx-settings-runtime--strings)
+    (drgnx-agents-history-days . identity)
     ;; the permissions matrix and the agent limits (`drgnx-agents-matrix.el')
     (drgnx-agents-matrix . drgnx-settings-runtime--matrix)
     (drgnx-agents-away-after . identity)

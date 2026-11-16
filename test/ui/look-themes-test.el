@@ -32,7 +32,7 @@
 
 (drgnx-look-gui-deftest drgnx-ui-look-themes/surface-pixels ()
   (drgnx-uitest-bare-frame)
-  (let ((buf (get-buffer-create " *look-themes*")))
+  (let ((buf (get-buffer-create " *look-themes*")) (config (current-window-configuration)))
     (unwind-protect
         (pcase-dolist (`(,variant . ,theme) '((dark . drgnx-dark) (light . drgnx-light) (hc . drgnx-high-contrast)))
           (delete-other-windows)
@@ -54,6 +54,8 @@
               ;; the mode line is the bottom row of the editor window's rectangle, at its far right
               (should (equal (funcall token 'gap) (drgnx-ui-look-themes--pixel editor 0.97 0.995))))))
       (mapc #'disable-theme custom-enabled-themes)
+      (set-window-configuration config)
+      (when (get-buffer "*look-themes-editor*") (kill-buffer "*look-themes-editor*"))
       (kill-buffer buf))))
 
 (provide 'look-themes-test)

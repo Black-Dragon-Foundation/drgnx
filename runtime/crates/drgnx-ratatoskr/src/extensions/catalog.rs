@@ -15,7 +15,7 @@ use huginn::read::{Limits, read_all};
 use huginn::value::{Datum, Node};
 use runstav::methods::extensions as w;
 use serde::Deserialize;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::sync::Arc;
 
@@ -630,6 +630,47 @@ pub fn build(inputs: Inputs) -> Index {
         entries.push(Entry::new(row, m.flags.clone(), detail));
     }
 
+    // The packages drgnx itself provides and activates: one row per package the modules that are on name.
+    let mut bundled: BTreeMap<&str, (String, Vec<&str>)> = BTreeMap::new();
+    for m in inputs
+        .modules
+        .iter()
+        .filter(|m| m.state == w::ModuleState::On)
+    {
+        for p in &m.packages {
+            let held = bundled.entry(p.as_str()).or_default();
+            if held.0.is_empty() {
+                held.0 = m
+                    .summaries
+                    .iter()
+                    .find(|s| s.first() == Some(p))
+                    .and_then(|s| s.get(1).cloned())
+                    .unwrap_or_default();
+            }
+            held.1.push(m.name.as_str());
+        }
+    }
+    for (name, (summary, modules)) in bundled {
+        let row = w::Row {
+            id: format!("bundled:{name}"),
+            kind: w::Kind::Package,
+            name: name.to_owned(),
+            summary,
+            state: w::State::BuiltIn,
+            source: "drgnx".into(),
+            signed: w::Signed::None,
+            version: None,
+            latest: None,
+            downloads: None,
+            why: modules
+                .iter()
+                .map(|m| w::Why::Module((*m).to_owned()))
+                .collect(),
+            layers: Vec::new(),
+        };
+        entries.push(Entry::new(row, Vec::new(), Detail::default()));
+    }
+
     for row in inputs.plugins {
         entries.push(Entry::new(row.clone(), Vec::new(), Detail::default()));
     }
@@ -887,6 +928,7 @@ mod tests {
             doc: format!("The {name} module.\nMore."),
             packages: packages.iter().map(|s| s.to_string()).collect(),
             flags: Vec::new(),
+            summaries: Default::default(),
             state: w::ModuleState::On,
         }
     }
@@ -900,6 +942,54 @@ mod tests {
 
     fn row<'a>(i: &'a Index, id: &str) -> &'a w::Row {
         &i.entry(id).unwrap_or_else(|| panic!("no row {id}")).row
+    }
+
+    // pattern D
+    #[test]
+    fn a_package_a_module_that_is_on_names_is_a_bundled_row() {
+        let files = Fake::fixtures();
+        let mut cache = Cache::default();
+        let mut on = module("tools/git", &["magit", "forge"]);
+        on.summaries
+            .push(vec!["magit".into(), "A Git porcelain".into()]);
+        let mut also = module("tools/search", &["magit"]);
+        also.summaries.push(vec!["magit".into(), "ignored".into()]);
+        let off = w::ModuleEntry {
+            state: w::ModuleState::Off,
+            ..module("lang/off", &["only-when-on"])
+        };
+        cache.set_modules(vec![on, also, off]);
+        let i = cache.refresh(&files);
+        let m = row(&i, "bundled:magit");
+        assert_eq!(m.state, w::State::BuiltIn);
+        assert_eq!(m.source, "drgnx");
+        assert_eq!(m.summary, "A Git porcelain");
+        assert_eq!(
+            m.why,
+            vec![
+                w::Why::Module("tools/git".into()),
+                w::Why::Module("tools/search".into())
+            ]
+        );
+        assert!(i.entry("bundled:forge").is_some());
+        assert!(
+            i.entry("bundled:only-when-on").is_none(),
+            "a module that is off provides nothing"
+        );
+        // the bundled filter keeps those rows and no other
+        let f = w::Filters {
+            bundled: true,
+            ..Default::default()
+        };
+        let ids: Vec<&str> = super::super::rank::search(&i.entries, "", &f, None, w::Sort::Name)
+            .into_iter()
+            .map(|n| i.entries[n].row.id.as_str())
+            .collect();
+        assert_eq!(ids, ["bundled:forge", "bundled:magit"]);
+        // the search box reaches them by name
+        let f = w::Filters::default();
+        let hit = super::super::rank::search(&i.entries, "forge", &f, None, w::Sort::Relevance);
+        assert!(hit.iter().any(|&n| i.entries[n].row.id == "bundled:forge"));
     }
 
     // pattern D

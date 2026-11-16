@@ -4,6 +4,7 @@
        :doc "Visual Studio Code's default keys"
        :mac-cmd t
        :indent-tabs-mode nil   ; VS Code indents with spaces (the default Emacs would give Lisp files tabs of 8)
+       :lone-modifiers (alt)   ; Alt pressed and released alone is `lone-alt' (Nidhogg): the menu, as VS Code's
        :bind ((palette "C-S-p" "<f1>")
               (keys-sheet "C-k C-r")
               (keyboard-profile "C-k C-p")
@@ -37,6 +38,7 @@
               (notebook-output-earlier "M-p")
               (notebook-copy-output "C-k n y")
               (notebook-toggle-outputs "C-k n h")
+              (face-menu "<lone-alt>")
               (quit :none "File → Quit drgnx; C-q closes the window as in VS Code" :mac "s-q")
               (preferences-keep-running :none "in the palette and the Options menu")
               (open-folder "C-k C-o")
@@ -669,6 +671,8 @@
               (extensions-update "u" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
               (extensions-update-all "U" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
               (extensions-uninstall "d" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
+              (extensions-toggle-section "TAB" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
+              (extensions-disable-module "D" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
               (extensions-toggle-project "p" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
               (extensions-refresh "g" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
               (extensions-cancel "k" :map (drgnx-extensions-list . drgnx-extensions-mode-map))
@@ -731,7 +735,6 @@
               (modal-toggle :none "with Vim keys")
               (face-toggle-menu-bar :none "the palette; F10 opens the menu as text while the bar is hidden")
               (face-toggle-wrap :none "the palette")
-              (face-menu :none "F10 (remap of menu-bar-open)")
               ;; the menu bar's mnemonics, as VS Code's window.enableMenuBarMnemonics (the Emacs and Vim profiles keep Alt)
               (menu-bar-open-file "M-f" :mac ())   ; macOS: the system menu bar
               (menu-bar-open-edit "M-e" :mac ())   ; macOS: the system menu bar

@@ -61,12 +61,14 @@ rows turn on, off; no theme; the default height; the global hooks and mode lines
 
 (defmacro drgnx-look-gui-deftest (name args &rest body)
   "`ert-deftest' NAME ARGS BODY for a look GUI row: the row starts with `drgnx-look-gui-check-clean', so a row that
-an earlier one left something for fails naming it, before it reads a pixel.  BODY's docstring and keywords stay first."
+an earlier one left something for fails naming it, before it reads a pixel; and it ends with it, after its own
+teardown, so a row that leaves something fails itself (the last row of a file too, whose session ends with it).
+BODY's docstring and keywords stay first."
   (declare (indent 2) (doc-string 3))
   (let (head)
     (when (and (stringp (car body)) (cdr body)) (push (pop body) head))
     (while (keywordp (car body)) (push (pop body) head) (push (pop body) head))
-    `(ert-deftest ,name ,args ,@(nreverse head) (drgnx-look-gui-check-clean) ,@body)))
+    `(ert-deftest ,name ,args ,@(nreverse head) (drgnx-look-gui-check-clean) ,@body (drgnx-look-gui-check-clean))))
 
 (provide 'drgnx-look-gui-fixture)
 ;;; look-gui-fixture.el ends here

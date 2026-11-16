@@ -55,8 +55,13 @@ A name with a separator or a leading dot is refused.
 
 The Built-in section's module rows come from the editor: the module sends its table with `extensions/modules` (one
 `drgnx-hub-call`, no wait) each time the hub's subscription is up (`drgnx-hub-connected-functions`) and after modules
-are turned off or on (`drgnx-modules-after-teardown-functions`). Each entry is `(:name :doc :packages :flags :state)`,
+are turned off or on (`drgnx-modules-after-teardown-functions`). Each entry is `(:name :doc :packages :flags :summaries :state)`, `:summaries` the one-line descriptions of its packages as `[name summary]` pairs from `package-alist`,
 the state `on` (ran), `failed`, `needs-package` (waits for its packages) or `off`.
+
+The packages of the modules that are `on` are rows of their own, `bundled:NAME` (kind `package`, state `built-in`, source
+`drgnx`, `why` one `module` entry per module that names the package); the filter `bundled` keeps them. The list's
+`bundled` section (title Built-in) and `builtin` section (Emacs's) send `collapsed: true` until the user opens them with
+`TAB` on the header: the hub then builds the header with its count and no rows.
 
 ## The list: the hub's rows
 

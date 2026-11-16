@@ -7354,6 +7354,85 @@
       "classes": [
         "user"
       ],
+      "doc": "whether past sessions are on, how many are indexed, and the CLIs whose files read with many unknown lines (format drift)",
+      "name": "agents/history/status",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PastDrift": {
+            "additionalProperties": false,
+            "description": "One CLI whose session files read with many lines this build does not know.",
+            "properties": {
+              "files": {
+                "description": "Files at 20% unknown lines or more, over at least 10 lines.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "provider": {
+                "$ref": "#/$defs/PastProvider"
+              },
+              "unknown_pct": {
+                "description": "The share of unknown lines over those files, in percent.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "provider",
+              "files",
+              "unknown_pct"
+            ],
+            "type": "object"
+          },
+          "PastProvider": {
+            "description": "The CLI that wrote a session.",
+            "enum": [
+              "claude",
+              "gemini",
+              "codex"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "drift": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PastDrift"
+            },
+            "type": "array"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "sessions": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "on",
+          "sessions"
+        ],
+        "title": "PastStatus",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the caller's view shows the other CLIs' past sessions as rows (the workspace's first), narrowed by a query",
       "name": "agents/history/subscribe",
       "params": {
@@ -17921,6 +18000,11 @@
                 "default": false,
                 "type": "boolean"
               },
+              "bundled": {
+                "default": false,
+                "description": "The packages drgnx itself provides and activates (the modules' `:packages`, rows `bundled:NAME`).",
+                "type": "boolean"
+              },
               "disabled": {
                 "default": false,
                 "description": "Modules that are off.",
@@ -18093,6 +18177,11 @@
           "ListSection": {
             "description": "One section of the list: a search, its header's title.",
             "properties": {
+              "collapsed": {
+                "default": false,
+                "description": "Show the header and its count only (a section the user has not opened).",
+                "type": "boolean"
+              },
               "minus_updates": {
                 "default": false,
                 "description": "Leave out the rows whose state is `update` (Installed: they wait in Updates).",
@@ -18123,6 +18212,7 @@
                 "$ref": "#/$defs/Filters",
                 "default": {
                   "builtin": false,
+                  "bundled": false,
                   "disabled": false,
                   "enabled": false,
                   "installed": false,
@@ -18321,6 +18411,17 @@
               },
               "state": {
                 "$ref": "#/$defs/ModuleState"
+              },
+              "summaries": {
+                "default": [],
+                "description": "`[name, summary]` pairs: a package's one-line description as the editor knows it (`package-desc-summary`).",
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
               }
             },
             "required": [
@@ -18718,6 +18819,11 @@
                 "default": false,
                 "type": "boolean"
               },
+              "bundled": {
+                "default": false,
+                "description": "The packages drgnx itself provides and activates (the modules' `:packages`, rows `bundled:NAME`).",
+                "type": "boolean"
+              },
               "disabled": {
                 "default": false,
                 "description": "Modules that are off.",
@@ -18837,6 +18943,7 @@
             "$ref": "#/$defs/Filters",
             "default": {
               "builtin": false,
+              "bundled": false,
               "disabled": false,
               "enabled": false,
               "installed": false,

@@ -5,6 +5,9 @@ How drgnx looks, and how to change it. What it looks like, and why (the colour t
 density and the icons. Everything here is a setting: change it in the settings page or in `settings.el`, and it
 applies at once to every frame, with no restart.
 
+A change of font, density or the cards' gap fits the text into the window; the window keeps its size (`ui/look` sets
+`frame-inhibit-implied-resize` while it runs). Turning `ui/look` off gives the window back the size it had.
+
 ## Colours and themes
 
 drgnx ships three themes, all generated from one table of colours: **drgnx Dark**, **drgnx Light** and **drgnx High

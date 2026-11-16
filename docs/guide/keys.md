@@ -26,6 +26,12 @@ this stack for every command, next to VS Code's own keys (see Leader keys below)
 A stack with the VS Code profile also indents with spaces, as VS Code does (`indent-tabs-mode` defaults to nil; a file's own
 indentation and `.editorconfig` still win). The Emacs and Vim profiles leave Emacs's default.
 
+With the VS Code profile, Alt pressed and released on its own opens the menu (☰), as VS Code's compact menu does;
+Alt held with another key stays that Meta key (`Alt+F` is still `M-f`). drgnx's Emacs (Nidhogg) reports the lone Alt
+as the key `<lone-alt>` once a profile asks for it (`:lone-modifiers (alt)` in the profile, which sets
+`nidhogg-lone-modifier-events`); `keys.eld` can bind `<lone-alt>` to something else. The Emacs and Vim profiles leave
+Alt alone.
+
 Onboarding's Look and Keys step asks which one you want (VS Code preselected; [onboarding.md](onboarding.md)).
 
 **A Vim stack needs its engine.** Vim keys run on evil, which the `editor/evil` module provides; it is off, and

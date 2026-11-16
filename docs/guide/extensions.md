@@ -16,7 +16,7 @@ other. A pack with a mode of its own (Python, Go, PHP, Elixir and most others) a
 
 ## The list
 
-Rows are grouped in sections: **Installed**, **Updates**, **Recommended** (below), **Plugins**, **Built-in** and **Generations**. Each row has the kind's mark,
+Rows are grouped in sections: **Installed**, **Updates**, **Recommended** (below), **Plugins**, **Built-in**, **Emacs built-ins** and **Generations**. Each row has the kind's mark,
 the Explorer's Lucide icons on a graphical display (`package` for packages and generations, `plug` for plugins,
 `blocks` for modules) and `P`, `&` or `M` in a terminal, then the name, the version, a chip for its state, and on a second line the summary,
 the archive it comes from and how far you can trust that (signed, unsigned archive, local, Git commit, hash approved);
@@ -29,13 +29,20 @@ has it* (a warning, in the colour of *update to X*: the error colour is for what
 byte-compile), *restart to use* (an update that a running session cannot load yet). When updates wait for a restart the
 header says so and has a **Restart drgnx** button.
 
+**Built-in** lists the packages drgnx itself provides and activates, one row for each package that a module which is on
+names (the module's `:packages`): the name, a one-line description and the module that uses it (`drgnx module tools/git`).
+It starts closed with its count in the header; `TAB` on the header opens or closes it (the search still finds these
+rows by name). A built-in row has no Uninstall: it belongs to its module. **Disable Module of Built-in Package** (`D`)
+turns that module off, as Preferences: Modules does, and asks first when other modules need it. **Emacs built-ins**
+(`@builtin`) is the packages Emacs ships, closed the same way.
+
 ## Searching
 
 `/` opens the search; the list follows what you type. Words that start with `@` filter:
 
 | Word | Keeps |
 |---|---|
-| `@installed` `@updates` `@builtin` `@plugins` | those rows |
+| `@installed` `@updates` `@builtin` `@bundled` `@plugins` | those rows (`@bundled`: the packages drgnx provides) |
 | `@enabled` `@disabled` | modules that are on or off |
 | `@unsigned` | packages from an archive that does not sign |
 | `@archive:melpa` `@kind:module` `@keyword:vc` | by archive, kind or keyword |
@@ -59,6 +66,8 @@ A word after `@` that is none of these shows as a quiet chip, *not a filter*; it
 | Turn on or off in this project | `p` | `p` | `p` |
 | Refresh | `g` | `g` | `g r` |
 | Cancel | `k` | `k` | `x` |
+| Open or close the Built-in section (on its header) | `TAB` | `TAB` | `TAB` |
+| Disable the module of a built-in package | `D` | `D` | `D` |
 | Show log | `L` | `L` | `L` |
 
 Uninstall asks nothing: a rollback (see Generations) brings the package back. A package something else still needs is
@@ -66,7 +75,7 @@ refused and the row says why.
 
 Every command is also in the palette, under Extensions: **Open Extensions**, **Search Extensions**, **Extension
 Details**, **Install Extension**, **Update Extension**, **Update All Extensions**, **Uninstall Extension**, **Turn
-Extension On or Off Here**, **Refresh Extensions**, **Cancel Extension Job**, **Show Extension Job Log**, **Roll Back
+Extension On or Off Here**, **Refresh Extensions**, **Cancel Extension Job**, **Show Extension Job Log**, **Open or Close Extensions Section**, **Disable Module of Built-in Package**, **Roll Back
 Packages**, **Restart drgnx**, **More About Extension**, **Show Recommended Extensions**, **Show Suggested Extension**,
 for plugins **Install a Plugin from a Folder**, **Approve Plugin**, **Turn Plugin On or Off**, **Move Plugin Up**,
 **Move Plugin Down**, **Replace Plugin** and **Remove Plugin**, and, for the trust card and a reviewed update,

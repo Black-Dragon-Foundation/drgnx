@@ -1135,7 +1135,7 @@ impl Map {
                     id,
                     kind: card_kind(&kind),
                     about,
-                    text: title,
+                    text: strip_text(&job, &title),
                     open: true,
                 })
             })
@@ -1855,6 +1855,33 @@ fn card_kind(k: &str) -> CardKind {
 type Card = (String, String, String, String);
 
 /// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
+/// A card's words on the strip: a proposal's title (`2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min: approve to
+/// start`) is cut to its share of the strip, which keeps only what every proposal says, so it becomes `approve 2
+/// tasks (JOB)`: what to approve, and which job it is.  Other cards are as titled.
+fn strip_text(job: &str, title: &str) -> String {
+    match title.strip_suffix(": approve to start") {
+        Some(head) => format!(
+            "approve {} ({job})",
+            head.split(", ").next().unwrap_or(head)
+        ),
+        None => title.to_string(),
+    }
+}
+
+/// The stripped ids (`kind:` removed) of the entities the old scanner made, `plan:/abs/path` and `spec:/abs/path`, whose
+/// file an importer entity (`...:rec-HASH`, `data.records.file`) holds: the same file twice on the map.  ROWS are
+/// (id, records file).
+fn legacy_duplicates<'a>(
+    rows: impl Iterator<Item = (&'a str, Option<&'a str>)> + Clone,
+) -> BTreeSet<String> {
+    let adopted: BTreeSet<&str> = rows.clone().filter_map(|(_, file)| file).collect();
+    rows.filter_map(|(id, _)| {
+        let (_, rest) = id.split_once(':')?;
+        (rest.starts_with('/') && adopted.contains(rest)).then(|| rest.to_string())
+    })
+    .collect()
+}
+
 async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
     f.writer
         .db
@@ -1889,20 +1916,27 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
             {
                 let mut q = c.prepare(
                     "select id, kind, coalesce(title, ''), coalesce(status, ''), \
-                     coalesce(json_extract(data, '$.text'), title, '') from entity \
-                     where retired_tx is null and kind in ('ask', 'spec', 'plan', 'task') order by n",
+                     coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file') \
+                     from entity where retired_tx is null and kind in ('ask', 'spec', 'plan', 'task') order by n",
                 )?;
-                let rows = q.query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, String>(4)?,
-                    ))
-                })?;
-                for (rank, row) in rows.enumerate() {
-                    let (id, kind, title, status, text) = row?;
+                let all = q
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, String>(3)?,
+                            r.get::<_, String>(4)?,
+                            r.get::<_, Option<String>>(5)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let hidden = legacy_duplicates(all.iter().map(|r| (r.0.as_str(), r.5.as_deref())));
+                plan_of.retain(|_, plan| !hidden.contains(plan));
+                for (rank, (id, kind, title, status, text, _)) in all.into_iter().enumerate() {
+                    if hidden.contains(&strip(&id)) {
+                        continue;
+                    }
                     out.push(match kind.as_str() {
                         "ask" => Event::Graph(GraphFact::Ask {
                             key: strip(&id),

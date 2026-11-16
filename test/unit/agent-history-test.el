@@ -112,6 +112,7 @@ the CLIs' own folder variables unset (so the hub reads only HOME)."
   (list :key key :text text :props (and past (list (list 0 (length text) "drgnx-past" (list :provider "claude" :id past))))))
 
 (ert-deftest drgnx-agent-history/the-agents-list-shows-past-sessions-after-its-own ()
+  :tags '(:cond)                        ; a real process stands in for the events connection
   (load (expand-file-name "modules/tools/drgnx-agent-panel-list" drgnx-dir) nil t)
   (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
         (default-directory temporary-file-directory) asked opened)

@@ -204,6 +204,7 @@ params! {
     PastOpen(past::PastRef),
     PastResume(past::PastResume),
     PastRescan(Empty),
+    PastStatus(Empty),
     JobPropose(jobs::ProposeParams),
     JobStartTask(jobs::StartTaskParams),
     JobReassign(jobs::ReassignParams),

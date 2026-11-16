@@ -902,6 +902,7 @@ impl Front {
             | Params::PastOpen(_)
             | Params::PastResume(_)
             | Params::PastRescan(_)
+            | Params::PastStatus(_)
             | Params::RecordsStatus(_)
             | Params::RecordsConflict(_)
             | Params::RecordsResolve(_)

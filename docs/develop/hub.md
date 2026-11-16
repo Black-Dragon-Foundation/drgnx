@@ -1314,6 +1314,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/history/rescan` | user | `{}` | `{sessions: natnum}` | no |
 | `agents/history/resume` | user | `{id: string, profile?: string, provider: "claude" \| "gemini" \| "codex", route: "copy" \| "original"}` | `{route: "copy" \| "original", session: string}` | yes |
 | `agents/history/search` | user | `{query: string}` | `{hits?: [PastHit]}` | no |
+| `agents/history/status` | user | `{}` | `{drift?: [PastDrift], on: boolean, sessions: natnum}` | no |
 | `agents/history/subscribe` | user | `{limit?: natnum, query?: string, view: string, workspace?: AbsPath}` | `boolean` | no |
 | `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
 | `agents/huddle/start` | user | `{clash?: string, sessions?: [Id]}` | `Huddle` | yes |
@@ -1410,11 +1411,11 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
-| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
-| `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
+| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{collapsed?: boolean, minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
+| `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed", summaries?: [[string]]}]}` | `{}` | no |
 | `extensions/recommended` | user | `{ids: [string], version: natnum}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
-| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
+| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
 | `forecast/get` | user | `{job: Id}` | `Forecast` | no |
 | `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
@@ -2026,8 +2027,12 @@ size, mtime and the offset read to) and an FTS5 table `turn` of each entry's tex
 - **Roots** (`Roots::of`): `$CLAUDE_CONFIG_DIR` or `~/.claude`, `$CODEX_HOME` or `~/.codex`, `$GEMINI_CLI_HOME/.gemini`
   or `~/.gemini`, narrowed by `drgnx-agents-history-providers`; the walk never follows a link. The same folders are
   on norn's deny list (`cli_session_dirs`), hard tier.
-- **Scan**: `follow` scans every 2 s on a blocking thread; a file whose size and mtime are unchanged is skipped, a
-  grown one is read on from its offset with the kept `minni::Reader` (32 kept), a shrunk or unknown one is read whole,
+- **Scan**: `follow` scans every 2 s on a blocking thread. The walk is stat-only and hot/cold: a leaf folder (a Claude project folder, a Codex day, a Gemini `chats`) none of whose files changed within the hour is read again only when its own mtime moved or on every 30th walk (an append to an old file is seen within about a minute), a folder with a recent file every walk (`Roots::walk`, `Walk`). The known files (path, size, mtime,
+  offset) are kept in memory, loaded from the index once, and a scan compares the walk with them. When nothing is new,
+  changed or gone it opens no file, starts no transaction, reads no list and builds no view (`scan_changed` answers
+  `changed: false`; `History::reads` counts the files opened, for the test). Files whose mtime is older than
+  `drgnx-agents-history-days` (180; 0 = no cap) are not read and leave the index. A file whose size and mtime are
+  unchanged is skipped, a grown one is read on from its offset with the kept `minni::Reader` (32 kept), a shrunk or unknown one is read whole,
   a gone one dropped. Polling, not a watch: Hrafn's inotify watch reports no in-place modify, and Codex appends to a
   file it keeps open. A scan writes nothing in the roots (a test holds bytes, mtimes and modes equal).
 - **Views**: `agents/history/subscribe {view, workspace?, query?}` makes VIEW the list (rows keyed `h:PROVIDER:ID`
@@ -2037,7 +2042,10 @@ size, mtime and the offset read to) and an FTS5 table `turn` of each entry's tex
   places it after its own rows: its buffer keeps its Lisp view and attaches the hub view with
   `drgnx-view-patch-attach … :keep t` and an apply function of its own (`drgnx-agent-panel-list--past-apply`). `agents/history/open` reads the file whole and publishes the transcript on
   `agent-history/PROVIDER:ID` with the agent panel's row builder (16 kept), and answers the terminal's resume argv.
-  `agents/history/search` answers the hits (title matches first, then FTS, 50 at most); `rescan` scans now.
+  `agents/history/status` answers `{on, sessions, drift}`: `drift` lists, per CLI, the files whose share of lines of a type
+  minni has never heard of (`Reader::unknown`; the types skipped on purpose are `minni::known_skipped`) is 20% or more over at
+  least 10 lines (the `session` table's `lines` and `unknown` columns); the doctor's `past-sessions` check shows it. An
+  index made before those columns is dropped and read again (it is a cache). `agents/history/search` answers the hits (title matches first, then FTS, 50 at most); `rescan` scans now.
 - **Resume**: `agents/history/resume {provider, id, route}` checks the file (`checked_file`: a regular file, its true
   name under the root), records a `Grant` for the new session id and starts the session on the provider's profile with
   `Attach::Resume(ID)`. The sandbox (`resume_grant`) then puts the file where the CLI looks under the jail's empty
@@ -4407,7 +4415,8 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   so a refresh run from the command line is seen too. A file that does not read (truncated JSON, a catalog of another
   `version`, a lock with a mistake) keeps its last good copy; `extensions/details` carries a note saying so. A file that
   is gone is empty.
-- **Ids:** `pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`. A plugin's row comes from the plugins' last look
+- **Ids:** `pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`, `bundled:NAME` (a package a module that is on names: kind
+  `package`, state `built-in`, source `drgnx`, `why` the modules; the `bundled` filter keeps them). A plugin's row comes from the plugins' last look
   (`plugins/list`, memory only), with the hub's `unapproved`, `changed`, `disabled` or `broken`, and for an approved one
   `on` or `off` by the global `drgnx-agents-plugins`; `signed` is `hash-approved`. A search never reads the folder.
 - **State:** `installed`, `update` (the catalog's update plan takes a newer version), `held` (a newer version exists the
