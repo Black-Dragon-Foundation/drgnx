@@ -349,6 +349,7 @@ fn runner_job_runs_on_edge_points_at_the_runner() {
 
 // ---- rows views: the map's rows as patches ------------------------------------------------------------------------
 
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::Measure;
 use drgnx_rows::{ImageId, Op, Patch, Row};
 use runstav::methods::view::ViewEnv;
@@ -1269,7 +1270,7 @@ fn detail_rows_are_the_mockups_tile() {
         r.runs.iter().map(|x| x.2.as_str()).collect()
     }
     assert!(
-        faces_of(&rows[0]).contains(&"drgnx-ui-heading"),
+        faces_of(&rows[0]).contains(&FaceId::UiHeading.name()),
         "{:?}",
         rows[0]
     );
@@ -1282,9 +1283,13 @@ fn detail_rows_are_the_mockups_tile() {
     // the head: the agent's badge, its name and its state as a chip at the right; then the subtitle
     // (work-space-dark.html `.det .hd`)
     assert!(rows[0].text.contains("Opus · hub rows"), "{:?}", rows[0]);
-    assert!(faces_of(&rows[0]).contains(&"drgnx-chip"), "{:?}", rows[0]);
     assert!(
-        faces_of(&rows[0]).contains(&"drgnx-work-who-1"),
+        faces_of(&rows[0]).contains(&FaceId::Chip.name()),
+        "{:?}",
+        rows[0]
+    );
+    assert!(
+        faces_of(&rows[0]).contains(&FaceId::WorkWho1.name()),
         "{:?}",
         rows[0]
     );
@@ -1299,23 +1304,23 @@ fn detail_rows_are_the_mockups_tile() {
         rows[1]
     );
     assert!(
-        faces_of(&rows[1]).contains(&"drgnx-text-muted"),
+        faces_of(&rows[1]).contains(&FaceId::TextMuted.name()),
         "{:?}",
         rows[1]
     );
     for k in ["you", "spec", "plan", "task"] {
         let r = key(k);
-        assert!(faces_of(&r).contains(&"drgnx-text-muted"), "{r:?}");
-        assert!(faces_of(&r).contains(&"drgnx-accent"), "{r:?}");
+        assert!(faces_of(&r).contains(&FaceId::TextMuted.name()), "{r:?}");
+        assert!(faces_of(&r).contains(&FaceId::Accent.name()), "{r:?}");
     }
     let open = rows
         .iter()
         .find(|r| r.text.contains("Open"))
         .expect("the Open action");
-    assert!(faces_of(open).contains(&"drgnx-button"), "{open:?}");
-    assert!(faces_of(open).contains(&"drgnx-keycap"), "{open:?}");
+    assert!(faces_of(open).contains(&FaceId::Button.name()), "{open:?}");
+    assert!(faces_of(open).contains(&FaceId::Keycap.name()), "{open:?}");
     for r in &rows {
-        assert!(faces_of(r).contains(&"drgnx-work-pane"), "{r:?}");
+        assert!(faces_of(r).contains(&FaceId::WorkPane.name()), "{r:?}");
     }
 }
 

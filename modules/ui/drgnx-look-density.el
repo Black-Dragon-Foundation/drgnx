@@ -20,6 +20,7 @@
 (require 'drgnx-state)
 (require 'drgnx-type-faces)
 (require 'drgnx-pixels)
+(declare-function drgnx-view-env-look-changed "drgnx-view-env")
 
 (defvar drgnx-look-font-code)
 (defvar drgnx-look-fonts-applied-hook)
@@ -107,6 +108,8 @@ user set a default `line-spacing', which then stays."
   "The `:apply' of `drgnx-look-density': at once, while ui/look runs."
   (when (drgnx-module-running-p 'ui/look)
     (drgnx-look-density-apply)
+    ;; hub-fed views: the density goes with their env, a new epoch
+    (when (fboundp 'drgnx-view-env-look-changed) (drgnx-view-env-look-changed))
     (run-hooks 'drgnx-look-density-changed-hook)))
 
 (defun drgnx-look-ui-line-spacing (&optional line-px density scale)

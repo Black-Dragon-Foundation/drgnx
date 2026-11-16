@@ -63,6 +63,12 @@ html.ayu {
   --drgnx-a4: #c6a0ff;
   --drgnx-a5: #f592bb;
   --drgnx-a6: #7fd6d1;
+  --drgnx-button-primary-bg: #3d6fe0;
+  --drgnx-button-primary-fg: #ffffff;
+  --drgnx-button-edge: #6b6e7a;
+  --drgnx-key-hint-edge: #6b6e7a;
+  --drgnx-card-needs-you-edge: #ff9566;
+  --drgnx-progress-track: #212228;
 }
 /* light */
 :root[data-theme="light"],
@@ -126,6 +132,12 @@ html.rust {
   --drgnx-a4: #7a3ccf;
   --drgnx-a5: #b0306c;
   --drgnx-a6: #0b7470;
+  --drgnx-button-primary-bg: #2c5fd4;
+  --drgnx-button-primary-fg: #ffffff;
+  --drgnx-button-edge: #898c97;
+  --drgnx-key-hint-edge: #898c97;
+  --drgnx-card-needs-you-edge: #b8461a;
+  --drgnx-progress-track: #e9eaee;
 }
 /* hc */
 :root[data-theme="hc"] {
@@ -188,6 +200,12 @@ html.rust {
   --drgnx-a4: #dcc0ff;
   --drgnx-a5: #ffb0d3;
   --drgnx-a6: #96ece6;
+  --drgnx-button-primary-bg: #a8c6ff;
+  --drgnx-button-primary-fg: #000000;
+  --drgnx-button-edge: #c9ccd3;
+  --drgnx-key-hint-edge: #c9ccd3;
+  --drgnx-card-needs-you-edge: #ffb38a;
+  --drgnx-progress-track: #8c909a;
 }
 /* a reader whose system asks for more contrast, unless the page chose */
 @media (prefers-contrast: more) {
@@ -252,5 +270,11 @@ html.rust {
     --drgnx-a4: #dcc0ff;
     --drgnx-a5: #ffb0d3;
     --drgnx-a6: #96ece6;
+    --drgnx-button-primary-bg: #a8c6ff;
+    --drgnx-button-primary-fg: #000000;
+    --drgnx-button-edge: #c9ccd3;
+    --drgnx-key-hint-edge: #c9ccd3;
+    --drgnx-card-needs-you-edge: #ffb38a;
+    --drgnx-progress-track: #8c909a;
   }
 }

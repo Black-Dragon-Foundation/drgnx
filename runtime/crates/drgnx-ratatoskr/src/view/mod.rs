@@ -561,6 +561,16 @@ fn instance_id() -> u64 {
 /// A fixture view's labels: (key, text, px), each a row fitted to PX then a stop.
 pub type Label = (String, String, u32);
 
+/// What the kit's expansion (`drgnx_rows::kit`) reads of ENV's class: its scale, whether it is a terminal, its glyphs.
+pub fn kit_env(env: &ViewEnv) -> drgnx_rows::kit::KitEnv<'_> {
+    drgnx_rows::kit::KitEnv {
+        scale: env.scale,
+        tty: matches!(env.display, Display::Tty),
+        glyphs: &env.glyphs,
+        density: env.density,
+    }
+}
+
 /// A fixture view's rows, the images they may name, and its labels.
 pub type Fixture = (Vec<Row>, Vec<(ImageId, String)>, Vec<Label>);
 

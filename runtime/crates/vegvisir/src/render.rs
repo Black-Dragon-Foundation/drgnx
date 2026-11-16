@@ -21,6 +21,7 @@ use serde_json::Value;
 use crate::layout::{Form, Layout};
 use crate::model::{Fields, JobFact, State};
 use crate::{Edge, EdgeKind, Item, ItemId, Kind};
+use drgnx_rows::faces::FaceId;
 
 /// The layer labels' margin, logical px.
 pub const MARGIN: u32 = 84;
@@ -37,7 +38,7 @@ pub const LAYER_NAMES: [&str; 8] = [
 ];
 /// The face that gives a card's text (and the strip's chips) its font, under the pieces' own faces: each is measured
 /// in the font the editor says its face draws in (work-space-dark.html `.acardm`, the caption size).
-const CARD_FONT: &str = "drgnx-work-card";
+const CARD_FONT: &str = FaceId::WorkCard.name();
 
 /// Whether the map is drawn as an outline: by the layout (a terminal, or a layout that does not fit), or the user's
 /// `O` either way.
@@ -234,7 +235,7 @@ fn band_row(
     let mut b = RowBuilder::new(format!("band:{}", row_key(s, i)));
     let tiles = e.tiles(index, i, g);
     if tiles.is_empty() {
-        b.push(" ", Some("drgnx-work-band"));
+        b.push(" ", Some(FaceId::WorkBand.name()));
     }
     for (t, svg, alt) in tiles {
         let id = e.id(&svg);
@@ -242,7 +243,7 @@ fn band_row(
         let start = b.pos();
         b.stop(t * e.tile).image(id, &alt);
         let end = b.pos();
-        b.face(start, end, "drgnx-work-band");
+        b.face(start, end, FaceId::WorkBand.name());
     }
     b.height(1, g.px(units).saturating_sub(1));
     b.finish()
@@ -302,11 +303,11 @@ fn card_rows(
             if line == 0 && !label.is_empty() {
                 let text = fit_px(
                     m,
-                    Some("drgnx-work-label"),
+                    Some(FaceId::WorkLabel.name()),
                     &label,
                     g.margin.saturating_sub(8),
                 );
-                b.push(&text, Some("drgnx-work-label"));
+                b.push(&text, Some(FaceId::WorkLabel.name()));
             }
             for (_, part) in &parts {
                 match *part {
@@ -430,7 +431,7 @@ fn segment(
     // a `new` mark at the end of the line keeps its place: the text before it is what gets cut
     let tail =
         l.0.last()
-            .filter(|(_, f)| *f == Some("drgnx-work-new"))
+            .filter(|(_, f)| *f == Some(FaceId::WorkNew.name()))
             .cloned();
     let body = match &tail {
         Some(_) => Line(l.0[..l.0.len() - 1].to_vec(), l.1),
@@ -474,9 +475,9 @@ fn segment(
     );
     // with a selection, what is off its chain is muted (the mockup's dimmed rest), under the text's own faces
     if off_chain(s, id) {
-        b.face(start, end, "drgnx-work-dim");
+        b.face(start, end, FaceId::WorkDim.name());
     }
-    b.face(start, end, "drgnx-work-card");
+    b.face(start, end, FaceId::WorkCard.name());
     b.prop(start, end, "drgnx-work-id", Value::String(id.0.clone()));
 }
 
@@ -490,14 +491,14 @@ fn off_chain(s: &Scene, id: &ItemId) -> bool {
 /// The decoration face of line I of a card of N lines; the selected card's is the ring's (`drgnx-card-sel-*`).
 fn card_face(n: usize, i: usize, selected: bool) -> &'static str {
     match (selected, n, i) {
-        (false, 1, _) => "drgnx-card-single",
-        (false, _, 0) => "drgnx-card-top",
-        (false, n, i) if i + 1 == n => "drgnx-card-bottom",
-        (false, _, _) => "drgnx-card-mid",
-        (true, 1, _) => "drgnx-card-sel-single",
-        (true, _, 0) => "drgnx-card-sel-top",
-        (true, n, i) if i + 1 == n => "drgnx-card-sel-bottom",
-        (true, _, _) => "drgnx-card-sel-mid",
+        (false, 1, _) => FaceId::CardSingle.name(),
+        (false, _, 0) => FaceId::CardTop.name(),
+        (false, n, i) if i + 1 == n => FaceId::CardBottom.name(),
+        (false, _, _) => FaceId::CardMid.name(),
+        (true, 1, _) => FaceId::CardSelSingle.name(),
+        (true, _, 0) => FaceId::CardSelTop.name(),
+        (true, n, i) if i + 1 == n => FaceId::CardSelBottom.name(),
+        (true, _, _) => FaceId::CardSelMid.name(),
     }
 }
 
@@ -561,31 +562,31 @@ fn dot(it: &Item) -> (&'static str, &'static str) {
         let st = r.state.as_str();
         let face = if st == "ready" {
             if r.jobs > 0 {
-                "drgnx-runners-running"
+                FaceId::RunnersRunning.name()
             } else {
-                "drgnx-runners-ready"
+                FaceId::RunnersReady.name()
             }
         } else if st.starts_with("benched") {
-            "drgnx-runners-out"
+            FaceId::RunnersOut.name()
         } else if st.starts_with("needs") || st.starts_with("waits for your") {
-            "drgnx-runners-attention"
+            FaceId::RunnersAttention.name()
         } else if st.starts_with("unreachable") {
-            "drgnx-runners-error"
+            FaceId::RunnersError.name()
         } else if st.starts_with("draining")
             || st.starts_with("preempting")
             || st.starts_with("sleeping")
         {
-            "drgnx-runners-subtle"
+            FaceId::RunnersSubtle.name()
         } else {
-            "drgnx-runners-out"
+            FaceId::RunnersOut.name()
         };
         return ("●", face);
     }
     let face = match it.fields.state {
-        Some(State::Running) => "drgnx-work-chain",
-        Some(State::NeedsYou) => "drgnx-work-needs-you",
-        Some(State::Review | State::Stalled) => "drgnx-work-overlap",
-        _ => "drgnx-work-dim",
+        Some(State::Running) => FaceId::WorkChain.name(),
+        Some(State::NeedsYou) => FaceId::WorkNeedsYou.name(),
+        Some(State::Review | State::Stalled) => FaceId::WorkOverlap.name(),
+        _ => FaceId::WorkDim.name(),
     };
     ("●", face)
 }
@@ -598,12 +599,12 @@ pub fn agent_number(it: &Item) -> u8 {
 
 /// The filled circle behind an agent's initial, by its number (work-space-dark.html `.who`).
 const WHO_FACES: [&str; 6] = [
-    "drgnx-work-who-1",
-    "drgnx-work-who-2",
-    "drgnx-work-who-3",
-    "drgnx-work-who-4",
-    "drgnx-work-who-5",
-    "drgnx-work-who-6",
+    FaceId::WorkWho1.name(),
+    FaceId::WorkWho2.name(),
+    FaceId::WorkWho3.name(),
+    FaceId::WorkWho4.name(),
+    FaceId::WorkWho5.name(),
+    FaceId::WorkWho6.name(),
 ];
 
 /// The agent badge: the model's initial in the agent's colour.
@@ -677,7 +678,7 @@ fn job_chip(job: &JobFact, now: u64) -> String {
 
 fn new_chip(s: &Scene, it: &Item, l: &mut Line) {
     if s.new.contains(&it.id) {
-        l.push(" new ", Some("drgnx-work-new"));
+        l.push(" new ", Some(FaceId::WorkNew.name()));
     }
 }
 
@@ -693,12 +694,12 @@ fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
         .push(bdg, Some(bface))
         .push(" ", None);
     if let Some(m) = f.model.as_ref().filter(|m| !names_model(&it.label, m)) {
-        who.push(format!("{m} · "), Some("drgnx-work-title"));
+        who.push(format!("{m} · "), Some(FaceId::WorkTitle.name()));
     }
-    who.push(it.label.clone(), Some("drgnx-work-title"));
+    who.push(it.label.clone(), Some(FaceId::WorkTitle.name()));
     // the going line: the activity, then each number (minutes, spend, progress) in the code font
     let mut going = Line::default();
-    going.push(activity(f), Some("drgnx-text-muted"));
+    going.push(activity(f), Some(FaceId::TextMuted.name()));
     let numbers: Vec<String> = f
         .minutes
         .map(|m| format!("{m} min"))
@@ -708,22 +709,22 @@ fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
         .collect();
     for n in numbers {
         going
-            .push(" · ", Some("drgnx-text-muted"))
-            .push(n, Some("drgnx-work-meta"));
+            .push(" · ", Some(FaceId::TextMuted.name()))
+            .push(n, Some(FaceId::WorkMeta.name()));
     }
     if let Some(c) = f.context.filter(|c| *c > 80) {
         going
-            .push(" · ", Some("drgnx-text-muted"))
-            .push(format!("ctx {c} %"), Some("drgnx-work-meta"));
+            .push(" · ", Some(FaceId::TextMuted.name()))
+            .push(format!("ctx {c} %"), Some(FaceId::WorkMeta.name()));
     }
     if let Some(j) = &f.job {
         going
-            .push(" · ", Some("drgnx-text-muted"))
-            .push(job_chip(j, s.now), Some("drgnx-text-muted"));
+            .push(" · ", Some(FaceId::TextMuted.name()))
+            .push(job_chip(j, s.now), Some(FaceId::TextMuted.name()));
     }
     let mut concl = Line::default();
     if let Some(c) = &f.conclusion {
-        concl.push(format!("→ {c}"), Some("drgnx-text-muted"));
+        concl.push(format!("→ {c}"), Some(FaceId::TextMuted.name()));
         new_chip(s, it, &mut concl);
     }
     let flag = if it.warn {
@@ -743,14 +744,14 @@ fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
             }
             None => "⚠ overlap".into(),
         };
-        l.push(text, Some("drgnx-work-overlap"));
+        l.push(text, Some(FaceId::WorkOverlap.name()));
         l
     } else {
         let mut bits = Vec::new();
         bits.extend(f.reads.map(|r| format!("reads {r}")));
         bits.extend(f.edits.map(|(n, p, m)| format!("edits {n} (+{p} −{m})")));
         let mut l = Line::default();
-        l.push(bits.join(" · "), Some("drgnx-text-subtle"));
+        l.push(bits.join(" · "), Some(FaceId::TextSubtle.name()));
         l
     };
     vec![
@@ -776,16 +777,16 @@ fn compact_lines(s: &Scene, it: &Item) -> Vec<Line> {
         f.model.as_ref().filter(|m| !names_model(&it.label, m)),
         it.kind,
     ) {
-        who.push(format!("{m} · "), Some("drgnx-work-title"));
+        who.push(format!("{m} · "), Some(FaceId::WorkTitle.name()));
     }
-    who.push(it.label.clone(), Some("drgnx-work-title"));
+    who.push(it.label.clone(), Some(FaceId::WorkTitle.name()));
     new_chip(s, it, &mut who);
     let mut bits = vec![activity(f)];
     bits.extend(f.minutes.map(|m| format!("{m}m")));
     bits.extend(f.job.as_ref().map(|j| job_chip(j, s.now)));
     let mut going = Line::plain(bits.join(" "));
     if it.warn {
-        going.push(" ⚠", Some("drgnx-work-overlap"));
+        going.push(" ⚠", Some(FaceId::WorkOverlap.name()));
     }
     vec![who, going]
 }
@@ -816,7 +817,7 @@ fn chip_line(it: &Item) -> Line {
     let f = &it.fields;
     let mut l = Line::default();
     if it.needs_you {
-        l.push("⚑ ", Some("drgnx-work-needs-you"));
+        l.push("⚑ ", Some(FaceId::WorkNeedsYou.name()));
     }
     let runner = f.runner.as_ref().filter(|_| it.kind == Kind::Machine);
     if let Some(r) = runner {
@@ -880,23 +881,25 @@ fn chip_line(it: &Item) -> Line {
     l.push(format!(" {name}"), None);
     if let (Kind::Branch, Some(tag)) = (it.kind, f.tag.as_ref()) {
         l.push(" ", None)
-            .push(format!(" {tag} "), Some("drgnx-work-chip"));
+            .push(format!(" {tag} "), Some(FaceId::WorkChip.name()));
     }
     if runner.is_some_and(|r| r.mac) {
-        l.push(" macOS", Some("drgnx-runners-os"));
+        l.push(" macOS", Some(FaceId::RunnersOs.name()));
     }
     match (it.kind, f.change) {
         // a file's change: the added and the removed in their own colours (`session.rs +40 −3`)
         (Kind::File, Some((p, m))) => {
             l.push(" ", None)
-                .push(format!("+{p}"), Some("drgnx-work-plus"))
+                .push(format!("+{p}"), Some(FaceId::WorkPlus.name()))
                 .push(" ", None)
-                .push(format!("−{m}"), Some("drgnx-work-minus"));
+                .push(format!("−{m}"), Some(FaceId::WorkMinus.name()));
         }
         // a plan's progress is a chip of its own, a machine's slots follow its name
         (Kind::Plan, _) if !extra.is_empty() => {
-            l.push(" ", None)
-                .push(format!(" {} ", extra.join(" · ")), Some("drgnx-work-chip"));
+            l.push(" ", None).push(
+                format!(" {} ", extra.join(" · ")),
+                Some(FaceId::WorkChip.name()),
+            );
         }
         (Kind::Machine, _) if !extra.is_empty() => {
             l.push(format!(" {}", extra.join(" · ")), None);
@@ -907,7 +910,7 @@ fn chip_line(it: &Item) -> Line {
         _ => {}
     }
     if it.warn {
-        l.push(" ⚠", Some("drgnx-work-overlap"));
+        l.push(" ⚠", Some(FaceId::WorkOverlap.name()));
     }
     l
 }
@@ -1270,9 +1273,9 @@ pub fn strip(
     // the needs-you chips share what the right-hand chips leave, each cut to its share (no chip runs under them)
     let shown = entries.len().clamp(1, 9);
     let spare = (env.width_px as f32 - w - 44.0 * env.scale) / shown as f32;
-    let overhead = fit::width_in(m, Some("drgnx-work-needs-you"), " ⚑   ")
-        + fit::width_in(m, Some("drgnx-work-needs-you-key"), " g1 ")
-        + fit::width_in(m, Some("drgnx-work-needs-you"), " ")
+    let overhead = fit::width_in(m, Some(FaceId::WorkNeedsYou.name()), " ⚑   ")
+        + fit::width_in(m, Some(FaceId::WorkNeedsYouKey.name()), " g1 ")
+        + fit::width_in(m, Some(FaceId::WorkNeedsYou.name()), " ")
         + 4.0 * env.scale;
     let room = ((spare - overhead).max(40.0 * env.scale))
         .min(CHIP_MAX as f32 * env.scale)
@@ -1283,19 +1286,22 @@ pub fn strip(
             b.push(" ", None);
         }
         let full = e.clone();
-        let e = fit_px(m, Some("drgnx-work-needs-you"), e, room);
+        let e = fit_px(m, Some(FaceId::WorkNeedsYou.name()), e, room);
         let start = b.pos();
-        b.push(&format!(" ⚑ {e} "), Some("drgnx-work-needs-you"))
-            .push(&format!(" g{} ", i + 1), Some("drgnx-work-needs-you-key"))
-            .push(" ", Some("drgnx-work-needs-you"));
+        b.push(&format!(" ⚑ {e} "), Some(FaceId::WorkNeedsYou.name()))
+            .push(
+                &format!(" g{} ", i + 1),
+                Some(FaceId::WorkNeedsYouKey.name()),
+            )
+            .push(" ", Some(FaceId::WorkNeedsYou.name()));
         let end = b.pos();
-        b.face(start, end, "drgnx-chip");
+        b.face(start, end, FaceId::Chip.name());
         b.prop(start, end, "help-echo", Value::String(full));
     }
     if entries.len() > 9 {
         b.push(
             &format!(" +{} ", entries.len() - 9),
-            Some("drgnx-work-needs-you"),
+            Some(FaceId::WorkNeedsYou.name()),
         );
     }
     // 20 px short of the edge: the window's fringe and its truncation glyph are not drawn on
@@ -1315,21 +1321,21 @@ pub fn strip(
         });
         match drawn {
             Some((id, svg)) => {
-                b.push(" ", Some("drgnx-work-chip"));
+                b.push(" ", Some(FaceId::WorkChip.name()));
                 b.image(id, "▣");
                 images.insert(id, svg);
-                b.push(c.trim_start_matches(' '), Some("drgnx-work-chip"));
+                b.push(c.trim_start_matches(' '), Some(FaceId::WorkChip.name()));
                 // the leading room is the chip's own: the image replaces the first space's width
             }
             None => {
-                b.push(c, Some("drgnx-work-chip"));
+                b.push(c, Some(FaceId::WorkChip.name()));
             }
         }
         let end = b.pos();
-        b.face(start, end, "drgnx-chip");
+        b.face(start, end, FaceId::Chip.name());
     }
     let end = b.pos();
-    b.face(0, end, "drgnx-work-card");
+    b.face(0, end, FaceId::WorkCard.name());
     b.height(1, (30.0 * env.scale).round() as u32);
     (b.finish(), images.into_iter().collect())
 }
@@ -1476,7 +1482,7 @@ fn outline_block(s: &Scene, id: &ItemId, cols: usize, env: &Env) -> Vec<Line> {
         let fw = fit_tty::width(&flag, env.tty_widths);
         if hw + 2 + fw <= cols {
             head.push(" ".repeat(cols - hw - fw), None)
-                .push(flag, Some("drgnx-work-overlap"));
+                .push(flag, Some(FaceId::WorkOverlap.name()));
         }
     }
     let mut lines = vec![
@@ -1536,12 +1542,12 @@ pub fn list_rows(entries: &[crate::list::ListEntry], selected: Option<&ItemId>) 
                 b.push(&format!("  on {m}"), None);
             }
             let end = b.pos();
-            b.face(start, end, "drgnx-work-card");
+            b.face(start, end, FaceId::WorkCard.name());
             if e.visibility == crate::Visibility::Faded {
-                b.face(start, end, "drgnx-work-dim");
+                b.face(start, end, FaceId::WorkDim.name());
             }
             if selected == Some(&e.item) {
-                b.face(start, end, "drgnx-selected");
+                b.face(start, end, FaceId::Selected.name());
             }
             b.prop(start, end, "drgnx-work-id", Value::String(e.item.0.clone()));
             b.finish()
@@ -1592,10 +1598,16 @@ mod tests {
     fn a_mac_runner_has_the_macos_chip_and_a_sleeping_dot() {
         let l = chip_line(&machine("ready", true));
         assert!(l.text().ends_with(" mini macOS 1/2"), "{:?}", l.text());
-        assert!(l.0.contains(&(" macOS".to_string(), Some("drgnx-runners-os"))));
+        assert!(l.0.contains(&(" macOS".to_string(), Some(FaceId::RunnersOs.name()))));
         assert!(!chip_line(&machine("ready", false)).text().contains("macOS"));
-        assert_eq!(dot(&machine("sleeping", true)).1, "drgnx-runners-subtle");
-        assert_eq!(dot(&machine("unreachable", true)).1, "drgnx-runners-error");
+        assert_eq!(
+            dot(&machine("sleeping", true)).1,
+            FaceId::RunnersSubtle.name()
+        );
+        assert_eq!(
+            dot(&machine("unreachable", true)).1,
+            FaceId::RunnersError.name()
+        );
     }
 
     /// [D] UX audit W4: the last step's class is the card's words only while the agent runs; a turn that ended says

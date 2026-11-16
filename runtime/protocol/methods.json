@@ -43488,6 +43488,15 @@
       "name": "view/env",
       "params": {
         "$defs": {
+          "Density": {
+            "description": "The user's density (`drgnx-look-density`): the sizes the kit's `(density KEY)` geometry takes. On the wire, its\nname; an env without one is comfortable.",
+            "enum": [
+              "compact",
+              "comfortable",
+              "roomy"
+            ],
+            "type": "string"
+          },
           "Display": {
             "description": "A display's kind.",
             "enum": [
@@ -43524,6 +43533,11 @@
           },
           "class": {
             "type": "string"
+          },
+          "density": {
+            "$ref": "#/$defs/Density",
+            "default": "comfortable",
+            "description": "The user's density (`drgnx-look-density`): the kit's sizes that follow it (a tree level's indent). None:\ncomfortable. A change is a new epoch, as a scale change is."
           },
           "display": {
             "$ref": "#/$defs/Display"
@@ -43572,6 +43586,24 @@
                 {
                   "format": "float",
                   "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "glyphs": {
+            "default": [],
+            "description": "`[name, glyph]`: the kit's glyphs (those `etc/ui/components.eld` names) as `drgnx-face-glyph` draws them on the\nclass's frame, ASCII on a terminal that is not UTF-8; a name missing here is drawn in its Unicode form\n(`drgnx_rows::kit`).",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
                 }
               ],
               "type": "array"

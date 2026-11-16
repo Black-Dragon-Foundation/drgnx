@@ -1627,7 +1627,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
-| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, faces?: [{avg?: number, face: string, file?: string, index?: natnum, pad?: number, px?: number, role: string, wght?: number}], glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
@@ -2385,6 +2385,22 @@ it builds for Android too).
   (`(space :align-to (PX))`); an image takes one placeholder character too, and so does a space, shown as WIDTH x
   HEIGHT device px (`(space :width (W) :height (H))`, a card's progress bar) in its run's face. Empty lists are left out. Runs may
   overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
+- **Faces by `FaceId`.** Rust never spells a drgnx face as a string: it writes `FaceId::TextMuted.name()` (or a
+  family's `FaceId::AGENT[i].name()`), from the generated `drgnx_rows::faces` (`bin/drgnx design`; see
+  `docs/develop/design-system.md`, "Generated code"), so a renamed or removed face is a compile error. `RowBuilder`
+  keeps its `&str` API. The lint `drgnx-lint/rust-faces-through-the-enum` (`test/unit/lint-kit-test.el`) counts the
+  face literals and family `format!`s left per file against `drgnx-lint-kit--rust-face-literals-not-yet`, which only
+  falls; the standard faces (`default`, `bold`, `error`, …) are left as words.
+- **The kit.** A view builds a kit component (`etc/ui/components.eld`) with `drgnx_rows::kit`: a `Comp` (JSON
+  `{"c": "row", "kind": "tree", "depth": 2, "twisty": true, "text": …, "state": "selected", "action": {"kind", "args"}}`)
+  and a `KitEnv` (`view::kit_env(&env)`: the env's scale, whether it is a terminal, its `glyphs` and `density`) go through
+  `kit::expand(&mut builder, &kit_env, &comp)` (inline, onto the row being built) or `kit::expand_rows(&kit_env, key,
+  &comp)` (whole rows, keys `KEY/0`, `KEY/1`…). Pads are `RowBuilder::pad` spaces of `floor(logical × scale + 0.5 +
+  1e-9)` device px per part; on a terminal, characters, and glyphs in the env's form (else Unicode, `kit::GLYPHS`);
+  the runs are the component's kit face and the state's under it; an `Action` puts `drgnx-action` = `[kind, args…]`
+  and `mouse-face` over the component, which the editor maps to the kind's one keymap (`docs/develop/core.md`,
+  "Actions and focus-visible"). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
+  (`tests/kit_conformance.rs` and `drgnx-ui-kit/conformance` over `test/fixtures/kit`) keeps the two equal.
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
 - **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no
@@ -2412,8 +2428,11 @@ All of it is in memory only.
 
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
-  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, attach?, rows_in_sja?,
-  headless?}` keeps the env of (view, class) and builds its rows again. `headless: true` marks a view that Lisp only
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, glyphs: [[name, glyph]],
+  density?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again. `glyphs` are
+  the kit's glyphs as the class's frame draws them (ASCII on a terminal that is not UTF-8); `density` is the user's
+  (`compact`, `comfortable` when absent, `roomy`; `drgnx-look-density`), which the kit's sizes follow (a tree level's
+  indent), and a change of it is a new epoch. `headless: true` marks a view that Lisp only
   reads and never draws (git's letters): its rows are fitted to no window.  `attach: true` (the editor sends it with the first env of a new buffer) makes the hub
   drop a pair it already holds for the connection, with no `view/close` between (a buffer killed without its hook, an
   Emacs restarted on the same connection), and start over: the rows go out whole, a reset from version 1.

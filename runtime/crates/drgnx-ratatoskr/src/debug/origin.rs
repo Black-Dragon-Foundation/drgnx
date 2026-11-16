@@ -15,6 +15,7 @@
 
 use super::BoxFut;
 use super::record::{RunHit, RunProbe};
+use drgnx_rows::faces::FaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -705,12 +706,12 @@ pub fn rows(state: &Value) -> Vec<drgnx_rows::Row> {
     use serde_json::json;
     let mut out = Vec::new();
     let mut head = RowBuilder::new("head");
-    head.push("Where did ", Some("drgnx-debug-timeline-head"));
+    head.push("Where did ", Some(FaceId::DebugTimelineHead.name()));
     head.push(
         state["expr"].as_str().unwrap_or_default(),
-        Some("drgnx-debug-probe"),
+        Some(FaceId::DebugProbe.name()),
     );
-    head.push(" come from?", Some("drgnx-debug-timeline-head"));
+    head.push(" come from?", Some(FaceId::DebugTimelineHead.name()));
     let doing = match state["state"].as_str().unwrap_or_default() {
         "tracing" => format!("replaying, level {}", state["level"].as_u64().unwrap_or(1)),
         "done" => "done".to_owned(),
@@ -723,17 +724,17 @@ pub fn rows(state: &Value) -> Vec<drgnx_rows::Row> {
             state["n"].as_u64().unwrap_or(0),
             state["stop"].as_u64().unwrap_or(0)
         ),
-        Some("drgnx-debug-timeline-dim"),
+        Some(FaceId::DebugTimelineDim.name()),
     );
     out.push(head.finish());
     if let Some(n) = state["note"].as_str() {
         let mut r = RowBuilder::new("note");
-        r.push(n, Some("drgnx-status-warn"));
+        r.push(n, Some(FaceId::StatusWarn.name()));
         out.push(r.finish());
     }
     if let Some(w) = state["why"].as_str() {
         let mut r = RowBuilder::new("why");
-        r.push(w, Some("drgnx-status-fail"));
+        r.push(w, Some(FaceId::StatusFail.name()));
         out.push(r.finish());
     }
     let links = state["links"].as_array().cloned().unwrap_or_default();
@@ -741,7 +742,7 @@ pub fn rows(state: &Value) -> Vec<drgnx_rows::Row> {
         let mut r = RowBuilder::new("none");
         r.push(
             "No store to it before this stop was found",
-            Some("drgnx-debug-timeline-dim"),
+            Some(FaceId::DebugTimelineDim.name()),
         );
         out.push(r.finish());
     }
@@ -749,22 +750,22 @@ pub fn rows(state: &Value) -> Vec<drgnx_rows::Row> {
         let level = l["level"].as_u64().unwrap_or(1).max(1) as usize;
         let mut r = RowBuilder::new(format!("link:{i}"));
         r.push(&"  ".repeat(level - 1), None);
-        r.push("← ", Some("drgnx-debug-timeline-dim"));
+        r.push("← ", Some(FaceId::DebugTimelineDim.name()));
         let target = l["target"].as_str().unwrap_or_default();
         match (l["inside"].as_str(), l["value"].as_str()) {
             (Some(inside), v) => {
-                r.push(target, Some("drgnx-debug-timeline-head"));
+                r.push(target, Some(FaceId::DebugTimelineHead.name()));
                 r.push(&format!(" changed inside {inside}"), None);
                 if let Some(v) = v {
-                    r.push(&format!(" → {v}"), Some("drgnx-debug-probe-values"));
+                    r.push(&format!(" → {v}"), Some(FaceId::DebugProbeValues.name()));
                 }
             }
             (None, Some(v)) => {
-                r.push(target, Some("drgnx-debug-timeline-head"));
-                r.push(&format!(" = {v}"), Some("drgnx-debug-probe-values"));
+                r.push(target, Some(FaceId::DebugTimelineHead.name()));
+                r.push(&format!(" = {v}"), Some(FaceId::DebugProbeValues.name()));
             }
             (None, None) => {
-                r.push(target, Some("drgnx-debug-timeline-head"));
+                r.push(target, Some(FaceId::DebugTimelineHead.name()));
             }
         }
         let ops: Vec<String> = l["operands"]
@@ -776,7 +777,7 @@ pub fn rows(state: &Value) -> Vec<drgnx_rows::Row> {
         if !ops.is_empty() {
             r.push(
                 &format!("  ({})", ops.join(", ")),
-                Some("drgnx-debug-timeline-dim"),
+                Some(FaceId::DebugTimelineDim.name()),
             );
         }
         let file = l["path"]
@@ -787,10 +788,10 @@ pub fn rows(state: &Value) -> Vec<drgnx_rows::Row> {
             .unwrap_or_default();
         r.push(
             &format!("  {file} {}", l["line"]),
-            Some("drgnx-debug-timeline-dim"),
+            Some(FaceId::DebugTimelineDim.name()),
         );
         if l["traced"] == false {
-            r.push("  candidate", Some("drgnx-status-warn"));
+            r.push("  candidate", Some(FaceId::StatusWarn.name()));
         }
         let end = r.pos();
         r.prop(0, end, "drgnx-debug-origin-link", json!(i));

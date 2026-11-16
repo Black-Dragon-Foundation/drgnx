@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::Measure;
 use drgnx_rows::svg::Palette;
 use drgnx_rows::{Op, Row};
@@ -438,8 +439,8 @@ fn strip_chips_rows() {
     assert!(row.text.contains("desk 3/16"), "{row:?}");
     // the card covers the agent that needs you: no chip of its own
     assert!(!row.text.contains("fx-sess needs you"), "{row:?}");
-    assert!(row.runs.iter().any(|r| r.2 == "drgnx-work-needs-you"));
-    assert!(row.runs.iter().any(|r| r.2 == "drgnx-work-chip"));
+    assert!(row.runs.iter().any(|r| r.2 == FaceId::WorkNeedsYou.name()));
+    assert!(row.runs.iter().any(|r| r.2 == FaceId::WorkChip.name()));
     // the machines' chips end at the right edge
     let (pos, px) = *row.stops.last().expect("a stop before the machines");
     let tail: String = row.text.chars().skip(pos as usize + 1).collect();
@@ -557,25 +558,25 @@ fn card_text_names_the_ui_font_the_title_and_the_meta_line() {
     ] {
         let faces = faces_at(key, word);
         assert!(
-            faces.iter().any(|f| f == "drgnx-work-card"),
+            faces.iter().any(|f| f == FaceId::WorkCard.name()),
             "{key}: {faces:?}"
         );
     }
     assert!(
         faces_at("row:5:0:0:0", "Opus")
             .iter()
-            .any(|f| f == "drgnx-work-title")
+            .any(|f| f == FaceId::WorkTitle.name())
     );
     assert!(
         faces_at("row:5:0:0:2", "testing")
             .iter()
-            .any(|f| f == "drgnx-text-muted")
+            .any(|f| f == FaceId::TextMuted.name())
     );
     // the numbers of the going line are the code font, the words the UI font (work-space-dark.html `.meta2 .n`)
     assert!(
         faces_at("row:5:0:0:2", "32")
             .iter()
-            .any(|f| f == "drgnx-work-meta")
+            .any(|f| f == FaceId::WorkMeta.name())
     );
 }
 
@@ -634,7 +635,7 @@ fn a_long_strip_entry_is_cut_and_the_row_is_ui_text() {
     assert!(
         row.runs
             .iter()
-            .any(|r| r.0 == 0 && r.1 >= end - 1 && r.2 == "drgnx-work-card"),
+            .any(|r| r.0 == 0 && r.1 >= end - 1 && r.2 == FaceId::WorkCard.name()),
         "{:?}",
         row.runs
     );
@@ -700,11 +701,11 @@ fn the_selected_card_has_its_own_ring_faces() {
             .map(|(_, _, f)| f.clone())
             .collect()
     };
-    assert!(faces("row:5:0:0:0", "Opus").contains(&"drgnx-card-sel-top".to_owned()));
-    assert!(faces("row:5:0:0:2", "testing").contains(&"drgnx-card-sel-mid".to_owned()));
-    assert!(faces("row:5:0:0:4", "with").contains(&"drgnx-card-sel-bottom".to_owned()));
-    assert!(faces("row:5:0:0:0", "Sonnet").contains(&"drgnx-card-top".to_owned()));
-    assert!(faces("row:3:0:0:0", "deferred").contains(&"drgnx-card-single".to_owned()));
+    assert!(faces("row:5:0:0:0", "Opus").contains(&FaceId::CardSelTop.name().to_owned()));
+    assert!(faces("row:5:0:0:2", "testing").contains(&FaceId::CardSelMid.name().to_owned()));
+    assert!(faces("row:5:0:0:4", "with").contains(&FaceId::CardSelBottom.name().to_owned()));
+    assert!(faces("row:5:0:0:0", "Sonnet").contains(&FaceId::CardTop.name().to_owned()));
+    assert!(faces("row:3:0:0:0", "deferred").contains(&FaceId::CardSingle.name().to_owned()));
 }
 
 /// [D] The strip carries the forecast and cost chips before the machines' (work-space-dark.html: "wk 41 % ▲ Thu",
@@ -755,7 +756,7 @@ fn items_off_the_selections_chain_are_dim() {
         let at = u32::try_from(r.text[..at].chars().count()).unwrap();
         r.runs
             .iter()
-            .any(|(s, e, f)| *s <= at && at < *e && f == "drgnx-work-dim")
+            .any(|(s, e, f)| *s <= at && at < *e && f == FaceId::WorkDim.name())
     };
     assert!(!dim("row:5:0:0:0", "Opus"), "the selected agent is lit");
     assert!(
@@ -769,7 +770,7 @@ fn items_off_the_selections_chain_are_dim() {
         drawn
             .rows
             .iter()
-            .all(|r| r.runs.iter().all(|x| x.2 != "drgnx-work-dim"))
+            .all(|r| r.runs.iter().all(|x| x.2 != FaceId::WorkDim.name()))
     );
 }
 
@@ -793,7 +794,10 @@ fn a_branch_chip_shows_its_machine_tag() {
         .expect("the branches' row");
     assert!(row.text.contains("desk 3"), "{:?}", row.text);
     assert!(!row.text.contains("edits 2"), "{:?}", row.text);
-    assert!(row.runs.iter().any(|r| r.2 == "drgnx-work-chip"), "{row:?}");
+    assert!(
+        row.runs.iter().any(|r| r.2 == FaceId::WorkChip.name()),
+        "{row:?}"
+    );
 }
 
 /// [D] A machine's chip on the strip starts with its Lucide icon (a monitor, a laptop for "laptop") in an image of its
@@ -873,7 +877,10 @@ fn the_new_mark_survives_the_cut_of_a_long_conclusion() {
         .find(|r| r.key == "row:5:0:0:3")
         .expect("the conclusion line");
     assert!(r.text.contains("new"), "{r:?}");
-    assert!(r.runs.iter().any(|x| x.2 == "drgnx-work-new"), "{r:?}");
+    assert!(
+        r.runs.iter().any(|x| x.2 == FaceId::WorkNew.name()),
+        "{r:?}"
+    );
 }
 
 /// [D] A strip chip says what it is before its text, so one cut at the chip's width still does (the user's two chips

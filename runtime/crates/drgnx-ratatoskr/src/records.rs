@@ -1018,6 +1018,9 @@ async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
         .await
         .map_err(fail)?;
     }
+    // a ledger in a linked git worktree gives its plan that branch, and whether it is merged (git changes on its own:
+    // this is asked every time)
+    ledger_branch(db, &plan, &ledger, &marks, &tasks).await?;
     // git is asked again only when the ledger or the plan's task numbers changed since the last time
     let stamp = {
         let text = std::fs::read_to_string(&ledger).unwrap_or_default();
@@ -1035,6 +1038,147 @@ async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
     }
     ledger_commits(db, &plan, &ledger, &marks, &tasks).await?;
     kv_put(db, vec![(key, Some(stamp))]).await
+}
+
+/// A ledger that lies in a linked git worktree gives its plan the worktree's branch: a `branch:COMMON:NAME` entity the plan
+/// is `on_branch` of, and on the plan `data.git` (`branch`, `worktree` while its folder exists, `repo` the main checkout,
+/// `merged`).  Merged: every task is done (its steps or its ledger) and the branch is in main, or no longer exists.
+async fn ledger_branch(
+    db: &CoordDb,
+    plan: &Path,
+    ledger: &Path,
+    marks: &[saga::ledger::DoneMark],
+    tasks: &[Piece],
+) -> Result<(), Error> {
+    let dir = ledger.parent().unwrap_or(Path::new("/")).to_path_buf();
+    let all_done = !tasks.is_empty()
+        && tasks.iter().all(|t| {
+            let number = t.data["number"].as_str().unwrap_or("");
+            t.status.as_deref() == Some("done")
+                || marks.iter().any(|m| m.tasks.iter().any(|n| n == number))
+        });
+    let facts = crate::clock::blocking(move || {
+        let git_dir = git_out(&dir, &["rev-parse", "--absolute-git-dir"])?;
+        let common = git_out(
+            &dir,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?;
+        let same =
+            |a: &str, b: &str| std::fs::canonicalize(a).ok() == std::fs::canonicalize(b).ok();
+        if same(&git_dir, &common) {
+            return None;
+        }
+        let top = git_out(&dir, &["rev-parse", "--show-toplevel"])?;
+        let name = git_out(&dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        let repo = main_repo(&dir)?;
+        let main = ["main", "master"]
+            .into_iter()
+            .find(|m| git_out(&repo, &["rev-parse", "--verify", "-q", m]).is_some());
+        let exists = git_out(
+            &repo,
+            &["rev-parse", "--verify", "-q", &format!("refs/heads/{name}")],
+        )
+        .is_some();
+        let merged = all_done
+            && main.is_some_and(|m| {
+                !exists
+                    || std::process::Command::new("git")
+                        .arg("-C")
+                        .arg(&repo)
+                        .args(["merge-base", "--is-ancestor", &name, m])
+                        .status()
+                        .is_ok_and(|s| s.success())
+            });
+        Some((common, top, name, repo, merged))
+    })
+    .await
+    .map_err(|e| err(format!("git: {e}")))?;
+    let Some((common, top, name, repo, merged)) = facts else {
+        return Ok(());
+    };
+    let Some(head) = pieces(db, plan)
+        .await?
+        .into_iter()
+        .find(|p| p.role == "head")
+    else {
+        return Ok(());
+    };
+    let worktree = Path::new(&top).is_dir().then(|| top.clone());
+    let want = json!({
+        "branch": name,
+        "worktree": worktree,
+        "repo": format!("{}/", repo.to_string_lossy().trim_end_matches('/')),
+        "merged": merged,
+    });
+    let bid = format!("branch:{common}:{name}");
+    let top2 = top.clone();
+    db.write(meta(), move |tx| {
+        let cur = entity::by_n(tx.sql(), head.n)?;
+        if cur
+            .as_ref()
+            .is_some_and(|c| c.data.get("git") == Some(&want))
+        {
+            // facts unchanged: the link is there too
+            if let Some(b) = entity::by_id(tx.sql(), &bid)? {
+                link::add(
+                    tx,
+                    head.n,
+                    "on_branch",
+                    b.n,
+                    None,
+                    Origin::Inferred,
+                    Some("branch"),
+                )?;
+            }
+            return Ok(());
+        }
+        entity::update(
+            tx,
+            head.n,
+            None,
+            Changes {
+                data_patch: Some(json!({ "git": want })),
+                ..Default::default()
+            },
+        )?;
+        let b = match entity::by_id(tx.sql(), &bid)? {
+            Some(b) => {
+                entity::unretire(tx, b.n)?;
+                b.n
+            }
+            None => {
+                entity::create(
+                    tx,
+                    EntityNew {
+                        id: bid,
+                        kind: "branch".into(),
+                        project: cur.and_then(|c| c.project),
+                        title: Some(name.clone()),
+                        status: None,
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({"repo": top2, "name": name}),
+                        origin: Origin::Parsed,
+                        source: Some("branch".into()),
+                    },
+                )?
+                .n
+            }
+        };
+        link::add(
+            tx,
+            head.n,
+            "on_branch",
+            b,
+            None,
+            Origin::Inferred,
+            Some("branch"),
+        )?;
+        Ok(())
+    })
+    .await
+    .map_err(fail)
 }
 
 /// A commit a ledger names: its full sha, its time and its subject.
@@ -2277,6 +2421,105 @@ mod tests {
         std::fs::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
         f.sync(&lp).await;
         assert!(implements_of(&f).await.is_empty());
+    }
+
+    /// The head of the plan `pair.md`'s `data.git`, as text (or "none").
+    async fn git_of(f: &Fix) -> String {
+        f.db.read(|c| {
+            Ok(c.query_row(
+                "select coalesce(json_extract(data, '$.git'), 'none') from entity \
+                 where kind = 'plan' and json_extract(data, '$.records.role') = 'head' \
+                 and json_extract(data, '$.records.file') like '%/pair.md'",
+                [],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_ledger_in_a_linked_worktree_gives_its_plan_the_branch_and_whether_it_is_merged() {
+        let f = fix();
+        let repo = f.root.clone();
+        let git = |dir: &Path, args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t.invalid"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "git {args:?}: {o:?}");
+        };
+        git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a"), "1").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "first"]);
+        let wt = f.root.parent().unwrap().join("wt");
+        git(
+            &repo,
+            &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
+        );
+        let dir = wt.join("docs/plans/drgnx");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (pp, lp) = (dir.join("pair.md"), dir.join("pair.ledger.md"));
+        std::fs::write(&pp, "# Pair\n\n### Task 1: one\n\n- [ ] a\n").unwrap();
+        std::fs::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
+        let heard = |_e: ViewEvent| {};
+        import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &wt,
+            Some(RecordKind::Plans),
+            false,
+            &heard,
+        )
+        .await
+        .unwrap();
+        import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &wt,
+            Some(RecordKind::Ledgers),
+            false,
+            &heard,
+        )
+        .await
+        .unwrap();
+        let g: Value = serde_json::from_str(&git_of(&f).await).unwrap();
+        assert_eq!(g["branch"], "feat");
+        assert_eq!(g["merged"], false, "{g}");
+        assert!(
+            g["worktree"].as_str().is_some_and(|w| w.ends_with("/wt")),
+            "{g}"
+        );
+        let on = f
+            .count(
+                "select count(*) from link l join entity b on b.n = l.dst join entity a on a.n = l.src \
+                 where l.kind = 'on_branch' and l.tx_to = 4611686018427387904 and b.kind = 'branch' \
+                 and b.title = 'feat' and json_extract(a.data, '$.records.file') like '%/pair.md'",
+            )
+            .await;
+        assert_eq!(on, 1);
+        // every task done by the ledger, and feat has nothing main lacks: merged
+        std::fs::write(
+            &lp,
+            "# SDD ledger — plan: pair.md\nTask 1: complete (tests ok)\n",
+        )
+        .unwrap();
+        f.sync(&lp).await;
+        let g: Value = serde_json::from_str(&git_of(&f).await).unwrap();
+        assert_eq!(g["merged"], true, "{g}");
+        // a commit on feat that main lacks: not merged
+        std::fs::write(wt.join("b"), "2").unwrap();
+        git(&wt, &["add", "-A"]);
+        git(&wt, &["commit", "-q", "-m", "more"]);
+        f.sync(&lp).await;
+        let g: Value = serde_json::from_str(&git_of(&f).await).unwrap();
+        assert_eq!(g["merged"], false, "{g}");
     }
 
     #[tokio::test]
