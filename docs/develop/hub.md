@@ -2999,6 +2999,9 @@ by the hub (`runtime/crates/drgnx-ratatoskr/src/view/scm.rs` and `view/scm/`; th
   answers an id at once and runs on a thread; its `scm-remote` events say running, done, failed (git's text) or
   stopped. `git/remote-stop {id}` kills it.
 
+Rows: `test/conformance/scm/`. They wait on the view's own patches (an `insert` carrying the row a change makes),
+never a fixed time; the GUI scenario is `drgnx-scenario/scm-stage-and-commit-by-hand` (`docs/develop/scenarios.md`).
+
 ### The Outline panel's rows (`outline/set`)
 
 The Outline section's rows: the definitions of the file in the editor, built by the hub with Hrafn's parse

@@ -45,6 +45,16 @@ The last results of each configuration are kept in `$XDG_STATE_HOME/drgnx/ui/sce
 
 Each runs at the session's scale: run them with `DRGNX_UI_SCALE=1` and `2`.
 
+## Source Control (side bar)
+
+| Scenario | Expected (VS Code) | Reference | How |
+|---|---|---|---|
+| `scm-stage-and-commit-by-hand` | Ctrl+Shift+G lists the folder's repositories (the project and one nested in it) and the changed file; the row's + stages it; a click in the message box and typing give the message; Ctrl+Enter commits and the view says the working tree matches HEAD | drgnx only | every step must settle within 200 ms of its input (`:settle_ms` under the scenario's 1 s quiet period, so a late hub patch counts) |
+
+It leaves one screenshot per step (`scm-STEP.png`) and each step's `settle_ms` (`scm-steps.txt`) in the run's evidence folder, which `bin/drgnx test
+--container --scenario` mounts as the GUI tier does (`.claude/tmp/ui-evidence/<time>` in the checkout, or
+`DRGNX_UI_EVIDENCE_DIR`). Run it with `DRGNX_UI_SCALE=1` and `1.25`.
+
 ## New frames
 
 `frame-from-daemon-fast` runs in the controller after the in-session suite (because it starts a daemon

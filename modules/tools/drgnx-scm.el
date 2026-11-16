@@ -330,6 +330,8 @@ holding it), else the first the rows show; nil without rows."
                              (if (and root (cdr drgnx-scm--branches))
                                  (format " in %s" (file-name-nondirectory root)) "")
                              ")"))))
+        ;; the placeholder keeps to the box's one line (cut at its edge); a message you type wraps
+        (setq-local truncate-lines (and text t))
         (move-overlay drgnx-scm--placeholder-overlay (point-min) (point-min))
         (overlay-put drgnx-scm--placeholder-overlay 'after-string
                      (and text (propertize text 'face 'shadow 'cursor 0)))))))
@@ -624,7 +626,7 @@ ended."
                                           :when (lambda () (derived-mode-p 'drgnx-scm-message-mode)))
                        (when (fboundp 'drgnx-wb-define-section)
                          (drgnx-module-alist-put 'drgnx-wb-island-views 'scm '(:title "Source Control"))
-                         (drgnx-wb-define-section 'scm-message :view 'scm :slot 0 :own-header t :fit 0.15
+                         (drgnx-wb-define-section 'scm-message :view 'scm :slot 0 :own-header t :fit 0.15 :min-rows 1
                                                   :buffer #'drgnx-scm--message-buffer)
                          (drgnx-wb-define-section 'scm :view 'scm :slot 1 :own-header t
                                                   :buffer #'drgnx-scm--buffer))
