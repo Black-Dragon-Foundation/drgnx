@@ -626,3 +626,9 @@ it on again with the store's lines."
         (should-not (memq #'drgnx-debug-gutter--pool-update pre-redisplay-functions))))))
 
 ;;; debug-gutter-test.el ends here
+
+(ert-deftest drgnx-debug-gutter/an-event-it-cannot-place-is-ignored ()
+  "A `debug-breakpoints' event with no path (the hub sends one for a change that names no file) is ignored, not an
+error that every hub event handler's caller toasts."
+  (should-not (drgnx-debug-gutter--event "debug-breakpoints" (list :version 1 :breakpoints nil)))
+  (should-not (drgnx-debug-gutter--event "debug-breakpoints" (list :path nil :version 1))))

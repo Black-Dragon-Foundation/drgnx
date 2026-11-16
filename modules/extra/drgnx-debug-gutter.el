@@ -589,7 +589,7 @@ buffer's changes handed over first); no line is counted unless the hub cannot an
   "`drgnx-hub-event-functions': a file's breakpoints changed (`debug-breakpoints'), or the sessions did."
   (pcase event
     ("debug-breakpoints"
-     (when-let* ((b (get-file-buffer (plist-get data :path))))
+     (when-let* ((path (plist-get data :path)) ((stringp path)) (b (get-file-buffer path)))
        (with-current-buffer b
          (when drgnx-debug-gutter-mode (drgnx-debug-gutter--apply data)))))
     ("debug-state"
