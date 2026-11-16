@@ -398,6 +398,25 @@ pub struct NeedsYou {
     pub about: Vec<ItemId>,
 }
 
+impl NeedsYou {
+    /// Where the chip sits on the strip: its rank (permission asks 0, questions 1, clashes 2, sign-offs 3, pushes
+    /// 4, budget pauses 5, supervisor 6, proposals 7), then the oldest first. A card's age is its id (the store
+    /// numbers them as they open); a card with a word for an id counts as the newest.
+    pub fn urgency(&self) -> (u8, u64) {
+        let rank = match self.kind {
+            CardKind::Permission => 0,
+            CardKind::Question => 1,
+            CardKind::Clash => 2,
+            CardKind::SignOff => 3,
+            CardKind::Push => 4,
+            CardKind::Budget => 5,
+            CardKind::Supervisor => 6,
+            CardKind::Proposal | CardKind::Huddle => 7,
+        };
+        (rank, self.card.parse().unwrap_or(u64::MAX))
+    }
+}
+
 pub(crate) type Sym = u32;
 
 /// The interner: every id string the model has seen, and its kind.

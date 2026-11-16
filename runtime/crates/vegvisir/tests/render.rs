@@ -898,3 +898,67 @@ fn a_cut_gate_chip_still_says_what_it_is() {
     assert!(row.text.contains("⚑ Sign off: 2 tasks"), "{:?}", row.text);
     assert!(row.text.contains("g2"), "{:?}", row.text);
 }
+
+fn card(id: &str, kind: vegvisir::CardKind, text: &str) -> NeedsYou {
+    NeedsYou {
+        card: id.into(),
+        kind,
+        text: text.into(),
+        about: vec![],
+    }
+}
+
+/// [D] The strip's order: permission asks first, then questions, clashes, sign-offs, pushes, budgets, the
+/// supervisor and proposals; inside a rank the oldest (the lowest id) first. `g1` is the most urgent.
+#[test]
+fn needs_you_orders_permission_first_then_oldest() {
+    use vegvisir::CardKind::{Budget, Permission, Proposal, Push, Question};
+    let needs = vec![
+        card("1", Push, "push"),
+        card("9", Proposal, "proposal"),
+        card("5", Permission, "perm late"),
+        card("3", Question, "question"),
+        card("2", Permission, "perm early"),
+        card("4", Budget, "budget"),
+    ];
+    let got: Vec<String> = vegvisir::nav::strip_entries(&needs, &BTreeMap::new())
+        .into_iter()
+        .map(|e| e.text)
+        .collect();
+    assert_eq!(
+        got,
+        [
+            "perm early",
+            "perm late",
+            "question",
+            "push",
+            "budget",
+            "proposal"
+        ]
+    );
+}
+
+/// [D] A 300-character fact reaches the strip whole; the row fit cuts the chip with an ellipsis at its share of the
+/// width, and the chip carries the full text as `help-echo`.
+#[test]
+fn strip_chip_text_is_not_truncated() {
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let pal = palette();
+    let s = scene(&items, &edges, &layout, &new);
+    let long = format!("Codex asks: {}", "x".repeat(300));
+    let needs = vec![card("1", vegvisir::CardKind::Permission, &long)];
+    let (row, _) = render::strip(&s, &needs, &[], &[], &gui(&pal), &Cols);
+    assert!(row.text.contains('…'), "the fit cuts it: {row:?}");
+    assert!(
+        row.text.chars().count() < 200,
+        "{}",
+        row.text.chars().count()
+    );
+    let echo = row
+        .props
+        .iter()
+        .find(|p| p.2 == "help-echo")
+        .map(|p| p.3.clone());
+    assert_eq!(echo, Some(serde_json::Value::String(long)));
+}

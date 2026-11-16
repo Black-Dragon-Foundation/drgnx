@@ -1282,6 +1282,7 @@ pub fn strip(
         if i > 0 {
             b.push(" ", None);
         }
+        let full = e.clone();
         let e = fit_px(m, Some("drgnx-work-needs-you"), e, room);
         let start = b.pos();
         b.push(&format!(" ⚑ {e} "), Some("drgnx-work-needs-you"))
@@ -1289,6 +1290,7 @@ pub fn strip(
             .push(" ", Some("drgnx-work-needs-you"));
         let end = b.pos();
         b.face(start, end, "drgnx-chip");
+        b.prop(start, end, "help-echo", Value::String(full));
     }
     if entries.len() > 9 {
         b.push(

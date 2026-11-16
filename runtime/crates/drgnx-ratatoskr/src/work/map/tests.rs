@@ -1426,11 +1426,7 @@ fn a_gate_chip_on_the_strip_says_sign_off() {
     }));
     let v = rows_view(core.model(), 226);
     let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
-    assert!(
-        rows[0].text.contains("Sign off: 2 tasks"),
-        "{}",
-        rows[0].text
-    );
+    assert!(rows[0].text.contains("Sign off: 2 tasks"), "{}", rows[0].text);
 }
 
 #[test]
@@ -1470,7 +1466,7 @@ fn a_proposal_chip_says_sign_off_once_and_names_its_job() {
     let v = rows_view(core.model(), 226);
     let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
     assert!(
-        rows[0].text.contains("Sign off: 2 tasks (job-7)"),
+        rows[0].text.contains("Sign off (job-7): 2 tasks"),
         "{}",
         rows[0].text
     );
@@ -1494,7 +1490,7 @@ fn a_proposal_on_the_strip_says_what_to_approve_and_which_job() {
             "job-7",
             "2 tasks, about 0.00 USD (some unpriced), 3M tokens, 40 min: approve to start"
         ),
-        "Sign off: 2 tasks (job-7)"
+        "Sign off (job-7): 2 tasks, about 0.00 USD (some unpriced), 3M tokens, 40 min"
     );
     assert_eq!(
         strip_text("job-7", "Codex asks: cargo clippy"),
@@ -1679,4 +1675,68 @@ fn graph_fact(core: &mut Core, plan: &str, task: &str) {
             updated: 0,
         },
     );
+}
+
+fn card_about(core: &mut Core, id: &str, kind: vegvisir::CardKind, about: &str) {
+    core.step(vegvisir::Event::Card(vegvisir::CardFact {
+        id: id.into(),
+        kind,
+        about: vec![about.into()],
+        text: format!("card {id}"),
+        open: true,
+    }));
+}
+
+/// [D] Before anything is selected the Detail shows the subject of the most urgent thing that needs you, its head
+/// saying so; an empty map still says nothing is selected.
+#[test]
+fn detail_on_open_shows_the_most_urgent() {
+    let empty = Core::new();
+    assert_eq!(
+        detail::lines_or_default(empty.model(), None, 0),
+        vec![("head", "Nothing is selected.".to_string(), None)]
+    );
+    let mut core = core_with(2);
+    card_about(&mut core, "7", vegvisir::CardKind::Push, "agent:s1");
+    card_about(&mut core, "8", vegvisir::CardKind::Permission, "agent:s2");
+    let m = core.model();
+    assert_eq!(detail::default_item(m), Some(ItemId("agent:s2".into())));
+    let lines = detail::lines_or_default(m, None, 0);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.0 == "head" && l.1.contains("Needs you most")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|l| l.1.contains("agent 2")), "{lines:?}");
+}
+
+/// [D] Once the user selected something, the Detail follows the selection.
+#[test]
+fn detail_follows_the_selection_once_made() {
+    let mut core = core_with(2);
+    card_about(&mut core, "8", vegvisir::CardKind::Permission, "agent:s2");
+    let m = core.model();
+    let sel = ItemId("agent:s1".into());
+    let lines = detail::lines_or_default(m, Some(&sel), 0);
+    assert!(
+        !lines.iter().any(|l| l.1.contains("Needs you most")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|l| l.1.contains("agent 1")), "{lines:?}");
+}
+
+/// [D] A proposal's strip text keeps its whole fact (the fit cuts it at the window's edge).
+#[test]
+fn strip_text_is_not_truncated() {
+    let long = format!(
+        "{}: approve to start",
+        "2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min"
+    );
+    assert_eq!(
+        strip_text("J#1", &long),
+        "Sign off (J#1): 2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min"
+    );
+    let words = "x".repeat(300);
+    assert_eq!(strip_text("J#1", &words), words);
 }

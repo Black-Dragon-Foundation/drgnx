@@ -1409,7 +1409,8 @@ impl Map {
         class: Option<&str>,
     ) {
         let view = detail::view_of(&key.view);
-        let lines = detail::lines(m, v.selected.as_ref(), crate::clock::wall_secs() as u64);
+        let lines =
+            detail::lines_or_default(m, v.selected.as_ref(), crate::clock::wall_secs() as u64);
         for c in f.core.views.classes(key.conn, &view) {
             if class.is_some_and(|only| only != c) {
                 continue;
@@ -1882,15 +1883,13 @@ fn card_kind(k: &str) -> CardKind {
 /// An open card: id, job, kind, title.
 type Card = (String, String, String, String);
 
-/// A card's words on the strip: a proposal's title (`2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min: approve to
-/// start`) is cut to its share of the strip, which keeps only what every proposal says, so it becomes `Sign off: 2
-/// tasks (JOB)` (the strip's own prefix, said once): what to approve, and which job it is.  Other cards are as titled.
+/// A card's whole fact for the strip: a proposal's title (`2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min: approve
+/// to start`) becomes `Sign off (JOB): 2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min` (the strip's own prefix,
+/// said once, and the job first so a cut chip still says which).  Nothing is cut here: the row fit cuts a chip at the window's edge, and the chip's `help-echo` has
+/// the full text.  Other cards are as titled.
 fn strip_text(job: &str, title: &str) -> String {
     match title.strip_suffix(": approve to start") {
-        Some(head) => format!(
-            "Sign off: {} ({job})",
-            head.split(", ").next().unwrap_or(head)
-        ),
+        Some(head) => format!("Sign off ({job}): {head}"),
         None => title.to_string(),
     }
 }
