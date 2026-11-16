@@ -98,19 +98,23 @@ size in pixels (width for the docks, height for the panel); nil when there is ne
 
 (defun drgnx-persist-state (&optional frame)
   "FRAME's workbench as a plist (see the commentary).  A frame that rebuilds itself — its parameter
-`drgnx-persist-restore' is (FUNCTION . ARGS), e.g. a job window — is saved as (:role custom :restore …),
-with `:geometry' (pixel left top, then the text area's width and height — what `set-frame-size' sets, so the
-size does not grow at every restart) and, when it has one, `:fullscreen' (its `fullscreen' parameter: `maximized', …)
-when it is graphical."
+`drgnx-persist-restore' is (FUNCTION . ARGS), e.g. a job window — is saved as (:role custom :restore …).
+It and the main window are saved with `drgnx-persist--frame-geometry' when graphical."
   (if-let* ((restore (frame-parameter frame 'drgnx-persist-restore)))
-      (append (list :role 'custom :restore restore)
-              (and (display-graphic-p frame)
-                   (let ((edges (frame-edges frame 'outer-edges)))
-                     (append (list :geometry (list (nth 0 edges) (nth 1 edges)
-                                                   (frame-text-width frame) (frame-text-height frame)))
-                             (and (frame-parameter frame 'fullscreen)
-                                  (list :fullscreen (frame-parameter frame 'fullscreen)))))))
-    (drgnx-persist--workbench-state frame)))
+      (append (list :role 'custom :restore restore) (drgnx-persist--frame-geometry frame))
+    (let ((state (drgnx-persist--workbench-state frame)))
+      (if (eq (plist-get state :role) 'main) (append state (drgnx-persist--frame-geometry frame)) state))))
+
+(defun drgnx-persist--frame-geometry (frame)
+  "FRAME's `:geometry' (pixel left top, then the text area's width and height — what `set-frame-size' sets, so the
+size does not grow at every restart) and, when it has one, `:fullscreen' (its `fullscreen' parameter: `maximized', …);
+nil when FRAME is not graphical."
+  (and (display-graphic-p frame)
+       (let ((edges (frame-edges frame 'outer-edges)))
+         (append (list :geometry (list (nth 0 edges) (nth 1 edges)
+                                       (frame-text-width frame) (frame-text-height frame)))
+                 (and (frame-parameter frame 'fullscreen)
+                      (list :fullscreen (frame-parameter frame 'fullscreen)))))))
 
 (defun drgnx-persist--place-frame (frame geometry)
   "Put FRAME at GEOMETRY (pixel left top width height, as `drgnx-persist--geometry' checked it).  The position
@@ -370,6 +374,10 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
             (drgnx-state-sync f)))
         (set-frame-parameter nil 'drgnx-frame-role 'main)
         (drgnx-state-sync)
+        ;; its size first: the docks are clamped to it
+        (when-let* (((display-graphic-p)) (g (drgnx-persist--geometry main)))
+          (drgnx-persist--place-frame (selected-frame) g)
+          (drgnx-persist--keep-state (selected-frame) g (plist-get main :fullscreen)))
         (drgnx-persist--restore-frame main)
         (setq frames (remq main frames)))
       (let ((home (selected-frame)))
