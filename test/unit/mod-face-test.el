@@ -557,9 +557,12 @@ the string made last, and allocates nothing; a renamed buffer or another project
       (should (and (stringp (car g)) (stringp (cdr g))))
       (should (string-match-p "\\`[[:ascii:]]+\\'" (cdr g)))))
   ;; no two glyphs share an ASCII form: on a terminal that is not UTF-8 each still says which it is
-  ;; (the meanings the UI kit added -- fail, stopped, dismiss, unqueue, info, warn -- may look like an older one)
+  ;; (the meanings the UI kit added -- fail, stopped, dismiss, unqueue, info, warn -- may look like an older one, and
+  ;; so may the find bar's buttons, read among its own: match-previous and match-next are ahead's ^ and behind's v,
+  ;; rename-symbol diamond's <>)
   ;; nor the glyphs of the icons (`drgnx-ui--icon-glyphs'): they stand in for a picture
-  (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (or (memq (car g) '(fail stopped dismiss unqueue info warn))
+  (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (or (memq (car g) '(fail stopped dismiss unqueue info warn
+                                                                               match-previous match-next rename-symbol))
                                                           (assq (car g) drgnx-ui--icon-glyphs)))
                                           (default-value 'drgnx-face-glyphs)))))
     (should (= (length ascii) (length (delete-dups (copy-sequence ascii))))))

@@ -663,9 +663,10 @@ own keys under its prefixes, made again after each apply of the keys).  The undo
       (save-excursion (widget-value-set w (widget-value w))))))
 
 (defun drgnx-replace--insert-toggles (&optional symbol)
-  "The Aa, ab and .* toggles; with SYMBOL (the find bar) the ⟨⟩ Symbol toggle before them, else (the view) the {}
-Pattern toggle after them."
-  (pcase-dolist (`(,name ,label ,help) `(,@(and symbol '((:symbol "⟨⟩ Symbol" "Rename the symbol: the language server's edits")))
+  "The Aa, ab and .* toggles; with SYMBOL (the find bar) the Symbol toggle (the `rename-symbol' glyph) before them,
+else (the view) the {} Pattern toggle after them."
+  (pcase-dolist (`(,name ,label ,help) `(,@(and symbol `((:symbol ,(concat (drgnx-face-glyph 'rename-symbol) " Symbol")
+                                                                  "Rename the symbol: the language server's edits")))
                                          (:case "Aa" "Match case") (:word "ab" "Whole word") (:regexp ".*" "Regular expression")
                                          ,@(and (not symbol)
                                                 '((:pattern "{}" "Pattern: code with $A (one node) and $$$A (any number)")))))
@@ -2614,8 +2615,8 @@ on the rows path through Sjá (`down:file' / `up:file'), else the next header ro
         (widget-insert " ")
         (setq drgnx-replace--status-end (copy-marker (1- (point)) t))
         (widget-insert " ")
-        (drgnx-replace--insert-button nil "↑" "Previous match (S-RET)" (lambda () (drgnx-replace--bar-step -1)))
-        (drgnx-replace--insert-button nil "↓" "Next match (RET)" (lambda () (drgnx-replace--bar-step 1)))
+        (drgnx-replace--insert-button nil (drgnx-face-glyph 'match-previous) "Previous match (S-RET)" (lambda () (drgnx-replace--bar-step -1)))
+        (drgnx-replace--insert-button nil (drgnx-face-glyph 'match-next) "Next match (RET)" (lambda () (drgnx-replace--bar-step 1)))
         (drgnx-replace--insert-button nil (drgnx-face-glyph 'close) "Close (ESC)" #'drgnx-replace-bar-close)
         (widget-insert "\n")
         (drgnx-replace--insert-field 'replace "Replace " 24)
