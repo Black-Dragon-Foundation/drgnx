@@ -29,6 +29,8 @@
 (defvar drgnx-panel-replay--panel nil "The panel's buffer.")
 (defvar drgnx-panel-replay--module nil "Whether tools/agent-panel ran before the workload.")
 (defvar drgnx-panel-replay--module-set nil "Whether the up chose tools/agent-panel on, for the down to put back.")
+(defvar drgnx-panel-replay--keys-before nil
+  "Whether the keys' composed map was the global map when the up began: the down undoes an apply the panel caused.")
 (defvar drgnx-panel-replay--allocs nil "Objects each update's events made (newest first), while armed.")
 (defvar drgnx-panel-replay--draws nil "kB each draw of the panel made (newest first), while armed.")
 (defvar drgnx-panel-replay--armed nil "Non-nil while the updates are measured.")
@@ -36,6 +38,8 @@
 
 (declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
 (declare-function drgnx-agents-send "drgnx-agents")
+(declare-function drgnx-keys--uninstall-global "drgnx-keys" ())
+(defvar drgnx-keys--global-map)
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-agents-kill "drgnx-agents")
 (declare-function drgnx-agents-mirror-stop "drgnx-agents-mirror")
@@ -121,6 +125,8 @@ The panel inserts the rows the hub builds."
   (let ((mock (and bin (expand-file-name "ratatoskr-mock" (file-name-directory bin)))))
     (unless (and mock (file-executable-p bin) (file-executable-p mock))
       (error "panel-replay needs DRGNX_RATATOSKR_BIN (a test-hooks ratatoskr) with ratatoskr-mock beside it"))
+    (setq drgnx-panel-replay--keys-before
+          (and (boundp 'drgnx-keys--global-map) (eq (current-global-map) drgnx-keys--global-map)))
     (drgnx-panel-replay--module-on)
     (setq drgnx-panel-replay--dir (make-temp-file "drgnx-panel-replay" t))
     (let* ((dir drgnx-panel-replay--dir) (project (or drgnx-panel-replay-project (expand-file-name "project" dir)))
@@ -280,6 +286,11 @@ measure with no draw or no patch measured nothing: an error, as a premise that f
       (run-hooks 'drgnx-modules-after-teardown-functions))
     (drgnx-modules-set-enabled 'tools/agent-panel drgnx-panel-replay--module)
     (setq drgnx-panel-replay--module-set nil))
+  ;; the keys an apply installed meanwhile (the idle stage's hook, the commands the setup defined): `global-map' current
+  ;; again and the guard off, as before the up
+  (when (and (not drgnx-panel-replay--keys-before) (boundp 'drgnx-keys--global-map)
+             (eq (current-global-map) drgnx-keys--global-map))
+    (drgnx-keys--uninstall-global))
   (when drgnx-panel-replay--dir
     (ignore-errors (delete-directory drgnx-panel-replay--dir t))
     (setq drgnx-panel-replay--dir nil))
