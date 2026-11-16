@@ -77,7 +77,8 @@ If the key is taken in the same place, drgnx says by what, and asks:
 
 A **prefix clash** is flagged the same way: the key is the start of another command's key (recording `C-c e` when
 `C-c e C-x` is bound there), another key is the start of it, or it would replace one of Emacs' own prefixes
-(`M-g`). A key bound by Emacs or a package in that place is named too.
+(`M-g`). A key bound by Emacs or a package in that place is named too. Emacs' keys are read as the profile left
+them: recording `C-k C-9` in VS Code keys asks nothing, since the profile already made `C-k` a prefix.
 
 **Your own keys** (bound in `config.el`, or from the keyboard) show on their command's line as `yours (config.el)` or
 `yours (this session)` and are read-only here: **Change** refuses them, a key of yours cannot be taken by another

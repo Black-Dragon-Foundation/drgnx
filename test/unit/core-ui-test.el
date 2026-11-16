@@ -260,6 +260,10 @@
     (drgnx-ui-test--ascii
      ;; the Buffers row's close is the `close' glyph on its right edge (`drgnx-buffers--tail'), never a literal ×
      (should-not (string-search "×" (drgnx-face-glyph 'close)))
-     (should (string-search "[↓] [x]" (funcall bar))))
+     ;; the bar's buttons are flat chips; its previous and next arrows have an ASCII form too, and nothing on the
+     ;; row is outside ASCII
+     (let ((row (funcall bar)))
+       (should (string-search "^   v   x" row))
+       (should-not (string-match-p "[^[:ascii:]]" row))))
     (drgnx-ui-test--unicode
-     (should (string-search "[↓] [×]" (funcall bar))))))
+     (should (string-search "↑   ↓   ×" (funcall bar))))))
