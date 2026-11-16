@@ -371,6 +371,7 @@ console's tab shows without taking the focus."
                               ;; to define, as for Review's
                               (when (fboundp 'drgnx-wb-define-tab)
                                 (drgnx-wb-define-tab 'panel 'debug-console :title "Debug Console" :icon 'terminal
+                                                     :content #'drgnx-debug-console--buffer
                                                      :actions #'drgnx-debug-console-tab-actions))
                               (let ((in-console (lambda () (derived-mode-p 'drgnx-debug-console-mode))))
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-console-commands)
@@ -396,7 +397,8 @@ console's tab shows without taking the focus."
                                                           :map 'drgnx-debug-view-mode-map :when in-view))))
                               ;; the heap graph (drgnx-debug-heap.el): the panel's Graph tab, its key in its own map
                               (when (fboundp 'drgnx-wb-define-tab)
-                                (drgnx-wb-define-tab 'panel 'debug-graph :title "Heap Graph"))
+                                (drgnx-wb-define-tab 'panel 'debug-graph :title "Heap Graph" :contextual t
+                                                     :empty "No graph yet. Stop at a breakpoint and choose Show as Graph on a variable to draw its objects here."))
                               (drgnx-command-define 'debug-heap-select :category "Debug" :title "Graph: Select Card"
                                                     :command #'drgnx-debug-heap-select
                                                     :doc "Ring the card at point and show its references"

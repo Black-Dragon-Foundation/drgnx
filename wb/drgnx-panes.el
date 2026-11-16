@@ -122,7 +122,7 @@ Kept out of frame parameters: a buffer object in one would make the saved frame 
      (drgnx-wb-define-tab (alist-get (plist-get spec :home) drgnx-pane--areas) kind
                           :title (plist-get spec :title)
                           :placeholder (lambda () (drgnx-pane--buffer (drgnx-pane--spec kind) kind))
-                          :companions (plist-get spec :companions)))
+                          :companions (plist-get spec :companions) :contextual (plist-get spec :contextual)))
     ('editor
      (when-let* ((matcher (drgnx-pane--editor-matcher spec)))
        (drgnx-wb-place matcher 'editor)))))
@@ -279,7 +279,7 @@ module it belongs to was turned off, and on again, while the area stayed up."
 ;;;; The API
 
 (cl-defun drgnx-pane-define-kind (kind &key title buffer placeholder home size view slot height fill on-show
-                                       on-focus stack companions)
+                                       on-focus stack companions contextual)
   "Define pane KIND (a symbol); re-defining replaces.  Returns KIND.
 HOME is `left', `bottom', `right' or `editor' (default `bottom').  TITLE is a string (a left kind's may be a
 function).  BUFFER: a function returning the kind's buffer, or a buffer, or a buffer name (made when
@@ -293,6 +293,7 @@ ON-SHOW and ON-FOCUS: functions of the window.
 STACK: the kind this one stacks with by default (the grid reads it).
 COMPANIONS: a function of the kind's buffer returning (ABOVE BELOW), the buffers shown above and below it in windows of
 their own (a `right' kind; `drgnx-wb-define-tab').
+CONTEXTUAL: a bottom or right kind's tab is in its area's tab row only while shown (`drgnx-wb-define-tab').
 Called from a module's setup, the definition records the module as the kind's owner (`drgnx-state-kind-owner')
 and its undo \"pane kind KIND\": KIND hidden `:by teardown' where it shows (its size, front tab and places
 are kept as intent), then the previous definition put back or `drgnx-pane-undefine-kind' — only while KIND is
@@ -301,7 +302,7 @@ still the one defined here.  Defining a new KIND that is in front in an area tha
     (unless (memq home drgnx-pane--homes) (user-error "Bad pane home %s" home))
     (let ((spec (list :title title :buffer buffer :placeholder placeholder :home home :size size :view view
                       :slot slot :height height :fill fill :on-show on-show :on-focus on-focus :stack stack
-                      :companions companions))
+                      :companions companions :contextual contextual))
           (old (drgnx-pane-kind kind)) (old-owner (drgnx-state-kind-owner kind)))
       (drgnx-pane--call :define kind spec old)         ; first: an error leaves the kinds as they were
       (if old (setf (alist-get kind drgnx-pane--kinds) spec)       ; a new kind goes last, a redefined one stays put

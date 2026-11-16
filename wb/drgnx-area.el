@@ -32,7 +32,7 @@ row while the shown tab is the only one with content (`drgnx-area--lone-p')."
         (list :side side :size size :lone lone :tabs (plist-get (alist-get area drgnx-wb--areas) :tabs)))
   area)
 
-(cl-defun drgnx-wb-define-tab (area tab &key title icon placeholder start actions companions)
+(cl-defun drgnx-wb-define-tab (area tab &key title icon placeholder start actions companions empty contextual content)
   "Add TAB to AREA, titled TITLE; ICON (an icon name, `drgnx-look-icon') shows before the title; PLACEHOLDER returns
 the buffer shown while the tab has none.  START, a function of no arguments, makes the tab's buffer when a click on
 the tab finds none (VS Code's Terminal tab opens a terminal); the rules show what it makes in the tab.
@@ -40,6 +40,12 @@ ACTIONS, a function of no arguments, returns the tab's own pieces (a string, or 
 the tab row before its ✕ while the tab is shown; the tab's module calls `drgnx-wb-area-redraw' when they change.
 COMPANIONS, a function of the tab's buffer, returns (ABOVE BELOW): the buffers shown in windows of their own above
 and below it, each nil for none (an area on the left or right only; see \"Companions\" below).
+EMPTY, a string, is what the default placeholder says while the tab has no buffer (what appears here and how); the
+placeholder is never blank.  CONTEXTUAL non-nil: the tab is in the tab row only while it is the shown tab or has a
+buffer of its own, so the row is the same whenever the modules that define such tabs were set up.
+CONTENT, a function of no arguments, returns the buffer the tab shows when it has none saved (Problems lists the
+problems, Output shows Messages, the Debug Console its console): the tab is never an empty page; nil from it falls
+back to the placeholder.
 Called from a module's setup, the definition claims the tab and records its undo: the tab it
 replaced put back in the same place, or `drgnx-wb-undefine-tab' — only while the tab is still the one
 defined here.  Two modules defining the same tab may be torn down in either order."
@@ -47,7 +53,8 @@ defined here.  Two modules defining the same tab may be torn down in either orde
          (spec (alist-get area drgnx-wb--areas)) (tabs (copy-alist (plist-get spec :tabs)))
          (previous (cdr (assq tab tabs)))
          (props (list :title (or title (capitalize (symbol-name tab))) :icon icon :placeholder placeholder
-                      :start start :actions actions :companions companions)))
+                      :start start :actions actions :companions companions
+                      :empty empty :contextual contextual :content content)))
     (if (assq tab tabs) (setf (alist-get tab tabs) props)
       (setq tabs (append tabs (list (cons tab props)))))         ; in the order they are defined
     (setf (alist-get area drgnx-wb--areas) (plist-put spec :tabs tabs))
@@ -167,8 +174,23 @@ back at the end it has then, so it follows again."
                     (with-current-buffer (get-buffer-create (format " *drgnx %s*" (or tab area)) t)
                       (special-mode)
                       (current-buffer))))))
+    (drgnx-area--say-empty buf (plist-get (alist-get tab (plist-get (alist-get area drgnx-wb--areas) :tabs)) :empty))
     (with-current-buffer buf (setq drgnx-area--placeholder-p t))
     buf))
+
+(defun drgnx-area--content (area tab)
+  "TAB's `:content' buffer (`drgnx-wb-define-tab'), or nil: none defined, its module not loaded, or it gave no buffer."
+  (when-let* ((fn (plist-get (alist-get tab (plist-get (alist-get area drgnx-wb--areas) :tabs)) :content))
+              ((functionp fn)))
+    (let ((b (ignore-errors (funcall fn)))) (and (buffer-live-p b) b))))
+
+(defun drgnx-area--say-empty (buffer text)
+  "Put TEXT (a tab's :empty line) in BUFFER when it is a blank placeholder of ours, and draw no cursor in it."
+  (with-current-buffer buffer
+    (when (and (stringp text) (zerop (buffer-size)) (derived-mode-p 'special-mode))
+      (let ((inhibit-read-only t))
+        (insert (propertize text 'face 'shadow) "\n")))
+    (when (derived-mode-p 'special-mode) (setq-local cursor-type nil))))
 
 (defun drgnx-area--content-p (buffer)
   (and (buffer-live-p buffer) (not (buffer-local-value 'drgnx-area--placeholder-p buffer))))
@@ -189,6 +211,14 @@ it lives, else the view's buffer of the twin it was, else nil."
         ((buffer-live-p (nth 3 saved)) (nth 3 saved))))
 
 ;;;; The tab row
+
+(defun drgnx-area--tab-listed-p (area tab shown)
+  "Whether TAB is in AREA's tab row: always, but for a contextual tab (`drgnx-wb-define-tab'), which is there while it
+is SHOWN or has a buffer of its own."
+  (or (not (plist-get (alist-get tab (plist-get (alist-get area drgnx-wb--areas) :tabs)) :contextual))
+      (eq tab shown)
+      (drgnx-area--content-p
+       (drgnx-area--saved-buffer (alist-get tab (plist-get (drgnx-area--state area) :tabs))))))
 
 (defun drgnx-area--tab-click (event)
   "Show the tab clicked in an area's tab row; a tab with no buffer of its own and a START (`drgnx-wb-define-tab')
@@ -237,7 +267,7 @@ its own title (`drgnx-area-own-title')."
                                            (plist-get (cdr tab) :title) " ")
                                    'face face 'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
                                    'local-map drgnx-area--tab-map 'help-echo "Show this tab")))
-                   tabs " ")
+                   (seq-filter (lambda (tab) (drgnx-area--tab-listed-p area (car tab) shown)) tabs) " ")
         (drgnx-area--actions actions area))
        area))))
 
@@ -341,7 +371,8 @@ Returns the window — the same one across tab switches."
   (let* ((w (drgnx-wb-area-window area)) (tab (or tab (drgnx-wb-area-tab area))))
     (when w (drgnx-area--remember area w))
     (let* ((saved (alist-get tab (plist-get (drgnx-area--state area) :tabs)))
-           (buffer (or buffer (drgnx-area--saved-buffer saved) (drgnx-area--placeholder area tab))))
+           (buffer (or buffer (drgnx-area--saved-buffer saved) (drgnx-area--content area tab)
+                       (drgnx-area--placeholder area tab))))
       (if w (drgnx-wb-set-area-buffer w buffer)
         (setq w (drgnx-area--create area buffer)))
       (when (eq (car saved) buffer)
@@ -563,16 +594,65 @@ given) instead of selecting the placeholder: it makes one, which the rules show 
 
 (drgnx-wb-define-area 'panel :side 'bottom :size 12)
 (drgnx-wb-define-area 'right :side 'right :size 50 :lone t)
-(dolist (tab '(problems output results terminal help)) (drgnx-wb-define-tab 'panel tab))
+(defconst drgnx-area--output-modes '(messages-buffer-mode debugger-mode ert-results-mode process-menu-mode timer-list-mode)
+  "Major modes of the buffers the Output tab shows: its channels.")
+(defconst drgnx-area--output-names "\\`\\*\\(Warnings\\|Backtrace\\|Messages\\|timer-list\\|Process List\\)\\*\\'"
+  "Names of the buffers the Output tab shows: its channels.")
+
+(defun drgnx-wb-output-channels ()
+  "The live buffers the Output tab shows, by name: its channels."
+  (seq-filter (lambda (b) (and (buffer-live-p b)
+                               (or (string-match-p drgnx-area--output-names (buffer-name b))
+                                   (apply #'provided-mode-derived-p (buffer-local-value 'major-mode b)
+                                          drgnx-area--output-modes))))
+              (buffer-list)))
+
+(defun drgnx-wb-output-select-channel ()
+  "Show one of the Output tab's channels (Messages, Warnings, Backtrace, …) in the panel, chosen by name."
+  (interactive)
+  (let* ((names (mapcar (lambda (b) (cons (string-trim (buffer-name b) "[ *]+" "[ *]+") b)) (drgnx-wb-output-channels)))
+         (pick (if names (completing-read "Output channel: " (mapcar #'car names) nil t)
+                 (user-error "Nothing has been logged yet")))
+         (buf (cdr (assoc pick names))))
+    (drgnx-wb-area-show 'panel 'output buf)
+    (drgnx-wb-area-redraw 'panel)))
+
+(defvar drgnx-area--channel-map
+  (let ((m (make-sparse-keymap))) (define-key m [header-line mouse-1] #'drgnx-wb-output-select-channel) m)
+  "The Output tab's channel chip's click.")
+
+(defun drgnx-area--output-actions ()
+  "The Output tab's own piece: the channel it shows, a click picks another."
+  (when-let* ((w (drgnx-wb-area-window 'panel)) (buf (window-buffer w))
+              ((memq buf (drgnx-wb-output-channels))))
+    (propertize (concat " " (string-trim (buffer-name buf) "[ *]+" "[ *]+") " " (drgnx-look-icon 'chevron-down nil 14) " ")
+                'face 'drgnx-chip-quiet 'mouse-face 'highlight
+                'help-echo "The Output channel shown: click for another" 'local-map drgnx-area--channel-map)))
+
+(defun drgnx-area--problems-content ()
+  "The Problems tab's buffer: the view listing the project's problems, drawn now."
+  (when (fboundp 'drgnx-problems-buffer) (drgnx-problems-buffer)))
+
+(defun drgnx-area--output-content ()
+  "The Output tab's first channel: the one logged most recently of those that exist, else Messages."
+  (or (car (drgnx-wb-output-channels)) (get-buffer-create "*Messages*")))
+
+(drgnx-wb-define-tab 'panel 'problems :content #'drgnx-area--problems-content
+                     :empty "No problems have been detected in the workspace.")
+(drgnx-wb-define-tab 'panel 'output :actions #'drgnx-area--output-actions :content #'drgnx-area--output-content
+                     :empty "Nothing has been logged yet. Messages, warnings and backtraces appear here; Output: Select Channel picks one.")
+(drgnx-wb-define-tab 'panel 'results :empty "No results yet. The results of a search, a compile or a find-usages appear here.")
+(drgnx-wb-define-tab 'panel 'terminal)
+(drgnx-wb-define-tab 'panel 'help :empty "No help is open. Describe a command or a key, or press F1, and it appears here.")
 
 (pcase-dolist (`(,matcher ,tab)
-               '(((help-mode apropos-mode Info-mode Man-mode shortdoc-mode finder-mode) help)
+               `(((help-mode apropos-mode Info-mode Man-mode shortdoc-mode finder-mode) help)
                  ("\\`\\*\\(Help\\|info\\|eldoc.*\\|Apropos\\|Shortdoc .*\\|Finder.*\\|Holidays\\)\\*\\'" help)
                  ((compilation-mode occur-mode xref--xref-buffer-mode) results)
                  ((drgnx-problems-mode flymake-diagnostics-buffer-mode flymake-project-diagnostics-mode) problems)
                  ("\\`\\*Flycheck errors\\*\\'" problems)
-                 ((messages-buffer-mode debugger-mode ert-results-mode process-menu-mode timer-list-mode) output)
-                 ("\\`\\*\\(Warnings\\|Backtrace\\|Messages\\|timer-list\\|Process List\\)\\*\\'" output)
+                 (,drgnx-area--output-modes output)
+                 (,drgnx-area--output-names output)
                  ((shell-mode eshell-mode drgnx-term-mode term-mode vterm-mode inferior-emacs-lisp-mode comint-mode) terminal)
                  ;; shell and eshell show their buffer before setting its mode.
                  ("\\`\\*\\(shell\\|eshell\\|ielm\\|terminal\\|ansi-term\\|vterm\\)\\*\\(<[0-9]+>\\)?\\'" terminal)))

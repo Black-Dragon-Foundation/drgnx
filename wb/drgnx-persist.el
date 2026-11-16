@@ -151,6 +151,12 @@ window, so the state brings back no stray group in the bar's place."
       (setq w (window-parent w)))
     (if (and w (not (window-with-parameter 'window-side nil nil 'nomini))) w (window-main-window))))
 
+(defun drgnx-persist--shown-file (g)
+  "The file editor group G shows, else the last file it showed (a start page or a Work map in front does not lose
+the file you were in), else nil."
+  (or (buffer-file-name (window-buffer g))
+      (seq-some (lambda (e) (and (buffer-live-p (car e)) (buffer-file-name (car e)))) (window-prev-buffers g))))
+
 (defun drgnx-persist--workbench-state (frame)
   (with-selected-frame (or frame (selected-frame))
     (let ((dock (car (drgnx-wb--dock-windows))))
@@ -162,7 +168,7 @@ window, so the state brings back no stray group in the bar's place."
             :main (window-state-get (drgnx-persist--main-window) t)
             :groups (mapcar (lambda (g) (list :tabs (or (nth 2 (assq g drgnx-persist--pending))   ; still loading
                                                         (delq nil (mapcar #'buffer-file-name (drgnx-chrome-tabs g))))
-                                              :shown (buffer-file-name (window-buffer g))
+                                              :shown (drgnx-persist--shown-file g)
                                               :px (window-pixel-width g)))
                             (drgnx-groups-list))
             :extra (drgnx-persist--extra)))))

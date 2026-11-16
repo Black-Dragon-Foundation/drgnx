@@ -17,6 +17,7 @@
 (require 'outline)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-setting)
 (declare-function treesit-node-on "treesit.c")
 (declare-function treesit-node-start "treesit.c")
 (declare-function treesit-node-end "treesit.c")
@@ -282,6 +283,54 @@ kill ring, so a hung owner or a terminal that refuses the read costs its timeout
   (deactivate-mark)
   (let ((interprogram-paste-function nil)) (yank arg)))
 
+(defvar drgnx-editing-tab-size)
+(defvar drgnx-editing-word-wrap)
+(declare-function drgnx-look-fonts--settings-apply "drgnx-look-fonts")
+(defvar drgnx-face-line-wrap)
+(declare-function drgnx-face--apply-line-wrap "drgnx-face")
+
+;;;; The Editor settings a VS Code user looks for first
+
+(defun drgnx-editing--font-size-p (v) "Non-nil when V is a code size in pixels." (and (numberp v) (<= 6 v 72)))
+(defun drgnx-editing--tab-size-p (v) "Non-nil when V is a tab size in columns." (and (integerp v) (<= 1 v 16)))
+
+(defun drgnx-editing--apply-font-size ()
+  "`:apply' of `drgnx-editing-font-size': the code font's size is redrawn (ui/look reads the setting as a layer)."
+  (when (fboundp 'drgnx-look-fonts--settings-apply) (drgnx-look-fonts--settings-apply)))
+
+(drgnx-defsetting drgnx-editing-font-size 13.5
+  "The size of the code font in pixels (VS Code's editor.fontSize).  13.5 is drgnx's own code size; the code font
+role (`drgnx-look-font-code') still sets a size of its own on top.  A change applies at once."
+  :type 'number :group 'drgnx :scope 'global :agents 'never :apply #'drgnx-editing--apply-font-size
+  :schema '(pred drgnx-editing--font-size-p "a size in pixels from 6 to 72"))
+
+(defvar drgnx-editing--tab-saved nil "(TAB-WIDTH STANDARD-INDENT) the defaults `drgnx-editing-tab-size' replaced.")
+
+(defun drgnx-editing--apply-tab-size ()
+  "`:apply' of `drgnx-editing-tab-size': the default `tab-width' and `standard-indent', as VS Code's editor.tabSize
+sets how many columns a tab and an indent are.  Buffers whose mode sets an indent of its own keep it."
+  (unless drgnx-editing--tab-saved
+    (setq drgnx-editing--tab-saved (list (default-value 'tab-width) (default-value 'standard-indent))))
+  (setq-default tab-width drgnx-editing-tab-size standard-indent drgnx-editing-tab-size))
+
+(drgnx-defsetting drgnx-editing-tab-size 4
+  "How many columns a tab character, and one level of indent where the mode has none of its own, take (VS Code's
+editor.tabSize).  A change applies at once.  A mode that sets its own indent keeps it."
+  :type 'integer :group 'drgnx :scope 'global :agents 'never :apply #'drgnx-editing--apply-tab-size
+  :schema '(pred drgnx-editing--tab-size-p "a number of columns from 1 to 16"))
+
+(defun drgnx-editing--apply-word-wrap ()
+  "`:apply' of `drgnx-editing-word-wrap': `drgnx-face-line-wrap' follows it (`on' is `word', `off' is `truncate')."
+  (when (featurep 'drgnx-face)
+    (customize-set-variable 'drgnx-face-line-wrap (if (eq drgnx-editing-word-wrap 'on) 'word 'truncate))))
+
+(drgnx-defsetting drgnx-editing-word-wrap 'on
+  "Whether a line longer than its window continues on the next row, breaking at a word (`on'), or runs off the edge
+(`off'), as VS Code's editor.wordWrap.  drgnx wraps by default.  Toggle Word Wrap flips it for one buffer.  A change
+applies at once."
+  :type '(choice (const on) (const off)) :group 'drgnx :scope 'global :agents 'never
+  :apply #'drgnx-editing--apply-word-wrap :schema '(enum on off))
+
 (drgnx-module-define 'editor/editing
                      :doc "Fold, change case, expand and shrink the selection, go to line."
                      :stage 'startup
@@ -323,7 +372,14 @@ kill ring, so a hung owner or a terminal that refuses the read costs its timeout
                                         (edit-paste "Paste" drgnx-editing-paste "Paste the last copy, replacing the selection")))
                          (drgnx-command-define id :category (if (string-prefix-p "go-" (symbol-name id)) "Go" "Edit") :title title
                                                :command fn :scope 'editing :doc doc))
-                       (add-to-list 'emulation-mode-map-alists 'drgnx-editing--region-alist)))
+                       (drgnx-editing--apply-tab-size)
+                       (add-to-list 'emulation-mode-map-alists 'drgnx-editing--region-alist))
+                     :teardown
+                     (lambda ()
+                       (when drgnx-editing--tab-saved
+                         (setq-default tab-width (nth 0 drgnx-editing--tab-saved)
+                                       standard-indent (nth 1 drgnx-editing--tab-saved))
+                         (setq drgnx-editing--tab-saved nil))))
 
 (provide 'drgnx-editing)
 ;;; drgnx-editing.el ends here

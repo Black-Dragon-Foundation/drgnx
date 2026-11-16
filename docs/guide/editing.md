@@ -6,6 +6,17 @@ module waits.
 
 In a large file, sticky scroll, guides, blame and the language server stay off.
 
+## Font size, tab size and word wrap
+
+The three settings a VS Code user looks for first are at the top of Settings → Editor, with VS Code's meanings and
+changes apply at once:
+
+| Setting | VS Code's | Default | What it does |
+|---|---|---|---|
+| `drgnx-editing-font-size` | `editor.fontSize` | 13.5 | The code font's size in pixels. 13.5 is drgnx's own code size (VS Code's is 14); the code font role (`drgnx-look-font-code`) can still set a size of its own, which wins. |
+| `drgnx-editing-tab-size` | `editor.tabSize` | 4 | Columns a tab takes, and an indent where the mode has none of its own. A mode with its own indent keeps it. |
+| `drgnx-editing-word-wrap` | `editor.wordWrap` | `on` | `on` continues a long line on the next row at a word; `off` lets it run past the edge. drgnx wraps by default (VS Code does not). Toggle Word Wrap flips it for one buffer. |
+
 ## Language support (tree-sitter)
 
 Every language is a **language pack** (`packs/` in drgnx: Python, JavaScript, TypeScript, TSX, Go, Rust, Java, C, C++,

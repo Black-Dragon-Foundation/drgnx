@@ -218,7 +218,19 @@ fn a_terminal_header_has_no_images() {
 fn the_strip_has_a_pill_per_step_type_the_open_ones_raised() {
     let rows = build(&snap(json!({})), 1000, None).0;
     let strip = rows.iter().find(|r| r.key == STRIP).expect("the strip");
-    assert!(strip.text.starts_with(" Open: "), "{:?}", strip.text);
+    assert!(
+        strip.text.starts_with(" Expand steps: "),
+        "{:?}",
+        strip.text
+    );
+    // each pill says what a click does, so the strip reads as a switch, not a label
+    let helps = props(strip, "help-echo");
+    assert!(
+        helps.iter().any(|(v, _)| v
+            .as_str()
+            .is_some_and(|h| h.starts_with("Click to expand or collapse"))),
+        "{helps:?}"
+    );
     for t in STEP_TYPES {
         assert!(strip.text.contains(&format!(" {t} ")), "{:?}", strip.text);
     }

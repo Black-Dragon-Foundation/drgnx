@@ -109,7 +109,7 @@ when the hub sends the first rows. The panel draws no steps of its own.
 
 ## What opens
 
-The strip under the chips reads **Open:** and has a pill for each step type (thinking, read, search, edit, execute,
+The strip under the chips reads **Expand steps:** and has a pill for each step type (thinking, read, search, edit, execute,
 fetch, other), a ring, filled when it is on; **make default** is at its right end. In a narrow panel the pills go on as
 many lines as they need, and they follow the panel's width when you resize it. A type that is on shows the detail of its
 steps; a click on its pill or `T` flips one, `TAB` opens or folds the step at point whatever the toggles say.

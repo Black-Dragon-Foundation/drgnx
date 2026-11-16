@@ -1701,7 +1701,8 @@ nothing.  In a pixel bar the mark is the `git-branch' icon."
                 (and ahead (> ahead 0) (format " %s%d" (drgnx-statusbar--glyph 'ahead) ahead))
                 (and behind (> behind 0) (format " %s%d" (drgnx-statusbar--glyph 'behind) behind))))
     (when (and (stringp vc-mode) (string-match "\\`[ ]*[[:alpha:]]+[-:@!?]\\(.+\\)" (substring-no-properties vc-mode)))
-      (concat (drgnx-statusbar--glyph 'branch) " " (match-string 1 (substring-no-properties vc-mode))))))
+      ;; the same mark as the cache's branch: the glyph at one scale and the icon at another was the audit's S3
+      (concat (drgnx-statusbar--icon 'git-branch 'branch) " " (match-string 1 (substring-no-properties vc-mode))))))
 
 (defun drgnx-statusbar--flymake-count (type)
   "How many problems of TYPE flymake counts in this buffer (flymake caches the count until diagnostics change)."
