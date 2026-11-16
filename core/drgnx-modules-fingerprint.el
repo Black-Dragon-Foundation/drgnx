@@ -189,7 +189,8 @@ whose value is not what its name says is skipped.  About 12 ms compiled."
      (lambda (s)
        (when (fboundp s)
          (advice-mapc (lambda (f _props) (push (cons (list 'advice s) f) advice)) s))
-       (when (and (default-boundp s) (eq (indirect-variable s) s))
+       ;; a keyword is bound to itself: `:after-hook' is no hook
+       (when (and (default-boundp s) (not (keywordp s)) (eq (indirect-variable s) s))
          (let* ((name (symbol-name s)) (own (string-prefix-p "drgnx-" name)))
            (cond
             ((drgnx-modules-fingerprint--hook-name-p name)

@@ -76,6 +76,9 @@ string-pixel-width uses)")
  (:what "\\`\\(?:hook \\(?:hack-dir-local-get-variables-functions\\|drgnx-settings-[a-z-]+\\|drgnx-keys-after-apply-functions\\)\\|advice \\(?:hack-local-variables-filter\\|hack-dir-local--get-variables\\)\\) \\+"
   :source "\\`\\(?:core\\|wb\\|modules\\)/"
   :why "drgnx's settings and keys libraries wiring themselves into Emacs's file-local variable machinery and their own hooks when they load; a library is never unloaded")
+ (:what "\\`\\(?:hook after-load-functions\\|advice [^ ]+\\) \\+drgnx-keys--"
+  :source "\\`core/drgnx-keys\\.el\\'"
+  :why "the keys core's redirect, installed when drgnx-keys loads and on for the session (`drgnx-keys--install-redirect'; removed only by unload-feature): a GUI file whose session loads the keys core lazily (a bare frame, then a module that requires it) sees it arrive")
  (:what "\\`advice drgnx-hub--connect-socket \\+"
   :source "\\`harness/"
   :why "the harness's own hub-caller bookkeeping, installed when drgnx-uitest loads")
