@@ -50,6 +50,73 @@
                                    (should-not (drgnx-work-client-views))))))
     (should-not (get-buffer name))))
 
+(defmacro drgnx-work-space-test--with-hub (up &rest body)
+  "Run BODY, in the Work space module, with the map client's calls caught in `calls' ((METHOD . PARAMS) …, newest
+first), the hub's general calls in `hub-calls' ((METHOD PARAMS CALLBACK) …, newest first), and the hub connection
+counting as up when UP."
+  (declare (indent 1))
+  `(let (calls hub-calls)
+     (drgnx-test-with-modules '(tools/work-space) :strict t
+                              (cl-letf (((symbol-function 'drgnx-work-client--call)
+                                         (lambda (method params &rest _) (push (cons method params) calls) ,up))
+                                        ((symbol-function 'drgnx-work-space--hub-up-p) (lambda () ,up))
+                                        ((symbol-function 'drgnx-hub-call)
+                                         (lambda (method params callback &rest _) (push (list method params callback) hub-calls) 1)))
+                                ,@body))))
+
+(ert-deftest drgnx-work-space/a-map-that-cannot-load-says-why-in-its-buffer ()
+  ;; UX audit (2026-11-16): the Work map stayed blank on a hub that was not there; only the mode line said
+  ;; "reconnecting".  The reason is on the map itself now.
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
+  (drgnx-work-space-test--with-hub nil
+    (cl-letf (((symbol-function 'drgnx-hub-start-for-command)
+               (lambda (on-fail) (funcall on-fail "No drgnx hub runs"))))
+      (let ((buf (drgnx-work-space-open (list :id "workspace:000000000004" :roots (list temporary-file-directory)) t)))
+        (should (string-search "No drgnx hub runs" (format "%s" (buffer-local-value 'header-line-format buf))))))))
+
+(ert-deftest drgnx-work-space/a-map-waiting-for-the-hub-says-so-until-its-rows-come ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
+  (drgnx-work-space-test--with-hub nil
+    (cl-letf (((symbol-function 'drgnx-hub-start-for-command) #'ignore))
+      (let ((buf (drgnx-work-space-open (list :id "workspace:000000000005" :roots (list temporary-file-directory)) t)))
+        (should (string-search "hub" (format "%s" (buffer-local-value 'header-line-format buf))))
+        (drgnx-work-client--status (drgnx-work-client--get "workspace:000000000005") (quote live))
+        (should-not (buffer-local-value 'header-line-format buf))))))
+
+(ert-deftest drgnx-work-space/the-first-open-adopts-the-roots-records-and-draws-them ()
+  ;; "drgnx takes over": opening Work imports each root's specs and plans; when the hub answers, the map shows
+  ;; finished items too (specs and plans are live only under an agent) and subscribes again to read the store.
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
+  (drgnx-work-space-test--with-hub t
+    (cl-letf (((symbol-function 'drgnx-hub-start-for-command) #'ignore))
+      (let* ((root (file-name-as-directory temporary-file-directory))
+             (buf (drgnx-work-space-open (list :id "workspace:000000000006" :roots (list root)) t))
+             (import (assoc "records/import" hub-calls)))
+        (should import)
+        (should (equal (directory-file-name root) (plist-get (nth 1 import) :root)))
+        (should (string-search "Adopting" (format "%s" (buffer-local-value 'header-line-format buf))))
+        (setq calls nil)
+        (funcall (nth 2 import) (list :dry_run :false :files (vector (list :path "a.md" :kind "spec" :entities 1 :ops 1))) nil)
+        (should-not (buffer-local-value 'header-line-format buf))
+        (should (assoc "work/map/subscribe" calls))
+        (should (eq t (plist-get (plist-get (cdr (assoc "work/map/subscribe" calls)) :filters) :finished)))
+        ;; the same buffer asks once
+        (setq hub-calls nil)
+        (drgnx-work-space-open (list :id "workspace:000000000006" :roots (list root)) t)
+        (should-not (assoc "records/import" hub-calls))))))
+
+(ert-deftest drgnx-work-space/a-folder-without-records-keeps-its-filters ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
+  (drgnx-work-space-test--with-hub t
+    (cl-letf (((symbol-function 'drgnx-hub-start-for-command) #'ignore))
+      (let* ((root (file-name-as-directory temporary-file-directory))
+             (buf (drgnx-work-space-open (list :id "workspace:000000000007" :roots (list root)) t))
+             (import (assoc "records/import" hub-calls)))
+        (setq calls nil)
+        (funcall (nth 2 import) (list :dry_run :false :files []) nil)
+        (should-not (buffer-local-value 'header-line-format buf))
+        (should-not (assoc "work/map/subscribe" calls))))))
+
 (defun drgnx-work-space-test--bound-ids (profile)
   "The command ids PROFILE (an alist entry of the loaded profiles) has a row for."
   (mapcar #'car (plist-get (cdr profile) :bind)))

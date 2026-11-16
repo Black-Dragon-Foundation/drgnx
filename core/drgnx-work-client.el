@@ -122,6 +122,12 @@ hub sends what the change makes (the view's patches) before its answer, on the s
   "Close every view (the module's teardown)."
   (dolist (id (drgnx-work-client-views)) (drgnx-work-client-close id)))
 
+(defun drgnx-work-client-resubscribe (id)
+  "Ask the hub for view ID's rows again, with what it saved: the hub reads its store when a view subscribes."
+  (when-let* ((view (drgnx-work-client--get id)))
+    (condition-case nil (drgnx-work-client--subscribe view)
+      (error (drgnx-work-client--status view 'reconnecting)))))
+
 (defun drgnx-work-client-connected ()
   "A `drgnx-hub-connected-functions' handler: every view subscribes again (the hub kept nothing)."
   (maphash (lambda (_ view) (condition-case nil (drgnx-work-client--subscribe view)
