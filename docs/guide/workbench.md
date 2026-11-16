@@ -166,7 +166,8 @@ Refresh overtook is not shown. A remote folder is listed as before.
 **Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, at the row's right edge in
 the colours of your theme's version-control faces; the name itself stays in the text colour. A folder with changes
 inside shows `●` (also one whose only change is a new file; a new folder itself shows `U`), and so does a root;
-ignored files are dimmed.
+ignored files are dimmed. A folder holding its own repository (its own `.git`) shows that repository's status, as VS
+Code does: a repository around it that ignores it doesn't dim it.
 
 **Rows**: an icon, 6 px of room, then the name. With one root the tree starts at the root's entries (the sidebar's
 header names the project); with several, each root has a row with its name as it is. One background `git status` per
