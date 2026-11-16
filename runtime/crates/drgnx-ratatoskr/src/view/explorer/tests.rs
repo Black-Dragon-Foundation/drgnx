@@ -559,3 +559,16 @@ fn overlapping_roots_list_each_path_once() {
         ]
     );
 }
+
+/// A file revealed in a big tree (the open file, at a start) moves the window to show it, from the root while it fits
+/// in the first window: the user sees the tree, the root and the folders down to the file, not a slice of its folder
+/// (the user's Explorer, 2026-11-16: 150 rows from the middle of drgnx/core/, nothing above them).  Past the first
+/// window it starts a quarter window above the file, the folders above it still in the model; shown already, it stays.
+#[test]
+fn a_revealed_file_keeps_the_tree_above_it() {
+    assert_eq!(window_around(2000, 150, None, 120), None); // shown from the root already
+    assert_eq!(window_around(2000, 150, Some(900), 120), Some(0)); // fits the first window: from the root
+    assert_eq!(window_around(2000, 150, Some(900), 149), Some(0));
+    assert_eq!(window_around(2000, 150, None, 1000), Some(1000 - 37)); // deeper: a quarter window above it
+    assert_eq!(window_around(2000, 150, Some(980), 1000), None);
+}
