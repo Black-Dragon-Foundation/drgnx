@@ -429,6 +429,16 @@ fn live_n(tx: &Tx<'_>, id: &str) -> Result<Option<i64>, WriteError> {
 }
 
 /// Retire every live entity whose source is SOURCE (except KEEP); how many.
+/// The file a scanner-made entity (id `plan:/ABS`, `spec:/ABS`, `task:/ABS#N`, `step:/ABS#N.M`) is of, else none.
+fn legacy_file<'a>(id: &'a str, kind: &str) -> Option<&'a str> {
+    if !matches!(kind, "plan" | "spec" | "task" | "step") {
+        return None;
+    }
+    let (_, rest) = id.split_once(':')?;
+    rest.starts_with('/')
+        .then(|| rest.split('#').next().unwrap_or(rest))
+}
+
 /// The files the importer holds records of: `data.records.file` of the live entities it made (`...:rec-HASH-...`).
 fn importer_files(tx: &mut Tx<'_>) -> Result<HashSet<String>, WriteError> {
     let mut stmt = tx.sql().prepare(
@@ -686,18 +696,26 @@ pub fn put_with(
         }
     }
     // A plan or spec whose file the importer holds (`records/import`: `plan:rec-…`, `data.records.file`) is the
-    // importer's: the scanner's own `plan:/abs/path` of it would be a second node for one file on the map.  Its sent
-    // entity is left out, and `retire_source` below retires the one stored.
+    // importer's, with its tasks (`task:rec-…`): the scanner's own `plan:/abs/path` of it, and its `task:/abs/path#N`
+    // and `step:/abs/path#N.M`, would be a second copy of one file on the map.  They are left out of the request (with
+    // the links and updates that name them), and `retire_source` below retires the ones stored.
     let held = importer_files(tx)?;
+    let mut dropped: HashSet<String> = HashSet::new();
     if !held.is_empty() {
         for s in accepted.iter_mut() {
             if let Some(es) = s.entities.as_mut() {
                 es.0.retain(|e| {
-                    !(matches!(e.kind.as_str(), "plan" | "spec")
-                        && e.id
-                            .as_str()
-                            .split_once(':')
-                            .is_some_and(|(_, rest)| rest.starts_with('/') && held.contains(rest)))
+                    let mine = legacy_file(e.id.as_str(), e.kind.as_str())
+                        .is_some_and(|file| held.contains(file));
+                    if mine {
+                        dropped.insert(e.id.to_string());
+                    }
+                    !mine
+                });
+            }
+            if let Some(ls) = s.links.as_mut() {
+                ls.0.retain(|l| {
+                    !dropped.contains(l.src.as_str()) && !dropped.contains(l.dst.as_str())
                 });
             }
         }
@@ -724,6 +742,12 @@ pub fn put_with(
     }
     let mut later: Vec<ParsedUpdate> = Vec::new();
     for u in req.updates.map(|u| u.into_inner()).unwrap_or_default() {
+        // an update of an entity left out, in this request or an earlier one (a ledger sent alone)
+        if legacy_file(u.id.as_str(), kind_of(&u.id).unwrap_or(""))
+            .is_some_and(|f| held.contains(f))
+        {
+            continue;
+        }
         if let Err(why) = check_update(deny, &u) {
             answer.refused.push(Refusal {
                 source: None,

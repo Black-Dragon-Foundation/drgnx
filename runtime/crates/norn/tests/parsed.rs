@@ -1041,7 +1041,7 @@ fn a_plan_the_importer_holds_is_not_stored_again_from_the_scan() {
         1
     );
     importer_plan(&mut c, &f.plan);
-    // the next scan sends it again: the scanner's plan is retired and not put back; its task and step stay
+    // the next scan sends it again: the scanner's plan, task and step are retired and not put back
     put(&mut c, &f.deny, json!({"sources": [plan_source(&f.plan)]}));
     let live: Vec<String> = c
         .prepare("select id from entity where kind = 'plan' and retired_tx is null")
@@ -1051,11 +1051,18 @@ fn a_plan_the_importer_holds_is_not_stored_again_from_the_scan() {
         .map(Result::unwrap)
         .collect();
     assert_eq!(live, ["plan:rec-38377cd08b08-12cc5f9a0c03"]);
+    // its task and step went with it, and a ledger's update of the task is dropped, not refused
     assert_eq!(
         count(
             &c,
-            "select count(*) from entity where kind = 'task' and retired_tx is null"
+            "select count(*) from entity where kind in ('task', 'step') and retired_tx is null"
         ),
-        1
+        0
     );
+    let a = put(
+        &mut c,
+        &f.deny,
+        json!({"updates": [{"id": format!("task:{}#1", f.plan), "status": "done"}]}),
+    );
+    assert!(a.refused.is_empty(), "{a:?}");
 }
