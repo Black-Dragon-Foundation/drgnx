@@ -75,6 +75,60 @@ impl Hub {
         Ok(out)
     }
 
+    /// An agent's write the editor will apply (a paired chat's write to an open buffer) was caused by CAUSE: the
+    /// editor's batch, which names only `agent:SESSION#STEP`, records it with the whole cause.
+    pub fn note_cause(&self, cause: verdandi::Cause) {
+        if cause.session.is_none() || cause.step.is_none() {
+            return;
+        }
+        let mut g = self.lock();
+        if g.causes.len() >= super::CAUSES_KEPT {
+            g.causes.pop_front();
+        }
+        g.causes.push_back(cause);
+    }
+
+    /// Why record OP was made (its cause as the history holds it).
+    pub fn cause_of(&self, op: i64) -> Result<verdandi::Cause> {
+        Ok(self.lock().h.op(OpId(op))?.cause)
+    }
+
+    /// The hunk under LINE (1-based) of REL on TREE's branch: the record that wrote the line's text (the first of its
+    /// characters that one wrote; the line break counts for an empty line) and the index of that record's hunk which
+    /// holds the line.  None when no record wrote that line (the base's text) or the line is past the text.
+    pub fn hunk_at(&self, tree: &Tree, rel: &str, line: usize) -> Result<Option<(OpId, usize)>> {
+        let text = self.text(tree, rel)?.unwrap_or_default();
+        let Some(start) = line_start(&text, line) else {
+            return Ok(None);
+        };
+        let len = text[start..]
+            .find('\n')
+            .map_or(text.len() - start, |e| e + 1);
+        let (from, to) = (
+            text[..start].chars().count(),
+            text[..start + len].chars().count(),
+        );
+        let Some(op) = self
+            .blame(tree, rel, from..to)?
+            .first()
+            .map(|b| OpId(b.record))
+        else {
+            return Ok(None);
+        };
+        let mut g = self.lock();
+        let branch = g.branch(tree)?;
+        let line = i64::try_from(line).unwrap_or(i64::MAX);
+        Ok(g.h
+            .op_hunks(branch, op)?
+            .into_iter()
+            .find(|h| {
+                h.path == rel
+                    && i64::try_from(h.start_line).unwrap_or(i64::MAX) <= line
+                    && line <= i64::try_from(h.end_line).unwrap_or(0)
+            })
+            .map(|h| (op, h.index)))
+    }
+
     /// Revert hunk INDEX of record OP in REL of TREE as the user's operations at NOW.  With an editor buffer tracking
     /// the file, the edits go to it; else the hub applies them and writes the file, refused as stale when the disk
     /// is not what the history holds.
@@ -195,14 +249,30 @@ pub async fn op_hunks(
         .map(|s| s.trim_start_matches("session:").to_owned());
     // the time is read here: a blocking thread does not carry the virtual clock
     let now = crate::clock::wall_secs();
-    let listed = crate::clock::blocking(move || hub.op_hunks(&tree, p.op, session.as_deref(), now))
-        .await
-        .map_err(|e| internal(e.to_string()))?
-        .map_err(store)?;
+    let listed = crate::clock::blocking(move || {
+        let listed = hub.op_hunks(&tree, p.op, session.as_deref(), now)?;
+        // each record's cause once, beside its hunks: the Changes view and review need no call per hunk
+        let mut causes = std::collections::BTreeMap::new();
+        for (h, _) in &listed {
+            if let std::collections::btree_map::Entry::Vacant(e) = causes.entry(h.op.0) {
+                e.insert(hub.cause_of(h.op.0)?);
+            }
+        }
+        Ok::<_, Error>((listed, causes))
+    })
+    .await
+    .map_err(|e| internal(e.to_string()))?
+    .map_err(store)?;
+    let (listed, causes) = listed;
     Ok(w::OpHunks {
         hunks: listed
             .into_iter()
             .map(|(h, by)| w::OpHunk {
+                cause: causes
+                    .get(&h.op.0)
+                    .cloned()
+                    .map(wire_cause)
+                    .unwrap_or_default(),
                 op: h.op.0,
                 path: h.path,
                 index: n(h.index),
@@ -218,6 +288,145 @@ pub async fn op_hunks(
                 undone_by: undone_by(by),
             })
             .collect(),
+    })
+}
+
+/// Where LINE (1-based) of TEXT starts, in bytes; none past the text (the empty line after a last line break is no line).
+fn line_start(text: &str, line: usize) -> Option<usize> {
+    let mut at = 0;
+    for _ in 1..line {
+        at += text[at..].find('\n')? + 1;
+    }
+    (at < text.len()).then_some(at)
+}
+
+/// An entity's kind, title and body.
+type EntityText = (String, Option<String>, Option<String>);
+
+fn wire_cause(c: verdandi::Cause) -> w::OpCause {
+    w::OpCause {
+        session: c.session,
+        step: c.step,
+        task: c.task,
+        decision: c.decision,
+    }
+}
+
+/// `history/provenance`.
+pub async fn provenance(
+    f: &Front,
+    c: &Caller,
+    p: w::ProvenanceParams,
+) -> std::result::Result<w::Provenance, WireError> {
+    user_only(c)?;
+    let (hub, tree) = tree_of(f, &p.worktree)?;
+    let (op, path, index) = match (p.path, p.line, p.op, p.index) {
+        (Some(path), Some(line), None, None) => {
+            let line = usize::try_from(line)
+                .ok()
+                .filter(|l| *l > 0)
+                .ok_or_else(|| invalid("line", "lines count from 1"))?;
+            let (h, rel) = (hub.clone(), path.clone());
+            let t = tree.clone();
+            let found = crate::clock::blocking(move || h.hunk_at(&t, &rel, line))
+                .await
+                .map_err(|e| internal(e.to_string()))?
+                .map_err(store)?;
+            let (op, index) = found.ok_or_else(|| {
+                invalid(
+                    "line",
+                    format!("no record of this history wrote line {line} of {path}"),
+                )
+            })?;
+            (op.0, path, n(index))
+        }
+        (None, None, Some(op), Some(index)) => {
+            let h = hub.clone();
+            let t = tree.clone();
+            let now = crate::clock::wall_secs();
+            let listed = crate::clock::blocking(move || h.op_hunks(&t, Some(op), None, now))
+                .await
+                .map_err(|e| internal(e.to_string()))?
+                .map_err(store)?;
+            let (hunk, _) = listed
+                .into_iter()
+                .find(|(h, _)| n(h.index) == index)
+                .ok_or_else(|| invalid("index", format!("record {op} has no hunk {index}")))?;
+            (op, hunk.path, index)
+        }
+        _ => {
+            return Err(invalid(
+                "path",
+                "name a path and a line, or an op and an index",
+            ));
+        }
+    };
+    let cause = crate::clock::blocking(move || hub.cause_of(op))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(store)?;
+    // the names and the reason, from the store: the session's name, the task's title, the conclusion's words
+    let (sid, task, decision) = (
+        cause.session.clone(),
+        cause.task.clone(),
+        cause.decision.clone(),
+    );
+    let named = f
+        .writer
+        .db
+        .read(move |c| {
+            let row =
+                |id: &str| -> std::result::Result<Option<EntityText>, norn::store::CoordError> {
+                    match c.query_row(
+                        "select kind, title, body from entity where id = ?1 and retired_tx is null",
+                        [id],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    ) {
+                        Ok(v) => Ok(Some(v)),
+                        Err(urdr::SqliteError::QueryReturnedNoRows) => Ok(None),
+                        Err(e) => Err(e.into()),
+                    }
+                };
+            let agent = match &sid {
+                Some(s) => row(&format!("session:{s}"))?.and_then(|(_, t, _)| t),
+                None => None,
+            };
+            let title = match &task {
+                Some(t) => row(t)?.and_then(|(_, t, _)| t),
+                None => None,
+            };
+            let reason = match &decision {
+                Some(d) => row(d)?.map(|(kind, title, body)| {
+                    crate::work::conclusions::from_entity(
+                        d,
+                        &kind,
+                        title.as_deref(),
+                        body.as_deref(),
+                        &Value::Null,
+                        0.0,
+                    )
+                    .text
+                }),
+                None => None,
+            };
+            Ok((agent, title, reason))
+        })
+        .await;
+    let (agent, task_title, reason) = named.unwrap_or_else(|e| {
+        tracing::debug!("a hunk's provenance has no names: {e}");
+        (None, None, None)
+    });
+    Ok(w::Provenance {
+        op,
+        path,
+        index,
+        agent: agent.or_else(|| cause.session.clone()),
+        session: cause.session,
+        task: cause.task,
+        task_title,
+        decision: cause.decision,
+        reason,
+        step: cause.step,
     })
 }
 

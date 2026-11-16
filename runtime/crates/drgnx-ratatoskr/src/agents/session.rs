@@ -222,6 +222,8 @@ struct State {
     follow_tool: Option<usize>,
     /// The plan's `in_progress` entry, the follow feed's line when the agent sends plans.
     plan_now: Option<String>,
+    /// The conclusions this turn recorded, with their steps: an agent write's reason ([`Session::write_cause`]).
+    concluded: crate::work::conclusions::TurnConclusions,
 }
 
 /// What a tool call's update tells the presence model's live feed ([`crate::work::presence`]): taken under the state's
@@ -381,6 +383,7 @@ impl State {
             wheel_base: None,
             follow_tool: None,
             plan_now: None,
+            concluded: Default::default(),
             closed: Vec::new(),
             before: None,
             edits: Vec::new(),
@@ -5546,6 +5549,27 @@ impl Session {
         crate::hook_points::ToolCallInfo::from_acp(tool, kind.as_deref(), name.as_deref(), step)
     }
 
+    /// What caused the agent's write at STEP (`step.seq`): this session, that step, the task it works on, and the
+    /// newest conclusion it recorded in this turn at or before that step (none: "no reason recorded"; an older turn's
+    /// is never borrowed).
+    pub(crate) fn write_cause(&self, step: Option<i64>) -> verdandi::Cause {
+        let st = lock(&self.state);
+        crate::work::conclusions::write_cause(
+            &self.id,
+            self.task.as_deref(),
+            st.turns,
+            step,
+            &st.concluded,
+        )
+    }
+
+    /// The session recorded CONCLUSION (`decision:N`, a note's id) now: in its turn, at the step running.
+    pub(crate) fn conclusion_recorded(&self, conclusion: &str) {
+        let mut st = lock(&self.state);
+        let (turn, step) = (st.turns, st.cur.as_ref().map(|c| c.key));
+        st.concluded.record(turn, step, conclusion.to_owned());
+    }
+
     /// The step running now (`step.seq`), if any.
     pub(crate) fn current_step(&self) -> Option<i64> {
         lock(&self.state).cur.as_ref().map(|c| c.key)
@@ -5814,6 +5838,13 @@ impl Session {
         let eff = self.cells_now().await?;
         // the step the write is made in: the editor's change, and the disk's record, carry it into the history
         let step = self.current_step().unwrap_or(0);
+        // an open buffer's editor applies the write and names only this session and step: the history keeps the
+        // rest of the cause (the task, this turn's conclusion) for its batch
+        if let Some((hubs, state)) = &self.history
+            && let Ok((hub, _)) = hubs.of_tree(state, &self.cwd)
+        {
+            hub.note_cause(self.write_cause(Some(step)));
+        }
         let (path, mut kind) = match w {
             PairWrite::Edit { path, old, new } => (path, WriteKind::Edit { old, new }),
             PairWrite::Whole { path, content } => (path, WriteKind::Whole { content }),
@@ -5892,6 +5923,8 @@ impl Session {
     fn disk_record(&self, step: i64) -> Option<crate::pair::disk::Record> {
         let (hubs, state) = self.history.clone()?;
         let (cwd, sid) = (self.cwd.clone(), self.id.clone());
+        // the cause as it stands at the write's step: a conclusion recorded after it is not its reason
+        let cause = self.write_cause(Some(step));
         Some(Box::new(move |real: &Path, bytes: &[u8]| {
             let Some(rel) = real
                 .strip_prefix(resolve(&cwd))
@@ -5903,11 +5936,6 @@ impl Session {
             };
             let Ok((hub, tree)) = hubs.of_tree(&state, &cwd) else {
                 return;
-            };
-            let cause = verdandi::Cause {
-                session: Some(sid.clone()),
-                step: Some(step.to_string()),
-                ..Default::default()
             };
             if let Err(e) =
                 hub.on_agent_write(&tree, rel, bytes, &sid, cause, crate::clock::wall_secs())
@@ -6157,10 +6185,7 @@ impl Session {
         let Ok((hub, tree)) = hubs.of_tree(state, &self.cwd) else {
             return;
         };
-        let cause = verdandi::Cause {
-            session: Some(self.id.clone()),
-            ..Default::default()
-        };
+        let cause = self.write_cause(self.current_step());
         let (sid, bytes, now) = (
             self.id.clone(),
             content.as_bytes().to_vec(),

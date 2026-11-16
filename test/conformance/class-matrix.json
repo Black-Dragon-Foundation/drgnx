@@ -179,6 +179,7 @@
   "history/hunks": ["user"],
   "history/hunks/head": ["user"],
   "history/op/hunks": ["user"],
+  "history/provenance": ["user"],
   "history/redo": ["user"],
   "history/register": ["user"],
   "history/resync": ["user"],
