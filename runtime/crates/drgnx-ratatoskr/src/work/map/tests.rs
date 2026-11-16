@@ -1426,7 +1426,11 @@ fn a_gate_chip_on_the_strip_says_sign_off() {
     }));
     let v = rows_view(core.model(), 226);
     let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
-    assert!(rows[0].text.contains("Sign off: 2 tasks"), "{}", rows[0].text);
+    assert!(
+        rows[0].text.contains("Sign off: 2 tasks"),
+        "{}",
+        rows[0].text
+    );
 }
 
 #[test]

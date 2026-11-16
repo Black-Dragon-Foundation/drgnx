@@ -18,6 +18,7 @@
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
 pub mod buffers;
+pub mod changes;
 pub mod debug;
 pub mod explorer;
 pub mod extensions;
