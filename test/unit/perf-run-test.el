@@ -159,6 +159,20 @@ abort of the run that loses every result (a full run lost its perf.eld this way)
       (let ((j (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string)) :object-type 'plist :null-object nil)))
         (should (eql (plist-get (plist-get (plist-get (plist-get j :results) :typing) :alloc) :p50) 120))))))
 
+(ert-deftest drgnx-perf-run/the-session-limit-is-sized-to-the-run ()
+  "The session lives 600 s plus 45 s a workload (the harness's 1800 s default killed a whole run in its last
+workloads); a set $DRGNX_UI_MAX_RUNTIME wins; the output names the limit used."
+  (dolist (case '((nil "690") ("120" "120")))
+    (drgnx-perf-run-test--with-fake-run '(1.0)
+      (let ((process-environment (cons (if (car case) (concat "DRGNX_UI_MAX_RUNTIME=" (car case)) "DRGNX_UI_MAX_RUNTIME")
+                                       process-environment))
+            seen out)
+        (cl-letf (((symbol-function 'drgnx-perf-run--workloads) (lambda () '((typing :measure "m") (frames :measure "m"))))
+                  ((symbol-function 'drgnx-ui-start) (lambda (&rest _) (setq seen (getenv "DRGNX_UI_MAX_RUNTIME")) '(:name "fake"))))
+          (setq out (with-output-to-string (drgnx-perf-run))))
+        (should (equal seen (cadr case)))
+        (should (string-match-p (concat "perf: the session's limit: " (cadr case) " s") out))))))
+
 (ert-deftest drgnx-perf/a-session-at-another-gc-setting-is-refused ()
   ;; HARNESS-GC-1: perf at the settings of a user's session, or not at all
   (drgnx-perf-run-test--with-fake-run '(1.0)

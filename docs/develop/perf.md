@@ -16,6 +16,8 @@ DRGNX_PERF_WORKLOADS='A B'  only those workloads (space-separated names from the
 DRGNX_PERF_RESULTS=FILE     write the results as JSON: every metric (wall clock included), each workload's calibration,
                             the Emacs version and the commit; a workload that errors, the session gone included,
                             is an ERROR row and the file is still written
+DRGNX_UI_MAX_RUNTIME=S      the run's session lives S seconds; unset: 600 plus 45 a workload selected (every workload runs in
+                            one session; the harness's 1800 s default ended a full run). The output names the limit
 DRGNX_RATATOSKR_STALL_FILE=FILE  the workloads' hubs append their stall reports to FILE (hub.md, the stall watchdog);
                             `--container` mounts its folder at /stall; DRGNX_RATATOSKR_STALL_MS=MS their threshold
                             (a test-hooks hub's default: 250)
