@@ -241,6 +241,9 @@ fn root_id(root: &Path) -> String {
 /// The entries of ROOTS: each root, then its folder's entries, recursing into the open ones (EXPANDED). COMPACT joins
 /// an open folder whose only entry is a folder with it on one row; the chain ends at the first closed folder, which is
 /// never read. READ lists a folder (sorted). None when CANCEL is set before the end.
+///
+/// Each path is listed once (a row's key is its path): a root given twice is listed the first time only, and a root
+/// inside another shows as its own root, not again in the one that holds it (nor in a compact chain through it).
 pub fn list_tree(
     roots: &[PathBuf],
     expanded: &HashSet<String>,
@@ -249,8 +252,13 @@ pub fn list_tree(
     read: &mut dyn FnMut(&Path) -> Vec<(String, bool)>,
 ) -> Option<Vec<Entry>> {
     let mut out = Vec::new();
+    let ids: HashSet<String> = roots.iter().map(|r| root_id(r)).collect();
+    let mut seen = HashSet::new();
     for root in roots {
         let id = root_id(root);
+        if !seen.insert(id.clone()) {
+            continue;
+        }
         let name = Path::new(&id)
             .file_name()
             .map_or_else(|| id.clone(), |n| n.to_string_lossy().into_owned());
@@ -263,7 +271,16 @@ pub fn list_tree(
             open: true,
         });
         let kids = read(Path::new(&id));
-        walk(kids, &id, 1, expanded, compact, cancel, read, &mut out)?;
+        walk(
+            kids,
+            &id,
+            1,
+            (expanded, &ids),
+            compact,
+            cancel,
+            read,
+            &mut out,
+        )?;
     }
     Some(out)
 }
@@ -273,7 +290,7 @@ fn walk(
     kids: Vec<(String, bool)>,
     parent: &str,
     depth: usize,
-    expanded: &HashSet<String>,
+    (expanded, roots): (&HashSet<String>, &HashSet<String>),
     compact: bool,
     cancel: &AtomicBool,
     read: &mut dyn FnMut(&Path) -> Vec<(String, bool)>,
@@ -285,6 +302,9 @@ fn walk(
     for (name, dir) in kids {
         let mut label = name.clone();
         let mut path = join(parent, &name);
+        if roots.contains(&path) {
+            continue; // listed as a root of its own
+        }
         let mut open = dir && expanded.contains(&path);
         let mut inner = if open {
             read(Path::new(&path))
@@ -295,6 +315,9 @@ fn walk(
             let [(next, true)] = inner.as_slice() else {
                 break;
             };
+            if roots.contains(&join(&path, next)) {
+                break;
+            }
             let next = next.clone();
             label = format!("{label}/{next}");
             path = join(&path, &next);
@@ -318,7 +341,7 @@ fn walk(
                 inner,
                 &path,
                 depth + 1,
-                expanded,
+                (expanded, roots),
                 compact,
                 cancel,
                 read,
