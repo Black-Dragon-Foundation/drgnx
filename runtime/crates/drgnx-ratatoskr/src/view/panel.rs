@@ -18,6 +18,7 @@ use crate::agents::session::Session;
 use crate::agents::session::rows::{self, Cx, Facts, Look};
 use crate::dispatch::Caller;
 use crate::front::Front;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::{self, FontSet};
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::agents::{Entry, EntryType, PanelLook};
@@ -752,7 +753,7 @@ impl Panels {
             let mut b = RowBuilder::new("more");
             b.push(
                 "  ↑ earlier steps load when you scroll up",
-                Some("drgnx-agent-panel-subtle"),
+                Some(FaceId::AgentPanelSubtle.name()),
             );
             out.push(b.finish());
         }
@@ -817,12 +818,14 @@ fn hover(rows: &mut [Row]) {
         let spans: Vec<(u32, u32)> = r
             .props
             .iter()
-            .filter(|(_, _, n, _)| n == "drgnx-agent-panel-action" || n == "drgnx-agent-panel-chip")
+            .filter(|(_, _, n, _)| {
+                n == "drgnx-agent-panel-action" || n == FaceId::AgentPanelChip.name()
+            })
             .map(|(a, b, _, _)| (*a, *b))
             .collect();
         for (a, b) in spans {
             r.props
-                .push((a, b, "mouse-face".to_owned(), json!("drgnx-hover")));
+                .push((a, b, "mouse-face".to_owned(), json!(FaceId::Hover.name())));
         }
     }
 }

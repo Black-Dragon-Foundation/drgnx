@@ -4,6 +4,7 @@
 //! ledger is open are the editor's (`agents/panel/look`); the plan, the edits and the files come from the session.
 
 use crate::agents::session::rows::one_line;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::history::{HunkState, OpHunk};
 use runstav::methods::view::ViewEnv;
@@ -51,13 +52,13 @@ fn card(env: &ViewEnv, kind: &str, lines: Vec<Line>) -> Vec<Row> {
         .enumerate()
         .map(|(i, (text, face, props))| {
             let shape = if n == 1 {
-                "drgnx-card-single"
+                FaceId::CardSingle.name()
             } else if i == 0 {
-                "drgnx-card-top"
+                FaceId::CardTop.name()
             } else if i + 1 == n {
-                "drgnx-card-bottom"
+                FaceId::CardBottom.name()
             } else {
-                "drgnx-card-mid"
+                FaceId::CardMid.name()
             };
             let mut b = RowBuilder::new(format!("p:{kind}:{i}"));
             b.push(" ", None);
@@ -158,7 +159,7 @@ pub fn rows(i: &In) -> Vec<Row> {
         let mut lines: Vec<Line> = vec![(
             head,
             Some(if new > 0 {
-                "drgnx-status-attention"
+                FaceId::StatusAttention.name()
             } else {
                 "bold"
             }),

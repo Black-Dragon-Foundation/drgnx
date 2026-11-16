@@ -1,4 +1,5 @@
 use super::*;
+use drgnx_rows::faces::FaceId;
 use std::collections::HashMap;
 
 /// A fake disk: folder → its sorted entries; READS counts each folder read.
@@ -151,8 +152,8 @@ fn explorer_model_and_rows() {
         m.props,
         vec![(0, 8, "drgnx-work-id".to_owned(), json!("/r/lib/m.el"))]
     );
-    assert_eq!(m.runs[0], (0, 4, "drgnx-explorer-guide".to_owned()));
-    assert_eq!(m.runs[1], (4, 8, "drgnx-explorer-file".to_owned()));
+    assert_eq!(m.runs[0], (0, 4, FaceId::ExplorerGuide.name().to_owned()));
+    assert_eq!(m.runs[1], (4, 8, FaceId::ExplorerFile.name().to_owned()));
 
     let cut = explorer_doc_in(&got, 2, None);
     assert_eq!(cut.lists["order"].len(), 2);
@@ -200,6 +201,7 @@ fn gui_env(scale: f32) -> ViewEnv {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        glyphs: Vec::new(),
         attach: false,
         rows_in_sja: false,
         headless: false,
@@ -268,8 +270,14 @@ fn explorer_rows_draw_the_look() {
     assert_eq!(a.text, "     a.rs");
     assert_eq!(a.spaces, vec![(0, 24, 32), (2, 12, 32), (4, 12, 32)]);
     assert_eq!(a.images, vec![(3, id("file-code"), " ".to_owned())]);
-    assert!(a.runs.contains(&(5, 9, "drgnx-explorer-file".to_owned())));
-    assert!(a.runs.contains(&(1, 5, "drgnx-explorer-guide".to_owned())));
+    assert!(
+        a.runs
+            .contains(&(5, 9, FaceId::ExplorerFile.name().to_owned()))
+    );
+    assert!(
+        a.runs
+            .contains(&(1, 5, FaceId::ExplorerGuide.name().to_owned()))
+    );
     assert_eq!(
         prop(a, "drgnx-git-status").map(|p| p.3),
         Some(json!("modified"))
@@ -283,7 +291,7 @@ fn explorer_rows_draw_the_look() {
     assert_eq!(prop(&rows[4], "drgnx-agents-here"), None);
     // target: ignored, dimmed, no mark
     let t = &rows[3];
-    assert!(t.runs.iter().any(|r| r.2 == "drgnx-git-ignored"));
+    assert!(t.runs.iter().any(|r| r.2 == FaceId::GitIgnored.name()));
     assert_eq!(prop(t, "drgnx-git-status"), None);
     assert_eq!(t.images[0].1, id("chevron-right"));
     // notes.md: clean, the text icon

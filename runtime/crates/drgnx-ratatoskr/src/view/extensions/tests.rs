@@ -1,4 +1,5 @@
 use super::*;
+use drgnx_rows::faces::FaceId;
 
 fn row(id: &str, state: w::State) -> w::Row {
     w::Row {
@@ -132,6 +133,7 @@ fn extensions_kinds_are_lucide_icons_on_a_graphical_display() {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        glyphs: Vec::new(),
         attach: false,
         rows_in_sja: false,
         headless: false,
@@ -165,7 +167,7 @@ fn extensions_rows_follow_the_explorer_and_say_missing_neutrally() {
     let get = |k: &str| rows.iter().find(|r| r.key == k).unwrap();
     assert_eq!(
         get("section:installed").runs,
-        vec![(0, 13, "drgnx-wb-section".to_owned())]
+        vec![(0, 13, FaceId::WbSection.name().to_owned())]
     );
     let a = get("pkg:a");
     assert!(!a.runs.iter().any(|r| r.2 == "bold"), "{:?}", a.runs);
@@ -182,11 +184,19 @@ fn extensions_rows_follow_the_explorer_and_say_missing_neutrally() {
         "  m  missing: no archive you use has it"
     );
     assert!(
-        get("pkg:m").runs.iter().any(|r| r.2 == "drgnx-status-warn"),
+        get("pkg:m")
+            .runs
+            .iter()
+            .any(|r| r.2 == FaceId::StatusWarn.name()),
         "{:?}",
         get("pkg:m").runs
     );
-    assert!(!get("pkg:m").runs.iter().any(|r| r.2 == "drgnx-status-fail"));
+    assert!(
+        !get("pkg:m")
+            .runs
+            .iter()
+            .any(|r| r.2 == FaceId::StatusFail.name())
+    );
 }
 
 /// A language pack's row shows what it brings, as chips after the name: grammar, mode, server...
@@ -264,7 +274,7 @@ fn extensions_rows_carry_every_list_column() {
     );
     let runs = serde_json::to_value(b_row).unwrap()["runs"].to_string();
     assert!(
-        runs.contains("drgnx-status-warn") && runs.contains("shadow"),
+        runs.contains(FaceId::StatusWarn.name()) && runs.contains("shadow"),
         "{runs}"
     );
     // a terminal class: the glyph's ASCII form; dense: no summary lines

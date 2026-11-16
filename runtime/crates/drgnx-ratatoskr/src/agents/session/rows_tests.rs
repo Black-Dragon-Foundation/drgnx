@@ -1,4 +1,5 @@
 use super::*;
+use drgnx_rows::faces::FaceId;
 use std::collections::BTreeMap;
 
 fn entry(kind: EntryType, rest: Value) -> Entry {
@@ -84,8 +85,8 @@ fn hunks_split_at_30_lines() {
         );
     }
     assert!(hunks[0].text.starts_with("    a.el  @@"));
-    assert!(faces(hunks[0]).contains(&"drgnx-agent-panel-removed"));
-    assert!(faces(hunks[5]).contains(&"drgnx-agent-panel-added"));
+    assert!(faces(hunks[0]).contains(&FaceId::AgentPanelRemoved.name()));
+    assert!(faces(hunks[5]).contains(&FaceId::AgentPanelAdded.name()));
 }
 
 /// agent-panel.html: the panel's prose is in the UI font, its output and diffs in the code font, so every line of a
@@ -100,7 +101,7 @@ fn output_and_hunk_lines_are_code() {
     let out: Vec<&Row> = rows.iter().filter(|r| r.key.starts_with("e:3/d")).collect();
     assert!(!out.is_empty(), "{:?}", keys(&rows));
     for r in &out {
-        assert_eq!(faces(r), ["drgnx-agent-panel-output"], "{}", r.key);
+        assert_eq!(faces(r), [FaceId::AgentPanelOutput.name()], "{}", r.key);
     }
     let long: String = (0..40).map(|i| format!("line {i}\n")).collect();
     let large =
@@ -108,7 +109,7 @@ fn output_and_hunk_lines_are_code() {
     let rows = rows_of(&large, &Look::default(), &BTreeMap::new(), false);
     for k in ["e:3/d:0", "e:3/d:2"] {
         let r = rows.iter().find(|r| r.key == k).expect(k);
-        assert_eq!(faces(r), ["drgnx-agent-panel-output"], "{k}");
+        assert_eq!(faces(r), [FaceId::AgentPanelOutput.name()], "{k}");
     }
     let e = tool(
         json!({"title": "Edit a.el", "kind": "edit", "status": "completed",
@@ -120,7 +121,7 @@ fn output_and_hunk_lines_are_code() {
         .find(|r| r.key == "e:3/h:0")
         .expect("a hunk row");
     assert!(
-        faces(h).contains(&"drgnx-agent-panel-context"),
+        faces(h).contains(&FaceId::AgentPanelContext.name()),
         "{:?}",
         faces(h)
     );
@@ -199,9 +200,9 @@ fn a_steps_time_and_cost_are_measured_in_the_fonts_they_are_drawn_in() {
     };
     group_rows(3, &stepped("completed"), &[], None, &cx);
     let want: Vec<(String, String)> = [
-        ("15.0 s", "drgnx-agent-panel-warn"),
-        (" · ", "drgnx-agent-panel-code"),
-        ("$0.05", "drgnx-agent-panel-code"),
+        ("15.0 s", FaceId::AgentPanelWarn.name()),
+        (" · ", FaceId::AgentPanelCode.name()),
+        ("$0.05", FaceId::AgentPanelCode.name()),
     ]
     .iter()
     .map(|(t, r)| ((*t).to_owned(), (*r).to_owned()))
@@ -231,7 +232,7 @@ fn checkpoint_rows_carry_their_mark() {
     assert_eq!(
         faces(r)
             .iter()
-            .filter(|f| **f == "drgnx-agent-panel-warn")
+            .filter(|f| **f == FaceId::AgentPanelWarn.name())
             .count(),
         2
     );
@@ -309,8 +310,8 @@ fn rows_carry_provenance_lines() {
         Some(&json!([7, 2, 0]))
     );
     assert_eq!(prop(under[3], "drgnx-agent-panel-hook"), None);
-    assert_eq!(faces(under[0]), ["drgnx-agents-hooks-refused"]);
-    assert_eq!(faces(under[2]), ["drgnx-agents-hooks-busy"]);
+    assert_eq!(faces(under[0]), [FaceId::AgentsHooksRefused.name()]);
+    assert_eq!(faces(under[2]), [FaceId::AgentsHooksBusy.name()]);
 }
 
 #[test]
@@ -356,8 +357,8 @@ fn huddle_threads_are_rows() {
         rows[1].text,
         "\n  s2 says\n  ▎ I keep mine\n  ▎ because\n  → proposes: merge both"
     );
-    assert!(faces(&rows[1]).contains(&"drgnx-agent-2"));
-    assert!(faces(&rows[2]).contains(&"drgnx-agent-1"));
+    assert!(faces(&rows[1]).contains(&FaceId::Agent2.name()));
+    assert!(faces(&rows[2]).contains(&FaceId::Agent1.name()));
     assert_eq!(rows[3].text, "\n  Agreed proposal: merge both");
     let ended = json!({"state": "done", "participants": ["s1", "s2"], "outcome": "s1 yields"});
     let rows = huddle_rows(&ended);
@@ -399,7 +400,7 @@ fn a_shell_step_shows_its_command_in_code() {
     let code: Vec<String> = r
         .runs
         .iter()
-        .filter(|(_, _, f)| f == "drgnx-agent-panel-code")
+        .filter(|(_, _, f)| f == FaceId::AgentPanelCode.name())
         .map(|(s, e, _)| chars[*s as usize..*e as usize].iter().collect())
         .collect();
     assert_eq!(code, ["bin/drgnx test gateway"], "{:?}", r.runs);
@@ -421,7 +422,7 @@ fn an_allowed_step_says_how_it_was_allowed() {
     let rows = rows_with(&stepped("completed"), &look, &facts, false, Some(line));
     assert_eq!(under(&rows), [format!("    {line}")]);
     let row = rows.iter().find(|r| r.key == "e:3/p:0").unwrap();
-    assert_eq!(faces(row), ["drgnx-agent-panel-subtle"]);
+    assert_eq!(faces(row), [FaceId::AgentPanelSubtle.name()]);
     let rows = rows_with(&stepped("completed"), &look, &facts, true, Some(line));
     assert_eq!(
         under(&rows),

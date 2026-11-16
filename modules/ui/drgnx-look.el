@@ -486,6 +486,7 @@ else enabled since stays)."
   (drgnx-look-density-off)
   (drgnx-look-fonts-off)
   (drgnx-look-derive-off)
+  (drgnx-ui-kit-focus-mode -1)
   (when drgnx-look--taken
     (dolist (theme (plist-get drgnx-look--taken :ours))
       (when (memq theme custom-enabled-themes) (disable-theme theme)))
@@ -695,6 +696,12 @@ only the one remap is reapplied."
                        (drgnx-look-echo-area-on)
                        ;; no echo row on graphical frames: the box, and the frames that exist swapped for it
                        (drgnx-look-echo-apply)
+                       ;; the kit: the focus ring after a key, not a click; a component's action on RET or a click
+                       (drgnx-ui-kit-focus-mode 1)
+                       (drgnx-command-define 'kit-activate :category "View" :title "Activate the Component at Point"
+                                             :command #'drgnx-ui-kit-activate :map 'drgnx-ui-kit-action-base-map
+                                             :when (lambda () (get-text-property (point) 'drgnx-action))
+                                             :doc "Run the action of the button, row or card at point (its `drgnx-action')")
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window

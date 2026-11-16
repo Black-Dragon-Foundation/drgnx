@@ -60,6 +60,11 @@ pub struct ViewEnv {
     pub tz: String,
     #[serde(default)]
     pub reduced_motion: bool,
+    /// `[name, glyph]`: the kit's glyphs (those `etc/ui/components.eld` names) as `drgnx-face-glyph` draws them on the
+    /// class's frame, ASCII on a terminal that is not UTF-8; a name missing here is drawn in its Unicode form
+    /// (`drgnx_rows::kit`).
+    #[serde(default)]
+    pub glyphs: Vec<(String, String)>,
     /// The first env of a new buffer for this (view, class): a pair the hub already holds for the connection (no
     /// `view/close` came) is dropped and starts again, so the new buffer gets the rows whole.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

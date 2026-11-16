@@ -1,4 +1,5 @@
 use super::*;
+use drgnx_rows::faces::FaceId;
 use runstav::methods::agents::Snapshot;
 use std::collections::BTreeSet;
 
@@ -26,6 +27,7 @@ fn env(width: u32) -> ViewEnv {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        glyphs: Vec::new(),
         attach: false,
         rows_in_sja: false,
         headless: false,
@@ -127,7 +129,7 @@ fn the_header_is_one_row_with_its_lens_and_buttons_at_a_stop() {
     assert_eq!(names, ["lens:1", "lens:2", "lens:3", "pin", "more"]);
     assert!(actions[1].1.contains("review"));
     assert!(head.runs.iter().any(|(a, b, f)| {
-        f == "drgnx-agent-panel-lens-on"
+        f == FaceId::AgentPanelLensOn.name()
             && head
                 .text
                 .chars()
@@ -180,7 +182,7 @@ fn the_chips_are_what_the_snapshot_feeds() {
     assert_eq!(chips.key, CHIPS);
     assert!(chips.text.contains("◑ 50%"), "{:?}", chips.text);
     assert!(chips.text.contains("$1.23"), "{:?}", chips.text);
-    let kinds: Vec<_> = props(chips, "drgnx-agent-panel-chip")
+    let kinds: Vec<_> = props(chips, FaceId::AgentPanelChip.name())
         .into_iter()
         .map(|(v, _)| v.as_str().unwrap_or("").to_owned())
         .collect();
@@ -243,7 +245,7 @@ fn the_strip_has_a_pill_per_step_type_the_open_ones_raised() {
     let raised: Vec<String> = strip
         .runs
         .iter()
-        .filter(|(_, _, f)| f == "drgnx-agent-panel-tag-on")
+        .filter(|(_, _, f)| f == FaceId::AgentPanelTagOn.name())
         .map(|(a, b, _)| {
             strip
                 .text
@@ -304,7 +306,7 @@ fn the_chips_say_the_sandbox_the_files_and_the_checkpoints_when_the_hub_knows() 
     assert_eq!(
         chip_rows
             .iter()
-            .map(|r| props(r, "drgnx-agent-panel-chip").len())
+            .map(|r| props(r, FaceId::AgentPanelChip.name()).len())
             .sum::<usize>(),
         1
     );
@@ -331,7 +333,7 @@ fn the_chips_say_the_model_and_the_mcp_servers_and_both_explain_themselves() {
     let chips = rows.iter().find(|r| r.key == CHIPS).expect("chips");
     assert!(chips.text.contains(" opus "), "{}", chips.text);
     assert!(chips.text.contains("MCP 2"), "{}", chips.text);
-    let kinds: Vec<String> = props(chips, "drgnx-agent-panel-chip")
+    let kinds: Vec<String> = props(chips, FaceId::AgentPanelChip.name())
         .into_iter()
         .map(|(v, _)| v.as_str().unwrap_or_default().to_owned())
         .collect();

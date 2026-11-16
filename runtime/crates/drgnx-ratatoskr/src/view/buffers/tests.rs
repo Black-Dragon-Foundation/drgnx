@@ -1,4 +1,5 @@
 use super::*;
+use drgnx_rows::faces::FaceId;
 use runstav::methods::view::{Display, ViewEnv};
 
 fn put(id: &str, name: &str, file: Option<&str>, modified: bool) -> BufferOp {
@@ -28,6 +29,7 @@ fn env(display: Display, scale: f32) -> ViewEnv {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        glyphs: Vec::new(),
         attach: false,
         rows_in_sja: false,
         headless: false,
@@ -161,12 +163,12 @@ fn buffer_rows_draw_the_look() {
         rows[0].props,
         vec![
             (2, 6, "drgnx-git-status".into(), json!("modified")),
-            (2, 6, "drgnx-buffers-modified".into(), json!(true)),
+            (2, 6, FaceId::BuffersModified.name().into(), json!(true)),
             (0, 6, "drgnx-work-id".into(), json!("b1")),
         ]
     );
     assert!(rows[0].runs.is_empty());
-    assert_eq!(rows[1].runs, vec![(2, 9, "drgnx-git-ignored".into())]);
+    assert_eq!(rows[1].runs, vec![(2, 9, FaceId::GitIgnored.name().into())]);
     assert_eq!(
         rows[1].props,
         vec![(0, 9, "drgnx-work-id".into(), json!("b2"))]

@@ -1,0 +1,27 @@
+{
+  "doc": "The kit's conformance fixture: each comp expanded at each env, by the hub (drgnx_rows::kit, tests/kit_conformance.rs) and by core/drgnx-ui-kit.el (drgnx-ui-kit/conformance), must equal expected.json's entry ENV/COMP. Rust writes expected.json with DRGNX_KIT_BLESS=1. A tty env draws glyphs in their ASCII form when ascii is true.",
+  "envs": [
+    {"name": "1", "scale": 1.0, "tty": false, "ascii": false},
+    {"name": "1.25", "scale": 1.25, "tty": false, "ascii": false},
+    {"name": "1.75", "scale": 1.75, "tty": false, "ascii": false},
+    {"name": "2", "scale": 2.0, "tty": false, "ascii": false},
+    {"name": "tty", "scale": 1.0, "tty": true, "ascii": false},
+    {"name": "tty-ascii", "scale": 1.0, "tty": true, "ascii": true}
+  ],
+  "comps": [
+    {"name": "list-0", "comp": {"c": "row", "kind": "list", "text": "main.rs"}},
+    {"name": "list-2", "comp": {"c": "row", "kind": "list", "depth": 2, "text": "lib.rs"}},
+    {"name": "tree-0-open", "comp": {"c": "row", "kind": "tree", "depth": 0, "twisty": true, "text": "src"}},
+    {"name": "tree-2-closed", "comp": {"c": "row", "kind": "tree", "depth": 2, "twisty": false, "text": "kit"}},
+    {"name": "tree-2-leaf", "comp": {"c": "row", "kind": "tree", "depth": 2, "twisty": null, "text": "kit.rs"}},
+    {"name": "map-0", "comp": {"c": "row", "kind": "map", "text": "Work"}},
+    {"name": "map-2-open", "comp": {"c": "row", "kind": "map", "depth": 2, "twisty": true, "text": "日本語"}},
+    {"name": "hover", "comp": {"c": "row", "kind": "tree", "depth": 1, "twisty": false, "text": "a", "state": "hover"}},
+    {"name": "pressed", "comp": {"c": "row", "kind": "tree", "depth": 1, "twisty": false, "text": "a", "state": "pressed"}},
+    {"name": "selected", "comp": {"c": "row", "kind": "tree", "depth": 1, "twisty": false, "text": "a", "state": "selected"}},
+    {"name": "selected-inactive", "comp": {"c": "row", "kind": "tree", "depth": 1, "twisty": false, "text": "a", "state": "selected-inactive"}},
+    {"name": "focus-visible", "comp": {"c": "row", "kind": "tree", "depth": 1, "twisty": false, "text": "a", "state": "focus-visible"}},
+    {"name": "disabled", "comp": {"c": "row", "kind": "tree", "depth": 1, "twisty": false, "text": "a", "state": "disabled"}},
+    {"name": "action", "comp": {"c": "row", "kind": "list", "text": "open", "state": "selected", "action": {"kind": "kit-test", "args": [1, "a"]}}}
+  ]
+}

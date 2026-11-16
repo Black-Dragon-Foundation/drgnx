@@ -29,6 +29,7 @@ use super::output::{CellRun, LOG_ENTRIES};
 use super::tail;
 use crate::debug::{Delivery, Sink};
 use crate::front::Front;
+use drgnx_rows::faces::FaceId;
 
 /// The least time between two rebuilds of a notebook's views.
 pub const VIEW_EVERY: Duration = Duration::from_millis(100);
@@ -149,9 +150,9 @@ pub fn log_rows(entries: &[LogEntry], lost: u64) -> Vec<Row> {
             let mut b = RowBuilder::new(format!("e:{}:{k}", e.seq));
             if k == 0 {
                 let chip = if e.msg_type == "error" {
-                    "drgnx-chip-error"
+                    FaceId::ChipError.name()
                 } else {
-                    "drgnx-chip-quiet"
+                    FaceId::ChipQuiet.name()
                 };
                 b.push(&ty, Some(chip)).push(
                     &" ".repeat(14usize.saturating_sub(ty.chars().count())),
@@ -173,7 +174,7 @@ pub fn log_rows(entries: &[LogEntry], lost: u64) -> Vec<Row> {
             let n = b.pos();
             b.prop(0, n, "drgnx-notebook-log", json!(e.seq));
             if e.msg_type == "error" {
-                b.face(0, n, "drgnx-notebook-error-row");
+                b.face(0, n, FaceId::NotebookErrorRow.name());
             }
             rows.push(b.finish());
         }
@@ -231,7 +232,7 @@ pub fn outline_rows(cells: &[OutlineCell], total: usize, current: Option<&str>) 
         let kind = kind_name(c.kind);
         b.push(&format!("{:>width$}", i + 1), Some("shadow"))
             .push("  ", None)
-            .push(kind, Some("drgnx-chip-quiet"))
+            .push(kind, Some(FaceId::ChipQuiet.name()))
             .push(&" ".repeat(8 - kind.len()), None);
         let prompt = match (c.kind, c.state, c.execution_count) {
             (Kind::Code, "queued" | "running", _) => "[*]".to_string(),
@@ -240,9 +241,9 @@ pub fn outline_rows(cells: &[OutlineCell], total: usize, current: Option<&str>) 
             _ => String::new(),
         };
         let face = if c.stale {
-            "drgnx-notebook-stale"
+            FaceId::NotebookStale.name()
         } else {
-            "drgnx-notebook-prompt"
+            FaceId::NotebookPrompt.name()
         };
         b.push(&prompt, (!prompt.is_empty()).then_some(face))
             .push(
@@ -251,22 +252,22 @@ pub fn outline_rows(cells: &[OutlineCell], total: usize, current: Option<&str>) 
             )
             .push(&c.first_line, None);
         let chip = match c.state {
-            "running" => Some("drgnx-chip-accent"),
-            "queued" => Some("drgnx-chip-quiet"),
-            "error" => Some("drgnx-chip-error"),
-            "aborted" | "cancelled" => Some("drgnx-chip-warn"),
+            "running" => Some(FaceId::ChipAccent.name()),
+            "queued" => Some(FaceId::ChipQuiet.name()),
+            "error" => Some(FaceId::ChipError.name()),
+            "aborted" | "cancelled" => Some(FaceId::ChipWarn.name()),
             _ => None,
         };
         if let Some(face) = chip {
             b.push("  ", None).push(c.state, Some(face));
         }
         let end = b.pos();
-        b.prop(0, end, "drgnx-notebook-cell", json!(c.id));
+        b.prop(0, end, FaceId::NotebookCell.name(), json!(c.id));
         if current == Some(c.id.as_str()) {
             b.prop(0, end, "drgnx-notebook-current", json!(true)).face(
                 0,
                 end,
-                "drgnx-notebook-current-row",
+                FaceId::NotebookCurrentRow.name(),
             );
         }
         rows.push(b.finish());
@@ -334,13 +335,13 @@ fn cut_row(
     let mut b = RowBuilder::new(key);
     b.push(&lead, None)
         .push("   ", None)
-        .push(keys, Some("drgnx-chip-quiet"));
+        .push(keys, Some(FaceId::ChipQuiet.name()));
     if label_shown {
         b.push(&tail, Some("shadow"));
     }
     let end = b.pos();
     b.prop(0, end, prop, json!(n))
-        .face(0, end, "drgnx-notebook-cut");
+        .face(0, end, FaceId::NotebookCut.name());
     b.finish()
 }
 
@@ -369,7 +370,7 @@ fn run_faces(b: &mut RowBuilder, r: &Run, len: usize) {
         (s.bold, "bold"),
         (s.italic, "italic"),
         (s.underline, "underline"),
-        (s.inverse, "drgnx-notebook-inverse"),
+        (s.inverse, FaceId::NotebookInverse.name()),
     ] {
         if on {
             b.face(start, end, face);
@@ -426,9 +427,9 @@ pub fn output_rows(cell: &str, run: &CellRun, from: usize, cols: usize) -> Vec<R
         }
         let n = b.pos();
         if l.error {
-            b.face(0, n, "drgnx-notebook-error-row");
+            b.face(0, n, FaceId::NotebookErrorRow.name());
         }
-        b.prop(0, n, "drgnx-notebook-cell", json!(cell)).prop(
+        b.prop(0, n, FaceId::NotebookCell.name(), json!(cell)).prop(
             0,
             n,
             "drgnx-notebook-line",

@@ -12,6 +12,7 @@ use super::model::Doc;
 use super::{Key, Views, git, icons, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::search::{ExplorerParams, ExplorerStarted};
 use runstav::methods::view::{Display, ViewEnv};
@@ -600,7 +601,7 @@ fn entry_row(
     look: &RowLook,
     images: &mut BTreeMap<ImageId, String>,
 ) -> Row {
-    let guide = "drgnx-explorer-guide";
+    let guide = FaceId::ExplorerGuide.name();
     let mut b = RowBuilder::new(e.path.clone());
     // a hidden root's row is its name alone: an image is drawn even on invisible text
     let hidden = e.depth == 0 && look.one_root;
@@ -649,10 +650,10 @@ fn entry_row(
     }
     let name = b.pos();
     let face = match (e.depth, e.dir, mark) {
-        (_, _, Some(git::Kind::Ignored)) => "drgnx-git-ignored",
-        (0, _, _) => "drgnx-explorer-root",
-        (_, true, _) => "drgnx-explorer-directory",
-        _ => "drgnx-explorer-file",
+        (_, _, Some(git::Kind::Ignored)) => FaceId::GitIgnored.name(),
+        (0, _, _) => FaceId::ExplorerRoot.name(),
+        (_, true, _) => FaceId::ExplorerDirectory.name(),
+        _ => FaceId::ExplorerFile.name(),
     };
     b.push(&display(&e.label), Some(face));
     let end = b.pos();

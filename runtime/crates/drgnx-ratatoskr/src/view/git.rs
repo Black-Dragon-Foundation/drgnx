@@ -9,6 +9,7 @@ use super::{Key, Store, Views, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use draugr::git::{GitCall, Place, command, git_program};
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::git::LettersParams;
 use runstav::methods::view::VIEW_MAX;
@@ -63,11 +64,11 @@ impl Kind {
 
     pub(super) fn face(self) -> &'static str {
         match self {
-            Kind::Ignored => "drgnx-git-ignored",
-            Kind::Untracked | Kind::Added => "drgnx-git-added",
-            Kind::Renamed | Kind::Modified => "drgnx-git-modified",
-            Kind::Deleted => "drgnx-git-deleted",
-            Kind::Conflict => "drgnx-git-conflict",
+            Kind::Ignored => FaceId::GitIgnored.name(),
+            Kind::Untracked | Kind::Added => FaceId::GitAdded.name(),
+            Kind::Renamed | Kind::Modified => FaceId::GitModified.name(),
+            Kind::Deleted => FaceId::GitDeleted.name(),
+            Kind::Conflict => FaceId::GitConflict.name(),
         }
     }
 }

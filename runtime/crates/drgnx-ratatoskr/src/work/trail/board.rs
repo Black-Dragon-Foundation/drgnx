@@ -8,6 +8,7 @@
 //! its id.
 
 use crate::view::model::Doc;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::view::{Display, ViewEnv};
 use serde_json::{Map, Value, json};
@@ -190,7 +191,7 @@ pub(crate) fn board_rows(cards: &[Card], env: &ViewEnv) -> Vec<Row> {
     for (c, col) in cols.iter().enumerate() {
         head.stop(c as u32 * w).push(
             &format!("{} · {}", HEADINGS[c], col.len()),
-            Some("drgnx-work-label"),
+            Some(FaceId::WorkLabel.name()),
         );
     }
     let mut rows = vec![head.finish()];
@@ -214,9 +215,9 @@ pub(crate) fn board_rows(cards: &[Card], env: &ViewEnv) -> Vec<Row> {
                 b.stop(left);
                 let at = b.pos();
                 let face = if line == 0 {
-                    "drgnx-card-top"
+                    FaceId::CardTop.name()
                 } else {
-                    "drgnx-card-mid"
+                    FaceId::CardMid.name()
                 };
                 b.push(&fit(&card_line(card, line), chars), Some(face));
                 let end = b.pos();
@@ -246,10 +247,10 @@ fn bar(b: &mut RowBuilder, card: &Card, left: u32, w: u32, chars: usize, env: &V
             let fill = part(span);
             b.stop(left + px(4.0));
             at = b.pos();
-            b.space(fill, px(4.0), "drgnx-work-bar").space(
+            b.space(fill, px(4.0), FaceId::WorkBar.name()).space(
                 span - fill,
                 px(4.0),
-                "drgnx-work-bar-rest",
+                FaceId::WorkBarRest.name(),
             );
         }
         Display::Tty => {
@@ -257,15 +258,15 @@ fn bar(b: &mut RowBuilder, card: &Card, left: u32, w: u32, chars: usize, env: &V
             let fill = part(n);
             b.stop(left);
             at = b.pos();
-            b.push(&"▰".repeat(fill as usize), Some("drgnx-work-bar"))
+            b.push(&"▰".repeat(fill as usize), Some(FaceId::WorkBar.name()))
                 .push(
                     &"▱".repeat((n - fill) as usize),
-                    Some("drgnx-work-bar-rest"),
+                    Some(FaceId::WorkBarRest.name()),
                 );
         }
     }
     let end = b.pos();
-    b.face(at, end, "drgnx-card-bottom")
+    b.face(at, end, FaceId::CardBottom.name())
         .prop(at, end, "drgnx-work-id", json!(card.id));
 }
 
@@ -335,6 +336,7 @@ mod tests {
             tty_widths: vec![],
             tz: String::new(),
             reduced_motion: false,
+            glyphs: Vec::new(),
             attach: false,
             rows_in_sja: false,
             headless: false,
@@ -374,6 +376,7 @@ mod tests {
             tty_widths: vec![],
             tz: String::new(),
             reduced_motion: false,
+            glyphs: Vec::new(),
             attach: false,
             rows_in_sja: false,
             headless: false,
@@ -412,7 +415,10 @@ mod tests {
                 "scale {scale}: task:b (queued, no steps) then task:a"
             );
             let faces: Vec<&str> = bar.runs.iter().map(|r| r.2.as_str()).collect();
-            assert!(faces.contains(&"drgnx-work-bar") && faces.contains(&"drgnx-work-bar-rest"));
+            assert!(
+                faces.contains(&FaceId::WorkBar.name())
+                    && faces.contains(&FaceId::WorkBarRest.name())
+            );
             assert!(
                 bar.props.iter().any(|p| p.3 == json!("task:a")),
                 "the bar holds its card's id"

@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use super::*;
 use crate::notebook::spec::private_folder;
+use drgnx_rows::faces::FaceId;
 
 fn cell(id: &str, kind: Kind, line: &str, count: Option<i64>, state: &'static str) -> OutlineCell {
     OutlineCell {
@@ -36,15 +37,20 @@ fn an_outline_row_has_index_type_prompt_first_line_and_state_and_names_its_cell(
         let len = r.text.chars().count() as u32;
         assert_eq!(
             r.props,
-            vec![(0, len, "drgnx-notebook-cell".to_string(), json!(c.id))]
+            vec![(0, len, FaceId::NotebookCell.name().to_string(), json!(c.id))]
         );
     }
-    assert!(rows[2].runs.iter().any(|(_, _, f)| f == "drgnx-chip-error"));
+    assert!(
+        rows[2]
+            .runs
+            .iter()
+            .any(|(_, _, f)| f == FaceId::ChipError.name())
+    );
     assert!(
         rows[3]
             .runs
             .iter()
-            .any(|(_, _, f)| f == "drgnx-chip-accent")
+            .any(|(_, _, f)| f == FaceId::ChipAccent.name())
     );
 }
 
@@ -56,7 +62,11 @@ fn a_cell_that_never_ran_has_an_empty_prompt_and_a_stale_one_is_dim() {
     c.stale = true;
     c.execution_count = Some(2);
     let r = &outline_rows(&[c], 1, None)[0];
-    assert!(r.runs.iter().any(|(_, _, f)| f == "drgnx-notebook-stale"));
+    assert!(
+        r.runs
+            .iter()
+            .any(|(_, _, f)| f == FaceId::NotebookStale.name())
+    );
 }
 
 #[test]
@@ -308,7 +318,7 @@ fn a_full_output_is_a_window_of_its_lines_with_rows_counting_what_lies_outside()
     assert_eq!(
         rows[0].props,
         vec![
-            (0, 6, "drgnx-notebook-cell".to_string(), json!("c")),
+            (0, 6, FaceId::NotebookCell.name().to_string(), json!("c")),
             (0, 6, "drgnx-notebook-line".to_string(), json!(1)),
         ]
     );
@@ -531,7 +541,12 @@ fn log_rows_show_the_type_and_the_text_a_bounded_number_of_lines_and_say_what_is
     );
     assert_eq!(texts[2 + LOG_LINES], "comm_open       ");
     assert_eq!(rows[2].key, "e:5:0");
-    assert!(rows[2].runs.iter().any(|(_, _, f)| f == "drgnx-chip-error"));
+    assert!(
+        rows[2]
+            .runs
+            .iter()
+            .any(|(_, _, f)| f == FaceId::ChipError.name())
+    );
     assert_eq!(
         rows[1].props,
         vec![(0, 21, "drgnx-notebook-log".to_string(), json!(4))]
@@ -599,7 +614,7 @@ fn the_outlines_type_and_state_are_chips_of_the_look() {
         let kind_len = if r.text.contains("markdown") { 8 } else { 4 };
         assert_eq!(
             faces_at(r, 3, 3 + kind_len),
-            ["drgnx-chip-quiet"],
+            [FaceId::ChipQuiet.name()],
             "{}",
             r.text
         );
@@ -617,20 +632,23 @@ fn the_outlines_type_and_state_are_chips_of_the_look() {
     };
     assert_eq!(
         chip(&rows[0], "running").as_deref(),
-        Some("drgnx-chip-accent")
+        Some(FaceId::ChipAccent.name())
     );
     assert_eq!(
         chip(&rows[1], "queued").as_deref(),
-        Some("drgnx-chip-quiet")
+        Some(FaceId::ChipQuiet.name())
     );
-    assert_eq!(chip(&rows[2], "error").as_deref(), Some("drgnx-chip-error"));
+    assert_eq!(
+        chip(&rows[2], "error").as_deref(),
+        Some(FaceId::ChipError.name())
+    );
     assert_eq!(
         chip(&rows[3], "aborted").as_deref(),
-        Some("drgnx-chip-warn")
+        Some(FaceId::ChipWarn.name())
     );
     assert_eq!(
         chip(&rows[4], "cancelled").as_deref(),
-        Some("drgnx-chip-warn")
+        Some(FaceId::ChipWarn.name())
     );
     assert_eq!(
         rows[5]
@@ -660,13 +678,13 @@ fn the_cell_the_editor_is_in_is_marked_in_the_outline_and_no_other() {
     );
     assert_eq!(
         faces_at(&rows[1], 0, len).last().copied(),
-        Some("drgnx-notebook-current-row")
+        Some(FaceId::NotebookCurrentRow.name())
     );
     assert!(
         !rows[0]
             .runs
             .iter()
-            .any(|(_, _, f)| f == "drgnx-notebook-current-row")
+            .any(|(_, _, f)| f == FaceId::NotebookCurrentRow.name())
     );
     // no cell, or one that is not listed: nothing is marked
     for c in [None, Some("zz")] {
@@ -701,15 +719,15 @@ fn a_cut_row_is_a_tinted_row_with_the_key_that_moves_the_window() {
     let len = up.text.chars().count() as u32;
     assert_eq!(
         faces_at(up, 0, len).last().copied(),
-        Some("drgnx-notebook-cut")
+        Some(FaceId::NotebookCut.name())
     );
     // the arrow is one character, not three bytes: the key's place is counted in characters
     let key = up.text[..up.text.find("M-p").unwrap()].chars().count() as u32;
-    assert_eq!(faces_at(up, key, key + 3)[0], "drgnx-chip-quiet");
+    assert_eq!(faces_at(up, key, key + 3)[0], FaceId::ChipQuiet.name());
     let dlen = down.text.chars().count() as u32;
     assert_eq!(
         faces_at(down, 0, dlen).last().copied(),
-        Some("drgnx-notebook-cut")
+        Some(FaceId::NotebookCut.name())
     );
     assert!(down.text.contains("M-n later lines"));
 }
@@ -727,11 +745,11 @@ fn a_cut_row_fits_the_panes_columns_with_its_key_chip_whole() {
     let rows = output_rows("c", &lines(2500), 1200, 7 + 12);
     let up = &rows[0];
     let key = up.text[..up.text.find("M-p").unwrap()].chars().count() as u32;
-    assert_eq!(faces_at(up, key, key + 3)[0], "drgnx-chip-quiet");
+    assert_eq!(faces_at(up, key, key + 3)[0], FaceId::ChipQuiet.name());
     let len = up.text.chars().count() as u32;
     assert_eq!(
         faces_at(up, 0, len).last().copied(),
-        Some("drgnx-notebook-cut")
+        Some(FaceId::NotebookCut.name())
     );
 }
 
@@ -748,7 +766,7 @@ fn the_lines_of_an_error_output_are_error_rows_and_other_lines_are_not() {
     let is_err = |r: &Row| {
         r.runs
             .iter()
-            .any(|(_, _, f)| f == "drgnx-notebook-error-row")
+            .any(|(_, _, f)| f == FaceId::NotebookErrorRow.name())
     };
     assert_eq!(rows[0].text, "fine");
     assert!(!is_err(&rows[0]), "the stream before it is not");
@@ -760,7 +778,7 @@ fn the_lines_of_an_error_output_are_error_rows_and_other_lines_are_not() {
         assert!(len > 0, "an empty line of an error still has a row to tint");
         assert_eq!(
             faces_at(r, 0, len).last().copied(),
-            Some("drgnx-notebook-error-row")
+            Some(FaceId::NotebookErrorRow.name())
         );
     }
 }
@@ -768,7 +786,7 @@ fn the_lines_of_an_error_output_are_error_rows_and_other_lines_are_not() {
 #[test]
 fn the_logs_type_is_a_chip_and_an_error_entry_is_an_error_row() {
     let rows = log_rows(&[entry(1, "stream", "hi"), entry(2, "error", "a\nb")], 0);
-    assert_eq!(faces_at(&rows[0], 0, 6), ["drgnx-chip-quiet"]);
+    assert_eq!(faces_at(&rows[0], 0, 6), [FaceId::ChipQuiet.name()]);
     assert!(
         faces_at(&rows[0], 6, 7).is_empty(),
         "the padding is no chip"
@@ -776,14 +794,14 @@ fn the_logs_type_is_a_chip_and_an_error_entry_is_an_error_row() {
     let is_err = |r: &Row| {
         r.runs
             .iter()
-            .any(|(_, _, f)| f == "drgnx-notebook-error-row")
+            .any(|(_, _, f)| f == FaceId::NotebookErrorRow.name())
     };
     assert!(!is_err(&rows[0]));
     assert!(
         is_err(&rows[1]) && is_err(&rows[2]),
         "every line of an error entry"
     );
-    assert!(faces_at(&rows[1], 0, 5).contains(&"drgnx-chip-error"));
+    assert!(faces_at(&rows[1], 0, 5).contains(&FaceId::ChipError.name()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
