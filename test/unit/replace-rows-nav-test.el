@@ -95,9 +95,10 @@ a.txt, each file's matches under their definitions (`s:'), b.txt's under \"(top 
           (drgnx-replace-rows-nav-test--row "m:b.txt:5:4" "  [x] let needle;" 2))))
 
 (defmacro drgnx-replace-rows-nav-test--with (&rest body)
-  "BODY in the Search view's buffer on the rows path holding the model and rows above, nothing selected, nothing sent."
+  "BODY in the Search view's buffer on the rows path holding the model and rows above, nothing selected, nothing sent.
+A Unicode frame (a batch Emacs is an ASCII one): the separators read as on a graphical frame."
   (declare (indent 0))
-  `(progn
+  `(cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)))
      (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (should-not (get-buffer drgnx-replace-buffer-name))
      (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
