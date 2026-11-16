@@ -10,8 +10,10 @@ of the frame you are in. A *workspace* is the project's repository and, when it 
 notes repository with the code repositories inside it), that repository and the repositories directly inside it. To name
 the repositories yourself, set `drgnx-work-space-roots`.
 
-The map is a read-only buffer, `*drgnx work: NAME*`, in six layers: you asked, specs, plans, agents, branches, and
-files and machines. The hub keeps what the map shows and sends changes as they happen; the map never asks again until
+The map is a read-only buffer, `*drgnx work: NAME*`, in eight layers: you asked, specs, plans, tasks, agents, branches,
+files, and "Runs on" (the machines). A task shows its state as a glyph and a word: ✓ done, ▶ running, ● needs you,
+○ not started; an agent hangs under the task it works on. A task no plan holds sits under a "No plan" plan. The detail panel's why-chain shows the task as its own step
+after the plan. The hub keeps what the map shows and sends changes as they happen; the map never asks again until
 the hub restarts. If the hub goes away the map keeps what it showed and says "reconnecting" in its mode line, and it
 subscribes again by itself when the hub is back. A map no window shows costs nothing: the hub sends it no changes, and
 it is drawn again when you show it.
@@ -109,8 +111,13 @@ appears in the needs-you strip; its key jumps to the agents in it.
   sends it back to its agent with what the gates found, and `w` waives the gates once for that commit, with a reason
   you type, recorded on the task. Only you can waive; no agent or grant can.
 - `f` hides everything not on the selection's chain; while it is on, the arrow keys move inside the chain and ask the
-  hub for nothing. `o` shows only the agents and branches that overlap. `1` to `6` collapse a layer to one thin row
-  with its name and a count, `0` opens them all, `.` brings finished items back. Each of these is a layout you asked
+  hub for nothing. `o` shows only the agents and branches that overlap. The map opens as a **list**: spec, plan and task rows nested, each task with its agent and machine on its row;
+  `m` on the map (or the List · Graph switch) goes to the graph of layers and back, and each project keeps its mode.
+  In the graph, `1` to `8` collapse a layer to one thin row
+  with its name and a count, `0` opens them all. `.` (Cycle Work Filter) goes Active, Completed, All: Active is
+  agents that run or wait on you, what is not started, and anything that changed within `drgnx-work-recent-days`
+  (7); Completed is finished items only, each marked ✓; All is both, the finished ones faded. Each project keeps
+  its choice. Each of these is a layout you asked
   for, so the hub lays the map out again at once.
 - A layout you asked for **moves**: each card slides from where it was to its new place over 160 ms, cards that leave
   fade out and new ones fade in. The compositor moves the pixels, so your keys act on the new layout from the first

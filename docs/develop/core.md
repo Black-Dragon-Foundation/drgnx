@@ -632,6 +632,18 @@ can tell it from a command; the guard is put on where the callback is handed ove
 
 The model is loaded at the first catch, not when the guard loads (`drgnx-notice` requires `drgnx-guard`).
 
+### Unsaved changes on close
+
+`(drgnx-save-ask NAME)` (`core/drgnx-save-ask.el`) is the one question a close asks about a file's unsaved changes,
+as VS Code asks it: "Do you want to save the changes you made to NAME?", answered `save` (s), `discard` (d, Don't
+Save) or `cancel` (c, Escape, C-g). A close clicked with the mouse asks in a dialog where the frame can show one. It
+is no command and asks only where somebody can answer (`drgnx-save-ask-can-ask-p`): in batch, under
+`inhibit-interaction`, in a timer, in `drgnx-automatic` code or on the daemon's own terminal the answer is `cancel`
+at once, so nothing is lost and nothing waits. `(drgnx-save-ask-discard BUFFER)` carries out Don't Save: it kills
+BUFFER without asking again and keeps its text first in `drgnx-close-discarded` (the last five, newest first, as
+`(:file FILE :text TEXT :time TIME)`), so a mis-click is not fatal. Close Tab asks it
+([workbench](../guide/workbench.md)).
+
 ## Notices (`drgnx-notice.el`)
 
 One model for everything drgnx tells the user. Producers post; the chrome (status bar, Notices list) and the
@@ -3146,7 +3158,7 @@ its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) an
 ## Pane kinds (`wb/drgnx-panes.el`)
 
 Every pane (Explorer, agents, terminal, help, …) is one data definition, a kind, made with
-`(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack :companions)`.
+`(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack :companions :instance :instance-key)`.
 `:home` is `left`, `bottom`, `right` or `editor`; `:title` may be left out (a `left` kind's section header then shows
 only its ✕). Callers show and find panes by kind and never use the dock, area
 or section API directly: `drgnx-pane-show` (`:buffer`, `:select`), `drgnx-pane-hide`, `drgnx-pane-toggle`,
@@ -3234,6 +3246,176 @@ What the `areas` backend does with the edges:
   first, so focus ends in the editor window rather than in the new dock.
 - Redefining a kind with another home takes it out of its old dock; an editor kind's place rule goes when its
   `:buffer` or home changes.
+
+## The grid (`wb/drgnx-grid-tree.el`, `wb/drgnx-grid.el`)
+
+The tiled grid is Emacs's own window tree: a tile is a live window and a container is an internal window, so drgnx
+keeps no second tree that could drift from it. Its snapshot, `TREE`, exists only as data: for full size, the layout
+undo stack and saved layouts, and it is applied by rebuilding windows, never by setting a saved window parameter.
+
+**The format.** A `TREE` is one of:
+
+- `(row :px N :share F CHILD…)`: children side by side; `(col :px N :share F CHILD…)`: children stacked;
+- `(tile :px N :share F :id I :kinds (ENTRY…) :shown ENTRY :dock DOCK :state PLIST)`: a tool tile, its stack, the
+  entry shown, its dock (`left`, `right`, `bottom` or nil) and its kinds' own state. An entry is a kind, or
+  `(KIND . KEY)`, one instance of a kind (an agent panel's session; KEY a string, number or symbol:
+  `drgnx-grid-tree-entry-p`);
+- `(editor :px N :share F :id I :tabs (FILE…) :shown FILE :point P :start S)`: an editor tile and its tabs by file.
+
+`:px` is logical pixels (`drgnx-pixels-scale`) along the parent's direction, nil at the root; `:share` is the node's
+part of its parent, in (0, 1]. `(drgnx-grid-tree-to-logical PX SCALE)` and `(drgnx-grid-tree-from-logical LOGICAL
+SCALE)` convert, rounded half up as `drgnx-px` rounds, so logical → pixels → logical is exact at any scale.
+
+**Validation.** `(drgnx-grid-valid-tree-p TREE)` is t or nil, and nothing is built from a tree it refuses. It refuses a
+non-list, an object that cannot be written and read back (a buffer, marker, window or frame, also inside a tile's
+`:state`), a depth over 16, more than 64 leaves, a non-symbol kind, a `:px` that is not an integer in 1–20000, a
+`:share` outside (0, 1], a dock other than the three, and a row or col with fewer than two children. A kind no module
+defines is valid: its tile becomes a placeholder until the kind returns. `(drgnx-grid-tree-leaves TREE)` lists the
+leaves top-left to bottom-right.
+
+**Zones and letters.** `(drgnx-grid-zone EDGES X Y)` says where a drop at X, Y lands on a tile with pixel EDGES (LEFT
+TOP RIGHT BOTTOM): `left`, `right`, `above` or `below` in the outer quarter of that side (a split; exactly a quarter is
+the middle), else `center` (a stack). A corner goes to the nearer side, a tie to the left or right. `(drgnx-grid-letters
+N)` gives the switcher's letters: the home row first (`a s d f j k l ; g h`), then the other letters of a–z, at most 27.
+Test: `test/unit/grid-tree-test.el`.
+
+**A frame's tree.** `(drgnx-grid-tree &optional FRAME)` is FRAME's grid (`drgnx-grid-root`, the status bar's row left
+out) as a `TREE`, its sizes logical pixels at FRAME's scale. A docked area is a `tile` whose `:state` is `(:area
+AREA)`, the side bar one holding the kind `side-bar` with `(:view VIEW)`; an atom is one leaf (its main window's).
+`(drgnx-grid-apply-tree TREE &optional FRAME)` arranges FRAME as TREE and answers non-nil:
+
+- an invalid TREE changes nothing and gives one `drgnx-notify` warning;
+- the live tiles whose ids TREE holds stay, the same window objects; the others are deleted and TREE's missing tiles are
+  split off the kept ones (only splits, so the kept windows never move to another parent). When the kept tiles are
+  arranged otherwise than TREE has them, only the first stays and the rest is built around it;
+- sizes are TREE's `:px` at FRAME's scale when a container's children add up to its size, else their `:share`s, set
+  pixelwise by moving each child's trailing edge (`adjust-window-trailing-edge`), preserved sizes lifted for the call;
+- a docked area or the side bar fills its new window through its own show, which `drgnx-grid-split-dock` hands the
+  window (`drgnx-grid--into`); a tool tile shows its stack, an unknown kind its placeholder;
+- no buffer is killed: an editor tile leaving the grid gives its tabs to the editor you used last.
+
+**Full size.** `(drgnx-grid-full-size-toggle &optional WINDOW)`, the command `tile-full-size` (Full-Size Tile:
+`C-k C-m`, `C-k RET` · `C-x w m` · Vim's `C-w o`, `C-w _`, `C-w |`), saves `(ID . TREE)` in the frame parameter
+`drgnx-grid-full` (the `:arrangement` intent) and deletes every other tile of the grid (the status bar stays), past
+`no-delete-other-windows`. Again, `drgnx-grid-leave-full-size` applies the saved tree: the same edges, ±0 px at the
+same scale. While a tile is full size, every other grid command — a split, a tile shown, hidden, focused or resized, a
+dock toggled — leaves full size first, then acts. The full tile's tab line starts "Full size · 1 of N · KEY back"
+(window parameter `drgnx-grid-full-note`, read by the chrome; KEY from the profile). Workbench remaps
+`delete-other-windows`, `evil-window-delete-others`, `evil-window-set-height` and `evil-window-set-width` to it, so
+`C-x 1` and those Vim keys never lose the layout. Zen is full size plus centred text: View: Zen (`drgnx-look-zen`) and
+the Zen layout (`drgnx-layouts--zen`, its way back the layout's own: `drgnx-grid-forget-full-size`).
+Tests: `test/unit/grid-tree-live-test.el`, `test/ui/grid-full-size-gui-test.el`.
+
+**Placement on tiles** (work-space §9.3). With the grid on:
+
+- **a file** goes to the editor tile you used last; it never covers the Work map (`drgnx-rules-never-cover-modes`,
+  default `drgnx-work-map-mode`): another editor tile takes it, else a new one split from the map's right
+  (`drgnx-rules--uncovered`);
+- **a kind with instances** (`:instance` KEY → buffer, `:instance-key` buffer → KEY or nil; the agent panel's
+  sessions, `drgnx-agent-panel--session-of`): the first shows as the kind always did (the right dock); a second key's
+  buffer gets a tile of its own left of it, its stack holding `(KIND . KEY)`; from the third on they stack onto the last
+  instance tile; a key that has a tile comes back to it (`drgnx-grid--show-instance`). Each instance's tab is titled
+  by its buffer. A tile of the grid's own shows its kind's `:companions` as parts of its atom, fitted to their text
+  (`drgnx-grid--companions`); `delete-window` on a part hides the tile;
+- **the first show of a kind in `drgnx-grid-placements`** while the map shows (default: the Research Trail): a tile
+  below the map, or, when the frame is narrower than `drgnx-grid-narrow-px` (1200 logical px) and the `:narrow` kind
+  (Detail) shows, stacked onto its tile or split below its dock (`drgnx-grid--place`);
+- **a package's own `display-buffer-in-side-window`** for a buffer no rule places: a **temporary tile** on that side
+  of the grid (`drgnx-grid-temporary-tile`: `drgnx-tile-temporary` t, sized by the call's `window-width` or
+  `window-height`, else a quarter), never a side window; `delete-window` deletes it;
+- **the popup lane** borrows the panel when it shows and is not selected, else it is a temporary row under the grid
+  (`drgnx-grid-popup-row`, role `popup`, no tile); ending it leaves the grid as it was, to the pixel
+  (`drgnx-grid-end-popup-row`).
+
+While a temporary window shows, `drgnx-grid-tree` answers the tree from before the first of them (frame parameter
+`drgnx-grid--good`, the last good tree): temporary windows are never saved. **A grid a package collapsed** — two or
+more tiles gone in one change, past the grid's own hides (a package's `delete-other-windows` with
+`ignore-window-parameters`, or `set-window-configuration`) — is pushed as it was on the frame's layout undo stack
+(`drgnx-grid-push`, frame parameter `drgnx-grid-stack`, newest first, at most 20; `drgnx-grid--watch-foreign` on the
+store's `windows-changed`). Close Pane (`Esc`, `q`) on a tool tile hides it.
+Tests: `test/unit/grid-rules-test.el` (`drgnx-grid-rules/`).
+
+### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
+
+`drgnx-grid-mode` (global) makes `grid` the pane backend (`drgnx-pane-backend`): pane kinds then live in **tool
+tiles**, ordinary windows of the frame's window tree, not side windows. Callers keep calling `drgnx-pane-show`,
+`-hide`, `-focus`, `-window` and `-resize`; the backend is registered in `drgnx-pane--backends` from
+`wb/drgnx-grid.el`.
+
+- A **tool tile** has the role `tile` (chrome `tile`: the tab row of its stack on its tab line, no mode line),
+  `drgnx-pane-stack` (its kinds, the shown one first), `drgnx-tile-id` (an integer, per frame), `drgnx-tile-dock`
+  (`left`, `right`, `bottom`, nil once moved off its home), `no-delete-other-windows`, `no-other-window`, and a
+  `delete-window` parameter that hides it. It is dedicated (`drgnx`), so `display-buffer` never puts another buffer
+  there.
+- An **editor tile** is an editor window (role `editor`) with a `drgnx-tile-id` and `no-delete-other-windows`; its
+  `delete-window` refuses the last one.
+- `(drgnx-grid-root &optional FRAME)` is `window-main-window`; `(drgnx-grid-tiles &optional FRAME FILTER)` lists the
+  tiles in reading order (`editor`, `tool` or nil for both); `(drgnx-grid-dock DOCK &optional FRAME)` is the tile
+  docked there; `(drgnx-grid-toggle-dock DOCK)` hides it or shows it with the kind it showed last.
+- **Where a tile goes.** The left and right docks run the frame's full height beside the whole grid; the bottom dock
+  sits under the part between them. A hidden dock comes back beside the tiles it gave its space to (frame parameter
+  `drgnx-grid-memory`, keyed by dock, or by kind for a tile without one: `(:side :neighbour IDS :px LOGICAL :dock)`),
+  else at its dock. A kind whose dock tile shows joins its stack. The size is the dock's `:sizes` intent, else the
+  kinds' `:size` in columns or lines, clamped so both the new tile and its neighbour keep `drgnx-grid-min-px` (120
+  logical px; in a terminal `drgnx-grid-min-columns` 12 and `drgnx-grid-min-lines` 3). With no room it says "No room
+  there" and changes nothing.
+- **Hiding** deletes the window with its space going to its sibling only, and inside the sibling only to the tiles
+  along the deleted edge: the others' sizes are preserved for the delete (Emacs's `delete-window` gives the space to
+  `window-left` or `window-right`).
+- Each kind's buffer, start and point per frame are kept in a weak table (`drgnx-grid--kinds`), not a frame
+  parameter, so the saved frame state never holds a buffer. A killed buffer brings its kind's placeholder.
+- While the mode is on, `balance-windows` balances only editor tiles (`drgnx-grid--balance-editors-only`: the tool
+  tiles' buffers are `window-size-fixed` for the call), and a new editor window becomes an editor tile (the store's
+  `windows-changed`).
+
+The rules, each a test in `test/unit/grid-rules-test.el`:
+
+| | Rule |
+|---|---|
+| R1 | Showing a kind already in a stack brings its tab to the front; the window and every edge stay |
+| R2 | Showing a hidden tile takes space only from its neighbour |
+| R3 | Hiding a tile gives its space back to that neighbour only |
+| R4 | A tile keeps its pixel size across hide and show (±0 px) |
+| R5 | Tool tiles never take focus unless asked |
+| R6 | A tool tile shows only its kinds' buffers; killing one shows the placeholder |
+| R7 | Nothing splits, resizes or makes a frame on its own: `delete-window` on a tool tile hides it, `balance-windows` and `delete-other-windows` leave the tool tiles |
+| R8 | The last editor tile stays |
+
+
+### Docked tiles and atoms: the side bar, the panel, the right side
+
+`core/workbench` turns `drgnx-grid-mode` on, so the left dock, the panel and the right dock are **docked tiles**, not
+side windows. Their contents stay where they were: the dock's sections (`wb/drgnx-wb.el`) and the areas' tabs
+(`wb/drgnx-area.el`: buffers, starts and points, placeholders, companions, contextual tabs, the tab row) keep their
+data and their API. Only their windows are made and deleted by the grid while it is on (`drgnx-wb-grid-p`):
+
+- `(drgnx-grid-split-dock DOCK &optional PX FRAME KINDS)` splits the dock's window as R2 says, at PX pixels (the
+  dock's `:sizes` intent, the area's `:size`, `drgnx-wb-dock-columns`), and gives it `drgnx-tile-dock` and an id. An
+  area's window keeps its role (`panel`, `right`, chrome `area`); a section's keeps `dock`.
+- `(drgnx-grid-remove-dock WINDOW)` deletes the tile whole (its atom) as R3 says and remembers where it was in
+  `drgnx-grid-memory` under its dock.
+- **Atoms.** `(drgnx-grid-add-part WINDOW SIDE &optional PX)` splits a part off a tile and makes the tile's windows one
+  atom (`window-make-atom`): a split from any of them goes beside the whole tile, and `delete-window` on one hides the
+  tile. Parts carry `drgnx-tile-part`. An area's companions (the agent conversation's header and composer around its
+  transcript) are parts of the area's tile; the dock's sections are parts of the side bar's tile, the first section
+  its main window, each further one split below at its `:height` share of the dock. `(drgnx-grid-delete-part PART)`
+  deletes one part alone (a tab switch to a kind without companions); a tile left with one window is no atom.
+- `drgnx-grid-tool-tile-p` counts a docked tile's main window, never its parts; `(drgnx-grid-dock 'left)` is the side
+  bar's first section.
+- The pane kind `side-bar` (`:home 'left :sidebar t`) is the whole left dock: showing it shows the current view's
+  sections, its window is the first section's, hiding it hides the dock. A `:sidebar` kind defines no section.
+- The grid's root (`drgnx-grid-root`) is `window-main-window` less the status bar's row: with the bar across the
+  frame, the frame's root holds the grid and the bar, and a split of the grid's root gets a parent of its own, so
+  the bar stays the root's last child (the bar's own repair would otherwise delete and split it from a timer). The
+  bar keeps the bottom dock's height when it does rebuild its row.
+- The left and right docks split the smallest window holding every tile not docked on their side, so every editor
+  group gives its share of the width, as to a side window; the bottom dock splits the part between the side docks.
+  Every split is pixelwise (`window-resize-pixelwise`), else a size comes back rounded to whole lines.
+- With the grid off (`drgnx-grid-mode` -1, the `areas` backend) the docks and areas are side windows as before; the
+  batch tests of `wb-area`, `wb-dock`, `wb-rules` and `wb-state` cover that path.
+
+`window-swap-states` cannot swap atoms (on two parts it swaps those two windows only, on two atom roots it signals),
+so moving an atom goes through its state (`window-state-get` on the root). Test: `test/unit/grid-atoms-test.el`.
 
 ## The UI kit (`drgnx-ui-kit.el`)
 
@@ -3665,7 +3847,8 @@ twice and the saved workbench (`workbench.eld`) does not change.
 | `:front` AREA | the tab in front | the area's `:tab` in `drgnx-wb-areas` |
 | `:view` | the sidebar's view, also one no module defines now | `drgnx-wb-view` |
 | `:layout`, `:previous`, `:zen-return` | read-only until B10 | `drgnx-layouts-current`, `-previous`, `-zen-return` |
-| `:places`, `:arrangement` | nil until the grid | — |
+| `:arrangement` | what a tile shown full size goes back to, `(ID . TREE)`; read-only (full size writes it) | `drgnx-grid-full` |
+| `:places` | nil until the grid | — |
 
 Without SUBKEY, `:sizes` and `:front` answer an alist of every home or area. FRAME nil is the selected frame.
 
@@ -3786,8 +3969,10 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   sample redisplays and takes `drgnx-uitest-snapshot`: `glitnir-snapshot` presents what was drawn, forces a paint and
   returns what that paint committed, so a sample is one trip through the compositor, which answers a size or a map in
   order with those paints. The wait ends when FRAMES samples in a row are the same (the picture, or VALUE's result for
-  a state the picture does not show) and, on the native shell, `nhwl-presenter-stats` shows no commit owed since the
-  last such wait. A paint that does not come within the primitive's 1 s is the next try; a timeout fails the test. Do
+  a state the picture does not show) and, on the native shell, `nhwl-presenter-stats` shows every request gone out
+  (its `:presented` has reached its `:published`). Not a count of commits since the last wait: a packet merged into
+  one still waiting owes no commit of its own, so under a compositor that answered no frame callback (KWin with no
+  render device) that count settled on a picture that never went out. A paint that does not come within the primitive's 1 s is the next try; a timeout fails the test. Do
   not use it across a count of draws: the samples are paints. A row with a popup that has no parent (mini-frame detaches
   its frame) passes FRAME, since `drgnx-uitest-root-frame` can find that popup. The session's output lists every test
   that skipped by name (`  SKIP NAME`), so a green tier shows what it did not run.

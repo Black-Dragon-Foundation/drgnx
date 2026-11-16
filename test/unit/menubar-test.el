@@ -147,6 +147,18 @@ the ends), or the title under the pointer; the next menu opens under its title, 
     (drgnx-menubar-mode -1))
   (should-not drgnx-menubar-mode))
 
+(ert-deftest drgnx-menubar/alt-shift-and-the-letter-opens-no-menu ()
+  "Alt+F opens File; Alt+Shift+F, which reaches File's command only as Emacs drops the Shift, opens nothing: VS Code's
+Alt+Shift+F is no menu, and a terminal that sends it must not be left in a menu (the legacy terminals' fallback
+types Ctrl+Shift chords as Alt+Shift keys, so M-F stays free)."
+  (let (opened)
+    (cl-letf (((symbol-function 'drgnx-menubar-open) (lambda (id &rest _) (push id opened))))
+      (dolist (shifted '(nil t))
+        (let ((this-command-keys-shift-translated shifted))
+          (call-interactively #'drgnx-menubar-open-file)
+          (call-interactively #'drgnx-menubar-open-edit))))
+    (should (equal opened '(edit file)))))
+
 (ert-deftest drgnx-menubar/mnemonics-are-the-vs-code-profiles-only ()
   "Alt+F opens File in the VS Code profile; the Emacs and Vim profiles bind no menu key on Alt."
   (let ((profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))))

@@ -224,7 +224,14 @@ pub struct AgentStep {
 #[serde(rename_all = "lowercase")]
 pub enum BudgetScope {
     Project(ParsedId),
+    /// A spec: every plan that derives from it counts toward it.
+    Spec(ParsedId),
+    /// A plan (the document's entity id): every run of it counts toward it.
     Plan(ParsedId),
+    /// One run of a plan (a job id).
+    Run(Id),
+    /// A task (its entity id): the workers that worked on it count toward it.
+    Task(ParsedId),
     /// A manager session.
     Manager(Id),
     /// A worker session.

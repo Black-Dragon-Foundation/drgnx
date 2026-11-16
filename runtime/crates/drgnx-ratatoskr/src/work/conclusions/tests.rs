@@ -432,3 +432,50 @@ mod after_a_step {
         assert!(got.contains(&Concluded::Finding("note:unstamped".into())));
     }
 }
+
+// ---- a write's reason (hunk provenance) ----
+
+/// Pure (D): an agent's write names its session, its step, the task it works on and the conclusion it recorded in the
+/// same turn before the write.
+#[test]
+fn an_agent_write_carries_its_task_and_turn_conclusion() {
+    let mut t = TurnConclusions::default();
+    t.record(1, Some(2), "decision:4".into());
+    let c = write_cause("a1", Some("task:J-1"), 1, Some(3), &t);
+    assert_eq!(c.session.as_deref(), Some("a1"));
+    assert_eq!(c.step.as_deref(), Some("3"));
+    assert_eq!(c.task.as_deref(), Some("task:J-1"));
+    assert_eq!(c.decision.as_deref(), Some("decision:4"));
+    // the newest of the turn's conclusions by then
+    t.record(1, Some(3), "note:n7".into());
+    assert_eq!(
+        write_cause("a1", None, 1, Some(3), &t).decision.as_deref(),
+        Some("note:n7")
+    );
+}
+
+/// Pure (D), Review Focus 3: a quick fix with no conclusion in its turn has no reason; the previous turn's
+/// conclusion is never borrowed.
+#[test]
+fn a_write_with_no_conclusion_this_turn_has_no_reason() {
+    let mut t = TurnConclusions::default();
+    t.record(1, Some(2), "decision:4".into());
+    assert_eq!(write_cause("a1", None, 2, Some(9), &t).decision, None);
+    assert_eq!(t.latest_in_turn(2, None), None);
+    // and a conclusion of the new turn replaces the old turn's
+    t.record(2, Some(10), "decision:5".into());
+    assert_eq!(t.latest_in_turn(1, Some(3)), None);
+    assert_eq!(t.latest_in_turn(2, Some(10)).as_deref(), Some("decision:5"));
+}
+
+/// Pure (D): a conclusion recorded at a later step than the write is not its reason.
+#[test]
+fn a_conclusion_after_the_write_is_not_its_reason() {
+    let mut t = TurnConclusions::default();
+    t.record(1, Some(5), "decision:4".into());
+    assert_eq!(write_cause("a1", None, 1, Some(3), &t).decision, None);
+    assert_eq!(
+        write_cause("a1", None, 1, Some(5), &t).decision.as_deref(),
+        Some("decision:4")
+    );
+}

@@ -129,6 +129,28 @@ pub(crate) struct Inner {
     /// Per tree, the paths of the watcher's file events held while a session's tool call there runs, for the step
     /// that closes it to claim ([`Hub::claim`]).
     pub held: HashMap<String, Vec<String>>,
+    /// The whole causes of agent writes an editor buffer will apply (a paired chat's write to an open file), newest
+    /// last, at most [`CAUSES_KEPT`]: the editor's batch names only `agent:SESSION#STEP`, and its records take the
+    /// task and the conclusion from here ([`Hub::note_cause`]).
+    pub causes: std::collections::VecDeque<verdandi::Cause>,
+}
+
+/// How many agent writes' causes [`Inner::causes`] keeps.
+pub(crate) const CAUSES_KEPT: usize = 256;
+
+impl Inner {
+    /// CAUSE (session and step, from a batch's origin) with what the session said of that write when it made it.
+    pub(crate) fn whole_cause(&self, cause: verdandi::Cause) -> verdandi::Cause {
+        if cause.session.is_none() {
+            return cause;
+        }
+        self.causes
+            .iter()
+            .rev()
+            .find(|c| c.session == cause.session && c.step == cause.step)
+            .cloned()
+            .unwrap_or(cause)
+    }
 }
 
 /// One document's line authors on one branch, at the document's version FRONTIER.
@@ -298,6 +320,7 @@ impl Hub {
                 kept: HashMap::new(),
                 flights: HashMap::new(),
                 held: HashMap::new(),
+                causes: Default::default(),
             }),
             events: tokio::sync::broadcast::channel(256).0,
             dir: dir.to_path_buf(),

@@ -1246,10 +1246,15 @@ none, put back what it was before.  On an Emacs without the variable, nothing."
 (defvar drgnx-keys--everywhere-alist (list (cons 'drgnx-keys--everywhere-on drgnx-keys--everywhere-map))
   "The entry `emulation-mode-map-alists' holds (as this symbol) while there are `:everywhere' keys.")
 
+(defvar-local drgnx-keys-everywhere-here nil
+  "Non-nil in a minibuffer whose prompt takes the `:everywhere' keys too: a list a key opened, where pressing it
+again moves on (Open Previous Editor in Group's C-<tab>, `drgnx-chrome-recent-editor').")
+
 (defun drgnx-keys--everywhere-filter (event command)
-  "COMMAND for the `:everywhere' key EVENT, except in the minibuffer (there C-j and its like are the minibuffer's)
-and where a keymap holding your binding of EVENT is active (`drgnx-keys--yours-everywhere')."
-  (and (not (minibufferp))
+  "COMMAND for the `:everywhere' key EVENT, except in the minibuffer (there C-j and its like are the minibuffer's;
+not one that sets `drgnx-keys-everywhere-here') and where a keymap holding your binding of EVENT is active
+\(`drgnx-keys--yours-everywhere')."
+  (and (or (not (minibufferp)) drgnx-keys-everywhere-here)
        (not (seq-some (lambda (y) (and (eq (caar y) event) (drgnx-keys--foreign-active-p (cdar y))))
                       drgnx-keys--yours-everywhere))
        command))

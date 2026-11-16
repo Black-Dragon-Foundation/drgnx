@@ -209,7 +209,10 @@ fn listen(port: u16, reuseport: bool) -> (std::os::fd::OwnedFd, u16) {
     use std::os::fd::{FromRawFd, OwnedFd};
     // SAFETY: plain socket calls on a descriptor made here and owned by the returned OwnedFd; the sockaddr is zeroed then set.
     unsafe {
-        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        // close-on-exec from the start: a descriptor without it is inherited by every child another test spawns in the
+        // meantime (a Command's fork/exec in a parallel test), and the child, in this process's group, keeps the
+        // listener alive after it is dropped here, which the "nothing listens" check then finds
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
         assert!(fd >= 0);
         let owned = OwnedFd::from_raw_fd(fd);
         let on: libc::c_int = i32::from(reuseport);
@@ -258,9 +261,35 @@ fn a_listener_that_another_process_of_the_account_could_join_is_refused() {
     // a second same-uid listener on the port (it joined the group): the group's check names it as well, and it is refused too
     let (second, _) = listen(p, true);
     assert!(ports::exclusively_owned(p, &[me]).is_err());
-    // nothing listens: not yet
     drop((shared, second));
-    assert_eq!(ports::exclusively_owned(p, &[me]), Ok(false));
+    // nothing listens: not yet.  On a port nothing here ever listened on: the one just dropped can still be listening in
+    // a child another test forked meanwhile (it holds a copy of every descriptor until its exec), which is a listener
+    // of this process group until then, so asking about it again measures that child, not the check
+    let (_bound, q) = reserve();
+    assert_eq!(ports::exclusively_owned(q, &[me]), Ok(false));
+}
+
+/// A port 127.0.0.1 gives, held by a socket that is bound and does not listen (so no child's copy of it is a listener).
+fn reserve() -> (std::os::fd::OwnedFd, u16) {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    // SAFETY: plain socket calls on a descriptor made here and owned by the returned OwnedFd; the sockaddr is zeroed then set.
+    unsafe {
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+        assert!(fd >= 0);
+        let owned = OwnedFd::from_raw_fd(fd);
+        let mut a: libc::sockaddr_in = std::mem::zeroed();
+        a.sin_family = libc::AF_INET as libc::sa_family_t;
+        a.sin_addr.s_addr = u32::from_be_bytes([127, 0, 0, 1]).to_be();
+        let len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        assert_eq!(libc::bind(fd, std::ptr::from_ref(&a).cast(), len), 0);
+        let mut got: libc::sockaddr_in = std::mem::zeroed();
+        let mut l = len;
+        assert_eq!(
+            libc::getsockname(fd, std::ptr::from_mut(&mut got).cast(), &mut l),
+            0
+        );
+        (owned, u16::from_be(got.sin_port))
+    }
 }
 
 /// A port check never outlasts its deadline: a command that does not exit is killed and the check fails, saying so

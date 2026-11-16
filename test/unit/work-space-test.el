@@ -99,10 +99,10 @@ counting as up when UP."
         (funcall (nth 2 import) (list :dry_run :false :files (vector (list :path "a.md" :kind "spec" :entities 1 :ops 1))) nil)
         (should-not (buffer-local-value 'header-line-format buf))
         (should (assoc "work/map/subscribe" calls))
-        (should (eq t (plist-get (plist-get (cdr (assoc "work/map/subscribe" calls)) :filters) :finished)))
+        (should (equal "all" (plist-get (plist-get (cdr (assoc "work/map/subscribe" calls)) :filters) :show)))
         ;; and once more after the subscription (calls are newest first): the set that reaches the new view
         (should (equal (mapcar #'car (seq-take calls 2)) '("work/map/set" "work/map/subscribe")))
-        (should (eq t (plist-get (plist-get (cdr (car calls)) :filters) :finished)))
+        (should (equal "all" (plist-get (plist-get (cdr (car calls)) :filters) :show)))
         ;; the same buffer asks once
         (setq hub-calls nil)
         (drgnx-work-space-open (list :id "workspace:000000000006" :roots (list root)) t)

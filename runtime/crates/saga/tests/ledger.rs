@@ -32,3 +32,20 @@ fn ledger_sections_attach_to_tasks() {
     assert_eq!(d.sections[1].body, "\n—\n\n");
     assert!(d.sections[2].body.contains("| a | yes |"));
 }
+
+#[test]
+fn done_marks_name_tasks_and_commits() {
+    let text = "# SDD ledger — plan: p.md\nTask 1: complete (commit a5813f7, tests: 114/114)\nTask 2-3: complete (commits 0e61612..5ceabdc, tests ok)\nTask 22b: complete\nTask 4: Ruling: not a mark\nTask 5: pending\n";
+    let m = saga::ledger::done_marks(text);
+    assert_eq!(m.len(), 3);
+    assert_eq!(
+        (m[0].tasks.clone(), m[0].commits.clone()),
+        (vec!["1".to_string()], vec!["a5813f7".to_string()])
+    );
+    assert_eq!(m[1].tasks, ["2", "3"]);
+    assert_eq!(m[1].commits, ["0e61612", "5ceabdc"]);
+    assert_eq!(
+        (m[2].tasks.clone(), m[2].commits.is_empty()),
+        (vec!["22b".to_string()], true)
+    );
+}

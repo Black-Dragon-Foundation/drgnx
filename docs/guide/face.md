@@ -46,7 +46,8 @@ leaves them out.
   window Left and Right go on to the menu beside it (Right first opens a submenu) and the pointer moving over another
   title opens that one, as in VS Code. In the VS Code profile
   Alt and the first letter open a menu (`Alt+F` File, `Alt+E` Edit, `Alt+S` Selection, `Alt+V` View, `Alt+G` Go,
-  `Alt+R` Run, `Alt+T` Terminal, `Alt+H` Help), and the titles underline that letter. The Emacs and Vim profiles keep
+  `Alt+R` Run, `Alt+T` Terminal, `Alt+H` Help), and the titles underline that letter. Alt+Shift and the letter opens
+  no menu (VS Code's `Shift+Alt+F` is no menu either; in a legacy terminal it is Search, [keys.md](keys.md)). The Emacs and Vim profiles keep
   Alt for editing; the commands **Open the File Menu** … **Open the Help Menu** take a key of your own like any other
   ([keys.md](keys.md)).
 - **What is in them:** `etc/menus.eld` lists the commands of each menu in groups; titles and keys come from the
@@ -174,18 +175,24 @@ shows in the icon's place. They are not in the table below.
 | `sep` | ` · ` | ` \| ` | `flag` | ⚑ | `#` |
 | `diamond` | ◆ | `<>` | `search` | ⌕ | `/` |
 | `minimize` | – | `-` | `maximize` | ▢ | `[]` |
-| `bullet` | • | `>` | | | |
+| `bullet` | • | `>` | `newline` | ⏎ | `\n` |
+| `dash` | — | `--` | `arrow-left` | ← | `<-` |
+| `empty-set` | ∅ | `{}` | | | |
 | `fail` | ✕ | `X` | `stopped` | ■ | `#` |
 | `dismiss` | × | `x` | `unqueue` | − | `-` |
 | `info` | ℹ | `i` | `warn` | ⚠ | `!` |
 | `package` | ⬡ | `P` | `plugin` | ◆ | `+` |
 | `module` | ▣ | `M` | `refused` | ⛔ | `X` |
 | `note` | ✎ | `n` | `changed` | ↻ | `~` |
-| `hook-busy` | ⏳ | `...` | | | |
+| `hook-busy` | ⏳ | `...` | `rename-symbol` | ⟨⟩ | `<>` |
+| `match-previous` | ↑ | `^` | `match-next` | ↓ | `v` |
+| `dropdown` | ▾ | `v` | `changed-lines` | ± | `+-` |
+| `save-search` | ☆ | `*` | | | |
 
 The glyphs are by meaning. `close` is the mark of a close button, `fail` is "something failed", `dismiss` dismisses a
 notice and `unqueue` takes a queued message back. Some look alike by default, but each is its own entry, so restyling
-`close` leaves "tests failed" alone. The table and `drgnx-face-glyph` are part of the core (`core/drgnx-ui-kit.el`): they
+`close` leaves "tests failed" alone; the find bar's `match-previous` and `match-next` are not the branch's `ahead`
+and `behind`. The table and `drgnx-face-glyph` are part of the core (`core/drgnx-ui-kit.el`): they
 work whether or not this module is on. The lists use the same kit: a module's status in Preferences: Modules and an
 onboarding step's status show a glyph in the status face (`drgnx-status-ok`, `-info`, `-warn`, `-fail` and
 `-needs-you`, which inherit `success`, `shadow`, `warning`, `error` and `error`), so they read without colour too.

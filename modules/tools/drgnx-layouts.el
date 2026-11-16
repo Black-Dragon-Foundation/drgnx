@@ -33,6 +33,9 @@
 (declare-function drgnx-groups-list "drgnx-groups")
 (declare-function drgnx-groups--split "drgnx-groups")
 (declare-function drgnx-chrome-apply "drgnx-chrome")
+(declare-function drgnx-grid-full-size-p "drgnx-grid" (&optional frame))
+(declare-function drgnx-grid-full-size-toggle "drgnx-grid" (&optional window))
+(declare-function drgnx-grid-forget-full-size "drgnx-grid" (&optional frame))
 (declare-function drgnx-persist--strip "drgnx-persist")
 (declare-function drgnx-persist--clamp "drgnx-persist")
 (declare-function drgnx-persist--visit "drgnx-persist")
@@ -325,8 +328,11 @@ layout removes them (their intent, the saved arrangements, is untouched); defini
     pane))
 
 (defun drgnx-layouts--zen (editor)
-  "EDITOR alone (its margins come from `drgnx-layouts--zen-margins')."
-  (delete-other-windows editor)
+  "EDITOR alone (its margins come from `drgnx-layouts--zen-margins'): with the grid on, its tile at full size
+\(`drgnx-grid-full-size-toggle'), the way back the layout's own (`drgnx-layouts-zen-return')."
+  (if (drgnx-wb-grid-p)
+      (unless (drgnx-grid-full-size-p) (drgnx-grid-full-size-toggle editor))
+    (delete-other-windows editor))
   (select-window editor))
 
 (defun drgnx-layouts--remove-panes ()
@@ -368,6 +374,7 @@ layout removes them (their intent, the saved arrangements, is untouched); defini
          (drgnx-layouts--centre nil)
          (add-hook 'window-size-change-functions #'drgnx-layouts--zen-resize))
         ((eq from 'zen)
+         (when (fboundp 'drgnx-grid-forget-full-size) (drgnx-grid-forget-full-size))   ; the layout put its own back
          (dolist (w (window-list nil 'nomini))
            (when (drgnx-signal-editor-window-p w) (set-window-margins w 0 0)))
          (unless (seq-some (lambda (f) (eq (frame-parameter f 'drgnx-layouts-current) 'zen)) (frame-list))

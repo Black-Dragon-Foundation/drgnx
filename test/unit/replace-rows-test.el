@@ -42,10 +42,14 @@
   "The Search view's old rows' view type, as its section defines it (undone with the macro's `drgnx-view--types')."
   (drgnx-view-define 'replace-results :render #'drgnx-replace--render-row :delay 0 :slice drgnx-view-slice :key-test 'eq))
 
+(defvar drgnx-replace-rows-test--ascii nil "Non-nil: `drgnx-replace-rows-test--with's frame is an ASCII terminal's.")
+
 (defmacro drgnx-replace-rows-test--with (&rest body)
-  "BODY in the Search view's buffer (`buf', view `view') with a hub that is up: its calls are recorded, nothing is sent."
+  "BODY in the Search view's buffer (`buf', view `view') with a hub that is up: its calls are recorded, nothing is sent.
+A Unicode frame (a batch Emacs is an ASCII one): the marks and separators read as on a graphical frame, unless
+`drgnx-replace-rows-test--ascii'."
   (declare (indent 0))
-  `(progn
+  `(cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) drgnx-replace-rows-test--ascii)))
      (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
      (should-not (get-buffer drgnx-replace-buffer-name))
      (let* ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
@@ -501,7 +505,6 @@ greyed out but in a git scope and goes with it; Next Scope cycles the chips."
     (should-not (drgnx-replace-rows-test--active :lines))
     (drgnx-replace--set-scope 'changed)
     (should (equal '(:kind "changed") (drgnx-replace-rows-test--scope)))
-    ;; the form's flat chips (ca8579a1a, S1): on, and off
     (should (eq 'drgnx-replace-chip-on (widget-get (drgnx-replace--widget 'changed) :button-face)))
     (should (eq 'drgnx-replace-chip (widget-get (drgnx-replace--widget 'project) :button-face)))
     (should (drgnx-replace-rows-test--active :lines))
@@ -545,25 +548,67 @@ and deleted files it skipped; an empty scope says why; a Branch with no base to 
                                     :scope (list :files 0 :needs_base "choose a base: detached HEAD")))
     (should (string-match-p "choose a base: detached HEAD.*Choose…" (drgnx-replace-rows-test--status)))))
 
+(ert-deftest drgnx-replace-rows/the-form-has-an-ascii-form ()
+  "On a terminal that does not write UTF-8 the view's marks are ASCII (`drgnx-face-glyph'): Branch's ▾, `±', the
+pattern language's ▾, ☆ (Save This Search) and a saved search's ☆ (a batch Emacs is such a terminal)."
+  (let ((drgnx-replace-rows-test--ascii t))
+    (drgnx-replace-rows-test--with
+      (drgnx-replace-rows-test--answering
+          '(("search/saved/list" . (:saved [(:name "TODOs" :search (:query (:mode "text" :text "TODO")) :pinned :false
+                                                   :project :false :shared :false)])))
+        (drgnx-replace--set-scope 'branch)
+        (drgnx-replace--toggle :pattern)
+        (drgnx-replace--search-now)
+        (should (equal "Branch v" (string-trim (widget-value (drgnx-replace--widget 'branch)))))
+        (should (equal "+-" (string-trim (widget-value (drgnx-replace--widget :lines)))))
+        (should (string-match-p "^  \\* TODOs" (drgnx-replace-rows-test--lists)))
+        (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+          (should (string-match-p "any v" text))
+          (should-not (string-match-p "[▾±☆]" text)))))))
+
+(ert-deftest drgnx-replace-rows/the-view-is-ascii-on-an-ascii-terminal ()
+  "On a terminal that does not write UTF-8 nothing the Search view draws is outside ASCII: the status line's
+Searching… and its separators, the lists' separators, a saved search's ×, a pinned count's …, a row's … and ⏎, the
+report of a write (`drgnx-face-glyph''s sep, ellipsis, dismiss and newline)."
+  (let ((drgnx-replace-rows-test--ascii t))
+    (drgnx-replace-rows-test--with
+      (drgnx-replace-rows-test--answering
+          `(("search/saved/list" . (:saved [(:name "TODOs" :search (:query (:mode "text" :text "TODO")) :pinned t
+                                                   :project :false :shared :false)]))
+            ("search/recent" . (:recent ,(vector drgnx-replace-rows-test--older))))
+        (setq drgnx-replace--searching t)
+        (drgnx-replace--search-now)
+        (drgnx-replace--update-status)
+        (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+          (should (string-search " | " text))
+          (should-not (string-match-p "[^[:ascii:]]" text)))
+        (should-not (string-match-p "[^[:ascii:]]" (drgnx-replace--report 3 2 1)))
+        (should-not (string-match-p "[^[:ascii:]]" (drgnx-replace--spec-label
+                                                    '(:query (:mode "pattern" :pattern "x") :scope (:kind "changed")))))
+        (should (equal "...567890123456789x\\ny"
+                       (substring-no-properties
+                        (drgnx-replace--preview '(:before "abcdefghij1234567890123456789" :text "x\ny" :after "") ""))))))))
+
 (ert-deftest drgnx-replace-rows/the-branch-menu-picks-a-base ()
   "Pattern D: Branch ▾ pressed while Branch is on opens its menu (`search/scope-bases': the upstream, the default and
 recent branches); the base picked goes with the search and on the chip."
-  (drgnx-replace-rows-test--with
-    (drgnx-replace--fill 'find "needle")
-    (drgnx-replace--set-scope 'branch)
-    (should (equal '(:kind "branch") (drgnx-replace-rows-test--scope)))
-    (let (asked offered)
-      (cl-letf (((symbol-function 'drgnx-hub-call-sync)
-                 (lambda (method params &rest _) (setq asked (cons method params))
-                   (list :current "work" :upstream "origin/main" :default "origin/main" :recent ["main" "dev"]
-                         :detached :false)))
-                ((symbol-function 'completing-read)
-                 (lambda (_prompt coll &rest _) (setq offered (all-completions "" coll)) "dev")))
-        (drgnx-replace--branch-pressed))
-      (should (equal '("search/scope-bases" :root "/r/") asked))
-      (should (equal '("origin/main" "main" "dev") offered)))
-    (should (equal '(:kind "branch" :base "dev") (drgnx-replace-rows-test--scope)))
-    (should (equal "Branch dev ▾" (string-trim (widget-value (drgnx-replace--widget 'branch)))))))
+  (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)))   ; the Unicode marks: ▾, ☆
+    (drgnx-replace-rows-test--with
+      (drgnx-replace--fill 'find "needle")
+      (drgnx-replace--set-scope 'branch)
+      (should (equal '(:kind "branch") (drgnx-replace-rows-test--scope)))
+      (let (asked offered)
+        (cl-letf (((symbol-function 'drgnx-hub-call-sync)
+                   (lambda (method params &rest _) (setq asked (cons method params))
+                     (list :current "work" :upstream "origin/main" :default "origin/main" :recent ["main" "dev"]
+                           :detached :false)))
+                  ((symbol-function 'completing-read)
+                   (lambda (_prompt coll &rest _) (setq offered (all-completions "" coll)) "dev")))
+          (drgnx-replace--branch-pressed))
+        (should (equal '("search/scope-bases" :root "/r/") asked))
+        (should (equal '("origin/main" "main" "dev") offered)))
+      (should (equal '(:kind "branch" :base "dev") (drgnx-replace-rows-test--scope)))
+      (should (equal "Branch dev ▾" (string-trim (widget-value (drgnx-replace--widget 'branch))))))))
 
 (defconst drgnx-replace-rows-test--older
   '(:query (:mode "text" :text "older" :case t :regexp :false) :replace "x"
@@ -620,24 +665,25 @@ Search walks back, and past the newest gives the search that was there before th
 (ert-deftest drgnx-replace-rows/the-empty-view-lists-saved-then-recent ()
   "Pattern D: with Find empty the view lists the project's saved searches, then its last 8 recent ones; a click on
 one restores and runs it; with words in Find the lists go."
-  (drgnx-replace-rows-test--with
-    (drgnx-replace-rows-test--answering
-        `(("search/saved/list" . (:saved [(:name "TODOs" :search (:query (:mode "text" :text "TODO")) :pinned :false
-                                                 :project :false :shared :false)]))
-          ("search/recent" . (:recent ,(vconcat (cons drgnx-replace-rows-test--older
-                                                      (mapcar (lambda (i) `(:query (:mode "text" :text ,(format "r%d" i))))
-                                                              (number-sequence 1 9)))))))
-      (drgnx-replace--search-now)
-      (let ((lists (drgnx-replace-rows-test--lists)))
-        (should (string-match-p "Saved\n.*☆ TODOs.*\nRecent\n.*older" lists))
-        (should (string-match-p "r7" lists))
-        (should-not (string-match-p "r8" lists)))
-      (goto-char drgnx-replace--lists-beg)
-      (search-forward "older")
-      (push-button (match-beginning 0))
-      (should (equal "older" (drgnx-replace--text 'find)))
-      (should (eq 'changed (drgnx-replace--opt :scope)))
-      (should (equal "" (drgnx-replace-rows-test--lists))))))
+  (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)))   ; the Unicode marks: ▾, ☆
+    (drgnx-replace-rows-test--with
+      (drgnx-replace-rows-test--answering
+          `(("search/saved/list" . (:saved [(:name "TODOs" :search (:query (:mode "text" :text "TODO")) :pinned :false
+                                                   :project :false :shared :false)]))
+            ("search/recent" . (:recent ,(vconcat (cons drgnx-replace-rows-test--older
+                                                        (mapcar (lambda (i) `(:query (:mode "text" :text ,(format "r%d" i))))
+                                                                (number-sequence 1 9)))))))
+        (drgnx-replace--search-now)
+        (let ((lists (drgnx-replace-rows-test--lists)))
+          (should (string-match-p "Saved\n.*☆ TODOs.*\nRecent\n.*older" lists))
+          (should (string-match-p "r7" lists))
+          (should-not (string-match-p "r8" lists)))
+        (goto-char drgnx-replace--lists-beg)
+        (search-forward "older")
+        (push-button (match-beginning 0))
+        (should (equal "older" (drgnx-replace--text 'find)))
+        (should (eq 'changed (drgnx-replace--opt :scope)))
+        (should (equal "" (drgnx-replace-rows-test--lists)))))))
 
 (ert-deftest drgnx-replace-rows/a-saved-search-and-its-pinned-count ()
   "Pattern D: Save This Search (☆) names the view's search (the words by default) and keeps it

@@ -25,8 +25,17 @@ use drgnx_rows::faces::FaceId;
 
 /// The layer labels' margin, logical px.
 pub const MARGIN: u32 = 84;
-/// The six layers' labels, sentence case; the last is short for "Files and machines".
-pub const LAYER_NAMES: [&str; 6] = ["You asked", "Specs", "Plans", "Agents", "Branches", "Files"];
+/// The eight layers' labels, sentence case.
+pub const LAYER_NAMES: [&str; 8] = [
+    "You asked",
+    "Specs",
+    "Plans",
+    "Tasks",
+    "Agents",
+    "Branches",
+    "Files",
+    "Runs on",
+];
 /// The face that gives a card's text (and the strip's chips) its font, under the pieces' own faces: each is measured
 /// in the font the editor says its face draws in (work-space-dark.html `.acardm`, the caption size).
 const CARD_FONT: &str = FaceId::WorkCard.name();
@@ -91,9 +100,9 @@ pub struct Index {
     /// The keys in y order: (a band?, the layout row's index); each band above its row.
     order: Vec<(bool, usize)>,
     /// Per layer (1–6), its first row's index in draw order.
-    first: [Option<usize>; 7],
+    first: [Option<usize>; 9],
     /// Per layer, how many items it holds.
-    count: [usize; 7],
+    count: [usize; 9],
     /// Each placed item's first row (a port's chip sits in the band above it).
     first_row: BTreeMap<ItemId, usize>,
 }
@@ -102,7 +111,7 @@ impl Index {
     pub fn of(s: &Scene) -> Index {
         let l = s.layout;
         let mut items: Vec<Vec<(u32, ItemId)>> = vec![Vec::new(); l.rows.len()];
-        let mut count = [0; 7];
+        let mut count = [0; 9];
         for (id, it) in s.items {
             let layer = it.kind.layer();
             count[usize::from(layer)] += 1;
@@ -133,7 +142,7 @@ impl Index {
         let mut by_y: Vec<usize> = (0..l.rows.len()).collect();
         by_y.sort_by_key(|&i| l.rows[i].y);
         let mut order = Vec::new();
-        let mut first = [None; 7];
+        let mut first = [None; 9];
         for i in by_y {
             if l.bands.iter().any(|b| b.row as usize == i) {
                 order.push((true, i));
@@ -243,8 +252,8 @@ fn band_row(
 /// How many text lines layout row R holds: five for a rich agent row, two for a compact one, else one.
 fn row_lines(r: &crate::layout::Row) -> u32 {
     match (r.layer, r.height_units) {
-        (4, h) if h >= 20 => 5,
-        (4, _) => 2,
+        (5, h) if h >= 20 => 5,
+        (5, _) => 2,
         _ => 1,
     }
 }
@@ -328,7 +337,7 @@ enum Part {
 /// The label of layout row I's first line: the layer's name on its first row, a collapsed layer's with its count.
 fn layer_label(s: &Scene, index: &Index, i: usize) -> String {
     let r = &s.layout.rows[i];
-    let name = LAYER_NAMES[usize::from(r.layer.clamp(1, 6)) - 1];
+    let name = LAYER_NAMES[usize::from(r.layer.clamp(1, 8)) - 1];
     if r.collapsed {
         format!("{name} · {}", index.count[usize::from(r.layer)])
     } else if index.first[usize::from(r.layer)] == Some(i) {
@@ -821,6 +830,7 @@ fn chip_line(it: &Item) -> Line {
             Kind::Ask => ("message-square", "❝"),
             Kind::Spec => ("file-text", "◫"),
             Kind::Plan => ("list-checks", "☰"),
+            Kind::Task => ("flag", "⚑"),
             Kind::Branch => ("git-branch", "⑂"),
             Kind::File => ("file-code", "▭"),
             Kind::Machine if it.label == "laptop" => ("laptop", "▭"),
@@ -830,6 +840,11 @@ fn chip_line(it: &Item) -> Line {
         l.1 = Some((name, alt));
     }
     let extra: Vec<String> = match it.kind {
+        Kind::Task => f
+            .task_state
+            .map(|s| format!("{} {}", s.glyph(), s.word()))
+            .into_iter()
+            .collect(),
         Kind::Plan => f
             .progress
             .map(|(a, b)| format!("{a}/{b}"))
@@ -1270,6 +1285,7 @@ pub fn strip(
         if i > 0 {
             b.push(" ", None);
         }
+        let full = e.clone();
         let e = fit_px(m, Some(FaceId::WorkNeedsYou.name()), e, room);
         let start = b.pos();
         b.push(&format!(" ⚑ {e} "), Some(FaceId::WorkNeedsYou.name()))
@@ -1280,6 +1296,7 @@ pub fn strip(
             .push(" ", Some(FaceId::WorkNeedsYou.name()));
         let end = b.pos();
         b.face(start, end, FaceId::Chip.name());
+        b.prop(start, end, "help-echo", Value::String(full));
     }
     if entries.len() > 9 {
         b.push(
@@ -1407,7 +1424,9 @@ fn why(s: &Scene, id: &ItemId) -> String {
         cur = parent(s, c);
     }
     chain.reverse();
-    if let Some(t) = s.items.get(id).and_then(|it| it.fields.task.clone()) {
+    if let Some(t) = s.items.get(id).and_then(|it| it.fields.task.clone())
+        && !chain.contains(&t)
+    {
         chain.push(t);
     }
     chain.join(" › ")
@@ -1477,6 +1496,65 @@ fn outline_block(s: &Scene, id: &ItemId, cols: usize, env: &Env) -> Vec<Line> {
     lines
 }
 
+/// The rows of List mode: one per entry, keyed `list:N`, a fold mark and the label indented by depth (canonical
+/// characters, never pixels), a task's state glyph and word, then its agent, machine and chips. Each carries its
+/// item's id, which the editor's keys and clicks read. The kit draws these rows later; this is the plain form.
+pub fn list_rows(entries: &[crate::list::ListEntry], selected: Option<&ItemId>) -> Vec<Row> {
+    use crate::list::ListChip;
+    entries
+        .iter()
+        .enumerate()
+        .map(|(n, e)| {
+            let mut b = RowBuilder::new(format!("list:{n}"));
+            let start = b.pos();
+            b.push(&"  ".repeat(usize::from(e.depth)), None);
+            let fold = match (e.depth, e.collapsed) {
+                (2, _) => "",
+                (_, true) => "▸ ",
+                _ => "▾ ",
+            };
+            b.push(fold, None);
+            if let Some(s) = e.chips.iter().find_map(|c| match c {
+                ListChip::State(s) => Some(*s),
+                _ => None,
+            }) {
+                b.push(&format!("{} ", s.glyph()), None);
+            }
+            b.push(&e.label, None);
+            if let Some(n) = e.count {
+                b.push(&format!(" · {n}"), None);
+            }
+            for c in &e.chips {
+                match c {
+                    ListChip::State(s) => b.push(&format!("  {}", s.word()), None),
+                    ListChip::Branch(x) => b.push(&format!("  ⑂ {x}"), None),
+                    ListChip::Files(f, l) => b.push(&format!("  {f} files {l} lines"), None),
+                    ListChip::Progress(d, t) => b.push(&format!("  {d}/{t}"), None),
+                };
+            }
+            if let Some(a) = &e.agent {
+                b.push(
+                    &format!("  {}", a.as_str().trim_start_matches("agent:")),
+                    None,
+                );
+            }
+            if let Some(m) = &e.machine {
+                b.push(&format!("  on {m}"), None);
+            }
+            let end = b.pos();
+            b.face(start, end, FaceId::WorkCard.name());
+            if e.visibility == crate::Visibility::Faded {
+                b.face(start, end, FaceId::WorkDim.name());
+            }
+            if selected == Some(&e.item) {
+                b.face(start, end, FaceId::Selected.name());
+            }
+            b.prop(start, end, "drgnx-work-id", Value::String(e.item.0.clone()));
+            b.finish()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1495,6 +1573,9 @@ mod tests {
             warn: false,
             needs_you: false,
             shared: false,
+            done: false,
+            ready: false,
+            touched: 0,
             fields: Fields {
                 slots: Some((1, 2)),
                 runner: Some(RunnerFact {
@@ -1507,6 +1588,7 @@ mod tests {
                 }),
                 ..Fields::default()
             },
+            chips: Vec::new(),
         }
     }
 

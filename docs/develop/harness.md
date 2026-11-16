@@ -876,7 +876,10 @@ session launcher         systemd         # or detached (process group, no system
   copies, as for every local test image, so worktrees with other inputs never share a tag), built from
   `test/container/Containerfile.wm` (fedora:45 + `emacs-pgtk kwin niri sway dbus-daemon mesa-dri-drivers procps-ng
   util-linux`, ~2.3 GB; `kwin_wayland` and `sway` lose their `cap_sys_nice` file capability, which the container does
-  not grant), with the same cap and security options. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
+  not grant), with the same cap and security options. A KWin run gets `/dev/udmabuf` (never `/dev/dri`): KWin 6.8's
+  virtual backend composites only on a render device, and udmabuf gives it Mesa's llvmpipe on any machine; without
+  it KWin answers no frame callback and the presenter holds every packet after its first commit, so a host without
+  `/dev/udmabuf` is refused (exit 2, with the reason). `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
   too. `DRGNX_TEST_WM_IMAGE` uses a prebuilt one (`DRGNX_TEST_GUI_IMAGE` does not apply: that image has neither).
 - **A local run builds an image only when it must.** `bin/drgnx test --container` takes the image `NAME:TAG` (TAG as
   above) from the local store when it is there; else pulls `ghcr.io/black-dragon-foundation/NAME:TAG` (CI's copy of the
@@ -1291,6 +1294,10 @@ test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label
 `DRGNX_USER_ELPA` (a directory holding the pinned kkp, and corfu, unpacked) is mounted read-only as `/elpa`, so the
 kkp tests and the kitty exit test run there too; without it they skip. Every `--container` tier mounts it the same
 way, so the batch tests that load a package (the extras teardown) run in a container too.
+A GUI session inherits `DRGNX_USER_ELPA` too (`drgnx-ui-keep-env`), so the GUI tests that load packages (code
+editing, the editor rows, magit's ediff) find them there. The magit row (`drgnx-ui-grid-ediff/magit-ediff-stays-in-one-tile`)
+puts magit and its dependencies from it on the load path; without magit it fails, unless `DRGNX_TEST_ALLOW_NO_MAGIT=1`
+(which sessions inherit as well) lets the run go without it.
 `DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. The tier gets the test hub ([The test hub](#the-test-hub)): a session
 starts none by itself, so a test that reads hub-fed rows (the Explorer's folders and git letters, the Open section)
 starts one in its session with `drgnx-tty-session-hub` (`ratatoskr serve --foreground` on the session's runtime

@@ -333,8 +333,10 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
                 return Ok(None);
             };
             let row = norn::read::jobs::job(c, &job)?;
-            // the budget scope the runner books the run's spend under
-            let plan = row.as_ref().map(crate::runner::plan_scope);
+            // the budget the run spends from: its plan's (every run of it), or its own with no plan
+            let plan = row.as_ref().map(|j| {
+                crate::runner::plan_scope(j).unwrap_or_else(|| crate::runner::run_scope(j))
+            });
             // the run's facts its first start recorded (`runner::tick::run_facts`) and the user's order
             let data = row
                 .as_ref()
@@ -482,12 +484,14 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
     }
 }
 
-/// What the plan scope PLAN (`runner::plan_scope`) spent in USD (measured and estimated) and its USD budget: none when
-/// it has neither.
-fn plan_cost(b: &crate::budget::Budgets, plan: &str) -> Option<(f64, Option<f64>)> {
+/// What the budget scope PLAN (a plan's, every run of it: `runner::plan_scope`; a run's with no plan) spent in USD
+/// (measured and estimated) and its USD budget: none when it has neither.
+fn plan_cost(
+    b: &crate::budget::Budgets,
+    plan: &runstav::methods::timeline::BudgetScope,
+) -> Option<(f64, Option<f64>)> {
     use runstav::methods::matrix::Unit;
-    use runstav::methods::timeline::BudgetScope;
-    let v = b.view(&BudgetScope::Plan(runstav::types::Bounded(plan.to_owned())));
+    let v = b.view(plan);
     let spent: f64 = v
         .spent
         .iter()

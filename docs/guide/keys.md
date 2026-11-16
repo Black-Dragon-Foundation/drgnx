@@ -67,6 +67,7 @@ loaded, so there is never a session with Vim keys and no Vim editing:
 | Toggle Line Numbers | — | — | `SPC u l` |
 | Module Report | — | — | `SPC h m` |
 | Toggle Sidebar | `C-b` | `<f8>` | `SPC e` |
+| Open Previous Editor in Group (the group's editors, most recent first; again moves down, `C-S-<tab>` up) | `C-<tab>` | palette | palette |
 | Focus Explorer / Buffers | palette / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
 | View: Explorer / View: Search | `C-S-e` / `C-S-f` | palette / palette | palette / `SPC /` |
 | Replace in Files | `C-S-h` | `C-c s r` | `SPC s r` |
@@ -253,7 +254,7 @@ profile:
 | `SPC u t` | Undo Tree… |
 | `SPC u z` | Zen Mode |
 | `SPC v` | Expand Selection |
-| `SPC w c` | Close Editor Group |
+| `SPC w c` | Close Tile |
 | `SPC w g` | Move Editor Group into New Window |
 | `SPC w m` | Move Editor into Next Group |
 | `SPC w n` | Move Editor into New Window |
@@ -286,11 +287,11 @@ commands, so the workbench keeps its editor groups, tabs and layout (the key tip
 | `:e FILE` | Open File… `FILE` (`:e` alone and `:e!` re-read the file, evil's own) |
 | `:sp [FILE]`, `C-w s` | Split Editor Down (`FILE` opens in the new group) |
 | `:vs [FILE]`, `C-w v` | Split Editor Right (`FILE` opens in the new group) |
-| `C-w c`, `:clo` | Close Editor Group |
-| `C-w o` | Close the other editor groups (the sidebar, the panel and the right dock stay) |
+| `C-w c`, `:clo` | Close Tile |
+| `C-w o`, `C-w _`, `C-w \|` | Full-Size Tile: this tile alone; again to put every tile back |
 | `:new [FILE]`, `C-w n` | A new editor group below with an empty buffer (`FILE` opens there) |
 | `:bd[!]` | Kill the buffer; each group showing it closes that tab and goes on with its next one, no group is closed |
-| `:q`, `ZQ` | Close Tab when the group has other tabs, else Close Editor Group when there is another group, else Close Window |
+| `:q`, `ZQ` | Close Tab when the group has other tabs, else Close Tile when there is another group, else Close Window |
 | `:wq`, `:x`, `ZZ` | Save when the buffer changed, then what `:q` does |
 | `:wq`, `:x`, `ZZ` in a Magit commit or rebase message | Finish the edit: git goes on (`with-editor-finish`) |
 | `:q`, `ZQ` in a Magit commit or rebase message | Cancel the edit (`with-editor-cancel`) |
@@ -396,7 +397,7 @@ yours (`:mac "S-s-y"` in `keys.eld` binds `s-Y`).
 | Command | Linux | Mac |
 |---|---|---|
 | Toggle Terminal / New Terminal | ``C-` `` / ``C-S-` `` | Ctrl: ``C-` `` / ``C-S-` `` (Cmd+` is macOS' next window) |
-| Go to Recent / Back / Forward | `C-<tab>` / `M-<left>` / `M-<right>` | Ctrl: `C-<tab>` / `C--` / `C-_` (Ctrl+Shift+-) |
+| Open Previous Editor in Group / Back / Forward | `C-<tab>` / `M-<left>` / `M-<right>` | Ctrl: `C-<tab>` / `C--` / `C-_` (Ctrl+Shift+-) |
 | Next / Previous Tab | `C-<next>` / `C-<prior>` | `M-s-<right>` / `M-s-<left>` (Option+Cmd+→ / ←) |
 | Close Tab / Close Window | `C-w` / `C-q` | `s-w` / `s-W` (Shift+Cmd+W) |
 | Quit drgnx | — (File → Quit; `C-q` closes the window as in VS Code) | `s-q` (offers to save, then stops drgnx) |
@@ -557,7 +558,7 @@ until you take them away.
 The sheet says one thing for each key, and it is what `key-binding` answers: yours is the top layer of the resolver,
 so a key of yours (or a key under a command of yours, `C-k x` when `C-k` is yours) is one line, never a profile key
 shown winning while yours wins. A lambda or closure is printed as `a lambda`, never its body. A key a minor mode's map
-takes over in a buffer is not covered yet; the VS Code profile's `C-<tab>` (Go to Recent) is a key that works in every
+takes over in a buffer is not covered yet; the VS Code profile's `C-<tab>` (Open Previous Editor in Group) is a key that works in every
 mode, ahead of tab-bar-mode's own `C-<tab>` (`tab-next`, which the top line would otherwise give it).
 
 Keys you bound from the keyboard, `M-:` or `emacsclient --eval` stay for the session, as in any Emacs; they are never

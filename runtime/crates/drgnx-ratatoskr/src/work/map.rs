@@ -17,7 +17,7 @@ use runstav::methods::agents::{SessionStatus, Snapshot};
 use runstav::methods::timeline::StepClass;
 use runstav::methods::view::{Display, ViewEnv};
 use runstav::methods::work::{
-    Machine, MapClose, MapDensity, MapFilters, MapRows, MapSet, MapSubscribe, MapVersion,
+    Machine, MapClose, MapDensity, MapFilters, MapRows, MapSet, MapShow, MapSubscribe, MapVersion,
     PresenceMode, Workspace,
 };
 use runstav::wire::{Error, ErrorCode};
@@ -316,9 +316,13 @@ impl Sess {
             .and_then(|u| Some((u.used?, u.size?)))
             .filter(|(_, size)| *size > 0.0)
             .map(|(used, size)| (used / size * 100.0).clamp(0.0, 100.0) as u8);
+        // the cost is a number, or an object with an `amount` (what the agent's usage update carries)
         let spend = usage
             .and_then(|u| u.cost.as_ref())
-            .and_then(Value::as_f64)
+            .and_then(|c| {
+                c.as_f64()
+                    .or_else(|| c.get("amount").and_then(Value::as_f64))
+            })
             .map(|c| format!("${c:.2}"));
         let mut out = vec![Event::Session(SessionFact {
             id: s.id.clone(),
@@ -368,7 +372,7 @@ impl Sess {
 }
 
 /// A snapshot's state on the map.
-fn state_of(s: &Snapshot) -> State {
+pub(crate) fn state_of(s: &Snapshot) -> State {
     if !s.permissions.is_empty() {
         return State::NeedsYou;
     }
@@ -561,11 +565,23 @@ fn density(d: MapDensity) -> Density {
     }
 }
 
+fn mode_of(m: runstav::methods::work::MapMode) -> vegvisir::MapMode {
+    match m {
+        runstav::methods::work::MapMode::List => vegvisir::MapMode::List,
+        runstav::methods::work::MapMode::Graph => vegvisir::MapMode::Graph,
+    }
+}
+
 fn filters(f: &MapFilters) -> Filters {
     Filters {
         focus: f.focus.clone().map(ItemId),
         overlaps: f.overlaps,
-        finished: f.finished,
+        show: match f.show {
+            MapShow::Active => vegvisir::Show::Active,
+            MapShow::Completed => vegvisir::Show::Completed,
+            MapShow::All => vegvisir::Show::All,
+        },
+        recent_days: f.recent_days,
     }
 }
 
@@ -624,7 +640,7 @@ fn frame_items(m: &vegvisir::Model, v: &ViewState, l: &Layout) -> Vec<vegvisir::
         .filter(|it| {
             l.at.contains_key(&it.id)
                 || (!narrowed
-                    && (it.live || v.filters.finished)
+                    && vegvisir::shown(it, &v.filters, m.minute()) != vegvisir::Visibility::Hidden
                     && v.collapsed.contains(&it.kind.layer()))
         })
         .collect()
@@ -645,6 +661,9 @@ fn view_rows(
     let Some(l) = v.layout.as_ref() else {
         return (Vec::new(), Vec::new());
     };
+    // List mode: nested rows (plain text until the kit draws them), the strip above
+    let list = (v.state.mode == vegvisir::MapMode::List)
+        .then(|| vegvisir::list::entries(m, &v.state, m.minute()));
     let items: BTreeMap<ItemId, vegvisir::Item> = v
         .sent
         .iter()
@@ -681,8 +700,12 @@ fn view_rows(
         .collect();
     let (strip, mut images) = render::strip(&scene, &m.needs_you(), &machines, extra, &renv, fonts);
     let mut rows = vec![strip];
-    rows.extend(drawn.rows);
-    images.extend(drawn.images);
+    if let Some(entries) = &list {
+        rows.extend(render::list_rows(entries, v.selected.as_ref()));
+    } else {
+        rows.extend(drawn.rows);
+        images.extend(drawn.images);
+    }
     (rows, images)
 }
 
@@ -814,6 +837,13 @@ impl Map {
             }
         }
         out
+    }
+
+    /// A session changed: the Agents sides shown read the sessions again (a map open or not).
+    pub fn agents_changed(self: &Arc<Self>) {
+        if let Some(f) = self.front.get().and_then(Weak::upgrade) {
+            f.core.views.agents_side_changed(&f);
+        }
     }
 
     /// A session's snapshot and its subagents, from its `agent` emit.
@@ -1262,8 +1292,9 @@ impl Map {
         let mut new = Vec::new();
         for id in &delta.changed {
             let Some(it) = m.item(id) else { continue };
-            let visible =
-                (it.live || v.state.filters.finished) && (it.kind != Kind::File || it.shared);
+            let visible = vegvisir::shown(&it, &v.state.filters, m.minute())
+                != vegvisir::Visibility::Hidden
+                && (it.kind != Kind::File || it.shared);
             if v.sent.contains(id) || (!narrowed && visible) {
                 if !v.sent.contains(id) {
                     new.push(id.clone());
@@ -1327,7 +1358,10 @@ impl Map {
         let at = self.now_ms();
         let wake = v.marks.note(conclusions, at);
         let new = v.marks.ids();
-        let doc = v.layout.as_ref().map(|l| model::doc(m, l, &v.sent));
+        let doc = v
+            .layout
+            .as_ref()
+            .map(|l| model::doc(m, l, &v.sent, &v.state));
         #[cfg(test)]
         {
             let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1386,7 +1420,8 @@ impl Map {
         class: Option<&str>,
     ) {
         let view = detail::view_of(&key.view);
-        let lines = detail::lines(m, v.selected.as_ref(), crate::clock::wall_secs() as u64);
+        let lines =
+            detail::lines_or_default(m, v.selected.as_ref(), crate::clock::wall_secs() as u64);
         for c in f.core.views.classes(key.conn, &view) {
             if class.is_some_and(|only| only != c) {
                 continue;
@@ -1656,6 +1691,8 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
         density: density(p.density),
         filters: filters(&p.filters),
         collapsed: p.collapsed.iter().copied().collect(),
+        mode: mode_of(p.mode),
+        ..ViewState::default()
     };
     let mut g = lock(&map.inner);
     map.open.store(true, Ordering::Relaxed);
@@ -1742,6 +1779,9 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     }
     if let Some(d) = p.density {
         state.density = density(d);
+    }
+    if let Some(md) = p.mode {
+        state.mode = mode_of(md);
     }
     let selected = p.selected.clone().map(ItemId);
     if selected.is_some() {
@@ -1854,16 +1894,13 @@ fn card_kind(k: &str) -> CardKind {
 /// An open card: id, job, kind, title.
 type Card = (String, String, String, String);
 
-/// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
-/// A card's words on the strip: a proposal's title (`2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min: approve to
-/// start`) is cut to its share of the strip, which keeps only what every proposal says, so it becomes `approve 2
-/// tasks (JOB)`: what to approve, and which job it is.  Other cards are as titled.
+/// A card's whole fact for the strip: a proposal's title (`2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min: approve
+/// to start`) becomes `Sign off (JOB): 2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min` (the strip's own prefix,
+/// said once, and the job first so a cut chip still says which).  Nothing is cut here: the row fit cuts a chip at the window's edge, and the chip's `help-echo` has
+/// the full text.  Other cards are as titled.
 fn strip_text(job: &str, title: &str) -> String {
     match title.strip_suffix(": approve to start") {
-        Some(head) => format!(
-            "approve {} ({job})",
-            head.split(", ").next().unwrap_or(head)
-        ),
+        Some(head) => format!("Sign off ({job}): {head}"),
         None => title.to_string(),
     }
 }
@@ -1882,6 +1919,10 @@ fn legacy_duplicates<'a>(
     .collect()
 }
 
+/// The plan item that holds the tasks no plan holds.
+const NO_PLAN: &str = "no-plan";
+
+/// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
 async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
     f.writer
         .db
@@ -1916,7 +1957,9 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
             {
                 let mut q = c.prepare(
                     "select id, kind, coalesce(title, ''), coalesce(status, ''), \
-                     coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file') \
+                     coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file'), \
+                     json_extract(data, '$.ledger.done'), \
+                     coalesce((select at from tx where tx.id = entity.updated_tx), 0) \
                      from entity where retired_tx is null and kind in ('ask', 'spec', 'plan', 'task') order by n",
                 )?;
                 let all = q
@@ -1928,12 +1971,31 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                             r.get::<_, String>(3)?,
                             r.get::<_, String>(4)?,
                             r.get::<_, Option<String>>(5)?,
+                            r.get::<_, Option<bool>>(6)?.unwrap_or(false),
+                            r.get::<_, f64>(7)?,
                         ))
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
                 let hidden = legacy_duplicates(all.iter().map(|r| (r.0.as_str(), r.5.as_deref())));
                 plan_of.retain(|_, plan| !hidden.contains(plan));
-                for (rank, (id, kind, title, status, text, _)) in all.into_iter().enumerate() {
+                // a task with no plan sits under a "No plan" plan item, never skipped
+                let orphans = all.iter().any(|r| {
+                    r.1 == "task" && !hidden.contains(&strip(&r.0)) && !plan_of.contains_key(&r.0)
+                });
+                if orphans {
+                    out.push(Event::Graph(GraphFact::Plan {
+                        id: NO_PLAN.into(),
+                        title: "No plan".into(),
+                        rank: u64::MAX / 2,
+                        progress: None,
+                        updated: 0,
+                    }));
+                }
+                for (rank, (id, kind, title, status, text, _, ledger_done, at)) in
+                    all.into_iter().enumerate()
+                {
+                    // when the record last changed, in minutes (the Active filter's window)
+                    let updated = (at / 60.0).max(0.0) as u64;
                     if hidden.contains(&strip(&id)) {
                         continue;
                     }
@@ -1945,20 +2007,23 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                         "spec" => Event::Graph(GraphFact::Spec {
                             id: strip(&id),
                             title,
+                            updated,
                         }),
                         "plan" => Event::Graph(GraphFact::Plan {
                             id: strip(&id),
                             title,
                             rank: rank as u64,
                             progress: None,
+                            updated,
                         }),
                         _ => {
-                            let Some(plan) = plan_of.get(&id) else { continue };
+                            let plan = plan_of.get(&id).map_or(NO_PLAN, String::as_str);
                             Event::Graph(GraphFact::Task {
                                 id: strip(&id),
-                                plan: plan.clone(),
+                                plan: plan.to_owned(),
                                 title,
-                                done: status == "done",
+                                done: status == "done" || ledger_done,
+                                updated,
                             })
                         }
                     });

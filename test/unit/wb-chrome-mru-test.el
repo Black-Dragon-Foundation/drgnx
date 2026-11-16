@@ -5,6 +5,7 @@
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-chrome)
 (require 'drgnx-groups)
+(defvar drgnx-close-discarded)
 
 (defmacro drgnx-chrome-test--with (dir &rest body)
   "BODY with chrome on, one editor window, a temp DIR for files."
@@ -134,3 +135,73 @@
       (should (equal (window-parameter (selected-window) 'drgnx-tab-history) (list c a)))
       (drgnx-chrome-test--show a)
       (should (equal (window-parameter (selected-window) 'drgnx-tab-history) (list a c))))))
+
+(ert-deftest drgnx-chrome/closing-a-changed-file-asks-to-save ()
+  "Close Tab on the last tab of a changed file asks Save / Don't Save / Cancel (`drgnx-save-ask'): Save writes it and
+closes, Don't Save closes and drops the changes (the buffer goes, its text kept in `drgnx-close-discarded'), Cancel
+leaves the tab.  An unchanged file, or one another group still shows a tab of, closes without a question."
+  (drgnx-chrome-test--with dir
+    (let* ((answer nil) (asked 0) (drgnx-close-discarded nil)
+           (a (drgnx-chrome-test--open dir "a.txt")) (b (drgnx-chrome-test--open dir "b.txt")))
+      (cl-letf (((symbol-function 'drgnx-save-ask) (lambda (_name) (cl-incf asked) answer)))
+        (drgnx-chrome-test--show b)
+        (drgnx-chrome-close-tab)                            ; unchanged: no question
+        (should (= 0 asked))
+        (should (equal (drgnx-chrome-tabs (selected-window)) (list a)))
+        (drgnx-chrome-test--show b)                         ; its tab again (the buffer stayed open)
+        (with-current-buffer b (insert "kept? "))
+        (setq answer 'cancel)
+        (drgnx-chrome-close-tab)
+        (should (= 1 asked))
+        (should (eq (window-buffer) b))
+        (should (memq b (drgnx-chrome-tabs (selected-window))))
+        (should (buffer-modified-p b))
+        (setq answer 'save)
+        (drgnx-chrome-close-tab)
+        (should (= 2 asked))
+        (should-not (memq b (drgnx-chrome-tabs (selected-window))))
+        (should-not (buffer-modified-p b))
+        (should (equal "kept? x\n" (with-temp-buffer (insert-file-contents (expand-file-name "b.txt" dir))
+                                                     (buffer-string))))
+        (drgnx-chrome-test--show b)
+        (with-current-buffer b (goto-char (point-min)) (insert "dropped "))
+        (setq answer 'discard)
+        (drgnx-chrome-close-tab)
+        (should (= 3 asked))
+        (should-not (buffer-live-p b))
+        (should (equal "dropped kept? x\n" (plist-get (car drgnx-close-discarded) :text)))
+        (should (equal "kept? x\n" (with-temp-buffer (insert-file-contents (expand-file-name "b.txt" dir))
+                                                     (buffer-string))))
+        ;; a tab of it in another group: the edit stays in view, no question
+        (setq b (drgnx-chrome-test--open dir "b.txt"))
+        (with-current-buffer b (insert "two groups "))
+        (let ((w2 (split-window nil nil 'right)))
+          (set-window-parameter w2 'drgnx-tabs (list b))
+          (drgnx-chrome-close-tab)
+          (should (= 3 asked))
+          (should (buffer-live-p b))
+          (should (buffer-modified-p b)))))))
+
+(ert-deftest drgnx-chrome/ctrl-tab-lists-the-group-most-recent-first ()
+  "VS Code's Ctrl+Tab (Open Previous Editor in Group): the group's editors, the one used before this first and
+selected (Return goes back to it), then the older ones, the shown one last; pressed again while the list is open the
+selection moves down, Ctrl+Shift+Tab up, so Ctrl held and Tab tapped cycles."
+  (drgnx-chrome-test--with dir
+    (let ((a (drgnx-chrome-test--open dir "a.txt")) (b (drgnx-chrome-test--open dir "b.txt"))
+          (c (drgnx-chrome-test--open dir "c.txt"))
+          ;; the keys as the VS Code profile binds them: ahead of every mode, the list's minibuffer included
+          (emulation-mode-map-alists
+           (cons (list (cons t (let ((m (make-sparse-keymap)))
+                                 (keymap-set m "C-<tab>" #'drgnx-chrome-recent-editor)
+                                 (keymap-set m "C-S-<tab>" #'drgnx-chrome-recent-editor-up)
+                                 m)))
+                 emulation-mode-map-alists)))
+      (should (equal (drgnx-chrome-recent-editors) (list b a c)))      ; c shown, used last before it: b, then a
+      (execute-kbd-macro (kbd "C-<tab> RET"))
+      (should (eq (window-buffer) b))
+      (should (equal (drgnx-chrome-recent-editors) (list c a b)))
+      (execute-kbd-macro (kbd "C-<tab> C-<tab> RET"))                   ; one down: a
+      (should (eq (window-buffer) a))
+      (should (equal (drgnx-chrome-recent-editors) (list b c a)))
+      (execute-kbd-macro (kbd "C-<tab> C-<tab> C-S-<tab> RET"))         ; down, then up again: b
+      (should (eq (window-buffer) b)))))

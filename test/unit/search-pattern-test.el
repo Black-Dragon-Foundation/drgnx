@@ -77,7 +77,8 @@ grammar); the language can be chosen, `any' is every language; off, no line."
     (should (drgnx-replace--opt :pattern))
     (should (equal (drgnx-replace--opt :lang) "elisp"))
     (should (equal (drgnx-replace--spec-text '(:query (:mode "pattern" :pattern "(eq $A $A)"))) "(eq $A $A)"))
-    (should (string-match-p "· Pattern" (drgnx-replace--spec-label '(:query (:mode "pattern" :pattern "x")))))))
+    (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) nil)))   ; a Unicode frame's ·
+      (should (string-match-p "· Pattern" (drgnx-replace--spec-label '(:query (:mode "pattern" :pattern "x"))))))))
 
 (ert-deftest drgnx-search-pattern/replace-all-refuses-a-pattern ()
   "Pattern D: a Pattern search only finds for now: Replace All says so."

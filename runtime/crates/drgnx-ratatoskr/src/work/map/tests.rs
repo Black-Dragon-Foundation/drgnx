@@ -366,6 +366,14 @@ impl Measure for Cols {
     }
 }
 
+/// The state of a Graph-mode view: these tests read the graph's links and rows.
+fn graph_state() -> ViewState {
+    ViewState {
+        mode: vegvisir::MapMode::Graph,
+        ..ViewState::default()
+    }
+}
+
 /// Session I starts (no place: the "No plan" block).
 fn add_session(core: &mut Core, i: u64) {
     let snap: Snapshot =
@@ -397,7 +405,7 @@ fn core_with(n: u64) -> Core {
 fn rows_view(m: &vegvisir::Model, width: u32) -> View {
     let state = ViewState {
         width_units: width,
-        ..ViewState::default()
+        ..graph_state()
     };
     let l = layout::layout(m, &state, None);
     let sent = frame_items(m, &state, &l)
@@ -620,7 +628,7 @@ fn map_model_carries_links_rects_and_lists() {
     let v = &g.views[&key];
     let m = g.spaces["w"].core.model();
     let l = v.layout.as_ref().expect("laid out");
-    let d = model::doc(m, l, &v.sent);
+    let d = model::doc(m, l, &v.sent, &graph_state());
     assert_eq!(d.nodes.len(), v.sent.len());
     let a1 = &d.nodes["agent:s1"];
     let fields = a1["fields"].as_array().expect("fields");
@@ -737,11 +745,11 @@ fn chain_golden_matches_vegvisir() {
     let m = core.model();
     let state = vegvisir::ViewState {
         width_units: 376,
-        ..vegvisir::ViewState::default()
+        ..graph_state()
     };
     let l = vegvisir::layout::layout(m, &state, None);
     let sent: BTreeSet<ItemId> = l.at.keys().cloned().collect();
-    let d = model::doc(m, &l, &sent);
+    let d = model::doc(m, &l, &sent, &graph_state());
     let mut chains = serde_json::Map::new();
     for id in &sent {
         let c = m.chain(id);
@@ -808,7 +816,12 @@ fn map_model_carries_review_fields_overlaps_and_plans() {
         open: true,
     }));
     let v = rows_view(core.model(), 226);
-    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    let d = model::doc(
+        core.model(),
+        v.layout.as_ref().expect("laid out"),
+        &v.sent,
+        &graph_state(),
+    );
     let fields = d.nodes["agent:s1"]["fields"].as_array().expect("fields");
     assert!(
         fields.contains(&json!(["overlaps", "agent:s2"])),
@@ -820,7 +833,12 @@ fn map_model_carries_review_fields_overlaps_and_plans() {
         core.step(e);
     }
     let v = rows_view(core.model(), 376);
-    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    let d = model::doc(
+        core.model(),
+        v.layout.as_ref().expect("laid out"),
+        &v.sent,
+        &graph_state(),
+    );
     let shown: Vec<String> = v
         .sent
         .iter()
@@ -894,7 +912,12 @@ fn the_strip_and_the_needs_you_list_line_up() {
         at("  g5"),
     ];
     assert!(chips.is_sorted(), "{}", rows[0].text);
-    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    let d = model::doc(
+        core.model(),
+        v.layout.as_ref().expect("laid out"),
+        &v.sent,
+        &graph_state(),
+    );
     assert_eq!(
         d.lists["needs-you"],
         vec!["c0", "agent:s2", "agent:s3", "agent:s4", "agent:s1"]
@@ -949,7 +972,12 @@ fn open_huddle_is_on_the_strip_and_the_needs_you_list() {
         "{}",
         rows[0].text
     );
-    let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
+    let d = model::doc(
+        core.model(),
+        v.layout.as_ref().expect("laid out"),
+        &v.sent,
+        &graph_state(),
+    );
     assert_eq!(d.lists["needs-you"], vec!["agent:s1"]);
     assert!(
         core.model().items().values().all(|it| !it.needs_you),
@@ -1432,16 +1460,318 @@ fn a_file_the_importer_holds_is_not_drawn_again_from_the_old_scanners_entity() {
 }
 
 #[test]
+fn a_proposal_chip_says_sign_off_once_and_names_its_job() {
+    let mut core = core_with(1);
+    core.step(Event::Card(CardFact {
+        id: "g1".into(),
+        kind: CardKind::SignOff,
+        about: Vec::new(),
+        text: strip_text(
+            "job-7",
+            "2 tasks, about 0.00 USD (some unpriced), 3M tokens, 40 min: approve to start",
+        ),
+        open: true,
+    }));
+    let v = rows_view(core.model(), 226);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    assert!(
+        rows[0].text.contains("Sign off (job-7): 2 tasks"),
+        "{}",
+        rows[0].text
+    );
+    assert!(
+        !rows[0].text.to_lowercase().contains("sign off: sign off"),
+        "{}",
+        rows[0].text
+    );
+    assert_eq!(
+        rows[0].text.matches("Sign off").count(),
+        1,
+        "{}",
+        rows[0].text
+    );
+}
+
+#[test]
 fn a_proposal_on_the_strip_says_what_to_approve_and_which_job() {
     assert_eq!(
         strip_text(
             "job-7",
             "2 tasks, about 0.00 USD (some unpriced), 3M tokens, 40 min: approve to start"
         ),
-        "approve 2 tasks (job-7)"
+        "Sign off (job-7): 2 tasks, about 0.00 USD (some unpriced), 3M tokens, 40 min"
     );
     assert_eq!(
         strip_text("job-7", "Codex asks: cargo clippy"),
         "Codex asks: cargo clippy"
     );
+}
+
+/// A session on TASK (a bare task id), in state STATE.
+fn task_session(core: &mut Core, i: u64, task: &str, state: State) {
+    let snap: Snapshot = serde_json::from_value(
+        json!({"id": format!("s{i}"), "name": format!("agent {i}"), "task": task}),
+    )
+    .expect("a snapshot");
+    let sess = Sess {
+        snap,
+        kids: Vec::new(),
+        place: None,
+        seq: i,
+        state,
+        since: 0,
+        job: None,
+    };
+    for ev in sess.facts() {
+        core.step(ev);
+    }
+}
+
+fn graph(core: &mut Core, f: vegvisir::GraphFact) {
+    core.step(vegvisir::Event::Graph(f));
+}
+
+/// [D] A plan's task with a live agent is a task item, linked plan → task → agent, and its model node says its state.
+#[test]
+fn a_plan_task_with_a_live_agent_is_a_task_item_linked_both_ways() {
+    let mut core = Core::new();
+    graph(
+        &mut core,
+        vegvisir::GraphFact::Plan {
+            id: "p".into(),
+            title: "P".into(),
+            rank: 1,
+            progress: None,
+            updated: 0,
+        },
+    );
+    graph(
+        &mut core,
+        vegvisir::GraphFact::Task {
+            id: "t".into(),
+            plan: "p".into(),
+            title: "do it".into(),
+            done: false,
+            updated: 0,
+        },
+    );
+    task_session(&mut core, 1, "t", State::NeedsYou);
+    let m = core.model();
+    let item = m.item(&ItemId("task:t".into())).expect("a task item");
+    assert_eq!(item.kind, Kind::Task);
+    assert_eq!(item.fields.task_state, Some(vegvisir::TaskState::NeedsYou));
+    let has = |a: &str, b: &str| {
+        m.edges()
+            .iter()
+            .any(|e| e.from.as_str() == a && e.to.as_str() == b)
+    };
+    assert!(has("plan:p", "task:t") && has("task:t", "agent:s1"));
+    let l = vegvisir::layout::layout(
+        m,
+        &ViewState {
+            width_units: 226,
+            ..graph_state()
+        },
+        None,
+    );
+    let sent: BTreeSet<ItemId> = m.items().into_keys().collect();
+    let doc = model::doc(m, &l, &sent, &graph_state());
+    let node = &doc.nodes["task:t"];
+    assert!(
+        node["fields"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(["task_state", "needs-you"])),
+        "{node}"
+    );
+}
+
+/// [D] The store's reader: a task with no plan sits under a "No plan" plan item instead of being skipped.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_task_without_a_plan_sits_under_no_plan() {
+    use urdr::graph::entity::{self, EntityNew, Origin};
+    let dir = tempfile::tempdir().unwrap();
+    let front = Front::new(
+        runstav::proof::Cap::generate().unwrap(),
+        dir.path().join("hub-x.sock"),
+        crate::store::WorkDb::spawn(dir.path().join("work.db")).unwrap(),
+        norn::store::CoordDb::spawn(dir.path().join("work.db")),
+    );
+    front
+        .writer
+        .write(&crate::runner::service(), "test", |tx| {
+            let mut mk = |id: &str, kind: &str| {
+                entity::create(
+                    tx,
+                    EntityNew {
+                        id: id.into(),
+                        kind: kind.into(),
+                        project: None,
+                        title: Some(id.into()),
+                        status: None,
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({}),
+                        origin: Origin::Recorded,
+                        source: None,
+                    },
+                )
+                .map(|e| e.n)
+                .map_err(|e| norn::store::CoordError::Refused(e.to_string()))
+            };
+            let plan = mk("plan:p1", "plan")?;
+            let t1 = mk("task:t1", "task")?;
+            mk("task:t2", "task")?;
+            urdr::graph::link::add(tx, plan, "parent_of", t1, None, Origin::Recorded, None)
+                .map_err(|e| norn::store::CoordError::Refused(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (events, _) = read_store(&front).await;
+    let task_plan = |id: &str| {
+        events.iter().find_map(|e| match e {
+            vegvisir::Event::Graph(vegvisir::GraphFact::Task { id: t, plan, .. }) if t == id => {
+                Some(plan.clone())
+            }
+            _ => None,
+        })
+    };
+    assert_eq!(task_plan("t1").as_deref(), Some("p1"));
+    assert_eq!(task_plan("t2").as_deref(), Some("no-plan"));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        vegvisir::Event::Graph(vegvisir::GraphFact::Plan { id, title, .. })
+            if id == "no-plan" && title == "No plan"
+    )));
+}
+
+/// [D] A map opens in List mode: the model's descriptor says `list`, and the arrows walk the rows.
+#[test]
+fn the_list_is_the_default_mode() {
+    let mut core = Core::new();
+    graph_fact(&mut core, "p", "t");
+    let m = core.model();
+    let state = ViewState::default();
+    assert_eq!(state.mode, vegvisir::MapMode::List);
+    let l = vegvisir::layout::layout(m, &state, None);
+    let sent: BTreeSet<ItemId> = m.items().into_keys().collect();
+    let doc = model::doc(m, &l, &sent, &state);
+    assert_eq!(doc.descriptor["mode"], "list");
+    let graph_doc = model::doc(m, &l, &sent, &graph_state());
+    assert_eq!(graph_doc.descriptor["mode"], "graph");
+}
+
+fn graph_fact(core: &mut Core, plan: &str, task: &str) {
+    graph(
+        core,
+        vegvisir::GraphFact::Plan {
+            id: plan.into(),
+            title: "P".into(),
+            rank: 1,
+            progress: None,
+            updated: 0,
+        },
+    );
+    graph(
+        core,
+        vegvisir::GraphFact::Task {
+            id: task.into(),
+            plan: plan.into(),
+            title: "T".into(),
+            done: false,
+            updated: 0,
+        },
+    );
+}
+
+fn card_about(core: &mut Core, id: &str, kind: vegvisir::CardKind, about: &str) {
+    core.step(vegvisir::Event::Card(vegvisir::CardFact {
+        id: id.into(),
+        kind,
+        about: vec![about.into()],
+        text: format!("card {id}"),
+        open: true,
+    }));
+}
+
+/// [D] Before anything is selected the Detail shows the subject of the most urgent thing that needs you, its head
+/// saying so; an empty map still says nothing is selected.
+#[test]
+fn detail_on_open_shows_the_most_urgent() {
+    let empty = Core::new();
+    assert_eq!(
+        detail::lines_or_default(empty.model(), None, 0),
+        vec![("head", "Nothing is selected.".to_string(), None)]
+    );
+    let mut core = core_with(2);
+    card_about(&mut core, "7", vegvisir::CardKind::Push, "agent:s1");
+    card_about(&mut core, "8", vegvisir::CardKind::Permission, "agent:s2");
+    let m = core.model();
+    assert_eq!(detail::default_item(m), Some(ItemId("agent:s2".into())));
+    let lines = detail::lines_or_default(m, None, 0);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.0 == "head" && l.1.contains("Needs you most")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|l| l.1.contains("agent 2")), "{lines:?}");
+}
+
+/// [D] Once the user selected something, the Detail follows the selection.
+#[test]
+fn detail_follows_the_selection_once_made() {
+    let mut core = core_with(2);
+    card_about(&mut core, "8", vegvisir::CardKind::Permission, "agent:s2");
+    let m = core.model();
+    let sel = ItemId("agent:s1".into());
+    let lines = detail::lines_or_default(m, Some(&sel), 0);
+    assert!(
+        !lines.iter().any(|l| l.1.contains("Needs you most")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|l| l.1.contains("agent 1")), "{lines:?}");
+}
+
+/// [D] A proposal's strip text keeps its whole fact (the fit cuts it at the window's edge).
+#[test]
+fn strip_text_is_not_truncated() {
+    let long = format!(
+        "{}: approve to start",
+        "2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min"
+    );
+    assert_eq!(
+        strip_text("J#1", &long),
+        "Sign off (J#1): 2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min"
+    );
+    let words = "x".repeat(300);
+    assert_eq!(strip_text("J#1", &words), words);
+}
+
+/// [D] A session's spend reaches the map whether its usage carries the cost as a number or as an object with an
+/// `amount` (the agent's usage update): a turn's end then changes its card, and the map patches.
+#[test]
+fn a_cost_object_is_the_sessions_spend() {
+    for cost in [json!(0.01), json!({"amount": 0.01, "currency": "USD"})] {
+        let snap: Snapshot = serde_json::from_value(
+            json!({"id": "s1", "name": "a", "usage": {"used": 10.0, "size": 100.0, "cost": cost}}),
+        )
+        .expect("a snapshot");
+        let sess = Sess {
+            snap,
+            kids: Vec::new(),
+            place: None,
+            seq: 1,
+            state: State::Running,
+            since: 0,
+            job: None,
+        };
+        let spend = sess.facts().into_iter().find_map(|e| match e {
+            vegvisir::Event::Session(s) => s.spend,
+            _ => None,
+        });
+        assert_eq!(spend.as_deref(), Some("$0.01"), "{cost}");
+    }
 }
