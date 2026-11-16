@@ -1468,6 +1468,8 @@ The commands of modules that need no installed package are in it, the later stag
                               agent-settings-openrouter agent-settings-report
                               ;; the viewed file's proposals: accept and revert at point
                               agents-proposal-accept agents-proposal-revert
+                              ;; the Changes view's rows: open and revert at point
+                              changes-open-hunk changes-revert-hunk
                               ;; P9's plugins page: keys in its own page map only
                               plugins-refresh plugins-approve plugins-disable plugins-project-toggle
                               shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor

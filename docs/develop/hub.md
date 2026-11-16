@@ -1346,6 +1346,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
 | `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
+| `changes/close` | user | `{view: string}` | `boolean` | no |
+| `changes/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
+| `changes/subscribe` | user | `{view: string}` | `boolean` | no |
 | `config/changed` | user | `{}` | `boolean` | no |
 | `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no |
 | `coord/agent` | user | `{register?: {base?: string, branch?: string, clear?: ["kind" \| "name" \| "cwd" \| "worktree" \| "branch" \| "base" \| "plan" \| "task" \| "pid"], cwd?: string, id: AgentName, kind?: string, name?: string, pid?: natnum, plan?: string, task?: TaskRef, worktree?: string}, seen?: AgentName}` | `{id?: string, seen?: number}` | yes |
@@ -1639,8 +1642,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `work/flow/subscribe` | user | `{detail?: string, job?: string, map: string, rules?: boolean, view: string}` | `{hub: natnum}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
-| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
-| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
+| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
 | `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
