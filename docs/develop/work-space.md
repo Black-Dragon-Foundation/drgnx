@@ -874,3 +874,8 @@ roots' first root commits (the path where git does not answer).
 ## Changes by task
 
 `work/changes.rs` groups what the agents changed by the task each worked on: task, then file, then hunk, with a last group, "Your edits and others", for what no task owns (`group`; `by_task` reads each live session's edited files and their diffs from the edit history; `hunks_of` reads a diff's hunks). A hunk's agent is its session's, and its `reason` stays empty ("no reason recorded") until the history records the cause of an agent write. `view/changes.rs` builds the `changes` view's rows in that order as plain text; each hunk row carries the `drgnx-action` it offers (open the file at the hunk) and a `drgnx-hunk` property naming the path, op, index and agent for comment and revert. The Changes place that shows the view comes with the layout A shell.
+
+## The Agents side
+
+`view/agents_side.rs` is the Agents side's model: one `Card` per session (its mark, task, provider, state line, progress and one button: Answer for what needs you, Review for edits ready, Open otherwise), needs-you first, then running, then the rest by last activity; "Earlier" holds the five newest past sessions and an `All ›` row. A card is a few rows keyed `card:SESSION:N`, so one session's change patches only its card's rows. `agents_on(entries, path)` is the sessions working on a path, for the chip "an agent is working here". The rows are plain text until the kit draws the cards; the view's wire methods and the existing Claude and Gemini sessions in "Earlier" come with the shell.
+
