@@ -2921,7 +2921,9 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   (`drgnx-explorer--rows-scrolled`, half the window), and after a draw that leaves a window at the rows' top or end
   (no scroll can run above the buffer's start). `around` (a reveal) names an entry the next listing's window must
   hold: when it falls outside, the window starts at the root while the entry fits in the first window (the tree above
-  it shows), else it moves to hold the entry a quarter of the way down. Each path is listed once: a root given twice
+  it shows), else it moves to hold the entry a quarter of the way down. A window that starts below the root draws the
+  folders above its first entry (root → … → parent) as its first rows, outside `order`, so a deep reveal never shows
+  a slice with nothing above it (`window_shown`). Each path is listed once: a root given twice
   is listed the first time only, and a root inside another is its own top row, not listed again inside that one.
 - **Row,** per display class (`view/env`): the key is the path. On a terminal, the indent guides (`│ ` per level below
   the first) and the chevron (`▾ `, `▸ `, or two spaces for a file) in `drgnx-explorer-guide`. On a graphical display
