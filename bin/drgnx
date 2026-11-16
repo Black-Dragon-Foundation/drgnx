@@ -180,10 +180,14 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
         --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key) ||
     { rt_err "the build of drgnx-key failed"; return 1; }
   # drgnx-term, next to the hub: the terminal's worker, which the hub runs from beside its own binary (term::worker_bin).
-  # Its engine (libghostty-vt) needs Zig: a failure only warns (drgnx runs, its terminal does not open)
-  (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
-        --manifest-path runtime/Cargo.toml -p drgnx-term --bin drgnx-term) ||
+  # Its engine (libghostty-vt) is built with Zig from pinned tarballs, which build.rs never downloads: fetch.sh first
+  # (nothing when they are there).  A failure only warns, saying which step: drgnx runs, its terminal does not open
+  if ! bash "$here/runtime/crates/ghostty-vt-sys/fetch.sh" >&2; then
+    rt_err "warning: libghostty-vt's pinned tarballs could not be fetched (runtime/crates/ghostty-vt-sys/fetch.sh): drgnx's terminal does not open until drgnx runtime build runs with a network"
+  elif ! (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
+        --manifest-path runtime/Cargo.toml -p drgnx-term --bin drgnx-term); then
     rt_err "warning: the terminal's worker (drgnx-term) did not build: drgnx's terminal does not open until it does (needs Zig: install.sh sets it up)"
+  fi
   # the relay sidecar of a networked container job: static Linux musl, whatever the host (on a Mac it is cross-built with
   # Rust's self-contained musl and rust-lld: no C toolchain for Linux); a failure only warns (no network for jobs then)
   local pxarch pxtriple pxl pxenv

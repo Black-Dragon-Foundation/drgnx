@@ -547,6 +547,10 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
                        " chmod 755 \"$CARGO_TARGET_DIR/release/drgnx-term\";; esac\n")
                cargo-log))
       (set-file-modes (expand-file-name "cargo" tc) #o755)
+      ;; the terminal engine's pinned tarballs: fetched (a stub) before drgnx-term is built, as the test hub does
+      (let ((fetch (expand-file-name "install/runtime/crates/ghostty-vt-sys/fetch.sh" dir)))
+        (make-directory (file-name-directory fetch) t)
+        (drgnx-update-test--write fetch (format "#!/bin/sh\necho \"fetch.sh ran\" >> '%s'\n" cargo-log)))
       ;; the forwarder's musl target is added through the toolchain's rustup (a stub: never the host's)
       (drgnx-update-test--write (expand-file-name "rustup" tc) (format "#!/bin/sh\necho \"rustup $*\" >> '%s'\n" cargo-log))
       (set-file-modes (expand-file-name "rustup" tc) #o755)
@@ -573,6 +577,7 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
           (should (string-search (format "rustup target add %s-unknown-linux-musl" arch) log)))
         ;; the terminal's worker: the hub runs it from beside its own binary (a daily install had no terminal)
         (should (string-search "-j 4 --manifest-path runtime/Cargo.toml -p drgnx-term --bin drgnx-term RUSTUP_HOME=" log))
+        (should (< (or (string-search "fetch.sh ran" log) most-positive-fixnum) (string-search "-p drgnx-term" log)))
         (should (file-executable-p (expand-file-name "data/bin/drgnx-term" dir)))
         (should (string-search (format "RUSTUP_HOME=%s/rh CARGO_HOME=%s/ch" dir dir) log))
         (should (string-search (format "TARGET=%s/cache/drgnx/ratatoskr-target COMMIT=%s CHECKOUT=%s/install" dir head dir) log))

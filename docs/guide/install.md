@@ -355,8 +355,9 @@ The same build makes `drgnx-key`, which a job given your keys runs its command b
 container job (it only warns). Without the native copy a keyed job on this machine is refused, and `drgnx doctor`
 says so in its Ratatoskr check.
 It also makes `drgnx-term`, the terminal's worker, which `drgnx runtime install` puts beside `ratatoskr` (the hub runs
-it from there). Its engine needs Zig (install.sh sets it up); a build that fails only warns, and drgnx's terminal does
-not open until it is built.
+it from there). Its engine is built with Zig (install.sh sets it up) from pinned libghostty-vt tarballs, which the
+build downloads first and checks (`runtime/crates/ghostty-vt-sys/fetch.sh`); a fetch or build that fails only warns,
+and drgnx's terminal does not open until it is built.
 install.sh takes the first of these that applies (`--dry-run` says which):
 
 1. `cargo` and `rustc` 1.95 or newer already on `PATH`.
