@@ -33,7 +33,8 @@ skipped, saying how to supply them, when they are not there."
   (drgnx-tty-session-require-packages '(corfu compat)))
 
 (defun drgnx-tty-popups-test--round (sess open shown close)
-  "OPEN a popup (a function), wait until SHOWN (a form) holds in the inner Emacs, then CLOSE it.  Opened, the
+  "OPEN a popup (a function), wait until SHOWN (a form) holds in the inner Emacs, then CLOSE it once the Emacs waits
+for input (`drgnx-tty-session-input-barrier').  Opened, the
 screen and the windows' edges differ from before; closed, every window has its buffer and edges again and the
 frame count is what it was."
   (let* ((before (drgnx-tty-session-eval sess drgnx-tty-popups-test--state))
@@ -44,6 +45,9 @@ frame count is what it was."
           (open-state (drgnx-tty-session-eval sess drgnx-tty-popups-test--state)))
       (should-not (equal screen-before screen-open))
       (should-not (equal (plist-get before :windows) (plist-get open-state :windows))))
+    ;; the evals above leave Lisp running behind them (their connection's sentinel, a redisplay): a C-g that arrives
+    ;; then is a quit of that Lisp ("[Quit]" in the minibuffer, which stays), not the key that ends the prompt
+    (drgnx-tty-session-input-barrier sess)
     (funcall close)
     (drgnx-tty-session-wait sess `(equal ',(plist-get before :windows) ,drgnx-tty-popups-test--windows) 10)
     (should (equal (plist-get before :frames)

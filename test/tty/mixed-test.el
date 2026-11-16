@@ -58,7 +58,7 @@ frame and an `emacsclient -t' client of one daemon.  Both are stopped afterwards
                     :size "100x30"
                     :command (format "%s -a false -t -s %s; echo \"[emacsclient exited $?]\"; sh"
                                      (drgnx-ui--emacsclient) (shell-quote-argument (plist-get ,(nth 0 spec) :socket)))))
-             (drgnx-tty-session-wait-tab ,(nth 1 spec) nil 30 '("*scratch*" "*drgnx start*"))
+             (drgnx-tty-session-wait-tab ,(nth 1 spec) nil 30 '("*scratch*" "*drgnx start*") ,(nth 0 spec))
              (drgnx-tty-session-wait ,(nth 0 spec) '(seq-some (lambda (f) (and (frame-parameter f 'client) (not (display-graphic-p f)))) (frame-list)) 30)
              (drgnx-tty-session-wait-stages ,(nth 0 spec))   ; no module stage rebinds a key or eats a C-g mid-row
              ,@body)

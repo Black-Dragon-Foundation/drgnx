@@ -26,6 +26,7 @@
 (declare-function drgnx-wb-focus-section "drgnx-wb" (name))
 (declare-function drgnx-wb-editor-window "drgnx-wb" (&optional frame))
 (declare-function drgnx-wb-rows-setup "drgnx-wb" ())
+(declare-function drgnx-wb-selection-sync "drgnx-wb" ())
 (declare-function drgnx-diff-show "drgnx-diff" (source &optional root file))
 (declare-function project-root "project" (project))
 (declare-function drgnx-explorer-roots "drgnx-explorer" ())
@@ -33,6 +34,7 @@
 (declare-function magit-status "magit-status" (&optional directory cache))
 (defvar drgnx-hub--events)
 (defvar drgnx-wb-dock-map)
+(defvar drgnx-wb--selected-overlay)
 
 (defgroup drgnx-scm nil "The Source Control side bar." :group 'drgnx)
 
@@ -67,15 +69,16 @@
   "Non-nil when the hub's event connection is up (the view lives on it)."
   (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
 
-(defun drgnx-scm--call (method params &optional then)
+(defun drgnx-scm--call (method params &optional then failed)
   "Ask the hub METHOD with PARAMS on the event connection; THEN gets the result on success.  A failure is a notice
-with git's text.  Nothing waits."
+with git's text, after FAILED (a function of no arguments) when given; without the hub, FAILED runs at once.  Nothing
+waits."
   (if (not (drgnx-scm--hub-p))
-      (message "Source Control: the hub is not running")
+      (progn (when failed (funcall failed)) (message "Source Control: the hub is not running"))
     (drgnx-hub--call-on drgnx-hub--events method params
                         (lambda (result error)
                           (if error
-                              (drgnx-scm--failed method error)
+                              (progn (when failed (funcall failed)) (drgnx-scm--failed method error))
                             (when then (funcall then result)))))))
 
 (defun drgnx-scm--failed (what error)
@@ -142,7 +145,15 @@ with git's text.  Nothing waits."
         (current-buffer))))
 
 (defun drgnx-scm--patched (&rest _)
-  "The rows changed: keep each repository's branch (the commit box's placeholder names it)."
+  "The rows changed: keep each repository's branch (the commit box's placeholder names it), and put the selected row
+back on point's row.  Sjá's edits move the selection overlay with the text (a row inserted at its start pushes it
+on, an edit can leave it empty at a row's start), and only a command would sync it again: an empty overlay's stretch
+to the right edge pushed the next row out of its window, drawn as a blank selected row (UX audit, Staged Changes
+after a stage)."
+  (let ((o drgnx-wb--selected-overlay))
+    (when (and (overlayp o) (overlay-buffer o)
+               (not (and (= (overlay-start o) (pos-bol)) (= (overlay-end o) (pos-eol)))))
+      (drgnx-wb-selection-sync)))
   (let (branches)
     (save-excursion
       (goto-char (point-min))
@@ -367,12 +378,19 @@ holding it), else the first the rows show; nil without rows."
     (when (string-empty-p message)
       (drgnx-wb-focus-section 'scm-message)
       (user-error "Type a commit message first"))
+    ;; the box empties as the commit starts (VS Code's input does): the commit's reply waits on git; a failure puts
+    ;; the message back while the box is still empty
+    (with-current-buffer (drgnx-scm--message-buffer)
+      (delete-region (point-min) (point-max))
+      (drgnx-scm--placeholder))
     (drgnx-scm--call "git/commit" (list :root root :message message :all (if all t :false))
                      (lambda (result)
+                       (let ((sha (plist-get result :sha)))
+                         (message "Committed %s" (substring sha 0 (min 8 (length sha))))))
+                     (lambda ()
                        (with-current-buffer (drgnx-scm--message-buffer)
-                         (delete-region (point-min) (point-max))
-                         (drgnx-scm--placeholder))
-                       (message "Committed %s" (substring (plist-get result :sha) 0 (min 8 (length (plist-get result :sha)))))))))
+                         (when (zerop (buffer-size)) (insert message))
+                         (drgnx-scm--placeholder))))))
 
 (defun drgnx-scm-commit ()
   "Commit what is staged with the commit box's message.  With nothing staged, asks once whether to stage every

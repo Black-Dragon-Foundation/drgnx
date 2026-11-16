@@ -49,9 +49,11 @@ Each runs at the session's scale: run them with `DRGNX_UI_SCALE=1` and `2`.
 
 | Scenario | Expected (VS Code) | Reference | How |
 |---|---|---|---|
-| `scm-stage-and-commit-by-hand` | Ctrl+Shift+G lists the folder's repositories (the project and one nested in it) and the changed file; the row's + stages it; a click in the message box and typing give the message; Ctrl+Enter commits and the view says the working tree matches HEAD | drgnx only | every step must settle within 200 ms of its input (`:settle_ms` under the scenario's 1 s quiet period, so a late hub patch counts) |
+| `scm-stage-and-commit-by-hand` | Ctrl+Shift+G lists the folder's repositories (the project and one nested in it) and the changed file; the row's + stages it; a click in the message box and typing give the message; Ctrl+Enter commits and the view says the working tree matches HEAD | drgnx only | every step must settle within 200 ms of its input (`:settle_ms` under the scenario's 1 s quiet period) and show its state within 200 ms (`reached_ms`: the first drawn patch, command or edit after which the state holds, as the hub's rows change inside Sjá where the recorder's window signatures do not see them); after each step no row is laid out wider than its window and no row with text is drawn blank (a pixel strip across the row in the snapshot); the empty state reads its whole sentence |
 
-It leaves one screenshot per step (`scm-STEP.png`) and each step's `settle_ms` (`scm-steps.txt`) in the run's evidence folder, which `bin/drgnx test
+The commit box empties as Ctrl+Enter sends the commit, before git answers; a failed commit puts the message back.
+
+It leaves one screenshot per step (`scm-STEP.png`) and each step's `settle_ms`, `reached_ms`, drawn patches (time and rows) and trace (`scm-steps.txt`) in the run's evidence folder, which `bin/drgnx test
 --container --scenario` mounts as the GUI tier does (`.claude/tmp/ui-evidence/<time>` in the checkout, or
 `DRGNX_UI_EVIDENCE_DIR`). Run it with `DRGNX_UI_SCALE=1` and `1.25`.
 
