@@ -879,9 +879,10 @@ screen never shows Emacs's raw mode line."
 Help's and the other read-only buffers that are not files, and Dired's."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
-(defcustom drgnx-statusbar-other '(mode misc)
+(defcustom drgnx-statusbar-other '(branch trust problems tests jobs needs-you drgnx toasts mode misc)
   "The segments of the bar of the buffers of `drgnx-statusbar-other-modes', on the left, in order (nothing on the
-right: they have no line and column).  `mode' is the buffer's `mode-name'."
+right: they have no line and column).  As VS Code's, the items that are not about a file stay (the branch, the
+problems, tests, jobs, what waits on you); `mode' is the buffer's `mode-name'."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
 (defcustom drgnx-statusbar-other-right nil
