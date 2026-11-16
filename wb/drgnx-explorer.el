@@ -1064,9 +1064,14 @@ redrawn row gets a new one; a badge of a row that went is deleted here."
     (when-let* ((file drgnx-explorer--reveal-pending) ((drgnx-view-row-start view file)))
       (setq drgnx-explorer--reveal-pending nil)
       (drgnx-explorer--rows-select file))
-    ;; a reset put point back on the selection (`drgnx-view-nav-class-step'): the selected row follows it
-    (let ((o drgnx-wb--selected-overlay))
-      (when (and (overlayp o) (overlay-buffer o) (/= (overlay-start o) (pos-bol))) (drgnx-wb-selection-sync)))
+    ;; the fill follows Sjá's selection: a reset put point back on it (`drgnx-view-nav-class-step'), and a patch that
+    ;; comes while another window has the focus finds the buffer's point where a filter left it, which can be a row
+    ;; off the window's (the user's Explorer after a wheel scroll and a click: the fill a row above the clicked one)
+    (let ((o drgnx-wb--selected-overlay)
+          (at (when-let* ((id (drgnx-view-nav-selection))) (drgnx-view-row-start view id))))
+      (when (and (overlayp o) (overlay-buffer o) (/= (overlay-start o) (or at (pos-bol))))
+        (when at (goto-char at))
+        (drgnx-wb-selection-sync)))
     (when drgnx-explorer--badges        ; a few rows at most: the badges of rows that went
       (maphash (lambda (key o) (unless (drgnx-view-row-start view key) (delete-overlay o) (remhash key drgnx-explorer--badges)))
                drgnx-explorer--badges))
