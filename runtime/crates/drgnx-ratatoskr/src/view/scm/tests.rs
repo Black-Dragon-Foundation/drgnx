@@ -182,7 +182,10 @@ fn the_empty_state_wraps_to_its_room() {
         px: 24.0,
     };
     let (rs, _) = rows::rows(&v, &tty(), &room, 0);
-    let notes: Vec<_> = rs.iter().filter(|r| r.key.starts_with(&format!("note\t{root}"))).collect();
+    let notes: Vec<_> = rs
+        .iter()
+        .filter(|r| r.key.starts_with(&format!("note\t{root}")))
+        .collect();
     assert_eq!(notes[0].key, format!("note\t{root}"));
     assert!(notes.len() >= 2, "{notes:?}");
     for n in &notes {
@@ -193,7 +196,12 @@ fn the_empty_state_wraps_to_its_room() {
     assert_eq!(words.join(" "), rows::NO_CHANGES);
     // with room, one row as before
     let (rs, _) = rows::rows(&v, &tty(), &rows::Room::wide(), 0);
-    assert_eq!(rs.iter().filter(|r| r.key.starts_with(&format!("note\t{root}"))).count(), 1);
+    assert_eq!(
+        rs.iter()
+            .filter(|r| r.key.starts_with(&format!("note\t{root}")))
+            .count(),
+        1
+    );
 }
 
 /// [D] A clean repository shows the empty state; tree view groups files under folder rows, and a folded folder

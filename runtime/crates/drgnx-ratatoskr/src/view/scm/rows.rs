@@ -318,7 +318,10 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
     if st.merge.is_empty() && st.staged.is_empty() && st.changes.is_empty() {
         // wrapped to the side bar's width, never cut: the first row keyed `note⇥ROOT`, the next `note⇥ROOT⇥N`
         let face = Some("drgnx-text-muted");
-        for (i, line) in wrap(out.room, face, "  ", NO_CHANGES).into_iter().enumerate() {
+        for (i, line) in wrap(out.room, face, "  ", NO_CHANGES)
+            .into_iter()
+            .enumerate()
+        {
             let k = if i == 0 {
                 key(&["note", &root])
             } else {
