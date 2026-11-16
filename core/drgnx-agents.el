@@ -412,7 +412,8 @@ map over the few items, made when the list changes."
   (setq drgnx-agents--attention
         (mapcar (lambda (i)
                   (list :id (cons 'permission (cons (plist-get i :session) (plist-get i :id)))
-                        :text (plist-get i :text) :command 'agents-answer :scope (plist-get i :job)))
+                        :text (plist-get i :text) :detail (plist-get i :detail)
+                        :command 'agents-answer :scope (plist-get i :job)))
                 (append (plist-get data :items) nil)))
   (drgnx-notice-set 'agents drgnx-agents--attention))
 

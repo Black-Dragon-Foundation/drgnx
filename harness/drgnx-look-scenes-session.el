@@ -1020,10 +1020,10 @@ look-scenes' types them)."
 (defun drgnx-look-scene--waiting ()
   "Two things waiting on you, for the title row's pill and the inbox: an agent's permission ask and a failed run."
   (drgnx-notice-set 'agents (list (list :id '(permission "s1" . 7) :command 'agents-answer
-                                        :text "claude · fix-explorer wants to run a command\ncargo test -p explorer --release")
+                                        :text "claude · fix-explorer wants to run a command"
+                                        :detail "cargo test -p explorer --release")
                                   (list :id '(permission "s2" . 3) :command 'agents-answer
-                                        :text "gemini · docs-sweep wants to edit a file\nREADME.md")))
-  (setq drgnx-notice--needs-you 2))
+                                        :text "gemini · docs-sweep wants to edit a file" :detail "README.md"))))
 
 (defun drgnx-look-scene-title-row-dark ()
   "The title row (title-bar.html option B): logo, ☰, project switcher, search box, pill, toggles."
