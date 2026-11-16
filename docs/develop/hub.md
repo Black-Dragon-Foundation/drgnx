@@ -4956,12 +4956,15 @@ write rate. A manager's own spend comes from the `manager` samples, per task, be
 `manager:`, `worker:`. `Plan` is the plan document (`runner::plan_id`: a graph plan's id, or `plan:` and the plan file's
 path, which is its parsed entity's id), `Run` one job (`runner::run_scope`), `Task` one task by its bare reference
 (`JOB#N`: `norn::write::tasks::task_key` takes off a `task:`, so `J#5` and `task:J#5` are one scope). A session keeps its
-task in that same bare form (set once, at its start); the graph's lookups, such as the session's `works_on` link, add the
-prefix back with `tasks::entity_id`. The chain (`Budgets::link_up`) is worker →
+task as the caller named it (the editor's tracker says `task:…`, the runner `JOB#N`), so `agents/list` answers it
+unchanged; whatever joins on it compares `task_key`, and the graph's lookups, such as the session's `works_on` link, add
+the prefix back with `tasks::entity_id(task_key(…))`. The chain (`Budgets::link_up`) is worker →
 task → run → plan → spec → project: the tick links a worker's whole chain when it starts it (`runner::budget_chain`
 reads the plan's `derives` link for its spec; a plan with no spec, or a run with no plan, sits under the project), the
 approval links the run's (`runner::link_run`), a manager links under its run, a worker it started under it.
-`Budgets::rekey` moves a session's links to its new session (`agents/move`). A hit's sessions are `members` of the scope
+`Budgets::rekey` moves a session's links to its new session (`agents/move`). The saved state carries a version: one
+saved before the split (below 2) gave a job with no plan its own `plan:JOB` scope, which is migrated on load to the
+job's `run` scope with its limits, spend, joint dollars and links; a plan file's or graph plan's scope keeps its meaning. A hit's sessions are `members` of the scope
 that hit; its jobs are the `Run` scopes below it and the gateway jobs bound below it (`jobs_under`), so a spec's or a
 plan's limit pauses every run under it, one card each. The saved state carries `version` 2; a state saved before (when
 `plan:` was one job) drops its `plan` scopes on load, with one log line.

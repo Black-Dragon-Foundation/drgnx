@@ -210,9 +210,23 @@ struct St {
     joint: BTreeSet<Key>,
 }
 
-/// The version of [`Saved`] this build writes.  Before 2 a `plan` scope was one job (now a `run`): such a state's
-/// plan scopes are dropped on load (no back-compat before launch).
+/// The version of [`Saved`] this build writes.  Before 2 a job with no plan had its own `plan` scope, `plan:JOB`: such
+/// a state's are migrated on load to the job's `run` scope, with their limits, spend and links ([`old_run_scope`]). A
+/// plan file's or graph plan's scope keeps its meaning (the plan across its runs).
 const SAVED_VERSION: u32 = 2;
+
+/// The `run` scope an old state's per-job `plan` scope (`plan:JOB`, the job ids being `job-…`) meant; none for every
+/// other scope.
+fn old_run_scope(sc: &BudgetScope) -> Option<BudgetScope> {
+    let BudgetScope::Plan(id) = sc else {
+        return None;
+    };
+    let job = id.as_str().strip_prefix("plan:")?;
+    if !job.starts_with("job-") {
+        return None;
+    }
+    runstav::types::Id::new(job).ok().map(BudgetScope::Run)
+}
 
 /// What `runtime.db` keeps.
 #[derive(Default, Serialize, Deserialize)]
@@ -385,20 +399,26 @@ impl Budgets {
         let _ = self.0.db.set(db);
     }
 
-    /// Read S back; the number of entries dropped (an old state's `plan` scopes, which were jobs).
+    /// Read S back; the number of entries migrated (an old state's per-job `plan` scopes, now `run`).
     fn restore(&self, mut s: Saved) -> usize {
-        let mut dropped = 0;
+        let mut moved = 0;
         if s.version < SAVED_VERSION {
-            let old = |sc: &BudgetScope| matches!(sc, BudgetScope::Plan(_));
-            let before = s.limits.len() + s.spent.len() + s.parents.len() + s.joint.len();
-            s.limits.retain(|(sc, _)| !old(sc));
-            s.spent.retain(|(sc, _)| !old(sc));
-            s.parents.retain(|(c, p)| !old(c) && !old(p));
-            s.joint.retain(|sc| !old(sc));
-            dropped = before - (s.limits.len() + s.spent.len() + s.parents.len() + s.joint.len());
-            if dropped > 0 {
+            let mut migrate = |sc: &mut BudgetScope| {
+                if let Some(run) = old_run_scope(sc) {
+                    *sc = run;
+                    moved += 1;
+                }
+            };
+            s.limits.iter_mut().for_each(|(sc, _)| migrate(sc));
+            s.spent.iter_mut().for_each(|(sc, _)| migrate(sc));
+            s.parents.iter_mut().for_each(|(c, p)| {
+                migrate(c);
+                migrate(p);
+            });
+            s.joint.iter_mut().for_each(&mut migrate);
+            if moved > 0 {
                 tracing::info!(
-                    "the saved budgets kept {dropped} entries of jobs under `plan` scopes (now `run`): dropped"
+                    "the saved budgets kept {moved} entries of jobs under `plan` scopes: moved to their `run` scopes"
                 );
             }
         }
@@ -434,7 +454,7 @@ impl Budgets {
             meter.resets_at = m.resets_at;
             st.meters.insert(m.provider, meter);
         }
-        dropped
+        moved
     }
 
     fn saved(&self) -> Saved {
