@@ -574,8 +574,15 @@ killing it would delete the folded windows of the other frames (they are dedicat
       (let ((inhibit-read-only t)) (erase-buffer))
       (insert (drgnx-wb-section-header (drgnx-wb--section-title name) t))
       (setq-local cursor-type nil truncate-lines t mode-line-format nil header-line-format nil)
+      ;; its row again when the body changes: the island header put on the dock's top window grows once its font is
+      ;; measured, after the fold, and left the folded row 9 px of 32 (the user's side bar: Open under Files)
+      (add-hook 'window-size-change-functions #'drgnx-wb--fold-refit nil t)
       (goto-char (point-min))
       (current-buffer))))
+
+(defun drgnx-wb--fold-refit (w)
+  "`window-size-change-functions' of a folded section's buffer: W, folded, one row tall again (`drgnx-wb--fold-shrink')."
+  (when (window-parameter w 'drgnx-folded) (drgnx-wb--fold-shrink w)))
 
 (defun drgnx-wb--fold-window (w name)
   "Fold W, dock section NAME's window, to its header: the header as a one-line buffer, the window one row tall."

@@ -2366,7 +2366,9 @@ keeps `count-lines`.
 A folded section is one row under its tab line both ways (`drgnx-wb--fold-shrink` shrinks it or grows it back):
 folded at the top of the dock and given the island header after (`drgnx-wb-island-refresh` resizes it then), it would
 otherwise keep the island header in its height and have no row left (the Open header missing until a frame swap laid
-the dock out again: `drgnx-live/echo-swap-keeps-the-whole-workbench`).
+the dock out again: `drgnx-live/echo-swap-keeps-the-whole-workbench`). The island header's tab line also grows once its font is
+measured, after that refresh: the folded section's buffer resizes its window again whenever its body changes
+(`drgnx-wb--fold-refit` on `window-size-change-functions`), or the row is left a few pixels under the Files header.
 
 A section fitted while its island header was still short (the title font not yet measured) is squeezed below its tab
 and header lines once the header grows: its header line is drawn past its bottom and the section below draws over
