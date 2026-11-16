@@ -137,6 +137,7 @@ Set with `setopt' or Customize, open panels draw again at once."
 (declare-function drgnx-agent-panel-huddle-teardown "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-huddle--event "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-composer-setup "drgnx-agent-panel-composer")
+(declare-function drgnx-agents-ask-setup "drgnx-agents-ask")
 (declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel--companion-state "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel--give-changed "drgnx-agent-panel-composer")
@@ -148,6 +149,8 @@ Set with `setopt' or Customize, open panels draw again at once."
   (load (expand-file-name "drgnx-agent-panel-cards" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-composer)
   (load (expand-file-name "drgnx-agent-panel-composer" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-agents-ask)
+  (load (expand-file-name "drgnx-agents-ask" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-header)
   (load (expand-file-name "drgnx-agent-panel-header" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-explain)
@@ -482,6 +485,7 @@ panel whose input starts an agent (`drgnx-agent-panel-new-chat'), as VS Code's c
   "S-<return>" #'newline)
 
 (declare-function drgnx-agents-session-ask "drgnx-agents-session" (text))
+(declare-function drgnx-agent-panel-with-context "drgnx-agent-panel-composer" (text))
 (declare-function drgnx-agents-default-profile "drgnx-agents")
 
 (defun drgnx-agent-panel--new-chat-header ()
@@ -534,7 +538,7 @@ panel takes this one's place."
   (let ((text (string-trim (buffer-substring-no-properties (point-min) (point-max)))))
     (when (string-empty-p text) (user-error "Type what to ask first"))
     (unless (fboundp 'drgnx-agents-session-ask) (user-error "No agents here (module tools/agents)"))
-    (drgnx-agents-session-ask text)
+    (drgnx-agents-session-ask (drgnx-agent-panel-with-context text))
     (let ((inhibit-read-only t)) (erase-buffer))))
 
 (defvar drgnx-agents--sessions)
@@ -630,6 +634,7 @@ class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same b
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))
   (drgnx-agent-panel-steps-setup)
   (drgnx-agent-panel-composer-setup)
+  (drgnx-agents-ask-setup)
   (drgnx-agent-panel-explain-setup)
   (drgnx-agent-panel-huddle-setup)
   (drgnx-module-hook 'drgnx-hub-event-functions huddle-event (event data)

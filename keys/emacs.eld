@@ -48,6 +48,7 @@
               (agents-view :none "in the palette")
               (agents-panel :none "in the palette")
               (agents-panel-toggle "TAB")
+              (ask-agent-about-this "C-c w a")
               (agents-panel-older :none "scrolling to the top of the panel; the palette")
               (agents-ask :none "the palette: type a question, or @")
               (agents-panel-next-tool "]")

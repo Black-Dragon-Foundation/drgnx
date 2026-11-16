@@ -51,6 +51,7 @@
               (agents-view "C-k a")
               (agents-panel "C-k p")
               (agents-panel-toggle "TAB")
+              (ask-agent-about-this "<C-i>")
               (agents-panel-older :none "scrolling to the top of the panel; the palette")
               (agents-ask :none "the palette: type a question, or @")
               (agents-panel-next-tool "]")
