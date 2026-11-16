@@ -64,6 +64,7 @@
 (declare-function drgnx-chrome-previous-tab "drgnx-chrome")
 (declare-function drgnx-wb-toggle-panel "drgnx-area")
 (declare-function drgnx-wb-focus-panel "drgnx-area")
+(declare-function drgnx-wb-output-select-channel "drgnx-area")
 (declare-function drgnx-wb-toggle-right-dock "drgnx-area")
 (declare-function drgnx-wb-show-unrouted "drgnx-rules")
 (declare-function drgnx-wb-place "drgnx-rules")
@@ -125,6 +126,9 @@ another buffer (BUFFER-NAME) is left as it was."
                                              :command #'drgnx-wb-toggle-panel :menu '("View") :doc "Show or hide the bottom panel (Terminal, Problems, Output, Results, Help)")
                        (drgnx-command-define 'focus-panel :category "View" :title "Focus Panel" :scope 'window
                                              :command #'drgnx-wb-focus-panel :doc "Show the bottom panel and move focus to it")
+                       (drgnx-command-define 'output-select-channel :category "View" :title "Output: Select Channel…" :scope 'window
+                                             :command #'drgnx-wb-output-select-channel
+                                             :doc "Show one of the Output tab's channels (Messages, Warnings, Backtrace) in the panel")
                        (drgnx-command-define 'toggle-right-dock :category "View" :title "Toggle Right Dock" :scope 'window
                                              :command #'drgnx-wb-toggle-right-dock :menu '("View") :doc "Show or hide the right dock")
                        ;; The Notices list (core) is a panel tab.

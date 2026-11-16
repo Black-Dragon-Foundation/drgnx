@@ -547,6 +547,7 @@
               (previous-tab "SPC b p" "g T")
               (toggle-panel "SPC j")
               (focus-panel :none "in the palette")
+              (output-select-channel :none "in the palette")
               (switch-tab :none "in the palette")
               (title-row-maximize :none "a double click on the title row; in the palette")
               (title-row-drag :none "a press on the title row's empty part, dragged")

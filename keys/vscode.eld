@@ -534,6 +534,7 @@
               (previous-tab "C-<prior>" :mac "M-s-<left>")
               (toggle-panel "M-j" :everywhere "C-j" :mac "M-j")
               (focus-panel :none "in the palette")
+              (output-select-channel :none "in the palette")
               (switch-tab :none "in the palette")
               (title-row-maximize :none "a double click on the title row; in the palette")
               (title-row-drag :none "a press on the title row's empty part, dragged")

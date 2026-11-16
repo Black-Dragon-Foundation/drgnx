@@ -342,7 +342,7 @@ selects; nothing is approved, pushed, merged or answered."
   (if-let* ((map (car (drgnx-work-map-buffers)))) (drgnx-work-detail-buffer map) (get-buffer-create "*drgnx work detail*")))
 
 (defvar drgnx-work-space--panel-trail nil
-  "The trail buffer the panel's Trail tab shows: the one of the agent last selected on a map.")
+  "The trail buffer the panel's Research Trail tab shows: the one of the agent last selected on a map.")
 
 (defun drgnx-work-space--trail-buffer ()
   "The buffer pane kind `work-trail' shows: the trail of the map's selected agent, else a line asking for one."
@@ -350,6 +350,7 @@ selects; nothing is approved, pushed, merged or answered."
       drgnx-work-space--panel-trail
     (with-current-buffer (get-buffer-create "*drgnx work trail*")
       (when (zerop (buffer-size)) (insert "Select an agent to follow its trail.\n"))
+      (setq-local cursor-type nil)
       (current-buffer))))
 
 (declare-function drgnx-work-trail-open "drgnx-work-trail")
@@ -377,7 +378,11 @@ it (its trail is made when there is none, the panel shows it while a Work lens i
 (defun drgnx-work-space--rules-buffer ()
   "The buffer pane kind `work-rules' shows: the Rules tile of the newest Flow."
   (or (seq-some (lambda (flow) (drgnx-work-flow-rules-buffer flow)) (drgnx-work-flow-buffers))
-      (get-buffer-create "*drgnx work rules*")))
+      (with-current-buffer (get-buffer-create "*drgnx work rules*")
+        (when (zerop (buffer-size))
+          (insert "No rules yet. The rules of a flow, and what each one holds back, appear here.\n"))
+        (setq-local cursor-type nil)
+        (current-buffer))))
 
 (defun drgnx-work-space-sync-shown ()
   "Tell the hub which maps a window shows now: a hidden one gets nothing, a shown one is drawn anew.  Runs on the
@@ -551,8 +556,10 @@ windows; the commands."
                         :doc "Name the agents in the file you are visiting, with their lines, and select it on the map")
   (when (fboundp 'drgnx-pane-define-kind)
     (drgnx-pane-define-kind 'work-detail :title " Detail" :home 'right :buffer #'drgnx-work-space--detail-buffer)
-    (drgnx-pane-define-kind 'work-trail :title " Trail" :home 'bottom :buffer #'drgnx-work-space--trail-buffer)
-    (drgnx-pane-define-kind 'work-rules :title " Rules" :home 'bottom :buffer #'drgnx-work-space--rules-buffer))
+    (drgnx-pane-define-kind 'work-trail :title " Research Trail" :home 'bottom :contextual t
+                            :buffer #'drgnx-work-space--trail-buffer)
+    (drgnx-pane-define-kind 'work-rules :title " Rules" :home 'bottom :contextual t
+                            :buffer #'drgnx-work-space--rules-buffer))
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((work-left "Select the Previous Item" drgnx-work-map-left "Along the layer, to the left")
                    (work-right "Select the Next Item" drgnx-work-map-right "Along the layer, to the right")

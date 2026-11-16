@@ -255,10 +255,10 @@ has none; pressed again while it shows, the panel hides; from another tab it swi
 (ert-deftest drgnx-area/a-package-side-window-never-takes-the-panel ()
   ;; I6: a direct `display-buffer-in-side-window' on the panel's side and slot.
   (drgnx-area-test--with
-   (let* ((panel (drgnx-wb-area-show 'panel 'output)) (b (get-buffer-create "*pkg*"))
+   (let* ((panel (drgnx-wb-area-show 'panel 'results)) (b (get-buffer-create "*pkg*"))
           (w (display-buffer-in-side-window b '((side . bottom)))))
      (should-not (eq w panel))
-     (should (eq (window-buffer panel) (drgnx-area--placeholder 'panel 'output)))
+     (should (eq (window-buffer panel) (drgnx-area--placeholder 'panel 'results)))
      (delete-window w)
      (kill-buffer b))))
 

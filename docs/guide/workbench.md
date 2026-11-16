@@ -270,6 +270,12 @@ the entry is back.
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
 | `other-group` | diffs and logs: another editor group (the one used last), else this one |
 
+**Empty tabs say why.** A panel tab with nothing in it shows one muted line saying what appears there (no blank page
+with a cursor box). **Contextual tabs** (Heap Graph, Branch Review, Research Trail, Rules) are in the tab row only
+while shown or holding something, so the row is the same on a fresh start and after a reopen: Problems, Output,
+Results, Terminal, Help and Debug Console. The Output tab shows its channel (Messages, Warnings, Backtrace, …) as a
+chip at the right of the row; click it, or run **Output: Select Channel…**, to pick another.
+
 A warning never opens the panel by itself, as VS Code's Output does not: it is logged in `*Warnings*` and counted on the
 status bar as a notice, whose button opens `*Warnings*` (an emergency still shows at once).
 
