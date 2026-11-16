@@ -1476,6 +1476,8 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-console debug-console-history-previous debug-console-history-next ; the console
                               debug-memory-next debug-memory-previous debug-memory-write ; the memory view
                               debug-heap-select ; the heap graph's RET
+                              menu-bar-open-file menu-bar-open-edit menu-bar-open-selection menu-bar-open-view
+                              menu-bar-open-go menu-bar-open-run menu-bar-open-terminal menu-bar-open-help ; Alt+letter
                               debug-disassembly-toggle-breakpoint ; the disassembly view
                               debug-inline-breakpoint ; Shift+F9, as in VS Code
                               debug-run-no-debug ; Run Without Debugging's C-F5

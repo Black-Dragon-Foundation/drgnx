@@ -352,8 +352,8 @@ pause and then a cut replays without the pause, so the key after it becomes a pr
 Help** is `C-k C-i` (VS Code) and `SPC k` (Vim); the Emacs profile keeps Emacs' `C-h .` (local help). **Close
 Pane** and **Close Quick Help** are `Esc` and `q` in all three profiles, only where they close something (a help or
 side pane, a popup, the quick help card; a buffer you type into keeps both keys). `F10` runs **Open the Menu** (a
-remap of Emacs' `menu-bar-open`: the menu as text while the menu bar is hidden). **Preferences: Look and Layout
-Settings…**, **Toggle Menu Bar**, **Toggle Status Bar**, **Toggle Quick Help on Hover**, **Show Start Page** and
+remap of Emacs' `menu-bar-open`: the File menu under the title row; [face.md](face.md#the-menu-bar)). **Preferences: Look and Layout
+Settings…**, **Toggle Emacs's Menu Bar**, **Toggle Menu Bar**, **Toggle Status Bar**, **Toggle Quick Help on Hover**, **Show Start Page** and
 **Change Language Mode** (also a click on the language in the status bar) have no key.
 
 ## On a Mac

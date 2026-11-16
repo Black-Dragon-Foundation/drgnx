@@ -18,7 +18,7 @@ Put your choices in `config.el` ([modules.md](modules.md#your-own-code-configel)
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-face-menu-bar` | `nil` | Show Emacs's menu bar. Hidden, the commands are in the palette, and `F10` opens the whole menu as text in the minibuffer (**Open the Menu**, `tmm-menubar`; the toolkit's own `F10` has no menu to open while the bar is hidden, and can freeze the window). With the bar shown, `F10` opens it as usual. **Toggle Menu Bar** (palette, View menu) flips it for this session only. |
+| `drgnx-face-menu-bar` | `nil` | Show Emacs's menu bar. Hidden, the commands are in the palette, and `F10` opens the whole menu as text in the minibuffer (**Open the Menu**, `tmm-menubar`; the toolkit's own `F10` has no menu to open while the bar is hidden, and can freeze the window). With the bar shown, `F10` opens it as usual. **Toggle Emacs's Menu Bar** (palette, View menu) flips it for this session only. While it shows, the title row leaves out drgnx's own menus ([The menu bar](#the-menu-bar)). |
 | `drgnx-face-scroll-bars` | `none` | `none`, or `native` for the toolkit's scroll bar on the right. The position is in the status bar. |
 | `drgnx-face-dividers` | `t` | A thin line between windows, in the theme's colours. In a terminal the border is the terminal's own, drawn in the same colour. Turning it off turns `window-divider-mode` off only if drgnx turned it on; yours stays. |
 | `drgnx-face-divider-width` | `1` | The line's width in pixels (graphical frames). |
@@ -33,6 +33,31 @@ and the settings above put them back.
 `drgnx-face-menu-bar` and `drgnx-face-scroll-bars` are the one source for new frames and open ones: a
 `(menu-bar-mode 1)` in `config.el` is overridden on every frame made after it, so use `setopt` as above. With the
 module off (Preferences: Modules), nothing of this runs after startup and `(menu-bar-mode 1)` brings the bar back.
+
+## The menu bar
+
+drgnx has VS Code's menus: **File Edit Selection View Go Run Terminal Help**, at the left of the title row. A click
+opens the menu under its title (on Nidhogg's own window a menu of its own, in a terminal Emacs's text menu); each row
+is a command with the key the active key profile gives it, greyed while it can't run here. Moving to another
+profile changes the keys at the next open. On macOS the same eight menus are in the system menu bar and the title row
+leaves them out.
+
+- **Keys:** `F10` opens File in every profile; inside a menu the arrows, Enter and Esc work. In the VS Code profile
+  Alt and the first letter open a menu (`Alt+F` File, `Alt+E` Edit, `Alt+S` Selection, `Alt+V` View, `Alt+G` Go,
+  `Alt+R` Run, `Alt+T` Terminal, `Alt+H` Help), and the titles underline that letter. The Emacs and Vim profiles keep
+  Alt for editing; the commands **Open the File Menu** … **Open the Help Menu** take a key of your own like any other
+  ([keys.md](keys.md)).
+- **What is in them:** `etc/menus.eld` lists the commands of each menu in groups; titles and keys come from the
+  registry and the profile. A module's command with a menu path (`:menu ("View")`) joins the end of that menu, and
+  one of the Options menu joins **File ▸ Preferences**. A command whose module is off is not shown.
+- **Narrow windows:** when the eight titles don't fit beside the search box, one **≡** button holds them.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `drgnx-menubar-visibility` | `classic` | `classic`: the eight menus (one button when the window is narrow); `compact`: always the one button; `toggle` or `hidden`: none in the title row (`F10` and the menu keys still open them). As VS Code's `window.menuBarVisibility`. **Toggle Menu Bar** (View ▸ Appearance) switches between `classic` and `compact`. |
+
+The menu bar keymap (`drgnx-menubar-mode`, on with the module) holds the same menus, made when they open; Emacs's
+Options, Buffers and Tools menus are hidden while it is on, and Help is drgnx's.
 
 ## The title bar
 

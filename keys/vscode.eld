@@ -685,6 +685,18 @@
               (face-toggle-menu-bar :none "the palette; F10 opens the menu as text while the bar is hidden")
               (face-toggle-wrap :none "the palette")
               (face-menu :none "F10 (remap of menu-bar-open)")
+              ;; the menu bar's mnemonics, as VS Code's window.enableMenuBarMnemonics (the Emacs and Vim profiles keep Alt)
+              (menu-bar-open-file "M-f" :mac ())   ; macOS: the system menu bar
+              (menu-bar-open-edit "M-e" :mac ())   ; macOS: the system menu bar
+              (menu-bar-open-selection "M-s" :mac ())   ; macOS: the system menu bar
+              (menu-bar-open-view "M-v" :mac ())   ; macOS: the system menu bar
+              (menu-bar-open-go "M-g" :mac ())   ; macOS: the system menu bar
+              (menu-bar-open-run "M-r" :mac ())   ; macOS: the system menu bar
+              (menu-bar-open-terminal "M-t" :mac ())   ; macOS: the system menu bar
+              (menu-bar-open-help "M-h" :mac ())   ; macOS: the system menu bar
+              (menu-bar-toggle :none "the palette; View > Appearance")
+              (help-documentation :none "the palette; Help menu")
+              (help-about :none "the palette; Help menu")
               (statusbar-toggle :none "the palette")
               (statusbar-change-mode :none "click the language in the status bar; the palette")
               (quick-help "C-k C-i")
