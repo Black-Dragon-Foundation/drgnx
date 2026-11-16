@@ -16,6 +16,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-registry)
+(require 'drgnx-notice)
 (require 'drgnx-surfaces)
 
 (defvar drgnx-dir)
@@ -231,7 +232,8 @@ On Nidhogg, Left, Right and the pointer over another title move to that menu, un
 (defun drgnx-menubar-help-about ()
   "Say which drgnx and which Emacs this is."
   (interactive)
-  (message "drgnx (%s) on %s" (abbreviate-file-name drgnx-dir) (emacs-version)))
+  (drgnx-notify 'config 'info (format "drgnx (%s) on %s" (abbreviate-file-name drgnx-dir) (emacs-version))
+                :id 'about :echo t))
 
 ;;;; The title row's items
 
