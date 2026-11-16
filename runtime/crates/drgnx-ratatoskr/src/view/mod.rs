@@ -17,7 +17,9 @@
 //!
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
+pub mod agents_side;
 pub mod buffers;
+pub mod changes;
 pub mod debug;
 pub mod explorer;
 pub mod extensions;
@@ -565,6 +567,7 @@ pub fn kit_env(env: &ViewEnv) -> drgnx_rows::kit::KitEnv<'_> {
         scale: env.scale,
         tty: matches!(env.display, Display::Tty),
         glyphs: &env.glyphs,
+        density: env.density,
     }
 }
 

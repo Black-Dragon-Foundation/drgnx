@@ -121,6 +121,7 @@ pub fn from_json(text: &str) -> Vec<Event> {
         out.push(Event::Graph(GraphFact::Spec {
             id: s.id.clone(),
             title: s.title.clone(),
+            updated: 0,
         }));
     }
     for p in &d.plans {
@@ -129,6 +130,7 @@ pub fn from_json(text: &str) -> Vec<Event> {
             title: p.title.clone(),
             rank: p.rank,
             progress: p.progress,
+            updated: 0,
         }));
         if let Some(spec) = &p.spec {
             out.push(Event::Graph(GraphFact::Derives {
@@ -143,6 +145,7 @@ pub fn from_json(text: &str) -> Vec<Event> {
             plan: t.plan.clone(),
             title: t.title.clone(),
             done: t.done,
+            updated: 0,
         }));
     }
     for a in &d.asks {

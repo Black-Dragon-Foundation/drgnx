@@ -255,8 +255,36 @@ pub enum MapDensity {
     Roomy,
 }
 
-/// A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (finished items too).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+/// Which items a map view shows: `.` cycles them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MapShow {
+    /// Agents running or waiting on you, what is not started, and what changed within `recent_days`.
+    #[default]
+    Active,
+    /// Finished items only.
+    Completed,
+    /// Both, the finished ones faded.
+    All,
+}
+
+/// How a map view is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MapMode {
+    /// Nested rows: spec, plan, task.
+    #[default]
+    List,
+    /// The layers and the edges between them.
+    Graph,
+}
+
+fn recent_days() -> u32 {
+    7
+}
+
+/// A map view's filters: `f` (only an item's chain), `o` (only overlaps and clashes), `.` (Active, Completed or All).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MapFilters {
     /// An item id: only its chain.
@@ -265,7 +293,21 @@ pub struct MapFilters {
     #[serde(default)]
     pub overlaps: bool,
     #[serde(default)]
-    pub finished: bool,
+    pub show: MapShow,
+    /// Days a changed item stays in Active (`drgnx-work-recent-days`).
+    #[serde(default = "recent_days")]
+    pub recent_days: u32,
+}
+
+impl Default for MapFilters {
+    fn default() -> MapFilters {
+        MapFilters {
+            focus: None,
+            overlaps: false,
+            show: MapShow::default(),
+            recent_days: recent_days(),
+        }
+    }
 }
 
 /// `work/map/subscribe`'s params: one map view of this connection (VIEW is the editor's id for it), the workspace it
@@ -279,6 +321,9 @@ pub struct MapSubscribe {
     pub width_units: u32,
     #[serde(default)]
     pub density: MapDensity,
+    /// List (the default) or Graph.
+    #[serde(default)]
+    pub mode: MapMode,
     #[serde(default)]
     pub filters: MapFilters,
     /// Collapsed layers, 1 to 6.
@@ -375,6 +420,9 @@ pub struct MapSet {
     pub width_units: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub density: Option<MapDensity>,
+    /// List or Graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<MapMode>,
     /// False: hidden (nothing is sent); true again: its model and rows drawn anew (the model a reset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shown: Option<bool>,
@@ -417,8 +465,8 @@ fn check_view(view: &str) -> Result<(), Error> {
 }
 
 fn check_layers(collapsed: &[u8]) -> Result<(), Error> {
-    if collapsed.iter().any(|l| !(1..=6).contains(l)) {
-        return Err(invalid("collapsed", "layers 1 to 6"));
+    if collapsed.iter().any(|l| !(1..=8).contains(l)) {
+        return Err(invalid("collapsed", "layers 1 to 8"));
     }
     Ok(())
 }

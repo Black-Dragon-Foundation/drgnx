@@ -1406,7 +1406,7 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
     (work-step-conclusions "L" drgnx-work-trail-mode-map) (work-needs-you-here-next "n" drgnx-work-map-mode-map)
     (work-needs-you-here-previous "N" drgnx-work-map-mode-map) (work-focus "f" drgnx-work-map-mode-map)
     (work-overlaps "o" drgnx-work-map-mode-map) (work-expand-layers "0" drgnx-work-map-mode-map)
-    (work-show-finished "." drgnx-work-map-mode-map) (work-search "/" drgnx-work-map-mode-map)
+    (work-cycle-filter "." drgnx-work-map-mode-map) (work-search "/" drgnx-work-map-mode-map)
     (work-escape "<escape>" drgnx-work-map-mode-map) (work-needs-you-next "C-k n" nil)
     (work-needs-you-1 "g 1" drgnx-work-lens-map) (work-needs-you-2 "g 2" drgnx-work-lens-map)
     (work-needs-you-3 "g 3" drgnx-work-lens-map) (work-needs-you-4 "g 4" drgnx-work-lens-map)
@@ -1415,7 +1415,8 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
     (work-needs-you-9 "g 9" drgnx-work-lens-map) (work-collapse-layer-1 "1" drgnx-work-map-mode-map)
     (work-collapse-layer-2 "2" drgnx-work-map-mode-map) (work-collapse-layer-3 "3" drgnx-work-map-mode-map)
     (work-collapse-layer-4 "4" drgnx-work-map-mode-map) (work-collapse-layer-5 "5" drgnx-work-map-mode-map)
-    (work-collapse-layer-6 "6" drgnx-work-map-mode-map) (work-view "C-k t" nil) (work-outline "O" drgnx-work-map-mode-map)
+    (work-collapse-layer-6 "6" drgnx-work-map-mode-map) (work-collapse-layer-7 "7" drgnx-work-map-mode-map)
+    (work-collapse-layer-8 "8" drgnx-work-map-mode-map) (work-view "C-k t" nil) (work-outline "O" drgnx-work-map-mode-map)
     (diff-toggle-layout "s" drgnx-diff-mode-map) (diff-toggle-file "TAB" drgnx-diff-mode-map)
     (diff-next-file "n" drgnx-diff-mode-map) (diff-prev-file "p" drgnx-diff-mode-map)
     (diff-visit "RET" drgnx-diff-mode-map) (review-visit "RET" drgnx-review-mode-map)
@@ -1465,6 +1466,8 @@ The commands of modules that need no installed package are in it, the later stag
                               agent-settings-add agent-settings-edit agent-settings-remove agent-settings-toggle
                               agent-settings-new-skill agent-settings-open-file agent-settings-other
                               agent-settings-openrouter agent-settings-report
+                              ;; the viewed file's proposals: accept and revert at point
+                              agents-proposal-accept agents-proposal-revert
                               ;; P9's plugins page: keys in its own page map only
                               plugins-refresh plugins-approve plugins-disable plugins-project-toggle
                               shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor

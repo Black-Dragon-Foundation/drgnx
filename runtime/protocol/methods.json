@@ -43643,6 +43643,15 @@
       "name": "view/env",
       "params": {
         "$defs": {
+          "Density": {
+            "description": "The user's density (`drgnx-look-density`): the sizes the kit's `(density KEY)` geometry takes. On the wire, its\nname; an env without one is comfortable.",
+            "enum": [
+              "compact",
+              "comfortable",
+              "roomy"
+            ],
+            "type": "string"
+          },
           "Display": {
             "description": "A display's kind.",
             "enum": [
@@ -43679,6 +43688,11 @@
           },
           "class": {
             "type": "string"
+          },
+          "density": {
+            "$ref": "#/$defs/Density",
+            "default": "comfortable",
+            "description": "The user's density (`drgnx-look-density`): the kit's sizes that follow it (a tree level's indent). None:\ncomfortable. A change is a new epoch, as a scale change is."
           },
           "display": {
             "$ref": "#/$defs/Display"

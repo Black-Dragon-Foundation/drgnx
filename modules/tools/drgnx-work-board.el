@@ -196,7 +196,11 @@ agent of the Timeline's selected step becomes the map's selection; the Board's s
     ;; leaving the Flow: the map's side panel where its tile showed
     (when (fboundp 'drgnx-work-flow-detail-hide) (drgnx-work-flow-detail-hide map))))
 
-(defun drgnx-work-lens-show-map () "Show the map, keeping the selection." (interactive) (drgnx-work-lens-switch 'map))
+(declare-function drgnx-work-map-mode-toggle "drgnx-work-map")
+(defun drgnx-work-lens-show-map ()
+  "Show the map, keeping the selection; pressed on the map itself, switch it between its list and its graph."
+  (interactive)
+  (if (derived-mode-p 'drgnx-work-map-mode) (drgnx-work-map-mode-toggle) (drgnx-work-lens-switch 'map)))
 (defun drgnx-work-lens-show-board () "Show the Board, keeping the selection." (interactive) (drgnx-work-lens-switch 'board))
 (defun drgnx-work-lens-show-timeline () "Show the Timeline, keeping the selection." (interactive) (drgnx-work-lens-switch 'timeline))
 

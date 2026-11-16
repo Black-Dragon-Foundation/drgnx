@@ -28,6 +28,7 @@ fn env(width: u32) -> ViewEnv {
         tz: String::new(),
         reduced_motion: false,
         glyphs: Vec::new(),
+        density: Default::default(),
         attach: false,
         rows_in_sja: false,
         headless: false,

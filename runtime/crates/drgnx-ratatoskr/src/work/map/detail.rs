@@ -52,13 +52,17 @@ fn why(m: &Model, it: &Item) -> Vec<(&'static str, String)> {
                 "ask" => ("you", format!("“{}”", pi.label)),
                 "spec" => ("spec", pi.label),
                 "plan" => ("plan", pi.label),
+                "task" => ("task", pi.label),
                 _ => ("", pi.label),
             });
         }
         cur = p;
     }
     chain.reverse();
-    chain.extend(it.fields.task.clone().map(|t| ("task", t)));
+    // an agent whose task is no item (a run's task) still names it
+    if !chain.iter().any(|(k, _)| *k == "task") {
+        chain.extend(it.fields.task.clone().map(|t| ("task", t)));
+    }
     chain
 }
 
@@ -262,6 +266,59 @@ pub(crate) fn lines(m: &Model, sel: Option<&ItemId>, now: u64) -> Vec<Line> {
         out.splice(at..at, queue);
     }
     out
+}
+
+/// The item the Detail shows before anything is selected: the subject of the most urgent thing that needs you
+/// (the strip's first chip), else the agent of the first task that is in progress, else none.
+pub(crate) fn default_item(m: &Model) -> Option<ItemId> {
+    let items = m.items();
+    let sent: std::collections::BTreeMap<ItemId, Item> = items.clone();
+    vegvisir::nav::strip_entries(&m.needs_you(), &sent)
+        .into_iter()
+        .map(|e| e.id)
+        .find(|id| items.contains_key(id))
+        .or_else(|| {
+            items
+                .values()
+                .filter(|it| it.kind == vegvisir::Kind::Task)
+                .filter(|it| {
+                    matches!(
+                        it.fields.task_state,
+                        Some(vegvisir::TaskState::Running | vegvisir::TaskState::NeedsYou)
+                    )
+                })
+                .find_map(|t| {
+                    m.edges()
+                        .into_iter()
+                        .find(|e| {
+                            e.from == t.id
+                                && items
+                                    .get(&e.to)
+                                    .is_some_and(|i| i.kind == vegvisir::Kind::Agent)
+                        })
+                        .map(|e| e.to)
+                })
+        })
+}
+
+/// `lines` for SEL, or for the default item (`default_item`) while nothing is selected, its head saying "Needs you
+/// most". Nothing selected on a map with no such item: one head line.
+pub(crate) fn lines_or_default(m: &Model, sel: Option<&ItemId>, now: u64) -> Vec<Line> {
+    if sel.is_some_and(|s| m.item(s).is_some()) {
+        return lines(m, sel, now);
+    }
+    match default_item(m) {
+        Some(d) => {
+            let mut out = lines(m, Some(&d), now);
+            // an agent's head is its badge row, then its subtitle: the words go on the subtitle; any other head is one line
+            let at = usize::from(out.first().is_some_and(|l| l.1.contains('\t')));
+            if let Some(l) = out.get_mut(at).filter(|l| l.0 == "head") {
+                l.1 = format!("Needs you most · {}", l.1);
+            }
+            out
+        }
+        None => lines(m, None, now),
+    }
 }
 
 /// An agent's head (work-space-dark.html `.det .hd`): its badge (its initial and its number), its name and its state
