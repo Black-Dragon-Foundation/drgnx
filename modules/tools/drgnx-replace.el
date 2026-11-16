@@ -744,7 +744,7 @@ else (the view) the {} Pattern toggle after them."
     (let ((lang (or (drgnx-replace--opt :lang) "any")))
       (with-temp-buffer
         (insert (propertize "Pattern " 'face 'drgnx-text-subtle))
-        (insert-text-button (concat lang " ▾") 'face 'drgnx-replace-on 'follow-link t
+        (insert-text-button (concat lang " " (drgnx-face-glyph 'dropdown)) 'face 'drgnx-replace-on 'follow-link t
                             'help-echo "The pattern's language (any: each file's own)"
                             'action (lambda (_) (call-interactively #'drgnx-replace-search-pattern-language)))
         (insert "\n")
@@ -861,7 +861,7 @@ no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the repla
   (let ((n (and (eq scope (drgnx-replace--opt :scope)) (plist-get drgnx-replace--scope-done :files)))
         (base (and (eq scope 'branch) (drgnx-replace--opt :base))))
     (concat (nth 1 (assq scope drgnx-replace--scopes)) (and base (concat " " base)) (and n (format " %d" n))
-            (and (eq scope 'branch) " ▾"))))
+            (and (eq scope 'branch) (concat " " (drgnx-face-glyph 'dropdown))))))
 
 (defun drgnx-replace--apply-scope ()
   "Draw the scope chips as the view's scope makes them: on or off, their labels; `±' only in a git scope."
@@ -1055,7 +1055,8 @@ why."
     (drgnx-replace--insert-button scope (drgnx-replace--scope-label scope) help
                                   (if (eq scope 'branch) #'drgnx-replace--branch-pressed
                                     (lambda () (drgnx-replace--set-scope scope)))))
-  (drgnx-replace--insert-button :lines "±" "Changed lines only: matches in the lines the scope's changes added"
+  (drgnx-replace--insert-button :lines (drgnx-face-glyph 'changed-lines)
+                                "Changed lines only: matches in the lines the scope's changes added"
                                 (lambda () (drgnx-replace--toggle :lines)))
   (widget-insert "\n")
   (drgnx-replace--insert-field 'include "Include   " nil)
@@ -1064,7 +1065,7 @@ why."
   (drgnx-replace--insert-button nil "Preview" "The changes of the selected row's file, as a diff"
                                 #'drgnx-replace-preview-file)
   (drgnx-replace--insert-button nil "Undo" "Undo the last replacement, in every file" #'drgnx-replace-view-undo)
-  (drgnx-replace--insert-button nil "☆" "Save this search (the empty view lists the saved ones)"
+  (drgnx-replace--insert-button nil (drgnx-face-glyph 'save-search) "Save this search (the empty view lists the saved ones)"
                                 #'drgnx-replace-search-save)
   (widget-insert "\n")
   (setq drgnx-replace--status-beg (point-marker))
@@ -2270,7 +2271,8 @@ and the last recent ones (`drgnx-replace-recent-shown'), each a button that rest
          (dolist (s drgnx-replace--saved)
            (let ((s s) (pinned (drgnx-replace--true (plist-get s :pinned))))
              (insert "  ")
-             (drgnx-replace--list-button (concat "☆ " (plist-get s :name)) (drgnx-replace--spec-label (plist-get s :search))
+             (drgnx-replace--list-button (concat (drgnx-face-glyph 'save-search) " " (plist-get s :name))
+                                         (drgnx-replace--spec-label (plist-get s :search))
                                          (lambda () (drgnx-replace--restore (plist-get s :search))))
              (unless (drgnx-replace--true (plist-get s :project))
                (insert "  ")

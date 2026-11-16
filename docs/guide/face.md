@@ -184,6 +184,8 @@ shows in the icon's place. They are not in the table below.
 | `note` | ✎ | `n` | `changed` | ↻ | `~` |
 | `hook-busy` | ⏳ | `...` | `rename-symbol` | ⟨⟩ | `<>` |
 | `match-previous` | ↑ | `^` | `match-next` | ↓ | `v` |
+| `dropdown` | ▾ | `v` | `changed-lines` | ± | `+-` |
+| `save-search` | ☆ | `*` | | | |
 
 The glyphs are by meaning. `close` is the mark of a close button, `fail` is "something failed", `dismiss` dismisses a
 notice and `unqueue` takes a queued message back. Some look alike by default, but each is its own entry, so restyling
