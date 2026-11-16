@@ -138,6 +138,9 @@ pub struct JobFact {
     /// The names of the keys sent to it (never their values).
     #[serde(default)]
     pub keys: Vec<String>,
+    /// Why it runs on its machine and not elsewhere, as the hub's queue placed it.
+    #[serde(default)]
+    pub why: Option<String>,
 }
 
 /// A closed timeline step.

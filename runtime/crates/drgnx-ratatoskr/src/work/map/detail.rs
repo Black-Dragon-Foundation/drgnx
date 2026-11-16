@@ -374,6 +374,18 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
     if !bits.is_empty() && word(&it.kind) != "agent" {
         out.push(("head", bits.join(" · ")));
     }
+    // a job on a machine: where it runs, and why there and not elsewhere (the queue's words)
+    if let Some(job) = &f.job
+        && let Some(on) = &job.runner
+    {
+        out.push((
+            "head",
+            match &job.why {
+                Some(why) => format!("Runs on {on} · why: {why}"),
+                None => format!("Runs on {on}"),
+            },
+        ));
+    }
     out.push(("why", "Why ↑".into()));
     let w = why(m, it);
     if w.is_empty() {

@@ -16688,6 +16688,13 @@
               "null"
             ]
           },
+          "placed_why": {
+            "description": "Why it was placed on `machine` and not elsewhere (\"r1: about 4 min, warm cache; local: …\", or \"pinned by\nyou\"); absent while it waits.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "priority": {
             "description": "Its priority, 1 (the user's) to 5 (background work), as the hub set it.",
             "format": "uint8",
@@ -16940,6 +16947,13 @@
               "null"
             ]
           },
+          "placed_why": {
+            "description": "Why it was placed on `machine` and not elsewhere (\"r1: about 4 min, warm cache; local: …\", or \"pinned by\nyou\"); absent while it waits.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "priority": {
             "description": "Its priority, 1 (the user's) to 5 (background work), as the hub set it.",
             "format": "uint8",
@@ -17121,6 +17135,13 @@
               },
               "name": {
                 "description": "The name the user gave it, if any.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "placed_why": {
+                "description": "Why it was placed on `machine` and not elsewhere (\"r1: about 4 min, warm cache; local: …\", or \"pinned by\nyou\"); absent while it waits.",
                 "type": [
                   "string",
                   "null"
@@ -17869,6 +17890,13 @@
           },
           "name": {
             "description": "The name the user gave it, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "placed_why": {
+            "description": "Why it was placed on `machine` and not elsewhere (\"r1: about 4 min, warm cache; local: …\", or \"pinned by\nyou\"); absent while it waits.",
             "type": [
               "string",
               "null"
@@ -28396,6 +28424,63 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "move a job (job:ID) or an agent's next jobs (session:ID) to a machine: a waiting job is placed there; a running one is never stopped here, a card asks Restart or Keep; an unknown or untrusted machine is refused with why",
+      "name": "machines/move",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`machines/move`: move a job, or a session's next jobs, to another machine.",
+        "properties": {
+          "machine": {
+            "description": "`local` (this machine) or a runner's name.",
+            "type": "string"
+          },
+          "target": {
+            "description": "`job:ID` (a job of the queue) or `session:ID` (an agent: its next jobs).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "machine"
+        ],
+        "title": "MoveParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`machines/move`'s answer.",
+        "properties": {
+          "card": {
+            "description": "The card asking whether to restart a job that runs (Restart / Keep), by id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "moved": {
+            "description": "The move is made: a waiting job waits for the machine named, or the session's next jobs go there. False when\nit was already there, or when it runs and the user is asked first (`card`).",
+            "type": "boolean"
+          },
+          "said": {
+            "description": "What happened, in words (\"its next jobs go to laptop\").",
+            "type": "string"
+          }
+        },
+        "required": [
+          "moved",
+          "said"
+        ],
+        "title": "MoveResult",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [
