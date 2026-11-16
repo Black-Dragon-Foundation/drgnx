@@ -453,6 +453,7 @@ params! {
     HistoryTake(history::TakeParams),
     HistoryRedo(history::RedoParams),
     HistoryOpHunks(history::OpHunksParams),
+    HistoryProvenance(history::ProvenanceParams),
     HistoryRevertHunk(history::RevertHunkParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),

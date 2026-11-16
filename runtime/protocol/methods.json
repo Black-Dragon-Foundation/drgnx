@@ -24784,10 +24784,46 @@
             ],
             "type": "string"
           },
+          "OpCause": {
+            "additionalProperties": false,
+            "description": "Why a record was made, as the history holds it: the agent's session and step, the task it worked on, the conclusion\n(`decision:N`, a note's id) it recorded in the same turn at or before the write.",
+            "properties": {
+              "decision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "step": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
           "OpHunk": {
             "additionalProperties": false,
             "description": "One hunk of a record: its lines in the text now (1-based), the record's text still there, the text it removed.",
             "properties": {
+              "cause": {
+                "$ref": "#/$defs/OpCause",
+                "default": {},
+                "description": "Why its record was made (hunk provenance)."
+              },
               "deleted": {
                 "type": "string"
               },
@@ -24866,6 +24902,125 @@
           "hunks"
         ],
         "title": "OpHunks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "why a hunk is there: the record that wrote the line under a position (or hunk INDEX of record OP), its agent's session, the task it worked on and the conclusion it recorded in the same turn at or before the write, in the agent's words; none recorded is said so, never an older turn's",
+      "name": "history/provenance",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/provenance`: in the worktree WORKTREE, the hunk under LINE (1-based) of PATH (relative to it), or hunk\nINDEX of record OP.",
+        "properties": {
+          "index": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "line": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "op": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktree"
+        ],
+        "title": "ProvenanceParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Where a hunk came from.  No `session`: no agent wrote it (the user, the outside world).  No `decision`: the agent\nrecorded no conclusion in that turn before the write (\"no reason recorded\").",
+        "properties": {
+          "agent": {
+            "description": "The agent's name (the session's), else its session id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "op": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "The conclusion's text: the agent's words.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "path",
+          "index"
+        ],
+        "title": "Provenance",
         "type": "object"
       },
       "writes": false

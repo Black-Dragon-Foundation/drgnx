@@ -1470,6 +1470,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], marks: [HunkMark], tracked: boolean}` | no |
 | `history/line-positions` | user | `{lines: [natnum], path: string, worktree_root: string}` | `{positions: [LinePosition], tracked: boolean}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
+| `history/provenance` | user | `{index?: integer, line?: integer, op?: integer, path?: string, worktree: string}` | `Provenance` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
 | `history/resync` | user | `{buffer_id: string, text: string, version: natnum}` | `{ok: boolean}` | yes |
