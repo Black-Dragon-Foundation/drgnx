@@ -429,6 +429,18 @@ fn live_n(tx: &Tx<'_>, id: &str) -> Result<Option<i64>, WriteError> {
 }
 
 /// Retire every live entity whose source is SOURCE (except KEEP); how many.
+/// The files the importer holds records of: `data.records.file` of the live entities it made (`...:rec-HASH-...`).
+fn importer_files(tx: &mut Tx<'_>) -> Result<HashSet<String>, WriteError> {
+    let mut stmt = tx.sql().prepare(
+        "select json_extract(data, '$.records.file') from entity \
+         where retired_tx is null and id like '%:rec-%' and json_extract(data, '$.records.file') is not null",
+    )?;
+    let files = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    Ok(files)
+}
+
 fn retire_source(tx: &mut Tx<'_>, source: &str, keep: &HashSet<&str>) -> Result<u64, WriteError> {
     let rows: Vec<(i64, String)> = {
         let mut stmt = tx.sql().prepare(
@@ -671,6 +683,23 @@ pub fn put_with(
                 why,
             }),
             None => accepted.push(s),
+        }
+    }
+    // A plan or spec whose file the importer holds (`records/import`: `plan:rec-…`, `data.records.file`) is the
+    // importer's: the scanner's own `plan:/abs/path` of it would be a second node for one file on the map.  Its sent
+    // entity is left out, and `retire_source` below retires the one stored.
+    let held = importer_files(tx)?;
+    if !held.is_empty() {
+        for s in accepted.iter_mut() {
+            if let Some(es) = s.entities.as_mut() {
+                es.0.retain(|e| {
+                    !(matches!(e.kind.as_str(), "plan" | "spec")
+                        && e.id
+                            .as_str()
+                            .split_once(':')
+                            .is_some_and(|(_, rest)| rest.starts_with('/') && held.contains(rest)))
+                });
+            }
         }
     }
     // What each entity should be, with this request's updates of it folded in.

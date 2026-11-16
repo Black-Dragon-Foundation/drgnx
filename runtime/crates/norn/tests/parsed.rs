@@ -999,3 +999,63 @@ fn record_needs_a_live_task_of_a_task_kind() {
     let a = parsed::record(&mut tx, &f.deny, &mut ProjectCache::default(), req).unwrap();
     assert_eq!(a.ids, ["commit:aaaa1111"]);
 }
+
+/// An importer's entity (`plan:rec-…`, its file in `data.records.file`), as `records/import` writes one.
+fn importer_plan(c: &mut Connection, file: &str) {
+    let mut tx = Tx::for_test(
+        c,
+        TxMeta::new("user", Class::User, "records/import"),
+        guard(),
+    );
+    entity::create(
+        &mut tx,
+        EntityNew {
+            id: "plan:rec-38377cd08b08-12cc5f9a0c03".into(),
+            kind: "plan".into(),
+            project: None,
+            title: Some("P".into()),
+            status: Some("open".into()),
+            body: None,
+            priority: None,
+            assignee: None,
+            data: json!({"records": {"file": file}}),
+            origin: Origin::Recorded,
+            source: None,
+        },
+    )
+    .unwrap();
+    tx.commit_for_test().unwrap();
+}
+
+#[test]
+fn a_plan_the_importer_holds_is_not_stored_again_from_the_scan() {
+    let f = fx();
+    let mut c = db();
+    // the scanner's plan came first, as on an install from before the importer
+    put(&mut c, &f.deny, json!({"sources": [plan_source(&f.plan)]}));
+    assert_eq!(
+        count(
+            &c,
+            "select count(*) from entity where kind = 'plan' and retired_tx is null"
+        ),
+        1
+    );
+    importer_plan(&mut c, &f.plan);
+    // the next scan sends it again: the scanner's plan is retired and not put back; its task and step stay
+    put(&mut c, &f.deny, json!({"sources": [plan_source(&f.plan)]}));
+    let live: Vec<String> = c
+        .prepare("select id from entity where kind = 'plan' and retired_tx is null")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(live, ["plan:rec-38377cd08b08-12cc5f9a0c03"]);
+    assert_eq!(
+        count(
+            &c,
+            "select count(*) from entity where kind = 'task' and retired_tx is null"
+        ),
+        1
+    );
+}

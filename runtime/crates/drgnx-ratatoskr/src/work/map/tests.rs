@@ -1441,9 +1441,22 @@ fn a_proposal_chip_says_sign_off_once_and_names_its_job() {
     }));
     let v = rows_view(core.model(), 226);
     let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
-    assert!(rows[0].text.contains("Sign off: 2 tasks (job-7)"), "{}", rows[0].text);
-    assert!(!rows[0].text.to_lowercase().contains("sign off: sign off"), "{}", rows[0].text);
-    assert_eq!(rows[0].text.matches("Sign off").count(), 1, "{}", rows[0].text);
+    assert!(
+        rows[0].text.contains("Sign off: 2 tasks (job-7)"),
+        "{}",
+        rows[0].text
+    );
+    assert!(
+        !rows[0].text.to_lowercase().contains("sign off: sign off"),
+        "{}",
+        rows[0].text
+    );
+    assert_eq!(
+        rows[0].text.matches("Sign off").count(),
+        1,
+        "{}",
+        rows[0].text
+    );
 }
 
 #[test]

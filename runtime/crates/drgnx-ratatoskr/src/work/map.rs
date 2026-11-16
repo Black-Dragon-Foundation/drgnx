@@ -1854,14 +1854,13 @@ fn card_kind(k: &str) -> CardKind {
 /// An open card: id, job, kind, title.
 type Card = (String, String, String, String);
 
-/// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
 /// A card's words on the strip: a proposal's title (`2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min: approve to
 /// start`) is cut to its share of the strip, which keeps only what every proposal says, so it becomes `Sign off: 2
 /// tasks (JOB)` (the strip's own prefix, said once): what to approve, and which job it is.  Other cards are as titled.
 fn strip_text(job: &str, title: &str) -> String {
     match title.strip_suffix(": approve to start") {
         Some(head) => format!(
-            "approve {} ({job})",
+            "Sign off: {} ({job})",
             head.split(", ").next().unwrap_or(head)
         ),
         None => title.to_string(),
@@ -1882,6 +1881,7 @@ fn legacy_duplicates<'a>(
     .collect()
 }
 
+/// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
 async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
     f.writer
         .db
