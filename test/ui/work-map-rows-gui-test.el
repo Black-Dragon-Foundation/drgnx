@@ -46,10 +46,10 @@
        (let ((root (drgnx-uitest-root-frame)) (buf nil))
          (unwind-protect
              (with-selected-frame root
-               (delete-other-windows)
+               (drgnx-work-thirty-only-window)
                (drgnx-work-thirty-start (drgnx-work-map-rows-gui--bin))
                (setq buf (drgnx-work-thirty-map t))
-               (delete-other-windows)
+               (drgnx-work-thirty-only-window)
                (set-window-buffer (selected-window) buf)
                (should (buffer-local-value 'drgnx-view-patch buf))
                (drgnx-work-map-rows-gui--settle buf)

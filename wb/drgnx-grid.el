@@ -1255,7 +1255,21 @@ Off, they live in the docks again (`areas')."
       (setq drgnx-grid--ediff-previous nil))
     (setq drgnx-pane-backend 'areas)
     (drgnx-state-unsubscribe 'windows-changed #'drgnx-grid--windows-changed)
-    (advice-remove 'balance-windows #'drgnx-grid--balance-editors-only)))
+    (advice-remove 'balance-windows #'drgnx-grid--balance-editors-only)
+    (dolist (f (frame-list)) (drgnx-grid--release f))))
+
+(defun drgnx-grid--release (frame)
+  "The grid off: FRAME's editor windows are plain windows again (no id, `delete-other-windows' deletes them), and
+once no tile is left the frame's grid bookkeeping is emptied (a frame parameter can only be set to nil)."
+  (dolist (w (drgnx-grid-tiles frame 'editor))
+    (when (window-parameter w 'drgnx-tile-id)
+      (set-window-parameter w 'drgnx-tile-id nil)
+      (set-window-parameter w 'no-delete-other-windows nil)
+      (when (eq (window-parameter w 'delete-window) #'drgnx-grid--delete-editor)
+        (set-window-parameter w 'delete-window nil))))
+  (unless (seq-some (lambda (w) (window-parameter w 'drgnx-tile-id)) (window-list frame 'nomini))
+    (dolist (p '(drgnx-grid-next-id drgnx-grid--good drgnx-grid-memory drgnx-grid-stack drgnx-grid-full))
+      (when (frame-parameter frame p) (set-frame-parameter frame p nil)))))
 
 (provide 'drgnx-grid)
 (require 'drgnx-grid-ops)               ; moving tiles: it needs this file first
