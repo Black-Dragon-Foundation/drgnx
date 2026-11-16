@@ -105,12 +105,12 @@ fn tty() -> RowLook {
 }
 
 fn keys(v: &ViewState) -> Vec<String> {
-    let (rows, _) = rows::rows(v, &tty(), 0);
+    let (rows, _) = rows::rows(v, &tty(), &rows::Room::wide(), 0);
     rows.into_iter().map(|r| r.key).collect()
 }
 
 fn text_of(v: &ViewState, key: &str) -> String {
-    let (rows, _) = rows::rows(v, &tty(), 0);
+    let (rows, _) = rows::rows(v, &tty(), &rows::Room::wide(), 0);
     rows.into_iter()
         .find(|r| r.key == key)
         .map(|r| r.text)
@@ -165,6 +165,35 @@ fn rows_list_the_sections_and_follow_a_stage() {
     let mut v = v;
     v.toggled.insert(k(&["sec", &root, "staged"]));
     assert!(!keys(&v).contains(&k(&["f", &root, "staged", "a.txt"])));
+}
+
+/// The empty state wraps to the room it has, never cut: a narrow side bar gives it more rows, each within the room
+/// (UX audit: at 1.25 it showed as "No changes. Your working tree m…").
+#[test]
+fn the_empty_state_wraps_to_its_room() {
+    let tmp = tempfile::tempdir().unwrap();
+    let r = repo(tmp.path(), "app");
+    let root = r.to_string_lossy().into_owned();
+    let v = view_of(&[&r]);
+    // one px a char, room for 24
+    let width = |_: Option<&str>, t: &str| t.chars().count() as f32;
+    let room = rows::Room {
+        width: &width,
+        px: 24.0,
+    };
+    let (rs, _) = rows::rows(&v, &tty(), &room, 0);
+    let notes: Vec<_> = rs.iter().filter(|r| r.key.starts_with(&format!("note\t{root}"))).collect();
+    assert_eq!(notes[0].key, format!("note\t{root}"));
+    assert!(notes.len() >= 2, "{notes:?}");
+    for n in &notes {
+        assert!(n.text.chars().count() <= 24, "{:?}", n.text);
+        assert!(!n.text.contains('…'));
+    }
+    let words: Vec<String> = notes.iter().map(|n| n.text.trim().to_owned()).collect();
+    assert_eq!(words.join(" "), rows::NO_CHANGES);
+    // with room, one row as before
+    let (rs, _) = rows::rows(&v, &tty(), &rows::Room::wide(), 0);
+    assert_eq!(rs.iter().filter(|r| r.key.starts_with(&format!("note\t{root}"))).count(), 1);
 }
 
 /// [D] A clean repository shows the empty state; tree view groups files under folder rows, and a folded folder

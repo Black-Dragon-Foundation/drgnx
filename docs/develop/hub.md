@@ -2985,7 +2985,8 @@ by the hub (`runtime/crates/drgnx-ratatoskr/src/view/scm.rs` and `view/scm/`; th
   object: kind, root, path, section, untracked, letter, sha, branch) and a button `drgnx-scm-action`. Sections are
   Merge Changes, Staged Changes and Changes (git's X letter is staged, Y unstaged, `?` is U); the graph starts folded
   and draws lanes with ● │ ╮ ╯, the commits ahead and behind the upstream marked. An empty tree says "No changes.
-  Your working tree matches HEAD."
+  Your working tree matches HEAD.", wrapped to the view's width (measured in the face's font, as the fit measures) on
+  `note⇥ROOT`, then `note⇥ROOT⇥1`, …, never cut with `…`.
 - **Commands.** `git/stage` (`add -A --`), `git/unstage` (`restore --staged`, or `rm --cached` before the first commit),
   `git/discard` (`restore --worktree`; untracked files are the editor's: it moves them to the trash), `git/commit
   {root, message, all, amend}` (the message on stdin, `add -A` first with ALL; answers `{sha}`), `git/undo-commit`
