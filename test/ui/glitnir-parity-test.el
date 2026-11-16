@@ -158,6 +158,13 @@ picture fills with the card's background: the two pictures would differ by the m
                ,@body)
            (ignore-errors (drgnx-test-glitnir--hide-popups))
            (ignore-errors (corfu-mode -1))
+           ;; the fixture's frames go: corfu's popup (corfu makes it again when it finds it dead) and the card it made
+           ;; without chrome (made again, with the look's, by the next card)
+           (dolist (v '(corfu--frame corfu-popupinfo--frame))
+             (when (and (boundp v) (frame-live-p (symbol-value v))) (delete-frame (symbol-value v) t) (set v nil)))
+           (when (frame-live-p drgnx-quickhelp--frame)
+             (delete-frame drgnx-quickhelp--frame t)
+             (setq drgnx-quickhelp--frame nil drgnx-quickhelp--card-up nil))
            (setq glitnir-enable t)
            (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
            (message nil))))))
