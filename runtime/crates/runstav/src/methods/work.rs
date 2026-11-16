@@ -417,8 +417,8 @@ fn check_view(view: &str) -> Result<(), Error> {
 }
 
 fn check_layers(collapsed: &[u8]) -> Result<(), Error> {
-    if collapsed.iter().any(|l| !(1..=6).contains(l)) {
-        return Err(invalid("collapsed", "layers 1 to 6"));
+    if collapsed.iter().any(|l| !(1..=8).contains(l)) {
+        return Err(invalid("collapsed", "layers 1 to 8"));
     }
     Ok(())
 }

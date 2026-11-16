@@ -10,8 +10,9 @@ of the frame you are in. A *workspace* is the project's repository and, when it 
 notes repository with the code repositories inside it), that repository and the repositories directly inside it. To name
 the repositories yourself, set `drgnx-work-space-roots`.
 
-The map is a read-only buffer, `*drgnx work: NAME*`, in six layers: you asked, specs, plans, agents, branches, and
-files and machines. The hub keeps what the map shows and sends changes as they happen; the map never asks again until
+The map is a read-only buffer, `*drgnx work: NAME*`, in eight layers: you asked, specs, plans, tasks, agents, branches,
+files, and "Runs on" (the machines). A task shows its state as a glyph and a word: ✓ done, ▶ running, ● needs you,
+○ not started; an agent hangs under the task it works on. The hub keeps what the map shows and sends changes as they happen; the map never asks again until
 the hub restarts. If the hub goes away the map keeps what it showed and says "reconnecting" in its mode line, and it
 subscribes again by itself when the hub is back. A map no window shows costs nothing: the hub sends it no changes, and
 it is drawn again when you show it.

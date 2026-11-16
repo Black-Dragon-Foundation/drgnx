@@ -45,7 +45,7 @@ pub struct ViewState {
     pub density: Density,
     #[serde(default)]
     pub filters: Filters,
-    /// Collapsed layers, 1–6.
+    /// Collapsed layers, 1–8.
     #[serde(default)]
     pub collapsed: BTreeSet<u8>,
 }

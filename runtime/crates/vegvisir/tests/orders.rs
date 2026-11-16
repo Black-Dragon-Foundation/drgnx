@@ -493,20 +493,33 @@ mod chain {
         ]);
         let m = c.model();
         let a = m.chain(&id("agent:A"));
-        assert_eq!(a.up, vec![id("ask:1"), id("spec:s"), id("plan:p")]);
+        assert_eq!(
+            a.up,
+            vec![id("ask:1"), id("spec:s"), id("plan:p"), id("task:t")]
+        );
         assert!(a.gaps.is_empty());
         assert_eq!(a.down, vec![id("branch:drgnx/a")]);
         let b = m.chain(&id("agent:B"));
         assert_eq!(b.up, vec![id("ask:2")]);
-        assert_eq!(b.gaps, vec![2, 3], "a brainstorm has no spec and no plan");
+        assert_eq!(
+            b.gaps,
+            vec![2, 3, 4],
+            "a brainstorm has no spec, no plan and no task"
+        );
         let c = m.chain(&id("agent:C"));
-        assert_eq!(c.up, vec![id("plan:q")]);
+        assert_eq!(c.up, vec![id("plan:q"), id("task:u")]);
         assert_eq!(c.gaps, vec![1, 2], "an imported plan has no ask");
         // from a branch, up goes through its agent
         let br = m.chain(&id("branch:drgnx/a"));
         assert_eq!(
             br.up,
-            vec![id("ask:1"), id("spec:s"), id("plan:p"), id("agent:A")]
+            vec![
+                id("ask:1"),
+                id("spec:s"),
+                id("plan:p"),
+                id("task:t"),
+                id("agent:A")
+            ]
         );
     }
 }
@@ -649,7 +662,7 @@ mod model {
                 && live(&c, "ask:1")
         );
         let effects = c.step(refs(&[("drgnx/a", "drgnx/main", true)]));
-        for s in ["agent:A", "branch:drgnx/a", "plan:p", "ask:1"] {
+        for s in ["agent:A", "branch:drgnx/a", "plan:p", "task:t", "ask:1"] {
             assert!(!live(&c, s), "{s} left");
         }
         let [Effect::Delta { delta, .. }] = effects.as_slice() else {
@@ -663,7 +676,8 @@ mod model {
                 id("branch:drgnx/a"),
                 // the base goes with the last live branch cut from it
                 id("branch:drgnx/main"),
-                id("plan:p")
+                id("plan:p"),
+                id("task:t")
             ]
         );
         assert!(delta.structural);

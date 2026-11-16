@@ -24,8 +24,17 @@ use crate::{Edge, EdgeKind, Item, ItemId, Kind};
 
 /// The layer labels' margin, logical px.
 pub const MARGIN: u32 = 84;
-/// The six layers' labels, sentence case; the last is short for "Files and machines".
-pub const LAYER_NAMES: [&str; 6] = ["You asked", "Specs", "Plans", "Agents", "Branches", "Files"];
+/// The eight layers' labels, sentence case.
+pub const LAYER_NAMES: [&str; 8] = [
+    "You asked",
+    "Specs",
+    "Plans",
+    "Tasks",
+    "Agents",
+    "Branches",
+    "Files",
+    "Runs on",
+];
 /// The face that gives a card's text (and the strip's chips) its font, under the pieces' own faces: each is measured
 /// in the font the editor says its face draws in (work-space-dark.html `.acardm`, the caption size).
 const CARD_FONT: &str = "drgnx-work-card";
@@ -90,9 +99,9 @@ pub struct Index {
     /// The keys in y order: (a band?, the layout row's index); each band above its row.
     order: Vec<(bool, usize)>,
     /// Per layer (1–6), its first row's index in draw order.
-    first: [Option<usize>; 7],
+    first: [Option<usize>; 9],
     /// Per layer, how many items it holds.
-    count: [usize; 7],
+    count: [usize; 9],
     /// Each placed item's first row (a port's chip sits in the band above it).
     first_row: BTreeMap<ItemId, usize>,
 }
@@ -101,7 +110,7 @@ impl Index {
     pub fn of(s: &Scene) -> Index {
         let l = s.layout;
         let mut items: Vec<Vec<(u32, ItemId)>> = vec![Vec::new(); l.rows.len()];
-        let mut count = [0; 7];
+        let mut count = [0; 9];
         for (id, it) in s.items {
             let layer = it.kind.layer();
             count[usize::from(layer)] += 1;
@@ -132,7 +141,7 @@ impl Index {
         let mut by_y: Vec<usize> = (0..l.rows.len()).collect();
         by_y.sort_by_key(|&i| l.rows[i].y);
         let mut order = Vec::new();
-        let mut first = [None; 7];
+        let mut first = [None; 9];
         for i in by_y {
             if l.bands.iter().any(|b| b.row as usize == i) {
                 order.push((true, i));
@@ -242,8 +251,8 @@ fn band_row(
 /// How many text lines layout row R holds: five for a rich agent row, two for a compact one, else one.
 fn row_lines(r: &crate::layout::Row) -> u32 {
     match (r.layer, r.height_units) {
-        (4, h) if h >= 20 => 5,
-        (4, _) => 2,
+        (5, h) if h >= 20 => 5,
+        (5, _) => 2,
         _ => 1,
     }
 }
@@ -327,7 +336,7 @@ enum Part {
 /// The label of layout row I's first line: the layer's name on its first row, a collapsed layer's with its count.
 fn layer_label(s: &Scene, index: &Index, i: usize) -> String {
     let r = &s.layout.rows[i];
-    let name = LAYER_NAMES[usize::from(r.layer.clamp(1, 6)) - 1];
+    let name = LAYER_NAMES[usize::from(r.layer.clamp(1, 8)) - 1];
     if r.collapsed {
         format!("{name} · {}", index.count[usize::from(r.layer)])
     } else if index.first[usize::from(r.layer)] == Some(i) {
@@ -1501,6 +1510,7 @@ mod tests {
                 }),
                 ..Fields::default()
             },
+            chips: Vec::new(),
         }
     }
 

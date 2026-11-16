@@ -28,7 +28,7 @@ pub enum GraphFact {
         #[serde(default)]
         progress: Option<(u32, u32)>,
     },
-    /// A task of a plan (`parent_of` plan → task). Not an item: it folds into its agent's card.
+    /// A task of a plan (`parent_of` plan → task): an item in layer 4.
     Task {
         id: String,
         plan: String,
@@ -324,6 +324,50 @@ pub struct Item {
     /// A file in an overlap: drawn as a node by default.
     pub shared: bool,
     pub fields: Fields,
+    /// A machine's jobs, one chip each, each linking to the agent that started it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chips: Vec<JobChip>,
+}
+
+/// One job on a machine's item.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobChip {
+    pub id: String,
+    pub name: String,
+    /// `running` or `waiting`.
+    pub state: String,
+    /// The agent that started it, when it is on the map.
+    pub links_to: Option<ItemId>,
+}
+
+/// A task's state, each shown as a glyph plus its word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskState {
+    Done,
+    Running,
+    NeedsYou,
+    NotStarted,
+}
+
+impl TaskState {
+    pub fn glyph(self) -> &'static str {
+        match self {
+            TaskState::Done => "✓",
+            TaskState::Running => "▶",
+            TaskState::NeedsYou => "●",
+            TaskState::NotStarted => "○",
+        }
+    }
+
+    pub fn word(self) -> &'static str {
+        match self {
+            TaskState::Done => "done",
+            TaskState::Running => "running",
+            TaskState::NeedsYou => "needs you",
+            TaskState::NotStarted => "not started",
+        }
+    }
 }
 
 /// One chip of the needs-you strip.
@@ -616,6 +660,36 @@ impl Model {
         out
     }
 
+    /// A task's state: needs you if any session working on it does, else running if one is queued, running or
+    /// waiting, else done if the record is, else not started.
+    pub fn task_state(&self, id: &ItemId) -> TaskState {
+        let f = &self.facts;
+        let Some(t) = self
+            .names
+            .get(id.as_str())
+            .filter(|t| f.tasks.contains_key(t))
+        else {
+            return TaskState::NotStarted;
+        };
+        let mine = || f.sessions.iter().filter(move |(_, s)| s.task == Some(t));
+        if mine().any(|(y, s)| {
+            s.fact.state == State::NeedsYou || self.d.items.get(y).is_some_and(|i| i.needs_you)
+        }) {
+            TaskState::NeedsYou
+        } else if mine().any(|(_, s)| {
+            matches!(
+                s.fact.state,
+                State::Queued | State::Running | State::Waiting
+            )
+        }) {
+            TaskState::Running
+        } else if f.tasks[&t].2 {
+            TaskState::Done
+        } else {
+            TaskState::NotStarted
+        }
+    }
+
     /// The clock's minute.
     pub fn minute(&self) -> u64 {
         self.facts.minute
@@ -625,6 +699,7 @@ impl Model {
         let d = &self.d.items[&y];
         let f = &self.facts;
         let mut fields = Fields::default();
+        let mut chips = Vec::new();
         let label = match d.kind {
             Kind::Ask => f.asks.get(&y).cloned().unwrap_or_default(),
             Kind::Spec => f.specs.get(&y).cloned().unwrap_or_default(),
@@ -633,6 +708,7 @@ impl Model {
                 fields.progress = *progress;
                 title.clone()
             }
+            Kind::Task => f.tasks[&y].1.clone(),
             Kind::Agent | Kind::Subagent => {
                 let s = &f.sessions[&y];
                 fields.state = Some(s.fact.state);
@@ -711,6 +787,18 @@ impl Model {
                 let m = &f.machines[&y];
                 fields.slots = Some((m.used, m.slots));
                 fields.runner = m.runner.clone();
+                chips = f
+                    .sessions
+                    .iter()
+                    .filter(|(_, s)| s.parent.is_none() && s.machine == Some(y))
+                    .filter_map(|(&a, s)| s.fact.job.as_ref().map(|j| (a, j)))
+                    .map(|(a, j)| JobChip {
+                        id: j.id.clone(),
+                        name: j.name.clone(),
+                        state: j.state.clone(),
+                        links_to: Some(self.names.id(a)),
+                    })
+                    .collect();
                 m.name.clone()
             }
         };
@@ -726,6 +814,7 @@ impl Model {
             needs_you: d.needs_you,
             shared: d.shared,
             fields,
+            chips,
         }
     }
 
@@ -1185,6 +1274,11 @@ impl Model {
                 item(Kind::Plan, live_plans.contains(&p), None, None, *rank),
             );
         }
+        for (&t, (plan, _, _)) in &f.tasks {
+            let live = agents.values().any(|a| a.live && a.task == Some(t));
+            let block = Some(*plan).filter(|pl| f.plans.contains_key(pl));
+            d.items.insert(t, item(Kind::Task, live, block, None, 0));
+        }
         for (&a, ag) in &agents {
             let kind = if ag.top { Kind::Agent } else { Kind::Subagent };
             let block = if ag.top {
@@ -1215,24 +1309,24 @@ impl Model {
             if !present(&a) {
                 continue;
             }
-            match n.kind(t) {
-                Some(_) => edges.push((a, t, EdgeKind::CameFrom)),
-                None => edges.extend(
-                    agents
-                        .iter()
-                        .filter(|(_, ag)| ag.top && ag.task == Some(t))
-                        .map(|(&g, _)| (a, g, EdgeKind::CameFrom)),
-                ),
-            }
+            edges.push((a, t, EdgeKind::CameFrom));
         }
         edges.extend(f.derives.iter().map(|&(p, s)| (s, p, EdgeKind::CameFrom)));
+        for (&t, (pl, _, _)) in &f.tasks {
+            edges.push((*pl, t, EdgeKind::CameFrom));
+        }
         for (&a, ag) in &agents {
             let s = &f.sessions[&a];
             match ag.parent {
                 Some(p) => edges.push((p, a, EdgeKind::CameFrom)),
                 None => {
-                    if let Some(pl) = ag.plan {
-                        edges.push((pl, a, EdgeKind::CameFrom));
+                    match ag.task.filter(|t| f.tasks.contains_key(t)) {
+                        Some(t) => edges.push((t, a, EdgeKind::CameFrom)),
+                        None => {
+                            if let Some(pl) = ag.plan {
+                                edges.push((pl, a, EdgeKind::CameFrom));
+                            }
+                        }
                     }
                     if let Some(b) = ag.branch {
                         edges.push((a, b, EdgeKind::CameFrom));

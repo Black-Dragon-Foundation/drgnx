@@ -114,17 +114,15 @@ fn golden_rows_of_the_fixture() {
         ("row:2:0:0", "Specs<420><428><img> race-proof tests<596>\n"),
         ("row:3:0:0", "Plans<232><240><img> deferred testin…<408>\n"),
         (
-            "row:4:0:0",
+            "row:5:0:0",
             "Agents<84><94>●  O  Opus · hub rows<316><328><338>●  S  Sonnet · fx-sess<560>\n\
              <84><94>SESSION-END-LOSES-STARTED…<316><328><338>review item 3<560>\n\
              <84><94>testing · 32 min · $1.20 …<316><328><338>needs you · 5 min<560>\n\
              <84><94>→ turn_core drops the sta…<316><328><338>→ fixed in seq<560>\n\
              <84><94>⚠ session.rs with fx-sess<316><328><338>⚠ session.rs with hub rows<560>\n",
         ),
-        (
-            "row:6:0:0",
-            "Files<248><256><img> session.rs …<392><404><412><img> desktop 3…<532>\n",
-        ),
+        ("row:7:0:0", "Files<248><256><img> session.rs …<392>\n"),
+        ("row:8:0:0", "Runs on<404><412><img> desktop 3…<532>\n"),
     ];
     let bad: Vec<String> = golden
         .iter()
@@ -136,7 +134,7 @@ fn golden_rows_of_the_fixture() {
     let a1 = drawn
         .rows
         .iter()
-        .find(|r| r.key == "row:4:0:0:0")
+        .find(|r| r.key == "row:5:0:0:0")
         .expect("the agents' first line");
     let at = u32::try_from(a1.text.chars().position(|c| c == 'h').unwrap()).unwrap();
     assert!(
@@ -157,7 +155,7 @@ fn golden_rows_of_the_fixture() {
             .unwrap_or_else(|| panic!("{k} in {keys:?}"))
     };
     assert!(pos("band:2:0:0") < pos("row:2:0:0:0"));
-    assert!(pos("row:5:0:0:0") < pos("band:4:0:1") && pos("band:4:0:1") < pos("row:4:0:1:0"));
+    assert!(pos("row:6:0:0:0") < pos("band:5:0:1") && pos("band:5:0:1") < pos("row:5:0:1:0"));
 }
 
 /// [D] The layer labels: the name on its layer's first row only, a collapsed layer's with its count; the index the
@@ -180,23 +178,23 @@ fn layer_labels_sorted_once() {
             .unwrap_or_else(|| panic!("{key}"));
         flat(r).split('<').next().unwrap_or("").to_owned()
     };
-    assert_eq!(label(&a.rows, "row:4:0:0:0"), "Agents");
-    assert_eq!(label(&a.rows, "row:4:0:0:1"), "", "only the first line");
+    assert_eq!(label(&a.rows, "row:5:0:0:0"), "Agents");
+    assert_eq!(label(&a.rows, "row:5:0:0:1"), "", "only the first line");
     assert_eq!(
-        label(&a.rows, "row:4:0:1:0"),
+        label(&a.rows, "row:5:0:1:0"),
         "",
         "only the layer's first row"
     );
     // the files layer collapsed: one thin row, its name with the count of its items
-    for r in layout.rows.iter_mut().filter(|r| r.layer == 6) {
+    for r in layout.rows.iter_mut().filter(|r| r.layer == 7) {
         r.collapsed = true;
     }
     layout
         .at
-        .retain(|id, _| !matches!(id.kind().map(|k| k.layer()), Some(6)));
+        .retain(|id, _| !matches!(id.kind().map(|k| k.layer()), Some(7)));
     let s = scene(&items, &edges, &layout, &new);
     let c = render::rows(&s, &Index::of(&s), &env, &Cols);
-    assert_eq!(label(&c.rows, "row:6:0:0:0"), "Files · 2");
+    assert_eq!(label(&c.rows, "row:7:0:0:0"), "Files · 1");
 }
 
 /// [D] A card that changed its width changes only its own lines: the diff is one replace of them, and a width the
@@ -229,11 +227,11 @@ fn width_change_replaces_only_rows_whose_fit_changed() {
             assert_eq!(
                 keys,
                 [
-                    "row:4:0:0:0",
-                    "row:4:0:0:1",
-                    "row:4:0:0:2",
-                    "row:4:0:0:3",
-                    "row:4:0:0:4"
+                    "row:5:0:0:0",
+                    "row:5:0:0:1",
+                    "row:5:0:0:2",
+                    "row:5:0:0:3",
+                    "row:5:0:0:4"
                 ]
             );
         }
@@ -323,10 +321,10 @@ fn lanes_on_one_column_are_one_image() {
     let golden = [
         ("band:2:0:0", "<384><img>"),
         ("band:3:0:0", "<192><img><384><img>"),
-        ("band:4:0:0", "<192><img><384><img>"),
-        ("band:5:0:0", "<0><img><192><img><384><img>"),
-        ("band:4:0:1", "<0><img><192><img><384><img>"),
-        ("band:6:0:0", "<192><img><384><img>"),
+        ("band:5:0:0", "<192><img><384><img>"),
+        ("band:6:0:0", "<0><img><192><img><384><img>"),
+        ("band:5:0:1", "<0><img><192><img><384><img>"),
+        ("band:7:0:0", "<192><img><384><img>"),
     ];
     for (key, want) in golden {
         let r = drawn
@@ -337,11 +335,11 @@ fn lanes_on_one_column_are_one_image() {
         assert_eq!(flat(r), want, "{key}");
     }
     assert_eq!(
-        layout_row(&drawn.rows, "row:5:0:0"),
+        layout_row(&drawn.rows, "row:6:0:0"),
         "Branches<99><img><120><128><img> rp-df-hub · e…<280><364><372><img> rp-fx-sess · …<524>\n"
     );
     assert_eq!(
-        layout_row(&drawn.rows, "row:4:0:1"),
+        layout_row(&drawn.rows, "row:5:0:1"),
         "<116><126>●  O  explore<284><291><img><403><img>\n<116><126>running 2m<284><291><img><403><img>\n"
     );
     // every image a row names is drawn
@@ -364,7 +362,7 @@ fn lanes_on_one_column_are_one_image() {
     let line = drawn
         .rows
         .iter()
-        .find(|r| r.key == "row:4:0:1:0")
+        .find(|r| r.key == "row:5:0:1:0")
         .expect("the subagent's line");
     assert_eq!(
         line.images.len(),
@@ -551,10 +549,10 @@ fn card_text_names_the_ui_font_the_title_and_the_meta_line() {
             .collect()
     };
     for (key, word) in [
-        ("row:4:0:0:0", "Opus"),
-        ("row:4:0:0:1", "SESSION"),
-        ("row:4:0:0:2", "testing"),
-        ("row:4:0:0:3", "turn_core"),
+        ("row:5:0:0:0", "Opus"),
+        ("row:5:0:0:1", "SESSION"),
+        ("row:5:0:0:2", "testing"),
+        ("row:5:0:0:3", "turn_core"),
         ("row:3:0:0:0", "deferred"),
     ] {
         let faces = faces_at(key, word);
@@ -564,18 +562,18 @@ fn card_text_names_the_ui_font_the_title_and_the_meta_line() {
         );
     }
     assert!(
-        faces_at("row:4:0:0:0", "Opus")
+        faces_at("row:5:0:0:0", "Opus")
             .iter()
             .any(|f| f == "drgnx-work-title")
     );
     assert!(
-        faces_at("row:4:0:0:2", "testing")
+        faces_at("row:5:0:0:2", "testing")
             .iter()
             .any(|f| f == "drgnx-text-muted")
     );
     // the numbers of the going line are the code font, the words the UI font (work-space-dark.html `.meta2 .n`)
     assert!(
-        faces_at("row:4:0:0:2", "32")
+        faces_at("row:5:0:0:2", "32")
             .iter()
             .any(|f| f == "drgnx-work-meta")
     );
@@ -597,7 +595,7 @@ fn a_label_that_names_the_model_is_not_prefixed_with_it_again() {
     let line = drawn
         .rows
         .iter()
-        .find(|r| r.key == "row:4:0:0:0")
+        .find(|r| r.key == "row:5:0:0:0")
         .expect("the agents' first line");
     assert!(
         line.text.contains(&format!("{model} · hub")),
@@ -673,7 +671,7 @@ fn a_chip_has_a_lucide_icon_image() {
     let machine = drawn
         .rows
         .iter()
-        .find(|r| r.key.starts_with("row:6:") && r.text.contains("desk"))
+        .find(|r| r.key.starts_with("row:8:") && r.text.contains("desk"))
         .expect("the machines' row");
     assert!(!machine.images.is_empty(), "{machine:?}");
 }
@@ -702,10 +700,10 @@ fn the_selected_card_has_its_own_ring_faces() {
             .map(|(_, _, f)| f.clone())
             .collect()
     };
-    assert!(faces("row:4:0:0:0", "Opus").contains(&"drgnx-card-sel-top".to_owned()));
-    assert!(faces("row:4:0:0:2", "testing").contains(&"drgnx-card-sel-mid".to_owned()));
-    assert!(faces("row:4:0:0:4", "with").contains(&"drgnx-card-sel-bottom".to_owned()));
-    assert!(faces("row:4:0:0:0", "Sonnet").contains(&"drgnx-card-top".to_owned()));
+    assert!(faces("row:5:0:0:0", "Opus").contains(&"drgnx-card-sel-top".to_owned()));
+    assert!(faces("row:5:0:0:2", "testing").contains(&"drgnx-card-sel-mid".to_owned()));
+    assert!(faces("row:5:0:0:4", "with").contains(&"drgnx-card-sel-bottom".to_owned()));
+    assert!(faces("row:5:0:0:0", "Sonnet").contains(&"drgnx-card-top".to_owned()));
     assert!(faces("row:3:0:0:0", "deferred").contains(&"drgnx-card-single".to_owned()));
 }
 
@@ -759,9 +757,9 @@ fn items_off_the_selections_chain_are_dim() {
             .iter()
             .any(|(s, e, f)| *s <= at && at < *e && f == "drgnx-work-dim")
     };
-    assert!(!dim("row:4:0:0:0", "Opus"), "the selected agent is lit");
+    assert!(!dim("row:5:0:0:0", "Opus"), "the selected agent is lit");
     assert!(
-        dim("row:4:0:0:0", "Sonnet"),
+        dim("row:5:0:0:0", "Sonnet"),
         "an agent off the chain is dim"
     );
     // with no selection nothing is dim
@@ -791,7 +789,7 @@ fn a_branch_chip_shows_its_machine_tag() {
     let row = drawn
         .rows
         .iter()
-        .find(|r| r.key.starts_with("row:5:") && r.text.contains("rp-a"))
+        .find(|r| r.key.starts_with("row:6:") && r.text.contains("rp-a"))
         .expect("the branches' row");
     assert!(row.text.contains("desk 3"), "{:?}", row.text);
     assert!(!row.text.contains("edits 2"), "{:?}", row.text);
@@ -834,16 +832,21 @@ fn chips_show_the_file_name_and_its_change_and_the_badge_is_a_circle() {
     let files = drawn
         .rows
         .iter()
-        .find(|r| r.key == "row:6:0:0:0")
+        .find(|r| r.key == "row:7:0:0:0")
         .expect("files");
     assert!(files.text.contains("session.rs"), "{files:?}");
     assert!(!files.text.contains("crates/"), "{files:?}");
-    assert!(files.text.contains("desktop 3"), "{files:?}");
-    assert!(!files.text.contains("desk "), "{files:?}");
+    let machines = drawn
+        .rows
+        .iter()
+        .find(|r| r.key == "row:8:0:0:0")
+        .expect("machines");
+    assert!(machines.text.contains("desktop 3"), "{machines:?}");
+    assert!(!machines.text.contains("desk "), "{machines:?}");
     let agent = drawn
         .rows
         .iter()
-        .find(|r| r.key == "row:4:0:0:0")
+        .find(|r| r.key == "row:5:0:0:0")
         .expect("agents");
     assert!(
         agent
@@ -867,7 +870,7 @@ fn the_new_mark_survives_the_cut_of_a_long_conclusion() {
     let r = drawn
         .rows
         .iter()
-        .find(|r| r.key == "row:4:0:0:3")
+        .find(|r| r.key == "row:5:0:0:3")
         .expect("the conclusion line");
     assert!(r.text.contains("new"), "{r:?}");
     assert!(r.runs.iter().any(|x| x.2 == "drgnx-work-new"), "{r:?}");

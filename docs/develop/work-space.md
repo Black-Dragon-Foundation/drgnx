@@ -1,7 +1,9 @@
 # The Work space: how the map is built
 
-The Work space's map shows every live piece of a workspace's agent work in six fixed layers: you asked, specs, plans,
-agents, branches, files and machines. This page is for contributors. It describes the parts behind the map, from the
+The Work space's map shows every live piece of a workspace's agent work in eight fixed layers: you asked, specs, plans,
+tasks, agents, branches, files and machines ("Runs on"). `Kind::Task` is layer 4 and `Model::task_state` gives its
+`TaskState` (needs you, running, done, not started); a machine's jobs are `Item.chips`, each linking to its agent.
+In the layout a task sits over its first agent in the block's sub-row, a task with no agent as a chip of its block. This page is for contributors. It describes the parts behind the map, from the
 hub's facts to the drawing.
 
 ## The map core: `vegvisir`

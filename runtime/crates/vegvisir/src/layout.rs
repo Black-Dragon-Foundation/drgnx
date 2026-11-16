@@ -59,7 +59,7 @@ pub enum Form {
     Compact,
 }
 
-/// One row of the map: a layer's line (`block_line` counts wrapped lines, and block lines for layers 4 and 5),
+/// One row of the map: a layer's line (`block_line` counts wrapped lines, and block lines for layers 5 and 6),
 /// `sub` the sub-row inside a block line.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Row {
@@ -142,7 +142,7 @@ pub(crate) struct Metrics {
     inner_band: u32,
     block_gap: u32,
     /// ask, spec, plan, branch, file, machine
-    chips: [u32; 6],
+    chips: [u32; 7],
 }
 
 impl Metrics {
@@ -156,7 +156,7 @@ impl Metrics {
                 band: 6,
                 inner_band: 2,
                 block_gap: 4,
-                chips: [50, 40, 46, 40, 44, 34],
+                chips: [50, 40, 46, 46, 40, 44, 34],
             },
             Density::Comfortable => Metrics {
                 rich: (54, 25),
@@ -168,7 +168,7 @@ impl Metrics {
                 band: 6,
                 inner_band: 3,
                 block_gap: 6,
-                chips: [56, 44, 52, 42, 50, 36],
+                chips: [56, 44, 52, 52, 42, 50, 36],
             },
             Density::Roomy => Metrics {
                 rich: (62, 30),
@@ -178,7 +178,7 @@ impl Metrics {
                 band: 10,
                 inner_band: 4,
                 block_gap: 8,
-                chips: [60, 48, 58, 46, 56, 42],
+                chips: [60, 48, 58, 58, 46, 56, 42],
             },
         }
     }
@@ -188,9 +188,10 @@ impl Metrics {
             Kind::Ask => self.chips[0],
             Kind::Spec => self.chips[1],
             Kind::Plan => self.chips[2],
-            Kind::Branch => self.chips[3],
-            Kind::File => self.chips[4],
-            Kind::Machine => self.chips[5],
+            Kind::Task => self.chips[3],
+            Kind::Branch => self.chips[4],
+            Kind::File => self.chips[5],
+            Kind::Machine => self.chips[6],
             Kind::Agent | Kind::Subagent => self.compact.0,
         }
     }
@@ -203,6 +204,9 @@ impl Metrics {
     }
 }
 
+/// What one plan's block holds: its top agents, its branches with no shown agent, its tasks with none.
+type BlockSet = (Vec<Sym>, Vec<Sym>, Vec<Sym>);
+
 /// A row being built: its items with x (set once known), widths and heights.
 struct RowB {
     layer: u8,
@@ -214,6 +218,7 @@ struct RowB {
 
 /// One block: a plan's agents in sub-rows, each followed by its branches' sub-row; x relative to the block.
 struct Block {
+    tasks: Vec<Vec<(Sym, u32, u32)>>,
     agents: Vec<Vec<(Sym, u32, u32, u32)>>,
     branches: Vec<Vec<(Sym, u32, u32)>>,
     width: u32,
@@ -385,7 +390,7 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
             names.name(y).to_string(),
         )
     };
-    let mut by_block: BTreeMap<(u64, String), (Vec<Sym>, Vec<Sym>)> = BTreeMap::new();
+    let mut by_block: BTreeMap<(u64, String), BlockSet> = BTreeMap::new();
     let block_key = |b: Option<Sym>| match b {
         Some(p) => (
             d.items.get(&p).map_or(u64::MAX - 1, |it| it.order),
@@ -413,6 +418,38 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
             by_block.entry(block_key(it.block)).or_default().1.push(b);
         }
     }
+    // a task sits over its first shown top agent; a task with none is a chip of its block
+    let mut task_of: BTreeMap<Sym, Sym> = BTreeMap::new();
+    let mut tasked: BTreeSet<Sym> = BTreeSet::new();
+    let mut tasks_vis: Vec<Sym> = vis
+        .iter()
+        .copied()
+        .filter(|&y| kind(y) == Kind::Task && !collapsed(y))
+        .collect();
+    tasks_vis.sort_by_cached_key(|&y| (d.items[&y].order, names.name(y).to_string()));
+    for &t in &tasks_vis {
+        let first = d
+            .edges
+            .iter()
+            .filter(|&&(a, b, k)| a == t && k == EdgeKind::CameFrom && agent_set.contains(&b))
+            .map(|&(_, b, _)| b)
+            .filter(|b| d.items[b].kind == Kind::Agent)
+            .min_by_key(|&b| (d.items[&b].order, names.name(b).to_string()));
+        match first {
+            Some(a) if !task_of.contains_key(&a) => {
+                task_of.insert(a, t);
+                tasked.insert(t);
+            }
+            _ => {}
+        }
+        if !tasked.contains(&t) {
+            by_block
+                .entry(block_key(d.items[&t].block))
+                .or_default()
+                .2
+                .push(t);
+        }
+    }
     let mut subs: BTreeMap<Sym, Vec<Sym>> = BTreeMap::new();
     for &a in &agents_vis {
         let it = &d.items[&a];
@@ -434,7 +471,7 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
 
     let mut form: BTreeMap<Sym, Form> = BTreeMap::new();
     let mut blocks: Vec<(Option<Sym>, Block)> = Vec::new();
-    for ((_, plan_name), (mut tops, mut lone)) in by_block {
+    for ((_, plan_name), (mut tops, mut lone, lone_tasks)) in by_block {
         tops.sort_by_cached_key(|&y| team(y));
         lone.sort_by_cached_key(|&y| team(y));
         let mut seq: Vec<Sym> = Vec::new();
@@ -448,7 +485,17 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
             names.get(&plan_name)
         };
         let block = pack_block(
-            &seq, &lone, &branch_of, &mx, width, v, &kind, &protected, &mut form,
+            &seq,
+            &lone,
+            &lone_tasks,
+            &task_of,
+            &branch_of,
+            &mx,
+            width,
+            v,
+            &kind,
+            &protected,
+            &mut form,
         );
         blocks.push((plan, block));
     }
@@ -466,22 +513,34 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
         cur = x + b.width;
     }
 
-    // rows of layers 4 and 5, with absolute x
+    // rows of layers 5 and 6, with absolute x
     let mut block_rows: Vec<RowB> = Vec::new();
     let mut block_x: BTreeMap<Option<Sym>, (u32, u32)> = BTreeMap::new();
     for (k, line) in lines.iter().enumerate() {
         let k = k as u32;
         let depth = line
             .iter()
-            .map(|&(i, _)| blocks[i].1.agents.len().max(blocks[i].1.branches.len()))
+            .map(|&(i, _)| {
+                let b = &blocks[i].1;
+                b.tasks.len().max(b.agents.len()).max(b.branches.len())
+            })
             .max()
             .unwrap_or(0);
         for s in 0..depth {
-            for (layer, is_agents) in [(4u8, true), (5u8, false)] {
+            for layer in [4u8, 5, 6] {
+                let is_agents = layer == 5;
                 let mut items = Vec::new();
                 for &(i, bx) in line {
                     let b = &blocks[i].1;
-                    if is_agents {
+                    if layer == 4 {
+                        items.extend(
+                            b.tasks
+                                .get(s)
+                                .into_iter()
+                                .flatten()
+                                .map(|&(y, x, w)| (y, bx + x, w, mx.chip_h)),
+                        );
+                    } else if is_agents {
                         items.extend(
                             b.agents
                                 .get(s)
@@ -622,7 +681,9 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
     let mut rows1 = Vec::new();
     place_layer(1, &[Kind::Ask], &mut xs, &mut rows1);
     let mut rows6 = Vec::new();
-    place_layer(6, &[Kind::File, Kind::Machine], &mut xs, &mut rows6);
+    place_layer(7, &[Kind::File], &mut xs, &mut rows6);
+    let mut rows8 = Vec::new();
+    place_layer(8, &[Kind::Machine], &mut xs, &mut rows8);
     upper_rows.extend(rows1);
     upper_rows.extend(rows2);
     upper_rows.extend(rows3);
@@ -645,14 +706,21 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
     if v.collapsed.contains(&4) {
         all.push(thin(4));
     }
-    all.extend(block_rows);
     if v.collapsed.contains(&5) {
         all.push(thin(5));
     }
+    all.extend(block_rows);
     if v.collapsed.contains(&6) {
         all.push(thin(6));
     }
+    if v.collapsed.contains(&7) {
+        all.push(thin(7));
+    }
     all.extend(rows6);
+    if v.collapsed.contains(&8) {
+        all.push(thin(8));
+    }
+    all.extend(rows8);
 
     finish(m, v, &mx, all, &drawn, &form, want_out)
 }
@@ -663,6 +731,8 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
 fn pack_block(
     seq: &[Sym],
     lone: &[Sym],
+    lone_tasks: &[Sym],
+    task_of: &BTreeMap<Sym, Sym>,
     branch_of: &BTreeMap<Sym, Sym>,
     mx: &Metrics,
     width: u32,
@@ -671,8 +741,9 @@ fn pack_block(
     protected: &impl Fn(Sym) -> bool,
     form: &mut BTreeMap<Sym, Form>,
 ) -> Block {
-    let agents_shown = !v.collapsed.contains(&4);
-    let branches_shown = !v.collapsed.contains(&5);
+    let agents_shown = !v.collapsed.contains(&5);
+    let tasks_shown = !v.collapsed.contains(&4);
+    let branches_shown = !v.collapsed.contains(&6);
     let pack = |forms: &BTreeMap<Sym, Form>| {
         let mut rows: Vec<Vec<(Sym, u32, u32, u32)>> = Vec::new();
         let mut x = 0u32;
@@ -714,6 +785,38 @@ fn pack_block(
             }
         }
         agents = pack(&forms);
+    }
+    let tw = mx.chip_w(Kind::Task);
+    let mut tasks: Vec<Vec<(Sym, u32, u32)>> = Vec::new();
+    if tasks_shown {
+        if agents_shown {
+            for row in &agents {
+                tasks.push(
+                    row.iter()
+                        .filter_map(|&(a, x, w, _)| task_of.get(&a).map(|&t| (t, x, w)))
+                        .collect(),
+                );
+            }
+        }
+        // with the agents collapsed, the tasks are packed as chips in their agents' order
+        let mut rest: Vec<Sym> = if agents_shown {
+            Vec::new()
+        } else {
+            seq.iter().filter_map(|a| task_of.get(a).copied()).collect()
+        };
+        rest.extend(lone_tasks);
+        for t in rest {
+            let end = tasks.last().and_then(|r| r.last()).map(|&(_, x, w)| x + w);
+            match end {
+                Some(e) if e + mx.gap + tw <= width => {
+                    tasks.last_mut().expect("a row").push((t, e + mx.gap, tw))
+                }
+                _ => tasks.push(vec![(t, 0, tw)]),
+            }
+        }
+        while tasks.last().is_some_and(|r| r.is_empty()) {
+            tasks.pop();
+        }
     }
     let bw = mx.chip_w(Kind::Branch);
     let mut branches: Vec<Vec<(Sym, u32, u32)>> = Vec::new();
@@ -762,6 +865,7 @@ fn pack_block(
     let width_of = agents
         .iter()
         .flat_map(|r| r.last().map(|&(_, x, w, _)| x + w))
+        .chain(tasks.iter().flat_map(|r| r.last().map(|&(_, x, w)| x + w)))
         .chain(
             branches
                 .iter()
@@ -773,6 +877,7 @@ fn pack_block(
         form.extend(forms);
     }
     Block {
+        tasks,
         agents,
         branches,
         width: width_of,
@@ -1011,7 +1116,7 @@ fn finish(
         if i > 0 {
             let p = &rows[i - 1];
             // an agent sub-row and its own branches' sub-row hold short straight edges only
-            let inner = p.layer == 4 && r.layer == 5 && p.line == r.line && p.sub == r.sub;
+            let inner = p.layer == 5 && r.layer == 6 && p.line == r.line && p.sub == r.sub;
             y += if inner { mx.inner_band } else { mx.band };
         }
         let h = if r.collapsed {
