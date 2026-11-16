@@ -60,6 +60,7 @@ that is not UTF-8: an icon's glyph says less than its picture.  The icon names t
    '((handle "⠿" . "::") (close "×" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
      (busy "◎" . "@") (waiting "◐" . "?") (paused "⏸" . "||") (ahead "↑" . "^") (behind "↓" . "v")
      (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#") (newline "⏎" . "\\n")
+     (dash "—" . "--") (arrow-left "←" . "<-") (empty-set "∅" . "{}")
      (diamond "◆" . "<>") (search "⌕" . "/") (bullet "•" . ">") (minimize "–" . "-") (maximize "▢" . "[]")
      (fail "✕" . "X") (stopped "■" . "#") (dismiss "×" . "x") (unqueue "−" . "-")
      (info "ℹ" . "i") (warn "⚠" . "!") (cloud "☁" . "c")

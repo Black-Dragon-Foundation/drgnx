@@ -1272,7 +1272,7 @@ whose rows end the list, at the end (a new file after its header)."
                         (propertize (funcall flat rep) 'face 'drgnx-replace-new))
               (propertize (funcall flat (plist-get m :text)) 'face 'drgnx-replace-match))
             (funcall flat (plist-get m :after))
-            (if-let* ((why (plist-get m :reason))) (propertize (concat "  — " why) 'face 'drgnx-replace-dim) ""))))
+            (if-let* ((why (plist-get m :reason))) (propertize (concat "  " (drgnx-face-glyph 'dash) " " why) 'face 'drgnx-replace-dim) ""))))
 
 (defun drgnx-replace--render-row (key)
   "The row of KEY: a file's header (KEY (drgnx-replace-file . FILE)) or a match's row (KEY its plist), the preview
@@ -3083,7 +3083,7 @@ STOP: where each line's tint ends (`drgnx-replace--diff-line')."
   (let* ((head (plist-get hunk :header))
          (old (if (string-match "-\\([0-9]+\\)" head) (string-to-number (match-string 1 head)) 1))
          (new (if (string-match "\\+\\([0-9]+\\)" head) (string-to-number (match-string 1 head)) 1))
-         (note (propertize "   ← unticked, kept" 'face 'drgnx-replace-preview-kept))
+         (note (propertize (concat "   " (drgnx-face-glyph 'arrow-left) " unticked, kept") 'face 'drgnx-replace-preview-kept))
          (lines (plist-get hunk :lines)) (blank (lambda (l) (string-blank-p (substring l 1)))))
     ;; no empty context at the hunk's ends (the mockup's hunks start and end on text)
     (while (and lines (eq (aref (car lines) 0) ?\s) (funcall blank (car lines)))
@@ -3169,7 +3169,7 @@ warning colour: a group that matched nothing), one line per distinct capture, \"
                                    (cl-loop for g in (append (plist-get c :groups) nil) for n from 1
                                             collect (let ((chip (if (stringp g) (format " \\%d = %s " n g)
                                                                   (concat (format " \\%d = " n)
-                                                                          (propertize "∅" 'face 'drgnx-replace-preview-empty)
+                                                                          (propertize (drgnx-face-glyph 'empty-set) 'face 'drgnx-replace-preview-empty)
                                                                           " "))))
                                                       ;; under the ∅'s warning colour, not over it
                                                       (add-face-text-property 0 (length chip) 'drgnx-replace-preview-group
@@ -3249,7 +3249,7 @@ groups line; the hunk's match ids on the whole row)."
                               (+ (length all) kept) (drgnx-face-glyph 'sep))
                       'face 'drgnx-text-subtle)
           (propertize (format "+%d" (or (plist-get answer :plus) 0)) 'face 'drgnx-replace-plus) " "
-          (propertize (format "−%d" (or (plist-get answer :minus) 0)) 'face 'drgnx-replace-minus)
+          (propertize (format "%s%d" (drgnx-face-glyph 'minus) (or (plist-get answer :minus) 0)) 'face 'drgnx-replace-minus)
           (drgnx-replace--right
            (concat (drgnx-replace--header-button "Open File" 'search-preview-open 'drgnx-ui-button) " "
                    (drgnx-replace--header-button "Replace in This File" 'search-preview-replace-file
@@ -3399,7 +3399,7 @@ index, :hunk its first hunk's diff text when it came, :captures that hunk's grou
         (skips (cl-count-if (lambda (x) (equal (plist-get x :path) (plist-get f :path))) skipped))
         (b (find-buffer-visiting (plist-get f :path))))
     (concat (propertize (format "+%d" k) 'face '(drgnx-replace-plus drgnx-replace-sheet-code)) " "
-            (propertize (format "−%d" k) 'face '(drgnx-replace-minus drgnx-replace-sheet-code))
+            (propertize (format "%s%d" (drgnx-face-glyph 'minus) k) 'face '(drgnx-replace-minus drgnx-replace-sheet-code))
             (if (> skips 0) (propertize (format "  %d skipped" skips) 'face 'warning) "")
             (if (and b (buffer-modified-p b)) (propertize "  open, unsaved: stays unsaved" 'face 'warning) ""))))
 
