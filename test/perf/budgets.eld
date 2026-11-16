@@ -22,6 +22,11 @@
  (debug-ruler-scroll (:input :p95) 16) (debug-ruler-scroll (:input :max) 50)
  ;; the open minimap over a 10,000-line scroll (design §8): within a frame, and judged against minimap-baseline
  (minimap-scroll (:input :p95) 16) (minimap-scroll (:input :max) 50)
+ ;; the line model (design §8): typing with it on within a frame (and within 0.3 ms p95 of it off: the relative rule),
+ ;; its first build of 1 MB at most 25 ms, at most 40 bytes a line
+ (minimap-type (:input :p95) 16) (minimap-type (:input :max) 50)
+ (minimap-type-250k (:input :p95) 16) (minimap-type-250k (:input :max) 50)
+ (lines-build-1mb (:build_ms) 25) (lines-memory (:bytes_per_line) 40)
  (debug-edges-scroll (:input :p95) 16) (debug-edges-scroll (:input :max) 50)
  (debug-breakpoint-click (:input :p95) 16) (debug-breakpoint-click (:input :max) 50)
  ;; a step's stop drawn (spec §5): the arrow, band and point moved within a frame (16 ms p95, from the event)

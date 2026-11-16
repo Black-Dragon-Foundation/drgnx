@@ -495,6 +495,22 @@ its advice off `timer-event-handler' and the hub batch."
     (should (assq 'minimap-baseline (drgnx-perf-run--workloads)))
     (should (assq 'minimap-scroll (drgnx-perf-run--workloads)))))
 
+(ert-deftest drgnx-perf-run/the-line-model-is-judged-against-the-same-typing-without-it ()
+  ;; design §8: typing with the line model on is at most 0.3 ms p95 over the same typing with it off (10,000 lines and
+  ;; the density limit); 20 models open add at most 1 ms to the GC pauses' p95 over 20 plain buffers
+  (let ((fails (lambda (res name)
+                 (seq-some (lambda (l) (string-search name l)) (drgnx-perf-run--relative-fails res)))))
+    (should-not (funcall fails '((minimap-type :input (:p95 4.3)) (minimap-type-baseline :input (:p95 4.0))) "minimap-type input"))
+    (should (funcall fails '((minimap-type :input (:p95 4.4)) (minimap-type-baseline :input (:p95 4.0))) "minimap-type input"))
+    (should (funcall fails '((minimap-type-250k :input (:p95 6.5)) (minimap-type-250k-baseline :input (:p95 6.0)))
+                     "minimap-type-250k input"))
+    (should-not (funcall fails '((lines-gc :gc_pause (:p95 9.0)) (lines-gc-baseline :gc_pause (:p95 8.0))) "lines-gc"))
+    (should (funcall fails '((lines-gc :gc_pause (:p95 9.2)) (lines-gc-baseline :gc_pause (:p95 8.0))) "lines-gc"))
+    (should-not (drgnx-perf-run--relative-fails '((minimap-type :input (:p95 9.0)))))
+    (dolist (w '(minimap-type-baseline minimap-type minimap-type-250k-baseline minimap-type-250k lines-gc-baseline
+                                       lines-gc lines-build-1mb lines-memory))
+      (should (assq w (drgnx-perf-run--workloads))))))
+
 (ert-deftest drgnx-perf-run/the-ruler-is-judged-against-the-same-scroll-without-it ()
   ;; the ruler's row narrows the file and has the column on; its baseline differs from it only by the ruler, so neither
   ;; the narrowing nor the column is counted against the ruler

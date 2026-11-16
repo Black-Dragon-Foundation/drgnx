@@ -39,6 +39,14 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | debug-gutter-scroll | as code-scrolling (without sticky scroll and guides), hunks' margin claimed (a file that shows hunks), with the breakpoint column on and 300 breakpoints of every kind and the hover pool laid out (the hub answered by a store in the session) | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-gutter-baseline in the same run (`drgnx-perf-run--relative-fails`, judged when both ran) |
 | debug-gutter-baseline | the same file and keys with hunks' margin and the breakpoint column claimed and empty, the column off: what a user sees when a session starts in a file that shows hunks (see "The breakpoint column's margin" below) | — (the 5 % rule's base) |
 | debug-ruler-baseline | debug-ruler-scroll with the ruler off (`drgnx-debug-overview-ruler`): the same narrowing, breakpoints, column and keys (see "The overview ruler" below) | — (the ruler's rule's base) |
+| minimap-type-baseline | the typing workload's keys in a 10,000-line file (the fixture's first 10,000 lines) with Nidhogg's line model off | — (the line model's rule's base) |
+| minimap-type | minimap-type-baseline with the line model on | input latency; p95 at most 0.3 ms over minimap-type-baseline in the same run |
+| minimap-type-250k-baseline | the typing workload in the whole fixture (about 250k lines, the minimap's density limit) with the line model off | — |
+| minimap-type-250k | minimap-type-250k-baseline with the line model on | input latency; p95 at most 0.3 ms over its baseline |
+| lines-gc-baseline | minimap-type-baseline with 20 more buffers holding the 10,000 lines, no models | — |
+| lines-gc | lines-gc-baseline with a line model in each of the 20 buffers (Rust memory, outside the GC's heap) | GC pause p95 at most 1 ms over lines-gc-baseline |
+| lines-build-1mb | the line model's first build of 1 MB of the fixture, synchronous (`nidhogg-lines-enable` with WAIT) | milliseconds (budget 25) |
+| lines-memory | the line model of the whole fixture | bytes a line (budget 40) |
 | minimap-baseline | the fixture narrowed to its first 10,000 lines with Nidhogg's line model on, scrolled as code-scrolling | — (the minimap's rule's base) |
 | minimap-scroll | minimap-baseline with the minimap open (Nidhogg's `glitnir-minimap`, 120 px, the default face's colours: its check needs Glitnir) | input latency; p50 at most the larger of 5 % and 0.3 ms over minimap-baseline in the same run |
 | debug-ruler-scroll | the fixture narrowed to its first 10,000 lines with 200 breakpoints (one every 50 lines) in the column and the overview ruler (Nidhogg's `glitnir-ruler`: its check needs the feature), scrolled as debug-gutter-scroll | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-ruler-baseline in the same run |
