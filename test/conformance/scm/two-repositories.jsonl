@@ -1,0 +1,25 @@
+{"scenario": "scm/two-repositories", "requires": ["v1"], "doc": "A workspace folder holding two repositories: scm/subscribe lists both under Repositories; scm/set select shows the chosen one's changes; staging in one leaves the other's rows as they were."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "s", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for r in one two; do mkdir -p $ROOT/ws/$r && cd $ROOT/ws/$r && git init -q -b main && echo x > f.txt && git add . && git -c user.name=t -c user.email=t@t commit -q -m init && echo y >> f.txt; done"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "scm/subscribe", "params": {"view": "s", "roots": ["$ROOT/ws"], "view_as": "list"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "sleep 2"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "scm/set", "params": {"view": "s", "select": {"root": "$ROOT/ws/one", "on": true}, "refresh": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "sleep 2"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "view/resync", "params": {"view": "s", "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-1", "ops": [{"reset": {"$contains": [{"key": "repos"}, {"key": "repo\t$ROOT/ws/one"}, {"key": "repo\t$ROOT/ws/two"}, {"key": "f\t$ROOT/ws/one\tchanges\tf.txt"}]}}]}}, "within_ms": 20000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "git/stage", "params": {"root": "$ROOT/ws/one", "paths": ["f.txt"]}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "sleep 2"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cd $ROOT/ws/one && git diff --cached --quiet && exit 1; cd $ROOT/ws/two && git diff --cached --quiet && ! git diff --quiet"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "scm/set", "params": {"view": "s", "select": {"root": "$ROOT/ws/two", "on": true}, "refresh": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "sleep 2"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "view/resync", "params": {"view": "s", "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-1", "ops": [{"reset": {"$contains": [{"key": "f\t$ROOT/ws/two\tchanges\tf.txt"}]}}]}}, "within_ms": 20000}

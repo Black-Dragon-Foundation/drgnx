@@ -448,6 +448,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "git/letters could not read a repository's status (git's complaint): the view keeps the rows it has; to the asking connection only"
         ),
         event!(
+            "scm-remote",
+            crate::methods::scm::RemoteEvent,
+            "a git/remote command (push, pull, fetch, sync, publish) is running, done, failed (git's complaint) or stopped; to the asking connection only"
+        ),
+        event!(
             "search-run-done",
             crate::methods::search::RunDone,
             "a Search view's search (search/run) ended: its run number, the files and matches it found, or why it could not run, and the matches that come back unticked; to the searching connection only; a search a newer one stopped says nothing"
@@ -562,6 +567,7 @@ mod tests {
                     "search-change",
                     "search-handoff-state",
                     "git-letters-error",
+                    "scm-remote",
                     // the native view model
                     "view-model",
                     // the terminals
@@ -596,7 +602,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 61);
+        assert_eq!(events().len(), 62);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(
