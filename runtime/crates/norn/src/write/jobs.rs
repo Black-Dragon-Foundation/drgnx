@@ -211,14 +211,30 @@ pub fn pause_running(tx: &mut WTx<'_>, id: &str, now: f64) -> Result<bool, Coord
     Ok(true)
 }
 
+/// A job's data with LIMITS (a JSON array of `{amount, unit}`) as its `limits`, and the `usd` one as its `budget`.
+pub fn set_limits_in(data: &mut serde_json::Map<String, Value>, limits: &Value) {
+    data.insert("limits".into(), limits.clone());
+    let usd = limits
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|l| l["unit"] == "usd")
+        .and_then(|l| l["amount"].as_f64());
+    match usd {
+        Some(b) => data.insert("budget".into(), json!(b)),
+        None => data.remove("budget"),
+    };
+}
+
 /// Job ID running again, read and written in this one transaction: only while it is `paused` or `stopped` and its
-/// data has no MARK (a proposal that never started); BUDGET, when given, becomes its data's `budget`, the rest of its
+/// data has no MARK (a proposal that never started); LIMITS, when given (a JSON array of `{amount, unit}`), become its
+/// data's `limits`, and the `usd` one its `budget` (the gateway's per-job dollars; none: the key goes), the rest of its
 /// data as it is now.  Why not, when it does not.
 pub fn resume_job(
     tx: &mut WTx<'_>,
     id: &str,
     mark: &str,
-    budget: Option<f64>,
+    limits: Option<&Value>,
     now: f64,
 ) -> Result<Result<(), String>, CoordError> {
     let row: Option<(Option<String>, Option<String>)> =
@@ -243,8 +259,8 @@ pub fn resume_job(
             "Job {id} was never approved: propose the plan again"
         )));
     }
-    if let Some(b) = budget {
-        data.insert("budget".into(), json!(b));
+    if let Some(l) = limits {
+        set_limits_in(&mut data, l);
     }
     job_set(tx, id, Some("running"), Some(&Value::Object(data)), now)?;
     Ok(Ok(()))
@@ -553,9 +569,9 @@ mod tests {
     #[test]
     fn a_resume_reads_the_job_in_its_write() {
         let mut s = Stops::at("running");
-        let resumed = |s: &mut Stops, budget| {
+        let resumed = |s: &mut Stops, limits: Option<Value>| {
             let mut tx = tx_of(&mut s.r.c);
-            let got = resume_job(&mut tx, "j", "never_approved", budget, 5.0).unwrap();
+            let got = resume_job(&mut tx, "j", "never_approved", limits.as_ref(), 5.0).unwrap();
             tx.commit_for_test().unwrap();
             got
         };
@@ -570,14 +586,20 @@ mod tests {
             )
             .is_ok()
         });
-        assert_eq!(resumed(&mut s, Some(7.0)), Ok(()));
+        assert_eq!(
+            resumed(
+                &mut s,
+                Some(json!([{"amount": 7.0, "unit": "usd"}, {"amount": 0.15, "unit": "limit-share"}]))
+            ),
+            Ok(())
+        );
         let data: String =
             s.r.c
                 .query_row("select data from job where id = 'j'", [], |r| r.get(0))
                 .unwrap();
         assert_eq!(
             serde_json::from_str::<Value>(&data).unwrap(),
-            json!({"note": "kept", "budget": 7.0})
+            json!({"note": "kept", "budget": 7.0, "limits": [{"amount": 7.0, "unit": "usd"}, {"amount": 0.15, "unit": "limit-share"}]})
         );
         let mut p = Stops::at("proposed");
         p.r.write(|tx| stop_job(tx, "j", "never_approved", 7.0).unwrap());

@@ -968,6 +968,12 @@ counts what the gateway measured plus what the subscription's agents estimated, 
 not $20 of each; the gateway may spend only what that sum leaves, and the card for the limit says it is an estimate
 ([jobs.md](jobs.md#routes-and-the-estimate)).
 
+A job takes its plan's limits when it starts or resumes, by unit: `job/propose`, `job/approve` and `job/resume` take
+`limits` (one per unit, at most five), so "$5" is `{amount: 5, unit: usd}` and "a share of the week" is
+`{amount: 0.15, unit: limit-share}`, which sets no dollar limit. Without `limits` the plan's stay as they are; an empty
+list clears them. `drgnx job ... --budget N` is the dollar limit. Only a `usd` limit on a plan a subscription can run
+becomes the joint pair with `usd-est`; every other unit is set as given.
+
 Budgets nest. What a worker spends counts against the worker, its task, its run (one job), its plan, the plan's spec and
 the project, and what it may still spend is the least remaining over that chain (a worker a manager started counts
 against the manager, and the manager against its run). A plan's budget is the plan's, not one run's: every run of the

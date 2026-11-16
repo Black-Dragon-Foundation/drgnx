@@ -8,7 +8,7 @@
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "job/stop", "params": {"id": "$job"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job", "status": "stopped"}}, "within_ms": 10000}
-{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/resume", "params": {"id": "$job", "budget": 5}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "job/resume", "params": {"id": "$job", "limits": [{"amount": 5, "unit": "usd"}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "message": "$string"}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "job/status", "params": {"id": "$job"}}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$job", "status": "stopped"}}, "within_ms": 5000}

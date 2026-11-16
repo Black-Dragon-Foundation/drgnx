@@ -18,7 +18,8 @@ use norn::read::tasks::Task;
 use norn::write::jobs::{pause_running, resume_job};
 use norn::write::tasks::force_status;
 use runstav::methods::agents::{AgentOp, DoParams, EntryType, SessionStatus, Snapshot, Transcript};
-use runstav::methods::jobs::{JobSummary, WithBudget};
+use runstav::methods::jobs::{JobSummary, WithLimits};
+use runstav::methods::matrix::Limit;
 use runstav::types::Id;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -254,9 +255,11 @@ pub async fn pause_job(front: &Front, job: &str, title: &str, data: Value) -> Op
         .ok()
 }
 
-/// The USD budget of JOB's plan (across its runs; a job with no plan: its run): USD in all.  BIND books the gateway's
-/// spend of the job under its run (the approval does; a resume keeps what the sessions bound).
-pub(crate) fn set_budget(front: &Front, job: &Job, usd: f64, bind: bool) {
+/// JOB's limits by unit on its plan (across its runs; a job with no plan: its run).  A `usd` limit on a job with a
+/// subscription profile binds the dollars jointly with `usd-est` ([`super::joint_limits`]); every other unit is as given;
+/// empty clears them.  BIND books the gateway's spend of the job under its run (the approval does; a resume keeps what
+/// the sessions bound).
+pub(crate) fn set_limits(front: &Front, job: &Job, limits: Vec<Limit>, bind: bool) {
     let run = super::run_scope(job);
     let scope = super::plan_scope(job).unwrap_or_else(|| run.clone());
     let b = &front.core.budgets;
@@ -266,10 +269,9 @@ pub(crate) fn set_budget(front: &Front, job: &Job, usd: f64, bind: bool) {
     } else {
         b.link_up(&[run.clone(), scope.clone()]);
     }
-    // with a subscription the two limits bind the measured and the estimated dollars together: one cap
     let subscription = super::has_subscription_profile(front, job);
-    let limits = super::budget_limits(usd, subscription);
-    let hits = if subscription {
+    let (limits, joint) = super::joint_limits(limits, subscription);
+    let hits = if joint {
         b.set_joint(&scope, limits)
     } else {
         b.set(&scope, limits)
@@ -281,27 +283,28 @@ pub(crate) fn set_budget(front: &Front, job: &Job, usd: f64, bind: bool) {
     b.notify(hits);
 }
 
-/// `job/resume`: go on with paused or stopped job ID, with BUDGET USD for the whole job when given; the sessions the
+/// `job/resume`: go on with paused or stopped job ID, with LIMITS for its plan when given; the sessions the
 /// pause held go on, the stopped ones' tasks are free for new agents.
-pub async fn resume(front: &Front, caller: &Caller, p: WithBudget) -> Result<JobSummary, Error> {
+pub async fn resume(front: &Front, caller: &Caller, p: WithLimits) -> Result<JobSummary, Error> {
     let id = p.id.as_str();
     let l: Loaded = load(front, id, false)
         .await?
         .ok_or_else(|| invalid(format!("No job {id}")))?;
     // the status, the never-approved mark and the data are read in the write itself, so a stop, a withdrawal or a
     // pause that lands between is never undone with what was read before it
-    let budget = p.budget.map(|b| b.get());
+    let limits: Option<Vec<Limit>> = p.limits.map(|l| l.0);
+    let limits_json = limits.as_ref().map(|l| json!(l));
     let jid = id.to_owned();
     front
         .writer
         .write(caller, "coord/job-set", move |tx| {
-            resume_job(tx, &jid, super::NEVER_APPROVED, budget, now())
+            resume_job(tx, &jid, super::NEVER_APPROVED, limits_json.as_ref(), now())
         })
         .await
         .map_err(crate::coord::fail)?
         .map_err(invalid)?;
-    if let Some(b) = budget {
-        set_budget(front, &l.job, b, false);
+    if let Some(limits) = limits {
+        set_limits(front, &l.job, limits, false);
     }
     settle_cards(front, caller, id, |c| {
         (c.kind.as_deref() == Some("budget")).then_some("resume")

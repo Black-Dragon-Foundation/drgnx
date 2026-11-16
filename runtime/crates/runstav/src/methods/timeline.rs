@@ -345,20 +345,25 @@ pub struct SupervisorEvent {
     pub text: String,
 }
 
-fn check_budget_set(p: &BudgetSetParams) -> Result<(), Error> {
-    let mut units: Vec<Unit> = p.limits.iter().map(|l| l.unit).collect();
+/// A set of limits as a budget takes them: one per unit, each a finite amount of 0 or more.
+pub(crate) fn check_limits(limits: &[Limit]) -> Result<(), Error> {
+    let mut units: Vec<Unit> = limits.iter().map(|l| l.unit).collect();
     units.sort();
     units.dedup();
-    if units.len() != p.limits.len() {
+    if units.len() != limits.len() {
         return Err(invalid("limits", "one limit per unit"));
     }
-    if p.limits
+    if limits
         .iter()
         .any(|l| !(l.amount.is_finite() && l.amount >= 0.0))
     {
         return Err(invalid("limits", "a limit: a finite amount, 0 or more"));
     }
     Ok(())
+}
+
+fn check_budget_set(p: &BudgetSetParams) -> Result<(), Error> {
+    check_limits(&p.limits)
 }
 
 pub(crate) fn methods() -> Vec<Method> {

@@ -9,8 +9,8 @@
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md", "budget": 0.005}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed", "budget": 0.005}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md", "limits": [{"amount": 0.005, "unit": "usd"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed", "limits": [{"amount": 0.005, "unit": "usd"}]}}, "within_ms": 10000}
 {"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit note.txt\n"}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}

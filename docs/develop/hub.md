@@ -1485,15 +1485,15 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `history/revert/preview` | user | `{decision?: integer, seq?: integer, session?: string}` | `RevertCard` | no |
 | `history/take` | user | `{from: string, hunks: [{path: string, theirs_end: integer, theirs_start: integer}], worktree: string}` | `{op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |
-| `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
+| `job/approve` | user | `{id: Id, limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}]}` | `JobSummary` | yes |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |
 | `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes |
 | `job/dismiss` | user | `{message: natnum}` | `boolean` | yes |
 | `job/order` | user | `{delta: Delta, task: TaskRef}` | `JobSummary` | yes |
-| `job/propose` | user | `{auto?: boolean, budget?: Usd, gate?: "review" \| "review+accept", plan: PlanRef, repo?: AbsPath}` | `JobSummary` | yes |
+| `job/propose` | user | `{auto?: boolean, gate?: "review" \| "review+accept", limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], plan: PlanRef, repo?: AbsPath}` | `JobSummary` | yes |
 | `job/reassign` | user | `{profile: string, task: TaskRef}` | `JobSummary` | yes |
 | `job/reply` | user | `{message: natnum, text: Prompt}` | `boolean` | yes |
-| `job/resume` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
+| `job/resume` | user | `{id: Id, limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}]}` | `JobSummary` | yes |
 | `job/start-task` | user | `{auto?: boolean, gate?: "review" \| "review+accept", n: TaskNo, plan: PlanRef}` | `JobSummary` | yes |
 | `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no |
 | `job/stop` | user | `{id: Id}` | `JobSummary` | yes |

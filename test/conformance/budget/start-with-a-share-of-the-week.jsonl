@@ -1,0 +1,14 @@
+{"scenario": "budget/start-with-a-share-of-the-week", "requires": ["v1", "test-hooks"], "doc": "A plan is approved with a limit by unit, not dollars: job/approve {limits: [{amount: 0.15, unit: limit-share}]} puts that limit on the plan's scope as given (budget/get shows it) and makes no usd limit; an empty list clears it, and job/approve without limits would have left it as it was."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-routes ((implement \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job", "limits": [{"amount": 0.15, "unit": "limit-share"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job", "limits": [{"amount": 0.15, "unit": "limit-share"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "budget/get", "params": {"scope": {"plan": "plan:$ROOT/plan.md"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"limits": [{"amount": 0.15, "unit": "limit-share"}]}}, "within_ms": 5000}

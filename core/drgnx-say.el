@@ -35,6 +35,18 @@
         ((>= x 0.005) (format "%.2f" x))
         (t "<0.01")))
 
+(defun drgnx-say--limits (limits)
+  "LIMITS (plists :amount :unit, the plan's limits by unit) as a line: `20 USD', `15% of the limit' for a share.  The
+estimate that binds with a `usd' limit on a subscription (`usd-est') is not listed twice."
+  (let ((usd (cl-find "usd" limits :key (lambda (l) (plist-get l :unit)) :test #'equal)))
+    (mapconcat (lambda (l)
+                 (let ((n (plist-get l :amount)) (unit (plist-get l :unit)))
+                   (cond ((equal unit "limit-share") (format "%d%% of the limit" (round (* 100 n))))
+                         ((equal unit "usd-est") (format "%s USD (estimate)" (drgnx-say--num n)))
+                         (t (format "%s %s" (drgnx-say--num n) (if (equal unit "usd") "USD" unit))))))
+               (if usd (cl-remove "usd-est" limits :key (lambda (l) (plist-get l :unit)) :test #'equal) limits)
+               ", ")))
+
 (defun drgnx-say--range (lo hi fmt)
   "\"LO–HI\" through FMT, or the one number when they print alike."
   (let ((a (funcall fmt lo)) (b (funcall fmt hi)))
@@ -133,8 +145,8 @@ for the job.  Nothing outside what is inserted moves."
     (drgnx-say--field "Tasks" (format "%d%s" (or (and tasks (length tasks)) (length (plist-get job-summary :tasks)))
                                       (if profiles (concat ", on " (string-join profiles ", ")) "")))
     ;; on a plan with a subscription the budget binds the estimate too, with the gateway's dollars (docs/guide/jobs.md)
-    (drgnx-say--field "Budget" (if (plist-get job-summary :budget)
-                                   (concat (format "%s USD" (drgnx-say--num (plist-get job-summary :budget)))
+    (drgnx-say--field "Budget" (if (plist-get job-summary :limits)
+                                   (concat (drgnx-say--limits (plist-get job-summary :limits))
                                            (if (cl-some (lambda (c) (equal (plist-get c :unit) "usd-est"))
                                                         (plist-get forecast :cost))
                                                ", binding the estimate on a subscription with the measured dollars"

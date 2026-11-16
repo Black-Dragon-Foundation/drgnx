@@ -45,7 +45,7 @@ use runstav::methods::forecast::Forecast;
 use runstav::methods::jobs::{
     BlockParams, ByMessage, ByTask, CardParams, JobStatusResult, JobSummary, MergeGate,
     OrderParams, PlanRef, ProposeParams, ReassignParams, ReplyParams, StartTaskParams,
-    StatusParams, TaskNo, WithBudget,
+    StatusParams, TaskNo, WithLimits,
 };
 use runstav::methods::matrix::{Limit, Unit};
 use runstav::methods::timeline::BudgetScope;
@@ -228,21 +228,28 @@ pub(crate) fn budget_warnings(f: &Forecast, budget: Option<f64>) -> Vec<String> 
     )]
 }
 
-/// The limits a dollar budget of USD sets: `usd` (what the gateway measures), and for a plan with a subscription
-/// profile `usd-est` too, because a subscription's spend lands there and a `usd` limit would never fire; the two then
-/// bind together ([`crate::budget::Budgets::set_joint`]), so the plan's dollars are capped once.
-pub(crate) fn budget_limits(usd: f64, subscription: bool) -> Vec<Limit> {
-    let mut limits = vec![Limit {
-        amount: usd,
-        unit: Unit::Usd,
-    }];
-    if subscription {
+/// The `usd` limit among LIMITS: the dollars the gateway's per-job cap and the warnings read.
+pub(crate) fn usd_of(limits: &[Limit]) -> Option<f64> {
+    limits
+        .iter()
+        .find(|l| l.unit == Unit::Usd)
+        .map(|l| l.amount)
+}
+
+/// The limits to set on a plan from LIMITS as the user gave them, and whether the dollars bind jointly: a `usd` limit
+/// on a plan with a subscription profile also limits `usd-est` by the same amount (a subscription's spend lands
+/// there, and a `usd` limit alone would never fire), and the two bind together
+/// ([`crate::budget::Budgets::set_joint`]), so the plan's dollars are capped once.  Every other unit is as given.
+pub(crate) fn joint_limits(mut limits: Vec<Limit>, subscription: bool) -> (Vec<Limit>, bool) {
+    let joint = subscription && usd_of(&limits).is_some();
+    if joint && !limits.iter().any(|l| l.unit == Unit::UsdEst) {
+        let amount = usd_of(&limits).unwrap_or(0.0);
         limits.push(Limit {
-            amount: usd,
+            amount,
             unit: Unit::UsdEst,
         });
     }
-    limits
+    (limits, joint)
 }
 
 /// Whether any profile JOB may run a task on (a route, its fallbacks, a reassignment) is a subscription's.
@@ -1028,7 +1035,10 @@ pub(crate) fn summarize(front: &Front, l: &Loaded) -> JobSummary {
         status: l.job.status.clone(),
         repo: l.job.repo.clone(),
         plan: l.job.plan.clone(),
-        budget: data.get("budget").and_then(Value::as_f64),
+        limits: data
+            .get("limits")
+            .and_then(|l| serde_json::from_value(l.clone()).ok())
+            .unwrap_or_default(),
         spent: Some(l.spent),
         estimate: data.get("estimate").cloned(),
         warnings: data
@@ -1354,7 +1364,7 @@ async fn new_id(front: &Front) -> Result<String, Error> {
 struct Proposal<'a> {
     plan: &'a PlanRef,
     repo: Option<&'a str>,
-    budget: Option<f64>,
+    limits: Option<Vec<Limit>>,
     auto: bool,
     alone: bool,
     gate: Option<MergeGate>,
@@ -1365,7 +1375,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     let Proposal {
         plan,
         repo,
-        budget,
+        limits,
         auto,
         alone,
         gate,
@@ -1527,8 +1537,11 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
             }
             o
         }).collect::<Vec<_>>(),
-        "routes": routes, "budget": budget, "gate": gate, "pack": pack,
+        "routes": routes, "gate": gate, "pack": pack,
     });
+    if let Some(l) = &limits {
+        norn::write::jobs::set_limits_in(data.as_object_mut().expect("an object"), &json!(l));
+    }
     if !profiles.is_empty() {
         data["profiles"] = Value::Object(profiles);
     }
@@ -1558,7 +1571,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         .as_ref()
         .map_or_else(Vec::new, |f| f.warnings.clone());
     if let Some(f) = &forecast {
-        warnings.extend(budget_warnings(f, budget));
+        warnings.extend(budget_warnings(f, limits.as_deref().and_then(usd_of)));
     }
     warnings.extend(said);
     data["estimate"] = estimate_of(forecast.as_ref(), tasks.len());
@@ -1717,7 +1730,7 @@ pub async fn propose(
     let proposal = Proposal {
         plan: &p.plan,
         repo: p.repo.as_ref().map(|r| r.as_str()),
-        budget: p.budget.map(|b| b.get()),
+        limits: p.limits.map(|l| l.0),
         auto: p.auto.unwrap_or(false),
         alone: false,
         gate: p.gate,
@@ -1733,13 +1746,13 @@ pub(crate) async fn propose_graph(
     caller: &Caller,
     plan: &PlanRef,
     repo: &str,
-    budget: Option<f64>,
+    limits: Option<Vec<Limit>>,
     gate: Option<MergeGate>,
 ) -> Result<JobSummary, Error> {
     let proposal = Proposal {
         plan,
         repo: Some(repo),
-        budget,
+        limits,
         auto: false,
         alone: true,
         gate,
@@ -1760,7 +1773,7 @@ pub async fn start_task(
     let proposal = Proposal {
         plan: &p.plan,
         repo: None,
-        budget: None,
+        limits: None,
         auto: p.auto.unwrap_or(false),
         alone: false,
         gate: p.gate,
@@ -1775,7 +1788,7 @@ async fn approve_job(
     front: &Front,
     caller: &Caller,
     id: &str,
-    budget: Option<f64>,
+    limits: Option<Vec<Limit>>,
 ) -> Result<(), Error> {
     let l = load(front, id, false)
         .await?
@@ -1785,10 +1798,12 @@ async fn approve_job(
         return Err(invalid(format!("Job {id} is {status}, not proposed")));
     }
     let mut data = data_of(&l.job);
-    if let Some(b) = budget {
-        data.insert("budget".into(), json!(b));
+    if let Some(l) = &limits {
+        norn::write::jobs::set_limits_in(&mut data, &json!(l));
     }
-    let budget = data.get("budget").and_then(Value::as_f64);
+    let limits: Option<Vec<Limit>> = data
+        .get("limits")
+        .and_then(|l| serde_json::from_value(l.clone()).ok());
     // the rule pack the proposal carried is the job's, recorded with the approval: the gates read that record
     let pack: Option<vordr::pack::Pack> = data
         .get("pack")
@@ -1811,9 +1826,9 @@ async fn approve_job(
     }
     // the run counts toward its plan, the plan toward its spec or project, from now on
     link_run(front, &l.job).await;
-    // the job's USD budget is its plan's limit: reaching it pauses the run (Task 16b)
-    if let Some(b) = budget {
-        fallback::set_budget(front, &l.job, b, true);
+    // the job's limits are its plan's: reaching one pauses the run (Task 16b)
+    if let Some(lim) = limits {
+        fallback::set_limits(front, &l.job, lim, true);
     }
     settle_cards(front, caller, id, |c| {
         (c.kind.as_deref() == Some("proposal")).then_some("approve")
@@ -1845,8 +1860,8 @@ pub(crate) async fn withdraw(front: &Front, caller: &Caller, id: &str) -> Result
     Ok(withdrawn)
 }
 
-pub async fn approve(front: &Front, caller: &Caller, p: WithBudget) -> Result<JobSummary, Error> {
-    approve_job(front, caller, p.id.as_str(), p.budget.map(|b| b.get())).await?;
+pub async fn approve(front: &Front, caller: &Caller, p: WithLimits) -> Result<JobSummary, Error> {
+    approve_job(front, caller, p.id.as_str(), p.limits.map(|l| l.0)).await?;
     summary(front, p.id.as_str(), false).await
 }
 
@@ -2060,7 +2075,7 @@ pub async fn reassign(
     review::reassign(front, caller, p).await
 }
 
-pub async fn resume(front: &Front, caller: &Caller, p: WithBudget) -> Result<JobSummary, Error> {
+pub async fn resume(front: &Front, caller: &Caller, p: WithLimits) -> Result<JobSummary, Error> {
     fallback::resume(front, caller, p).await
 }
 
@@ -2193,16 +2208,19 @@ mod price_tests {
         assert!(none["tokens"].as_u64().unwrap() > 0);
     }
 
-    /// Pure (D): a dollar budget on a plan with a subscription profile binds the estimate too.
+    /// Pure (D): a dollar limit on a plan with a subscription profile binds the estimate too (and is joint).
     #[test]
-    fn a_dollar_budget_on_a_subscription_plan_adds_the_estimate_limit() {
+    fn a_dollar_limit_on_a_subscription_plan_is_joint() {
+        let usd = Limit {
+            amount: 20.0,
+            unit: Unit::Usd,
+        };
+        let (limits, joint) = joint_limits(vec![usd], true);
+        assert!(joint);
         assert_eq!(
-            budget_limits(20.0, true),
+            limits,
             [
-                Limit {
-                    amount: 20.0,
-                    unit: Unit::Usd
-                },
+                usd,
                 Limit {
                     amount: 20.0,
                     unit: Unit::UsdEst
@@ -2211,16 +2229,20 @@ mod price_tests {
         );
     }
 
-    /// Pure (D).
+    /// Pure (D): a gateway-only plan keeps its one limit, and a limit-share is never turned into dollars.
     #[test]
-    fn a_gateway_only_plan_keeps_one_limit() {
-        assert_eq!(
-            budget_limits(20.0, false),
-            [Limit {
-                amount: 20.0,
-                unit: Unit::Usd
-            }]
-        );
+    fn a_gateway_only_plan_keeps_its_limits_as_given() {
+        let usd = Limit {
+            amount: 20.0,
+            unit: Unit::Usd,
+        };
+        let share = Limit {
+            amount: 0.15,
+            unit: Unit::LimitShare,
+        };
+        assert_eq!(joint_limits(vec![usd], false), (vec![usd], false));
+        // a share alone, even on a subscription plan: no dollar limit, no joint pair
+        assert_eq!(joint_limits(vec![share], true), (vec![share], false));
     }
 
     /// Pure (D): a p90 over the budget is a warning, never a refusal.
@@ -2670,7 +2692,15 @@ pub(crate) mod graph_plan_tests {
         )
         .await;
         let l = load(&f, &id, false).await.unwrap().unwrap();
-        fallback::set_budget(&f, &l.job, 20.0, true);
+        fallback::set_limits(
+            &f,
+            &l.job,
+            vec![Limit {
+                amount: 20.0,
+                unit: Unit::Usd,
+            }],
+            true,
+        );
         let scope = plan_scope(&l.job).unwrap();
         let b = &f.core.budgets;
         assert!(b.spend(&scope, Unit::UsdEst, 19.0).is_empty());
@@ -2683,6 +2713,90 @@ pub(crate) mod graph_plan_tests {
         assert_eq!(b.usd_left(&id), Some(0.0));
         // one card for the plan, not one per unit
         assert!(b.spend(&scope, Unit::UsdEst, 1.0).is_empty());
+    }
+
+    /// Pure (D): a temp store.  A job approved with a limit by unit has that limit on its plan's scope as given: a share
+    /// of the week is no dollar limit.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn approve_sets_limit_share_on_the_plan_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (id, _) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "body": "x"}]),
+        )
+        .await;
+        let p: WithLimits = serde_json::from_value(
+            json!({"id": id, "limits": [{"amount": 0.15, "unit": "limit-share"}]}),
+        )
+        .unwrap();
+        approve(&f, &user(), p).await.unwrap();
+        let l = load(&f, &id, false).await.unwrap().unwrap();
+        let scope = plan_scope(&l.job).unwrap();
+        assert_eq!(
+            f.core.budgets.limits(&scope),
+            [Limit {
+                amount: 0.15,
+                unit: Unit::LimitShare
+            }]
+        );
+        assert!(
+            f.core
+                .budgets
+                .limits(&scope)
+                .iter()
+                .all(|l| l.unit != Unit::Usd),
+            "no dollar limit is made"
+        );
+        let s = summary(&f, &id, false).await.unwrap();
+        assert_eq!(s.limits.len(), 1);
+    }
+
+    /// Pure (D): a temp store.  A resume without limits leaves the plan's as they are; an empty list clears them.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resume_without_limits_keeps_them_and_empty_limits_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (id, _) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "body": "x"}]),
+        )
+        .await;
+        let with = |v: Value| -> WithLimits { serde_json::from_value(v).unwrap() };
+        approve(
+            &f,
+            &user(),
+            with(json!({"id": id, "limits": [{"amount": 7.0, "unit": "usd"}]})),
+        )
+        .await
+        .unwrap();
+        let l = load(&f, &id, false).await.unwrap().unwrap();
+        let scope = plan_scope(&l.job).unwrap();
+        // the plan has a subscription profile: the dollars bind the estimate too (joint)
+        let want = [
+            Limit {
+                amount: 7.0,
+                unit: Unit::Usd,
+            },
+            Limit {
+                amount: 7.0,
+                unit: Unit::UsdEst,
+            },
+        ];
+        assert_eq!(f.core.budgets.limits(&scope), want);
+        // stop, then resume with no limits: untouched
+        let me: ById = serde_json::from_value(json!({"id": id})).unwrap();
+        stop(&f, &user(), me.clone()).await.unwrap();
+        resume(&f, &user(), with(json!({"id": id}))).await.unwrap();
+        assert_eq!(f.core.budgets.limits(&scope), want);
+        // empty limits: cleared
+        stop(&f, &user(), me).await.unwrap();
+        resume(&f, &user(), with(json!({"id": id, "limits": []})))
+            .await
+            .unwrap();
+        assert!(f.core.budgets.limits(&scope).is_empty());
     }
 
     /// Pure (D): a temp store.  With no profile named, the task's model is what the forecast prices.
@@ -2753,7 +2867,7 @@ mod resume_tests {
         serde_json::from_value(json!({ "id": JOB })).unwrap()
     }
 
-    fn with_budget() -> WithBudget {
+    fn with_budget() -> WithLimits {
         serde_json::from_value(json!({ "id": JOB })).unwrap()
     }
 
