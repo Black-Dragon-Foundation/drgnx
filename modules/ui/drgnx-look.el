@@ -667,6 +667,10 @@ only the one remap is reapplied."
                      :setup
                      (lambda ()
                        (setq drgnx-look--taken (list :previous (copy-sequence custom-enabled-themes) :ours nil))
+                       ;; the look's fonts, edge and dividers change the text area, never the window: Emacs would
+                       ;; resize the frame to keep its columns and lines, and lose the compositor's size on the way
+                       ;; back (a tiled frame came back 2 px short).  First, so it is undone last.
+                       (drgnx-module-set 'frame-inhibit-implied-resize t)
                        (drgnx-look--chrome-on)
                        (drgnx-modules-push-undo "docked panes as cards" #'drgnx-look-cards-clear)
                        (drgnx-look--edge-at-birth)     ; windows made from now on: born with the edge
