@@ -174,8 +174,14 @@ each command there."
   (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch)))
 
 (defun drgnx-work-map--require-sja ()
-  "This map's instance in Sjá, or a user error that says the map needs it."
-  (or (drgnx-work-map--sja) (user-error "%s" drgnx-work-map-no-sja)))
+  "This map's instance in Sjá, or a user error that says why there is none: no map here (a Work command run from the
+palette in another buffer), a map still waiting for the hub's rows, or an Emacs without Sjá.  Only the last names Sjá
+(UX audit W1: the palette's \"Work: Open\" in a file said this Emacs had no Sjá, on a Nidhogg that has it)."
+  (or (drgnx-work-map--sja)
+      (cond ((not (derived-mode-p 'drgnx-work-map-mode))
+             (user-error "Work: this acts on the Work map's selection; open the Work space first"))
+            ((drgnx-work-map-rows-p) (user-error "Work: the map is still loading"))
+            (t (user-error "%s" drgnx-work-map-no-sja)))))
 
 (defun drgnx-work-map--nav (verb &rest args)
   "Move the selection by VERB and ARGS through `drgnx-view-nav'; keep `drgnx-work-map--selection' as (KIND . ID) and
@@ -433,6 +439,23 @@ sheet."
       (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width tail) (drgnx-px 8))))))   ; a parenthesised size is pixels
               tail))))
 
+(defconst drgnx-work-lens--chip-commands
+  '(("focus" . work-focus) ("overlaps" . work-overlaps) ("evidence" . work-flow-evidence) ("rules" . work-flow-rules))
+  "The registered command a click on a lens's key chip runs, by the chip's label.")
+
+(defun drgnx-work-lens--click (id)
+  "A keymap for a lens bar segment: a click runs registry command ID in the window the bar is on (UX audit W2: the
+segments lit on hover and did nothing)."
+  (let ((m (make-sparse-keymap))
+        (run (lambda (event)
+               (interactive "e")
+               (let ((w (posn-window (event-start event))))
+                 (when (window-live-p w) (select-window w)))
+               (drgnx-ui-kit-run id))))
+    (define-key m [tab-line mouse-1] run)
+    (define-key m [header-line mouse-1] run)
+    m))
+
 (defun drgnx-work-lens-string (&optional current name keys)
   "The lens bar: the Work space's tab (Work · NAME, the workspace's name), then Map · Board · Timeline · Flow with
 CURRENT (`map', `board', `timeline' or `flow'; default `map') marked and the others in the label face (`m' `b' `t' `F'
@@ -448,13 +471,18 @@ switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their
            (propertize " " 'face 'drgnx-work-lens-rail)
            (mapconcat (lambda (v)
                         (propertize (format " %s " (cdr v))
-                                    'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-lens-seg)))
+                                    'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-lens-seg)
+                                    'keymap (drgnx-work-lens--click (intern (format "work-view-%s" (car v))))
+                                    'pointer 'hand 'help-echo (format "Show the %s" (cdr v))))
                       '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow"))
                       (propertize " " 'face 'drgnx-work-lens-rail))
            (propertize " " 'face 'drgnx-work-lens-rail)
            (mapconcat (lambda (k)
-                        (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
-                                (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
+                        (let ((id (cdr (assoc (car k) drgnx-work-lens--chip-commands))))
+                          (apply #'propertize
+                                 (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
+                                         (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key))
+                                 (and id (list 'keymap (drgnx-work-lens--click id) 'pointer 'hand)))))
                       keys "")
            (drgnx-work-lens--controls))))
     (add-text-properties 0 (length bar) '(mouse-face drgnx-hover-row) bar)   ; the ⋯ shows while the bar is hovered

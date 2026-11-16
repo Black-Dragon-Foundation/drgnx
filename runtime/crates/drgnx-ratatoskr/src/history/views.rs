@@ -477,6 +477,27 @@ impl Hub {
     }
 }
 
+/// NOW with HUNKS taken back: each hunk's text still there replaced by what it deleted, on its lines (a hunk whose
+/// text is gone puts what it deleted back where it was).  Last lines first, so earlier line numbers stay right.
+fn without_hunks(now: &str, hunks: &mut [verdandi::OpHunk]) -> String {
+    let mut lines: Vec<String> = now.split_inclusive('\n').map(str::to_owned).collect();
+    hunks.sort_by_key(|h| std::cmp::Reverse((h.start_line, h.op)));
+    for h in hunks.iter() {
+        let lo = h.start_line.saturating_sub(1).min(lines.len());
+        let hi = h.end_line.clamp(lo, lines.len());
+        let seg: String = lines[lo..hi].concat();
+        let back = if h.text.is_empty() {
+            format!("{}{seg}", h.deleted)
+        } else if let Some(at) = seg.find(&h.text) {
+            format!("{}{}{}", &seg[..at], h.deleted, &seg[at + h.text.len()..])
+        } else {
+            continue;
+        };
+        lines.splice(lo..hi, std::iter::once(back));
+    }
+    lines.concat()
+}
+
 /// OLD against NEW as hunks with OLD's replaced lines.
 fn head_hunks(old: &str, new: &str) -> verdandi::Result<Vec<w::HeadHunk>> {
     let lines: Vec<&str> = old.split_inclusive('\n').collect();
@@ -562,6 +583,107 @@ impl Hub {
         if old == new {
             return Ok(String::new());
         }
+        let (a, b) = (format!("a/{rel}"), format!("b/{rel}"));
+        let body = similar::TextDiff::from_lines(&old, &new)
+            .unified_diff()
+            .header(&a, &b)
+            .to_string();
+        Ok(format!("diff --git {a} {b}\n{body}"))
+    }
+
+    /// Whether TREE's branch holds text that is not SESSION's agent's (the user's checkout a chat works in, with your
+    /// uncommitted and untracked files): the session's edits are then its own records, never the branch against its
+    /// base.
+    pub fn shared_with(&self, tree: &Tree, session: &str) -> verdandi::Result<bool> {
+        let g = self.lock();
+        match g.h.find_branch(&tree.branch_name())? {
+            Some(branch) => g.h.others_on(branch, session),
+            None => Ok(false),
+        }
+    }
+
+    /// SESSION's own changes on TREE, per file: (path, the text with them taken back, the text now).  Only the
+    /// session's records count (their hunks still there); your lines around and between them are in both texts.
+    fn session_texts(
+        &self,
+        tree: &Tree,
+        session: &str,
+        now: f64,
+    ) -> verdandi::Result<Vec<(String, String, String)>> {
+        let listed = self.op_hunks(tree, None, Some(session), now)?;
+        let mut by: std::collections::BTreeMap<String, Vec<verdandi::OpHunk>> =
+            std::collections::BTreeMap::new();
+        for (h, _) in listed {
+            if h.state != verdandi::HunkState::Undone {
+                by.entry(h.path.clone()).or_default().push(h);
+            }
+        }
+        let mut g = self.lock();
+        let Some(branch) = g.h.find_branch(&tree.branch_name())? else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for (path, mut hunks) in by {
+            let Some(doc) = g.h.find_doc(&path)? else {
+                continue;
+            };
+            let new = g.h.text(doc, branch)?;
+            let old = without_hunks(&new, &mut hunks);
+            if old != new {
+                out.push((path, old, new));
+            }
+        }
+        Ok(out)
+    }
+
+    /// SESSION's own files on TREE with their line counts (see [`Hub::session_texts`]).
+    pub fn session_edits(
+        &self,
+        tree: &Tree,
+        session: &str,
+        now: f64,
+    ) -> verdandi::Result<Vec<EditCount>> {
+        let base = self.base_commit(tree)?;
+        Ok(self
+            .session_texts(tree, session, now)?
+            .into_iter()
+            .map(|(path, old, new)| {
+                let (mut plus, mut minus) = (0u32, 0u32);
+                for c in similar::TextDiff::from_lines(&old, &new).iter_all_changes() {
+                    match c.tag() {
+                        similar::ChangeTag::Insert => plus += 1,
+                        similar::ChangeTag::Delete => minus += 1,
+                        similar::ChangeTag::Equal => {}
+                    }
+                }
+                EditCount {
+                    untracked: base.as_deref().is_none_or(|b| {
+                        super::blob::text_at(&tree.git_dir, &tree.root, b, &path).is_none()
+                    }),
+                    plus,
+                    minus,
+                    path,
+                }
+            })
+            .collect())
+    }
+
+    /// REL's change by SESSION's own records on TREE as a unified diff (`diff --git a/REL b/REL`); empty when they
+    /// changed nothing there.
+    pub fn session_diff(
+        &self,
+        tree: &Tree,
+        rel: &str,
+        session: &str,
+        now: f64,
+    ) -> verdandi::Result<String> {
+        let Some((_, old, new)) = self
+            .session_texts(tree, session, now)?
+            .into_iter()
+            .find(|(p, _, _)| p == rel)
+        else {
+            return Ok(String::new());
+        };
         let (a, b) = (format!("a/{rel}"), format!("b/{rel}"));
         let body = similar::TextDiff::from_lines(&old, &new)
             .unified_diff()

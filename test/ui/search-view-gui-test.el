@@ -19,6 +19,9 @@
 (require 'drgnx-view)
 (require 'drgnx-view-env)   ; the test binds its send function: a session of this file alone has not loaded it
 (require 'drgnx-popup)
+;; loaded before the rows stub `drgnx-hub--call-on': a library loaded mid-row that requires the client defined the real
+;; function over the stub, so later calls went to the hub client (search/group was never seen; its expiry timer leaked)
+(require 'drgnx-hub-client)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-search-ui-test--repo) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-search-ui-test--repo) nil t)
 
@@ -275,6 +278,9 @@ temp dir; print where."
                       (quit-window t (get-buffer-window b t)))
                     (kill-buffer tile)))))
           (drgnx-wb-hide-sidebar)
+          ;; the sheet's popup frame (kept idle for the next popup) goes with the row, as popup-lane-float-test does
+          (when-let* ((c (frame-parameter root 'drgnx-popup-frame))) (when (frame-live-p c) (delete-frame c)))
+          (set-frame-parameter root 'drgnx-popup-frame nil)
           (with-selected-frame root
             (delete-other-windows)
             (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px))

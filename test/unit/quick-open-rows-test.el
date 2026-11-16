@@ -95,17 +95,18 @@ already.  No file is opened."
     (should (eq called #'project-find-file))
     (should-not sent)))
 
-(ert-deftest drgnx-quick-open/hub-down-is-project-find-file ()
-  "With no hub connection a local folder is `project-find-file' too: nothing is listed or ranked in Lisp, and the hub
-is never asked."
+(ert-deftest drgnx-quick-open/hub-down-lists-the-project-in-the-palette ()
+  "With no hub connection a local folder's files are the project's, read in the palette's files mode (audit P1: not
+`project-find-file''s square prompt), and the hub is never asked."
   (let ((sent nil) called (drgnx-hub--events nil) (dir (file-name-as-directory (make-temp-file "drgnx-qo" t))))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-quick-open--root) (lambda () dir))
-                  ((symbol-function 'call-interactively) (lambda (f &rest _) (setq called f))))
+                  ((symbol-function 'drgnx-quick-open--read-local) (lambda (root) (setq called root)))
+                  ((symbol-function 'call-interactively) (lambda (f &rest _) (error "Not the palette: %S" f))))
           (should-not (drgnx-quick-open--hub-p dir))
           (let ((drgnx-quick-open-send-function (lambda (m p) (push (list m p) sent))))
             (drgnx-quick-open))
-          (should (eq called #'project-find-file))
+          (should (equal called dir))
           (should-not sent))
       (delete-directory dir t))))
 

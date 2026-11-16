@@ -99,16 +99,30 @@ A macro: `skip-unless' exists only inside the body of `ert-deftest'."
      (drgnx-uitest-bare-frame)
      (message nil)                      ; the echo area stays one line: an edge popup's margin reaches it
      (when (fboundp 'glitnir-refresh) (glitnir-refresh))   ; Task 33 on; before it there is no chrome to refresh
-     (unwind-protect (progn ,@body)
-       ;; a failed scenario leaves no popup shown for the next one
-       (dolist (c (drgnx-uitest-child-frames (drgnx-uitest-root-frame)))
-         (make-frame-invisible c))
-       ;; a key map a popup's command left waiting for its next key (which-key, transient): no next command runs here,
-       ;; and `clear-transient-map' on the global `pre-command-hook' would stay for every later file
-       (while (memq 'clear-transient-map (default-value 'pre-command-hook))
-         (remove-hook 'pre-command-hook #'clear-transient-map))
-       (setq overriding-terminal-local-map nil)
-       (drgnx-test-chrome--settle))))
+     (let ((drgnx-test-chrome--frames (frame-list)))
+       (unwind-protect (progn ,@body)
+         ;; a failed scenario leaves no popup shown for the next one
+         (dolist (c (drgnx-uitest-child-frames (drgnx-uitest-root-frame)))
+           (make-frame-invisible c))
+         ;; the child frames the scenario's packages made (corfu's, eldoc-box's, posframe's, mini-frame's) go: each
+         ;; package keeps its frame for reuse and makes it again when it finds it dead
+         (dolist (c (frame-list))
+           (unless (or (memq c drgnx-test-chrome--frames) (not (frame-parent c)))
+             (ignore-errors (delete-frame c t))))
+         (drgnx-test-chrome--clear-transient-maps)
+         ;; posframe wraps the focus function when it loads and never unwraps it (as `focus-taking-child' does)
+         (when (fboundp 'posframe--redirect-posframe-focus)
+           (remove-function after-focus-change-function #'posframe--redirect-posframe-focus))
+         (setq overriding-terminal-local-map nil)
+         (drgnx-test-chrome--settle)))))
+
+(defun drgnx-test-chrome--clear-transient-maps ()
+  "Take off the global `pre-command-hook' every `clear-transient-map' a popup's command left waiting for its next key
+\(which-key, transient): no next command runs here, so it would stay for every later file.  `set-transient-map' names
+it with an uninterned symbol, so it is found by its name."
+  (dolist (f (default-value 'pre-command-hook))
+    (when (and (symbolp f) (equal (symbol-name f) "clear-transient-map"))
+      (remove-hook 'pre-command-hook f))))
 
 (defun drgnx-test-chrome--settle (&optional root)
   "Wait until ROOT shows what was changed.  A row with a popup that has no parent passes it: see `drgnx-test-wait-presented'."

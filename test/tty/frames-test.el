@@ -17,7 +17,7 @@
 (defun drgnx-tty-frames-test--workbench (sess eval)
   "SESS's screen shows the workbench: the tab line, the status bar (the mode line), the main role, and the
 Explorer once the sidebar is shown.  EVAL evaluates a form in the frame on that screen."
-  (drgnx-tty-session-wait-screen sess "\\*scratch\\* ×" 20)            ; the editor's tab line
+  (drgnx-tty-session-wait-tab sess "×" 20)            ; the editor's tab line
   (drgnx-tty-session-wait-screen sess "Ln [0-9]+, Col [0-9]+ ")             ; the status bar (it names no buffer)
   (should (eq (funcall eval '(drgnx-frame-role)) 'main))
   (should (eq (funcall eval '(plist-get (terminal-parameter nil 'drgnx-tty-caps) :id)) 'tmux))
@@ -144,7 +144,7 @@ once TEXT is on its screen."
     (drgnx-tty-session-key s "b")
     (drgnx-tty-session-wait s '(and (active-minibuffer-window) t))
     (let ((c (drgnx-tty-session-client s)))
-      (drgnx-tty-session-wait-screen c "\\*scratch\\* ×")
+      (drgnx-tty-session-wait-tab c "×")
       (should (drgnx-tty-frames-test--in-client s '(frame-parameter nil 'drgnx-tty-shown))))))
 
 (ert-deftest drgnx-tty-frames/two-clients-at-once ()
@@ -254,7 +254,7 @@ once TEXT is on its screen."
            (repeating-before (drgnx-tty-session-eval s repeating))
            (messages (drgnx-tty-session-eval s '(with-current-buffer "*Messages*" (point-max)))))
       (should tty)
-      (drgnx-tty-session-wait-screen c "\\*scratch\\*")
+      (drgnx-tty-session-wait-tab c)
       ;; a prompt open in that terminal
       (drgnx-tty-session-key c "C-x")
       (drgnx-tty-session-key c "b")

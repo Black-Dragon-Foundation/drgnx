@@ -10,7 +10,8 @@ restart.
 **How the dock looks.** The sidebar is one island on the panel surface (`drgnx-surface-panel`). Its top row is the
 island header: the Explorer's first folder's name, then **+** (New File), a magnifier (Find in Explorer) and **⋯**, a
 menu with Close Sidebar, Save All, Close Saved Editors and Close All Editors (`drgnx-wb-island-menu`). The three sections
-below it are headed **Open** (the Buffers panel), **Files** (the Explorer) and **Outline** (folded to its header at first; a click on a section's header folds or unfolds it, and focusing the Outline opens it; a second window's sidebar folds it there too, leaving the first window's as it was): a chevron and the title in
+below it are headed **Open** (the Buffers panel, folded to its header at first as VS Code's Open Editors, so a file you
+open moves nothing under the pointer), **Files** (the Explorer) and **Outline** (folded to its header at first; a click on a section's header folds or unfolds it, and focusing the Outline opens it; a second window's sidebar folds it there too, leaving the first window's as it was): a chevron and the title in
 `drgnx-wb-section` (small, semibold, muted), in sentence case, with nothing else on the row. **Open** is as tall as
 its rows (no empty rows under the last open buffer; with none open, the title and one blank line), at most 30% of the window, past
 which it scrolls; Files takes the rest, so its title stays put when the window is resized. Their rows are drawn in the UI font at the density's
@@ -166,7 +167,8 @@ Refresh overtook is not shown. A remote folder is listed as before.
 **Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, at the row's right edge in
 the colours of your theme's version-control faces; the name itself stays in the text colour. A folder with changes
 inside shows `●` (also one whose only change is a new file; a new folder itself shows `U`), and so does a root;
-ignored files are dimmed.
+ignored files are dimmed. A folder holding its own repository (its own `.git`) shows that repository's status, as VS
+Code does: a repository around it that ignores it doesn't dim it.
 
 **Rows**: an icon, 6 px of room, then the name. With one root the tree starts at the root's entries (the sidebar's
 header names the project); with several, each root has a row with its name as it is. One background `git status` per
@@ -257,7 +259,7 @@ the entry is back.
 |---|---|
 | `editor` | files, dired, unmatched buffers (logged) |
 | `current` | the selected window, unless it is a dock (then the editor) |
-| `panel` Problems | flymake / flycheck lists |
+| `panel` Problems | the Problems view (`drgnx-problems-mode`), flymake / flycheck lists |
 | `panel` Output | `*Messages*`, `*Warnings*`, `*Backtrace*`, ert results |
 | `panel` Results | compilation, grep, occur, xref |
 | `panel` Terminal | New Terminal (your shell in drgnx's own terminal; eshell for a remote folder and on Windows), New Eshell, shell, eshell, term, vterm, ielm, other comint buffers |
@@ -265,6 +267,9 @@ the entry is back.
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
 | `other-group` | diffs and logs: another editor group (the one used last), else this one |
+
+A warning never opens the panel by itself, as VS Code's Output does not: it is logged in `*Warnings*` and counted on the
+status bar as a notice, whose button opens `*Warnings*` (an emergency still shows at once).
 
 ### Chrome
 
@@ -292,7 +297,9 @@ Customize `drgnx-chrome-tab*`, `header-line` and `drgnx-wb-bar` to change them.
 surface, six pixels in from the card's edge, with a hairline (the `drgnx-border-subtle` face) along its bottom; tabs
 are two pixels apart (a terminal separates them with a space). The shown tab is lifted four pixels off the row's top
 and is on the `editor` colour with no hairline under it, so it joins the text below; it has its file's icon before
-the name. A tab that is not shown has no close mark you can see until the pointer is on the tab: the × (a 14-pixel
+the name. A file's tab is its file's name; a special page's is its name in words, never an Emacs buffer name:
+**Welcome** (the start page), **Settings**, **Keyboard Shortcuts**, **Extensions** (a buffer `*drgnx NAME*` reads
+as `Name`; a buffer may set its own in `drgnx-chrome-tab-title`). A tab that is not shown has no close mark you can see until the pointer is on the tab: the × (a 14-pixel
 icon in an 18-pixel slot) is drawn in the row's own colour and the tab's hover colour brings it out (no Lisp runs
 while the pointer moves). The × of the shown tab is always there, and so is every × on a terminal. A modified file
 shows a dimmed dot in the ×'s place (after its name on a terminal). A tab that is only there while it is shown is in
@@ -540,7 +547,7 @@ scrolls. Without Glitnir nothing changes.
 
 The **panel** (Toggle Panel: `M-j` · palette · `SPC j`) sits under the editors; Toggle Terminal (``C-` `` in the VS Code
 profile, as in VS Code) shows its Terminal tab, starting a terminal when the tab has none, and hides the panel when that
-tab already shows; the **right dock** (Toggle
+tab already shows; a click on the Terminal tab with no terminal starts one too, in the editor's folder; the **right dock** (Toggle
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
 **tab row** at the top (click a tab to show it; the shown tab is a pill on the quiet selection, face
 `drgnx-wb-tab-current`, the others muted text, `drgnx-wb-tab`). The right dock shows its tab row only while two of its tabs have

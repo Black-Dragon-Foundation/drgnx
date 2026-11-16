@@ -319,6 +319,22 @@ impl History {
         Ok(out)
     }
 
+    /// Whether BRANCH holds text that is not SESSION's agent's: an edit, a write or a change on disk by the user, the
+    /// disk or another session (a tree the agent shares with you, e.g. your checkout, rather than one of its own).
+    pub fn others_on(&self, branch: BranchId, session: &str) -> Result<bool> {
+        let mut st = self.conn.prepare(
+            "select p.author_json from op o join peer p on o.author = p.id \
+             where p.branch = ?1 and o.kind in ('edits', 'agent_step', 'external')",
+        )?;
+        let authors = st
+            .query_map([branch.0], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(authors.iter().any(|j| {
+            !serde_json::from_str::<serde_json::Value>(j)
+                .is_ok_and(|a| a["kind"] == "agent" && a["session"].as_str() == Some(session))
+        }))
+    }
+
     /// OP's spans by document.
     fn spans_by_doc(&self, op: OpId) -> Result<Vec<(DocId, Vec<Span>)>> {
         let mut by: Vec<(DocId, Vec<Span>)> = Vec::new();

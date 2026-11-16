@@ -7,7 +7,9 @@ drgnx debugs through its own client of the Debug Adapter Protocol, so the adapte
 
 **Start Debugging…** offers the project's configurations: those of `.vscode/launch.json` (read as VS Code reads it,
 comments, `${…}` variables, `inputs` and platform sections included), your own in the setting `debug.configurations`,
-and a default for the file's language when there is neither. The adapters: debugpy for Python, the
+and a default for the file's language when there is neither. With none of these (no launch.json, and no file of a
+language drgnx debugs), it asks **Select debugger** as VS Code does, writes that debugger's starting configurations to
+a new `.vscode/launch.json` and offers them; **Open launch.json** asks the same when the project has none. The adapters: debugpy for Python, the
 JavaScript/TypeScript debugger, delve for Go, CodeLLDB or lldb-dap for C, C++ and Rust. A launch.json `compounds`
 entry starts its configurations together (its own `preLaunchTask` first; with `stopAll`, stopping one stops them
 all). A configuration's `preLaunchTask` (and `postDebugTask`) runs from `.vscode/tasks.json` first, in a terminal tab
@@ -55,7 +57,8 @@ stopped line.
 **Variables** (the stopped frame's scopes; values that changed since the last stop are highlighted, big arrays open in
 pages of 100), **Watch** (expressions kept per project, evaluated at every stop), **Call Stack** (threads and frames;
 pick a frame to move the editor and the variables to it) and **Breakpoints** (the exception filters, each with a tick
-box, then every breakpoint with its dot as the gutter shows it and its line at the right). Arrow keys move and open, RET acts on the row, typing after `C-M-f` (`/` in the Emacs and Vim
+box, then every breakpoint with its dot as the gutter shows it and its line at the right). An open section with
+nothing in it says why in one quiet line: "Not paused", "No watch expressions", "Not running", "No breakpoints". Arrow keys move and open, RET acts on the row, typing after `C-M-f` (`/` in the Emacs and Vim
 profiles) filters it, F2 (`e`, `c`) sets a value; Copy Value, Copy as Expression and Add to Watch are in the
 palette. Its header starts the configuration picked there. While the program runs, the last stop's values stay,
 dimmed. A big list keeps its last 64 opened pages open; opening another closes the oldest.

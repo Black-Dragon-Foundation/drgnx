@@ -38,6 +38,7 @@
 (declare-function nidhogg-view-walk-to "nidhogg-views" (h list n))
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+(declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
 
 (defface drgnx-view-match '((t :inherit match))
   "A node that matches a hub-fed view's search."

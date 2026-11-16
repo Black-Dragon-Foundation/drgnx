@@ -34,7 +34,10 @@
 
 (declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
 (declare-function drgnx-view-nav-sja-step "drgnx-view-nav" (&optional ids))
+(declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (defvar nidhogg-view--row-decisions)
+
+(defvar-local drgnx-view-sja--was-broken nil "Non-nil after the buffer's store broke, until a patch applies again.")
 
 (defvar-local drgnx-view-sja-prop-functions nil
   "Alist (PROP . FN) of a view held in Sjá: after a draw put PROP on FROM..TO of a STRING it inserts, FN is called
@@ -124,6 +127,7 @@ W's start and point, the end and W's size (the window parameter `drgnx-view-sja-
 (defun drgnx-view-sja--release (s)
   "S's instance in Sjá closed, its draw timer and markers gone."
   (drgnx-timer-cancel (cons 'drgnx-view-sja (current-buffer)))
+  (drgnx-timer-cancel (cons 'drgnx-view-sja-revive (current-buffer)))
   (dolist (m (list (drgnx-view-patch-beg s) (drgnx-view-patch-end s))) (when m (set-marker m nil)))
   (drgnx-view-model--close s))
 
@@ -146,6 +150,9 @@ acknowledged, a resync asked for, a held one dims the view, a broken store says 
   (pcase what
     ('apply
      (setf (drgnx-view-patch-version s) version)
+     (when drgnx-view-sja--was-broken                   ; it draws again: the condition is over
+       (setq drgnx-view-sja--was-broken nil)
+       (drgnx-notice-clear 'render (cons 'view-broken (drgnx-view-patch-view s))))
      (when (drgnx-view-patch-stale s) (drgnx-view-patch--stale s nil))
      (drgnx-view-sja--arm s)
      (when (drgnx-view-patch-ack s) (drgnx-view-sja--send s "view/ack" :version version)))
@@ -166,13 +173,32 @@ decision, or nil when no buffer shows the pair."
         (when (drgnx-view-sja-p)
           (drgnx-view-sja--decided drgnx-view-patch (nth 2 r) (nth 1 r)))))))
 
+(defconst drgnx-view-sja-revive-delay 30
+  "Seconds after a view's store broke before it starts over once (`drgnx-view-sja--revive'): long enough that a
+store that breaks again costs the hub one reset a while, not a loop.")
 (defun drgnx-view-sja--broken (s)
-  "S's store broke (resyncs in a loop): the view stops, and a `render' condition says so (the doctor fails)."
+  "S's store broke (resyncs in a loop): the view stops, and a `render' condition says so (the doctor fails).  It
+starts over `drgnx-view-sja-revive-delay' seconds later (one timer, however many patches find it broken meanwhile)."
   (require 'drgnx-notice)
+  (setq drgnx-view-sja--was-broken t)
   (drgnx-notify 'render 'fail (format "the view %s stopped: its rows asked for a reset again and again"
                                       (drgnx-view-patch-view s))
                 :id (cons 'view-broken (drgnx-view-patch-view s)) :life 'condition
-                :fix "close the view and open it again; see the doctor"))
+                :fix "close the view and open it again; see the doctor")
+  (let ((key (cons 'drgnx-view-sja-revive (current-buffer))))
+    (unless (drgnx-timer-active-p key)
+      (drgnx-timer-start key drgnx-view-sja-revive-delay #'drgnx-view-sja--revive
+                         :args (list (current-buffer)) :owner (current-buffer)))))
+
+(defun drgnx-view-sja--revive (buffer)
+  "BUFFER's broken store starts over: Sjá forgets its books (which closes its breaker) and the hub is asked for a
+reset from nothing.  A store that breaks again waits again."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* ((s drgnx-view-patch) ((drgnx-view-patch-sja s)) (h (drgnx-view-patch-handle s)))
+        (nidhogg-view-rows h 'forget)
+        (setf (drgnx-view-patch-version s) nil (drgnx-view-patch-hub s) nil)
+        (drgnx-view-sja--send s "view/resync" :version 0)))))
 
 (defun drgnx-view-sja-pause (s on)
   "Pause S's view (ON) or resume it, in its buffer: while paused Sjá keeps its patches; resuming applies them, draws

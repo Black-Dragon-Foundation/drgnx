@@ -473,15 +473,17 @@
     (drgnx-modules--record 'test/m 'startup 0 'disabled)
     (should-not (drgnx-modules-test--notice 'test/m))))
 
-(ert-deftest drgnx-modules/missing-packages-and-requires-are-warn ()
+(ert-deftest drgnx-modules/missing-packages-and-requires-are-info ()
+  "Audit L2: a module waiting for packages is something to know, listed in Notices, not a problem: a fresh start
+showed a warning count in the status bar for modules whose optional packages were not installed yet."
   (drgnx-modules-test--noticing
     (drgnx-modules--record 'test/p 'startup 0 'missing-packages nil '(foo bar))
     (drgnx-modules--record 'test/r 'startup 0 'missing-requires nil '(test/p))
     (let ((p (drgnx-modules-test--notice 'test/p)) (r (drgnx-modules-test--notice 'test/r)))
-      (should (eq (plist-get p :severity) 'warn))
+      (should (eq (plist-get p :severity) 'info))
       (should (equal (plist-get p :text) "test/p waits for packages: foo bar"))
       (should (equal (plist-get p :fix) "drgnx sync installs them"))
-      (should (eq (plist-get r :severity) 'warn))
+      (should (eq (plist-get r :severity) 'info))
       (should (equal (plist-get r :text) "test/r needs test/p, which did not start")))))
 
 (ert-deftest drgnx-modules/problems-are-warn ()

@@ -231,7 +231,11 @@ fn explorer_rows_draw_the_look() {
         ("/r/src/a.rs".to_owned(), BTreeSet::from([3])),
     ]);
     let decor = Decor {
-        git: marks_of(&entries, &[(PathBuf::from("/r/"), Arc::new(status))]),
+        git: marks_of(
+            &entries,
+            &[(PathBuf::from("/r/"), Arc::new(status))],
+            &BTreeSet::new(),
+        ),
         here: Arc::new(here),
     };
     let look = RowLook::of(&gui_env(2.0), 12, 1);
@@ -314,7 +318,11 @@ fn explorer_marks_inherit_from_untracked_and_ignored_folders() {
         ]),
         branch: None,
     };
-    let marks = marks_of(&entries, &[(PathBuf::from("/r"), Arc::new(status))]);
+    let marks = marks_of(
+        &entries,
+        &[(PathBuf::from("/r"), Arc::new(status))],
+        &BTreeSet::new(),
+    );
     assert_eq!(marks["/r/new"], git::Kind::Untracked);
     assert_eq!(marks["/r/new/x.rs"], git::Kind::Untracked);
     assert_eq!(marks["/r/out/y.o"], git::Kind::Ignored);
@@ -322,6 +330,73 @@ fn explorer_marks_inherit_from_untracked_and_ignored_folders() {
         marks["/r"],
         git::Kind::Added,
         "the root rolls up the untracked folder as added"
+    );
+}
+
+/// A repository inside another (the org folder ignoring `drgnx/`, which has a `.git` of its own; the user's install
+/// 2026-11-16, where every drgnx file was drawn ignored, grey and italic) has its entries to itself: the outer status
+/// marks none of them, whether the inner one was read (its own marks, a clean file none) or not yet (no marks).
+#[test]
+fn a_nested_repository_is_not_marked_by_the_one_around_it() {
+    let entries = vec![
+        entry("/r", 0, true, true),
+        entry("/r/inner", 1, true, true),
+        entry("/r/inner/a.el", 2, false, false),
+        entry("/r/inner/b.el", 2, false, false),
+        entry("/r/out", 1, true, true),
+        entry("/r/out/y.o", 2, false, false),
+    ];
+    let outer = git::Status {
+        files: BTreeMap::from([
+            ("inner".to_owned(), git::Kind::Ignored),
+            ("out".to_owned(), git::Kind::Ignored),
+        ]),
+        branch: None,
+    };
+    let inner = git::Status {
+        files: BTreeMap::from([("a.el".to_owned(), git::Kind::Modified)]),
+        branch: None,
+    };
+    let nested = BTreeSet::from(["/r/inner".to_owned()]);
+    // the inner repository not read yet: no marks inside it, the outer ones elsewhere
+    let marks = marks_of(
+        &entries,
+        &[(PathBuf::from("/r"), Arc::new(outer.clone()))],
+        &nested,
+    );
+    assert_eq!(marks.get("/r/inner"), None);
+    assert_eq!(marks.get("/r/inner/a.el"), None);
+    assert_eq!(marks.get("/r/inner/b.el"), None);
+    assert_eq!(marks["/r/out/y.o"], git::Kind::Ignored);
+    // read: its own marks, a clean file none
+    let marks = marks_of(
+        &entries,
+        &[
+            (PathBuf::from("/r"), Arc::new(outer)),
+            (PathBuf::from("/r/inner"), Arc::new(inner)),
+        ],
+        &nested,
+    );
+    assert_eq!(marks["/r/inner/a.el"], git::Kind::Modified);
+    assert_eq!(marks.get("/r/inner/b.el"), None);
+    assert_eq!(marks["/r/out/y.o"], git::Kind::Ignored);
+}
+
+/// The folders holding a `.git` are the nested repositories; the others are not.
+#[test]
+fn nested_repositories_are_the_folders_holding_a_git() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_string_lossy().into_owned();
+    std::fs::create_dir_all(dir.path().join("inner/.git")).unwrap();
+    std::fs::create_dir_all(dir.path().join("plain")).unwrap();
+    let entries = vec![
+        entry(&root, 0, true, true),
+        entry(&format!("{root}/inner"), 1, true, false),
+        entry(&format!("{root}/plain"), 1, true, false),
+    ];
+    assert_eq!(
+        nested_repos(&entries),
+        BTreeSet::from([format!("{root}/inner")])
     );
 }
 
@@ -558,4 +633,17 @@ fn overlapping_roots_list_each_path_once() {
             "/r/a/b/c"
         ]
     );
+}
+
+/// A file revealed in a big tree (the open file, at a start) moves the window to show it, from the root while it fits
+/// in the first window: the user sees the tree, the root and the folders down to the file, not a slice of its folder
+/// (the user's Explorer, 2026-11-16: 150 rows from the middle of drgnx/core/, nothing above them).  Past the first
+/// window it starts a quarter window above the file, the folders above it still in the model; shown already, it stays.
+#[test]
+fn a_revealed_file_keeps_the_tree_above_it() {
+    assert_eq!(window_around(2000, 150, None, 120), None); // shown from the root already
+    assert_eq!(window_around(2000, 150, Some(900), 120), Some(0)); // fits the first window: from the root
+    assert_eq!(window_around(2000, 150, Some(900), 149), Some(0));
+    assert_eq!(window_around(2000, 150, None, 1000), Some(1000 - 37)); // deeper: a quarter window above it
+    assert_eq!(window_around(2000, 150, Some(980), 1000), None);
 }

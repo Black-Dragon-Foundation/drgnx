@@ -53,7 +53,10 @@ failure, `leak FILE-test.el`, naming each leftover (and the file that defined it
 processes, buffers, features, the default `mode-line-format`, `header-line-format` and `tab-line-format`, the global
 keymap (`current-global-map` and every binding in it; a prefix bound to an autoloaded keymap, like `kmacro-keymap`, is
 one binding, not walked: the scan loads no library), `minor-mode-map-alist`, and the selected frame's parameters and
-the number of frames. The allowlist is the census's (`test/leaks-allowed.eld`); native compilation's `Compiling:`
+the frames themselves (each by its name, child frames too) and the number of root frames (not of child frames: a
+pooled child frame the allowlist names, like quick help's card, would still count). A test that turns on a package
+whose child frames it shows (corfu, eldoc-box, posframe, mini-frame) deletes them in its teardown; the package makes
+them again. The allowlist is the census's (`test/leaks-allowed.eld`); native compilation's `Compiling:`
 jobs are on it, any other process is named. It works in one Emacs or per file, in any
 launcher: it reads state, not how the session was started. The fixtures `test/fixtures/file-leaks/` and the rows
 `drgnx-run-ert/a-file-that-...` show it red (a file that leaks a mode-line entry, a key, a header line, a frame
@@ -605,7 +608,7 @@ How it works:
 - It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
   A scene on the editor starts the scenes' hub first (the session starts none) and waits (20 s at most, else an error)
   for the Explorer's Files rows, which come from the hub: without it the section is empty. Every scene starts in the
-  editor layout (`drgnx-look-scene-begin`, called before each), because a Work scene before it leaves the Work layout;
+  editor layout (`drgnx-look-scene-begin`, called before each), because a scene before it may leave another layout;
   a scene in another layout applies it itself. The start page and notebook scenes report an error when their buffers
   are not shown in the editor layout. The setup writes the notebook scenes' kernelspec and its environment
   (`JUPYTER_PATH`, a short `XDG_RUNTIME_DIR`) before any hub starts, because the hub that runs the kernel is the one
@@ -684,7 +687,7 @@ How it works:
   asks, specs, plans, four agents with their branches, files and an overlap, two machines, plus a push and a permission
   card; the agents' minutes are counted from the hub's clock), the strip's forecast and cost chips and the first agent's
   trail (six steps and a finding, `orch::scene::map_trail`, shown by its trail view in place of the timeline's). The
-  scenes open the Work layout (the Detail island at its right, the trail under the map). The two seeds put different
+  scenes show the map in the editor group beside the Explorer, its Detail in the right dock (Work is a view). The two seeds put different
   agents on the map and cannot share a hub, so these scenes carry `:seed "map"` in `drgnx-look-scenes`: a run draws
   them in a second session of their own (with its own setup), after the other scenes, and its hub seeds the map's
   graph (`drgnx-look-scene-seed`). Each selects the first agent (its chain lit, the cards off it dimmed, its detail in the side panel) and waits for its rows.

@@ -1,7 +1,9 @@
 # Your shell and drgnx
 
 New Terminal (`C-S-\`` in the VS Code profile) runs your own shell in a real terminal in the panel: drgnx's own
-([below](#drgnxs-terminal)). Three
+([below](#drgnxs-terminal)). It starts in the workspace folder of what you are looking at, as VS Code's does: the
+Explorer's folder that holds it, else its project (the setting `drgnx-term-working-directory`: `file` for the file's
+own folder, `home`, or a folder); Open Terminal Here starts in the Explorer row's folder. Three
 small files in `etc/shell/` make that shell work better with drgnx. They are optional: without them the terminal
 still works.
 

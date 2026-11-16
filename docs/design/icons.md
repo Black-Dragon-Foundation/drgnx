@@ -41,7 +41,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `diamond` | `core/drgnx-agent-identity.el` |
 | `ellipsis` | `modules/tools/drgnx-work-map.el` |
 | `eye` | `core/drgnx-palette.el` |
-| `file` | `core/drgnx-icons.el`, `core/drgnx-palette.el`, `modules/tools/drgnx-replace.el`, `wb/drgnx-wb.el` |
+| `file` | `core/drgnx-icons.el`, `core/drgnx-palette.el`, `core/drgnx-quick-open.el`, `modules/tools/drgnx-replace.el`, `wb/drgnx-wb.el` |
 | `file-archive` | file kind: 0 names, 15 extensions |
 | `file-code` | file kind: 27 names, 114 extensions, `core/drgnx-palette.el` |
 | `file-cog` | file kind: 25 names, 32 extensions |

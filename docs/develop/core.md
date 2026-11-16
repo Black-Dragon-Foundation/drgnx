@@ -2311,7 +2311,11 @@ A view whose rows Sjá holds never reads a patch in Lisp. The editor asks for it
 `term/attach` for a terminal, `view/env` for the others), and the hub sends each patch on the raw `view-model` line
 `{view, rows: PATCH}`. Sjá's push decides it by the rows' rules and keeps the rows, styles and images; its answer
 `(VIEW VERSION DECISION CLASS)` goes to `drgnx-view-sja-pushed`. An applied patch arms the draw and is acknowledged,
-a resync is asked for, a held one dims the view, and a broken store fails a `render` condition.
+a resync is asked for, a held one dims the view, and a broken store (three resyncs within 10 s) fails a `render`
+condition. A broken store starts over once, `drgnx-view-sja-revive-delay` (30 s) after it broke: Sjá forgets its books,
+which closes its breaker, and the hub is asked for a reset from nothing (`view/resync` at version 0); the first patch
+that applies again clears the condition. A store that breaks again waits again, so a bad stream costs the hub one reset
+every 30 s, not a loop.
 
 The draw (`drgnx-view-sja-draw`) asks Sjá for the edits that turn the region into the rows, `nidhogg-view-rows`
 `draw`, and inserts them in one batch:
@@ -2358,6 +2362,11 @@ A dock section is as tall as its rows (`drgnx-wb--fit-window`, `window-resize` o
 `drgnx-wb--section-rows`: the rows Sjá holds (`drgnx-view-row-count nil`, which a draw of the window's slice does not
 all put in the buffer) or the inserter's, and no line of the buffer is counted for a view. A buffer that is not a view
 keeps `count-lines`.
+
+A folded section is one row under its tab line both ways (`drgnx-wb--fold-shrink` shrinks it or grows it back):
+folded at the top of the dock and given the island header after (`drgnx-wb-island-refresh` resizes it then), it would
+otherwise keep the island header in its height and have no row left (the Open header missing until a frame swap laid
+the dock out again: `drgnx-live/echo-swap-keeps-the-whole-workbench`).
 
 A section fitted while its island header was still short (the title font not yet measured) is squeezed below its tab
 and header lines once the header grows: its header line is drawn past its bottom and the section below draws over

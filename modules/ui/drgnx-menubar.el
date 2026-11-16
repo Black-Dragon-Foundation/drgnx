@@ -16,6 +16,8 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-registry)
+(require 'drgnx-notice)
+(require 'drgnx-file)
 (require 'drgnx-surfaces)
 
 (defvar drgnx-dir)
@@ -43,9 +45,10 @@ them).  On macOS the menus are in the system menu bar whatever this says."
   "The layout file's menus, read once."
   (or drgnx-menubar--layout
       (setq drgnx-menubar--layout
-            (with-temp-buffer
-              (insert-file-contents (expand-file-name "etc/menus.eld" drgnx-dir))
-              (read (current-buffer))))))
+            (let* ((file (expand-file-name "etc/menus.eld" drgnx-dir)) (r (drgnx-file-read file)))
+              (unless (eq (plist-get r :status) 'ok)
+                (error "%s does not read: %s" file (plist-get (plist-get r :problem) :text)))
+              (plist-get r :data)))))
 
 (defun drgnx-menubar-menus ()
   "The menus as (ID TITLE GROUP…), in order."
@@ -231,7 +234,8 @@ On Nidhogg, Left, Right and the pointer over another title move to that menu, un
 (defun drgnx-menubar-help-about ()
   "Say which drgnx and which Emacs this is."
   (interactive)
-  (message "drgnx (%s) on %s" (abbreviate-file-name drgnx-dir) (emacs-version)))
+  (drgnx-notify 'config 'info (format "drgnx (%s) on %s" (abbreviate-file-name drgnx-dir) (emacs-version))
+                :id 'about :echo t))
 
 ;;;; The title row's items
 

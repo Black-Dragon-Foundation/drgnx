@@ -2850,13 +2850,14 @@ closes, and a command's stays (what it printed can be read).
 
 ## drgnx-term-working-directory
 
-Where New Terminal starts: nil, the folder of what you are looking at; `home', your home folder; or a folder.
-Applies to new terminals.
+Where New Terminal starts: nil, the workspace folder of what you are looking at (the Explorer's folder that holds
+it, else its project, as VS Code); `file', the folder of what you are looking at; `home', your home folder; or a
+folder.  Open Terminal Here always starts in its folder.  Applies to new terminals.
 
 | Key | Value |
 | --- | --- |
 | Default | `nil` |
-| Type | `(choice (const nil) (const home) directory)` |
+| Type | `(choice (const nil) (const file) (const home) directory)` |
 | `:scope` | `global` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |

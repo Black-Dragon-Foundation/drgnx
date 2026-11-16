@@ -279,9 +279,10 @@ Applies to new terminals."
   :type 'string :group 'drgnx :scope 'global :agents 'never :schema 'string)
 
 (drgnx-defsetting drgnx-term-working-directory nil
-  "Where New Terminal starts: nil, the folder of what you are looking at; `home', your home folder; or a folder.
-Applies to new terminals."
-  :type '(choice (const nil) (const home) directory)
+  "Where New Terminal starts: nil, the workspace folder of what you are looking at (the Explorer's folder that holds
+it, else its project, as VS Code); `file', the folder of what you are looking at; `home', your home folder; or a
+folder.  Open Terminal Here always starts in its folder.  Applies to new terminals."
+  :type '(choice (const nil) (const file) (const home) directory)
   :group 'drgnx :scope 'global :agents 'never :schema '(or null symbol string))
 
 (drgnx-defsetting drgnx-term-shell-integration 'detect

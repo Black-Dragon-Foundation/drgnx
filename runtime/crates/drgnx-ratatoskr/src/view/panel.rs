@@ -305,7 +305,10 @@ impl Panels {
                 conn_id: 0,
             };
             let snapshot = f.core.agents.find(&sid).map(|s| s.snapshot()).ok();
-            let paired = snapshot.as_ref().is_some_and(|s| s.paired == Some(true));
+            // a paired chat, or any session in a tree it shares with you (your checkout): its own records, hunk by hunk,
+            // each taken back through the edit history keeping your lines; never your uncommitted or untracked files
+            let paired = snapshot.as_ref().is_some_and(|s| s.paired == Some(true))
+                || crate::work::edits::shared(&f, &sid).await.unwrap_or(false);
             let mut edited = Edited {
                 count: Some(count),
                 ..Edited::default()

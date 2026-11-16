@@ -140,6 +140,25 @@
                              (should (assoc "In the terminal" (drgnx-surfaces--sections)))))
   (should-not (memq 'drgnx-terminal-cheatsheet-section drgnx-surfaces-cheatsheet-sections)))
 
+(ert-deftest drgnx-term-callers/the-terminal-tab-starts-a-terminal-in-the-editor-s-folder ()
+  ;; the panel's Terminal tab, shown with no terminal, starts one (a click on the tab, as VS Code), from the editor's
+  ;; folder, never from the buffer the click came from (an emacsclient's, a placeholder's)
+  (drgnx-test-with-modules '(tools/terminal) :strict t
+                           (let* ((start (plist-get (alist-get 'terminal (plist-get (alist-get 'panel drgnx-wb--areas) :tabs)) :start))
+                                  (editor (generate-new-buffer "drgnx-term-callers-editor")) (from nil))
+                             (should (functionp start))
+                             (unwind-protect
+                                 (cl-letf (((symbol-function 'drgnx-wb-editor-window) (lambda () (selected-window)))
+                                           ((symbol-function 'drgnx-terminal-new) (lambda (&optional _) (setq from default-directory))))
+                                   (set-window-buffer (selected-window) editor)
+                                   (with-current-buffer editor (setq default-directory "/tmp/proj/"))
+                                   (with-temp-buffer
+                                     (setq default-directory "/elsewhere/")
+                                     (funcall start))
+                                   (should (equal from "/tmp/proj/")))
+                               (kill-buffer editor))))
+  (should-not (plist-get (alist-get 'terminal (plist-get (alist-get 'panel drgnx-wb--areas) :tabs)) :start)))
+
 (ert-deftest drgnx-term-callers/terminal-buffer-goes-to-the-panel ()
   ;; by its mode, whatever its name (a temp buffer's name is internal, which only name rules take)
   (drgnx-test-with-modules '(core/workbench)

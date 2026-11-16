@@ -58,7 +58,8 @@ chunks (or in the mode you chose for it before), with a header line that switche
 that chunk ([large-files.md](large-files.md)).
 
 Inside drgnx, **File → Open Folder…** (palette; `C-k C-o` in the VS Code profile, `SPC f o` in Vim's) asks for a
-folder and shows it the same way.
+folder and shows it the same way. The prompt starts at your home folder; type a path that starts with `/` or `~`
+and it replaces that start, so the input reads `/tmp`, not `~//tmp`.
 
 ## In a terminal: `drgnx -t`
 

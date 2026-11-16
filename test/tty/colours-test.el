@@ -40,8 +40,8 @@
                        '(256 16777216 256)))      ; B, A, and the session's own first client
         ;; a tmux-256color client with COLORTERM=truecolor is a tmux-direct frame, the others keep their TERM
         (should (equal (drgnx-tty-colours-test--types s) '("tmux-256color" "tmux-direct" "tmux-256color")))
-        (should (drgnx-tty-session-find b "\\*scratch\\*"))
-        (should (drgnx-tty-session-find a "\\*scratch\\*"))))))
+        (should (drgnx-tty-session-find b (drgnx-tty-session-tab-regexp b)))
+        (should (drgnx-tty-session-find a (drgnx-tty-session-tab-regexp a)))))))
 
 (ert-deftest drgnx-tty-colours/the-setting-decides-which-clients-are-swapped ()
   (drgnx-tty-session-with (s :daemon t)
@@ -153,7 +153,7 @@ foreground and background are the same colour on this terminal, in the default t
   (drgnx-tty-session-with (s :daemon t :size "120x40")
     (let ((c (drgnx-tty-session-client s :env '("TERM=xterm"))))
       (should (= (drgnx-tty-colours-test--cells s) 8))
-      (drgnx-tty-session-wait-screen c "\\*scratch\\* ×" 20)
+      (drgnx-tty-session-wait-tab c "×" 20)
       ;; the table is there and names the four groups
       (should (equal (drgnx-tty-colours-test--in-client s '(mapcar #'car drgnx-tty-frames-state-faces))
                      '(git review tabs)))

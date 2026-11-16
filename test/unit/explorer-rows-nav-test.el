@@ -361,6 +361,39 @@ rows' end asks `view/window' half the window on, once; with the window at 100, a
            w (save-excursion (goto-char (point-max)) (forward-line (- (window-body-height w))) (point)))
           (should (funcall tailed "/r/f159")))))))
 
+;; the user's Explorer, 2026-11-16: drawn from the middle of a folder, at its window's top, and a wheel up there does
+;; not scroll (the buffer's start), so `window-scroll-functions' never ran and the rows above never came
+(ert-deftest drgnx-explorer-rows/rows-drawn-at-the-top-of-a-later-window-ask-the-earlier ()
+  "Pattern D: a window of the listing that does not start at its first entry, drawn while a window shows the top of
+its rows, asks `view/window' half back at once: there is no scroll above the buffer's start to ask it."
+  (drgnx-explorer-rows-nav-test--with
+    (let* ((sent nil)
+           (drgnx-view-patch-send-function (lambda (method params) (push (cons method params) sent)))
+           (ids (lambda (from) (cl-loop for i from from below (+ from 60) collect (format "/r/f%03d" i))))
+           (model (lambda (from)
+                    (json-serialize
+                     (list :ops (vector (list :reset
+                                              (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                      :lists ["order"] :classes ["selected" "match" "dim" "ticked"]
+                                                                      :flags ["expanded"] :forms [] :start "order")
+                                                    :nodes (vconcat (list (list :id "/r" :kind "root" :flags 1
+                                                                                :fields [["label" "R"] ["path" "/r"] ["dir" 1]]))
+                                                                    (mapcar (lambda (id) (list :id id :kind "file" :flags 0 :parent "/r"
+                                                                                               :fields (vector (vector "label" id) (vector "path" id) (vector "dir" 0))))
+                                                                            (funcall ids from)))
+                                                    :edges []
+                                                    :lists (vector (list :name "order" :ids (vconcat (funcall ids from))
+                                                                         :total 200 :from from)))))))))
+           (rows (lambda (from) (mapcar (lambda (id) (list :key id :text id :props (list (list 0 (length id) "drgnx-work-id" id))))
+                                        (funcall ids from)))))
+      (set-window-buffer (selected-window) (current-buffer))
+      (set-window-start (selected-window) (point-min))
+      (drgnx-view-model-event (list :view view :hub 7 :base 1 :version 2 :reset t :model (funcall model 100)))
+      (drgnx-view-apply-patch (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 0 :model 2
+                                    :ops (list (list :reset (funcall rows 100)))))
+      (drgnx-view-draw-now drgnx-view)
+      (should (equal (list (list "view/window" :view view :list "order" :from 70)) sent)))))
+
 (ert-deftest drgnx-explorer-rows/a-twin-s-scroll-pages-the-view-s-window ()
   "Pattern D: the Explorer's twin (its buffer in another display class: a dock on a second monitor) pages the hub's
 window when it scrolls, as the Explorer does: a scroll within a page of its rows' end asks `view/window' further on.

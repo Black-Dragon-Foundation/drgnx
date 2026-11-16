@@ -87,10 +87,9 @@
 (declare-function drgnx-work-huddle-overlap "drgnx-work-detail")
 (declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-pane-show "drgnx-panes")
-(declare-function drgnx-layouts-apply "drgnx-layouts" (name))
-(declare-function drgnx-layouts-back "drgnx-layouts")
-(declare-function drgnx-layouts-current "drgnx-layouts" (&optional frame))
-(declare-function drgnx-layouts-define-shape "drgnx-layouts" (shape fn))
+(declare-function drgnx-wb-area-window "drgnx-area" (area &optional frame))
+(declare-function drgnx-wb-area-tab "drgnx-area" (area))
+(declare-function drgnx-wb-area-hide "drgnx-area" (area))
 (declare-function drgnx-signal-editor-window-p "drgnx-signal" (window))
 (declare-function drgnx-wb-editor-window "drgnx-wb")
 
@@ -343,7 +342,7 @@ selects; nothing is approved, pushed, merged or answered."
   (if-let* ((map (car (drgnx-work-map-buffers)))) (drgnx-work-detail-buffer map) (get-buffer-create "*drgnx work detail*")))
 
 (defvar drgnx-work-space--panel-trail nil
-  "The trail buffer the Work layout's bottom tile shows: the one of the agent last selected on a map.")
+  "The trail buffer the panel's Trail tab shows: the one of the agent last selected on a map.")
 
 (defun drgnx-work-space--trail-buffer ()
   "The buffer pane kind `work-trail' shows: the trail of the map's selected agent, else a line asking for one."
@@ -358,11 +357,10 @@ selects; nothing is approved, pushed, merged or answered."
 (declare-function drgnx-work-map--sja "drgnx-work-map")
 (declare-function drgnx-work-trail--sid "drgnx-work-trail")
 (declare-function drgnx-work-trail-panel-title "drgnx-work-trail")
-(declare-function drgnx-layouts-current "drgnx-layouts")
 
 (defun drgnx-work-space--follow-trail (buffer id)
   "`drgnx-view-selected-functions': with an agent ID selected on a map BUFFER, the trail tile of layout Work follows
-it (its trail is made when there is none, the tile shows it when the layout is on)."
+it (its trail is made when there is none, the panel shows it while a Work lens is on screen)."
   (when (and id (string-prefix-p "agent:" id) (buffer-live-p buffer)
              (eq (buffer-local-value 'major-mode buffer) 'drgnx-work-map-mode) (drgnx-work-map-rows-p))
     (let* ((sid (drgnx-work-trail--sid id))
@@ -372,7 +370,7 @@ it (its trail is made when there is none, the tile shows it when the layout is o
            (trail (drgnx-work-trail-open buffer sid)))
       (with-current-buffer trail (drgnx-work-trail-panel-title label))
       (setq drgnx-work-space--panel-trail trail)
-      (when (and (fboundp 'drgnx-layouts-current) (eq (drgnx-layouts-current) 'work))
+      (when (and (fboundp 'drgnx-pane-show) (drgnx-work-space--lens-window))
         (drgnx-pane-show 'work-trail :buffer trail)
         (drgnx-wb-area-redraw 'panel)))))
 
@@ -410,30 +408,23 @@ layout Work (`drgnx-work-space--follow-layout')."
                              (memq (buffer-local-value 'major-mode (window-buffer w)) drgnx-work-space--lens-modes)))
             (window-list frame 'nomini)))
 
-(defun drgnx-work-space--layout-shape (editor)
-  "Layout Work's editor shape: the window that shows a Work lens (else EDITOR, given the Work space's map) alone."
-  (let ((w (or (drgnx-work-space--lens-window) editor)))
-    (delete-other-windows w)
-    (unless (memq (buffer-local-value 'major-mode (window-buffer w)) drgnx-work-space--lens-modes)
-      (set-window-buffer w (drgnx-work-space-open nil t)))
-    (select-window w)))
-
 (defun drgnx-work-space--follow-layout (frame)
-  "With module tools/layouts on, FRAME enters layout Work when it starts showing a Work lens, and leaves it for where
-it came from (`drgnx-layouts-back') once it shows none.  Only a change of whether a lens is shown moves the layout, so
-another layout picked while a lens is shown stays."
-  (when (and (frame-live-p frame) (drgnx-module-running-p 'tools/layouts))
+  "FRAME's Work tiles follow its Work lens.  The Work space is a view in the editor, never a layout of its own (UX
+audit S1-1): when an editor window starts showing a lens, the right dock shows its Detail beside the Explorer and the
+editor groups, which stay; once no lens is shown, a right dock still on the Detail is hidden.  Only a change of whether
+a lens is shown moves anything, so a dock you change while a lens is shown stays.  Without the workbench's panes
+\(a bare session) nothing moves."
+  (when (and (frame-live-p frame) (fboundp 'drgnx-pane-show))
     (let ((lens (drgnx-work-space--lens-window frame)))
       (unless (eq (and lens t) (frame-parameter frame 'drgnx-work-space-shown))
         (set-frame-parameter frame 'drgnx-work-space-shown (and lens t))
         (with-selected-frame frame
-          (cond ((and lens (not (eq (drgnx-layouts-current) 'work)))
-                 (let ((buffer (window-buffer lens)))
-                   (drgnx-layouts-apply 'work)
-                   ;; the arrangement Work was left in may show another lens: the one just shown stays in front
-                   (unless (get-buffer-window buffer) (set-window-buffer (drgnx-wb-editor-window) buffer))))
-                ((and (not lens) (eq (drgnx-layouts-current) 'work))
-                 (drgnx-layouts-back))))))))
+          (if lens
+              (let ((win (selected-window)))
+                (drgnx-pane-show 'work-detail)
+                (when (window-live-p win) (select-window win)))
+            (when (and (drgnx-wb-area-window 'right) (eq (drgnx-wb-area-tab 'right) 'work-detail))
+              (drgnx-wb-area-hide 'right))))))))
 
 (defun drgnx-work-space--show-status (view-id status)
   "`drgnx-work-client-status-functions': a view's status changed; the map says reconnecting in its mode line."
@@ -562,9 +553,6 @@ windows; the commands."
     (drgnx-pane-define-kind 'work-detail :title " Detail" :home 'right :buffer #'drgnx-work-space--detail-buffer)
     (drgnx-pane-define-kind 'work-trail :title " Trail" :home 'bottom :buffer #'drgnx-work-space--trail-buffer)
     (drgnx-pane-define-kind 'work-rules :title " RULES" :home 'bottom :buffer #'drgnx-work-space--rules-buffer))
-  ;; layout Work's editor shape: the lens alone (tools/layouts follows a shown lens: `drgnx-work-space--follow-layout')
-  (eval-after-load 'drgnx-layouts
-    (drgnx-modules-with-owner (drgnx-layouts-define-shape 'work #'drgnx-work-space--layout-shape)))
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((work-left "Select the Previous Item" drgnx-work-map-left "Along the layer, to the left")
                    (work-right "Select the Next Item" drgnx-work-map-right "Along the layer, to the right")

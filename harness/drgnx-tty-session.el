@@ -561,6 +561,27 @@ is kitty's screen (`drgnx-tty-session-kitty-screen'; ESCAPES is not for it)."
       (sleep-for 0.05))
     pos))
 
+(defun drgnx-tty-session-tab-regexp (sess &optional close timeout names from)
+  "The regexp of the tab of a buffer NAMES names (default `*scratch*') on SESS's screen, then CLOSE (its close mark, as
+\"×\") when given.  A title is what SESS's Emacs draws (`drgnx-chrome-title-of-name': \"Scratch\", \"Welcome\"; the
+buffer's name where the workbench is not loaded), asked of it, so no row hard-codes a title (TIMEOUT s for the session
+to answer, default 20; FROM, the session whose Emacs is asked, default SESS: a pane that only runs an emacsclient of
+another session's daemon has no socket of its own).  Without CLOSE the buffers' names match too (a mode line shows
+them)."
+  (let* ((names (or names '("*scratch*")))
+         (titles (drgnx-tty-session-wait
+                  (or from sess) `(if (fboundp 'drgnx-chrome-title-of-name) (mapcar #'drgnx-chrome-title-of-name ',names) ',names)
+                  (or timeout 20)))
+         (any (lambda (l) (concat "\\(?:" (mapconcat #'regexp-quote (delete-dups (copy-sequence l)) "\\|") "\\)"))))
+    (if close
+        (concat (funcall any titles) " " close)
+      (funcall any (append titles names)))))
+
+(defun drgnx-tty-session-wait-tab (sess &optional close timeout names from)
+  "(COL . ROW) once SESS shows the tab of a buffer NAMES names (default `*scratch*'; `drgnx-tty-session-tab-regexp',
+CLOSE its close mark; FROM the session asked for the titles) on screen: the workbench is up (TIMEOUT s, default 20)."
+  (drgnx-tty-session-wait-screen sess (drgnx-tty-session-tab-regexp sess close timeout names from) (or timeout 20)))
+
 (defun drgnx-tty-session-find-below (sess heading regexp)
   "(COL . ROW) of REGEXP's first match on SESS's screen in a line below the first that matches HEADING, or nil."
   (let* ((lines (split-string (drgnx-tty-session-screen sess) "\n"))

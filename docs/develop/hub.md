@@ -1528,9 +1528,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `plugins/disable` | user | `{name: string}` | `PluginRow` | yes |
 | `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
-| `records/decide` | user | `{accept: boolean, id: Id}` | `{backup?: string, id: string, note?: string, status: "open" \| "accepted" \| "rejected" \| "stale"}` | yes |
-| `records/import` | user | `{dry_run?: boolean, only?: "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
-| `records/proposals` | user | `{path?: AbsPath}` | `{proposals?: [Proposal]}` | no |
+| `records/conflict` | user | `{id: Id}` | `{at: number, file: string, graph: string, id: string, path: string}` | no |
+| `records/import` | user | `{dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
+| `records/resolve` | user | `{id: Id, keep: "file" \| "graph"}` | `{id: string, keep: "file" \| "graph", path: string}` | yes |
 | `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
@@ -1731,8 +1731,9 @@ result is (`event(NAME).check`):
 | `agent-buffer` | the buffer views (to the view's connection only) | `{view, version, base, doc_version?, approximate?, agents: [{session, ordinal?, handle?, mode, line?, line_end?, col?, source, live?, projected?, step_title?, plan_entry?}], gutter: [{session, kind, start, end, projected?, help}]}`: a watched buffer's frame, at most once per view per 50 ms ("The buffer view") |
 | `agent-follow` | the follow feed (to the view's connection only) | `{view, session, file?, worktree, line?, col?, mode: listed \| read \| pending \| write \| edit, step_title?, plan_entry?, why_source: plan_entry \| step_title, changed?}`: where the followed session is now, at most once per 200 ms ("The follow feed") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
-| `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
-| `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
+| `view-written` | records | `{path, kind, hash}`: a record file written (never committed) |
+| `records-notice` | records | `{root, files, backup?}`: a project's record files were adopted (once per file); none is rewritten before |
+| `records-conflict` | records | `{path, ids}`: records both their file and the graph changed, newly flagged (Records: Resolve Conflict) |
 | `agent-wheel` | sessions | `{id, state: held \| free}`: the user's hold on a session's wheel; `held` once the turn the take stopped has ended and its step snapshot is taken (coordination.md, "Take the wheel") |
 | `wheel-save` | sessions (a give) | `{req, id, worktree}`: the editor saves its buffers in the session's worktree and answers `agents/wheel/saved {req, unsaved}` |
 | `pair-apply` | the pair door (to the editor that has the file) | `{write, session, ordinal, file, version?, floor?, edits: [{kind: replace, old, new} \| {kind: lines, line, delete, text}], ttl_ms}`: applied whole or refused whole, answered by `pair/answer` ([Pair mode](#pair-mode)) |
@@ -2917,8 +2918,11 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   outside `order`). The rows hold the window's entries only, so opening a folder of thousands costs a window: a
   `view/window` sends the model and the rows again, the rows it dropped removed and the ones it added inserted. The
   editor moves the window on a key at its edge (`drgnx-view-nav`) and on a scroll within a page of the rows' ends
-  (`drgnx-explorer--rows-scrolled`, half the window). `around` (a reveal) names an entry the next listing's window
-  must hold: when it falls outside, the window moves to hold it a quarter of the way down.
+  (`drgnx-explorer--rows-scrolled`, half the window), and after a draw that leaves a window at the rows' top or end
+  (no scroll can run above the buffer's start). `around` (a reveal) names an entry the next listing's window must
+  hold: when it falls outside, the window starts at the root while the entry fits in the first window (the tree above
+  it shows), else it moves to hold the entry a quarter of the way down. Each path is listed once: a root given twice
+  is listed the first time only, and a root inside another is its own top row, not listed again inside that one.
 - **Row,** per display class (`view/env`): the key is the path. On a terminal, the indent guides (`│ ` per level below
   the first) and the chevron (`▾ `, `▸ `, or two spaces for a file) in `drgnx-explorer-guide`. On a graphical display
   the look-fix layout (window-dark.html `.row`), sizes in device px at the env's scale: a space of `indent` (default 12,
@@ -3099,7 +3103,8 @@ ledger (`p:ledger:N`) are the hub's rows too (`view/panel_cards.rs`), each a car
 12 px. The state split: what is pinned (the cards' texts, oldest first), whether the ledger is open and the ledger's mark
 are per-(connection, view) user state in the hub's `Chosen`; the editor sends `pins` and `ledger_open` in
 `agents/panel/look`, and the hub sets the mark to the entry count less one when the ledger opens. The plan comes from the
-session; the ledger's files and a paired chat's hunks the hub reads itself (`work/files`, `history/op/hunks`) when the
+session; the ledger's files and the hunks of a paired chat or a session in a tree it shares with you (`work::edits::shared`)
+the hub reads itself (`work/files`, `history/op/hunks`) when the
 count of finished edits changes. A card's buttons are `card:*` values of `drgnx-agent-panel-action`, which the editor's
 click dispatcher (`drgnx-agent-panel-act`) answers by calling the existing command. The hub orders every row of the
 panel; the editor inserts them in that order, with no key prefix or special case.
