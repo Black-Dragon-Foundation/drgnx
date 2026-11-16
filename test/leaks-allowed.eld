@@ -42,8 +42,10 @@ string-pixel-width uses)")
   :source "\\`\\(?:themes\\|test/fixtures\\)/"
   :why "a theme or a test fixture a test loads; a feature is never unloaded")
  (:what "\\`\\(?:feature\\|timer\\|hook\\|advice\\|global-map\\) "
-  :source "/\\(?:childframe-elpa\\|pinned-elpa\\)/"
-  :why "a pinned child-frame or modal package loaded by the test that needs it: its own hooks, timers and keys come with the load (a function variable it wraps, like the focus function, is not covered: it changes what the next file sees)")
+  :source "/\\(?:childframe-elpa\\|pinned-elpa\\)/\\|\\`/elpa/"
+  :why "a pinned child-frame or modal package, or one of the user's packages (DRGNX_USER_ELPA, mounted at /elpa in a container), loaded by the test that needs it: its own hooks, timers and keys come with the load (a function variable it wraps, like the focus function, is not covered: it changes what the next file sees)")
+ (:what "\\`auto-mode .* \\+git-rebase-mode\\'"
+  :why "magit's git-rebase, loaded with magit by the GUI tier's magit ediff row, adds its file pattern (the census records no source for an auto-mode entry)")
  (:what "\\`\\(?:minor-mode-map\\|minor-mode\\|emulation-map\\|after-load\\) "
   :why "a library defining its minor mode and map, or an after-load form, when it loads")
  (:what "\\`timer idle [+-]#\\[nil ((if (buffer-live-p buffer)"

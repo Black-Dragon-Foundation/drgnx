@@ -44,6 +44,8 @@
  (debug-expand-chunks (:input :p95) 15) (debug-expand-chunks (:input :max) 50)
  ;; any hub-fed view: 100 rows removed above the window of a 6,000-row view and 100 added below, drawn in a frame
  ;; (its check fails the row when the buffer's paragraphs are left to Emacs: then redisplay walks back to its start)
+ ;; Design: Component Catalogue drawn again and shown (the frontend kit, §9)
+ (kit-catalogue-open (:input :p95) 500) (kit-catalogue-open (:input :max) 1000)
  (view-remove-above (:input :p95) 16) (view-remove-above (:input :max) 50)
  ;; any hub-fed view: the selection and a search set (every other row dim) or cleared in a 6,000-row view within a
  ;; frame (its check holds the overlays to the dim runs, never one per row)

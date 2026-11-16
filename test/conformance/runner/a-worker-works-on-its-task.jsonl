@@ -1,0 +1,15 @@
+{"scenario": "runner/a-worker-works-on-its-task", "requires": ["v1", "test-hooks"], "doc": "A plan run's worker is started with its task as the runner names it (JOB#N, no task: prefix); its session entity still gets the works_on link to the task's entity task:JOB#N. Once the worker's first turn is booked (budget/get on the run), the link is in the graph."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")))) (drgnx-agents-routes ((implement \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "say working\n"}
+{"do": "write_file", "path": "$ROOT/p.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "job/propose", "params": {"plan": "$ROOT/p.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"id": "$capture:j", "status": "proposed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 11, "method": "job/approve", "params": {"id": "$j"}}}
+{"do": "expect", "conn": "c", "json": {"id": 11, "result": {"id": "$j"}}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 12, "method": "budget/get", "params": {"scope": {"run": "$j"}}}, "expect": {"id": 12, "result": {"spent": {"$contains": [{"amount": 0.01, "unit": "usd-est"}]}}}, "within_ms": 90000, "every_ms": 200}
+{"do": "sql_expect", "sql": "select distinct t.id = 'task:$j#1' from link l join entity s on s.n = l.src join entity t on t.n = l.dst where l.kind = 'works_on' and s.kind = 'session'", "rows": [[1]]}

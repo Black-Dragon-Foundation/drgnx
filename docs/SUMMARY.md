@@ -113,5 +113,6 @@
     - [Status bar](design/components/status-bar.md)
     - [Title row](design/components/title-row.md)
     - [Research trail](design/components/trail.md)
+    - [Row (kit)](design/components/row.md)
 - [The app icon](design/app-icon.md)
 - [Writing a theme for drgnx](design/theme-authors.md)

@@ -3,6 +3,7 @@
 //! an env for.
 
 use super::{Key, Store, is_reset};
+use drgnx_rows::kit::Density;
 use drgnx_rows::{Op, Patch, Row, RowBuilder};
 use runstav::methods::view::{Display, ViewEnv};
 use skuld::{Bound, Core, Partial, every_order};
@@ -50,6 +51,8 @@ fn env(class: &str, epoch: u64, width: u32) -> ViewEnv {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        glyphs: Vec::new(),
+        density: Default::default(),
         attach: false,
         rows_in_sja: false,
         headless: false,
@@ -856,4 +859,19 @@ fn a_window_start_is_kept_per_list_until_the_view_starts_again() {
     s.set_window(CONN, "v", "order", 1);
     s.gone(CONN);
     assert_eq!(s.window_from(CONN, "v", "order"), None);
+}
+
+#[test]
+fn env_density_round_trips() {
+    // the user's density comes with the env (none: comfortable) and reaches the kit
+    let mut v = serde_json::to_value(env("c", 1, 300)).unwrap();
+    assert_eq!(v["density"], "comfortable");
+    v["density"] = "roomy".into();
+    let e: ViewEnv = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(e.density, Density::Roomy);
+    assert_eq!(super::kit_env(&e).density, Density::Roomy);
+    assert_eq!(serde_json::to_value(&e).unwrap(), v);
+    v.as_object_mut().unwrap().remove("density");
+    let e: ViewEnv = serde_json::from_value(v).unwrap();
+    assert_eq!(e.density, Density::Comfortable);
 }

@@ -575,6 +575,7 @@ ended."
 
 (defun drgnx-scm--teardown ()
   "Turning tools/scm off: the view's buffers go (the hub forgets the view with them)."
+  (drgnx-changes-teardown)
   (remove-hook 'after-save-hook #'drgnx-scm--saved)
   (remove-function after-focus-change-function #'drgnx-scm--focus-in)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-scm--hub-event)
@@ -628,6 +629,11 @@ ended."
     (apply #'drgnx-command-define id :category (substring label 0 at) :title (substring label (+ at 2))
            :command fn :doc doc more)))
 
+(unless (featurep 'drgnx-changes)
+  (load (expand-file-name "drgnx-changes" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-changes-setup "drgnx-changes")
+(declare-function drgnx-changes-teardown "drgnx-changes")
+
 (drgnx-module-define 'tools/scm
                      :doc "The Source Control side bar: changes, stage, commit, branches, push and pull, the graph."
                      :stage 'startup
@@ -648,6 +654,7 @@ ended."
                                                   :buffer #'drgnx-scm--message-buffer)
                          (drgnx-wb-define-section 'scm :view 'scm :slot 1 :own-header t
                                                   :buffer #'drgnx-scm--buffer))
+                       (drgnx-changes-setup)
                        (add-hook 'drgnx-hub-event-functions #'drgnx-scm--hub-event)
                        (add-hook 'after-save-hook #'drgnx-scm--saved)
                        (add-function :after after-focus-change-function #'drgnx-scm--focus-in)))

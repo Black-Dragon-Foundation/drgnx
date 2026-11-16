@@ -278,3 +278,183 @@ fn a_meter_reset_is_a_segment_not_a_negative_rise() {
     assert!((rises - 0.2).abs() < 1e-9, "{rises}");
     assert_eq!(rise_total(&[]), 0.0);
 }
+
+/// Pure (D): every kind of scope has its own key, so a plan and a run (one job) with the same id never share a budget.
+#[test]
+fn scope_keys_are_distinct_per_kind() {
+    let kinds = [
+        "project", "spec", "plan", "run", "task", "manager", "worker",
+    ];
+    let keys: BTreeSet<Key> = kinds.iter().map(|k| key(&sc(json!({*k: "x"})))).collect();
+    assert_eq!(keys.len(), kinds.len(), "{keys:?}");
+    assert_ne!(
+        key(&sc(json!({"plan": "x"}))),
+        key(&sc(json!({"run": "x"})))
+    );
+}
+
+/// Pure (D): a plan's limit spans its runs.  Run A spent 30 of the plan's 40, so run B starts with 10; B's worker
+/// (moved to another session on the way, which keeps its links) spends 10 and the plan's limit is reached once; each
+/// run's own spend is its share.
+#[test]
+fn a_second_run_spends_from_the_plans_limit() {
+    let b = Budgets::default();
+    let plan = sc(json!({"plan": "plan:p"}));
+    let (run_a, run_b) = (sc(json!({"run": "A"})), sc(json!({"run": "B"})));
+    let (task_a, task_b) = (
+        sc(json!({"task": "task:A-1"})),
+        sc(json!({"task": "task:B-1"})),
+    );
+    let (wa, wb, wb2) = (
+        sc(json!({"worker": "wa"})),
+        sc(json!({"worker": "wb"})),
+        sc(json!({"worker": "wb2"})),
+    );
+    b.link_up(&[wa.clone(), task_a, run_a.clone(), plan.clone()]);
+    b.set(&plan, vec![lim(40.0, Unit::Usd)]);
+    assert!(b.spend(&wa, Unit::Usd, 30.0).is_empty());
+    b.link_up(&[wb.clone(), task_b, run_b.clone(), plan.clone()]);
+    assert_eq!(left(&b, &wb, Unit::Usd), Some(10.0));
+    b.rekey(&wb, &wb2);
+    assert_eq!(left(&b, &wb2, Unit::Usd), Some(10.0));
+    let hits = b.spend(&wb2, Unit::Usd, 10.0);
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].scope, plan);
+    let spent = |s: &BudgetScope| b.view(s).spent.iter().map(|l| l.amount).sum::<f64>();
+    assert_eq!(spent(&run_a), 30.0);
+    assert_eq!(spent(&run_b), 10.0);
+    assert_eq!(spent(&plan), 40.0);
+}
+
+/// Pure (D): a spec's limit reaches every session of every plan under it, and every run (job) under it, bound to the
+/// gateway or not.
+#[test]
+fn a_spec_limit_reaches_every_plan_under_it() {
+    let b = Budgets::default();
+    let spec = sc(json!({"spec": "spec:s"}));
+    let project = sc(json!({"project": "project:q"}));
+    b.link_up(&[
+        sc(json!({"worker": "w1"})),
+        sc(json!({"task": "task:J1-1"})),
+        sc(json!({"run": "J1"})),
+        sc(json!({"plan": "plan:a"})),
+        spec.clone(),
+        project.clone(),
+    ]);
+    b.link_up(&[
+        sc(json!({"manager": "m2"})),
+        sc(json!({"run": "J2"})),
+        sc(json!({"plan": "plan:b"})),
+        spec.clone(),
+    ]);
+    // a plan of another spec in the same project is not under it
+    b.link_up(&[
+        sc(json!({"worker": "w3"})),
+        sc(json!({"run": "J3"})),
+        sc(json!({"plan": "plan:c"})),
+        project.clone(),
+    ]);
+    let mut below: Vec<_> = b
+        .members(&spec)
+        .iter()
+        .filter_map(|s| session_of(s).map(str::to_string))
+        .collect();
+    below.sort();
+    assert_eq!(below, ["m2", "w1"]);
+    let mut jobs = b.jobs_under(&spec);
+    jobs.sort();
+    assert_eq!(jobs, ["J1", "J2"]);
+    b.set(&spec, vec![lim(5.0, Unit::UsdEst)]);
+    let hits = b.spend(&sc(json!({"worker": "w1"})), Unit::UsdEst, 5.0);
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].scope, spec);
+}
+
+/// Pure (D): worker → task → run → plan → spec → project; what remains is the least of the six.
+#[test]
+fn the_chain_is_worker_task_run_plan_spec_project() {
+    let b = Budgets::default();
+    let chain = [
+        sc(json!({"worker": "w"})),
+        sc(json!({"task": "task:J-1"})),
+        sc(json!({"run": "J"})),
+        sc(json!({"plan": "plan:p"})),
+        sc(json!({"spec": "spec:s"})),
+        sc(json!({"project": "project:q"})),
+    ];
+    b.link_up(&chain);
+    // each scope's limit is the least in turn: 6 on the worker … 1 on the project
+    for (i, s) in chain.iter().enumerate() {
+        b.set(s, vec![lim(6.0 - i as f64, Unit::Usd)]);
+    }
+    for (i, s) in chain.iter().enumerate().rev() {
+        assert_eq!(
+            left(&b, &chain[0], Unit::Usd),
+            Some(6.0 - i as f64),
+            "{s:?}"
+        );
+        b.set(s, Vec::new());
+    }
+    assert_eq!(left(&b, &chain[0], Unit::Usd), None);
+    assert_eq!(b.members(&chain[5]), vec![chain[0].clone()]);
+}
+
+/// Pure (D): a task named as its entity (`task:J#5`) and as the session holds it (`J#5`) is one scope: the limit set
+/// on one is reached by spend under the other.
+#[test]
+fn an_unprefixed_task_ref_joins_its_budget() {
+    let b = Budgets::default();
+    let (prefixed, bare) = (sc(json!({"task": "task:J#5"})), sc(json!({"task": "J#5"})));
+    assert_eq!(key(&prefixed), key(&bare));
+    assert_eq!(key(&bare), "task:J#5");
+    let worker = sc(json!({"worker": "w"}));
+    b.link_up(&[worker.clone(), bare]);
+    b.set(&prefixed, vec![lim(1.0, Unit::Usd)]);
+    let hits = b.spend(&worker, Unit::Usd, 1.0);
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(key(&hits[0].scope), "task:J#5");
+}
+
+/// Pure (D): a state saved before the scopes were split (version 1, as the user's install may hold it) kept a job with
+/// no plan under `plan:JOB`, and a plan file's runs under `plan:PATH`. On load the job's scope becomes its `run`, with
+/// its limit, its spend, its joint dollars and its links; the plan file's keeps its meaning; each move is counted once.
+#[test]
+fn an_old_per_job_plan_scope_becomes_its_run() {
+    let old = json!({
+        "version": 1,
+        "limits": [[{"plan": "plan:job-20261101-120000"}, [{"amount": 20.0, "unit": "usd"}]],
+                   [{"plan": "plan:/p/x.md"}, [{"amount": 9.0, "unit": "usd"}]],
+                   [{"worker": "w1"}, [{"amount": 3.0, "unit": "usd"}]]],
+        "spent": [[{"plan": "plan:job-20261101-120000"}, [{"amount": 5.0, "unit": "usd"}]]],
+        "parents": [[{"worker": "w1"}, {"plan": "plan:job-20261101-120000"}],
+                    [{"plan": "plan:job-20261101-120000"}, {"project": "project:q"}]],
+        "joint": [{"plan": "plan:job-20261101-120000"}],
+    });
+    let b = Budgets::default();
+    assert_eq!(b.restore(serde_json::from_value(old).unwrap()), 5);
+    let run = sc(json!({"run": "job-20261101-120000"}));
+    let gone = sc(json!({"plan": "plan:job-20261101-120000"}));
+    assert_eq!(b.limits(&run), vec![lim(20.0, Unit::Usd)]);
+    assert_eq!(b.view(&run).spent, vec![lim(5.0, Unit::Usd)]);
+    assert!(b.limits(&gone).is_empty());
+    assert_eq!(
+        b.limits(&sc(json!({"plan": "plan:/p/x.md"}))),
+        vec![lim(9.0, Unit::Usd)]
+    );
+    // the worker still spends from the run's limit: 20 less the 5 spent, under its own 3
+    let w1 = sc(json!({"worker": "w1"}));
+    assert_eq!(left(&b, &w1, Unit::Usd), Some(3.0));
+    b.set(&w1, Vec::new());
+    assert_eq!(left(&b, &w1, Unit::Usd), Some(15.0));
+    assert_eq!(
+        b.members(&sc(json!({"project": "project:q"}))),
+        vec![w1.clone()]
+    );
+    // what this build saves reads back whole, with nothing moved
+    let c = Budgets::default();
+    assert_eq!(
+        c.restore(serde_json::from_str(&serde_json::to_string(&b.saved()).unwrap()).unwrap()),
+        0
+    );
+    assert_eq!(c.limits(&run), vec![lim(20.0, Unit::Usd)]);
+}

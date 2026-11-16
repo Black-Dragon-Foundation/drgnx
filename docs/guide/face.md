@@ -46,7 +46,8 @@ leaves them out.
   window Left and Right go on to the menu beside it (Right first opens a submenu) and the pointer moving over another
   title opens that one, as in VS Code. In the VS Code profile
   Alt and the first letter open a menu (`Alt+F` File, `Alt+E` Edit, `Alt+S` Selection, `Alt+V` View, `Alt+G` Go,
-  `Alt+R` Run, `Alt+T` Terminal, `Alt+H` Help), and the titles underline that letter. The Emacs and Vim profiles keep
+  `Alt+R` Run, `Alt+T` Terminal, `Alt+H` Help), and the titles underline that letter. Alt+Shift and the letter opens
+  no menu (VS Code's `Shift+Alt+F` is no menu either; in a legacy terminal it is Search, [keys.md](keys.md)). The Emacs and Vim profiles keep
   Alt for editing; the commands **Open the File Menu** … **Open the Help Menu** take a key of your own like any other
   ([keys.md](keys.md)).
 - **What is in them:** `etc/menus.eld` lists the commands of each menu in groups; titles and keys come from the
@@ -174,7 +175,9 @@ shows in the icon's place. They are not in the table below.
 | `sep` | ` · ` | ` \| ` | `flag` | ⚑ | `#` |
 | `diamond` | ◆ | `<>` | `search` | ⌕ | `/` |
 | `minimize` | – | `-` | `maximize` | ▢ | `[]` |
-| `bullet` | • | `>` | | | |
+| `bullet` | • | `>` | `newline` | ⏎ | `\n` |
+| `dash` | — | `--` | `arrow-left` | ← | `<-` |
+| `empty-set` | ∅ | `{}` | | | |
 | `fail` | ✕ | `X` | `stopped` | ■ | `#` |
 | `dismiss` | × | `x` | `unqueue` | − | `-` |
 | `info` | ℹ | `i` | `warn` | ⚠ | `!` |
@@ -183,6 +186,8 @@ shows in the icon's place. They are not in the table below.
 | `note` | ✎ | `n` | `changed` | ↻ | `~` |
 | `hook-busy` | ⏳ | `...` | `rename-symbol` | ⟨⟩ | `<>` |
 | `match-previous` | ↑ | `^` | `match-next` | ↓ | `v` |
+| `dropdown` | ▾ | `v` | `changed-lines` | ± | `+-` |
+| `save-search` | ☆ | `*` | | | |
 
 The glyphs are by meaning. `close` is the mark of a close button, `fail` is "something failed", `dismiss` dismisses a
 notice and `unqueue` takes a queued message back. Some look alike by default, but each is its own entry, so restyling

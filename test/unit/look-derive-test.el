@@ -17,9 +17,11 @@
 (deftheme drgnx-derive-test-dup "A dark theme whose keyword and builtin faces share a colour.")
 (deftheme drgnx-derive-test-bare "A dark theme that gives only the default colours.")
 (deftheme drgnx-derive-test-void "A theme whose default colours are unspecified, as a terminal frame's are.")
+(deftheme drgnx-derive-test-low "A dark theme whose muted text stands at 2:1.")
 
 (defconst look-derive-test--made
-  '(drgnx-derive-test-a drgnx-derive-test-b drgnx-derive-test-dup drgnx-derive-test-bare drgnx-derive-test-void))
+  '(drgnx-derive-test-a drgnx-derive-test-b drgnx-derive-test-dup drgnx-derive-test-bare drgnx-derive-test-void
+                        drgnx-derive-test-low))
 
 (defun look-derive-test--forget (theme)
   "Take THEME's face settings off the faces, and disable it."
@@ -180,6 +182,27 @@ accents (purple #9141ac reached only 5.96:1 when it was solved to 4.5)."
   (dolist (accent '("#3584e4" "#2190a4" "#3a944a" "#c88800" "#ed5b00" "#e62d42" "#d56199" "#9141ac" "#6f8396"))
     (let ((text (drgnx-look-accent-text (drgnx-color-rgb accent) 'hc)))
       (should (>= (drgnx-color-contrast text (drgnx-look-token 'editor 'hc)) 7.0)))))
+
+(require 'drgnx-notice)
+
+(ert-deftest drgnx-look-derive/clamp-gives-one-notice ()
+  "Pattern D: a theme whose muted text stands at 2:1 is clamped to 4.5:1 with one notice from the `look' source: a
+second run (another theme change) updates it, never adds one; nothing signals or prompts."
+  (custom-theme-set-faces 'drgnx-derive-test-low
+                          '(default ((t :background "#1e1e1e" :foreground "#d4d4d4")))
+                          '(shadow ((t :foreground "#4a4a4a"))))
+  (should (< (drgnx-color-contrast "#4a4a4a" "#1e1e1e") 2.0))
+  (cl-letf (((symbol-function 'read-from-minibuffer) (lambda (&rest _) (error "derive prompted")))
+            ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "derive prompted")))
+            ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "derive prompted"))))
+    (look-derive-test--on '(drgnx-derive-test-low)
+      (should (>= (drgnx-color-contrast (look-derive-test--fg 'drgnx-text-muted) "#1e1e1e") 4.5))
+      (should (= 1 (length (drgnx-notices :source 'look))))
+      (drgnx-look-derive)
+      (should (= 1 (length (drgnx-notices :source 'look))))
+      (should (string-match-p "contrast" (plist-get (car (drgnx-notices :source 'look)) :text)))))
+  ;; off: the notice goes with derive
+  (should-not (drgnx-notices :source 'look)))
 
 (provide 'look-derive-test)
 ;;; look-derive-test.el ends here

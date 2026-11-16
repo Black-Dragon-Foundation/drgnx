@@ -130,6 +130,23 @@ pub struct GutterRange {
     pub end_pos: Option<i64>,
 }
 
+/// One agent's change to the viewed file, offered as a proposal: the hunk's lines in the file, what it adds and, when
+/// the agent recorded one in that turn, why.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Proposal {
+    pub session: String,
+    /// The edit history's operation that wrote it, when it names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<u64>,
+    pub index: u32,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 /// A view's frame: `agents/buffer/watch`'s answer, and the data of `agent-buffer`.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -148,6 +165,9 @@ pub struct BufferFrame {
     pub agents: Vec<BufferAgent>,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub gutter: Vec<GutterRange>,
+    /// What agents working in their own worktrees changed in this file, as hunks to accept or revert.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub proposals: Vec<Proposal>,
 }
 
 fn check_view(view: &str) -> Result<(), Error> {

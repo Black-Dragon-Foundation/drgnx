@@ -42,6 +42,7 @@ fn agent_events(i: usize, a: &Gen, plans: u8, machines: u8) -> Vec<Event> {
             plan: format!("p{p}"),
             title: format!("task {i}"),
             done: false,
+            updated: 0,
         }));
     }
     let branch = format!("drgnx/b{i:02}");
@@ -118,6 +119,7 @@ fn world_events(w: &World) -> Vec<Event> {
             title: format!("plan {p}"),
             rank: u64::from(p),
             progress: None,
+            updated: 0,
         }));
         out.push(Event::Graph(GraphFact::Ask {
             key: format!("{p}"),
@@ -226,8 +228,8 @@ fn check_overlap(l: &Layout) -> Result<(), String> {
 
 fn check_layers(l: &Layout) -> Result<(), String> {
     rows_of(l);
-    // rows go 1, 2, 3, then 4 and 5 by block line, then 6
-    let group = |layer: u8| if layer == 5 { 4 } else { layer };
+    // rows go 1, 2, 3, then 4, 5 and 6 by block line, then 7 and 8
+    let group = |layer: u8| if (4..=6).contains(&layer) { 4 } else { layer };
     for w in l.rows.windows(2) {
         if group(w[1].layer) < group(w[0].layer) || w[1].y <= w[0].y {
             return Err(format!("row {:?} after {:?}", w[1], w[0]));
@@ -244,7 +246,7 @@ fn check_blocks(m: &Model, l: &Layout) -> Result<(), String> {
         by_row.entry(rows[id]).or_default().push((r.x, id));
     }
     for ((layer, _, _), mut list) in by_row {
-        if layer != 4 && layer != 5 {
+        if !(4..=6).contains(&layer) {
             continue;
         }
         list.sort();
@@ -547,7 +549,7 @@ fn summary(name: &str, l: &Layout) -> String {
         l.rows.len(),
         l.rows
             .iter()
-            .filter(|r| r.layer == 4)
+            .filter(|r| r.layer == 5)
             .map(|r| r.block_line)
             .max()
             .map_or(0, |k| k + 1),
@@ -722,7 +724,7 @@ fn a_block_compacts_before_its_second_sub_row() {
         "{:?}",
         l.form
     );
-    assert_eq!(l.rows.iter().filter(|r| r.layer == 4).count(), 1);
+    assert_eq!(l.rows.iter().filter(|r| r.layer == 5).count(), 1);
     // two rich cards fit one sub-row: they stay rich
     let two = model_of(world_events(&World {
         agents: vec![agent(false), agent(false)],

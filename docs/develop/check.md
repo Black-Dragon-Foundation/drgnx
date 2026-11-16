@@ -146,6 +146,11 @@ skips is not a pass nobody sees.
   `nidhogg-views`), a test that skipped with a reason naming a Sjá primitive (`nidhogg-view-…`, such as
   `skip-unless (fboundp 'nidhogg-view-rows)`) fails the run: `DRGNX_NIDHOGG_STRICT=1: skipped for Sjá, which this
   Emacs has not: REASON`. In an Emacs with Sjá such a skip had another reason (no display) and stays a skip.
+- **`DRGNX_TEST_STRICT_FACES=1`**: a hub row that names a face which is no face and is not in `etc/ui/faces.eld`
+  (a stale name; a known face of a module that is off is not one) is counted by `drgnx-view-patch--face` in
+  `drgnx-view-unknown-faces`. A test file whose Emacs ends with any counted is an unexpected result, `file NAME:
+  unknown faces: A (n), B (m)`; GUI sessions run the same runner, so a GUI row's file fails the same way. Outside a
+  test run nothing is counted. The check runner's strict runs set it; `bin/drgnx test --container` passes it in.
 
 ## A flake is a result (`DRGNX_TEST_RERUN`)
 

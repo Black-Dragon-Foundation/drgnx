@@ -103,9 +103,12 @@
         (should-not (get-text-property 200 'drgnx-work-id line))
         (should (<= chars 210))))))
 
+(defvar drgnx-view-unknown-faces)
+
 (ert-deftest drgnx-view-patch/unknown-face-is-dropped-not-interned ()
   (drgnx-view-patch-test--with
-    (let ((name "drgnx-view-patch-test-no-such-face-4711"))
+    ;; the name is unknown on purpose: a strict run's counter (DRGNX_TEST_STRICT_FACES) counts it in a table of its own
+    (let ((name "drgnx-view-patch-test-no-such-face-4711") (drgnx-view-unknown-faces (make-hash-table :test #'equal)))
       (drgnx-view-apply-patch (drgnx-view-patch-test--patch
                                (list (list :reset (list (drgnx-view-patch-test--row
                                                          "a" "xy" :runs (list (list 0 1 name) (list 1 2 "bold"))))))))

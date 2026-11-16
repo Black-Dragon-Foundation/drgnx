@@ -194,6 +194,11 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "the hunks of one record of a worktree's history, or of every record of a session's agent there (a paired chat's), each with what is still there and who undid it",
         ),
         method!(
+            "history/provenance", HistoryProvenance(ProvenanceParams) -> Provenance,
+            classes: [User], writes: false,
+            doc: "why a hunk is there: the record that wrote the line under a position (or hunk INDEX of record OP), its agent's session, the task it worked on and the conclusion it recorded in the same turn at or before the write, in the agent's words; none recorded is said so, never an older turn's",
+        ),
+        method!(
             "history/revert/hunk", HistoryRevertHunk(RevertHunkParams) -> HunkReverted,
             classes: [User], writes: true,
             doc: "revert one hunk of an agent's record, keeping the user's later typing: applied and written by the hub, or handed to the editor buffer that holds the file; a hunk whose old text has no place to go back to is a conflict and changes nothing",
@@ -230,11 +235,71 @@ pub struct UndoneBy {
     pub author: Option<serde_json::Value>,
 }
 
+/// Why a record was made, as the history holds it: the agent's session and step, the task it worked on, the conclusion
+/// (`decision:N`, a note's id) it recorded in the same turn at or before the write.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpCause {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+}
+
+/// `history/provenance`: in the worktree WORKTREE, the hunk under LINE (1-based) of PATH (relative to it), or hunk
+/// INDEX of record OP.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProvenanceParams {
+    pub worktree: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<i64>,
+}
+
+/// Where a hunk came from.  No `session`: no agent wrote it (the user, the outside world).  No `decision`: the agent
+/// recorded no conclusion in that turn before the write ("no reason recorded").
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Provenance {
+    pub op: i64,
+    pub path: String,
+    pub index: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// The agent's name (the session's), else its session id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    /// The conclusion's text: the agent's words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+}
+
 /// One hunk of a record: its lines in the text now (1-based), the record's text still there, the text it removed.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OpHunk {
     pub op: i64,
+    /// Why its record was made (hunk provenance).
+    #[serde(default)]
+    pub cause: OpCause,
     pub path: String,
     pub index: i64,
     pub start_line: i64,

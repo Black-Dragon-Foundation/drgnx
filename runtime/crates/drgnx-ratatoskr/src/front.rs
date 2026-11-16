@@ -751,6 +751,26 @@ impl Front {
                 crate::view::panel::look(self, &caller, p).map(|b| json!(b))
             }
             Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
+            // the Agents side: a card per session (view::agents_side)
+            Params::AgentsSideSubscribe(p) => {
+                crate::view::agents_side::subscribe(self, &caller, p).map(|b| json!(b))
+            }
+            Params::AgentsSideSet(p) => {
+                crate::view::agents_side::set(self, &caller, p).map(|b| json!(b))
+            }
+            Params::AgentsSideClose(p) => {
+                crate::view::agents_side::close(self, &caller, p).map(|b| json!(b))
+            }
+            // the Changes view: what the agents changed, by task (view::changes)
+            Params::ChangesSubscribe(p) => crate::view::changes::subscribe(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::ChangesSet(p) => crate::view::changes::set(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::ChangesClose(p) => {
+                crate::view::changes::close(self, &caller, p).map(|b| json!(b))
+            }
             // the Source Control view and the git commands it runs (view::scm)
             Params::ScmSubscribe(p) => {
                 crate::view::scm::subscribe(self, &caller, p).map(|b| json!(b))
@@ -937,6 +957,7 @@ impl Front {
             | Params::HistoryTake(_)
             | Params::HistoryRedo(_)
             | Params::HistoryOpHunks(_)
+            | Params::HistoryProvenance(_)
             | Params::HistoryRevertHunk(_)
             | Params::RunnersUnbench(_)
             | Params::RunnersRemove(_)
@@ -947,6 +968,7 @@ impl Front {
             | Params::RunnersKeysHeld(_)
             | Params::RunnersAudit(_)
             | Params::WorkConclusions(_)
+            | Params::ReviewEffects(_)
             | Params::AgentsPresenceSubscribe(_)
             | Params::AgentsPresenceGet(_)
             | Params::AgentsBufferWatch(_)

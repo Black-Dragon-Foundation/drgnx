@@ -1,0 +1,22 @@
+{"scenario": "changes/subscribe-groups-by-task", "requires": ["v1", "test-hooks"], "doc": "The Changes view groups what an agent wrote by the task it works on: a file the agent wrote shows under its task's title. Pattern B."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q -b main && echo one > a.rs && git add a.rs && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--state\" \"$ROOT/state\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "c1", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [8, 17], "width_px": 1000, "palette": [["accent", "#123456"], ["edge", "#654321"]], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into entity (n,id,kind,title,origin,ver,created_tx,updated_tx) values (9001,'plan:p1','plan','Plan one','recorded',1,1,1),(9002,'task:T1','task','write the thing','recorded',1,1,1),(9003,'task:T2','task','a loose task','recorded',1,1,1)", "insert into link (src,kind,dst,origin,tx_from) values (9001,'parent_of',9002,'recorded',1)"]}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "task": "T1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say go\nfs:write b.txt one\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"class": "think"}}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 6, "method": "work/files", "params": {"session": "$sid"}}, "expect": {"id": 6, "result": {"files": {"$contains": [{"path": "b.txt"}]}}}, "within_ms": 30000, "every_ms": 200}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "changes/subscribe", "params": {"view": "c1"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "c1", "ops": {"$text": ["write the thing", "b.txt"]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": true}, "within_ms": 10000}

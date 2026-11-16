@@ -8,7 +8,7 @@
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
-{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "a", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "a", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "mode": "graph"}}}
 {"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "a", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": {"hub": "$hub", "version": 1}}}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "work/map/set", "params": {"view": "a", "shown": false}}}

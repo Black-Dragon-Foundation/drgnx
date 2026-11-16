@@ -250,12 +250,15 @@ async fn a_write_that_waits_on_the_disk_holds_no_worker() {
     .unwrap();
     let s = agents.find(&sid).unwrap();
     s.disk.written().await;
-    std::fs::remove_file(&queue).unwrap();
+    // the FIFO is made beside the queue file and renamed over it: one step, so a write of the session's own cannot
+    // recreate a plain file between a remove and a mkfifo (the one flake of this test, 1 run in 50)
+    let beside = queue.with_extension("fifo-new");
     let made = std::process::Command::new("mkfifo")
-        .arg(&queue)
+        .arg(&beside)
         .status()
         .unwrap();
     assert!(made.success());
+    std::fs::rename(&beside, &queue).unwrap();
     // the write is queued and the task that asked for it ends, on a worker, while the open waits on the FIFO (a write
     // done in the task held its worker and the state lock until a reader came: the test hung here)
     let w = s.clone();

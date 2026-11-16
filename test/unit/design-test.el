@@ -124,7 +124,9 @@
 (ert-deftest drgnx-design/every-component-page-shows-its-shots-dark-and-light ()
   (let ((dir (expand-file-name "docs/design/components/" drgnx-dir)))
     (dolist (page (directory-files dir t "\\.md\\'"))
-      (unless (equal (file-name-nondirectory page) "index.md")
+      ;; the kit's pages (one per component of etc/ui/components.eld) show their sheets: the next test
+      (unless (or (equal (file-name-nondirectory page) "index.md")
+                  (assq (intern (file-name-base page)) (alist-get 'components (drgnx-ui-kit-components))))
         (let ((text (with-temp-buffer (insert-file-contents page) (buffer-string)))
               (name (file-name-sans-extension (file-name-nondirectory page))))
           (should (assoc name drgnx-design-shots))
@@ -134,6 +136,27 @@
     ;; and no shot without a page
     (dolist (shot drgnx-design-shots)
       (should (file-exists-p (expand-file-name (format "%s.md" (car shot)) dir))))))
+
+(ert-deftest drgnx-design/component-pages-from-components-eld ()
+  ;; each component of etc/ui/components.eld has a generated page with its geometry, terminal form, label, colours and
+  ;; states, and its sheets' pictures dark, light and hc; a geometry change changes the page (so --check catches it)
+  (let* ((table (drgnx-ui-kit-components)) (pages (drgnx-design--component-pages table)))
+    (dolist (c (alist-get 'components table))
+      (let ((text (cdr (assoc (format "components/%s.md" (car c)) pages))))
+        (should text)
+        (dolist (theme '("dark" "light" "hc"))
+          (should (string-search (format "](../img/kit-%s-%s.png)" (car c) theme) text))
+          (should (file-exists-p (expand-file-name (format "docs/design/img/kit-%s-%s.png" (car c) theme) drgnx-dir))))
+        (should (string-search "## Geometry" text))
+        (should (string-search "| selected-inactive |" text))))
+    (let ((row (cdr (assoc "components/row.md" pages))))
+      (should (string-search "| tree | roomy | 30 | 6 / 6 | 0 | no | 6 | 0 | 14 |" row))
+      (should (string-search "`⌄` open" row)))
+    ;; a geometry change shows
+    (let* ((changed (copy-tree table)) (row (assq 'row (alist-get 'components changed))))
+      (setcdr row (plist-put (cdr row) :geometry (plist-put (copy-sequence (plist-get (cdr row) :geometry)) :pad '(8 . 8))))
+      (should (string-search "| list | comfortable | 26 | 8 / 8 |"
+                             (cdr (assoc "components/row.md" (drgnx-design--component-pages changed))))))))
 
 (ert-deftest drgnx-design/a-shot-is-cut-where-the-table-says ()
   (skip-unless (executable-find "magick"))
@@ -155,6 +178,70 @@
       (let ((hex (drgnx-look-token token 'dark)))
         (should (string-match-p (format "^| <span class=\"swatch\" style=\"background: %s\"></span> | `%s` |" hex token)
                                 section))))))
+
+;;; Token tiers: the semantic tier, and a component tier of references
+
+(defconst design-test--component-seed
+  '(button-primary-bg button-primary-fg button-edge key-hint-edge card-needs-you-edge progress-track)
+  "The component-tier tokens the kit starts with.")
+
+(defun design-test--reference-p (value)
+  "Non-nil when VALUE, a token table entry, names tokens only: a token, or a tint or over of tokens."
+  (pcase value
+    ((pred symbolp) t)
+    (`(tint ,colour . ,(pred numberp)) (symbolp colour))
+    (`(over ,(pred symbolp) ,colour . ,(pred numberp)) (symbolp colour))))
+
+(ert-deftest drgnx-design/component-tokens-are-references ()
+  ;; a component token says which semantic token it uses (tinted or not), never which colour
+  (dolist (variant '(dark light hc))
+    (let ((entries (alist-get variant (drgnx-design--table))))
+      (dolist (token design-test--component-seed)
+        (should (assq token entries))
+        (should (eq 'component (drgnx-design-token-tier token))))
+      (dolist (entry entries)
+        (when (eq 'component (drgnx-design-token-tier (car entry)))
+          (should-not (when-let* ((bad (and (not (design-test--reference-p (cdr entry))) entry)))
+                        (list variant bad))))))))
+
+(ert-deftest drgnx-design/tokens-page-shows-the-tier ()
+  (let ((section (drgnx-design--section (design-test--page "tokens.md") 'dark)))
+    (should (string-search "| Swatch | Token | Value | Definition | Tier | Faces |" section))
+    (should (eq 'semantic (drgnx-design-token-tier 'sel)))
+    (should (string-match-p "^| <span[^|]*</span> | `sel` | [^|]* | [^|]* | semantic |" section))
+    (should (string-match-p "^| <span[^|]*</span> | `button-edge` | [^|]* | [^|]* | component |" section))))
+
+;;; Generated code: FaceId, the kit tables, faces.eld
+
+(ert-deftest drgnx-design/code-files-are-current ()
+  ;; a face, a component or the generator changed without `bin/drgnx design' fails here (and `--check' exits 1)
+  (let ((code (drgnx-design-code)))
+    (dolist (path '("runtime/crates/drgnx-rows/src/faces.rs" "runtime/crates/drgnx-rows/src/kit_gen.rs"
+                    "etc/ui/faces.eld"))
+      (should (assoc path code)))
+    (should-not (when-let* ((stale (drgnx-design-code-stale)))
+                  (ert-fail (format "stale generated code: %s; run bin/drgnx design" (string-join stale ", ")))))))
+
+(ert-deftest drgnx-design/face-enum-covers-every-defface ()
+  (let ((root (make-temp-file "drgnx-design-faces" t)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "modules/x" root) t)
+          (make-directory (expand-file-name "core" root) t)
+          (make-directory (expand-file-name "wb" root) t)
+          (with-temp-file (expand-file-name "modules/x/probe.el" root)
+            (insert "(defface drgnx-zz-probe '((t :inherit shadow)) \"A probe.\")\n"
+                    "(defface drgnx-zz-fam-1 nil \"One.\")\n(defface drgnx-zz-fam-2 nil \"Two.\")\n"
+                    ";; (defface drgnx-zz-commented nil \"\")\n"))
+          (let ((rs (drgnx-design--faces-rs root)))
+            (should (string-search "    ZzProbe,\n" rs))
+            (should (string-search "FaceId::ZzProbe => \"drgnx-zz-probe\"," rs))
+            (should (string-search "\"drgnx-zz-probe\" => FaceId::ZzProbe," rs))
+            (should (string-search "pub const ZZ_FAM: [FaceId; 2] = [FaceId::ZzFam1, FaceId::ZzFam2];" rs))
+            (should-not (string-search "ZzCommented" rs))
+            ;; the patch faces are there whatever the tree holds
+            (should (string-search "FaceId::Bold => \"bold\"," rs))))
+      (delete-directory root t))))
 
 (defvar drgnx-theme--box-fit)
 (defvar drgnx-theme--box-fit-pad)

@@ -1,5 +1,6 @@
 //! The row and patch format: positions, runs, ids on the wire.
 
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{Colour, CursorShape, Face, ImageId, Op, Patch, Row, RowBuilder, Style, TermMeta};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -16,13 +17,13 @@ fn positions_are_scalar_indices() {
     ] {
         let mut b = RowBuilder::new("k");
         b.push("x ", None)
-            .push(piece, Some("drgnx-accent"))
+            .push(piece, Some(FaceId::Accent.name()))
             .push(" y", Some("drgnx-dim"));
         let r = b.finish();
         let n = |s: &str| u32::try_from(s.chars().count()).unwrap();
         assert_eq!(
             r.runs[0],
-            (2, 2 + n(piece), "drgnx-accent".into()),
+            (2, 2 + n(piece), FaceId::Accent.name().into()),
             "{piece}"
         );
         assert_eq!(r.runs[1].1, n(&r.text), "{piece}");
@@ -53,16 +54,16 @@ fn adjacent_equal_runs_merge() {
 fn a_space_is_one_placeholder_of_a_size() {
     let mut b = RowBuilder::new("k");
     b.push("a", None)
-        .space(30, 4, "drgnx-work-bar")
-        .space(10, 4, "drgnx-work-bar-rest");
+        .space(30, 4, FaceId::WorkBar.name())
+        .space(10, 4, FaceId::WorkBarRest.name());
     let r = b.finish();
     assert_eq!(r.text, "a  ");
     assert_eq!(r.spaces, vec![(1, 30, 4), (2, 10, 4)]);
     assert_eq!(
         r.runs,
         vec![
-            (1, 2, "drgnx-work-bar".into()),
-            (2, 3, "drgnx-work-bar-rest".into())
+            (1, 2, FaceId::WorkBar.name().into()),
+            (2, 3, FaceId::WorkBarRest.name().into())
         ]
     );
     assert_eq!(

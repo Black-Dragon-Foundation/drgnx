@@ -11,6 +11,7 @@ use super::model::Doc;
 use super::{Key, Views, icons, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::FontSet;
 use drgnx_rows::fit_row::{Room, fit_row};
 use drgnx_rows::{ImageId, Row, RowBuilder};
@@ -218,7 +219,7 @@ fn notice_row(key: &str, text: &str, look: &RowLook, icon: bool) -> (Row, Vec<(I
     }
     r.push(text, None);
     let end = r.pos();
-    r.face(0, end, "drgnx-text-muted");
+    r.face(0, end, FaceId::TextMuted.name());
     r.prop(0, end, "drgnx-row-inert", json!(true));
     (r.finish(), images.into_iter().collect())
 }

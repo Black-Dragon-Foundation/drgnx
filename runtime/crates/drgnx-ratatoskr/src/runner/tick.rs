@@ -557,26 +557,21 @@ pub async fn start(
         }
     };
     // the session's steps are filed under its plan and project
-    let plan = super::plan_scope(&l.job);
+    let plan = super::plan_id(&l.job);
     let project = crate::graph::project_of(&repo)
         .await
         .map_err(super::internal)?
         .map(|p| p.id);
-    // spend counts toward the plan, and the plan toward its project; the gateway books the session's requests
-    // under the job
+    // spend counts toward the task, the task toward the run, then the plan, its spec and the project; the gateway
+    // books the session's requests under the job
     {
         use runstav::methods::timeline::BudgetScope;
-        let b = &front.core.budgets;
         let worker = crate::agents::session::scope_of(Role::Worker, &sid);
-        let plan_scope = BudgetScope::Plan(Bounded(plan.clone()));
-        match &project {
-            Some(p) => {
-                let project_scope = BudgetScope::Project(Bounded(p.clone()));
-                b.link(&plan_scope, &project_scope);
-            }
-            None => b.enroll(&plan_scope),
-        }
-        b.link(&worker, &plan_scope);
+        let task = BudgetScope::Task(Bounded(tid.to_owned()));
+        let mut chain = vec![worker.clone(), task];
+        chain.extend(super::budget_chain(front, &l.job, project.clone()).await);
+        let b = &front.core.budgets;
+        b.link_up(&chain);
         b.bind_job(job, &worker);
     }
     runs.set_scope(&sid, plan, project);

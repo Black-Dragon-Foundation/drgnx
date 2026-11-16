@@ -115,9 +115,10 @@ spec's `:box' colour too) or :distant-foreground."
     (drgnx-lint--files "wb" "modules")
     (lambda (form)
       (pcase form
-        ;; `special-event-map' holds events Emacs makes, never typed (a key release, a frame's close button)
+        ;; `special-event-map' holds events Emacs makes, never typed (a key release, a frame's close button);
+        ;; `input-decode-map' turns one event into another before any binding (Ctrl+I apart from Tab), it binds no command
         (`(,(or 'define-key 'keymap-set 'keymap-local-set 'local-set-key) ,map ,key . ,_)
-         (when (and (not (eq map 'special-event-map)) (drgnx-lint--keyboard-key-p key))
+         (when (and (not (memq map '(special-event-map input-decode-map))) (drgnx-lint--keyboard-key-p key))
            (format "%S binds a keyboard key" (car form))))
         (`(,(or 'global-set-key 'keymap-global-set) . ,_) (format "%S" (car form))))))))
 

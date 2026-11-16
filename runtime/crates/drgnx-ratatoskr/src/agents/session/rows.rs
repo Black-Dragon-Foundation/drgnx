@@ -14,6 +14,7 @@
 //! carries `drgnx-agent-panel-checkpoint` (its step's seq), a diff hunk `drgnx-agent-panel-hunk` ([path, n]).
 
 use super::super::markdown::Block;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::agents::{Entry, EntryType};
 use serde_json::{Value, json};
@@ -163,7 +164,7 @@ fn duration(secs: f64) -> String {
 /// The face a subagent's steps are drawn in: one of the six agent colours, by its `Task` call.
 fn child_face(parent: &str) -> String {
     let id = drgnx_rows::ImageId::of(parent.as_bytes(), 0);
-    format!("drgnx-agent-{}", 1 + id.hash % 6)
+    FaceId::AGENT[(id.hash % 6) as usize].name().to_owned()
 }
 
 fn step_type(e: &Entry) -> &str {
@@ -260,7 +261,7 @@ pub fn group_rows(
         EntryType::Tool => tool_rows(idx, entry, thoughts, cx),
         EntryType::User => {
             let mut l = Line::new(key.clone(), idx);
-            l.push("  ▍ you  ", Some("drgnx-agent-panel-you"))
+            l.push("  ▍ you  ", Some(FaceId::AgentPanelYou.name()))
                 .push(&one_line(str_of(entry, "text").unwrap_or(""), 70), None);
             vec![l.finish()]
         }
@@ -278,32 +279,35 @@ pub fn group_rows(
             }
         },
         EntryType::Thought => {
-            let mut rows = plain("  ▸ thinking".into(), "drgnx-agent-panel-subtle");
+            let mut rows = plain("  ▸ thinking".into(), FaceId::AgentPanelSubtle.name());
             if thinking_open(idx, cx) {
                 let lines = indented(str_of(entry, "text").unwrap_or(""), THINKING_LINES);
                 rows.extend(chunked(
                     &format!("{key}/t"),
                     idx,
                     &lines,
-                    Some("drgnx-agent-panel-subtle"),
+                    Some(FaceId::AgentPanelSubtle.name()),
                 ));
             }
             rows
         }
-        EntryType::Stop => plain("  — turn ended".into(), "drgnx-agent-panel-subtle"),
+        EntryType::Stop => plain("  — turn ended".into(), FaceId::AgentPanelSubtle.name()),
         EntryType::Error => {
             let text = str_of(entry, "text")
                 .or_else(|| str_of(entry, "title"))
                 .unwrap_or("error");
             plain(
                 format!("  ✗ {}", one_line(text, 80)),
-                "drgnx-agent-panel-fail",
+                FaceId::AgentPanelFail.name(),
             )
         }
-        EntryType::Compaction => plain("  — context compacted".into(), "drgnx-agent-panel-subtle"),
+        EntryType::Compaction => plain(
+            "  — context compacted".into(),
+            FaceId::AgentPanelSubtle.name(),
+        ),
         EntryType::Notice | EntryType::Note => plain(
             format!("  {}", one_line(str_of(entry, "text").unwrap_or(""), 80)),
-            "drgnx-agent-panel-subtle",
+            FaceId::AgentPanelSubtle.name(),
         ),
     }
 }
@@ -311,30 +315,30 @@ pub fn group_rows(
 fn block_row(idx: usize, n: usize, block: &Block) -> Row {
     let mut l = Line::new(format!("b:{idx}:{n}"), idx);
     let base = match block.kind {
-        "code" => Some("drgnx-agent-panel-md-code"),
-        "quote" => Some("drgnx-agent-panel-md-quote"),
-        "heading" => Some("drgnx-agent-panel-md-heading"),
+        "code" => Some(FaceId::AgentPanelMdCode.name()),
+        "quote" => Some(FaceId::AgentPanelMdQuote.name()),
+        "heading" => Some(FaceId::AgentPanelMdHeading.name()),
         _ => None,
     };
     if block.kind == "rule" {
         l.push("  ", None)
-            .push(&"─".repeat(24), Some("drgnx-agent-panel-md-rule"));
+            .push(&"─".repeat(24), Some(FaceId::AgentPanelMdRule.name()));
         return l.finish();
     }
     let quote = block.kind == "quote";
     let pad = if quote { "  ▎ " } else { "  " };
-    l.push(pad, quote.then_some("drgnx-agent-panel-md-quote"));
+    l.push(pad, quote.then_some(FaceId::AgentPanelMdQuote.name()));
     for span in &block.spans {
         let face = span
             .style
             .split_whitespace()
             .find_map(|s| match s {
-                "emph" => Some("drgnx-agent-panel-md-emph"),
-                "strong" => Some("drgnx-agent-panel-md-strong"),
-                "strike" => Some("drgnx-agent-panel-md-strike"),
-                "link" => Some("drgnx-agent-panel-md-link"),
-                "code" => Some("drgnx-agent-panel-md-code"),
-                h if h.len() == 2 && h.starts_with('h') => Some("drgnx-agent-panel-md-heading"),
+                "emph" => Some(FaceId::AgentPanelMdEmph.name()),
+                "strong" => Some(FaceId::AgentPanelMdStrong.name()),
+                "strike" => Some(FaceId::AgentPanelMdStrike.name()),
+                "link" => Some(FaceId::AgentPanelMdLink.name()),
+                "code" => Some(FaceId::AgentPanelMdCode.name()),
+                h if h.len() == 2 && h.starts_with('h') => Some(FaceId::AgentPanelMdHeading.name()),
                 _ => None,
             })
             .or(base);
@@ -366,24 +370,27 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     let mut l = Line::new(key.clone(), idx);
     l.push(if parent.is_some() { "      " } else { "  " }, None);
     let (dot, face) = match status {
-        "completed" | "done" => ("●", "drgnx-agent-panel-ok"),
-        "failed" => ("●", "drgnx-agent-panel-fail"),
-        _ => ("○", "drgnx-agent-panel-run"),
+        "completed" | "done" => ("●", FaceId::AgentPanelOk.name()),
+        "failed" => ("●", FaceId::AgentPanelFail.name()),
+        _ => ("○", FaceId::AgentPanelRun.name()),
     };
     l.push(dot, Some(face)).push(" ", None);
     let child = parent.map(child_face);
     if str_of(e, "kind") == Some("execute") {
         // agent-panel.html `.step .what`: "Shell" and the command in the code font
         l.push("Shell ", child.as_deref())
-            .push(title.trim_matches('`'), Some("drgnx-agent-panel-code"));
+            .push(title.trim_matches('`'), Some(FaceId::AgentPanelCode.name()));
     } else {
         l.push(&title, child.as_deref());
     }
     if !result.is_empty() {
-        l.push(&format!("  · {result}"), Some("drgnx-agent-panel-subtle"));
+        l.push(
+            &format!("  · {result}"),
+            Some(FaceId::AgentPanelSubtle.name()),
+        );
     }
     if facts.is_some_and(|(_, f)| f.undone) {
-        l.push("  ↶ undone", Some("drgnx-agent-panel-subtle"));
+        l.push("  ↶ undone", Some(FaceId::AgentPanelSubtle.name()));
     }
     if let Some((_, f)) = facts {
         let secs = f.start.zip(f.end).map(|(s, e)| (e - s).max(0.0));
@@ -394,9 +401,9 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
             parts.push((
                 duration(s),
                 if warn {
-                    "drgnx-agent-panel-warn"
+                    FaceId::AgentPanelWarn.name()
                 } else {
-                    "drgnx-agent-panel-code"
+                    FaceId::AgentPanelCode.name()
                 },
             ));
         }
@@ -405,9 +412,9 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
             parts.push((
                 format!("${c:.2}"),
                 if warn {
-                    "drgnx-agent-panel-warn"
+                    FaceId::AgentPanelWarn.name()
                 } else {
-                    "drgnx-agent-panel-code"
+                    FaceId::AgentPanelCode.name()
                 },
             ));
         }
@@ -416,14 +423,14 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
             let mut meta: Vec<(&str, &str)> = Vec::new();
             for (n, (t, f)) in parts.iter().enumerate() {
                 if n > 0 {
-                    meta.push((" · ", "drgnx-agent-panel-code"));
+                    meta.push((" · ", FaceId::AgentPanelCode.name()));
                 }
                 meta.push((t.as_str(), f));
             }
             l.b.stop((cx.right)(&meta));
             for (n, (t, f)) in parts.iter().enumerate() {
                 if n > 0 {
-                    l.push(" · ", Some("drgnx-agent-panel-code"));
+                    l.push(" · ", Some(FaceId::AgentPanelCode.name()));
                 }
                 l.push(t, Some(f));
             }
@@ -449,11 +456,11 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     if (cx.always)(e) {
         under.push((
             "allowed by your Always · V revokes".into(),
-            "drgnx-agent-panel-subtle",
+            FaceId::AgentPanelSubtle.name(),
             None,
         ));
     } else if let Some(how) = (cx.prov)(e) {
-        under.push((how, "drgnx-agent-panel-subtle", None));
+        under.push((how, FaceId::AgentPanelSubtle.name(), None));
     }
     for (n, (text, face, hook)) in under.into_iter().enumerate() {
         let mut l = Line::new(format!("{key}/p:{n}"), idx);
@@ -474,19 +481,19 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
         let text = text.join("\n");
         let mut l = Line::new(format!("{key}/t"), idx);
         if thinking_open(idx, cx) {
-            l.push("    ▾ thinking", Some("drgnx-agent-panel-subtle"));
+            l.push("    ▾ thinking", Some(FaceId::AgentPanelSubtle.name()));
             rows.push(l.finish());
             rows.extend(chunked(
                 &format!("{key}/t"),
                 idx,
                 &indented(&text, THINKING_LINES),
-                Some("drgnx-agent-panel-subtle"),
+                Some(FaceId::AgentPanelSubtle.name()),
             ));
         } else {
             let n = text.trim_end().split('\n').count();
             l.push(
                 &format!("    ▸ thinking · {n} lines"),
-                Some("drgnx-agent-panel-subtle"),
+                Some(FaceId::AgentPanelSubtle.name()),
             );
             rows.push(l.finish());
         }
@@ -508,7 +515,7 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
 }
 
 /// The face of a tool's output lines: the code font (the panel's own text is in the UI font).
-const OUTPUT: &str = "drgnx-agent-panel-output";
+const OUTPUT: &str = FaceId::AgentPanelOutput.name();
 
 /// A tool's output: a short one whole (its first [`DETAIL_LINES`]), a large one its first and last [`OUTPUT_EDGE`]
 /// lines around a line that says how many are hidden (an estimate, `~`, when the hub kept only its ends: TOTAL bytes).
@@ -541,7 +548,7 @@ fn detail_rows(idx: usize, key: &str, text: &str, total: Option<u64>) -> Vec<Row
             "    {}{hidden} lines hidden · / search · O open in a buffer",
             if whole == have { "" } else { "~" }
         ),
-        Some("drgnx-agent-panel-subtle"),
+        Some(FaceId::AgentPanelSubtle.name()),
     );
     let mut h = Line::new(format!("{dkey}:0"), idx);
     h.push(&head.join("\n"), Some(OUTPUT));
@@ -586,13 +593,13 @@ fn hunk_rows(idx: usize, key: &str, diffs: &[(String, String, String)]) -> Vec<R
             // (text, face) per line: the header first
             let mut lines: Vec<(String, Option<&str>)> = vec![(
                 format!("    {path}  {}", h.header()),
-                Some("drgnx-agent-panel-title"),
+                Some(FaceId::AgentPanelTitle.name()),
             )];
             for change in h.iter_changes() {
                 let (sign, face) = match change.tag() {
-                    similar::ChangeTag::Insert => ("+", Some("drgnx-agent-panel-added")),
-                    similar::ChangeTag::Delete => ("-", Some("drgnx-agent-panel-removed")),
-                    similar::ChangeTag::Equal => (" ", Some("drgnx-agent-panel-context")),
+                    similar::ChangeTag::Insert => ("+", Some(FaceId::AgentPanelAdded.name())),
+                    similar::ChangeTag::Delete => ("-", Some(FaceId::AgentPanelRemoved.name())),
+                    similar::ChangeTag::Equal => (" ", Some(FaceId::AgentPanelContext.name())),
                 };
                 let text = change.value().trim_end_matches('\n');
                 lines.push((format!("    {sign}{text}"), face));
@@ -631,19 +638,21 @@ pub fn huddle_rows(rec: &Value) -> Vec<Row> {
         })
         .unwrap_or_default();
     let face = |p: &str| {
-        format!(
-            "drgnx-agent-{}",
-            1 + who.iter().position(|w| w == p).unwrap_or(0) % 6
-        )
+        FaceId::AGENT[who.iter().position(|w| w == p).unwrap_or(0) % 6]
+            .name()
+            .to_owned()
     };
     let mut rows = Vec::new();
     let mut h = RowBuilder::new("h");
     h.push(
         &format!(" Huddle · {}", s(rec, "state").unwrap_or_default()),
-        Some("drgnx-agent-panel-title"),
+        Some(FaceId::AgentPanelTitle.name()),
     );
     if let Some(c) = s(rec, "clash") {
-        h.push(&format!(" · about {c}"), Some("drgnx-agent-panel-subtle"));
+        h.push(
+            &format!(" · about {c}"),
+            Some(FaceId::AgentPanelSubtle.name()),
+        );
     }
     h.push("\n  ", None);
     for (n, p) in who.iter().enumerate() {
@@ -664,12 +673,15 @@ pub fn huddle_rows(rec: &Value) -> Vec<Row> {
         let mut b = RowBuilder::new(format!("r:{n}"));
         b.push(&format!("\n  {from} says"), Some(&face(&from)));
         for line in s(r, "text").unwrap_or_default().trim_end().split('\n') {
-            b.push(&format!("\n  ▎ {line}"), Some("drgnx-agent-panel-md-quote"));
+            b.push(
+                &format!("\n  ▎ {line}"),
+                Some(FaceId::AgentPanelMdQuote.name()),
+            );
         }
         if let Some(p) = s(r, "proposal") {
             b.push(
                 &format!("\n  → proposes: {p}"),
-                Some("drgnx-agent-panel-subtle"),
+                Some(FaceId::AgentPanelSubtle.name()),
             );
         }
         rows.push(b.finish());
@@ -681,7 +693,7 @@ pub fn huddle_rows(rec: &Value) -> Vec<Row> {
     };
     if let Some(o) = outcome {
         let mut b = RowBuilder::new("o");
-        b.push(&format!("\n  {o}"), Some("drgnx-agent-panel-title"));
+        b.push(&format!("\n  {o}"), Some(FaceId::AgentPanelTitle.name()));
         rows.push(b.finish());
     }
     rows
@@ -731,7 +743,7 @@ pub fn hook_lines(rows: &[Value]) -> Vec<HookLine> {
         if row.get("outcome").and_then(Value::as_str) == Some("at-server") {
             out.push(HookLine {
                 text: "hooked at the hub's server".into(),
-                face: "drgnx-agents-hooks-note",
+                face: FaceId::AgentsHooksNote.name(),
                 row: r,
                 rec: 0,
             });
@@ -744,9 +756,11 @@ pub fn hook_lines(rows: &[Value]) -> Vec<HookLine> {
             let line = match s("verdict") {
                 Some("deny") => Some((
                     format!("refused by {w}{}", quoted(s("reason"))),
-                    "drgnx-agents-hooks-refused",
+                    FaceId::AgentsHooksRefused.name(),
                 )),
-                Some("change") => Some((format!("changed by {w}"), "drgnx-agents-hooks-changed")),
+                Some("change") => {
+                    Some((format!("changed by {w}"), FaceId::AgentsHooksChanged.name()))
+                }
                 Some("error")
                     if s("reason").is_some_and(|r| {
                         r.split(|c: char| !c.is_alphanumeric()).any(|w| w == "busy")
@@ -754,12 +768,12 @@ pub fn hook_lines(rows: &[Value]) -> Vec<HookLine> {
                 {
                     Some((
                         format!("{w} was busy: its hook did not run{}", quoted(s("reason"))),
-                        "drgnx-agents-hooks-busy",
+                        FaceId::AgentsHooksBusy.name(),
                     ))
                 }
                 Some("error") => Some((
                     format!("{w} failed{}", quoted(s("reason"))),
-                    "drgnx-agents-hooks-refused",
+                    FaceId::AgentsHooksRefused.name(),
                 )),
                 _ => None,
             };

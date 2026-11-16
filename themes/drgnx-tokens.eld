@@ -15,6 +15,12 @@
 ;; strong as every syntax colour on it allows; where that stands under 1.25:1 off the line, the run has an edge of the
 ;; hue at 3:1 on the line (`refine-*-edge'; elsewhere the edge is the fill), and in high contrast always (rings
 ;; over tints).  The rulings of 2026-11-10.
+;; Two tiers.  The semantic tier is the roles (surfaces, text, borders,
+;; hover, selection, focus, status, agents), named in core/drgnx-faces.el.  The component tier holds only what a
+;; component of etc/ui/components.eld needs of its own, at the end of each variant, named COMPONENT-SLOT[-STATE] (the component's id first), and
+;; its value is always a reference: a token, (tint TOKEN . ALPHA) or (over BASE TOKEN . ALPHA), never a literal
+;; (test/unit/design-test.el).  Edges a control is found by are 3:1 on the panel (the border tokens are 1.3:1 and
+;; stay for separators), so dark and light build them from `subtle'; text on a primary button is 4.5:1 (7:1 in hc).
 ((dark
   (gap . "#0a0b0d") (editor . "#15161a") (panel . "#18191e") (raised . "#1e1f25") (overlay . "#1e1f25")
   (hover . "#202128") (sel . "#243150") (sel-quiet . "#23252c") (sel-inactive . "#2b2d35") (current-line . "#1a1b20")
@@ -32,7 +38,10 @@
   (refine-add over add-bg ok . 0.06) (refine-del over del-bg error . 0.11) (refine-chg over warn-tint warn . 0.03)
   (refine-add-edge over add-bg ok . 0.50) (refine-del-edge over del-bg error . 0.62)
   (refine-chg-edge over warn-tint warn . 0.50)
-  (a1 . "#80b6ff") (a2 . "#f2ac7e") (a3 . "#a3dba3") (a4 . "#c6a0ff") (a5 . "#f592bb") (a6 . "#7fd6d1"))
+  (a1 . "#80b6ff") (a2 . "#f2ac7e") (a3 . "#a3dba3") (a4 . "#c6a0ff") (a5 . "#f592bb") (a6 . "#7fd6d1")
+  ;; component tier
+  (button-primary-bg . accent-fill) (button-primary-fg . on-accent) (button-edge over panel subtle . 0.75)
+  (key-hint-edge over panel subtle . 0.75) (card-needs-you-edge . attention) (progress-track . border-subtle))
  (light
   (gap . "#dfe0e6") (editor . "#ffffff") (panel . "#f6f6f8") (raised . "#ffffff") (overlay . "#ffffff")
   (hover . "#eeeff2") (sel . "#dbe5fb") (sel-quiet . "#ececf0") (sel-inactive . "#dadbe1") (current-line . "#f7f8fa")
@@ -49,7 +58,10 @@
   (match tint accent . 0.25) (match-edge tint accent . 0.25)
   (refine-add over add-bg ok . 0.19) (refine-del over del-bg error . 0.16) (refine-chg over warn-tint warn . 0.17)
   (refine-add-edge . refine-add) (refine-del-edge . refine-del) (refine-chg-edge . refine-chg)
-  (a1 . "#2255c2") (a2 . "#a5501a") (a3 . "#2b7339") (a4 . "#7a3ccf") (a5 . "#b0306c") (a6 . "#0b7470"))
+  (a1 . "#2255c2") (a2 . "#a5501a") (a3 . "#2b7339") (a4 . "#7a3ccf") (a5 . "#b0306c") (a6 . "#0b7470")
+  ;; component tier
+  (button-primary-bg . accent-fill) (button-primary-fg . on-accent) (button-edge over panel subtle . 0.75)
+  (key-hint-edge over panel subtle . 0.75) (card-needs-you-edge . attention) (progress-track . border-subtle))
  (hc
   (gap . "#000000") (editor . "#000000") (panel . "#000000") (raised . "#0b0b0b") (overlay . "#0b0b0b")
   (hover . "#1a1a1a") (sel . "#1a3166") (sel-fg . "#ffffff") (sel-quiet . "#1a1a1a") (sel-inactive . "#242424")
@@ -68,4 +80,7 @@
   (refine-add over add-bg ok . 0.06) (refine-del over del-bg error . 0.14) (refine-chg over warn-tint warn . 0.24)
   (refine-add-edge over add-bg ok . 0.42) (refine-del-edge over del-bg error . 0.50)
   (refine-chg-edge over warn-tint warn . 0.42)
-  (a1 . "#a8c6ff") (a2 . "#ffc49c") (a3 . "#b9f0b9") (a4 . "#dcc0ff") (a5 . "#ffb0d3") (a6 . "#96ece6")))
+  (a1 . "#a8c6ff") (a2 . "#ffc49c") (a3 . "#b9f0b9") (a4 . "#dcc0ff") (a5 . "#ffb0d3") (a6 . "#96ece6")
+  ;; component tier
+  (button-primary-bg . accent-fill) (button-primary-fg . on-accent) (button-edge . border-strong)
+  (key-hint-edge . border-strong) (card-needs-you-edge . attention) (progress-track . border)))
