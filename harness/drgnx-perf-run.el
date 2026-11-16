@@ -3422,13 +3422,24 @@ and a draw made twice the objects; a fresh clone and a synced copy have no .elc)
     (princ (format "perf: %s is not compiled: building the tree first\n" (file-relative-name el root)))
     (drgnx-perf-ab--build root)))
 
+(defun drgnx-perf-run--session-limit (n)
+  "Seconds the session of a run of N workloads may live: $DRGNX_UI_MAX_RUNTIME when set, else 600 plus 45 a
+workload.  Every workload runs in one session, and the harness's default (1800 s) ended a whole run in its last
+workloads; each workload keeps its own time limit, so a hang still ends there."
+  (let ((set (getenv "DRGNX_UI_MAX_RUNTIME")))
+    (if (and set (not (string-empty-p set))) (string-to-number set) (+ 600 (* 45 n)))))
+
 (defun drgnx-perf-run--judged (audit)
   "The run of `drgnx-perf-run'."
   (drgnx-perf-run--compiled drgnx-ui-repo-dir)
   (let* ((loads (list (drgnx-perf-load)))
          (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
          (all (drgnx-perf-run--workloads)) (selected (drgnx-perf-run--select all))
-         (s (drgnx-ui-start "drgnx" (drgnx-perf-run--session-size) 60)) (sess (drgnx-ui-own-session (plist-get s :name))) results)
+         (limit (drgnx-perf-run--session-limit (length selected)))
+         (s (let ((process-environment (cons (format "DRGNX_UI_MAX_RUNTIME=%d" limit) process-environment)))
+              (princ (format "perf: the session's limit: %d s (%d workloads)\n" limit (length selected)))
+              (drgnx-ui-start "drgnx" (drgnx-perf-run--session-size) 60)))
+         (sess (drgnx-ui-own-session (plist-get s :name))) results)
     (unwind-protect
         (progn
           (drgnx-perf-run--check-gc sess)
@@ -3437,8 +3448,11 @@ and a draw made twice the objects; a fresh clone and a synced copy have no .elc)
             (if-let* ((why (and (drgnx-env-container) (drgnx-perf-run--container-skip (car w)))))
                 (princ (format "perf: %s skipped in the container — %s\n" (car w) why))
               (message "perf: %s…" (car w))
-              (let* ((cal (drgnx-perf-run--call sess "(drgnx-perf-calibrate)"))
+              ;; The calibration is inside: a session that went away is this workload's ERROR, and the results so far
+              ;; are still written.
+              (let* (cal
                      (r (condition-case err (let ((drgnx-perf-run--profile (drgnx-perf-run--profile-file (car w))))
+                                              (setq cal (drgnx-perf-run--call sess "(drgnx-perf-calibrate)"))
                                               (drgnx-perf-run-workload sess (cdr w) audit))
                           (error (list :error (error-message-string err))))))
                 (push (cons (car w) (if (plist-get r :error) r (plist-put r :calibration cal))) results))

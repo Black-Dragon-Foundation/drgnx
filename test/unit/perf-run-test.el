@@ -139,6 +139,40 @@ that to drain (`drgnx-perf-ab--settle-form', as an A/B does) before it calibrate
         (should (plist-member (plist-get r :input) :p95))                ; null, kept
         (should (eq (plist-get (plist-get r :calibration) :loaded) :false))))))
 
+(ert-deftest drgnx-perf/a-session-that-went-away-is-an-error-row-and-the-results-are-still-written ()
+  "The session died after a workload: the next one's calibration fails.  That is the workload's ERROR, not an
+abort of the run that loses every result (a full run lost its perf.eld this way)."
+  (drgnx-perf-run-test--with-fake-run '(1.0)
+    (let* ((file (expand-file-name "out/results.json" dir))
+           (process-environment (cons (concat "DRGNX_PERF_RESULTS=" file) process-environment))
+           (calibrations 0) out)
+      (cl-letf (((symbol-function 'drgnx-perf-run--workloads) (lambda () '((typing :measure "m") (frames :measure "m"))))
+                ((symbol-function 'drgnx-perf-run--call)
+                 (lambda (_s form &rest _)
+                   (cond ((string-match-p "gc-cons-threshold" form) '(:now 1 :want 1))
+                         ((string-match-p "calibrate" form)
+                          (when (> (cl-incf calibrations) 1) (error "emacsclient: can't find socket"))
+                          '(:wall_ms 10.0 :cpu_ms 5.0 :loaded nil))
+                         (t '(:input (:n 3 :p50 2.0 :p95 nil) :alloc (:n 3 :p50 120) :rows 7))))))
+        (setq out (with-output-to-string (drgnx-perf-run))))
+      (should (string-match-p "ERROR frames: .*can't find socket" out))
+      (let ((j (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string)) :object-type 'plist :null-object nil)))
+        (should (eql (plist-get (plist-get (plist-get (plist-get j :results) :typing) :alloc) :p50) 120))))))
+
+(ert-deftest drgnx-perf-run/the-session-limit-is-sized-to-the-run ()
+  "The session lives 600 s plus 45 s a workload (the harness's 1800 s default killed a whole run in its last
+workloads); a set $DRGNX_UI_MAX_RUNTIME wins; the output names the limit used."
+  (dolist (case '((nil "690") ("120" "120")))
+    (drgnx-perf-run-test--with-fake-run '(1.0)
+      (let ((process-environment (cons (if (car case) (concat "DRGNX_UI_MAX_RUNTIME=" (car case)) "DRGNX_UI_MAX_RUNTIME")
+                                       process-environment))
+            seen out)
+        (cl-letf (((symbol-function 'drgnx-perf-run--workloads) (lambda () '((typing :measure "m") (frames :measure "m"))))
+                  ((symbol-function 'drgnx-ui-start) (lambda (&rest _) (setq seen (getenv "DRGNX_UI_MAX_RUNTIME")) '(:name "fake"))))
+          (setq out (with-output-to-string (drgnx-perf-run))))
+        (should (equal seen (cadr case)))
+        (should (string-match-p (concat "perf: the session's limit: " (cadr case) " s") out))))))
+
 (ert-deftest drgnx-perf/a-session-at-another-gc-setting-is-refused ()
   ;; HARNESS-GC-1: perf at the settings of a user's session, or not at all
   (drgnx-perf-run-test--with-fake-run '(1.0)
