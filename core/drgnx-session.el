@@ -29,6 +29,7 @@
 (declare-function drgnx-explorer-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
 (declare-function drgnx-explorer-open-root "drgnx-explorer")
+(declare-function drgnx-start-put-away "drgnx-start" (frame))
 (declare-function drgnx-explorer-focus "drgnx-explorer")
 (defvar drgnx-explorer-buffer-name)
 
@@ -108,6 +109,7 @@ is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call nev
         (dired dir)
       (drgnx-explorer-open-root dir)
       (drgnx-explorer-focus)
+      (when (fboundp 'drgnx-start-put-away) (drgnx-start-put-away (selected-frame)))   ; no start page, as `code DIR'
       (with-current-buffer drgnx-explorer-buffer-name (setq default-directory dir)))
     t))
 
