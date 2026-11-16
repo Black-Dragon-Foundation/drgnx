@@ -318,6 +318,18 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
       (prog1 (apply f args) (setq drgnx-perf-run-test--reach (max drgnx-perf-run-test--reach (point))))
     (scan-error (setq drgnx-perf-run-test--reach (point-max)) (signal (car err) (cdr err)))))
 
+(ert-deftest drgnx-perf-run/visiting-the-fixture-never-asks-about-its-size ()
+  "Pattern D (pure: the real fixture visited in batch).  The fixture is core/ three times and grows with core/; past
+`large-file-warning-threshold' `find-file' asked \"really open?\", which reads stdin in batch and stopped the tests
+and the perf session.  With the threshold below the fixture's size, the visit form still visits it without asking."
+  (let ((drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
+        (large-file-warning-threshold 1))
+    (unwind-protect
+        (should (eq t (eval (read (drgnx-perf-run--visit-fixture-form)) t)))
+      (when-let* ((b (find-buffer-visiting drgnx-perf-run--fixture)))
+        (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+      (delete-file drgnx-perf-run--fixture))))
+
 (ert-deftest drgnx-perf-run/typing-at-the-fixtures-spot-never-scans-past-its-form ()
   "Pattern D (pure: the real fixture in a buffer, the typing workload's characters inserted one by one and the line
 fontified after each, as redisplay does; no session, no clock).  The fixture is core/ three times, so where its middle

@@ -540,7 +540,8 @@ is the same page in the same place.
 **Don't show this again** keeps your choice in `face.eld` in drgnx's state directory (`:start-dismissed`) and puts
 the page away; it stays away on every later start and window. **Show Start Page** (palette, Help; no key of its own)
 brings it back whenever you want it. The page is a tab only while it is shown, like `*scratch*`
-(`drgnx-chrome-transient-tabs`), so it never lingers among your files.
+(`drgnx-chrome-transient-tabs`), so it never lingers among your files. Turning the workbench's chrome off
+(`core/workbench` off) takes the tabs it noted off the windows too.
 
 ## Faces
 
