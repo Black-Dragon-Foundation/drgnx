@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 pub use chain::Chain;
 pub use model::{
-    CardFact, CardKind, GraphFact, Item, JobFact, MachineFact, Mode, Model, NeedsYou,
+    CardFact, CardKind, GraphFact, Instant, Item, JobFact, MachineFact, Mode, Model, NeedsYou,
     PresenceEntry, PresenceFact, RefFact, RunnerFact, SessionFact, State, StepFact,
 };
 pub use overlap::Overlap;

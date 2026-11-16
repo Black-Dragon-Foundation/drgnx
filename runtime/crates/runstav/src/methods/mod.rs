@@ -280,6 +280,7 @@ params! {
     AgentsBufferUnwatch(editor::BufferUnwatch),
     WorkMapSubscribe(work::MapSubscribe),
     WorkMapSet(work::MapSet),
+    WorkTargetSet(work::TargetSetParams),
     WorkMapClose(work::MapClose),
     WorkTrailSubscribe(work::TrailSubscribe),
     WorkTrailClose(work::TrailClose),

@@ -512,7 +512,7 @@ mod tests {
     ];
 
     /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
-    const CORE_WRITES: [&str; 11] = [
+    const CORE_WRITES: [&str; 12] = [
         "agents/move",
         "agents/role",
         "exec/bump",
@@ -524,6 +524,7 @@ mod tests {
         "budget/set",
         "records/import",
         "records/resolve",
+        "work/target/set",
     ];
 
     /// Every method is the hub's own: each name decodes to a `Params` variant of its own, and every variant is some

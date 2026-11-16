@@ -950,6 +950,7 @@ impl Front {
             | Params::AgentsBufferUnwatch(_)
             | Params::WorkMapSubscribe(_)
             | Params::WorkMapSet(_)
+            | Params::WorkTargetSet(_)
             | Params::WorkMapClose(_)
             | Params::WorkTrailSubscribe(_)
             | Params::WorkTrailClose(_)

@@ -1718,6 +1718,45 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
     })
 }
 
+/// `work/target/set`: the target date of a spec or plan, written into its data through the writer (the map reads the
+/// store again after the write); null removes it.  False when no such live entity.
+pub async fn target_set(
+    f: &Front,
+    _: &Caller,
+    p: runstav::methods::work::TargetSetParams,
+) -> Result<bool, Error> {
+    let id = p.item.as_str().to_owned();
+    let at = p.target_at;
+    f.writer
+        .db
+        .write(
+            urdr::graph::TxMeta::new("user", urdr::graph::Class::User, "work/target"),
+            move |tx| {
+                let Some(e) =
+                    urdr::graph::entity::by_id(tx.sql(), &id)?.filter(|e| e.retired_tx.is_none())
+                else {
+                    return Ok(false);
+                };
+                urdr::graph::entity::update(
+                    tx,
+                    e.n,
+                    None,
+                    urdr::graph::entity::Changes {
+                        data_patch: Some(serde_json::json!({ "target_at": at })),
+                        ..Default::default()
+                    },
+                )?;
+                Ok(true)
+            },
+        )
+        .await
+        .map_err(|e| Error {
+            code: ErrorCode::Internal,
+            message: format!("work/target/set: {e}"),
+            path: None,
+        })
+}
+
 /// `work/map/set`: VIEW changes; the user's own change relayouts at once (drawn anew); the answer is the view's
 /// version after it.
 pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
@@ -1917,7 +1956,7 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                 let mut q = c.prepare(
                     "select id, kind, coalesce(title, ''), coalesce(status, ''), \
                      coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file'), \
-                     json_extract(data, '$.ledger.done') \
+                     json_extract(data, '$.ledger.done'), json_extract(data, '$.target_at') \
                      from entity where retired_tx is null and kind in ('ask', 'spec', 'plan', 'task') order by n",
                 )?;
                 let all = q
@@ -1930,15 +1969,22 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                             r.get::<_, String>(4)?,
                             r.get::<_, Option<String>>(5)?,
                             r.get::<_, Option<bool>>(6)?.unwrap_or(false),
+                            r.get::<_, Option<f64>>(7)?,
                         ))
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
                 let hidden = legacy_duplicates(all.iter().map(|r| (r.0.as_str(), r.5.as_deref())));
                 plan_of.retain(|_, plan| !hidden.contains(plan));
-                for (rank, (id, kind, title, status, text, _, ledger_done)) in all.into_iter().enumerate() {
+                for (rank, (id, kind, title, status, text, _, ledger_done, target)) in all.into_iter().enumerate() {
                     if hidden.contains(&strip(&id)) {
                         continue;
                     }
+                    let target_ev = matches!(kind.as_str(), "spec" | "plan").then(|| {
+                        Event::Graph(GraphFact::Target {
+                            item: id.clone(),
+                            at: target.map(vegvisir::Instant),
+                        })
+                    });
                     out.push(match kind.as_str() {
                         "ask" => Event::Graph(GraphFact::Ask {
                             key: strip(&id),
@@ -1964,6 +2010,7 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                             })
                         }
                     });
+                    out.extend(target_ev);
                 }
             }
             for (a, kind, b) in links {

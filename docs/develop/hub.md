@@ -1641,6 +1641,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
 | `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
 | `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
+| `work/target/set` | user | `{item: string, target_at?: number}` | `boolean` | yes |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
 | `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
@@ -2261,7 +2262,10 @@ out, and sends the connection that shows it the view's model and rows.
   version}`. `view` is the editor's id for it: one editor can show two workspaces, or one at two widths, so the hub
   keeps state per (connection, view). `work/map/set {view, filters? | collapsed? | width_units? | density? | shown? |
   selected? | clear? | outline?}` answers `{version}`; an unknown view is `invalid-params`. `work/map/close {view}`
-  ends one; a connection's views end with it. A workspace no view shows is dropped. `version` counts the view's
+  ends one; a connection's views end with it. `work/target/set {item, target_at}` writes (null removes) a spec's or
+  plan's target date, seconds since the epoch, into the entity's `data.target_at`; the map reads the store again after
+  the write and the item's `fields.target_at` carries it (`vegvisir::GraphFact::Target`); a `task:` id or a
+  non-finite time is `invalid-params`, an id with no live entity answers false. A workspace no view shows is dropped. `version` counts the view's
   layouts and changes from the subscription's 1.
 - **Model and rows** ("The native view model" and "Rows" below). The subscription sends the view's model as
   `view-model` (a reset first: the items shown as nodes with their links, the edges among them, the lists the keys

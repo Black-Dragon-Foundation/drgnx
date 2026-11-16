@@ -20,6 +20,8 @@ pub enum GraphFact {
     Ask { key: String, text: String },
     /// `spec:ID`.
     Spec { id: String, title: String },
+    /// A spec's or plan's target date (`spec:ID` or `plan:ID`; none: no target).
+    Target { item: String, at: Option<Instant> },
     /// `plan:ID`; `rank` orders the plans (and so their blocks).
     Plan {
         id: String,
@@ -266,6 +268,9 @@ pub struct Fields {
     pub context: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress: Option<(u32, u32)>,
+    /// A spec's or plan's target date, seconds since the epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_at: Option<Instant>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -303,6 +308,13 @@ pub struct Fields {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<JobFact>,
 }
+
+/// A point in time, in seconds since the epoch (a finite number: the wire refuses the others), ordered by value.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Instant(pub f64);
+
+impl Eq for Instant {}
 
 /// One item of the map.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -413,6 +425,8 @@ struct Facts {
     asks: BTreeMap<Sym, String>,
     specs: BTreeMap<Sym, String>,
     plans: BTreeMap<Sym, PlanF>,
+    /// spec or plan → its target date
+    targets: BTreeMap<Sym, Instant>,
     /// task → (plan, title, done)
     tasks: BTreeMap<Sym, (Sym, String, bool)>,
     asked: BTreeSet<(Sym, Sym)>,
@@ -627,10 +641,14 @@ impl Model {
         let mut fields = Fields::default();
         let label = match d.kind {
             Kind::Ask => f.asks.get(&y).cloned().unwrap_or_default(),
-            Kind::Spec => f.specs.get(&y).cloned().unwrap_or_default(),
+            Kind::Spec => {
+                fields.target_at = f.targets.get(&y).copied();
+                f.specs.get(&y).cloned().unwrap_or_default()
+            }
             Kind::Plan => {
                 let (title, _, progress) = &f.plans[&y];
                 fields.progress = *progress;
+                fields.target_at = f.targets.get(&y).copied();
                 title.clone()
             }
             Kind::Agent | Kind::Subagent => {
@@ -810,6 +828,24 @@ impl Model {
                         return None;
                     }
                     f.plans.insert(y, v);
+                    touched.insert(y);
+                }
+                GraphFact::Target { item, at } => {
+                    let Some((kind, id)) = item
+                        .split_once(':')
+                        .filter(|(k, _)| matches!(*k, "spec" | "plan"))
+                    else {
+                        return None;
+                    };
+                    let y = n.intern_as(kind, id);
+                    let now = at;
+                    if f.targets.get(&y).copied() == now {
+                        return None;
+                    }
+                    match now {
+                        Some(a) => f.targets.insert(y, a),
+                        None => f.targets.remove(&y),
+                    };
                     touched.insert(y);
                 }
                 GraphFact::Task {

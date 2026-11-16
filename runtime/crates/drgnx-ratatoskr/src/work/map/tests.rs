@@ -1473,3 +1473,73 @@ fn a_proposal_on_the_strip_says_what_to_approve_and_which_job() {
         "Codex asks: cargo clippy"
     );
 }
+
+/// `work/target/set` writes a plan's or spec's `target_at` into its data, null removes it, and an id that is no
+/// live entity answers false.
+#[tokio::test]
+async fn the_target_of_a_plan_is_written_and_null_clears_it() {
+    use crate::agents::session::attach_tests::Fx;
+    use runstav::methods::work::TargetSetParams;
+    let fx = Fx::new();
+    let db = &fx.front.writer.db;
+    db.write(
+        urdr::graph::TxMeta::new("user", urdr::graph::Class::User, "test"),
+        |tx| {
+            urdr::graph::entity::create(
+                tx,
+                urdr::graph::entity::EntityNew {
+                    id: "plan:p1".into(),
+                    kind: "plan".into(),
+                    project: None,
+                    title: Some("p".into()),
+                    status: None,
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data: serde_json::json!({}),
+                    origin: urdr::graph::entity::Origin::Recorded,
+                    source: None,
+                },
+            )?;
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+    let caller = crate::dispatch::Caller {
+        class: runstav::registry::Class::User,
+        sid: None,
+        job: None,
+        conn_id: 1,
+    };
+    let set = |item: &str, at: Option<f64>| TargetSetParams {
+        item: runstav::types::Bounded(item.into()),
+        target_at: at,
+    };
+    assert!(
+        super::target_set(&fx.front, &caller, set("plan:p1", Some(1.8e9)))
+            .await
+            .unwrap()
+    );
+    let read = || {
+        db.read(|c| {
+            Ok(c.query_row(
+                "select json_extract(data, '$.target_at') from entity where id = 'plan:p1'",
+                [],
+                |r| r.get::<_, Option<f64>>(0),
+            )?)
+        })
+    };
+    assert_eq!(read().await.unwrap(), Some(1.8e9));
+    assert!(
+        super::target_set(&fx.front, &caller, set("plan:p1", None))
+            .await
+            .unwrap()
+    );
+    assert_eq!(read().await.unwrap(), None);
+    assert!(
+        !super::target_set(&fx.front, &caller, set("plan:nope", Some(1.0)))
+            .await
+            .unwrap()
+    );
+}

@@ -44718,6 +44718,44 @@
       "classes": [
         "user"
       ],
+      "doc": "set (or with null clear) the target date of a spec or a plan; true when the item exists",
+      "name": "work/target/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/target/set`'s params: the target date of a spec or a plan (null clears it).",
+        "properties": {
+          "item": {
+            "description": "`spec:ID` or `plan:ID`.",
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "target_at": {
+            "description": "Seconds since the epoch; null removes the target.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "title": "TargetSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "end one trail, Timeline or Board view of this connection (a connection's views end with it)",
       "name": "work/trail/close",
       "params": {
