@@ -392,7 +392,10 @@ pub async fn provenance(
                 None => None,
             };
             let title = match &task {
-                Some(t) => row(t)?.and_then(|(_, t, _)| t),
+                Some(t) => {
+                    let id = norn::write::tasks::entity_id(norn::write::tasks::task_key(t));
+                    row(&id)?.and_then(|(_, t, _)| t)
+                }
                 None => None,
             };
             let reason = match &decision {

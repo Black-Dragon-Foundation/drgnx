@@ -15,6 +15,6 @@
 {"do": "write_file", "path": "$ROOT/repo/p.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt with today's date.\n"}
 {"do": "poll", "conn": "c", "json": {"id": 12, "method": "review/effects", "params": {"change": {"doc": "$ROOT/repo/p.md", "from": "$blob"}}}, "expect": {"id": 12, "result": [{"task": "$j#1", "task_title": "Add the note", "state": "running", "effect": "brief-changes", "why": "Task 1 is running: its brief changes; the agent gets a steer.", "agent": "$string"}, {"task": "$j#2", "state": "queued", "effect": "stops", "why": "Task 2 is queued: it would not start."}]}, "within_ms": 60000, "every_ms": 300}
 {"do": "send", "conn": "c", "json": {"id": 13, "method": "review/effects", "params": {"change": {"doc": "$ROOT/repo/p.md", "from": "--output=x"}}}}
-{"do": "expect", "conn": "c", "json": {"id": 13, "error": {"code": -32602}}}
+{"do": "expect", "conn": "c", "json": {"id": 13, "error": {"code": "invalid-params", "path": "from"}}}
 {"do": "send", "conn": "c", "json": {"id": 14, "method": "review/effects", "params": {"change": {"paths": ["elsewhere.rs"]}}}}
 {"do": "expect", "conn": "c", "json": {"id": 14, "result": []}}
