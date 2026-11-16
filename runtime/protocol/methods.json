@@ -19604,6 +19604,13 @@
                 },
                 "type": "array"
               },
+              "finish": {
+                "$ref": "#/$defs/Range",
+                "default": {
+                  "p50": 0.0,
+                  "p90": 0.0
+                }
+              },
               "n": {
                 "description": "The task's number in its plan.",
                 "format": "uint64",
@@ -19621,6 +19628,14 @@
               },
               "role": {
                 "type": "string"
+              },
+              "start": {
+                "$ref": "#/$defs/Range",
+                "default": {
+                  "p50": 0.0,
+                  "p90": 0.0
+                },
+                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros)."
               },
               "tokens": {
                 "$ref": "#/$defs/Range",
@@ -20030,6 +20045,13 @@
                 },
                 "type": "array"
               },
+              "finish": {
+                "$ref": "#/$defs/Range",
+                "default": {
+                  "p50": 0.0,
+                  "p90": 0.0
+                }
+              },
               "n": {
                 "description": "The task's number in its plan.",
                 "format": "uint64",
@@ -20047,6 +20069,14 @@
               },
               "role": {
                 "type": "string"
+              },
+              "start": {
+                "$ref": "#/$defs/Range",
+                "default": {
+                  "p50": 0.0,
+                  "p90": 0.0
+                },
+                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros)."
               },
               "tokens": {
                 "$ref": "#/$defs/Range",

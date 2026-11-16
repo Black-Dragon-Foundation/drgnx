@@ -831,12 +831,9 @@ impl Model {
                     touched.insert(y);
                 }
                 GraphFact::Target { item, at } => {
-                    let Some((kind, id)) = item
+                    let (kind, id) = item
                         .split_once(':')
-                        .filter(|(k, _)| matches!(*k, "spec" | "plan"))
-                    else {
-                        return None;
-                    };
+                        .filter(|(k, _)| matches!(*k, "spec" | "plan"))?;
                     let y = n.intern_as(kind, id);
                     let now = at;
                     if f.targets.get(&y).copied() == now {

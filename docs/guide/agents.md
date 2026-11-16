@@ -791,6 +791,9 @@ tokens, active and wall time, and cost, each as a range ("about 12–41 USD (est
   plans went past their high end, once nine finished plans were forecast; that total is what the Autonomous preset
   checks against its spend cell and the week. `forecast/accuracy` shows, per role and profile, how many tasks
   finished, the share that stayed within their p90, and the median of actual over p50.
+- **When each task runs.** Each task also has a start and a finish, in seconds from the run's start, as a middle and a
+  high end of their own: the tasks run on the job's slots in the order the runner takes them, a task starting after
+  the tasks it needs. The plan's wall time is the last finish of each simulated run, not the highest finish of any task.
 - **Wakes and the manager.** The wake line ("of which wakes: 1–3 cold, about 3 USD") is part of the total, not added to
   it. A manager's own spend, where history has one, shows beside the total.
 - **`usd` and `usd-est`.** On a gateway profile the cost is exact dollars (`usd`). On a subscription it is what the
