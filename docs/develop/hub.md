@@ -2495,7 +2495,9 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   after the last) is measured as drawn, each char in the font of the topmost run whose face sets one (a face that sets
   only colours draws in the font of the faces under it), images at their SVG's width, spaces at theirs, boxes'
   ends; a segment that runs past the next stop (the last: past `width_px`) is cut with `…` between grapheme clusters,
-  to the stop less the slack (a terminal: in columns, no slack). The row then carries `fonts: [[start, end, role]]`,
+  to the stop less the slack (a terminal: in columns, no slack). A text that must be read whole wraps in its
+  builder instead, measured with the same fit: the Outline's notice (`outline::rows_in`) goes on at its spaces in
+  rows of its own (`notice`, `notice-2`, …). The row then carries `fonts: [[start, end, role]]`,
   the roles its chars were measured in (`ui` left out), and the editor's fit guard reports under the same key: the
   segment's roles in the order they first appear, joined by `+` (`fit_row::roles_key`,
   `drgnx-view-patch--roles-key`). A headless env (`view/env`'s `headless`) or a width of 0 fits nothing.

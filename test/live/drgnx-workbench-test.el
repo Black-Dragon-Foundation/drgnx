@@ -101,6 +101,34 @@
       (drgnx-ui-stop (plist-get s :name))
       (delete-directory root t))))
 
+(defun drgnx-live-wb--until (sess form what)
+  "Ask SESS for FORM (a Lisp string whose value is t or :false under :v) until it is t, at most 30 s; else fail on WHAT."
+  (let ((deadline (+ (float-time) 30)))
+    (while (not (eq t (plist-get (drgnx-ui-call sess (format "(drgnx-uitest--json (list :v (if %s t :false)))" form)) :v)))
+      (when (> (float-time) deadline) (ert-fail (list "not within 30 s" what)))
+      (drgnx-ui--poll-pause 0.05))))
+
+(defun drgnx-live-wb--hub (sess)
+  "Start the test hub in SESS's Emacs and connect it, as `drgnx-tty-session-hub' does for a tty session: a session
+starts none by itself (DRGNX_NO_HUB_START), and the Outline's rows are the hub's.  No hub binary fails the test."
+  (let ((bin (seq-some (lambda (kv) (and (string-prefix-p "DRGNX_RATATOSKR_BIN=" kv) (substring kv 20)))
+                       (drgnx-ui--hub-env))))
+    (unless (and bin (file-executable-p bin))
+      (ert-fail "needs the test hub: DRGNX_RATATOSKR_BIN"))
+    (drgnx-ui-call sess (format "(progn (require 'drgnx-hub-client)
+                                  (unless (drgnx-hub-running-p)
+                                    (let ((process-environment (cons \"RATATOSKR_SUPERVISOR=none\" process-environment)))
+                                      (make-process :name \"ratatoskr-test\" :noquery t :connection-type 'pipe
+                                                    :buffer (generate-new-buffer \" *ratatoskr-test*\")
+                                                    :command (list %S \"serve\" \"--foreground\"
+                                                                   \"--parent-pid\" (number-to-string (emacs-pid))))))
+                                  (drgnx-uitest--json (list :ok t)))"
+                                bin))
+    (drgnx-live-wb--until sess "(drgnx-hub-running-p)" "the hub running")
+    (drgnx-ui-call sess "(progn (drgnx-hub-connect) (drgnx-uitest--json (list :ok t)))")
+    (drgnx-live-wb--until sess "(and drgnx-hub--events (eq (process-status drgnx-hub--events) 'open))"
+                          "the hub connected")))
+
 (ert-deftest drgnx-live/the-outline-of-a-file-without-one-is-a-quiet-empty-state ()
   ;; The scene's case: the Outline lists an Emacs Lisp file's definitions, then the editor shows a shell script with
   ;; none.  The notice row is whole: not scrolled sideways, nothing drawn before it (no selection left over from the
@@ -126,6 +154,7 @@
     (with-temp-file sh (insert "#!/bin/sh\necho hello\n"))
     (unwind-protect
         (progn
+          (drgnx-live-wb--hub sess)
           ;; the Outline opened (it starts folded): this tests its rows, not its fold
           (drgnx-ui-call sess (format "(progn (drgnx-wb-show-sidebar)
                                              (when (drgnx-wb-section-collapsed-p 'outline) (drgnx-wb-toggle-section 'outline))
@@ -141,7 +170,12 @@
           (drgnx-ui-call sess (format "(progn (drgnx-wb-focus-editor) (find-file %S) (drgnx-outline-refresh)
                                              (drgnx-uitest--json (list :ok t)))" sh))
           (drgnx-ui-measure sess nil)
-          (let ((after (drgnx-ui-call sess probe)))
+          ;; the hub builds the Outline's rows: asked until its notice came (the probe again each look, at most 10 s)
+          (let ((after (drgnx-ui-call sess probe)) (deadline (+ (float-time) 10)))
+            (while (and (not (string-match-p "No outline for this file" (plist-get after :text)))
+                        (< (float-time) deadline))
+              (drgnx-ui--poll-pause 0.05)
+              (setq after (drgnx-ui-call sess probe)))
             (message "outline empty state %S" after)
             (should (string-match-p "No outline for this file" (plist-get after :text)))
             (should (= 0 (plist-get after :hscroll)))

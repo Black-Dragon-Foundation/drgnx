@@ -1110,6 +1110,10 @@ OWN-HUB: the workload started the hub (`drgnx-perf--hub-start'), and the teardow
       (defvar drgnx-perf--term-consed nil "kB allocated by each draw of a terminal buffer since the arm.")
       (defvar drgnx-perf--term-armed nil "(TIME CONSED) at the arm.")
       (defvar drgnx-perf--term-own-hub nil "Whether the teardown stops the hub.")
+      (defvar drgnx-perf--term-windows nil
+        "The frame's windows before the terminals opened, which the teardown puts back: a terminal shown in the panel
+left it open and selected, and the next workload's split of the editor window met a side window.")
+      (setq drgnx-perf--term-windows (current-window-configuration))
       (defvar drgnx-perf--echo-pending nil "Send times of the typed terminal's keys not drawn yet, newest first.")
       (defvar drgnx-perf--echo-ms nil "Per key since the arm: ms from its send to the next draw of the typed terminal.")
       (defun drgnx-perf--echo-sent (method _params)
@@ -1242,6 +1246,9 @@ collection, against before it opened, plus its buffer's text)."
           (when (buffer-live-p b)
             (let ((kill-buffer-query-functions nil)) (kill-buffer b))))   ; term/close ends its worker
         (setq drgnx-perf--term nil drgnx-perf--term2 nil)
+        (when drgnx-perf--term-windows
+          (set-window-configuration drgnx-perf--term-windows)
+          (setq drgnx-perf--term-windows nil))
         (when drgnx-perf--term-own-hub (drgnx-perf--hub-stop))
         t)
       (drgnx-perf--term-open)

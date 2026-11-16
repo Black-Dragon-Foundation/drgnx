@@ -105,13 +105,16 @@ and what came is drawn.  PRED's value."
 
 (ert-deftest drgnx-outline/a-file-past-a-megabyte-shows-a-notice ()
   ;; The hub's one size check (`too_large', view/outline.rs) at the Lisp Outline's limit: the definitions in a file
-  ;; past it are not parsed, the section says why.
+  ;; past it are not parsed, the section says why, whole: the notice is wider than the sidebar, so it wraps onto rows
+  ;; of its own instead of being cut (`rows_in').
   (drgnx-outline-test--with dir src
     (let ((large-file-warning-threshold nil))
       (drgnx-outline-test--show
        (drgnx-outline-test--visit dir "big.el" (concat "(defun kept () 1)\n;; " (make-string (* 1024 1024) ?x) "\n"))))
-    (drgnx-outline-test--settle (lambda () (string-match-p "This file is too large for an outline" (buffer-string)))
+    (drgnx-outline-test--settle (lambda () (string-match-p "This file is too large for an outline"
+                                                           (replace-regexp-in-string "\n +" " " (buffer-string))))
                                 "the notice")
+    (should-not (string-search "…" (buffer-string)))
     (should-not (member "kept" (drgnx-outline-test--names)))))
 
 (ert-deftest drgnx-outline/a-remote-file-is-not-sent ()
