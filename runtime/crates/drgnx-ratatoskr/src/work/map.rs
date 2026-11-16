@@ -743,33 +743,7 @@ fn rows_width(envs: &[ViewEnv]) -> Option<u32> {
         .min()
 }
 
-/// A live session for the Changes place: its id, its name, and the task it works on with that task's title.
-pub type RosterEntry = (String, String, Option<(String, String)>);
-
 impl Map {
-    /// The live sessions: (id, name, the task it works on with that task's title), for the Changes place.
-    pub fn roster(&self) -> Vec<RosterEntry> {
-        let g = lock(&self.inner);
-        g.sessions
-            .values()
-            .map(|s| {
-                let task = s.snap.task.clone().map(|t| {
-                    let title = g
-                        .spaces
-                        .values()
-                        .find_map(|sp| sp.core.model().item(&ItemId(format!("task:{t}"))))
-                        .map_or_else(|| t.clone(), |it| it.label);
-                    (t, title)
-                });
-                (
-                    s.snap.id.clone(),
-                    s.snap.name.clone().unwrap_or_else(|| s.snap.id.clone()),
-                    task,
-                )
-            })
-            .collect()
-    }
-
     /// Whether any map view is open.
     pub fn open(&self) -> bool {
         self.open.load(Ordering::Relaxed)
@@ -861,12 +835,15 @@ impl Map {
         out
     }
 
-    /// A session's snapshot and its subagents, from its `agent` emit.
-    pub fn session(self: &Arc<Self>, snap: &Snapshot, kids: &[crate::work::subagents::Child]) {
-        // the Agents side follows every session, a map open or not
+    /// A session changed: the Agents sides shown read the sessions again (a map open or not).
+    pub fn agents_changed(self: &Arc<Self>) {
         if let Some(f) = self.front.get().and_then(Weak::upgrade) {
             f.core.views.agents_side_changed(&f);
         }
+    }
+
+    /// A session's snapshot and its subagents, from its `agent` emit.
+    pub fn session(self: &Arc<Self>, snap: &Snapshot, kids: &[crate::work::subagents::Child]) {
         if !self.open() {
             return;
         }

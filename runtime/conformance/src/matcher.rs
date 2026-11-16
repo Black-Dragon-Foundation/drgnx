@@ -6,7 +6,7 @@
 //! must be missing), `"$capture:NAME"` (match anything and remember it), `"$NAME"` (equal to a value captured earlier) and `"$not:NAME"` (any
 //! value but the one captured as NAME);
 //! `"$NAME#1"` (a captured string followed by more text, such as a task id `JOB#1`) matches the capture and that text.
-//! `{"$text": "needle"}` matches any value with a string inside it (at any depth) that holds `needle`: a patch's rows by
+//! `{"$text": "needle"}` (or a list of needles, each of which must be held) matches any value with a string inside it (at any depth) that holds `needle`: a patch's rows by
 //! what they say, whatever the ops around them are. JSON numbers of equal value match, however they are spelled
 //! (`0` and `0.0`).
 
@@ -77,14 +77,19 @@ fn at(path: &str, pattern: &Value, actual: &Value, caps: &mut Captures) -> Resul
     match pattern {
         Value::String(s) if s.starts_with('$') => special(&here, s, actual, caps),
         Value::Object(p) => {
-            if let (1, Some(Value::String(needle))) = (p.len(), p.get("$text")) {
-                return if holds_text(actual, needle) {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "{here}: no text holds {needle:?} in {}",
-                        show(actual)
-                    ))
+            if let (1, Some(wanted)) = (p.len(), p.get("$text")) {
+                let needles: Vec<&str> = match wanted {
+                    Value::String(s) => vec![s.as_str()],
+                    Value::Array(l) => l.iter().filter_map(Value::as_str).collect(),
+                    _ => {
+                        return Err(format!(
+                            "{here}: \"$text\" takes a string or a list of strings"
+                        ));
+                    }
+                };
+                return match needles.iter().find(|n| !holds_text(actual, n)) {
+                    None => Ok(()),
+                    Some(n) => Err(format!("{here}: no text holds {n:?} in {}", show(actual))),
                 };
             }
             if let (1, Some(Value::Array(wanted))) = (p.len(), p.get("$contains")) {
@@ -353,6 +358,14 @@ mod tests {
         assert!(
             !ok(json!({"$text": "x"}), json!(5)),
             "a number holds no text"
+        );
+        assert!(
+            ok(json!({"$text": ["list:3", "not started"]}), patch.clone()),
+            "every needle"
+        );
+        assert!(
+            !ok(json!({"$text": ["list:3", "nope"]}), patch),
+            "one missing needle fails"
         );
     }
 }

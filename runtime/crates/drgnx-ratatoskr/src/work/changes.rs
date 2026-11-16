@@ -127,6 +127,31 @@ pub fn hunks_of(diff: &str, agent: &str, session: &str) -> Vec<HunkRef> {
     out
 }
 
+/// The title of each task id in TASKS (bare ids: `T1` is the entity `task:T1`).
+async fn task_titles(f: &Front, tasks: Vec<String>) -> std::collections::BTreeMap<String, String> {
+    if tasks.is_empty() {
+        return std::collections::BTreeMap::new();
+    }
+    f.writer
+        .db
+        .read(move |c| {
+            let mut out = std::collections::BTreeMap::new();
+            for t in &tasks {
+                let row: Result<Option<String>, _> = c.query_row(
+                    "select title from entity where id = ?1 and retired_tx is null",
+                    [format!("task:{t}")],
+                    |r| r.get(0),
+                );
+                if let Ok(Some(title)) = row {
+                    out.insert(t.clone(), title);
+                }
+            }
+            Ok(out)
+        })
+        .await
+        .unwrap_or_default()
+}
+
 /// The words of each decision id in DECISIONS (the conclusion an agent recorded): its reason.
 pub async fn reasons(
     f: &Front,
@@ -194,7 +219,23 @@ pub fn record_refs(
 /// then the session is the hunk's agent and its task the hunk's task.
 pub async fn by_task(f: &Front) -> Result<Vec<TaskGroup>, Error> {
     let mut sessions = Vec::new();
-    for (sid, name, task) in f.core.map.roster() {
+    let live: Vec<(String, String, Option<String>)> = f
+        .core
+        .agents
+        .live_sessions()
+        .iter()
+        .map(|s| {
+            let snap = s.snapshot();
+            let name = snap.name.clone().unwrap_or_else(|| snap.id.clone());
+            (snap.id, name, snap.task)
+        })
+        .collect();
+    let titles = task_titles(f, live.iter().filter_map(|l| l.2.clone()).collect()).await;
+    for (sid, name, task) in live {
+        let task = task.map(|t| {
+            let title = titles.get(&t).cloned().unwrap_or_else(|| t.clone());
+            (t, title)
+        });
         let Some(changed) = crate::work::edits::edited(f, &sid).await? else {
             continue;
         };

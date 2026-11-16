@@ -4190,6 +4190,8 @@ impl Session {
             (st.seq, entries)
         };
         let snapshot = self.snapshot();
+        // the Agents side follows every session, a map open or not
+        self.map.agents_changed();
         if self.map.open() {
             self.map.session(&snapshot, &self.subagents());
         }
