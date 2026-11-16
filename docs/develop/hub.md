@@ -1313,7 +1313,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/history/rescan` | user | `{}` | `{sessions: natnum}` | no |
 | `agents/history/resume` | user | `{id: string, profile?: string, provider: "claude" \| "gemini" \| "codex", route: "copy" \| "original"}` | `{route: "copy" \| "original", session: string}` | yes |
 | `agents/history/search` | user | `{query: string}` | `{hits?: [PastHit]}` | no |
-| `agents/history/subscribe` | user | `{query?: string, view: string, workspace?: AbsPath}` | `boolean` | no |
+| `agents/history/subscribe` | user | `{limit?: natnum, query?: string, view: string, workspace?: AbsPath}` | `boolean` | no |
 | `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
 | `agents/huddle/start` | user | `{clash?: string, sessions?: [Id]}` | `Huddle` | yes |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
@@ -2016,7 +2016,10 @@ size, mtime and the offset read to) and an FTS5 table `turn` of each entry's tex
   file it keeps open. A scan writes nothing in the roots (a test holds bytes, mtimes and modes equal).
 - **Views**: `agents/history/subscribe {view, workspace?, query?}` makes VIEW the list (rows keyed `h:PROVIDER:ID`
   with a `drgnx-past` prop `{provider, id}`; the workspace's sessions under "This workspace" first); every scan builds
-  the shown lists again. `agents/history/open` reads the file whole and publishes the transcript on
+  the shown lists again. With `limit` the rows are a section of another list: a "Past sessions" header (`h:past`), at
+  most LIMIT sessions and an `h:more` row counting the rest. The Agents list asks for one (`agents-list-past`) and
+  places it after its own rows: its buffer keeps its Lisp view and attaches the hub view with
+  `drgnx-view-patch-attach … :keep t` and an apply function of its own (`drgnx-agent-panel-list--past-apply`). `agents/history/open` reads the file whole and publishes the transcript on
   `agent-history/PROVIDER:ID` with the agent panel's row builder (16 kept), and answers the terminal's resume argv.
   `agents/history/search` answers the hits (title matches first, then FTS, 50 at most); `rescan` scans now.
 - **Resume**: `agents/history/resume {provider, id, route}` checks the file (`checked_file`: a regular file, its true

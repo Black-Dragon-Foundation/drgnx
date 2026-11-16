@@ -251,7 +251,7 @@ fn the_workspaces_sessions_come_first() {
         s("b", "/w/orchard/sub"),
         s("c", "/w/orchardx"),
     ];
-    let keys: Vec<String> = list_rows(&list, Some("/w/orchard"), None)
+    let keys: Vec<String> = list_rows(&list, Some("/w/orchard"), None, None)
         .into_iter()
         .map(|r| r.key)
         .collect();
@@ -265,7 +265,54 @@ fn the_workspaces_sessions_come_first() {
             "h:claude:c"
         ]
     );
-    assert_eq!(list_rows(&[], None, None)[0].key, "h:none");
+    assert_eq!(list_rows(&[], None, None, None)[0].key, "h:none");
+}
+
+#[test]
+fn a_section_of_another_list_shows_a_few_and_says_how_many_more() {
+    let s = |id: &str, cwd: &str| PastSession {
+        provider: PastProvider::Claude,
+        id: id.into(),
+        title: id.into(),
+        cwd: Some(cwd.into()),
+        branch: None,
+        started: None,
+        updated: Some("2026-11-01T10:00:00Z".into()),
+        turns: 1,
+        live: None,
+    };
+    let list = [
+        s("a", "/w/other"),
+        s("b", "/w/orchard"),
+        s("c", "/w/other"),
+        s("d", "/w/other"),
+    ];
+    let keys = |limit| -> Vec<String> {
+        list_rows(&list, Some("/w/orchard"), None, Some(limit))
+            .into_iter()
+            .map(|r| r.key)
+            .collect()
+    };
+    assert_eq!(
+        keys(2),
+        [
+            "h:past",
+            "h:here",
+            "h:claude:b",
+            "h:other",
+            "h:claude:a",
+            "h:more"
+        ]
+    );
+    // the workspace's one session fills a limit of one: the other projects' header goes with its rows
+    assert_eq!(keys(1), ["h:past", "h:here", "h:claude:b", "h:more"]);
+    assert_eq!(keys(4).last().map(String::as_str), Some("h:claude:d"));
+    let more = list_rows(&list, Some("/w/orchard"), None, Some(2));
+    assert!(
+        more.last().unwrap().text.contains("2 more"),
+        "{:?}",
+        more.last()
+    );
 }
 
 #[test]

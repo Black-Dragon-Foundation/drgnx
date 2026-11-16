@@ -641,6 +641,10 @@ CLIs left in their own folders: Claude Code (the `projects` folder in `~/.claude
 CLI, the first thing you asked, the project, the date, the number of turns and the branch. The hub reads the files
 again every few seconds, so a session you are running in a terminal grows in the list as it goes.
 
+The Agents list shows them too: under your drgnx sessions, a **Past sessions** section with the latest eight, this
+workspace's first, and a last line saying how many more Show Past Sessions has. The keys below work on those rows as
+well (RET opens one; `/` narrows the section by the same search).
+
 In the list:
 
 | Key (VS Code, Emacs) | Vim | Command | Does |

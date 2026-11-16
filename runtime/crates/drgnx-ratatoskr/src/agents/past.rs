@@ -269,8 +269,8 @@ fn index_text(e: &Value) -> Option<String> {
     (!t.is_empty()).then(|| crate::agents::transcript::redact(t))
 }
 
-/// What a shown History list asked for: its workspace and its query.
-type Asked = (Option<String>, Option<String>);
+/// What a shown History list asked for: its workspace, its query and, for a section of another list, its limit.
+type Asked = (Option<String>, Option<String>, Option<usize>);
 
 /// The past sessions: where the index is, what it reads, the readers kept, the list's views and the transcripts open.
 #[derive(Default)]
@@ -444,7 +444,8 @@ impl History {
                 .publish_built(f, key, |_, _| (transcript_rows(&entries), Vec::new()));
             return true;
         }
-        let Some((workspace, query)) = lock(&self.shown).get(&(key.0, key.1.clone())).cloned()
+        let Some((workspace, query, limit)) =
+            lock(&self.shown).get(&(key.0, key.1.clone())).cloned()
         else {
             return false;
         };
@@ -455,7 +456,7 @@ impl History {
         let list = lock(&self.list).clone();
         f.core.views.publish_built(f, key, |_, _| {
             (
-                list_rows(&list, workspace.as_deref(), hits.as_deref()),
+                list_rows(&list, workspace.as_deref(), hits.as_deref(), limit),
                 Vec::new(),
             )
         });
@@ -783,12 +784,49 @@ fn header_row(key: &str, text: &str) -> Row {
 }
 
 /// The History list's rows: the workspace's sessions under one header, then the others'; with HITS (a search), the
-/// hits in their order.
+/// hits in their order.  With LIMIT, a section of another list: a "Past sessions" header first, at most LIMIT sessions
+/// (the workspace's first), and a last row saying how many more Past Sessions shows.
 pub fn list_rows(
     list: &[PastSession],
     workspace: Option<&str>,
     hits: Option<&[PastHit]>,
+    limit: Option<usize>,
 ) -> Vec<Row> {
+    let Some(limit) = limit else {
+        return all_rows(list, workspace, hits);
+    };
+    let mut out = vec![header_row("h:past", "Past sessions")];
+    let rows = all_rows(list, workspace, hits);
+    let sessions = rows
+        .iter()
+        .filter(|r| r.key.matches(':').count() >= 2)
+        .count();
+    let mut shown = 0;
+    for r in rows {
+        let session = r.key.matches(':').count() >= 2;
+        if session && shown == limit {
+            continue;
+        }
+        shown += usize::from(session);
+        out.push(r);
+    }
+    // a header whose sessions were all cut goes too
+    while out
+        .last()
+        .is_some_and(|r| r.key.matches(':').count() < 2 && r.key != "h:none" && r.key != "h:past")
+    {
+        out.pop();
+    }
+    if sessions > limit {
+        out.push(header_row(
+            "h:more",
+            &format!("  {} more in Show Past Sessions", sessions - limit),
+        ));
+    }
+    out
+}
+
+fn all_rows(list: &[PastSession], workspace: Option<&str>, hits: Option<&[PastHit]>) -> Vec<Row> {
     let shown: Vec<(&PastSession, Option<&str>)> = match hits {
         Some(h) => h
             .iter()
@@ -991,6 +1029,7 @@ pub async fn subscribe(f: &Front, c: &Caller, p: PastSubscribe) -> Result<bool, 
             p.workspace
                 .map(|w| w.as_str().trim_end_matches('/').to_owned()),
             p.query.map(|q| q.0),
+            p.limit.map(|n| (n as usize).clamp(1, 200)),
         ),
     );
     f.core.past.build_all(f, Some(c.conn_id), &view);

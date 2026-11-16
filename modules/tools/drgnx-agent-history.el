@@ -35,6 +35,12 @@
 (defconst drgnx-agent-history-view "agents-past"
   "The list's hub view (a transcript's is the `agent-history/PROVIDER:ID' that `agents/history/open' answers).")
 
+(defconst drgnx-agent-history-section-view "agents-list-past"
+  "The hub view of the Agents list's Past sessions section (`drgnx-agent-panel-list').")
+
+(defvar-local drgnx-agent-history--view nil
+  "In a buffer that shows past sessions as a hub view: that view (the list's, or the Agents list's section).")
+(defvar-local drgnx-agent-history--limit nil "In a section of another list: how many sessions it shows.")
 (defvar-local drgnx-agent-history--workspace nil "The folder whose sessions the list shows first.")
 (defvar-local drgnx-agent-history--query nil "What the list is narrowed to, or nil.")
 (defvar-local drgnx-agent-history--opened nil
@@ -65,14 +71,21 @@ env's resubscribe)."
     (user-error "The drgnx hub is not connected"))
   (drgnx-hub--call-on drgnx-hub--events method params callback))
 
-(defun drgnx-agent-history--ask (&optional _view)
-  "Ask the hub for the list's rows (again after a reconnect: the env's resubscribe)."
-  (when-let* ((b (get-buffer drgnx-agent-history-buffer-name)))
+(defun drgnx-agent-history--asker (view)
+  "The buffer that shows past sessions as hub VIEW (default: the Past Sessions list), or nil."
+  (let ((view (or view drgnx-agent-history-view)))
+    (seq-find (lambda (b) (equal (buffer-local-value 'drgnx-agent-history--view b) view)) (buffer-list))))
+
+(defun drgnx-agent-history--ask (&optional view)
+  "Ask the hub for the rows of VIEW (default: the Past Sessions list), again after a reconnect: the env's
+resubscribe."
+  (when-let* ((b (drgnx-agent-history--asker view)))
     (with-current-buffer b
       (drgnx-agent-history--call "agents/history/subscribe"
-                                 (append (list :view drgnx-agent-history-view)
+                                 (append (list :view drgnx-agent-history--view)
                                          (and drgnx-agent-history--workspace (list :workspace drgnx-agent-history--workspace))
-                                         (and drgnx-agent-history--query (list :query drgnx-agent-history--query)))
+                                         (and drgnx-agent-history--query (list :query drgnx-agent-history--query))
+                                         (and drgnx-agent-history--limit (list :limit drgnx-agent-history--limit)))
                                  #'drgnx-agent-history--asked))))
 
 (defun drgnx-agent-history--asked (on error)
@@ -105,10 +118,25 @@ env's resubscribe)."
     (with-current-buffer b
       (unless (derived-mode-p 'drgnx-agent-history-mode)
         (drgnx-agent-history-mode)
+        (setq drgnx-agent-history--view drgnx-agent-history-view)
         (drgnx-agent-history--attach drgnx-agent-history-view #'drgnx-agent-history--ask))
       (setq drgnx-agent-history--workspace (directory-file-name workspace)))
     (drgnx-agent-history--ask)
     b))
+
+(defun drgnx-agent-history-section (limit)
+  "Make the current buffer, which keeps a view of its own, also ask for the Past sessions section: at most LIMIT
+sessions, the workspace's first (`agents/history/subscribe' with :limit).  The buffer places the hub's rows itself
+\(`drgnx-view-patch-apply-function'); returns the section's view."
+  (setq drgnx-agent-history--view drgnx-agent-history-section-view
+        drgnx-agent-history--limit limit
+        drgnx-agent-history--workspace (directory-file-name (drgnx-agent-history--workspace-root)))
+  (drgnx-view-patch-attach drgnx-agent-history-section-view "unshown" :keep t)
+  (require 'drgnx-view-env)
+  (drgnx-view-env-register drgnx-agent-history-section-view (current-buffer) #'drgnx-agent-history--ask)
+  (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+    (drgnx-agent-history--ask drgnx-agent-history-section-view))
+  drgnx-agent-history-section-view)
 
 (defun drgnx-agent-history-show ()
   "Show your past Claude Code, Gemini CLI and Codex sessions in the right dock, this workspace's first."
@@ -117,16 +145,19 @@ env's resubscribe)."
     (if (fboundp 'drgnx-wb-area-show) (drgnx-wb-area-show 'right 'agents b) (pop-to-buffer b))))
 
 (defun drgnx-agent-history-search (query)
-  "Narrow Past Sessions to those whose title or transcript holds every word of QUERY (empty: all of them)."
+  "Narrow the past sessions to those whose title or transcript holds every word of QUERY (empty: all of them): in
+the Agents list its Past sessions section, elsewhere Past Sessions."
   (interactive (list (read-string "Search past sessions: "
-                                  (and (get-buffer drgnx-agent-history-buffer-name)
-                                       (buffer-local-value 'drgnx-agent-history--query
-                                                           (get-buffer drgnx-agent-history-buffer-name))))))
-  (let ((b (drgnx-agent-history-buffer)))
+                                  (let ((b (if (equal drgnx-agent-history--view drgnx-agent-history-section-view)
+                                               (current-buffer)
+                                             (get-buffer drgnx-agent-history-buffer-name))))
+                                    (and b (buffer-local-value 'drgnx-agent-history--query b))))))
+  (let* ((section (equal drgnx-agent-history--view drgnx-agent-history-section-view))
+         (b (if section (current-buffer) (drgnx-agent-history-buffer))))
     (with-current-buffer b
-      (setq drgnx-agent-history--query (and (not (string-blank-p query)) query)))
-    (drgnx-agent-history--ask)
-    (when (called-interactively-p 'any) (drgnx-agent-history-show))))
+      (setq drgnx-agent-history--query (and (not (string-blank-p query)) query))
+      (drgnx-agent-history--ask drgnx-agent-history--view))
+    (when (and (not section) (called-interactively-p 'any)) (drgnx-agent-history-show))))
 
 (defun drgnx-agent-history--at-point ()
   "The past session at point, (:provider P :id ID), or in a transcript its own; else a `user-error'."

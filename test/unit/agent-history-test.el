@@ -105,4 +105,57 @@ the CLIs' own folder variables unset (so the hub reads only HOME)."
     (cl-letf (((symbol-function 'completing-read) (lambda (_prompt _choices &rest args) (nth 4 args))))
       (should (eq (drgnx-agent-history-read-route) 'original)))))
 
+;; The Agents list's Past sessions section: the hub's rows (a hub view the list's buffer keeps beside its own) drawn
+;; after the live sessions, in the hub's order, RET on one opening its transcript, the same search narrowing them.
+
+(defun agent-history-test--row (key text &optional past)
+  (list :key key :text text :props (and past (list (list 0 (length text) "drgnx-past" (list :provider "claude" :id past))))))
+
+(ert-deftest drgnx-agent-history/the-agents-list-shows-past-sessions-after-its-own ()
+  (load (expand-file-name "modules/tools/drgnx-agent-panel-list" drgnx-dir) nil t)
+  (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
+        (default-directory temporary-file-directory) asked opened)
+    (cl-letf (((symbol-function 'drgnx-agent-history--call)
+               (lambda (method params cb) (push (cons method params) asked) (when (equal method "agents/history/open") (setq opened params)) (ignore cb)))
+              ((symbol-function 'drgnx-view-env-register) #'ignore)
+              ((symbol-function 'drgnx-agents-sessions) #'ignore)
+              (drgnx-hub--events (start-process "agent-history-test-events" nil "cat")))
+      (unwind-protect
+          (with-current-buffer (drgnx-agent-panel-list-buffer)
+            ;; the section asks for a few sessions, this workspace's first
+            (let ((p (cdr (assoc "agents/history/subscribe" asked))))
+              (should (equal (plist-get p :view) drgnx-agent-history-section-view))
+              (should (equal (plist-get p :limit) drgnx-agent-panel-list-past-limit))
+              (should (equal (plist-get p :workspace) (directory-file-name temporary-file-directory))))
+            (drgnx-view-apply-patch
+             (list :view drgnx-agent-history-section-view :class "unshown" :hub 7 :base 0 :version 1 :env_epoch 0
+                   :ops (list (list :reset (list (agent-history-test--row "h:past" "Past sessions")
+                                                 (agent-history-test--row "h:claude:a1" "  count the apples" "a1"))))))
+            (drgnx-view-draw-now drgnx-view)
+            (should (string-match-p "No agent sessions yet.*\nPast sessions\n  count the apples" (buffer-string)))
+            ;; a row the hub inserts lands where it says, one it removes goes
+            (drgnx-view-apply-patch
+             (list :view drgnx-agent-history-section-view :class "unshown" :hub 7 :base 1 :version 2 :env_epoch 0
+                   :ops (list (list :insert (list :after "h:past" :rows (list (agent-history-test--row "h:claude:b2" "  weigh the pears" "b2")))))))
+            (drgnx-view-draw-now drgnx-view)
+            (should (string-match-p "Past sessions\n  weigh the pears\n  count the apples" (buffer-string)))
+            (drgnx-view-apply-patch
+             (list :view drgnx-agent-history-section-view :class "unshown" :hub 7 :base 2 :version 3 :env_epoch 0
+                   :ops (list (list :remove (list "h:claude:a1")))))
+            (drgnx-view-draw-now drgnx-view)
+            (should-not (string-match-p "apples" (buffer-string)))
+            ;; RET on a past row opens its transcript
+            (goto-char (point-min))
+            (search-forward "weigh the pears")
+            (drgnx-agent-panel-list-open)
+            (should (equal opened '(:provider "claude" :id "b2")))
+            ;; the same search narrows the section, not the Past Sessions list
+            (setq asked nil)
+            (drgnx-agent-history-search "pears")
+            (should (equal (plist-get (cdr (assoc "agents/history/subscribe" asked)) :view) drgnx-agent-history-section-view))
+            (should (equal (plist-get (cdr (assoc "agents/history/subscribe" asked)) :query) "pears"))
+            (should-not (get-buffer drgnx-agent-history-buffer-name)))
+        (delete-process drgnx-hub--events)
+        (kill-buffer drgnx-agent-panel-list-buffer-name)))))
+
 ;;; agent-history-test.el ends here

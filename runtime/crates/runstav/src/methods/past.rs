@@ -42,7 +42,8 @@ pub struct PastSession {
 }
 
 /// `agents/history/subscribe`: the caller's VIEW shows the past sessions as rows, the workspace's first, narrowed by
-/// QUERY (titles and the whole transcripts' text).
+/// QUERY (titles and the whole transcripts' text).  With LIMIT the rows are a section of another list (the Agents
+/// list's): a header, at most LIMIT sessions, and a last row that says how many more Past Sessions shows.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct PastSubscribe {
     pub view: Bounded<String, 256>,
@@ -50,6 +51,8 @@ pub struct PastSubscribe {
     pub workspace: Option<AbsPath>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<Bounded<String, 512>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

@@ -7270,8 +7270,16 @@
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`agents/history/subscribe`: the caller's VIEW shows the past sessions as rows, the workspace's first, narrowed by\nQUERY (titles and the whole transcripts' text).",
+        "description": "`agents/history/subscribe`: the caller's VIEW shows the past sessions as rows, the workspace's first, narrowed by\nQUERY (titles and the whole transcripts' text).  With LIMIT the rows are a section of another list (the Agents\nlist's): a header, at most LIMIT sessions, and a last row that says how many more Past Sessions shows.",
         "properties": {
+          "limit": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "query": {
             "maxLength": 512,
             "type": [

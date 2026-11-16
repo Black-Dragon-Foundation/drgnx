@@ -22,6 +22,7 @@
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-ui-agent-history--repo) nil t)
 (load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-ui-agent-history--repo) nil t)
 (load (expand-file-name "modules/tools/drgnx-agent-history" drgnx-ui-agent-history--repo) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-panel-list" drgnx-ui-agent-history--repo) nil t)
 
 (defun drgnx-ui-agent-history--bin ()
   "The hub: DRGNX_RATATOSKR_BIN, else the checkout's test-hooks build (a GUI session does not inherit the variable)."
@@ -99,6 +100,38 @@
               (drgnx-ui-agent-history--shows transcript "Answered: count the apples" "the transcript's rows")
               (should (string-match-p "and the plums" (drgnx-ui-agent-history--text transcript)))
               (should (buffer-local-value 'buffer-read-only transcript)))
+          (drgnx-agent-history-teardown))))))
+
+;; The Agents list itself shows them: a Past sessions section after the live sessions, this workspace's first, the
+;; same search narrowing it.
+(ert-deftest drgnx-ui-agent-history/the-agents-list-shows-past-sessions ()
+  (skip-unless (display-graphic-p))
+  (let ((process-environment (append (list (concat "DRGNX_RATATOSKR_BIN=" (drgnx-ui-agent-history--bin))
+                                           "CLAUDE_CONFIG_DIR" "CODEX_HOME" "GEMINI_CLI_HOME")
+                                     process-environment)))
+    (drgnx-hub-client-test--with-ratatoskr
+      (let* ((home (expand-file-name "home" root))
+             (here (expand-file-name "orchard" home))
+             (frame (drgnx-uitest-root-frame)) list)
+        (make-directory here t)
+        (drgnx-ui-agent-history--session home "a1" here "count the apples")
+        (drgnx-ui-agent-history--session home "b2" "/elsewhere" "weigh the pears")
+        (drgnx-hub-connect)
+        (drgnx-test-wait (lambda () (and (processp drgnx-hub--events) (process-get drgnx-hub--events :drgnx-proven)))
+                         :secs 30 :what "the event connection proves itself")
+        (unwind-protect
+            (with-selected-frame frame
+              (delete-other-windows)
+              (let ((default-directory (file-name-as-directory here)))
+                (setq list (drgnx-agent-panel-list-buffer)))
+              (set-window-buffer (selected-window) list)
+              (drgnx-ui-agent-history--shows list "No agent sessions yet.*\nPast sessions\nThis workspace\n.*count the apples.*\nOther projects\n.*weigh the pears"
+                                             "the Agents list's Past sessions, the workspace's first")
+              (with-current-buffer list (drgnx-agent-history-search "pears"))
+              (drgnx-test-wait (lambda () (redisplay t) (not (string-match-p "apples" (drgnx-ui-agent-history--text list))))
+                               :secs 30 :what "the search narrows the section")
+              (should (string-match-p "Past sessions\n.*weigh the pears" (drgnx-ui-agent-history--text list))))
+          (kill-buffer list)
           (drgnx-agent-history-teardown))))))
 
 ;;; agent-history-gui-test.el ends here
