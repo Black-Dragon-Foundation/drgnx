@@ -261,6 +261,7 @@ params! {
     DecisionsEffects(plans::EffectsParams),
     TimelineGet(timeline::TimelineParams),
     BudgetGet(timeline::BudgetGetParams),
+    BudgetTreePage(timeline::BudgetTreeParams),
     BudgetSet(timeline::BudgetSetParams),
     PaceGet(timeline::PaceParams),
     ForecastGet(forecast::ForecastParams),

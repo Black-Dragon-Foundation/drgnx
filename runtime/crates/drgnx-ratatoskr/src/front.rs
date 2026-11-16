@@ -908,6 +908,7 @@ impl Front {
             | Params::BriefSet(_)
             | Params::TimelineGet(_)
             | Params::BudgetGet(_)
+            | Params::BudgetTreePage(_)
             | Params::BudgetSet(_)
             | Params::PaceGet(_)
             | Params::ForecastGet(_)

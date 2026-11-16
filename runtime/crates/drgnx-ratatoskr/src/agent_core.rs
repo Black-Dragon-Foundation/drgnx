@@ -172,6 +172,7 @@ pub async fn serve(
         Params::BriefSet(p) => answer(brief::set(f, c, p).await),
         Params::TimelineGet(p) => answer(timeline::get(f, c, p).await),
         Params::BudgetGet(p) => answer(budget::get(f, c, p).await),
+        Params::BudgetTreePage(p) => answer(budget::tree(f, c, p).await),
         Params::BudgetSet(p) => answer(budget::set(f, c, p).await),
         Params::PaceGet(p) => answer(budget::pace(f, c, p).await),
         Params::ForecastGet(p) => answer(forecast::get(f, c, p).await),

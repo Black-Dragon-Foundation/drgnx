@@ -1960,7 +1960,6 @@ fn legacy_duplicates<'a>(
 /// The plan item that holds the tasks no plan holds.
 const NO_PLAN: &str = "no-plan";
 
-/// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
 /// The budget facts of the records READ and of the live sessions: spend against the binding limit, none when no limit
 /// counts for the item.
 fn budget_events(f: &Front, records: &[Event]) -> Vec<Event> {
@@ -2017,6 +2016,7 @@ pub(crate) fn item_budget(
     })
 }
 
+/// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
 async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
     f.writer
         .db

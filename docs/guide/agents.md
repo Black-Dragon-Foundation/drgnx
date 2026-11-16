@@ -974,6 +974,11 @@ A job takes its plan's limits when it starts or resumes, by unit: `job/propose`,
 list clears them. `drgnx job ... --budget N` is the dollar limit. Only a `usd` limit on a plan a subscription can run
 becomes the joint pair with `usd-est`; every other unit is set as given.
 
+`budget/tree` lists the scopes as a tree (a project, its specs, plans, runs, tasks, managers and workers; 200 nodes a
+page, `after` asks for the next): each node has its limits, spend, what remains, its state (`ok`, `nearing` from 80 % of
+the binding limit, `reached`, `none`), the burn per hour and a label (the title, a session's name, "run N" in start
+order); a run under a plan also has `share_of_parent`, its part of the plan's spend in the plan's binding unit.
+
 Budgets nest. What a worker spends counts against the worker, its task, its run (one job), its plan, the plan's spec and
 the project, and what it may still spend is the least remaining over that chain (a worker a manager started counts
 against the manager, and the manager against its run). A plan's budget is the plan's, not one run's: every run of the
