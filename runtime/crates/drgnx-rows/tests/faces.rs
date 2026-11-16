@@ -1,7 +1,7 @@
 //! The generated face enum and kit tables (`src/faces.rs`, `src/kit_gen.rs`, from `bin/drgnx design`) agree with
 //! themselves: every face's name reads back, the numbered families are whole, and the kit's tables answer.
 
-use drgnx_rows::faces::{AGENT, FaceId, WORK_WHO};
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::kit_gen::{self, CompId, STATES, State};
 
 #[test]
@@ -12,10 +12,10 @@ fn faces_round_trip() {
     assert_eq!(FaceId::from_name("drgnx-no-such-face"), None);
     assert_eq!(FaceId::TextMuted.name(), "drgnx-text-muted");
     assert_eq!(FaceId::Bold.name(), "bold");
-    assert_eq!(AGENT.len(), 12);
-    assert_eq!(AGENT[0].name(), "drgnx-agent-1");
-    assert_eq!(AGENT[11].name(), "drgnx-agent-12");
-    assert_eq!(WORK_WHO.len(), 6);
+    assert_eq!(FaceId::AGENT.len(), 12);
+    assert_eq!(FaceId::AGENT[0].name(), "drgnx-agent-1");
+    assert_eq!(FaceId::AGENT[11].name(), "drgnx-agent-12");
+    assert_eq!(FaceId::WORK_WHO.len(), 6);
 }
 
 #[test]

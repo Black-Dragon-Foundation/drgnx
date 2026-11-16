@@ -36,7 +36,7 @@ source, which the next run updates or clears, never a second one and never a pro
 
 | File | Made from |
 |---|---|
-| `runtime/crates/drgnx-rows/src/faces.rs` | `FaceId`: every `(defface NAME` in `core/`, `wb/` and `modules/` (read as text: a face a loop defines is not seen), the kit's faces and the faces a view patch may name. A variant is the name without `drgnx-` in UpperCamelCase (`drgnx-text-muted` is `TextMuted`); `name()` and `from_name()` go between the two; a numbered family (`NAME-1`… or `NAME-0`…, two or more) is also an array (`AGENT`, `WORK_WHO`, `TERM_COLOR`), indexed by the number less the first |
+| `runtime/crates/drgnx-rows/src/faces.rs` | `FaceId`: every `(defface NAME` in `core/`, `wb/` and `modules/` (read as text: a face a loop defines is not seen), the kit's faces and the faces a view patch may name. A variant is the name without `drgnx-` in UpperCamelCase (`drgnx-text-muted` is `TextMuted`); `name()` and `from_name()` go between the two; a numbered family (`NAME-1`… or `NAME-0`…, two or more) is also an associated array (`FaceId::AGENT`, `FaceId::WORK_WHO`, `FaceId::TERM_COLOR`), indexed by the number less the first |
 | `runtime/crates/drgnx-rows/src/kit_gen.rs` | `etc/ui/components.eld`: `CompId`, `State`, `STATES` (each state but rest with its semantic face) and per component `geom(id, variant)`, `label(id, variant)` and `face(id, variant)`; a variant slice names variant values and, optionally, a density (`"compact"`, `"comfortable"`, the default, `"roomy"`) |
 | `etc/ui/faces.eld` | the same face list, for Lisp |
 

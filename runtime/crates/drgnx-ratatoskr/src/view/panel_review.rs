@@ -9,6 +9,7 @@
 
 use super::icons;
 use crate::agents::session::rows::one_line;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::{self, FontSet};
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::agents::{Permission, RpcId};
@@ -107,13 +108,13 @@ fn id_of(id: &Option<RpcId>) -> String {
 
 fn shape(n: usize, i: usize) -> &'static str {
     if n == 1 {
-        "drgnx-card-single"
+        FaceId::CardSingle.name()
     } else if i == 0 {
-        "drgnx-card-top"
+        FaceId::CardTop.name()
     } else if i + 1 == n {
-        "drgnx-card-bottom"
+        FaceId::CardBottom.name()
     } else {
-        "drgnx-card-mid"
+        FaceId::CardMid.name()
     }
 }
 
@@ -167,10 +168,10 @@ fn diff_header(
         icons::file_icon(path.rsplit('/').next().unwrap_or(path)),
         "▤",
         icon_px,
-        "drgnx-text-muted",
+        FaceId::TextMuted.name(),
     );
     b.push(" ", None);
-    let button = Some("drgnx-ui-button");
+    let button = Some(FaceId::UiButton.name());
     let actions_w = text_width(i, button, " Reject ")
         + text_width(i, None, " ")
         + text_width(i, button, " Accept ");
@@ -183,7 +184,7 @@ fn diff_header(
     let name = one_line(path, 50);
     let both = text_width(i, Some("bold"), &name)
         + text_width(i, None, " ")
-        + text_width(i, Some("drgnx-agent-panel-subtle"), &label);
+        + text_width(i, Some(FaceId::AgentPanelSubtle.name()), &label);
     let (name, label) = if env.width_px == 0 || i64::from(both) <= room {
         (name, label)
     } else if room > 0 {
@@ -198,14 +199,14 @@ fn diff_header(
     };
     b.push(&name, Some("bold"));
     b.push(" ", None);
-    b.push(&label, Some("drgnx-agent-panel-subtle"));
+    b.push(&label, Some(FaceId::AgentPanelSubtle.name()));
     b.stop(
         env.width_px
             .saturating_sub(actions_w + px(env, 20.0))
             .max(1),
     );
     let r = b.pos();
-    b.push(" Reject ", Some("drgnx-ui-button"));
+    b.push(" Reject ", Some(FaceId::UiButton.name()));
     let r_end = b.pos();
     b.prop(
         r,
@@ -216,7 +217,7 @@ fn diff_header(
     b.prop(r, r_end, "help-echo", json!("D: take the change back"));
     b.push(" ", None);
     let a = b.pos();
-    b.push(" Accept ", Some("drgnx-ui-button"));
+    b.push(" Accept ", Some(FaceId::UiButton.name()));
     let a_end = b.pos();
     b.prop(
         a,
@@ -272,16 +273,16 @@ fn diff_card(
             }
         };
         let (sign, rest, face) = match c {
-            Some('+') => ("+", &l[1..], "drgnx-agent-panel-added"),
-            Some('-') => ("-", &l[1..], "drgnx-agent-panel-removed"),
-            Some(' ') => (" ", &l[1..], "drgnx-agent-panel-context"),
-            _ => (" ", l.as_str(), "drgnx-agent-panel-context"),
+            Some('+') => ("+", &l[1..], FaceId::AgentPanelAdded.name()),
+            Some('-') => ("-", &l[1..], FaceId::AgentPanelRemoved.name()),
+            Some(' ') => (" ", &l[1..], FaceId::AgentPanelContext.name()),
+            _ => (" ", l.as_str(), FaceId::AgentPanelContext.name()),
         };
         let mut b = RowBuilder::new(format!("c:diff:{path}:{n}:{k}"));
         b.push(" ", None);
         // the line number in the muted colour, the line's tint under it
         let gutter = b.pos();
-        b.push(&format!("{num:4} "), Some("drgnx-text-muted"));
+        b.push(&format!("{num:4} "), Some(FaceId::TextMuted.name()));
         let gutter_end = b.pos();
         b.face(gutter, gutter_end, face);
         // cut at the card's edge by the row fit, which measures the line in its font
@@ -310,13 +311,13 @@ fn perm_card(i: &In, images: &mut Vec<(ImageId, String)>, p: &Permission) -> Vec
         "shield",
         "⛨",
         px(env, 16.0),
-        "drgnx-agent-panel-perm-head",
+        FaceId::AgentPanelPermHead.name(),
     );
     b.push(&format!(" {}?", one_line(title, 70)), None);
     b.stop(env.width_px.saturating_sub(px(env, 12.0)));
     let end = b.pos();
-    b.face(0, end, "drgnx-agent-panel-perm-head");
-    b.face(0, end, "drgnx-card-single");
+    b.face(0, end, FaceId::AgentPanelPermHead.name());
+    b.face(0, end, FaceId::CardSingle.name());
     b.prop(0, end, "drgnx-agent-panel-card", card.clone());
     let head = b.finish();
     let mut b = RowBuilder::new(format!("c:perm:{id}:1"));
@@ -324,17 +325,17 @@ fn perm_card(i: &In, images: &mut Vec<(ImageId, String)>, p: &Permission) -> Vec
     for (k, (label, face, action, help)) in [
         (
             " Allow ",
-            "drgnx-ui-button-primary",
+            FaceId::UiButtonPrimary.name(),
             "allow",
             "RET: allow it once",
         ),
         (
             " Always ",
-            "drgnx-ui-button",
+            FaceId::UiButton.name(),
             "always",
             "A: allow it from now on",
         ),
-        (" Deny ", "drgnx-ui-button", "deny", "D: deny it"),
+        (" Deny ", FaceId::UiButton.name(), "deny", "D: deny it"),
     ]
     .into_iter()
     .enumerate()
@@ -367,11 +368,11 @@ fn queue_row(env: &ViewEnv, n: usize, note: &str) -> Row {
             n + 1,
             one_line(note, 60)
         ),
-        Some("drgnx-agent-panel-subtle"),
+        Some(FaceId::AgentPanelSubtle.name()),
     );
     b.stop(env.width_px.saturating_sub(px(env, 12.0)));
     let end = b.pos();
-    b.face(0, end, "drgnx-card-single");
+    b.face(0, end, FaceId::CardSingle.name());
     b.prop(0, end, "drgnx-agent-panel-queued", json!(n));
     b.finish()
 }

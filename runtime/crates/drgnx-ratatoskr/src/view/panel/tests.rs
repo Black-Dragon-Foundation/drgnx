@@ -4,6 +4,7 @@
 use super::{Panels, Source, hover, view_of};
 use crate::agents::session::rows::{self, Facts, GroupIn};
 use crate::view::{Key, Store, is_reset};
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::FontSet;
 use drgnx_rows::{Op, Patch, Row, RowBuilder};
 use runstav::methods::agents::{Entry, EntryType};
@@ -546,11 +547,9 @@ fn a_clickable_part_gets_the_hover_face_by_name() {
     b.prop(s, e, "drgnx-agent-panel-action", json!("pin"));
     let mut rows = vec![b.finish()];
     hover(&mut rows);
-    assert!(
-        rows[0].props.iter().any(|(a, z, n, v)| (*a, *z) == (s, e)
-            && n == "mouse-face"
-            && *v == json!("drgnx-hover"))
-    );
+    assert!(rows[0].props.iter().any(|(a, z, n, v)| (*a, *z) == (s, e)
+        && n == "mouse-face"
+        && *v == json!(FaceId::Hover.name())));
     // nothing else is a hover part
     assert_eq!(
         rows[0]

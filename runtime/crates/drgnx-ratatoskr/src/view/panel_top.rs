@@ -6,6 +6,7 @@
 
 use super::icons;
 use crate::agents::session::rows::STEP_TYPES;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::{self, FontSet};
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::agents::{SessionStatus, Snapshot};
@@ -138,9 +139,9 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
     let mut lens_w = 0;
     for (n, p) in cx.lens.names.iter().enumerate() {
         let face = if cx.lens.on == n as u32 + 1 {
-            "drgnx-agent-panel-lens-on"
+            FaceId::AgentPanelLensOn.name()
         } else {
-            "drgnx-agent-panel-lens"
+            FaceId::AgentPanelLens.name()
         };
         let name_w = text_width(cx, Some(face), p);
         lens_w += if gui {
@@ -159,14 +160,14 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
 
     // the head: " " icon " " name
     b.push(" ", None);
-    icon(&mut b, images, "bot", "@", icon_px, "drgnx-accent");
+    icon(&mut b, images, "bot", "@", icon_px, FaceId::Accent.name());
     b.push(" ", None);
     let t = b.pos();
-    b.push(name, Some("drgnx-agent-panel-title"));
+    b.push(name, Some(FaceId::AgentPanelTitle.name()));
     let end = b.pos();
     b.prop(t, end, "drgnx-work-id", json!("p:head"));
     let head_w = text_width(cx, None, " ")
-        + text_width(cx, Some("drgnx-agent-panel-title"), name)
+        + text_width(cx, Some(FaceId::AgentPanelTitle.name()), name)
         + if gui { icon_px + p4 } else { 2 * cell };
 
     // what the agent does, cut to the room: 12 px before the right part, which sits 8 px from the edge
@@ -181,14 +182,14 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
         match env.display {
             Display::Gui => fit::fit_in(
                 cx.fonts,
-                Some("drgnx-agent-panel-subtle"),
+                Some(FaceId::AgentPanelSubtle.name()),
                 &status,
                 room as f32,
             ),
             Display::Tty => status.chars().take((room as u32 / cell) as usize).collect(),
         }
     };
-    b.push(&status, Some("drgnx-agent-panel-subtle"));
+    b.push(&status, Some(FaceId::AgentPanelSubtle.name()));
 
     // the right part starts at its stop
     let stop = env.width_px.saturating_sub(right_w + p8);
@@ -196,16 +197,16 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
     for (n, p) in cx.lens.names.iter().enumerate() {
         if n > 0 {
             if gui {
-                b.space(p2, 1, "drgnx-surface-gap");
+                b.space(p2, 1, FaceId::SurfaceGap.name());
             } else {
-                b.push(" ", Some("drgnx-surface-gap"));
+                b.push(" ", Some(FaceId::SurfaceGap.name()));
             }
         }
         let start = b.pos();
         let face = if cx.lens.on == n as u32 + 1 {
-            "drgnx-agent-panel-lens-on"
+            FaceId::AgentPanelLensOn.name()
         } else {
-            "drgnx-agent-panel-lens"
+            FaceId::AgentPanelLens.name()
         };
         if gui {
             b.space(p8, 1, face);
@@ -248,7 +249,7 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
             name,
             alt,
             icon_px,
-            "drgnx-agent-panel-subtle",
+            FaceId::AgentPanelSubtle.name(),
         );
         if gui {
             b.space(p4, 1, "default");
@@ -273,7 +274,7 @@ fn strip(cx: &Cx) -> Vec<Row> {
     let default = "make default";
     let width = |face: &str, t: &str| text_width(cx, Some(face), t);
     let room = i64::from(env.width_px) - i64::from(px(env, 12.0));
-    let indent_px = width("drgnx-agent-panel-subtle", open);
+    let indent_px = width(FaceId::AgentPanelSubtle.name(), open);
     // the parts, each a (text, face, action)
     let mut parts: Vec<(String, &str, String)> = STEP_TYPES
         .iter()
@@ -281,15 +282,19 @@ fn strip(cx: &Cx) -> Vec<Row> {
             (
                 format!(" {t} "),
                 if cx.open.contains(*t) {
-                    "drgnx-agent-panel-tag-on"
+                    FaceId::AgentPanelTagOn.name()
                 } else {
-                    "drgnx-agent-panel-tag"
+                    FaceId::AgentPanelTag.name()
                 },
                 format!("type:{t}"),
             )
         })
         .collect();
-    parts.push((default.to_owned(), "drgnx-accent", "default".to_owned()));
+    parts.push((
+        default.to_owned(),
+        FaceId::Accent.name(),
+        "default".to_owned(),
+    ));
     let mut lines: Vec<Vec<(String, &str, String)>> = vec![Vec::new()];
     let mut line_w = i64::from(indent_px);
     for part in parts {
@@ -313,7 +318,7 @@ fn strip(cx: &Cx) -> Vec<Row> {
         };
         let mut b = RowBuilder::new(key);
         if n == 0 {
-            b.push(open, Some("drgnx-agent-panel-subtle"));
+            b.push(open, Some(FaceId::AgentPanelSubtle.name()));
         } else if gui {
             b.space(indent_px, 1, "default");
         } else {
@@ -425,7 +430,7 @@ fn chips(s: &Snapshot, cx: &Cx) -> Vec<Row> {
     let mut used = gap;
     for (kind, text) in &list {
         let label = format!(" {text} ");
-        let w = text_width(cx, Some("drgnx-agent-panel-chip"), &label);
+        let w = text_width(cx, Some(FaceId::AgentPanelChip.name()), &label);
         if used > gap && used + w > room {
             out.push(b.finish());
             b = RowBuilder::new(format!("{CHIPS}:{}", out.len()));
@@ -436,10 +441,10 @@ fn chips(s: &Snapshot, cx: &Cx) -> Vec<Row> {
             used += gap;
         }
         let start = b.pos();
-        b.push(&label, Some("drgnx-agent-panel-chip"));
+        b.push(&label, Some(FaceId::AgentPanelChip.name()));
         let end = b.pos();
         if let Some(kind) = kind {
-            b.prop(start, end, "drgnx-agent-panel-chip", json!(kind));
+            b.prop(start, end, FaceId::AgentPanelChip.name(), json!(kind));
         }
         used += w;
     }

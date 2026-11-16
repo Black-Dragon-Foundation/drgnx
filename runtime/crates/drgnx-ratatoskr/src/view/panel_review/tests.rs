@@ -1,4 +1,5 @@
 use super::*;
+use drgnx_rows::faces::FaceId;
 use runstav::methods::view::Display;
 
 fn env(width: u32) -> ViewEnv {
@@ -99,14 +100,14 @@ fn a_hunk_is_a_header_over_numbered_lines_in_card_faces() {
             .map(|(_, _, f)| f.clone())
             .unwrap_or_default()
     };
-    assert_eq!(shape(&rows[1]), "drgnx-card-top");
-    assert_eq!(shape(&rows[3]), "drgnx-card-mid");
-    assert_eq!(shape(&rows[4]), "drgnx-card-bottom");
+    assert_eq!(shape(&rows[1]), FaceId::CardTop.name());
+    assert_eq!(shape(&rows[3]), FaceId::CardMid.name());
+    assert_eq!(shape(&rows[4]), FaceId::CardBottom.name());
     assert!(
         rows[1]
             .runs
             .iter()
-            .any(|(_, _, f)| f == "drgnx-agent-panel-removed")
+            .any(|(_, _, f)| f == FaceId::AgentPanelRemoved.name())
     );
     assert!(
         rows[1]
@@ -142,7 +143,7 @@ fn a_request_is_a_ringed_line_over_allow_always_and_deny() {
         rows[0]
             .runs
             .iter()
-            .any(|(_, _, f)| f == "drgnx-agent-panel-perm-head")
+            .any(|(_, _, f)| f == FaceId::AgentPanelPermHead.name())
     );
     assert_eq!(
         action_of(&rows[1], "card:"),

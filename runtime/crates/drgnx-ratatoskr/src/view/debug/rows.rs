@@ -6,6 +6,7 @@
 use super::model::Line;
 use crate::view::explorer::RowLook;
 use crate::view::icons;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::{self, Measure};
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::view::{Display, ViewEnv};
@@ -52,7 +53,7 @@ impl<'a> Room<'a> {
 }
 
 /// The face of a frame's place and a breakpoint's line at the right edge.
-const PLACE: &str = "drgnx-debug-view-place";
+const PLACE: &str = FaceId::DebugViewPlace.name();
 
 /// Where the row's text has got to, px: spaces and images count their size, text its measure.
 struct Pen<'r, 'a> {
@@ -97,16 +98,16 @@ impl Pen<'_, '_> {
 fn value_face(value: &str) -> &'static str {
     let v = value.trim();
     if v.starts_with('"') || v.starts_with('\'') || v.starts_with("b'") || v.starts_with("b\"") {
-        "drgnx-debug-view-string"
+        FaceId::DebugViewString.name()
     } else if !v.is_empty()
         && v.parse::<f64>().is_ok()
         && v.chars()
             .next()
             .is_some_and(|c| c.is_ascii_digit() || c == '-' || c == '.')
     {
-        "drgnx-debug-view-number"
+        FaceId::DebugViewNumber.name()
     } else {
-        "drgnx-debug-view-value"
+        FaceId::DebugViewValue.name()
     }
 }
 
@@ -116,7 +117,7 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
         x: 0,
         room,
     };
-    let guide = "drgnx-debug-view-guide";
+    let guide = FaceId::DebugViewGuide.name();
     match look.gui {
         Some((indent, icon, gap)) => {
             for _ in 0..l.depth {
@@ -158,27 +159,27 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
         } else {
             "[ ] "
         };
-        p.push(tick, Some("drgnx-debug-view-tick"));
+        p.push(tick, Some(FaceId::DebugViewTick.name()));
     }
     match l.kind {
         "section" => {
-            p.push(&l.label, Some("drgnx-debug-view-section"));
+            p.push(&l.label, Some(FaceId::DebugViewSection.name()));
         }
         "scope" | "var" | "watch" => {
             let name_face = if l.kind == "scope" {
-                "drgnx-debug-view-scope"
+                FaceId::DebugViewScope.name()
             } else {
-                "drgnx-debug-view-name"
+                FaceId::DebugViewName.name()
             };
             p.push(&l.label, Some(name_face));
             if l.lazy {
                 p.push(": ", None)
-                    .push("(…)", Some("drgnx-debug-view-link"));
+                    .push("(…)", Some(FaceId::DebugViewLink.name()));
             } else if let Some(v) = &l.value {
                 let face = if l.error {
-                    "drgnx-debug-view-error"
+                    FaceId::DebugViewError.name()
                 } else if l.changed {
-                    "drgnx-debug-view-changed"
+                    FaceId::DebugViewChanged.name()
                 } else {
                     value_face(v)
                 };
@@ -188,16 +189,16 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
             }
             if l.capped {
                 p.push("  ", None)
-                    .push("expand again", Some("drgnx-debug-view-type"));
+                    .push("expand again", Some(FaceId::DebugViewType.name()));
             }
         }
         "breakpoint" => {
             let (glyph, face) = match l.mark.unwrap_or("plain") {
-                "condition" => ("⊜ ", "drgnx-debug-view-breakpoint"),
-                "log" => ("◆ ", "drgnx-debug-view-breakpoint"),
-                "off" => ("○ ", "drgnx-debug-view-breakpoint-off"),
-                "unbound" => ("● ", "drgnx-debug-view-breakpoint-off"),
-                _ => ("● ", "drgnx-debug-view-breakpoint"),
+                "condition" => ("⊜ ", FaceId::DebugViewBreakpoint.name()),
+                "log" => ("◆ ", FaceId::DebugViewBreakpoint.name()),
+                "off" => ("○ ", FaceId::DebugViewBreakpointOff.name()),
+                "unbound" => ("● ", FaceId::DebugViewBreakpointOff.name()),
+                _ => ("● ", FaceId::DebugViewBreakpoint.name()),
             };
             p.push(glyph, Some(face));
             // `file:line[:col]`: the file here, the line at the right edge
@@ -211,9 +212,9 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
                     one_line(d)
                 };
                 let face = if l.mark == Some("unbound") {
-                    "drgnx-debug-view-type"
+                    FaceId::DebugViewType.name()
                 } else {
-                    "drgnx-debug-view-condition"
+                    FaceId::DebugViewCondition.name()
                 };
                 p.push("  ", None);
                 let fitted = room.fit(Some(face), &d, p.left(reserve));
@@ -225,7 +226,7 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
         }
         "frame" => {
             let face = if l.current {
-                Some("drgnx-debug-view-current")
+                Some(FaceId::DebugViewCurrent.name())
             } else {
                 None
             };
@@ -240,10 +241,10 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
             }
         }
         "more" => {
-            p.push(&l.label, Some("drgnx-debug-view-link"));
+            p.push(&l.label, Some(FaceId::DebugViewLink.name()));
         }
         "chunk" | "hidden" | "label" | "empty" => {
-            p.push(&l.label, Some("drgnx-debug-view-type"));
+            p.push(&l.label, Some(FaceId::DebugViewType.name()));
         }
         _ => {
             p.push(&l.label, None);
@@ -253,21 +254,21 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
         if let Some(c) = &l.chip {
             // a thread's state at the right edge; a running one quiet (debugging.html `.st2`, `.st2.run`)
             let face = if c == "RUNNING" {
-                "drgnx-debug-view-chip-quiet"
+                FaceId::DebugViewChipQuiet.name()
             } else {
-                "drgnx-debug-view-chip"
+                FaceId::DebugViewChip.name()
             };
             p.right(&format!(" {c} "), face);
         }
         if let Some(d) = &l.detail {
             p.push("  ", None)
-                .push(&one_line(d), Some("drgnx-debug-view-type"));
+                .push(&one_line(d), Some(FaceId::DebugViewType.name()));
         }
     }
     let mut b = p.b;
     let end = b.pos();
     if l.dim {
-        b.face(body, end, "drgnx-debug-view-dim");
+        b.face(body, end, FaceId::DebugViewDim.name());
     }
     b.prop(0, end, "drgnx-work-id", json!(l.id));
     b.finish()

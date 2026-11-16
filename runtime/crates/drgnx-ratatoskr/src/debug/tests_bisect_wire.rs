@@ -3,6 +3,7 @@
 
 use super::bisect::{Candidate, Stage};
 use super::bisect_wire::{Make, Pending, commits, materialise, stage_repo};
+use drgnx_rows::faces::FaceId;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
@@ -239,7 +240,7 @@ fn the_card_follows_the_events() {
     assert!(
         dots.runs
             .iter()
-            .any(|r| r.2 == "drgnx-debug-timeline-current")
+            .any(|r| r.2 == FaceId::DebugTimelineCurrent.name())
     );
     // a user's save: no revert or ask; narrowing's result
     let mut u = s.clone();

@@ -2,7 +2,7 @@
 //! Every face drgnx defines, by name: a renamed or removed face is a compile error where Rust names it.
 //! Rows still carry face names as strings (`FaceId::TextMuted.name()`); the generator is `harness/drgnx-design.el`
 //! (`docs/develop/design-system.md`). Numbered families (`drgnx-agent-1`...) are arrays indexed by the number
-//! less the first (`AGENT[0]` is `drgnx-agent-1`, `TERM_COLOR[0]` is `drgnx-term-color-0`).
+//! less the first (`FaceId::AGENT[0]` is `drgnx-agent-1`, `FaceId::TERM_COLOR[0]` is `drgnx-term-color-0`).
 
 /// A face drgnx defines, or one of the standard faces a view patch may name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2472,16 +2472,16 @@ impl FaceId {
             _ => return None,
         })
     }
+
+    /// `drgnx-agent-K`, by K.
+    pub const AGENT: [FaceId; 12] = [FaceId::Agent1, FaceId::Agent2, FaceId::Agent3, FaceId::Agent4, FaceId::Agent5, FaceId::Agent6, FaceId::Agent7, FaceId::Agent8, FaceId::Agent9, FaceId::Agent10, FaceId::Agent11, FaceId::Agent12];
+
+    /// `drgnx-term-color-K`, by K.
+    pub const TERM_COLOR: [FaceId; 16] = [FaceId::TermColor0, FaceId::TermColor1, FaceId::TermColor2, FaceId::TermColor3, FaceId::TermColor4, FaceId::TermColor5, FaceId::TermColor6, FaceId::TermColor7, FaceId::TermColor8, FaceId::TermColor9, FaceId::TermColor10, FaceId::TermColor11, FaceId::TermColor12, FaceId::TermColor13, FaceId::TermColor14, FaceId::TermColor15];
+
+    /// `drgnx-work-agent-K`, by K.
+    pub const WORK_AGENT: [FaceId; 6] = [FaceId::WorkAgent1, FaceId::WorkAgent2, FaceId::WorkAgent3, FaceId::WorkAgent4, FaceId::WorkAgent5, FaceId::WorkAgent6];
+
+    /// `drgnx-work-who-K`, by K.
+    pub const WORK_WHO: [FaceId; 6] = [FaceId::WorkWho1, FaceId::WorkWho2, FaceId::WorkWho3, FaceId::WorkWho4, FaceId::WorkWho5, FaceId::WorkWho6];
 }
-
-/// `drgnx-agent-K`, by K.
-pub const AGENT: [FaceId; 12] = [FaceId::Agent1, FaceId::Agent2, FaceId::Agent3, FaceId::Agent4, FaceId::Agent5, FaceId::Agent6, FaceId::Agent7, FaceId::Agent8, FaceId::Agent9, FaceId::Agent10, FaceId::Agent11, FaceId::Agent12];
-
-/// `drgnx-term-color-K`, by K.
-pub const TERM_COLOR: [FaceId; 16] = [FaceId::TermColor0, FaceId::TermColor1, FaceId::TermColor2, FaceId::TermColor3, FaceId::TermColor4, FaceId::TermColor5, FaceId::TermColor6, FaceId::TermColor7, FaceId::TermColor8, FaceId::TermColor9, FaceId::TermColor10, FaceId::TermColor11, FaceId::TermColor12, FaceId::TermColor13, FaceId::TermColor14, FaceId::TermColor15];
-
-/// `drgnx-work-agent-K`, by K.
-pub const WORK_AGENT: [FaceId; 6] = [FaceId::WorkAgent1, FaceId::WorkAgent2, FaceId::WorkAgent3, FaceId::WorkAgent4, FaceId::WorkAgent5, FaceId::WorkAgent6];
-
-/// `drgnx-work-who-K`, by K.
-pub const WORK_WHO: [FaceId; 6] = [FaceId::WorkWho1, FaceId::WorkWho2, FaceId::WorkWho3, FaceId::WorkWho4, FaceId::WorkWho5, FaceId::WorkWho6];

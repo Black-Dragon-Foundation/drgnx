@@ -12,6 +12,7 @@ use super::explorer::{EXCLUDE_MAX, Exclude};
 use super::{Key, Views, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::{Row, RowBuilder};
 use hrafn::WatchEvent;
 use hrafn::grep::Ignore;
@@ -32,7 +33,7 @@ pub const MAX_N: u32 = 1000;
 /// Roots whose names are kept; the one used longest ago goes first.
 pub const LISTS_MAX: usize = 8;
 /// The face of a query's words in a row.
-const MATCH_FACE: &str = "drgnx-quick-open-match";
+const MATCH_FACE: &str = FaceId::QuickOpenMatch.name();
 
 /// The rule a listing follows: the call's when it says, else the setting `drgnx-search-ignore-rules` (SETTING, its
 /// value); `index` when neither says `real`.

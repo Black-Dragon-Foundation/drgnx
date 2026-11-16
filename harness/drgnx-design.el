@@ -477,7 +477,7 @@ text (nothing is loaded): files in name order, forms in file order.  Faces made 
      "//! Every face drgnx defines, by name: a renamed or removed face is a compile error where Rust names it.\n"
      "//! Rows still carry face names as strings (`FaceId::TextMuted.name()`); the generator is `harness/drgnx-design.el`\n"
      "//! (`docs/develop/design-system.md`). Numbered families (`drgnx-agent-1`...) are arrays indexed by the number\n"
-     "//! less the first (`AGENT[0]` is `drgnx-agent-1`, `TERM_COLOR[0]` is `drgnx-term-color-0`).\n\n"
+     "//! less the first (`FaceId::AGENT[0]` is `drgnx-agent-1`, `FaceId::TERM_COLOR[0]` is `drgnx-term-color-0`).\n\n"
      "/// A face drgnx defines, or one of the standard faces a view patch may name.\n"
      "#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]\n#[non_exhaustive]\npub enum FaceId {\n"
      (mapconcat (lambda (f) (format "    /// `%s`\n    %s," f (drgnx-design--camel f))) faces "\n")
@@ -490,12 +490,13 @@ text (nothing is loaded): files in name order, forms in file order.  Faces made 
      "    /// The face named NAME, if drgnx defines it.\n    pub fn from_name(name: &str) -> Option<FaceId> {\n"
      "        Some(match name {\n"
      (mapconcat (lambda (f) (format "            \"%s\" => FaceId::%s," f (drgnx-design--camel f))) faces "\n")
-     "\n            _ => return None,\n        })\n    }\n}\n"
+     "\n            _ => return None,\n        })\n    }\n"
      (mapconcat (lambda (family)
-                  (format "\n/// `%s-K`, by K.\npub const %s: [FaceId; %d] = [%s];\n" (car family)
+                  (format "\n    /// `%s-K`, by K.\n    pub const %s: [FaceId; %d] = [%s];\n" (car family)
                           (drgnx-design--snake (car family)) (length (cdr family))
                           (mapconcat (lambda (f) (format "FaceId::%s" (drgnx-design--camel f))) (cdr family) ", ")))
-                (drgnx-design--families faces) ""))))
+                (drgnx-design--families faces) "")
+     "}\n")))
 
 (defun drgnx-design--faces-eld (&optional root)
   "etc/ui/faces.eld: the faces of `drgnx-design-face-names', for Lisp."

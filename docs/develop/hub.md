@@ -2385,6 +2385,12 @@ it builds for Android too).
   (`(space :align-to (PX))`); an image takes one placeholder character too, and so does a space, shown as WIDTH x
   HEIGHT device px (`(space :width (W) :height (H))`, a card's progress bar) in its run's face. Empty lists are left out. Runs may
   overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
+- **Faces by `FaceId`.** Rust never spells a drgnx face as a string: it writes `FaceId::TextMuted.name()` (or a
+  family's `FaceId::AGENT[i].name()`), from the generated `drgnx_rows::faces` (`bin/drgnx design`; see
+  `docs/develop/design-system.md`, "Generated code"), so a renamed or removed face is a compile error. `RowBuilder`
+  keeps its `&str` API. The lint `drgnx-lint/rust-faces-through-the-enum` (`test/unit/lint-kit-test.el`) counts the
+  face literals and family `format!`s left per file against `drgnx-lint-kit--rust-face-literals-not-yet`, which only
+  falls; the standard faces (`default`, `bold`, `error`, …) are left as words.
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
 - **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no

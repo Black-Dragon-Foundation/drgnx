@@ -9,6 +9,7 @@ use drgnx_rows::{Row, RowBuilder};
 use serde_json::Value;
 
 use crate::render::Env;
+use drgnx_rows::faces::FaceId;
 
 /// A time zone as the editor's offset from UTC, in seconds (`view/env`'s `tz`: `+HHMM`, as `%z` prints it).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -128,7 +129,7 @@ fn put_icon(
             b.image(id, icon(kind));
         }
         None => {
-            b.push(icon(kind), Some("drgnx-work-label"));
+            b.push(icon(kind), Some(FaceId::WorkLabel.name()));
         }
     }
 }
@@ -196,7 +197,7 @@ pub fn title(s: &Step) -> String {
 fn segments(s: &Step) -> Vec<(String, Option<&'static str>)> {
     let d = &s.detail;
     let plain = |t: String| (t, None);
-    let path = |t: String| (t, Some("drgnx-accent"));
+    let path = |t: String| (t, Some(FaceId::Accent.name()));
     match kind(s) {
         "read" => {
             let mut out = vec![plain("read ".into())];
@@ -214,20 +215,20 @@ fn segments(s: &Step) -> Vec<(String, Option<&'static str>)> {
                 (None, Some(h)) => h,
                 (None, None) => title(s),
             };
-            vec![plain("web ".into()), (text, Some("drgnx-text-muted"))]
+            vec![plain("web ".into()), (text, Some(FaceId::TextMuted.name()))]
         }
         "thought" => match &d.title {
-            Some(t) => vec![(format!("thought: {t}"), Some("drgnx-work-thought"))],
-            None => vec![("thinking".into(), Some("drgnx-work-thought"))],
+            Some(t) => vec![(format!("thought: {t}"), Some(FaceId::WorkThought.name()))],
+            None => vec![("thinking".into(), Some(FaceId::WorkThought.name()))],
         },
         "edit" => {
             let mut out = vec![plain("edit ".into()), path(title(s))];
             for w in d.title.iter().flat_map(|t| t.split(' ')) {
                 out.push(plain(" ".into()));
                 let face = if w.starts_with('+') {
-                    "drgnx-work-plus"
+                    FaceId::WorkPlus.name()
                 } else {
-                    "drgnx-work-minus"
+                    FaceId::WorkMinus.name()
                 };
                 out.push((w.to_owned(), Some(face)));
             }
@@ -297,7 +298,7 @@ fn build(
         let k = kind(s);
         // a step a conclusion rests on starts with its number in a circle; the others keep the room
         match concs.iter().find(|c| c.rests_on.contains(&s.id)) {
-            Some(c) => b.push(&format!(" {} ", c.n), Some("drgnx-work-step-number")),
+            Some(c) => b.push(&format!(" {} ", c.n), Some(FaceId::WorkStepNumber.name())),
             None => b.push("   ", None),
         };
         b.stop((30.0 * env.scale) as u32);
@@ -318,8 +319,8 @@ fn build(
             _ => {}
         }
         let end = b.pos();
-        b.face(from, end, "drgnx-work-meta")
-            .face(0, end, "drgnx-work-pane");
+        b.face(from, end, FaceId::WorkMeta.name())
+            .face(0, end, FaceId::WorkPane.name());
         b.prop(0, end, "drgnx-work-step", Value::from(s.id)).prop(
             0,
             end,
@@ -338,7 +339,7 @@ fn build(
                 .stop(right)
                 .push(&zone.time(end), None);
             let to = b.pos();
-            b.face(0, to, "drgnx-work-pane");
+            b.face(0, to, FaceId::WorkPane.name());
             out.push(b.finish());
         }
     }
@@ -384,21 +385,21 @@ fn conclusion_rows(
             let mut b = RowBuilder::new(format!("conc:{}:{i}", c.n));
             if i == 0 {
                 put_icon(&mut b, env, &c.kind, images);
-                b.push(&format!(" {name} "), Some("drgnx-work-title"))
-                    .push(&format!(" {} ", c.n), Some("drgnx-chip-solid"))
-                    .push(&format!(" {}", c.text), Some("drgnx-work-title"));
+                b.push(&format!(" {name} "), Some(FaceId::WorkTitle.name()))
+                    .push(&format!(" {} ", c.n), Some(FaceId::ChipSolid.name()))
+                    .push(&format!(" {}", c.text), Some(FaceId::WorkTitle.name()));
                 if new {
                     // `new`, plain text at the card's right: a box of its own would break the ring
                     b.stop(env.width_px.saturating_sub((64.0 * env.scale) as u32));
-                    b.push(" new ", Some("drgnx-work-new"));
+                    b.push(" new ", Some(FaceId::WorkNew.name()));
                 }
             } else {
                 b.push(
                     &format!("   based on {based}{unmatched} · "),
-                    Some("drgnx-text-muted"),
+                    Some(FaceId::TextMuted.name()),
                 )
-                .push(" l ", Some("drgnx-chip-quiet"))
-                .push(" light them · ↵ sources", Some("drgnx-text-muted"));
+                .push(" l ", Some(FaceId::ChipQuiet.name()))
+                .push(" light them · ↵ sources", Some(FaceId::TextMuted.name()));
             }
             // the card runs to the tile's right edge: a stop, in the card's face
             b.stop(env.width_px.saturating_sub((8.0 * env.scale) as u32));
@@ -407,12 +408,12 @@ fn conclusion_rows(
                 0,
                 end,
                 if i == 0 {
-                    "drgnx-card-sel-top"
+                    FaceId::CardSelTop.name()
                 } else {
-                    "drgnx-card-sel-bottom"
+                    FaceId::CardSelBottom.name()
                 },
             )
-            .face(0, end, "drgnx-work-pane")
+            .face(0, end, FaceId::WorkPane.name())
             .prop(0, end, "drgnx-work-conclusion", Value::from(c.n))
             .prop(
                 0,
@@ -436,12 +437,12 @@ pub struct Lane {
 /// The face of a step's segment, by its kind.
 fn seg_face(kind: &str) -> &'static str {
     match kind {
-        "read" | "search" | "web" => "drgnx-work-seg-read",
-        "edit" => "drgnx-work-seg-edit",
-        "thought" => "drgnx-work-seg-think",
-        "job" => "drgnx-work-seg-job",
-        "waiting" => "drgnx-work-seg-wait",
-        _ => "drgnx-work-seg-tool",
+        "read" | "search" | "web" => FaceId::WorkSegRead.name(),
+        "edit" => FaceId::WorkSegEdit.name(),
+        "thought" => FaceId::WorkSegThink.name(),
+        "job" => FaceId::WorkSegJob.name(),
+        "waiting" => FaceId::WorkSegWait.name(),
+        _ => FaceId::WorkSegTool.name(),
     }
 }
 
@@ -478,18 +479,18 @@ pub fn timeline_rows(lanes: &[Lane], env: &Env, m: &dyn Measure, zone: Zone) -> 
     };
     axis.push(
         &format!("{}{}{to}", " ".repeat(20), zone.time(t0)),
-        Some("drgnx-work-label"),
+        Some(FaceId::WorkLabel.name()),
     );
     let mut out = vec![axis.finish()];
     for lane in lanes {
         let mut b = RowBuilder::new(format!("lane:{}", lane.id));
         let label = drgnx_rows::fit::fit_in(
             m,
-            Some("drgnx-work-label"),
+            Some(FaceId::WorkLabel.name()),
             &lane.label,
             130.0 + drgnx_rows::fit::SLACK,
         );
-        b.push(&label, Some("drgnx-work-label"));
+        b.push(&label, Some(FaceId::WorkLabel.name()));
         let end = b.pos();
         b.prop(
             0,
