@@ -2090,8 +2090,10 @@ Edits have their own words (table in `runtime/conformance/src/mock_acp/mod.rs`):
 
 The step table's schema 13 (`norn::migrate13`) adds `machine`, `slots_used`, `slots_total` and the index
 `step_session_start (session, start)`. A step carries the machine it ran on (`Step.machine`; none: the hub's own or not
-known) and a machine-queue step the slots in use and in all when its wait began (`Step.slots`); the hub does not fill
-them yet (`JobEvent::Queued` is no longer sent and a session has no placement to read). A roll-up carries `first` (the
+known) and a machine-queue step the slots in use and in all when its wait began (`Step.slots`); a session's steps carry its machine, the hub's own (`work::machines::LOCAL`) until
+`Session::set_machine` says another (the placement's setter); `slots` stay empty, because nothing queues a session for a
+machine any more (`JobEvent::Queued` and `Admitted` are not sent: a job that finds the machine full is recorded as queued
+and its starter told at once, so no step waits in the queue). A roll-up carries `first` (the
 first step's start) and `last` (the last step's end, none while a step is open).
 
 ### The presence model

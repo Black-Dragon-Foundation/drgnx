@@ -1054,6 +1054,8 @@ pub struct Session {
     writer: crate::coord::Writer,
     /// The plan and project each session works under (the matrix's project and plan layers).
     scopes: crate::runner::Scopes,
+    /// The machine the session's process runs on, stamped on each step ([`Session::set_machine`]).
+    machine: Arc<Mutex<String>>,
     budgets: crate::budget::Budgets,
     /// The token of the session's gateway registration (a gateway profile).
     gateway: Mutex<Option<String>>,
@@ -2401,6 +2403,7 @@ fn assemble(
     let (done, done_rx) = tokio::sync::mpsc::unbounded_channel();
     let (steps, rx) = tokio::sync::mpsc::unbounded_channel();
     let flow = Arc::new(StepFlow::default());
+    let machine = Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string()));
     let ctx = StepCtx {
         flow: flow.clone(),
         session: i.id.clone(),
@@ -2409,6 +2412,7 @@ fn assemble(
         provider: step_provider(profile),
         cwd: i.cwd.clone(),
         acp: Some(l.acp.0.to_string()),
+        machine: machine.clone(),
         history: front
             .dirs
             .get()
@@ -2524,6 +2528,7 @@ fn assemble(
         settings: front.settings.clone(),
         writer: front.writer.clone(),
         scopes: front.core.runs.scopes(),
+        machine,
         budgets: front.core.budgets.clone(),
         gateway: Mutex::new(l.gateway.clone()),
         net: Mutex::new(l.net),
@@ -3259,6 +3264,8 @@ struct StepCtx {
     cwd: PathBuf,
     /// The agent conversation its steps run in.
     acp: Option<String>,
+    /// The machine its process runs on (the hub's own, `work::machines::LOCAL`, until [`Session::set_machine`]).
+    machine: Arc<Mutex<String>>,
     /// The projects' edit histories and the hub's state folder, to name the record a step anchors (none: a test).
     history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
 }
@@ -3300,7 +3307,9 @@ fn step_row(c: &ClosedStep, sink: &StepSink, ctx: &StepCtx) -> StepRow {
         snapshot: None,
         log_version: None,
         acp: ctx.acp.clone(),
-        machine: None,
+        machine: Some(lock(&ctx.machine).clone()),
+        // no slots: nothing queues a session for a machine any more (`exec::JobEvent`: Queued and Admitted are not
+        // sent), so no step waits on one
         slots: None,
     };
     let end = table::StepEnd {
@@ -5704,6 +5713,17 @@ impl Session {
         n
     }
 
+    /// The machine the session's process runs on: `work::machines::LOCAL` (the hub's own) from the start.
+    pub fn machine(&self) -> String {
+        lock(&self.machine).clone()
+    }
+
+    /// Say where the session's process runs (a machine of the registry): the steps written from now on carry it
+    /// (`Step.machine`).  The hub's own machine until a placement says otherwise.
+    pub fn set_machine(&self, machine: &str) {
+        *lock(&self.machine) = machine.to_owned();
+    }
+
     /// The session's job waits for a machine (ON), or got one.
     pub(crate) fn queue_wait(self: &Arc<Self>, on: bool) {
         {
@@ -7489,6 +7509,77 @@ mod tests {
         assert_eq!(st.closed[1].open.tool_kind.as_deref(), Some("read"));
     }
 
+    /// A step's row carries the machine its session's process runs on: the hub's own to start with, and what
+    /// `set_machine` says after.
+    #[tokio::test]
+    async fn a_steps_row_carries_the_sessions_machine() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, _seen) = tokio::sync::broadcast::channel(4);
+        let machine = Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string()));
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: None,
+            agent: "mock".into(),
+            provider: None,
+            cwd: PathBuf::new(),
+            acp: None,
+            machine: machine.clone(),
+            history: None,
+        };
+        let sink = StepSink {
+            writer,
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+            predict: None,
+        };
+        let closed = ClosedStep {
+            open: OpenStep {
+                class: StepClass::Think,
+                start: 1.0,
+                tool: None,
+                tool_kind: None,
+                tool_id: None,
+                message_id: None,
+                key: 0,
+                mcp: false,
+                parent_tool: None,
+            },
+            end: 2.0,
+            turn_id: None,
+            tokens_in: 0,
+            tokens_out: 0,
+            cache_read: 0,
+            cache_write: 0,
+            cost: None,
+            detail: None,
+            command: None,
+            context: None,
+            before: None,
+            call_end: None,
+            diffs: Vec::new(),
+            cell: None,
+        };
+        let (row, _, _) = step_row(&closed, &sink, &ctx);
+        assert_eq!(row.machine.as_deref(), Some("local"));
+        assert_eq!(row.slots, None, "nothing queues a session for a machine");
+        *lock(&machine) = "desktop".into();
+        let (row, _, _) = step_row(&closed, &sink, &ctx);
+        assert_eq!(row.machine.as_deref(), Some("desktop"));
+    }
+
     #[tokio::test]
     async fn closed_steps_reach_the_step_table_in_order_and_are_announced() {
         let dir = tempfile::tempdir().unwrap();
@@ -7507,6 +7598,7 @@ mod tests {
             provider: None,
             cwd: PathBuf::new(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: None,
         };
         let sink = StepSink {
@@ -7616,6 +7708,7 @@ mod tests {
             provider: None,
             cwd: PathBuf::new(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: None,
         };
         let sink = StepSink {
@@ -7695,6 +7788,7 @@ mod tests {
             provider: None,
             cwd: PathBuf::new(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: None,
         };
         let sink = StepSink {
@@ -7797,6 +7891,7 @@ mod tests {
             provider: None,
             cwd: work.clone(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: Some((hubs.clone(), state)),
         };
         let sink = StepSink {
@@ -7903,6 +7998,7 @@ mod tests {
             provider: None,
             cwd: work.clone(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: Some((hubs.clone(), state)),
         };
         let sink = StepSink {
@@ -8009,6 +8105,7 @@ mod tests {
             provider: None,
             cwd: wt.clone(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -8097,6 +8194,7 @@ mod tests {
             provider: None,
             cwd: wt.clone(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
