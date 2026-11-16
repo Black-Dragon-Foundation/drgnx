@@ -215,6 +215,28 @@ pending, corfu's auto timer run, and no other timer due within 1 s.")
         (should-not (drgnx-tty-session-eval s '(assq 'corfu-quit kx-seen)))
         (should (equal (drgnx-tty-session-eval s '(with-current-buffer "x.el" (buffer-string))) "(with-"))))))
 
+(ert-deftest drgnx-tty-popups/a-typed-absolute-path-replaces-the-prompt-s-folder ()
+  ;; Open Folder starts at ~/; typing /tmp there reads as /tmp in the input, as VS Code's path box does, not as
+  ;; ~//tmp (the shadowed ~/ is dropped once something is typed after it)
+  (let ((dirs (drgnx-tty-session-require-packages '(vertico orderless marginalia corfu compat))))
+    (drgnx-tty-popups-test--with (s :size "100x30")
+      (should (drgnx-tty-session-eval
+               s `(progn (dolist (d ',dirs) (add-to-list 'load-path d))
+                         (drgnx-modules-turn-on 'extra/completion)
+                         ;; a prompt only from a key the user types (<f8>: no key profile claims it)
+                         (global-set-key (kbd "<f8>") (lambda () (interactive)
+                                                        (let ((default-directory "~/"))
+                                                          (read-directory-name "Open folder: " nil nil t))))
+                         (drgnx-module-running-p 'extra/completion))))
+      (drgnx-tty-popups-test--key s "<f8>")
+      (drgnx-tty-session-wait s '(and (active-minibuffer-window) t) 10)
+      (drgnx-tty-session-send s "/tmp")
+      (let ((input '(with-current-buffer (window-buffer (active-minibuffer-window)) (minibuffer-contents))))
+        (drgnx-tty-session-wait s `(string-suffix-p "tmp" ,input) 10)
+        (should (equal (drgnx-tty-session-eval s input) "/tmp")))
+      (drgnx-tty-popups-test--key s "C-g")
+      (drgnx-tty-session-wait s '(null (active-minibuffer-window)) 10))))
+
 ;;;; The cursor line stays visible
 
 (ert-deftest drgnx-tty-popups/the-cursor-line-stays-visible ()
