@@ -111,18 +111,18 @@
           (ignore at-left at-right))
         (should (eq (window-buffer (selected-window)) a))))))
 
-(ert-deftest drgnx-grid-moves/swap-with-a-dock-keeps-the-places-sizes ()
-  ;; a docked tile's preserved size is its place's: swapped into an editor's place, it does not take it along (I11's
-  ;; C-k S-<down> from an editor onto the panel)
+(ert-deftest drgnx-grid-moves/a-swapped-dock-stays-a-tile ()
+  ;; a docked area's window swapped into an editor's place is no dock's any more but still a tile, holding the kind
+  ;; (it was no tile at all).  The dock's preserved height staying with its place is I11's (drgnx-inv/i11-…): a batch
+  ;; frame does not trade the sizes even without the fix.
   (drgnx-grid-test--with
-    (let ((one (selected-window)))
+    (let ((two (drgnx-groups-split-right)))
       (drgnx-pane-show 'g-term)
       (let* ((term (drgnx-pane-window 'g-term)) (id (window-parameter term 'drgnx-tile-id))
              (places (drgnx-grid-moves-test--places)))
         (should (window-parameter term 'drgnx-tile-dock))
-        (drgnx-grid-swap one term)
+        (drgnx-grid-swap two term)
         (should (equal (drgnx-grid-moves-test--places) places))
-        ;; no dock's any more, still a tile holding the terminal
         (let ((moved (drgnx-grid-moves-test--by-id id)))
           (should (drgnx-grid-tool-tile-p moved))
           (should-not (window-parameter moved 'drgnx-tile-dock))

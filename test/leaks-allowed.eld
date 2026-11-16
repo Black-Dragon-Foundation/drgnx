@@ -59,7 +59,7 @@ string-pixel-width uses)")
  (:what "\\`frame-param drgnx-\\(?:wb-\\|intent-by\\|layouts-\\|look-\\|frame-role\\|monitor\\|platform-wm\\|work-space-shown\\)"
   :why "the workbench's own layout and look bookkeeping in the frame parameters: every file that opens a panel sets it; the look rows' drgnx-look-gui-check-clean reads what moves pixels")
  (:what "\\`frame-param drgnx-grid-[-a-z]+ \\+nil\\'"
-  :why "the grid's bookkeeping on the frame (ids, memory, the undo stack, the last good tree), emptied by the grid fixture's reset: a frame parameter cannot be removed, only emptied")
+  :why "the grid's bookkeeping on the frame (ids, memory, the undo stack, the last good tree), emptied by the grid fixture's reset.  It cannot be removed: Emacs has no call that deletes a frame parameter (`modify-frame-parameters' and `set-frame-parameter' only store into the frame's alist, nil included, and `frame-parameters' returns a copy), so the census sees the name with nil")
  (:what "\\`frame-param drgnx-popup-frame \\+nil\\'"
   :why "the popup lane's slot on the frame, empty again: the row deleted the popup's frame (a frame parameter cannot be removed, only emptied)")
  (:what "\\`advice server-visit-files \\+drgnx-session--visit-unasked\\'"
