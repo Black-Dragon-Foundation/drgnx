@@ -748,6 +748,16 @@ impl Front {
                 crate::view::panel::look(self, &caller, p).map(|b| json!(b))
             }
             Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
+            // the Agents side: a card per session (view::agents_side)
+            Params::AgentsSideSubscribe(p) => {
+                crate::view::agents_side::subscribe(self, &caller, p).map(|b| json!(b))
+            }
+            Params::AgentsSideSet(p) => {
+                crate::view::agents_side::set(self, &caller, p).map(|b| json!(b))
+            }
+            Params::AgentsSideClose(p) => {
+                crate::view::agents_side::close(self, &caller, p).map(|b| json!(b))
+            }
             // the Changes view: what the agents changed, by task (view::changes)
             Params::ChangesSubscribe(p) => crate::view::changes::subscribe(self, &caller, p)
                 .await

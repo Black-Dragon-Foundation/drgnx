@@ -368,7 +368,7 @@ impl Sess {
 }
 
 /// A snapshot's state on the map.
-fn state_of(s: &Snapshot) -> State {
+pub(crate) fn state_of(s: &Snapshot) -> State {
     if !s.permissions.is_empty() {
         return State::NeedsYou;
     }
@@ -863,6 +863,10 @@ impl Map {
 
     /// A session's snapshot and its subagents, from its `agent` emit.
     pub fn session(self: &Arc<Self>, snap: &Snapshot, kids: &[crate::work::subagents::Child]) {
+        // the Agents side follows every session, a map open or not
+        if let Some(f) = self.front.get().and_then(Weak::upgrade) {
+            f.core.views.agents_side_changed(&f);
+        }
         if !self.open() {
             return;
         }

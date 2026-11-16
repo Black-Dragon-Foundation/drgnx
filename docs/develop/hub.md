@@ -1330,6 +1330,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
 | `agents/send` | user | `{id: Id, if_free?: boolean, text: Prompt}` | `boolean` | yes |
+| `agents/side/close` | user | `{view: string}` | `boolean` | no |
+| `agents/side/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
+| `agents/side/subscribe` | user | `{view: string}` | `boolean` | no |
 | `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no |
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |

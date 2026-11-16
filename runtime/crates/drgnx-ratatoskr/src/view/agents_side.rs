@@ -3,9 +3,137 @@
 //! sessions and an `All ›` row. Each card is a few rows keyed by its session, so one session's change patches only
 //! its card's rows. Plain `RowBuilder` text until the kit draws the cards (Task 24).
 
+use crate::dispatch::Caller;
+use crate::front::Front;
+use crate::view::{Key, Views};
 use drgnx_rows::{Row, RowBuilder};
+use runstav::methods::agents_side::{Set, Subscribe, ViewId};
+use runstav::methods::past::PastProvider;
+use runstav::wire::Error;
 use serde_json::json;
+use std::collections::BTreeSet;
+use std::sync::{Mutex, MutexGuard};
 use vegvisir::State;
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The Agents side views of every connection.
+#[derive(Default)]
+pub struct AgentsSides {
+    views: Mutex<BTreeSet<(u64, String)>>,
+}
+
+impl AgentsSides {
+    pub(super) fn gone(&self, conn: u64) {
+        lock(&self.views).retain(|(c, _)| *c != conn);
+    }
+}
+
+/// Every session the side shows: the live ones (the hub's table, in start order: a later one is the more recent), then
+/// the past sessions of Claude Code, Gemini CLI and Codex (newest first).
+pub fn sessions_now(f: &Front) -> Vec<SessionIn> {
+    let live = f.core.agents.live_sessions();
+    let n = live.len() as u64;
+    let mut out: Vec<SessionIn> = live
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let snap = s.snapshot();
+            SessionIn {
+                id: snap.id.clone(),
+                name: snap.name.clone().unwrap_or_else(|| snap.id.clone()),
+                provider: snap.profile.clone().unwrap_or_default(),
+                task_title: snap.task.clone().unwrap_or_default(),
+                state: crate::work::map::state_of(&snap),
+                progress: None,
+                last_activity: 1 + i as u64,
+                edits_ready: !snap.reviews.is_empty(),
+                past: false,
+                seq: 1 + i as u64,
+            }
+        })
+        .collect();
+    let past = f.core.past.sessions();
+    let total = past.len() as u64;
+    out.extend(past.into_iter().enumerate().map(|(i, p)| {
+        SessionIn {
+            id: format!("past:{}", p.id),
+            name: p.title.clone(),
+            provider: match p.provider {
+                PastProvider::Claude => "Claude",
+                PastProvider::Gemini => "Gemini",
+                PastProvider::Codex => "Codex",
+            }
+            .to_owned(),
+            task_title: p.cwd.clone().unwrap_or_default(),
+            state: State::Finished,
+            progress: None,
+            // newest first in the list: keep that order below the live ones
+            last_activity: total - i as u64,
+            edits_ready: false,
+            past: true,
+            seq: n + 1 + i as u64,
+        }
+    }));
+    out
+}
+
+impl Views {
+    /// The rows of KEY's Agents side for its class; false when the view is none.
+    pub(super) fn agents_side_build(&self, f: &Front, key: &Key) -> bool {
+        if !lock(&self.agents_sides.views).contains(&(key.0, key.1.clone())) {
+            return false;
+        }
+        let rows = rows(&sessions_now(f));
+        self.publish_built(f, key, |_, _| (rows, Vec::new()));
+        true
+    }
+
+    fn agents_side_show(&self, f: &Front, conn: u64, view: &str) {
+        self.publish_rows(f, conn, view, rows(&sessions_now(f)));
+    }
+
+    /// A session changed: every Agents side shown reads the sessions again, and only the cards that changed go out.
+    pub fn agents_side_changed(&self, f: &Front) {
+        let views: Vec<(u64, String)> = lock(&self.agents_sides.views).iter().cloned().collect();
+        if views.is_empty() {
+            return;
+        }
+        let rows = rows(&sessions_now(f));
+        for (c, v) in views {
+            self.publish_rows(f, c, &v, rows.clone());
+        }
+    }
+}
+
+/// `agents/side/subscribe`.
+pub fn subscribe(f: &Front, c: &Caller, p: Subscribe) -> Result<bool, Error> {
+    lock(&f.core.views.agents_sides.views).insert((c.conn_id, p.view.clone()));
+    f.core.views.agents_side_show(f, c.conn_id, &p.view);
+    Ok(true)
+}
+
+/// `agents/side/set`: refresh reads the sessions and the past sessions again.
+pub fn set(f: &Front, c: &Caller, p: Set) -> Result<bool, Error> {
+    if !lock(&f.core.views.agents_sides.views).contains(&(c.conn_id, p.view.clone())) {
+        return Err(Error {
+            code: runstav::wire::ErrorCode::InvalidParams,
+            message: "not an Agents side view (agents/side/subscribe first)".into(),
+            path: Some("view".into()),
+        });
+    }
+    if p.refresh {
+        f.core.views.agents_side_show(f, c.conn_id, &p.view);
+    }
+    Ok(true)
+}
+
+/// `agents/side/close`.
+pub fn close(f: &Front, c: &Caller, p: ViewId) -> Result<bool, Error> {
+    Ok(lock(&f.core.views.agents_sides.views).remove(&(c.conn_id, p.view)))
+}
 
 /// How many past sessions "Earlier" lists.
 pub const EARLIER: usize = 5;
