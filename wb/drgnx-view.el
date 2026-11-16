@@ -25,6 +25,7 @@
 (require 'drgnx-wb)
 (require 'drgnx-state)                  ; whether a view shows: the workbench state store
 (require 'drgnx-ui-kit)                 ; an action's keymap (`drgnx-ui-kit-action-map')
+(require 'drgnx-file)                   ; etc/ui/faces.eld, read by a strict test run's face counter
 
 (defvar drgnx-signal-errors)            ; drgnx-signal, when loaded
 (declare-function drgnx-gc-gap "drgnx-gc" ())
@@ -2013,9 +2014,33 @@ drawn."
 
 ;;;; Rendering a stored row
 
+(defvar drgnx-test-strict-faces nil
+  "Non-nil in a strict test run (DRGNX_TEST_STRICT_FACES=1, set by harness/run-ert.el): a row's face name that is no
+face and not in etc/ui/faces.eld is counted in `drgnx-view-unknown-faces', and the run fails the file.")
+
+(defvar drgnx-view-unknown-faces (make-hash-table :test #'equal)
+  "Face name → how many times a row named it while it was unknown (`drgnx-test-strict-faces').  Bounded by the
+names rows carry: only filled in a test run.")
+
+(defvar drgnx-view--known-faces nil
+  "The face names of etc/ui/faces.eld (every face drgnx defines, a module's that is off included), as a hash; read
+the first time a strict run needs it.")
+
+(defun drgnx-view--known-face-p (name)
+  "Non-nil when NAME is in etc/ui/faces.eld."
+  (unless drgnx-view--known-faces
+    (let ((h (make-hash-table :test #'equal)))
+      (dolist (f (plist-get (drgnx-file-read (expand-file-name "etc/ui/faces.eld" drgnx-dir)) :data))
+        (puthash (symbol-name f) t h))
+      (setq drgnx-view--known-faces h)))
+  (gethash name drgnx-view--known-faces))
+
 (defun drgnx-view-patch--face (name)
-  "The face NAME names, when it is one a row may use; never interns NAME."
+  "The face NAME names, when it is one a row may use; never interns NAME.  In a strict test run a NAME that is no face
+and no face drgnx defines is counted (`drgnx-view-unknown-faces')."
   (let ((f (intern-soft name)))
+    (when (and drgnx-test-strict-faces (not (and f (facep f))) (stringp name) (not (drgnx-view--known-face-p name)))
+      (puthash name (1+ (gethash name drgnx-view-unknown-faces 0)) drgnx-view-unknown-faces))
     (and f (facep f) (or (memq f drgnx-view-patch-faces) (string-prefix-p "drgnx-" name)) f)))
 
 (defun drgnx-view-patch--prop (name)

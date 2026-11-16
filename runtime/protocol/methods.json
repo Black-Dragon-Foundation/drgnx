@@ -9545,6 +9545,94 @@
       "classes": [
         "user"
       ],
+      "doc": "an Agents side view is shown no more",
+      "name": "agents/side/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view id: `agents/side/close`.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "ViewId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a change to an Agents side view: refresh reads the sessions and the past sessions again",
+      "name": "agents/side/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/side/set`: a change to VIEW: REFRESH reads the sessions and the past sessions again.",
+        "properties": {
+          "refresh": {
+            "default": false,
+            "type": "boolean"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Set",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a hub-fed view shows the Agents side: a card per session (needs you first, then running, then the rest by last activity), each with one button, and the five newest past sessions under Earlier; one session's change patches only its card's rows",
+      "name": "agents/side/subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/side/subscribe`: VIEW shows the Agents side; its rows come as `view-patch` per display class and follow\nevery session's change.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Subscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "steps of a session's transcript with their entries (at most 50; never a whole transcript)",
       "name": "agents/slice",
       "params": {

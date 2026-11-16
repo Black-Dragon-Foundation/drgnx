@@ -401,6 +401,23 @@ stays a skip."
                            :condition (format "DRGNX_NIDHOGG_STRICT=1: skipped for Sjá, which this Emacs has not: %s"
                                               (plist-get s :reason))))))
 
+;; With DRGNX_TEST_STRICT_FACES=1 (the check runner's strict runs) a hub row that names a face which is none and is not
+;; in etc/ui/faces.eld (a stale name: a module's face that is off is known) is counted by `drgnx-view-patch--face';
+;; a file whose Emacs ends with any counted is an unexpected result.
+(defvar drgnx-test-strict-faces)
+(defvar drgnx-view-unknown-faces)
+
+(defun drgnx-run-ert--unknown-face-failures (files)
+  "Under DRGNX_TEST_STRICT_FACES=1, one failure (:name :condition) for the test FILES when their rows named unknown
+faces (`drgnx-view-unknown-faces'), naming each with its count; else nil."
+  (when (and (bound-and-true-p drgnx-test-strict-faces) (boundp 'drgnx-view-unknown-faces)
+             (> (hash-table-count drgnx-view-unknown-faces) 0))
+    (let (pairs)
+      (maphash (lambda (k v) (push (format "%s (%d)" k v) pairs)) drgnx-view-unknown-faces)
+      (let ((text (format "file %s: unknown faces: %s" (mapconcat #'file-name-nondirectory files ", ")
+                          (string-join (sort pairs #'string<) ", "))))
+        (list (list :name text :condition (concat text " (a row names a face that is none: fix the name at its source)")))))))
+
 (defun drgnx-run-ert--flaky-file ()
   "The listed flakes: DRGNX_TEST_FLAKY (a file), else test/flaky.eld of this checkout."
   (let ((given (drgnx-run-ert--env "DRGNX_TEST_FLAKY")))
@@ -877,6 +894,7 @@ summary to RESULTS-FILE.  Return t if every test passed."
     (advice-add 'ert-run-test :around #'drgnx-run-ert--progress-around))
   (drgnx-run-ert--trampolines-see-real-primitives)
   (drgnx-run-ert--wait-profile-on)
+  (when (equal (getenv "DRGNX_TEST_STRICT_FACES") "1") (setq drgnx-test-strict-faces t))
   (when-let* ((a (drgnx-run-ert--env "DRGNX_TEST_AUDIT")))
     (drgnx-run-ert--audit-install (and (not (equal a "1")) a)))
   (let* ((census (and (or (drgnx-run-ert--leaks-on-p) (drgnx-run-ert--file-leaks-p))
@@ -910,6 +928,9 @@ summary to RESULTS-FILE.  Return t if every test passed."
                        (list (drgnx-run-ert--matched-nothing selector)))))
          (leaks (and census (drgnx-run-ert--census-finish)))
          (load-failures (append load-failures (and (drgnx-run-ert--file-leaks-p) (drgnx-run-ert--leak-failures leaks))))
+         (load-failures (append load-failures
+                                (drgnx-run-ert--unknown-face-failures
+                                 (cl-remove-if-not (lambda (f) (drgnx-run-ert--file-selected-p f selector)) (drgnx-run-ert--files dir)))))
          (tests nil) (known-red nil) (failures nil) (skipped nil))
     (cl-loop
      for test across (ert--stats-tests stats)

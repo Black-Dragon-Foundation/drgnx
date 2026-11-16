@@ -226,6 +226,51 @@ pub async fn files(f: &Front, _: &Caller, p: EditedFiles) -> Result<EditedFilesL
     Ok(EditedFilesList { files })
 }
 
+/// One hunk of one of a session's edit records, with the cause the record carries (hunk provenance).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordHunk {
+    pub op: i64,
+    pub path: String,
+    pub index: usize,
+    pub start_line: u32,
+    pub end_line: u32,
+    /// Some of it is still in the file.
+    pub live: bool,
+    pub decision: Option<String>,
+}
+
+/// SESSION's edit records' hunks on its branch, each with its record's cause.
+pub async fn record_hunks(f: &Front, session: &str) -> Result<Vec<RecordHunk>, Error> {
+    let (hub, tree) = history_of(f, session)?;
+    let (sid, now) = (session.to_owned(), crate::clock::wall_secs());
+    crate::clock::blocking(move || {
+        let listed = hub.op_hunks(&tree, None, Some(&sid), now)?;
+        let mut causes = std::collections::BTreeMap::new();
+        for (h, _) in &listed {
+            if let std::collections::btree_map::Entry::Vacant(e) = causes.entry(h.op.0) {
+                e.insert(hub.cause_of(h.op.0)?);
+            }
+        }
+        Ok::<_, verdandi::Error>(
+            listed
+                .into_iter()
+                .map(|(h, _)| RecordHunk {
+                    op: h.op.0,
+                    live: h.state != verdandi::HunkState::Undone,
+                    decision: causes.get(&h.op.0).and_then(|c| c.decision.clone()),
+                    path: h.path,
+                    index: h.index,
+                    start_line: u32::try_from(h.start_line).unwrap_or(u32::MAX),
+                    end_line: u32::try_from(h.end_line).unwrap_or(u32::MAX),
+                })
+                .collect(),
+        )
+    })
+    .await
+    .map_err(|e| fail(e.to_string()))?
+    .map_err(|e| fail(e.to_string()))
+}
+
 /// `work/hunks`.
 pub async fn hunks(f: &Front, _: &Caller, p: HunksParams) -> Result<Hunks, Error> {
     let diff = diff_of(f, p.session.as_str(), &p.path.into_inner()).await?;

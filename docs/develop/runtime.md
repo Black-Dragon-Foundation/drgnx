@@ -893,7 +893,7 @@ $BACKEND_SOCKET $CAP $LOCK`) exist once a `root` or `start` step made the root: 
 by element and in length, unless the pattern is `{"$contains": [...]}` (every listed pattern matches some element).
 Special strings: `"$any"`, `"$string"`, `"$number"`, `"$hex64"`, `"$absent"` (the key must be missing), `"$capture:NAME"`
 (matches anything, remembers it) and `"$NAME"` (equal to the value captured earlier); `"$NAME#1"` (a captured string
-followed by more text, such as a task id `JOB#1`) is the capture with that text appended.
+followed by more text, such as a task id `JOB#1`) is the capture with that text appended. `{"$text": "needle"}` matches any value with a string inside it, at any depth, that holds the needle: a `view-patch`'s rows by what they say, whatever the ops around them. Numbers match by value, however they are spelled (`0` and `0.0`).
 
 **The `hello` proofs** are computed by the harness itself, with its own HMAC-SHA256: the client proof is
 `HMAC(cap hex as ASCII, "drgnx-hub client " + hub_nonce + " " + client_nonce)` and the hub's is

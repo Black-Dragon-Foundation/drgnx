@@ -877,7 +877,7 @@ roots' first root commits (the path where git does not answer).
 
 ## The Agents side
 
-`view/agents_side.rs` is the Agents side's model: one `Card` per session (its mark, task, provider, state line, progress and one button: Answer for what needs you, Review for edits ready, Open otherwise), needs-you first, then running, then the rest by last activity; "Earlier" holds the five newest past sessions and an `All ›` row. A card is a few rows keyed `card:SESSION:N`, so one session's change patches only its card's rows. `agents_on(entries, path)` is the sessions working on a path, for the chip "an agent is working here". The rows are plain text until the kit draws the cards; the view's wire methods and the existing Claude and Gemini sessions in "Earlier" come with the shell.
+`view/agents_side.rs` is the Agents side's model: one `Card` per session (its mark, task, provider, state line, progress and one button: Answer for what needs you, Review for edits ready, Open otherwise), needs-you first, then running, then the rest by last activity; "Earlier" holds the five newest past sessions and an `All ›` row. A card is a few rows keyed `card:SESSION:N`, so one session's change patches only its card's rows. `agents_on(entries, path)` is the sessions working on a path, for the chip "an agent is working here". The rows are plain text until the kit draws the cards. `agents/side/subscribe`, `agents/side/set` (refresh) and `agents/side/close` serve the view: the live sessions come from the hub's table (a later start counts as more recent), the "Earlier" ones from the past-sessions index of Claude Code, Gemini CLI and Codex, and every session's emit patches the cards that changed.
 
 ## Proposals in the viewed file
 

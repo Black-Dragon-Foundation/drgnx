@@ -326,5 +326,47 @@
                     (should (memq face (ensure-list at)))))))))
       (kill-buffer buf))))
 
+;; The unknown-face counter (test mode): a row naming a face that is none, and is not in etc/ui/faces.eld, is counted
+(defvar drgnx-test-strict-faces)
+(defvar drgnx-view-unknown-faces)
+(declare-function drgnx-view-patch--face "drgnx-view" (name))
+
+(ert-deftest drgnx-ui-kit/unknown-face-is-counted-in-test-mode ()
+  (require 'drgnx-view)
+  (let ((drgnx-test-strict-faces t) (drgnx-view-unknown-faces (make-hash-table :test #'equal)))
+    (should-not (drgnx-view-patch--face "drgnx-no-such-face"))
+    (should (equal 1 (gethash "drgnx-no-such-face" drgnx-view-unknown-faces)))
+    ;; a known face of a module that is off (extra/hunks, not loaded here) is no stale name
+    (should-not (facep 'drgnx-hunk-added))
+    (should-not (drgnx-view-patch--face "drgnx-hunk-added"))
+    (should-not (gethash "drgnx-hunk-added" drgnx-view-unknown-faces))
+    ;; out of test mode nothing is counted
+    (let ((drgnx-test-strict-faces nil))
+      (drgnx-view-patch--face "drgnx-no-such-face"))
+    (should (equal 1 (gethash "drgnx-no-such-face" drgnx-view-unknown-faces)))))
+
+(ert-deftest drgnx-ui-kit/unknown-face-fails-the-file ()
+  ;; a nested run of a fixture file whose one test passes but draws a row naming an unknown face: the file is an
+  ;; unexpected result naming the face
+  (let* ((tmp (make-temp-file "drgnx-faces" t)) (results (expand-file-name "results.json" tmp))
+         (file (expand-file-name "faces-test.el" tmp)))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert ";;; faces-test.el -*- lexical-binding: t -*-\n(require 'ert)\n"
+                    (format "(dolist (d '(\"core\" \"wb\")) (add-to-list 'load-path (expand-file-name d %S)))\n" drgnx-dir)
+                    "(require 'drgnx-view)\n"
+                    "(ert-deftest faces-fixture/draws-a-stale-face () (drgnx-view-patch--face \"drgnx-no-such-face\") (should t))\n"))
+          (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_STRICT_FACES=1"
+                                                   "DRGNX_TEST_SELECTOR" "DRGNX_TEST_LEAKS" "DRGNX_TEST_SHUFFLE")
+                                             process-environment)))
+            (should (eql 1 (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                         "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                         "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" tmp))))
+          (let* ((r (json-parse-string (with-temp-buffer (insert-file-contents results) (buffer-string)) :object-type 'plist))
+                 (names (mapcar (lambda (f) (plist-get f :name)) (plist-get r :failures))))
+            (should (seq-some (lambda (n) (string-match-p "faces-test\\.el: unknown faces: drgnx-no-such-face (1)" n)) names))))
+      (delete-directory tmp t))))
+
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

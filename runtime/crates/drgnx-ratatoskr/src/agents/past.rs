@@ -481,6 +481,11 @@ impl History {
     }
 
     /// Files opened to read since the start (a scan that finds nothing new opens none).
+    /// The past sessions as last read from the index, newest first.
+    pub fn sessions(&self) -> Vec<PastSession> {
+        lock(&self.list).clone()
+    }
+
     pub fn reads(&self) -> u64 {
         self.reads.load(std::sync::atomic::Ordering::Relaxed)
     }

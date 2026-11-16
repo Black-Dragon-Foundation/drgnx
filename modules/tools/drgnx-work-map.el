@@ -728,8 +728,9 @@ reduced (the desktop's setting through Glitnir, or `drgnx-look-motion')."
        (not (and (fboundp 'glitnir--reduced-motion-p) (glitnir--reduced-motion-p)))))
 
 (defun drgnx-work-map--card-row-p (key)
-  "Whether row KEY is one of the layout's card rows (the hub's `row:…'; not the strip, a band or the outline)."
-  (and (stringp key) (string-prefix-p "row:" key)))
+  "Whether row KEY is one of the map's item rows: the graph's card rows (the hub's `row:…') or a list's (`list:…');
+not the strip, a band or the outline."
+  (and (stringp key) (or (string-prefix-p "row:" key) (string-prefix-p "list:" key))))
 
 (defun drgnx-work-map--drawn-ids ()
   "Hash id → t: every card the buffer's card rows draw now."
