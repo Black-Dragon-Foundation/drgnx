@@ -282,6 +282,8 @@ pub struct History {
     shown: Mutex<BTreeMap<(u64, String), Asked>>,
     /// The transcripts open, by view, oldest first.
     open: Mutex<Vec<(String, Arc<Vec<Entry>>)>>,
+    /// Files opened to read since the start.
+    reads: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Default)]
@@ -290,6 +292,10 @@ struct Inner {
     db_path: Option<PathBuf>,
     roots: Option<Roots>,
     readers: Vec<(PathBuf, Reader)>,
+    /// The indexed files by path, as the index has them (loaded once, kept current by each scan).
+    known: Option<HashMap<String, Indexed>>,
+    /// The list has been read from the index since it was opened.
+    listed: bool,
 }
 
 impl History {
@@ -298,6 +304,8 @@ impl History {
         let mut i = lock(&self.inner);
         if i.db_path.as_ref() != Some(&db_path) {
             i.db = None;
+            i.known = None;
+            i.listed = false;
         }
         i.db_path = Some(db_path);
         i.roots = Some(roots);
@@ -308,6 +316,8 @@ impl History {
     pub fn off(&self, db_path: &Path) {
         let mut i = lock(&self.inner);
         i.db = None;
+        i.known = None;
+        i.listed = false;
         i.roots = None;
         i.readers.clear();
         for suffix in ["", "-journal", "-wal", "-shm"] {
@@ -338,34 +348,76 @@ impl History {
     /// Scan the roots now (blocking): new and changed files read (an append from its offset), gone ones dropped.  The
     /// answer is how many sessions are indexed.
     pub fn scan(&self) -> Result<u64, String> {
+        self.scan_changed().map(|(n, _)| n)
+    }
+
+    /// Files opened to read since the start (a scan that finds nothing new opens none).
+    pub fn reads(&self) -> u64 {
+        self.reads.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// `scan`, and whether the index changed.  The walk is stat-only: the files' size and change time are compared with
+    /// the known ones held in memory; when nothing is new, changed or gone nothing is opened, written or listed.
+    pub fn scan_changed(&self) -> Result<(u64, bool), String> {
         let mut i = lock(&self.inner);
         let Some(roots) = i.roots.clone() else {
-            return Ok(0);
+            return Ok((0, false));
         };
         let found = roots.files();
         if i.db.is_none() {
             let Some(p) = i.db_path.clone() else {
-                return Ok(0);
+                return Ok((0, false));
             };
             i.db = Some(open_db(&p)?);
+            i.known = None;
+            i.listed = false;
         }
-        let Inner { db, readers, .. } = &mut *i;
+        let Inner {
+            db,
+            readers,
+            known,
+            listed,
+            ..
+        } = &mut *i;
         let db = db.as_mut().expect("opened above");
-        let known = indexed(db)?;
+        if known.is_none() {
+            *known = Some(indexed(db)?);
+        }
+        let known_map = known.as_mut().expect("loaded above");
+        let todo: Vec<&Found> = found
+            .iter()
+            .filter(|f| {
+                f.size <= MAX_FILE
+                    && !known_map
+                        .get(f.path.to_string_lossy().as_ref())
+                        .is_some_and(|r| r.size == f.size && r.mtime == f.mtime)
+            })
+            .collect();
+        // known files not found again: the matched ones are the found ones that are known
+        let matched = found
+            .iter()
+            .filter(|f| known_map.contains_key(f.path.to_string_lossy().as_ref()))
+            .count();
+        if todo.is_empty() && matched == known_map.len() && *listed {
+            return Ok((known_map.len() as u64, false));
+        }
         let paths: BTreeSet<String> = found
             .iter()
             .map(|f| f.path.to_string_lossy().into_owned())
             .collect();
+        let gone: Vec<Indexed> = known_map
+            .values()
+            .filter(|k| !paths.contains(&k.path))
+            .cloned()
+            .collect();
         let tx = db.transaction().map_err(|e| e.to_string())?;
-        for k in known.values().filter(|k| !paths.contains(&k.path)) {
+        for k in &gone {
             drop_session(&tx, &k.key)?;
         }
-        for f in &found {
+        let mut put: Vec<Indexed> = Vec::new();
+        for f in todo {
             let path = f.path.to_string_lossy().into_owned();
-            let row = known.get(&path);
-            if row.is_some_and(|r| r.size == f.size && r.mtime == f.mtime) || f.size > MAX_FILE {
-                continue;
-            }
+            let row = known_map.get(&path);
             // a file read before and grown since reads on from its offset with the reader kept, else whole
             let mut reader = None;
             if let Some(r) = row
@@ -378,6 +430,8 @@ impl History {
             }
             let fresh = reader.is_none();
             let mut rd = reader.unwrap_or_else(|| Reader::new(f.provider));
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if let Err(e) = read_into(&mut rd, f) {
                 tracing::debug!("past sessions: {}: {e}", f.path.display());
                 continue;
@@ -387,17 +441,24 @@ impl History {
             } else {
                 row.map_or(0, |r| r.entries)
             };
-            index_one(&tx, f, &rd, row, old_entries)?;
+            put.push(index_one(&tx, f, &rd, row, old_entries)?);
             readers.push((f.path.clone(), rd));
             if readers.len() > READERS {
                 readers.remove(0);
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
+        for k in &gone {
+            known_map.remove(&k.path);
+        }
+        for r in put {
+            known_map.insert(r.path.clone(), r);
+        }
         let list = list_of(db)?;
         let n = list.len() as u64;
         *lock(&self.list) = list;
-        Ok(n)
+        *listed = true;
+        Ok((n, true))
     }
 
     /// The sessions whose title or transcript hold every word of QUERY, best first.
@@ -545,7 +606,7 @@ fn index_one(
     rd: &Reader,
     row: Option<&Indexed>,
     old_entries: u64,
-) -> Result<(), String> {
+) -> Result<Indexed, String> {
     let meta = rd.meta();
     let sid = meta.id.clone().unwrap_or_else(|| {
         f.path
@@ -605,7 +666,14 @@ fn index_one(
         ),
     )
     .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(Indexed {
+        key,
+        path: f.path.to_string_lossy().into_owned(),
+        size: f.size,
+        mtime: f.mtime,
+        off: rd.offset(),
+        entries: entries.len() as u64,
+    })
 }
 
 const COLUMNS: &str = "provider, sid, title, cwd, branch, started, updated, turns";
@@ -983,7 +1051,8 @@ fn ready(f: &Front) -> Result<bool, Error> {
         f.core.past.off(&db);
         return Ok(false);
     }
-    let roots = Roots::of(&dirs.home, |n| std::env::var(n).ok()).only(&v.agents_history_providers);
+    let roots = Roots::of(&dirs.home, |n| std::env::var(n).ok())
+        .only(&v.agents_history_providers);
     if f.core.past.roots().as_ref() != Some(&roots) {
         f.core.past.configure(db, roots);
     }
@@ -1002,11 +1071,13 @@ pub async fn scan_now(f: &Front) -> Result<u64, Error> {
         return Ok(0);
     }
     let me = f.core.past.clone();
-    let n = crate::clock::blocking(move || me.scan())
+    let (n, changed) = crate::clock::blocking(move || me.scan_changed())
         .await
         .map_err(|e| internal(format!("the scan: {e}")))?
         .map_err(internal)?;
-    f.core.past.rebuild_lists(f);
+    if changed {
+        f.core.past.rebuild_lists(f);
+    }
     Ok(n)
 }
 

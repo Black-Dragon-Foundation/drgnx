@@ -1140,6 +1140,12 @@ its first stop: at most 2 s at the 95th percentile on Linux) is the live row `de
 ten Python traces in a row. It needs the adapter image with bwrap (`ctr.sh --sandbox`), is `#[ignore]`d as a timing
 test, and measures and prints.
 
+Past sessions' warm scan is the bench `runtime/crates/drgnx-ratatoskr/benches/past_scan.rs`: `past-scan`, 5,000 Claude
+session files over 100 project folders, one full scan and then 200 scans with nothing changed, each measured in its
+thread's CPU time (`getrusage(RUSAGE_THREAD)`); p95 must stay under 4 ms, and no file may be opened. It is `#[ignore]`d
+and measures and prints; run it optimized and alone on a pinned host:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench past_scan -- --ignored --nocapture --test-threads 1`.
+
 Tests: `test/unit/perf-extensions-test.el` (every row has a budget and a fixture, the comparison measures both sides).
 
 ## What typing rebuilds

@@ -405,3 +405,37 @@ fn a_cli_taken_out_leaves_the_index_and_off_deletes_it() {
     assert_eq!(h.history.scan().unwrap(), 0, "nothing is read while off");
     assert!(!h.state.join(DB).exists());
 }
+
+#[test]
+fn an_unchanged_scan_opens_no_file_and_writes_nothing() {
+    let h = Home::new();
+    h.claude("c1", "count the apples");
+    h.claude("c2", "count the pears");
+    assert_eq!(h.history.scan_changed().unwrap(), (2, true));
+    let reads = h.history.reads();
+    assert_eq!(reads, 2);
+    let db = h.state.join(DB);
+    let before = std::fs::metadata(&db).unwrap().modified().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let (n, changed) = h.history.scan_changed().unwrap();
+    assert_eq!((n, changed), (2, false), "nothing changed");
+    assert_eq!(h.history.reads(), reads, "no file was opened");
+    assert_eq!(
+        std::fs::metadata(&db).unwrap().modified().unwrap(),
+        before,
+        "the index was not written"
+    );
+    // a changed file is read again, and only that one
+    let p = h.claude("c1", "count the apples and the plums");
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&p)
+        .unwrap()
+        .write_all(b"\n")
+        .unwrap();
+    assert!(h.history.scan_changed().unwrap().1);
+    assert_eq!(h.history.reads(), reads + 1);
+    // a file gone is dropped and reported
+    std::fs::remove_file(&p).unwrap();
+    assert_eq!(h.history.scan_changed().unwrap(), (1, true));
+}
