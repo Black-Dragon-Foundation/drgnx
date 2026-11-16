@@ -501,8 +501,9 @@ greyed out but in a git scope and goes with it; Next Scope cycles the chips."
     (should-not (drgnx-replace-rows-test--active :lines))
     (drgnx-replace--set-scope 'changed)
     (should (equal '(:kind "changed") (drgnx-replace-rows-test--scope)))
-    (should (eq 'drgnx-replace-on (widget-get (drgnx-replace--widget 'changed) :button-face)))
-    (should (eq 'drgnx-replace-dim (widget-get (drgnx-replace--widget 'project) :button-face)))
+    ;; the form's flat chips (ca8579a1a, S1): on, and off
+    (should (eq 'drgnx-replace-chip-on (widget-get (drgnx-replace--widget 'changed) :button-face)))
+    (should (eq 'drgnx-replace-chip (widget-get (drgnx-replace--widget 'project) :button-face)))
     (should (drgnx-replace-rows-test--active :lines))
     (drgnx-replace--toggle :lines)
     (should (equal '(:kind "changed" :changed_lines t) (drgnx-replace-rows-test--scope)))
