@@ -6,6 +6,9 @@
 //! must be missing), `"$capture:NAME"` (match anything and remember it), `"$NAME"` (equal to a value captured earlier) and `"$not:NAME"` (any
 //! value but the one captured as NAME);
 //! `"$NAME#1"` (a captured string followed by more text, such as a task id `JOB#1`) matches the capture and that text.
+//! `{"$text": "needle"}` matches any value with a string inside it (at any depth) that holds `needle`: a patch's rows by
+//! what they say, whatever the ops around them are. JSON numbers of equal value match, however they are spelled
+//! (`0` and `0.0`).
 
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -38,6 +41,33 @@ pub fn matches(pattern: &Value, actual: &Value, caps: &mut Captures) -> Result<(
     at("", pattern, actual, caps)
 }
 
+/// Whether the numbers A and B are the same value: whole numbers exactly, anything else as floats (so `0` and `0.0`).
+fn same_number(a: &serde_json::Number, b: &serde_json::Number) -> bool {
+    match (a.as_i64(), b.as_i64(), a.as_u64(), b.as_u64()) {
+        (Some(x), Some(y), _, _) => x == y,
+        (_, _, Some(x), Some(y)) => x == y,
+        _ => a.as_f64() == b.as_f64(),
+    }
+}
+
+/// Whether PATTERN equals ACTUAL as JSON values, numbers by value.
+fn same(pattern: &Value, actual: &Value) -> bool {
+    match (pattern, actual) {
+        (Value::Number(a), Value::Number(b)) => same_number(a, b),
+        _ => pattern == actual,
+    }
+}
+
+/// Whether a string holding NEEDLE is anywhere inside V.
+fn holds_text(v: &Value, needle: &str) -> bool {
+    match v {
+        Value::String(s) => s.contains(needle),
+        Value::Array(items) => items.iter().any(|i| holds_text(i, needle)),
+        Value::Object(o) => o.values().any(|i| holds_text(i, needle)),
+        _ => false,
+    }
+}
+
 fn at(path: &str, pattern: &Value, actual: &Value, caps: &mut Captures) -> Result<(), String> {
     let here = if path.is_empty() {
         "the line".to_string()
@@ -47,6 +77,16 @@ fn at(path: &str, pattern: &Value, actual: &Value, caps: &mut Captures) -> Resul
     match pattern {
         Value::String(s) if s.starts_with('$') => special(&here, s, actual, caps),
         Value::Object(p) => {
+            if let (1, Some(Value::String(needle))) = (p.len(), p.get("$text")) {
+                return if holds_text(actual, needle) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "{here}: no text holds {needle:?} in {}",
+                        show(actual)
+                    ))
+                };
+            }
             if let (1, Some(Value::Array(wanted))) = (p.len(), p.get("$contains")) {
                 let Value::Array(items) = actual else {
                     return Err(format!(
@@ -124,7 +164,7 @@ fn at(path: &str, pattern: &Value, actual: &Value, caps: &mut Captures) -> Resul
             }
             Ok(())
         }
-        _ if pattern == actual => Ok(()),
+        _ if same(pattern, actual) => Ok(()),
         _ => Err(format!(
             "{here}: wanted {}, got {}",
             show(pattern),
@@ -169,7 +209,7 @@ fn special(here: &str, s: &str, actual: &Value, caps: &mut Captures) -> Result<(
             }
             if let Some(name) = s.strip_prefix("$not:") {
                 return match caps.0.get(name) {
-                    Some(seen) if seen == actual => Err(format!(
+                    Some(seen) if same(seen, actual) => Err(format!(
                         "{here}: wanted anything but the captured ${name}, got {}",
                         show(actual)
                     )),
@@ -178,7 +218,7 @@ fn special(here: &str, s: &str, actual: &Value, caps: &mut Captures) -> Result<(
                 };
             }
             match caps.0.get(&s[1..]) {
-                Some(seen) if seen == actual => Ok(()),
+                Some(seen) if same(seen, actual) => Ok(()),
                 Some(seen) => Err(format!(
                     "{here}: wanted the captured {s} = {}, got {}",
                     show(seen),
@@ -277,5 +317,42 @@ mod tests {
             json!([1, {"k": "v", "extra": 1}])
         ));
         assert!(!ok(json!({"$contains": [9]}), json!([1, 2, 3])));
+    }
+
+    #[test]
+    fn numbers_of_equal_value_match_whatever_their_spelling() {
+        assert!(
+            ok(json!(0), json!(0.0)),
+            "an integer pattern, a float actual"
+        );
+        assert!(
+            ok(json!(0.0), json!(0)),
+            "a float pattern, an integer actual"
+        );
+        assert!(ok(json!({"n": 2}), json!({"n": 2.0})));
+        assert!(ok(json!([1.5, 3]), json!([1.5, 3.0])));
+        assert!(!ok(json!(0), json!(0.5)), "different values still differ");
+        assert!(!ok(json!(1), json!("1")), "a number is no string");
+        // a captured number is equal to the same value spelled another way
+        let mut caps = Captures::default();
+        matches(&json!({"v": "$capture:v"}), &json!({"v": 3}), &mut caps).unwrap();
+        assert!(matches(&json!({"v": "$v"}), &json!({"v": 3.0}), &mut caps).is_ok());
+    }
+
+    #[test]
+    fn text_finds_a_string_anywhere_in_the_value() {
+        // a view-patch's rows: the text is somewhere inside the ops
+        let patch = json!({"ops": [{"insert": [0, [{"key": "list:3", "text": "  ○ do it  not started"}]]}]});
+        assert!(ok(json!({"ops": {"$text": "not started"}}), patch.clone()));
+        assert!(ok(json!({"$text": "do it"}), patch.clone()));
+        assert!(!ok(json!({"ops": {"$text": "needs you"}}), patch.clone()));
+        assert!(ok(
+            json!({"$contains": [{"insert": {"$text": "list:3"}}]}),
+            patch["ops"].clone()
+        ));
+        assert!(
+            !ok(json!({"$text": "x"}), json!(5)),
+            "a number holds no text"
+        );
     }
 }
