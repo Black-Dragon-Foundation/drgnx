@@ -369,6 +369,8 @@
               (untrust-folder :none "the palette")
               (restricted-mode :none "click the shield in the status bar")
               (go-recent :none "C-x b (stock)")
+              (editor-recent :none "the palette")
+              (editor-recent-up :none "the palette")
               (go-symbol-project :none "C-M-. (stock)")
               (go-back :none "M-, (stock)")
               (go-forward :none "C-M-, (stock)")

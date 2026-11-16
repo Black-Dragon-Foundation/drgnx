@@ -384,6 +384,8 @@
               (untrust-folder :none "the palette")
               (restricted-mode :none "click the shield in the status bar")
               (go-recent "SPC b b")
+              (editor-recent :none "the palette")
+              (editor-recent-up :none "the palette")
               (go-symbol-project "SPC s y")
               (go-back :none "C-o (Vim's jump back)")
               (go-forward :none "C-i (Vim's jump forward)")
