@@ -231,14 +231,24 @@ it (a notes repository with the code repositories inside it)."
             (car (sort (split-string (buffer-string) "\n" t) #'string<)))))
       root))
 
+(declare-function drgnx-explorer-roots "drgnx-explorer")
+
+(defun drgnx-work-space--project-of (dir)
+  "The root of the project DIR (a local folder) is in, or nil."
+  (and dir (not (file-remote-p dir))
+       (let ((default-directory dir)) (when-let* ((p (project-current))) (project-root p)))))
+
 (defun drgnx-work-space-workspace (&optional frame)
   "The workspace FRAME's selected window works in: (:id ID :roots ROOTS), or nil when it is in no project (a scratch
-buffer, a folder outside git, a remote folder).  ROOTS: `drgnx-work-space-roots' or the default (see there); ID:
+buffer, a folder outside git, a remote folder) and the Explorer's folders are in none either (a dock buffer sits in ~,
+so the Explorer's folder stands in).  ROOTS: `drgnx-work-space-roots' or the default (see there); ID:
 \"workspace:\" and 12 hex digits of the roots' project ids."
   (let* ((frame (or frame (selected-frame)))
          (dir (with-current-buffer (window-buffer (frame-selected-window frame)) default-directory))
-         (root (and dir (not (file-remote-p dir))
-                    (let ((default-directory dir)) (when-let* ((p (project-current))) (project-root p)))))
+         (root (or (drgnx-work-space--project-of dir)
+                   ;; focus in a dock, the Inbox or the detail tile (their buffers sit in ~): the folder the Explorer shows
+                   (seq-some #'drgnx-work-space--project-of
+                             (and (fboundp 'drgnx-explorer-roots) (drgnx-explorer-roots)))))
          (roots (cond (drgnx-work-space-roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r)))
                                                       drgnx-work-space-roots))
                       (root (drgnx-work-space--default-roots (file-truename root))))))
@@ -351,8 +361,11 @@ once per map and when the hub is up; when every folder answered, the map shows w
       (when (and (zerop drgnx-work-space--adopting) (> found 0) drgnx-work-space--view)
         ;; the hub reads the store when a view subscribes: ask again, with the finished items shown
         (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :finished t))
+        ;; the filters go with the new subscription, and again once it exists on the hub: a `work/map/set' sent first
+        ;; would meet the old view, which the subscription replaces (the user's map stayed empty until it was set again)
         (drgnx-work-client-set drgnx-work-space--view :filters (list :overlaps :false :finished t))
-        (drgnx-work-client-resubscribe drgnx-work-space--view))
+        (drgnx-work-client-resubscribe drgnx-work-space--view)
+        (drgnx-work-client-set drgnx-work-space--view :filters (list :overlaps :false :finished t)))
       (drgnx-work-space--notice buffer))))
 
 (defun drgnx-work-space--buffer (workspace)

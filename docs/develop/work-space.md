@@ -865,6 +865,6 @@ milliseconds spent drawing (`work-live-draw` reads it).
 ### The workspace
 
 `drgnx-work-space-workspace` is the frame's selected window's project (`project-current`; none for a remote folder, a
-folder outside git or a scratch buffer, which opens an empty map). Its roots are `drgnx-work-space-roots` or the
+folder outside git or a scratch buffer). When that buffer is in no project (the Inbox, a bottom-panel tab and the Detail tile sit in `~`), the project of the first of the Explorer's folders that is in one stands in; only when there is none either does the empty map open. After the adoption answers, the map subscribes again with the finished filter and sets it once more on the new view (a `work/map/set` sent before the new subscription met the old view). Entities the old Lisp scanner made (`plan:/abs/path`, `spec:/abs/path`) whose file the importer holds (`plan:rec-…`, `data.records.file`) are not drawn: `legacy_duplicates` in `work/map.rs` (the scanner's move to the hub retires them). A proposal card on the strip reads `approve N tasks (JOB)` (`strip_text`), not its cost sentence cut to the chip's share. Its roots are `drgnx-work-space-roots` or the
 default (the project's repository, and an enclosing repository with the repositories directly in it); its id is `workspace:` and 12 hex digits of the 64-bit FNV-1a hash over the sorted
 roots' first root commits (the path where git does not answer).

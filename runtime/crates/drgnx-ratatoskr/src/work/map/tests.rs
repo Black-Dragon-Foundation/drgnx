@@ -1383,3 +1383,39 @@ fn the_detail_head_says_testing_and_the_run_age() {
     assert!(lines[0].1.ends_with("\ttesting"), "{:?}", lines[0]);
     assert!(lines[1].1.contains("running 47 min"), "{:?}", lines[1]);
 }
+
+#[test]
+fn a_file_the_importer_holds_is_not_drawn_again_from_the_old_scanners_entity() {
+    let file = "/w/docs/plans/m2-evidence.md";
+    let rows = [
+        ("plan:/w/docs/plans/m2-evidence.md", None),
+        ("plan:rec-38377cd08b08-12cc5f9a0c03", Some(file)),
+        // an old-scanner plan whose file the importer does not hold stays
+        ("plan:/w/docs/plans/other.md", None),
+        ("spec:/w/docs/specs/s.md", None),
+        (
+            "spec:rec-38377cd08b08-aaaaaaaaaaaa",
+            Some("/w/docs/specs/s.md"),
+        ),
+    ];
+    let hidden = legacy_duplicates(rows.iter().copied());
+    assert_eq!(
+        hidden.into_iter().collect::<Vec<_>>(),
+        ["/w/docs/plans/m2-evidence.md", "/w/docs/specs/s.md"]
+    );
+}
+
+#[test]
+fn a_proposal_on_the_strip_says_what_to_approve_and_which_job() {
+    assert_eq!(
+        strip_text(
+            "job-7",
+            "2 tasks, about 0.00 USD (some unpriced), 3M tokens, 40 min: approve to start"
+        ),
+        "approve 2 tasks (job-7)"
+    );
+    assert_eq!(
+        strip_text("job-7", "Codex asks: cargo clippy"),
+        "Codex asks: cargo clippy"
+    );
+}

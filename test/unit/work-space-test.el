@@ -100,10 +100,33 @@ counting as up when UP."
         (should-not (buffer-local-value 'header-line-format buf))
         (should (assoc "work/map/subscribe" calls))
         (should (eq t (plist-get (plist-get (cdr (assoc "work/map/subscribe" calls)) :filters) :finished)))
+        ;; and once more after the subscription (calls are newest first): the set that reaches the new view
+        (should (equal (mapcar #'car (seq-take calls 2)) '("work/map/set" "work/map/subscribe")))
+        (should (eq t (plist-get (plist-get (cdr (car calls)) :filters) :finished)))
         ;; the same buffer asks once
         (setq hub-calls nil)
         (drgnx-work-space-open (list :id "workspace:000000000006" :roots (list root)) t)
         (should-not (assoc "records/import" hub-calls))))))
+
+(ert-deftest drgnx-work-space/focus-in-a-dock-buffer-still-opens-the-explorers-project ()
+  ;; the Inbox, a bottom-panel tab and the Detail tile sit in ~: the workspace is the Explorer's folder then
+  (let* ((root (make-temp-file "work-space-proj" t))
+         (home (make-temp-file "work-space-home" t)))
+    (unwind-protect
+        (progn
+          (call-process "git" nil nil nil "-C" root "init" "-q")
+          (setq root (file-name-as-directory (file-truename root)))
+          (cl-letf (((symbol-function 'drgnx-explorer-roots) (lambda () (list home root))))
+            (drgnx-test-with-modules '(tools/work-space)
+              (with-temp-buffer
+                (setq default-directory (file-name-as-directory home))
+                (save-window-excursion
+                  (set-window-buffer (selected-window) (current-buffer))
+                  (let ((ws (drgnx-work-space-workspace)))
+                    (should ws)
+                    (should (member root (plist-get ws :roots)))))))))
+      (delete-directory root t)
+      (delete-directory home t))))
 
 (ert-deftest drgnx-work-space/a-folder-without-records-keeps-its-filters ()
   (drgnx-test-require-nidhogg (fboundp 'nidhogg-view--call) "nidhogg-view--call")
