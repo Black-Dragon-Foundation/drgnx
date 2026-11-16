@@ -3235,6 +3235,37 @@ What the `areas` backend does with the edges:
 - Redefining a kind with another home takes it out of its old dock; an editor kind's place rule goes when its
   `:buffer` or home changes.
 
+## The grid (`wb/drgnx-grid-tree.el`)
+
+The tiled grid is Emacs's own window tree: a tile is a live window and a container is an internal window, so drgnx
+keeps no second tree that could drift from it. Its snapshot, `TREE`, exists only as data: for full size, the layout
+undo stack and saved layouts, and it is applied by rebuilding windows, never by setting a saved window parameter.
+
+**The format.** A `TREE` is one of:
+
+- `(row :px N :share F CHILD…)`: children side by side; `(col :px N :share F CHILD…)`: children stacked;
+- `(tile :px N :share F :id I :kinds (KIND…) :shown KIND :dock DOCK :state PLIST)`: a tool tile, its stack of kinds,
+  the one shown, its dock (`left`, `right`, `bottom` or nil) and its kinds' own state;
+- `(editor :px N :share F :id I :tabs (FILE…) :shown FILE :point P :start S)`: an editor tile and its tabs by file.
+
+`:px` is logical pixels (`drgnx-pixels-scale`) along the parent's direction, nil at the root; `:share` is the node's
+part of its parent, in (0, 1]. `(drgnx-grid-tree-to-logical PX SCALE)` and `(drgnx-grid-tree-from-logical LOGICAL
+SCALE)` convert, rounded half up as `drgnx-px` rounds, so logical → pixels → logical is exact at any scale.
+
+**Validation.** `(drgnx-grid-valid-tree-p TREE)` is t or nil, and nothing is built from a tree it refuses. It refuses a
+non-list, an object that cannot be written and read back (a buffer, marker, window or frame, also inside a tile's
+`:state`), a depth over 16, more than 64 leaves, a non-symbol kind, a `:px` that is not an integer in 1–20000, a
+`:share` outside (0, 1], a dock other than the three, and a row or col with fewer than two children. A kind no module
+defines is valid: its tile becomes a placeholder until the kind returns. `(drgnx-grid-tree-leaves TREE)` lists the
+leaves top-left to bottom-right.
+
+**Zones and letters.** `(drgnx-grid-zone EDGES X Y)` says where a drop at X, Y lands on a tile with pixel EDGES (LEFT
+TOP RIGHT BOTTOM): `left`, `right`, `above` or `below` in the outer quarter of that side (a split; exactly a quarter is
+the middle), else `center` (a stack). A corner goes to the nearer side, a tie to the left or right. `(drgnx-grid-letters
+N)` gives the switcher's letters: the home row first (`a s d f j k l ; g h`), then the other letters of a–z, at most 27.
+Test: `test/unit/grid-tree-test.el`.
+
+
 ## The UI kit (`drgnx-ui-kit.el`)
 
 What every surface that draws a mark or a button shares. It is in core and requires only the registry and the
