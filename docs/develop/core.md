@@ -3969,8 +3969,10 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   sample redisplays and takes `drgnx-uitest-snapshot`: `glitnir-snapshot` presents what was drawn, forces a paint and
   returns what that paint committed, so a sample is one trip through the compositor, which answers a size or a map in
   order with those paints. The wait ends when FRAMES samples in a row are the same (the picture, or VALUE's result for
-  a state the picture does not show) and, on the native shell, `nhwl-presenter-stats` shows no commit owed since the
-  last such wait. A paint that does not come within the primitive's 1 s is the next try; a timeout fails the test. Do
+  a state the picture does not show) and, on the native shell, `nhwl-presenter-stats` shows every request gone out
+  (its `:presented` has reached its `:published`). Not a count of commits since the last wait: a packet merged into
+  one still waiting owes no commit of its own, so under a compositor that answered no frame callback (KWin with no
+  render device) that count settled on a picture that never went out. A paint that does not come within the primitive's 1 s is the next try; a timeout fails the test. Do
   not use it across a count of draws: the samples are paints. A row with a popup that has no parent (mini-frame detaches
   its frame) passes FRAME, since `drgnx-uitest-root-frame` can find that popup. The session's output lists every test
   that skipped by name (`  SKIP NAME`), so a green tier shows what it did not run.
