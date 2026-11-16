@@ -2027,7 +2027,7 @@ size, mtime and the offset read to) and an FTS5 table `turn` of each entry's tex
 - **Roots** (`Roots::of`): `$CLAUDE_CONFIG_DIR` or `~/.claude`, `$CODEX_HOME` or `~/.codex`, `$GEMINI_CLI_HOME/.gemini`
   or `~/.gemini`, narrowed by `drgnx-agents-history-providers`; the walk never follows a link. The same folders are
   on norn's deny list (`cli_session_dirs`), hard tier.
-- **Scan**: `follow` scans every 2 s on a blocking thread. The walk is stat-only: the known files (path, size, mtime,
+- **Scan**: `follow` scans every 2 s on a blocking thread. The walk is stat-only and hot/cold: a leaf folder (a Claude project folder, a Codex day, a Gemini `chats`) none of whose files changed within the hour is read again only when its own mtime moved or on every 30th walk (an append to an old file is seen within about a minute), a folder with a recent file every walk (`Roots::walk`, `Walk`). The known files (path, size, mtime,
   offset) are kept in memory, loaded from the index once, and a scan compares the walk with them. When nothing is new,
   changed or gone it opens no file, starts no transaction, reads no list and builds no view (`scan_changed` answers
   `changed: false`; `History::reads` counts the files opened, for the test). Files whose mtime is older than

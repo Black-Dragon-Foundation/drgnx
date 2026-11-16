@@ -52,6 +52,10 @@
 //! and `session/fork` and `session/resume` read it there for a session this process does not hold, so a second process
 //! forks or resumes what the first left; session ids then skip the ones the folder holds.  Without it, history lives
 //! in the process only.
+//! Claude's `session/resume` of an id the process neither holds nor finds in `--state` is, as in claude-agent-acp
+//! (`resumeSession` hands `{resume: sessionId}` to Claude Code), Claude Code's own conversation: the file
+//! `<$CLAUDE_CONFIG_DIR or $HOME/.claude>/projects/<cwd, non-alphanumerics as ->/<sessionId>.jsonl`; without it the answer is
+//! the error -32002 "Resource not found".
 //!
 //! `--panel FEATURES`: the personality also speaks drgnx's `_drgnx/panel` extension (src/mock_acp/panel.rs: its
 //! `panel:*` words and the client's `_drgnx/*` requests). With `before-tool`, every confirmation it asks for is
@@ -78,6 +82,31 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
+
+/// Whether Claude Code's conversation SID is where it reads it for the session's `cwd`: `$CLAUDE_CONFIG_DIR` (else
+/// `$HOME/.claude`) `/projects/<cwd, every character that is not an ASCII letter or digit as `-`>/<SID>.jsonl`.
+fn claude_conversation_exists(sid: &str, params: &Value) -> bool {
+    let Some(cwd) = params["cwd"].as_str() else {
+        return false;
+    };
+    let dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")));
+    let Some(dir) = dir else { return false };
+    let mut folder = String::new();
+    for c in cwd.chars() {
+        if c.is_ascii_alphanumeric() {
+            folder.push(c);
+        } else {
+            folder.extend(std::iter::repeat_n('-', c.len_utf16()));
+        }
+    }
+    dir.join("projects")
+        .join(folder)
+        .join(format!("{sid}.jsonl"))
+        .is_file()
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -505,7 +534,7 @@ impl Agent {
                 let sid = params["sessionId"].as_str().unwrap_or("s0").to_string();
                 self.log(
                     "session/resume",
-                    json!({"sessionId": sid, "mcpServers": params["mcpServers"]}),
+                    json!({"sessionId": sid, "mcpServers": params["mcpServers"], "cwd": params["cwd"]}),
                 );
                 if !self.sessions.contains_key(&sid) {
                     let v = match self.load(&sid, &params) {
@@ -514,6 +543,13 @@ impl Agent {
                             v
                         }
                         None => {
+                            // claude-agent-acp resumes by Claude Code's own session id, read from
+                            // `<config dir>/projects/<cwd as a folder name>/<id>.jsonl`; no file, no session
+                            if self.kind == Kind::Claude
+                                && !claude_conversation_exists(&sid, &params)
+                            {
+                                return rpc_error(&id, -32002, "Resource not found");
+                            }
                             let s = self.open(&params);
                             self.sessions.remove(&s).unwrap()
                         }

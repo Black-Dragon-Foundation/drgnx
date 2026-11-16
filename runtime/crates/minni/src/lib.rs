@@ -124,15 +124,34 @@ pub fn parse_whole(provider: Provider, bytes: &[u8]) -> Reader {
 /// Anything else skipped, and every unreadable line, counts as unknown ([`Reader::unknown`]).
 pub fn known_skipped(p: Provider) -> &'static [&'static str] {
     match p {
+        // the types a real Claude Code install's transcripts hold besides the conversation (counted over one machine's
+        // files, names only), and `progress` and `meta` (a user line with `isMeta`) from the reader's own history
         Provider::Claude => &[
             "meta",
             "system",
-            "file-history-snapshot",
-            "queue-operation",
             "progress",
             "attachment",
-            "permission-mode",
+            "queue-operation",
             "last-prompt",
+            "permission-mode",
+            "mode",
+            "file-history-snapshot",
+            "file-history-delta",
+            "api-request",
+            "api-request-blob",
+            "api-request-shape",
+            "atis-latch",
+            "agent-color",
+            "agent-name",
+            "frame-link",
+            "session-owner",
+            "pr-link",
+            "bridge-session",
+            "worktree-state",
+            "tools-used",
+            "cost-state",
+            "artifact-autoreact-ledger",
+            "artifact-comment-monitor",
         ],
         Provider::Codex => &["event_msg", "turn_context", "state"],
         Provider::Gemini => &["$patch"],

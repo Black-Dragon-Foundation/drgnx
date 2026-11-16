@@ -22,7 +22,7 @@ use runstav::methods::past::{
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -146,22 +146,38 @@ impl Roots {
     /// Every session file under the roots (never through a link): Claude's `projects/*/*.jsonl`, Gemini's
     /// `tmp/*/chats/session-*.json{l,}`, Codex's `sessions/YYYY/MM/DD/rollout-*.jsonl` and `archived_sessions/*.jsonl`.
     pub fn files(&self) -> Vec<Found> {
-        let mut out = Vec::new();
+        let mut out = self.walk(&mut Walk::default()).fresh;
+        out.sort_by_key(|f| std::cmp::Reverse(f.mtime));
+        out
+    }
+
+    /// The walk W remembers: a folder of files none of which changed within the last hour is read again only when its
+    /// own change time moved or on every 30th walk (a file appended to in an old folder is then seen within a minute at
+    /// 2 s polling); a folder with a recent file is read every walk.  Only the folders read are in `fresh`.
+    pub fn walk(&self, w: &mut Walk) -> Walked {
+        w.round += 1;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as i64);
+        let ctx = Ctx {
+            recheck: w.round % COLD_ROUNDS == 1,
+            hot_after: now - HOT_NS,
+            cutoff: (self.days > 0).then(|| now - i64::from(self.days) * 86_400 * 1_000_000_000),
+        };
+        let mut out = Walked::default();
+        let mut leaf = |dir: &Path, p: Provider, want: &dyn Fn(&str) -> bool| {
+            leaf_in(dir, p, want, w, &ctx, &mut out)
+        };
         if let Some(r) = &self.claude {
             for d in dirs_in(&r.join("projects")) {
-                files_in(&d, Provider::Claude, |n| n.ends_with(".jsonl"), &mut out);
+                leaf(&d, Provider::Claude, &|n| n.ends_with(".jsonl"));
             }
         }
         if let Some(r) = &self.gemini {
             for d in dirs_in(&r.join("tmp")) {
-                files_in(
-                    &d.join("chats"),
-                    Provider::Gemini,
-                    |n| {
-                        n.starts_with("session-") && (n.ends_with(".jsonl") || n.ends_with(".json"))
-                    },
-                    &mut out,
-                );
+                leaf(&d.join("chats"), Provider::Gemini, &|n| {
+                    n.starts_with("session-") && (n.ends_with(".jsonl") || n.ends_with(".json"))
+                });
             }
         }
         if let Some(r) = &self.codex {
@@ -169,27 +185,91 @@ impl Roots {
             for y in dirs_in(&r.join("sessions")) {
                 for m in dirs_in(&y) {
                     for d in dirs_in(&m) {
-                        files_in(&d, Provider::Codex, rollout, &mut out);
+                        leaf(&d, Provider::Codex, &rollout);
                     }
                 }
             }
-            files_in(
-                &r.join("archived_sessions"),
-                Provider::Codex,
-                rollout,
-                &mut out,
-            );
+            leaf(&r.join("archived_sessions"), Provider::Codex, &rollout);
         }
-        if self.days > 0 {
-            let age = std::time::Duration::from_secs(u64::from(self.days) * 86_400);
-            if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-                let cutoff = now.saturating_sub(age).as_nanos() as i64;
-                out.retain(|f| f.mtime >= cutoff);
-            }
-        }
-        out.sort_by_key(|f| std::cmp::Reverse(f.mtime));
         out
     }
+}
+
+/// A folder is "hot" while a file in it changed within this long.
+const HOT_NS: i64 = 3_600 * 1_000_000_000;
+/// Every this many walks the cold folders are read again whatever their change time says.
+const COLD_ROUNDS: u64 = 30;
+
+/// What `Roots::walk` remembers between walks: each leaf folder's change time and whether it held a recent file.
+#[derive(Default)]
+pub struct Walk {
+    dirs: HashMap<PathBuf, Seen>,
+    round: u64,
+}
+
+struct Seen {
+    mtime: i64,
+    hot: bool,
+}
+
+/// The files of the folders read this walk, and the folders (with their file counts) taken as they were.
+#[derive(Default)]
+pub struct Walked {
+    pub fresh: Vec<Found>,
+    /// The folders read this walk (even when empty), and the ones taken as they were.
+    pub read: HashSet<PathBuf>,
+    pub cached: HashSet<PathBuf>,
+}
+
+struct Ctx {
+    recheck: bool,
+    hot_after: i64,
+    cutoff: Option<i64>,
+}
+
+fn leaf_in(
+    dir: &Path,
+    p: Provider,
+    want: &dyn Fn(&str) -> bool,
+    w: &mut Walk,
+    ctx: &Ctx,
+    out: &mut Walked,
+) {
+    let Ok(m) = std::fs::metadata(dir) else {
+        w.dirs.remove(dir);
+        return;
+    };
+    let dm = mtime_of(&m);
+    if let Some(s) = w.dirs.get(dir)
+        && s.mtime == dm
+        && !s.hot
+        && !ctx.recheck
+    {
+        out.cached.insert(dir.to_path_buf());
+        return;
+    }
+    out.read.insert(dir.to_path_buf());
+    let before = out.fresh.len();
+    files_in(dir, p, want, &mut out.fresh);
+    if let Some(c) = ctx.cutoff {
+        let mut i = before;
+        while i < out.fresh.len() {
+            if out.fresh[i].mtime < c {
+                out.fresh.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+    let hot = out.fresh[before..].iter().any(|f| f.mtime > ctx.hot_after);
+    w.dirs.insert(dir.to_path_buf(), Seen { mtime: dm, hot });
+}
+
+fn parent_of(path: &str) -> PathBuf {
+    Path::new(path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
 }
 
 /// The folders in DIR (not links).
@@ -333,6 +413,9 @@ struct Inner {
     readers: Vec<(PathBuf, Reader)>,
     /// The indexed files by path, as the index has them (loaded once, kept current by each scan).
     known: Option<HashMap<String, Indexed>>,
+    /// How many indexed files each leaf folder holds (the known ones, by their parent).
+    per_dir: HashMap<PathBuf, usize>,
+    walk: Walk,
     /// The list has been read from the index since it was opened.
     listed: bool,
 }
@@ -344,9 +427,14 @@ impl History {
         if i.db_path.as_ref() != Some(&db_path) {
             i.db = None;
             i.known = None;
+            i.walk = Walk::default();
             i.listed = false;
         }
         i.db_path = Some(db_path);
+        if i.roots.as_ref() != Some(&roots) {
+            // other roots (or another cap): every folder is read again
+            i.walk = Walk::default();
+        }
         i.roots = Some(roots);
     }
 
@@ -356,6 +444,7 @@ impl History {
         let mut i = lock(&self.inner);
         i.db = None;
         i.known = None;
+        i.walk = Walk::default();
         i.listed = false;
         i.roots = None;
         i.readers.clear();
@@ -402,13 +491,13 @@ impl History {
         let Some(roots) = i.roots.clone() else {
             return Ok((0, false));
         };
-        let found = roots.files();
         if i.db.is_none() {
             let Some(p) = i.db_path.clone() else {
                 return Ok((0, false));
             };
             i.db = Some(open_db(&p)?);
             i.known = None;
+            i.walk = Walk::default();
             i.listed = false;
         }
         let Inner {
@@ -416,13 +505,22 @@ impl History {
             readers,
             known,
             listed,
+            per_dir,
+            walk,
             ..
         } = &mut *i;
         let db = db.as_mut().expect("opened above");
         if known.is_none() {
-            *known = Some(indexed(db)?);
+            let k = indexed(db)?;
+            per_dir.clear();
+            for r in k.values() {
+                *per_dir.entry(parent_of(&r.path)).or_default() += 1;
+            }
+            *known = Some(k);
         }
         let known_map = known.as_mut().expect("loaded above");
+        let walked = roots.walk(walk);
+        let found = &walked.fresh;
         let todo: Vec<&Found> = found
             .iter()
             .filter(|f| {
@@ -432,21 +530,36 @@ impl History {
                         .is_some_and(|r| r.size == f.size && r.mtime == f.mtime)
             })
             .collect();
-        // known files not found again: the matched ones are the found ones that are known
-        let matched = found
-            .iter()
-            .filter(|f| known_map.contains_key(f.path.to_string_lossy().as_ref()))
-            .count();
-        if todo.is_empty() && matched == known_map.len() && *listed {
+        // what is known in the folders read, against what was found there; and every folder known is still there
+        let mut matched: HashMap<&Path, usize> = HashMap::new();
+        for f in found {
+            if known_map.contains_key(f.path.to_string_lossy().as_ref())
+                && let Some(d) = f.path.parent()
+            {
+                *matched.entry(d).or_default() += 1;
+            }
+        }
+        let steady = per_dir.iter().all(|(d, n)| {
+            walked.cached.contains(d)
+                || (walked.read.contains(d) && matched.get(d.as_path()).copied().unwrap_or(0) == *n)
+        });
+        if todo.is_empty() && steady && *listed {
             return Ok((known_map.len() as u64, false));
         }
-        let paths: BTreeSet<String> = found
-            .iter()
-            .map(|f| f.path.to_string_lossy().into_owned())
-            .collect();
+        let paths: HashSet<&Path> = found.iter().map(|f| f.path.as_path()).collect();
         let gone: Vec<Indexed> = known_map
             .values()
-            .filter(|k| !paths.contains(&k.path))
+            .filter(|k| {
+                let path = Path::new(&k.path);
+                let dir = path.parent().unwrap_or(path);
+                if walked.cached.contains(dir) {
+                    false
+                } else if walked.read.contains(dir) {
+                    !paths.contains(path)
+                } else {
+                    true
+                }
+            })
             .cloned()
             .collect();
         let tx = db.transaction().map_err(|e| e.to_string())?;
@@ -489,9 +602,19 @@ impl History {
         tx.commit().map_err(|e| e.to_string())?;
         for k in &gone {
             known_map.remove(&k.path);
+            let d = parent_of(&k.path);
+            if let Some(n) = per_dir.get_mut(&d) {
+                *n -= 1;
+                if *n == 0 {
+                    per_dir.remove(&d);
+                }
+            }
         }
         for r in put {
-            known_map.insert(r.path.clone(), r);
+            let d = parent_of(&r.path);
+            if known_map.insert(r.path.clone(), r).is_none() {
+                *per_dir.entry(d).or_default() += 1;
+            }
         }
         let list = list_of(db)?;
         let n = known_map.len() as u64;

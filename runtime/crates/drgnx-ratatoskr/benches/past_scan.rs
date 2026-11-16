@@ -37,7 +37,15 @@ fn write_files(home: &Path) {
                 serde_json::json!({"type":"assistant","uuid":"u2","sessionId":id,"timestamp":"2026-11-01T10:00:05Z",
                     "message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}),
             );
-            std::fs::write(dir.join(format!("{id}.jsonl")), text).unwrap();
+            let file = dir.join(format!("{id}.jsonl"));
+            std::fs::write(&file, text).unwrap();
+            // sessions of the past, as most of a real folder is (a file changed within the hour keeps its folder hot)
+            std::fs::File::options()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_modified(std::time::SystemTime::now() - Duration::from_secs(86_400))
+                .unwrap();
         }
     }
 }
