@@ -1160,6 +1160,171 @@ fn login_grants(
     scratch: &Path,
     target: gleipnir::Target,
 ) -> Result<LoginGrants, Refusal> {
+    let mut g = login_grants_base(dir, shape, scratch, target)?;
+    if let Some(r) = crate::agents::past::grant(&shape.sid) {
+        resume_grant(&r, dir, shape, scratch, target, &mut g).map_err(|message| Refusal {
+            rule: Rule::Setup,
+            path: Some(r.file.clone()),
+            message,
+        })?;
+    }
+    Ok(g)
+}
+
+/// A resumed past session's file in its jail (`agents::past`): where the CLI looks for it under its login dir DIR
+/// (Claude: its project folder for the cwd; Codex: `sessions/YYYY/MM/DD`; Gemini: `tmp/…/chats`), in the folder of
+/// the session's own bound there.  `copy`: a copy of that one file (Claude's subagent files too) made there.
+/// `original`: that one file bound read-write at that place, over an empty one, and nothing beside it; without a
+/// mount namespace, that one path writable (where it is where the CLI looks).
+fn resume_grant(
+    r: &crate::agents::past::Grant,
+    dir: &Path,
+    shape: &SessionShape,
+    scratch: &Path,
+    target: gleipnir::Target,
+    g: &mut LoginGrants,
+) -> Result<(), String> {
+    use crate::agents::past::checked_file;
+    use runstav::methods::past::PastRoute;
+    let real_dir = dir
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let root = r
+        .root
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", r.root.display()))?;
+    if real_dir != root {
+        return Err("the session's CLI folder is not the one the past session is in".into());
+    }
+    let file = checked_file(&root, &r.file)?;
+    let name = file.file_name().ok_or("no file name")?.to_owned();
+    // where the CLI looks (REAL, under the login dir) and the session's own folder bound there (OWN)
+    let (real, own, rel): (PathBuf, PathBuf, PathBuf) = match r.provider {
+        minni::Provider::Claude => {
+            let project = crate::agents::lock::claude_project(dir, &shape.cwd)
+                .ok_or("the session's cwd has no Claude project folder")?;
+            (
+                project,
+                scratch.join("claude-project"),
+                PathBuf::from(&name),
+            )
+        }
+        minni::Provider::Codex => {
+            let under = file
+                .strip_prefix(root.join("sessions"))
+                .map(Path::to_path_buf);
+            let rel = match under {
+                Ok(p) => p,
+                // an archived one goes where its date says: rollout-YYYY-MM-DDT…
+                Err(_) => {
+                    let n = name.to_string_lossy();
+                    let d = n
+                        .strip_prefix("rollout-")
+                        .and_then(|t| t.get(..10))
+                        .ok_or("not a rollout file")?;
+                    let mut parts = d.split('-');
+                    let (y, m, day) = (parts.next(), parts.next(), parts.next());
+                    let (Some(y), Some(m), Some(day)) = (y, m, day) else {
+                        return Err("not a rollout file".into());
+                    };
+                    PathBuf::from(y).join(m).join(day).join(&name)
+                }
+            };
+            (
+                dir.join("sessions"),
+                scratch.join("login").join("sessions"),
+                rel,
+            )
+        }
+        minni::Provider::Gemini => {
+            let rel = file
+                .strip_prefix(root.join("tmp"))
+                .map_err(|_| "not under the CLI's tmp folder".to_string())?
+                .to_path_buf();
+            (dir.join("tmp"), scratch.join("login").join("tmp"), rel)
+        }
+    };
+    let bwrap = target == gleipnir::Target::LinuxBwrap;
+    let made = |p: &Path| -> Result<(), String> {
+        if let Some(parent) = p.parent() {
+            paths::private_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        Ok(())
+    };
+    match r.route {
+        PastRoute::Copy => {
+            if !bwrap {
+                return Err("resuming on a copy needs the full sandbox tier: resume in the original file, or in a terminal".into());
+            }
+            let to = own.join(&rel);
+            made(&to)?;
+            copy_private(&file, &to)?;
+            if r.provider == minni::Provider::Claude
+                && let Some(stem) = file.file_stem()
+            {
+                let subs = file.with_file_name(stem).join("subagents");
+                if let Ok(rd) = std::fs::read_dir(&subs) {
+                    let into = own.join(stem).join("subagents");
+                    for e in rd.flatten() {
+                        if e.file_type().is_ok_and(|t| t.is_file()) {
+                            made(&into.join(e.file_name()))?;
+                            copy_private(&e.path(), &into.join(e.file_name()))?;
+                        }
+                    }
+                }
+            }
+        }
+        PastRoute::Original => {
+            if bwrap {
+                let stand_in = own.join(&rel);
+                made(&stand_in)?;
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&stand_in)
+                    .map_err(|e| format!("{}: {e}", stand_in.display()))?;
+                g.binds.push(gleipnir::Bind {
+                    mode: gleipnir::Mode::Rw,
+                    source: file,
+                    dest: real.join(&rel),
+                });
+            } else if real.join(&rel) == file {
+                g.write.push(file);
+            } else {
+                return Err("that file is not where the CLI looks for it: resume on a copy, or in a terminal".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// FROM copied to TO (made with mode 0600, never through a link).
+fn copy_private(from: &Path, to: &Path) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut src = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(from)
+        .map_err(|e| format!("{}: {e}", from.display()))?;
+    let mut dst = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(to)
+        .map_err(|e| format!("{}: {e}", to.display()))?;
+    std::io::copy(&mut src, &mut dst).map_err(|e| format!("{}: {e}", to.display()))?;
+    Ok(())
+}
+
+/// [`login_grants`] before a resumed session's file.
+fn login_grants_base(
+    dir: &Path,
+    shape: &SessionShape,
+    scratch: &Path,
+    target: gleipnir::Target,
+) -> Result<LoginGrants, Refusal> {
     use crate::agents::lock::LoginUse;
     let real = |p: &Path| {
         p.symlink_metadata()

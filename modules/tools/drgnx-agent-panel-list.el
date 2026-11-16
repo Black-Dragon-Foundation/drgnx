@@ -47,7 +47,7 @@
 
 (defun drgnx-agent-panel-list--render (key)
   (if (eq key :empty)
-      (propertize "No agent sessions yet: New Agent Session… starts one\n" 'face 'shadow)
+      (propertize "No agent sessions yet: New Agent Session… starts one; Show Past Sessions lists your other CLIs' sessions\n" 'face 'shadow)
     (if-let* ((s (drgnx-agent-panel-list--session key)))
         (propertize (format "%-26s %-9s %5s  %s\n" (drgnx-agent-session-name s) (symbol-name (drgnx-agent-session-status s))
                             (if-let* ((p (drgnx-agents-context-percent s))) (format "%d%%" p) "")

@@ -26,6 +26,7 @@ pub mod launch;
 pub mod lock;
 pub mod markdown;
 pub mod net;
+pub mod past;
 pub mod probe;
 pub mod queue;
 pub mod rewind;

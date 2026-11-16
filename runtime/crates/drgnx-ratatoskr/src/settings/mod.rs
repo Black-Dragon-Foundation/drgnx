@@ -86,6 +86,12 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         OnError::Strict,
     ),
     setting("drgnx-agents-trace-opens", "Vec<String>", OnError::Strict),
+    setting("drgnx-agents-history", "bool", OnError::Strict),
+    setting(
+        "drgnx-agents-history-providers",
+        "Vec<String>",
+        OnError::Strict,
+    ),
     setting(
         "drgnx-ai-providers",
         "Vec<ProviderConfig>",
@@ -206,6 +212,10 @@ pub struct RuntimeValues {
     pub agents_start_env_names: Vec<String>,
     /// The providers whose shell steps' opens are traced on Linux (`work::trace`).
     pub agents_trace_opens: Vec<String>,
+    /// Whether the other CLIs' past sessions are read and indexed (off: `history.db` is deleted).
+    pub agents_history: bool,
+    /// The CLIs whose past sessions are read: "claude", "gemini", "codex".
+    pub agents_history_providers: Vec<String>,
     /// The user's providers, each replacing the preset of its id.
     pub ai_providers: Vec<ProviderEntry>,
     /// The user's role chains (a role not named here has its shipped chain, [`Defaults::roles`]).
@@ -488,6 +498,8 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-allow-unsandboxed" => values.agents_allow_unsandboxed = de(node)?,
         "drgnx-agents-start-env-names" => values.agents_start_env_names = de(node)?,
         "drgnx-agents-trace-opens" => values.agents_trace_opens = de(node)?,
+        "drgnx-agents-history" => values.agents_history = de(node)?,
+        "drgnx-agents-history-providers" => values.agents_history_providers = de(node)?,
         "drgnx-ai-providers" => values.ai_providers = providers::entries(node)?,
         "drgnx-ai-roles" => values.ai_roles = providers::roles(node)?,
         "drgnx-agents-matrix" => {

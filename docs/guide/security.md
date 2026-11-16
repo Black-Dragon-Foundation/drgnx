@@ -379,6 +379,21 @@ which keeps what it records while that folder lasts; on the reduced tier and on 
 Gemini CLI there cannot keep or resume a session of their own (if the CLI cannot start without one, use the full
 tier).
 
+## Your past CLI sessions
+
+Past Sessions ([Agents](agents.md#past-sessions)) reads the sessions Claude Code, Gemini CLI and Codex keep in
+their own folders: read-only, never through a link, on this machine only. The hub indexes them in
+`<state>/hub/history.db` (mode 0600), with every key-like string replaced by `[redacted: KIND]`. Only your own
+editor's connection may ask for them (the `user` class): no agent tool reaches them, and those folders are on the
+personal-notes deny list's hard tier, so no indexer, embedder or record reaches them either. A transcript goes to a
+model only when you resume it, and only to the CLI it came from.
+
+The one write is yours to choose, per resume: "write the original" binds exactly that one session file into the
+resumed agent's jail, read-write, over the empty folder the jail already has there. The file must be a regular file
+(not a link) where its CLI keeps sessions; its neighbours, its folder, its subagent files and every other project's
+sessions stay out of reach. The default, "on a copy", gives the jail a copy and leaves your file alone.
+`drgnx-agents-history` off stops the reading and deletes `history.db`.
+
 ## Secrets in the store
 
 An agent's write to the store that looks like a credential is refused ("looks like a secret; do not store

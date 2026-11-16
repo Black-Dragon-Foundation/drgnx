@@ -52,6 +52,8 @@ pub struct Core {
     pub briefs: crate::brief::Briefs,
     pub manager: crate::manager::Managers,
     pub records: crate::records::Views,
+    /// The other CLIs' past sessions ([`crate::agents::past`]).
+    pub past: std::sync::Arc<crate::agents::past::History>,
     pub machines: crate::work::machines::Machines,
     /// The runners' registry ([`crate::runners::methods`]).
     pub runners: crate::runners::methods::Hub,
@@ -179,6 +181,11 @@ pub async fn serve(
         Params::SayRevise(p) => answer(say::revise(f, c, p).await),
         Params::SayEnd(p) => answer(say::end(f, c, p).await),
         Params::RecordsImport(p) => answer(records::import(f, c, p).await),
+        Params::PastSubscribe(p) => answer(crate::agents::past::subscribe(f, c, p).await),
+        Params::PastSearch(p) => answer(crate::agents::past::search(f, c, p).await),
+        Params::PastOpen(p) => answer(crate::agents::past::open(f, c, p).await),
+        Params::PastResume(p) => answer(crate::agents::past::resume(f, c, p).await),
+        Params::PastRescan(p) => answer(crate::agents::past::rescan(f, c, p).await),
         Params::RecordsStatus(p) => answer(records::status(f, c, p).await),
         Params::RecordsProposals(p) => answer(records::proposals(f, c, p).await),
         Params::RecordsDecide(p) => answer(records::decide(f, c, p).await),

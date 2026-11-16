@@ -435,6 +435,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     crate::records::install_tool(&front);
     crate::clock::spawn("records:follow", crate::records::follow(front.clone()));
+    crate::clock::spawn("past:follow", crate::agents::past::follow(front.clone()));
     // a matrix change that makes a paired chat's chat.project-edit never closes its pair door at once
     crate::clock::spawn(
         "pair:follow-matrix",

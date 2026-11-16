@@ -394,6 +394,8 @@ mod tests {
             "agents/config",
             "agents/do",
             "agents/grants/revoke",
+            // a past session resumed: a session starts
+            "agents/history/resume",
             "agents/huddle/start",
             "agents/kill",
             "agents/pause",

@@ -250,6 +250,62 @@ The profile New Agent Session offers on Return: a profile's name, or nil for cla
 | `:agents` | `never` |
 | `:schema` | `(or null string)` |
 
+## drgnx-agents-history
+
+Non-nil: the hub reads your past Claude Code, Gemini CLI and Codex sessions from their own folders (read-only, on
+this machine only) so Agents: Past Sessions lists, searches and resumes them.  Nil: nothing is read and the hub's
+index of them (history.db) is deleted.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"bool"` |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-agents-history-providers
+
+The CLIs whose past sessions the hub reads (`drgnx-agents-history'): "claude" (Claude Code), "gemini" (Gemini
+CLI), "codex" (Codex).  A CLI taken out of the list is no longer read and its sessions leave the index.
+
+| Key | Value |
+| --- | --- |
+| Default | `("claude" "gemini" "codex")` |
+| Type | `(repeat (choice (const "claude") (const "gemini") (const "codex")))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-agents-history-resume-writes-original
+
+Non-nil: Resume Here on a past session starts with "write the original" chosen, so the jailed agent may write
+that one CLI session file and your own CLI sees the continuation.  Nil: it starts on a copy (the default).  You still
+choose per resume.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
 ## drgnx-agents-hook-rules
 
 Rules the hub checks at the hook points, before any plugin: each is a plist with :point, :verdict (deny or annotate)

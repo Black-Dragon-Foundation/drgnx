@@ -29,6 +29,7 @@ pub mod mcp;
 pub mod notebook;
 pub mod orch;
 pub mod pair;
+pub mod past;
 pub mod plans;
 pub mod plugins;
 pub mod records;
@@ -197,6 +198,11 @@ params! {
     AgentsKill(agents::ById),
     AgentsPermission(agents::PermissionParams),
     AgentsDo(agents::DoParams),
+    PastSubscribe(past::PastSubscribe),
+    PastSearch(past::PastSearch),
+    PastOpen(past::PastRef),
+    PastResume(past::PastResume),
+    PastRescan(Empty),
     JobPropose(jobs::ProposeParams),
     JobStartTask(jobs::StartTaskParams),
     JobReassign(jobs::ReassignParams),
@@ -476,6 +482,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(forecast::methods());
     v.extend(say::methods());
     v.extend(records::methods());
+    v.extend(past::methods());
     v.extend(work::methods());
     v.extend(view::methods());
     v.extend(term::methods());

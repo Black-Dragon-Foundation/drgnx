@@ -1462,6 +1462,8 @@ The commands of modules that need no installed package are in it, the later stag
                               agents-panel-compose agents-panel-newline agents-panel-back   ; the composer as an input buffer
                               agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open
                               work-huddle agents-view agents-open   ; part 3: the agent panel (its list) and H on a map overlap
+                              sessions-search sessions-open sessions-resume sessions-resume-in-terminal
+                              sessions-rescan ; Past Sessions' list and transcripts
                               ;; extra/debug needs no package now (the hub is its client), so it sets up here too
                               debug-start debug-breakpoint debug-breakpoint-conditional debug-logpoint
                               debug-breakpoint-enable debug-run-to-cursor debug-step-over debug-step-in debug-step-out
