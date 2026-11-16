@@ -142,6 +142,26 @@ commands name.  Read when a session starts."
   :group 'drgnx :scope 'global
   :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
 
+(drgnx-defsetting drgnx-agents-history t
+  "Non-nil: the hub reads your past Claude Code, Gemini CLI and Codex sessions from their own folders (read-only, on
+this machine only) so Agents: Past Sessions lists, searches and resumes them.  Nil: nothing is read and the hub's
+index of them (history.db) is deleted."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "bool" :schema 'boolean)
+
+(drgnx-defsetting drgnx-agents-history-providers '("claude" "gemini" "codex")
+  "The CLIs whose past sessions the hub reads (`drgnx-agents-history'): \"claude\" (Claude Code), \"gemini\" (Gemini
+CLI), \"codex\" (Codex).  A CLI taken out of the list is no longer read and its sessions leave the index."
+  :type '(repeat (choice (const "claude") (const "gemini") (const "codex")))
+  :group 'drgnx :scope 'global
+  :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-agents-history-resume-writes-original nil
+  "Non-nil: Resume Here on a past session starts with \"write the original\" chosen, so the jailed agent may write
+that one CLI session file and your own CLI sees the continuation.  Nil: it starts on a copy (the default).  You still
+choose per resume."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :agents 'never)
+
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote

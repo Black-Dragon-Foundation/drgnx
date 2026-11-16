@@ -6960,6 +6960,461 @@
       "classes": [
         "user"
       ],
+      "doc": "a past session's transcript as a read-only view, and how it resumes",
+      "name": "agents/history/open",
+      "params": {
+        "$defs": {
+          "PastProvider": {
+            "description": "The CLI that wrote a session.",
+            "enum": [
+              "claude",
+              "gemini",
+              "codex"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/$defs/PastProvider"
+          }
+        },
+        "required": [
+          "provider",
+          "id"
+        ],
+        "title": "PastRef",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PastProvider": {
+            "description": "The CLI that wrote a session.",
+            "enum": [
+              "claude",
+              "gemini",
+              "codex"
+            ],
+            "type": "string"
+          },
+          "PastSession": {
+            "additionalProperties": false,
+            "description": "One past session as its row shows it.",
+            "properties": {
+              "branch": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "The CLI's own session id (what its resume command takes).",
+                "type": "string"
+              },
+              "live": {
+                "description": "A drgnx session resumed from it, when one runs.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider": {
+                "$ref": "#/$defs/PastProvider"
+              },
+              "started": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "turns": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "updated": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "provider",
+              "id",
+              "title",
+              "turns"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/history/open`'s answer: the view that shows the transcript (`agent-history/PROVIDER:ID`) and the session.",
+        "properties": {
+          "argv": {
+            "default": [],
+            "description": "The command that resumes it in a terminal, as argv (never a shell string), run in the session's cwd.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "resume_here": {
+            "description": "Whether Resume here can run: an agent profile for the provider exists.",
+            "type": "boolean"
+          },
+          "session": {
+            "$ref": "#/$defs/PastSession"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "session",
+          "resume_here"
+        ],
+        "title": "PastOpened",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the CLIs' folders read again for past sessions (read-only)",
+      "name": "agents/history/rescan",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "sessions": {
+            "description": "The sessions indexed now.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "title": "PastScanned",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a past session continued as a drgnx agent through its provider's ACP adapter: on a copy, or writing that one original file",
+      "name": "agents/history/resume",
+      "params": {
+        "$defs": {
+          "PastProvider": {
+            "description": "The CLI that wrote a session.",
+            "enum": [
+              "claude",
+              "gemini",
+              "codex"
+            ],
+            "type": "string"
+          },
+          "PastRoute": {
+            "description": "How a resume runs.",
+            "oneOf": [
+              {
+                "const": "copy",
+                "description": "A drgnx session on a copy of the session file, in the jail's own folder (the user's CLI does not see it).",
+                "type": "string"
+              },
+              {
+                "const": "original",
+                "description": "A drgnx session that may write that one original session file (the user's CLI sees the continuation).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "profile": {
+            "description": "The agent profile (default: the provider's own).",
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "$ref": "#/$defs/PastProvider"
+          },
+          "route": {
+            "$ref": "#/$defs/PastRoute"
+          }
+        },
+        "required": [
+          "provider",
+          "id",
+          "route"
+        ],
+        "title": "PastResume",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PastRoute": {
+            "description": "How a resume runs.",
+            "oneOf": [
+              {
+                "const": "copy",
+                "description": "A drgnx session on a copy of the session file, in the jail's own folder (the user's CLI does not see it).",
+                "type": "string"
+              },
+              {
+                "const": "original",
+                "description": "A drgnx session that may write that one original session file (the user's CLI sees the continuation).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "route": {
+            "$ref": "#/$defs/PastRoute"
+          },
+          "session": {
+            "description": "The drgnx session now running.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "route"
+        ],
+        "title": "PastResumed",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "past sessions whose title or transcript holds every word of the query, best first, with a snippet",
+      "name": "agents/history/search",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "query": {
+            "maxLength": 512,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "PastSearch",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PastHit": {
+            "additionalProperties": false,
+            "description": "One search hit: its session and a piece of the text that matched.",
+            "properties": {
+              "session": {
+                "$ref": "#/$defs/PastSession"
+              },
+              "snippet": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session",
+              "snippet"
+            ],
+            "type": "object"
+          },
+          "PastProvider": {
+            "description": "The CLI that wrote a session.",
+            "enum": [
+              "claude",
+              "gemini",
+              "codex"
+            ],
+            "type": "string"
+          },
+          "PastSession": {
+            "additionalProperties": false,
+            "description": "One past session as its row shows it.",
+            "properties": {
+              "branch": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "The CLI's own session id (what its resume command takes).",
+                "type": "string"
+              },
+              "live": {
+                "description": "A drgnx session resumed from it, when one runs.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider": {
+                "$ref": "#/$defs/PastProvider"
+              },
+              "started": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "turns": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "updated": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "provider",
+              "id",
+              "title",
+              "turns"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "hits": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PastHit"
+            },
+            "type": "array"
+          }
+        },
+        "title": "PastHits",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the caller's view shows the other CLIs' past sessions as rows (the workspace's first), narrowed by a query",
+      "name": "agents/history/subscribe",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`agents/history/subscribe`: the caller's VIEW shows the past sessions as rows, the workspace's first, narrowed by\nQUERY (titles and the whole transcripts' text).  With LIMIT the rows are a section of another list (the Agents\nlist's): a header, at most LIMIT sessions, and a last row that says how many more Past Sessions shows.",
+        "properties": {
+          "limit": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "query": {
+            "maxLength": 512,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "PastSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a huddle's record: its clash, the two sessions, its state, the replies (agent text), the agreement's proposal and the user's decision",
       "name": "agents/huddle/get",
       "params": {
