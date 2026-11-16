@@ -611,8 +611,17 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
     args=(--memory "$mem" --memory-swap "$mem" --security-opt seccomp=unconfined --security-opt label=disable)
     # KWin 6.8's virtual backend composites only with a render device: without one it manages windows but answers no
     # frame callback, so the presenter commits once and then holds every packet.  /dev/udmabuf (never /dev/dri) makes it
-    # use its software device, Mesa's llvmpipe, on any machine, as Nidhogg's test/gui.sh does
-    if [ "$comp" = kwin ] && [ -c /dev/udmabuf ]; then args+=(--device /dev/udmabuf); fi
+    # use its software device, Mesa's llvmpipe, on any machine, as Nidhogg's test/gui.sh does.  A host without it is
+    # refused: a KWin run without it went on, and its presented waits could pass on pictures that never went out.
+    # DRGNX_TEST_UDMABUF: another device path (the tests)
+    if [ "$comp" = kwin ]; then
+      local udmabuf="${DRGNX_TEST_UDMABUF:-/dev/udmabuf}"
+      if [ ! -c "$udmabuf" ]; then
+        echo "drgnx: --compositor kwin needs $udmabuf, KWin's software render device (without it KWin answers no frame callback); load the udmabuf module (modprobe udmabuf) or run another compositor" >&2
+        return 2
+      fi
+      args+=(--device "$udmabuf")
+    fi
     # DRGNX_PERF_CPUS=2|4: the machine shape of the workers' A/B (review M14), the cores the run may use (as `drgnx-perf-cpuset-args')
     # one thread of each of the first N physical cores (a 7900X: 0,1; a 4900HS, whose core's threads sit side by side: 0,2)
     case "${DRGNX_PERF_CPUS:-}" in

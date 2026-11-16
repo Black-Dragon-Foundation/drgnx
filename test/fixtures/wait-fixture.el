@@ -105,20 +105,20 @@ long before counts as ended."
   "`drgnx-test--presenter-counts' at the end of the last `drgnx-test-wait-presented'.")
 
 (defun drgnx-test--presenter-counts (frame)
-  "(OWED . SENT) of FRAME's display on the native shell: the packets that need a commit of their own (published, less
-those merged into one still waiting) and the commits sent.  Nil where there is no presenter."
+  "(PUBLISHED . PRESENTED) of FRAME's display on the native shell, the presenter's own request numbers: the newest
+request (each packet, configure ack and piece of surface state takes the next one) and the newest that, with every
+older one, has gone out in a flushed commit.  Nil where there is no presenter."
   (when-let* (((fboundp 'nhwl-presenter-stats))
               (s (ignore-errors (nhwl-presenter-stats frame))))
-    (cons (- (plist-get s :packets) (plist-get s :superseded))
-          (+ (plist-get s :commits) (plist-get s :bare-commits)))))
+    (cons (plist-get s :published) (plist-get s :presented))))
 
 (defun drgnx-test--presented-p (frame)
-  "Non-nil when every packet of FRAME's display published since the last presented wait has gone out as a commit.
-A packet makes at least one commit, and a tree with child frames makes more.  With no presenter (macOS, a pgtk build)
-it is t: there `glitnir-snapshot' itself returns after a paint."
-  (let ((now (drgnx-test--presenter-counts frame)) (then drgnx-test--settled-counts))
-    (or (null now) (null then)
-        (>= (- (cdr now) (cdr then)) (- (car now) (car then))))))
+  "Non-nil when every request of FRAME's display has gone out in a commit: the presenter's :presented has reached its
+:published.  Not a count of commits since the last wait: a packet merged into one still waiting adds no commit owed,
+so that count settled while nothing went out (KWin with no render device answered no frame callback after its first).
+With no presenter (macOS, a pgtk build) it is t: there `glitnir-snapshot' itself returns after a paint."
+  (let ((now (drgnx-test--presenter-counts frame)))
+    (or (null now) (>= (cdr now) (car now)))))
 
 (cl-defun drgnx-test-wait-presented (&key frame value (frames 2) (secs 30))
   "Wait until FRAME's root frame (default the session's) shows what was changed; return the last sample.

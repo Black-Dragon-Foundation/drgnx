@@ -875,7 +875,8 @@ session launcher         systemd         # or detached (process group, no system
   util-linux`, ~2.3 GB; `kwin_wayland` and `sway` lose their `cap_sys_nice` file capability, which the container does
   not grant), with the same cap and security options. A KWin run gets `/dev/udmabuf` (never `/dev/dri`): KWin 6.8's
   virtual backend composites only on a render device, and udmabuf gives it Mesa's llvmpipe on any machine; without
-  it KWin answers no frame callback and the presenter holds every packet after its first commit. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
+  it KWin answers no frame callback and the presenter holds every packet after its first commit, so a host without
+  `/dev/udmabuf` is refused (exit 2, with the reason). `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
   too. `DRGNX_TEST_WM_IMAGE` uses a prebuilt one (`DRGNX_TEST_GUI_IMAGE` does not apply: that image has neither).
 - **A local run builds an image only when it must.** `bin/drgnx test --container` takes the image `NAME:TAG` (TAG as
   above) from the local store when it is there; else pulls `ghcr.io/black-dragon-foundation/NAME:TAG` (CI's copy of the
