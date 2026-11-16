@@ -788,6 +788,37 @@ other sections).  Returns non-nil when NAME was defined."
   (and (drgnx-wb--dock-windows frame) t))
 
 (defvar drgnx-rules--placing)           ; drgnx-rules.el: the dock's side windows are meant, not rerouted
+(declare-function drgnx-grid-on-p "drgnx-grid")
+(declare-function drgnx-grid-split-dock "drgnx-grid" (dock &optional px frame kinds))
+(declare-function drgnx-grid-add-part "drgnx-grid" (window side &optional px))
+(declare-function drgnx-grid-remove-dock "drgnx-grid" (window))
+
+(defun drgnx-wb-grid-p ()
+  "Non-nil when the docks and areas are tiles of the grid (`drgnx-grid-on-p'), not side windows."
+  (and (fboundp 'drgnx-grid-on-p) (drgnx-grid-on-p)))
+
+(defun drgnx-wb--section-parameters (name spec)
+  "The window parameters of dock section NAME's window, defined with SPEC."
+  `((drgnx-role . dock) (drgnx-section . ,name) (no-delete-other-windows . t) (no-other-window . t)
+    ;; `:own-header': the buffer's own header line shows (a view's controls)
+    ,@(unless (plist-get spec :own-header)
+        `((header-line-format . ,(let ((title (plist-get spec :title)))
+                                   (drgnx-wb-section-header (if (functionp title) (funcall title) title))))))))
+
+(defun drgnx-wb--show-dock-tile (sections)
+  "The left dock as a tile of the grid: SECTIONS' windows ((NAME . SPEC) …, in slot order), the first split from its
+dock's neighbour at the dock's width (`drgnx-grid-split-dock'), the others parts of its atom below it, each its
+`:height' of the dock when it has one, else half the window above."
+  (let* ((first (drgnx-grid-split-dock 'left (or (frame-parameter nil 'drgnx-wb-dock-px)
+                                                 (* drgnx-wb-dock-columns (frame-char-width)))))
+         (height (window-pixel-height first)) (prev nil))
+    (pcase-dolist (`(,name . ,spec) sections)
+      (let ((w (if prev (drgnx-grid-add-part prev 'below (let ((h (plist-get spec :height))) (and h (round (* h height)))))
+                 first)))
+        (pcase-dolist (`(,k . ,v) (drgnx-wb--section-parameters name spec)) (set-window-parameter w k v))
+        (set-window-buffer w (funcall (plist-get spec :buffer)))
+        (set-window-dedicated-p w t)
+        (setq prev w)))))
 
 (defun drgnx-wb--in-view-p (spec view)
   "Non-nil when the section SPEC belongs to VIEW (a section without :view is the Explorer's)."
@@ -807,22 +838,20 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
   "Show the left dock (the current view's sections) without selecting it; keep the width it had."
   (unless (drgnx-wb-sidebar-showing-p)
     (let ((selected (selected-window)) (view (drgnx-wb-sidebar-view)))
-      (pcase-dolist (`(,name . ,spec) (sort (seq-filter (lambda (s) (drgnx-wb--in-view-p (cdr s) view)) drgnx-wb--sections)
-                                            (lambda (a b) (< (plist-get (cdr a) :slot) (plist-get (cdr b) :slot)))))
-        (let ((drgnx-rules--placing t))
-          (display-buffer-in-side-window
-           (funcall (plist-get spec :buffer))
-           `((side . left) (slot . ,(plist-get spec :slot)) (window-width . ,drgnx-wb-dock-columns)
-             ,@(when (plist-get spec :height) `((window-height . ,(plist-get spec :height))))
-             (dedicated . t)
-             (window-parameters . ((drgnx-role . dock) (drgnx-section . ,name) (no-delete-other-windows . t)
-                                   (no-other-window . t)
-                                   ;; `:own-header': the buffer's own header line shows (a view's controls)
-                                   ,@(unless (plist-get spec :own-header)
-                                       `((header-line-format . ,(let ((title (plist-get spec :title)))
-                                                                  (drgnx-wb-section-header
-                                                                   (if (functionp title) (funcall title) title))))))))))))
-      (when-let* ((px (frame-parameter nil 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
+      (let ((sections (sort (seq-filter (lambda (s) (drgnx-wb--in-view-p (cdr s) view)) drgnx-wb--sections)
+                            (lambda (a b) (< (plist-get (cdr a) :slot) (plist-get (cdr b) :slot))))))
+        (if (drgnx-wb-grid-p)
+            (drgnx-wb--show-dock-tile sections)
+          (pcase-dolist (`(,name . ,spec) sections)
+            (let ((drgnx-rules--placing t))
+              (display-buffer-in-side-window
+               (funcall (plist-get spec :buffer))
+               `((side . left) (slot . ,(plist-get spec :slot)) (window-width . ,drgnx-wb-dock-columns)
+                 ,@(when (plist-get spec :height) `((window-height . ,(plist-get spec :height))))
+                 (dedicated . t)
+                 (window-parameters . ,(drgnx-wb--section-parameters name spec))))))))
+      (when-let* (((not (drgnx-wb-grid-p)))            ; a tile is split at its width
+                  (px (frame-parameter nil 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
         (let ((window-resize-pixelwise t))              ; or the width is rounded to whole columns
           (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t))))
       (dolist (w (drgnx-wb--dock-windows))
@@ -851,9 +880,13 @@ The width is noted `:by auto' (`drgnx-state-note-intent'): a width you chose is 
 
 (defun drgnx-wb--delete-dock (windows)
   "Delete the dock's WINDOWS.  Their width goes to the editor groups in proportion to their widths, as showing the
-dock takes it back, so a hide and a show leave each group as wide as it was."
-  (let ((window-combination-resize t))
-    (dolist (w windows) (when (window-live-p w) (delete-window w)))))
+dock takes it back, so a hide and a show leave each group as wide as it was.  A dock that is a tile of the grid goes
+whole, its width to the tiles along its edge (R3, `drgnx-grid-remove-dock')."
+  (if (drgnx-wb-grid-p)
+      (when-let* ((main (seq-find (lambda (w) (not (window-parameter w 'drgnx-tile-part))) windows)))
+        (drgnx-grid-remove-dock main))
+    (let ((window-combination-resize t))
+      (dolist (w windows) (when (window-live-p w) (delete-window w))))))
 
 (defvar drgnx-wb-view-providers nil
   "Alist VIEW → function that defines VIEW's sections now.  A module that sets up late can register one in its setup,

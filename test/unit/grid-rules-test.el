@@ -1,4 +1,4 @@
-;;; grid-rules-test.el --- batch tests: the tiled grid's rules R1–R8 on tool and editor tiles -*- lexical-binding: t -*-
+;;; grid-rules-test.el --- batch tests: the tiled grid's rules R1–R8 on its docked tiles and editor tiles -*- lexical-binding: t -*-
 ;; test-class: det
 (require 'ert)
 (require 'cl-lib)
@@ -58,9 +58,9 @@ the bottom, `g-chat' at the right, `g-tree' at the left."
   (drgnx-grid-test--with
     (let* ((term (drgnx-pane-show 'g-term)) (problems (drgnx-pane-show 'g-problems)) (before (drgnx-grid-test--edges)))
       (should (eq term problems))
-      (should (equal (window-parameter term 'drgnx-pane-stack) '(g-problems g-term)))
+      (should (eq (drgnx-wb-area-tab 'panel) 'g-problems))
       (should (eq (drgnx-pane-show 'g-term) term))
-      (should (eq (car (window-parameter term 'drgnx-pane-stack)) 'g-term))
+      (should (eq (drgnx-wb-area-tab 'panel) 'g-term))
       (should (eq (window-buffer term) (get-buffer " *drgnx g-term*")))
       (should (equal before (drgnx-grid-test--edges)))
       (should (eq (drgnx-pane-window 'g-term) term))
@@ -154,7 +154,7 @@ the bottom, `g-chat' at the right, `g-tree' at the left."
       (kill-buffer b)
       (should (window-live-p w))
       (should (eq (window-buffer w) (get-buffer " *drgnx g-term*")))
-      (should (eq (car (window-parameter w 'drgnx-pane-stack)) 'g-term)))))
+      (should (eq (drgnx-wb-area-tab 'panel) 'g-term)))))
 
 (ert-deftest drgnx-grid/foreign-buffers-are-routed-away ()
   ;; R6: another buffer never slips into a tool tile
@@ -218,17 +218,18 @@ the bottom, `g-chat' at the right, `g-tree' at the left."
 (ert-deftest drgnx-grid/first-arrangement-matches-the-docks ()
   ;; the docks as tiles sit where the side-window docks sat: left dock | (editor over panel) | right dock
   (drgnx-grid-test--with
-    (let ((window-sides-vertical t) area-edges)
-      ;; today's docks: side windows, the same sizes
-      (drgnx-wb-define-section 'g-tree :slot 0 :title "Tree" :buffer (drgnx-grid-test--buffer " *drgnx g-tree*"))
-      (let ((drgnx-wb-dock-columns 30)) (drgnx-wb-show-sidebar))
+    (let ((window-sides-vertical t) (drgnx-wb-dock-columns 30) area-edges)
       (drgnx-wb-define-area 'panel :side 'bottom :size 10)
       (drgnx-wb-define-area 'right :side 'right :size 40)
-      (drgnx-wb-define-tab 'right 'g-chat :title "Chat")
-      (let ((left (car (drgnx-wb--dock-windows))) (panel (drgnx-wb-area-show 'panel 'output))
-            (right (drgnx-wb-area-show 'right 'g-chat)))
-        (setq area-edges (mapcar #'window-pixel-edges (list left panel right))))
-      (drgnx-wb-area-hide 'panel) (drgnx-wb-area-hide 'right) (drgnx-wb-hide-sidebar)
+      ;; today's docks: side windows, the same sizes
+      (let ((drgnx-pane-backend 'areas))
+        (drgnx-wb-show-sidebar)
+        (let ((left (car (drgnx-wb--dock-windows)))
+              (panel (drgnx-wb-area-show 'panel 'g-term))
+              (right (drgnx-wb-area-show 'right 'g-chat)))
+          (should (window-parameter left 'window-side))
+          (setq area-edges (mapcar #'window-pixel-edges (list left panel right))))
+        (drgnx-wb-area-hide 'panel) (drgnx-wb-area-hide 'right) (drgnx-wb-hide-sidebar))
       (drgnx-grid-test--reset)
       (let ((grid-edges (mapcar #'window-pixel-edges (mapcar #'drgnx-pane-show '(g-tree g-term g-chat)))))
         (ert-info ((format "left, bottom, right: areas %S, grid %S" area-edges grid-edges))

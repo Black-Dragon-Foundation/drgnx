@@ -52,12 +52,23 @@
 ;;;; Tiles
 
 (defun drgnx-grid-root (&optional frame)
-  "The root of FRAME's grid: `window-main-window', the frame's root less the shell's side windows (the rail)."
-  (window-main-window frame))
+  "The root of FRAME's grid: `window-main-window' (the frame's root less the shell's side windows, the rail), less the
+status bar's row when the bar runs across the frame (the root's last child, `drgnx-statusbar')."
+  (let* ((main (window-main-window frame)) (last (and (not (window-live-p main)) (window-last-child main))))
+    (if (and last (eq (window-parameter last 'drgnx-role) 'statusbar) (eq (window-prev-sibling last) (window-child main)))
+        (window-child main)
+      main)))
+
+(defun drgnx-grid-on-p ()
+  "Non-nil when pane kinds live in the grid (`drgnx-pane-backend' `grid'): the docks and the areas are then tiles."
+  (eq drgnx-pane-backend 'grid))
 
 (defun drgnx-grid-tool-tile-p (window)
-  "Non-nil when WINDOW is a live tool tile."
-  (and (window-live-p window) (eq (window-parameter window 'drgnx-role) 'tile)))
+  "Non-nil when WINDOW is a live tool tile: role `tile', or the main window of a docked tile (`drgnx-tile-dock': the
+side bar, the panel, the right side), never one of its parts (`drgnx-tile-part')."
+  (and (window-live-p window)
+       (or (eq (window-parameter window 'drgnx-role) 'tile) (window-parameter window 'drgnx-tile-dock))
+       (not (window-parameter window 'drgnx-tile-part))))
 
 (defun drgnx-grid-editor-tile-p (window)
   "Non-nil when WINDOW is a live editor tile: an editor window of the state store (no role, no side)."
@@ -219,16 +230,21 @@ docked left or right; nil when there is none."
                            (drgnx-grid-tiles frame))))
     (and inner (drgnx-grid--lca inner))))
 
+(defun drgnx-grid--beside (dock frame)
+  "The smallest window holding every tile of FRAME not docked at DOCK, else the grid's root."
+  (let ((tiles (seq-remove (lambda (w) (eq (window-parameter w 'drgnx-tile-dock) dock)) (drgnx-grid-tiles frame))))
+    (or (and tiles (drgnx-grid--lca tiles)) (drgnx-grid-root frame))))
+
 (defun drgnx-grid--dock-target (dock frame)
-  "Where DOCK's tile is split from on FRAME, as (WINDOW . SIDE): the left and right docks run the frame's full
-height beside the whole grid; the bottom dock sits under the part between them (`drgnx-grid--center')."
-  (let ((root (drgnx-grid-root frame)))
-    (pcase dock
-      ('left (cons (if (window-combination-p root t) (window-child root) root) 'left))
-      ('right (cons (if (window-combination-p root t) (window-last-child root) root) 'right))
-      ('bottom (let ((left (drgnx-grid-dock 'left frame)) (right (drgnx-grid-dock 'right frame)))
-                 ;; under the part between the side docks, or under the whole grid when no side dock shows
-                 (cons (or (and (or left right) (drgnx-grid--center frame)) root) 'below))))))
+  "Where DOCK's tile is split from on FRAME, as (WINDOW . SIDE): the left and right docks run the grid's full height
+beside everything but the other side dock (the editor groups all give their share, as they would to a side window);
+the bottom dock sits under the part between them (`drgnx-grid--center')."
+  (pcase dock
+    ('left (cons (drgnx-grid--beside 'left frame) 'left))
+    ('right (cons (drgnx-grid--beside 'right frame) 'right))
+    ('bottom (let ((left (drgnx-grid-dock 'left frame)) (right (drgnx-grid-dock 'right frame)))
+               ;; under the part between the side docks, or under the whole grid when no side dock shows
+               (cons (or (and (or left right) (drgnx-grid--center frame)) (drgnx-grid-root frame)) 'below)))))
 
 (defun drgnx-grid--remembered-target (memory frame)
   "Where a hidden tile goes back to on FRAME, from its MEMORY: (WINDOW . SIDE), WINDOW the smallest window holding
@@ -244,38 +260,80 @@ the tiles it last gave its space to that still live; nil when none does."
     (setf (alist-get key all) value)
     (set-frame-parameter frame 'drgnx-grid-memory all)))
 
-(defun drgnx-grid--no-room ()
-  "Say that a tile has no room there; nothing changed."
-  (message "No room there")
-  nil)
-
-(defun drgnx-grid--make-tool-tile (dock kinds frame)
-  "Split a new tool tile for DOCK holding KINDS on FRAME, from where it was last (R2), else from its dock's
-neighbour, at its remembered size clamped to the room there.  Nil, and nothing changed, when there is no room."
-  (let* ((memory (drgnx-grid--memory dock frame))
+(defun drgnx-grid-split-dock (dock &optional px frame kinds)
+  "A new window for DOCK's tile on FRAME (R2): split from the tiles it last gave its space to, else from its dock's
+neighbour (`drgnx-grid--dock-target').  PX is its size in pixels along the split (left and right a width, bottom a
+height); nil: DOCK's `:sizes' intent, else KINDS' `:size', else `drgnx-grid--default-size'.  It is clamped so the
+new window and the one it comes from keep `drgnx-grid-min-size' (at most half the room each).  The window gets
+`drgnx-tile-dock' DOCK, an id and `no-delete-other-windows'; the caller gives it its role, buffer and the rest."
+  (drgnx-grid--adopt-editors frame)
+  (let* ((frame (or frame (selected-frame)))
+         (memory (drgnx-grid--memory dock frame))
          (target (or (drgnx-grid--remembered-target memory frame) (drgnx-grid--dock-target dock frame)))
          (window (car target)) (side (cdr target))
          (horizontal (and (memq side '(left right)) t))
          (room (window-size window horizontal t))
-         (least (drgnx-grid-min-size frame horizontal))
-         (px (max least (min (drgnx-grid--dock-default-px dock kinds frame) (- room least)))))
-    (if (< (- room least) least)
-        (drgnx-grid--no-room)
-      (let ((w (let ((drgnx-rules--placing t) (window-combination-limit nil) (window-combination-resize nil)
-                     (ignore-window-parameters t))
-                 (split-window window (- px) side t))))
-        (set-window-parameter w 'drgnx-role 'tile)
-        (set-window-parameter w 'drgnx-pane-stack (copy-sequence kinds))
-        (set-window-parameter w 'drgnx-tile-dock dock)
-        (drgnx-grid-tile-id w)
-        (dolist (p '((no-delete-other-windows . t) (no-other-window . t) (mode-line-format . none)
-                     (delete-window . drgnx-grid--delete-window) (quit-restore . nil)))
-          (set-window-parameter w (car p) (cdr p)))
-        (set-window-scroll-bars w nil nil nil nil t)
-        (drgnx-grid--put-buffer w (car kinds) frame)
-        ;; after the scroll bars: Emacs keeps the size only while it equals the body size it recorded
-        (window-preserve-size w horizontal t)
-        w))))
+         (least (min (drgnx-grid-min-size frame horizontal) (/ room 2)))
+         (px (max least (min (or px (drgnx-grid--dock-default-px dock kinds frame)) (- room least))))
+         ;; the grid's root split gets a parent of its own: the status bar's row stays the frame root's other child
+         (w (let ((drgnx-rules--placing t) (window-combination-limit (eq window (drgnx-grid-root frame)))
+                  (window-combination-resize nil)
+                  (ignore-window-parameters t) (window-resize-pixelwise t))
+              (split-window window (- px) side t))))
+    (set-window-parameter w 'drgnx-tile-dock dock)
+    (set-window-parameter w 'no-delete-other-windows t)
+    (drgnx-grid-tile-id w)
+    w))
+
+(defun drgnx-grid--tile-root (window)
+  "The window that holds tile WINDOW whole: its atom's root (`window-atom-root'), else WINDOW."
+  (let ((root (window-atom-root window))) (if (and root (not (window-live-p root))) root window)))
+
+(defun drgnx-grid-remove-dock (window)
+  "Delete the docked tile whose main window is WINDOW, with its parts (the whole atom), giving its space back as R3
+says, and remember where it was for its next show (`drgnx-grid-memory', keyed by its dock).  Its size is the
+caller's to note (`:sizes' intent)."
+  (let* ((frame (window-frame window)) (dock (window-parameter window 'drgnx-tile-dock))
+         (memory (drgnx-grid--delete-tile (drgnx-grid--tile-root window))))
+    (when dock (drgnx-grid--set-memory dock memory frame))
+    t))
+
+(defun drgnx-grid-add-part (window side &optional px)
+  "Split a part off tile WINDOW on SIDE (`above', `below'), PX pixels tall (nil: half), and make the tile's windows
+one atom: a split from any of them goes beside the whole tile, and `delete-window' on one deletes the tile.  The part
+carries `drgnx-tile-part' t and the tile's dock; the caller gives it its role, buffer and the rest."
+  (let* ((root (let ((r (window-atom-root window))) (and r (not (window-live-p r)) r)))
+         (part (let ((drgnx-rules--placing t) (window-combination-limit (not root)) (window-combination-resize nil)
+                     (ignore-window-parameters t) (window-resize-pixelwise t))
+                 (split-window window (and px (- px)) side t))))
+    (window-make-atom (or root (window-parent part)))
+    (set-window-parameter part 'drgnx-tile-part t)
+    (set-window-parameter part 'drgnx-tile-dock (window-parameter window 'drgnx-tile-dock))
+    (set-window-parameter part 'no-delete-other-windows t)
+    part))
+
+(defun drgnx-grid-delete-part (part)
+  "Delete PART of a tile alone, not the whole atom: its space goes to the tile's other windows.  A tile left with one
+window is no atom any more."
+  (when (window-live-p part)
+    (let ((sibling (or (window-left part) (window-right part))))
+      (let ((ignore-window-parameters t) (window-combination-resize nil)) (delete-window part))
+      (when (and (window-valid-p sibling) (not (window-parameter (window-parent sibling) 'window-atom)))
+        (walk-window-subtree (lambda (w) (set-window-parameter w 'window-atom nil)) sibling t)))))
+
+(defun drgnx-grid--make-tool-tile (dock kinds frame)
+  "Split a new tool tile for DOCK holding KINDS on FRAME (`drgnx-grid-split-dock'), its stack's front shown."
+  (let* ((w (drgnx-grid-split-dock dock nil frame kinds)) (horizontal (drgnx-grid--horizontal-dock-p dock)))
+    (set-window-parameter w 'drgnx-role 'tile)
+    (set-window-parameter w 'drgnx-pane-stack (copy-sequence kinds))
+    (dolist (p '((no-other-window . t) (mode-line-format . none) (delete-window . drgnx-grid--delete-window)
+                 (quit-restore . nil)))
+      (set-window-parameter w (car p) (cdr p)))
+    (set-window-scroll-bars w nil nil nil nil t)
+    (drgnx-grid--put-buffer w (car kinds) frame)
+    ;; after the scroll bars: Emacs keeps the size only while it equals the body size it recorded
+    (window-preserve-size w (and horizontal t) t)
+    w))
 
 (defun drgnx-grid--dock-of (kind)
   "The dock KIND lives at: its home (`left', `bottom', `right'), nil for an editor kind."
@@ -468,11 +526,22 @@ A docked tile's size is noted as its dock's `:sizes' intent.  The window, or nil
   "The `grid' backend's :define: as the docks' (the sections, tabs and editor place rules stay the shared data)."
   (drgnx-pane--areas-define kind spec old))
 
-(defun drgnx-grid--backend-show (kind buffer select) (drgnx-grid-show kind :buffer buffer :select select))
-(defun drgnx-grid--backend-hide (kind) (drgnx-grid-hide kind))
-(defun drgnx-grid--backend-window (kind frame) (drgnx-grid-window kind frame))
-(defun drgnx-grid--backend-focus (kind) (drgnx-grid-focus kind))
-(defun drgnx-grid--backend-resize (kind px horizontal) (drgnx-grid-resize kind px horizontal))
+;; A docked kind (home `left', `bottom', `right') lives in its dock's tile, whose contents the side bar's sections and
+;; the areas' tabs keep (their buffers, starts, points, placeholders, companions): with the grid on, those make and
+;; delete their windows as tiles (`drgnx-grid-split-dock', `drgnx-grid-remove-dock', `drgnx-grid-add-part').  The
+;; grid's own stack (`drgnx-grid-show') holds a kind moved off its dock.
+(defun drgnx-grid--docked-p (kind) (drgnx-grid--dock-of kind))
+(defun drgnx-grid--backend-show (kind buffer select)
+  (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-show kind buffer select)
+    (drgnx-grid-show kind :buffer buffer :select select)))
+(defun drgnx-grid--backend-hide (kind)
+  (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-hide kind) (drgnx-grid-hide kind)))
+(defun drgnx-grid--backend-window (kind frame)
+  (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-window kind frame) (drgnx-grid-window kind frame)))
+(defun drgnx-grid--backend-focus (kind)
+  (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-focus kind) (drgnx-grid-focus kind)))
+(defun drgnx-grid--backend-resize (kind px horizontal)
+  (if (drgnx-grid--docked-p kind) (drgnx-pane--areas-resize kind px horizontal) (drgnx-grid-resize kind px horizontal)))
 
 (setf (alist-get 'grid drgnx-pane--backends)
       (list :define #'drgnx-grid--define :show #'drgnx-grid--backend-show :hide #'drgnx-grid--backend-hide
@@ -487,8 +556,9 @@ Their buffers' `window-size-fixed' is t for the call (Emacs balances around a fi
   (let ((kept nil))
     (unwind-protect
         (progn
-          (dolist (w (drgnx-grid-tiles nil 'tool))
-            (let ((b (window-buffer w)))
+          (dolist (w (window-list nil 'nomini))
+            (when-let* (((or (window-parameter w 'drgnx-tile-dock) (eq (window-parameter w 'drgnx-role) 'tile)))
+                        (b (window-buffer w)))
               (unless (assq b kept)
                 (with-current-buffer b
                   (push (list b (local-variable-p 'window-size-fixed) window-size-fixed) kept)
@@ -498,6 +568,9 @@ Their buffers' `window-size-fixed' is t for the call (Emacs balances around a fi
         (when (buffer-live-p b)
           (with-current-buffer b
             (if local (setq-local window-size-fixed value) (kill-local-variable 'window-size-fixed))))))))
+
+;; The side bar as one kind: the left dock with the current view's sections (the flow plan's places show it).
+(drgnx-pane-define-kind 'side-bar :title "Side Bar" :home 'left :sidebar t)
 
 (define-minor-mode drgnx-grid-mode
   "The tiled grid: pane kinds live in tiles, ordinary windows of Emacs's window tree (`drgnx-pane-backend' `grid').

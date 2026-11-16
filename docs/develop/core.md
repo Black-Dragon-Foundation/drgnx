@@ -3311,6 +3311,42 @@ The rules, each a test in `test/unit/grid-rules-test.el`:
 | R7 | Nothing splits, resizes or makes a frame on its own: `delete-window` on a tool tile hides it, `balance-windows` and `delete-other-windows` leave the tool tiles |
 | R8 | The last editor tile stays |
 
+
+### Docked tiles and atoms: the side bar, the panel, the right side
+
+`core/workbench` turns `drgnx-grid-mode` on, so the left dock, the panel and the right dock are **docked tiles**, not
+side windows. Their contents stay where they were: the dock's sections (`wb/drgnx-wb.el`) and the areas' tabs
+(`wb/drgnx-area.el`: buffers, starts and points, placeholders, companions, contextual tabs, the tab row) keep their
+data and their API. Only their windows are made and deleted by the grid while it is on (`drgnx-wb-grid-p`):
+
+- `(drgnx-grid-split-dock DOCK &optional PX FRAME KINDS)` splits the dock's window as R2 says, at PX pixels (the
+  dock's `:sizes` intent, the area's `:size`, `drgnx-wb-dock-columns`), and gives it `drgnx-tile-dock` and an id. An
+  area's window keeps its role (`panel`, `right`, chrome `area`); a section's keeps `dock`.
+- `(drgnx-grid-remove-dock WINDOW)` deletes the tile whole (its atom) as R3 says and remembers where it was in
+  `drgnx-grid-memory` under its dock.
+- **Atoms.** `(drgnx-grid-add-part WINDOW SIDE &optional PX)` splits a part off a tile and makes the tile's windows one
+  atom (`window-make-atom`): a split from any of them goes beside the whole tile, and `delete-window` on one hides the
+  tile. Parts carry `drgnx-tile-part`. An area's companions (the agent conversation's header and composer around its
+  transcript) are parts of the area's tile; the dock's sections are parts of the side bar's tile, the first section
+  its main window, each further one split below at its `:height` share of the dock. `(drgnx-grid-delete-part PART)`
+  deletes one part alone (a tab switch to a kind without companions); a tile left with one window is no atom.
+- `drgnx-grid-tool-tile-p` counts a docked tile's main window, never its parts; `(drgnx-grid-dock 'left)` is the side
+  bar's first section.
+- The pane kind `side-bar` (`:home 'left :sidebar t`) is the whole left dock: showing it shows the current view's
+  sections, its window is the first section's, hiding it hides the dock. A `:sidebar` kind defines no section.
+- The grid's root (`drgnx-grid-root`) is `window-main-window` less the status bar's row: with the bar across the
+  frame, the frame's root holds the grid and the bar, and a split of the grid's root gets a parent of its own, so
+  the bar stays the root's last child (the bar's own repair would otherwise delete and split it from a timer). The
+  bar keeps the bottom dock's height when it does rebuild its row.
+- The left and right docks split the smallest window holding every tile not docked on their side, so every editor
+  group gives its share of the width, as to a side window; the bottom dock splits the part between the side docks.
+  Every split is pixelwise (`window-resize-pixelwise`), else a size comes back rounded to whole lines.
+- With the grid off (`drgnx-grid-mode` -1, the `areas` backend) the docks and areas are side windows as before; the
+  batch tests of `wb-area`, `wb-dock`, `wb-rules` and `wb-state` cover that path.
+
+`window-swap-states` cannot swap atoms (on two parts it swaps those two windows only, on two atom roots it signals),
+so moving an atom goes through its state (`window-state-get` on the root). Test: `test/unit/grid-atoms-test.el`.
+
 ## The UI kit (`drgnx-ui-kit.el`)
 
 What every surface that draws a mark or a button shares. It is in core and requires only the registry and the

@@ -111,7 +111,7 @@ Kept out of frame parameters: a buffer object in one would make the saved frame 
               ((not (equal matcher (drgnx-pane--editor-matcher spec))))
               ((not (drgnx-pane--matcher-used-by-other-p matcher kind))))
     (setq drgnx-rules--table (assoc-delete-all matcher drgnx-rules--table)))
-  (pcase (plist-get spec :home)
+  (pcase (and (not (plist-get spec :sidebar)) (plist-get spec :home))
     ('left
      (drgnx-wb-define-section
       kind :slot (or (plist-get spec :slot) 0) :title (plist-get spec :title)
@@ -130,7 +130,9 @@ Kept out of frame parameters: a buffer object in one would make the saved frame 
 (defun drgnx-pane--areas-window (kind &optional frame)
   (let ((spec (drgnx-pane--spec kind)))
     (pcase (plist-get spec :home)
-      ('left (drgnx-wb-section-window kind frame))
+      ('left (if (plist-get spec :sidebar)
+                 (seq-find (lambda (w) (not (window-parameter w 'drgnx-tile-part))) (drgnx-wb--dock-windows frame))
+               (drgnx-wb-section-window kind frame)))
       ((or 'bottom 'right)
        (let ((area (drgnx-pane--area kind)))
          (with-selected-frame (or frame (selected-frame))
@@ -151,6 +153,11 @@ Kept out of frame parameters: a buffer object in one would make the saved frame 
       (select-window (drgnx-wb-editor-window) 'norecord))
     (prog1
         (pcase home
+          ((and 'left (guard (plist-get spec :sidebar)))
+           (drgnx-wb-show-sidebar)
+           (let ((w (drgnx-pane--areas-window kind)))
+             (when (and w select) (select-window w))
+             w))
           ('left
            (let ((was (drgnx-wb-section-window kind)))
              (drgnx-wb-show-view (or (plist-get spec :view) 'explorer))
@@ -279,7 +286,7 @@ module it belongs to was turned off, and on again, while the area stayed up."
 ;;;; The API
 
 (cl-defun drgnx-pane-define-kind (kind &key title buffer placeholder home size view slot height fill on-show
-                                       on-focus stack companions contextual)
+                                       on-focus stack companions contextual sidebar)
   "Define pane KIND (a symbol); re-defining replaces.  Returns KIND.
 HOME is `left', `bottom', `right' or `editor' (default `bottom').  TITLE is a string (a left kind's may be a
 function).  BUFFER: a function returning the kind's buffer, or a buffer, or a buffer name (made when
@@ -294,6 +301,8 @@ STACK: the kind this one stacks with by default (the grid reads it).
 COMPANIONS: a function of the kind's buffer returning (ABOVE BELOW), the buffers shown above and below it in windows of
 their own (a `right' kind; `drgnx-wb-define-tab').
 CONTEXTUAL: a bottom or right kind's tab is in its area's tab row only while shown (`drgnx-wb-define-tab').
+SIDEBAR: a `left' kind that is the whole side bar (the grid's `side-bar'): it shows, hides and sizes the left dock
+with the current view's sections, and has no section of its own.
 Called from a module's setup, the definition records the module as the kind's owner (`drgnx-state-kind-owner')
 and its undo \"pane kind KIND\": KIND hidden `:by teardown' where it shows (its size, front tab and places
 are kept as intent), then the previous definition put back or `drgnx-pane-undefine-kind' — only while KIND is
@@ -302,7 +311,7 @@ still the one defined here.  Defining a new KIND that is in front in an area tha
     (unless (memq home drgnx-pane--homes) (user-error "Bad pane home %s" home))
     (let ((spec (list :title title :buffer buffer :placeholder placeholder :home home :size size :view view
                       :slot slot :height height :fill fill :on-show on-show :on-focus on-focus :stack stack
-                      :companions companions :contextual contextual))
+                      :companions companions :contextual contextual :sidebar sidebar))
           (old (drgnx-pane-kind kind)) (old-owner (drgnx-state-kind-owner kind)))
       (drgnx-pane--call :define kind spec old)         ; first: an error leaves the kinds as they were
       (if old (setf (alist-get kind drgnx-pane--kinds) spec)       ; a new kind goes last, a redefined one stays put

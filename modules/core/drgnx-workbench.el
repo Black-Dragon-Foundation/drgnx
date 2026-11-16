@@ -8,6 +8,7 @@
 (require 'drgnx-surfaces)
 (require 'drgnx-memo)
 (declare-function drgnx-signal-mode "drgnx-signal")
+(declare-function drgnx-grid-mode "drgnx-grid")
 (declare-function drgnx-state-mode "drgnx-state")
 (declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-state-intent--user-resized "drgnx-state-intent")
@@ -114,6 +115,10 @@ another buffer (BUFFER-NAME) is left as it was."
                        (drgnx-rules-mode 1)
                        ;; The bottom panel and the right dock; popups borrow the panel.
                        (require 'drgnx-area)
+                       ;; The tiled grid: the side bar, the panel and the right side are tiles of the window tree,
+                       ;; not side windows (docs/develop/core.md, "The grid").
+                       (require 'drgnx-grid)
+                       (drgnx-grid-mode 1)
                        (require 'drgnx-popup)
                        ;; A warning is logged and counted on the status bar, never shown by itself (as VS Code's Output)
                        (drgnx-module-advice 'display-warning :around quiet-warning (fn type message &optional level buffer-name)

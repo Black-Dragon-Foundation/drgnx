@@ -619,7 +619,8 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
   has its own, so a file chosen in one frame's dock opens in that frame's editor. Moving between two windows on one
   file changes the editor but not the file, so the Explorer and the Outline stay as they are.
 - **Roles** (`wb/drgnx-wb.el`): each window is an `editor` or a `dock` window (window parameter `drgnx-role`). The
-  dock is side windows with a pixel width kept across hide/show, no scroll bars, and titles in the
+  dock is one tile of the grid (its sections move, hide and show as one; side windows when `drgnx-grid-mode` is
+  off) with a pixel width kept across hide/show, no scroll bars, and titles in the
   `header-line-format` *window parameter*, where no mode can erase them. Showing the dock never takes focus; files
   chosen in it go to the most recently used editor window, never splitting it. Sections are registered with
   `drgnx-wb-define-section` (slot, title, height, buffer, `:on-show`); a title may be a function, asked each time
