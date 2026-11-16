@@ -1282,6 +1282,22 @@ macOS (no /proc there)."
               (should (member (cadr c) args)))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/container-tty-memory-grows-with-its-jobs ()
+  ;; The terminal tier holds one file's sessions in 3g; DRGNX_TEST_JOBS files at once get 1.5g each (4 files met the
+  ;; 3g cap dozens of times a run, swapped, and their waits timed out at random); swap equal, none on top;
+  ;; DRGNX_TEST_TTY_MEMORY sets another size.
+  (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
+    (unwind-protect
+        (pcase-dolist (`(,env ,mem) '((nil "3g") (("DRGNX_TEST_JOBS=2") "3g") (("DRGNX_TEST_JOBS=4") "6144m")
+                                      (("DRGNX_TEST_JOBS=4" "DRGNX_TEST_TTY_MEMORY=5g") "5g")))
+          (let* ((args (drgnx-bin-test--container-argv   ; the outer run's own jobs and size unset (the first wins)
+                        dir (append (cons "DRGNX_TEST_TTY_IMAGE=tty-image" env) '("DRGNX_TEST_JOBS" "DRGNX_TEST_TTY_MEMORY"))
+                        "--tty"))
+                 (opts (butlast args (length (member "tty-image" args)))))
+            (should (equal (list env (cadr (member "--memory" opts)) (cadr (member "--memory-swap" opts)))
+                           (list env mem mem)))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/container-soak-accepted ()
   ;; --soak [MIN] runs the soak in the GUI image, memory-capped like --ui; combined with another tier it is refused.
   (let ((dir (make-temp-file "drgnx-bin-tmp" t)))

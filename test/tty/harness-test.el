@@ -151,16 +151,21 @@
         (should-not (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))))
         (should-not (drgnx-tty-session--pane-alive-p s))))))
 
-(defun drgnx-tty-harness-test--dead-pid ()
-  (let ((p (make-process :name "drgnx-tty-dead" :command '("true") :noquery t)))
-    (while (process-live-p p) (accept-process-output p 0.05))
-    (process-id p)))
+(defun drgnx-tty-harness-test--owner (dir)
+  "A process that passes for a runner's Emacs (`drgnx-tty-session--owner-alive-p': its name says emacs) until it is
+killed: a copy of sleep in DIR named emacs-owner."
+  (let ((bin (expand-file-name "emacs-owner" dir)))
+    (copy-file (executable-find "sleep") bin t)
+    (make-process :name "drgnx-tty-owner" :command (list bin "600") :noquery t)))
 
 (ert-deftest drgnx-tty-harness/a-dead-owner-s-session-is-swept ()
-  ;; a runner SIGKILLed mid-test leaves its tmux server, its Emacs and its run dir, in its own temp state root
+  ;; a runner SIGKILLed mid-test leaves its tmux server, its Emacs and its run dir, in its own temp state root.
+  ;; Its owner lives until the session is made and seen, then dies: a sweep of another test file running at the same
+  ;; time (DRGNX_TEST_JOBS) leaves a session of a live owner alone, and after the death either sweep removes it
   (let* ((other-root (make-temp-file "drgnx-tty-other" t))
+         (owner (drgnx-tty-harness-test--owner other-root))
          (stale (let ((process-environment (cons (concat "DRGNX_UI_STATE=" other-root) process-environment))
-                      (drgnx-tty-session--owner (drgnx-tty-harness-test--dead-pid)))
+                      (drgnx-tty-session--owner (process-id owner)))
                   (drgnx-tty-session-start :config "minimal")))
          (pattern (format "(%s/|-L %s )" (regexp-quote (plist-get stale :run)) (regexp-quote (plist-get stale :name)))))
     (unwind-protect
@@ -169,11 +174,16 @@
           (setq drgnx-tty-session--live (delq stale drgnx-tty-session--live))
           (should (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))))
           (should (file-directory-p (plist-get stale :run)))
+          (should (drgnx-tty-session--owner-alive-p (process-id owner)))
+          (delete-process owner)                          ; the runner is killed
+          (drgnx-test-wait (lambda () (not (drgnx-tty-session--owner-alive-p (process-id owner)))) :secs 10
+                           :what "the owner's end")
           (drgnx-tty-session-with (s :command "true")
             (should (plist-get s :target))
             (should-not (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))))
             (should-not (file-exists-p (plist-get stale :run)))
             (should-not (file-exists-p (file-name-directory (plist-get stale :socket))))))
+      (delete-process owner)
       (let ((process-environment (cons (concat "DRGNX_UI_STATE=" other-root) process-environment)))
         (drgnx-tty-session-stop stale))
       (delete-directory other-root t))))

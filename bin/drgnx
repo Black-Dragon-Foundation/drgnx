@@ -628,7 +628,12 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
     fedora="${fedora:-45}"
     image=drgnx-test-tty; file=Containerfile.tty; cmd=(bin/drgnx test --tty); prebuilt="${DRGNX_TEST_TTY_IMAGE:-}"
     build=(--build-arg "FEDORA=$fedora")
-    args=(--security-opt seccomp=unconfined --security-opt label=disable --memory 3g)   # the GUI tier's options; tmux and Emacs sessions
+    # the GUI tier's options; tmux and Emacs sessions.  3g holds one file at a time; DRGNX_TEST_JOBS files at once get
+    # 1.5g each (4 files at 3g met the cap dozens of times a run and swapped, and their waits timed out at random);
+    # DRGNX_TEST_TTY_MEMORY for another size.  No swap on top, as the GUI tier
+    local tmem="${DRGNX_TEST_TTY_MEMORY:-3g}"
+    if [ -z "${DRGNX_TEST_TTY_MEMORY:-}" ] && [[ "${DRGNX_TEST_JOBS:-}" =~ ^[3-9]$|^[1-9][0-9]+$ ]]; then tmem="$((DRGNX_TEST_JOBS * 1536))m"; fi
+    args=(--security-opt seccomp=unconfined --security-opt label=disable --memory "$tmem" --memory-swap "$tmem")
     mount="$here:/src:ro"
   else
     # the batch tier: capped like the others, no swap beyond it; DRGNX_TEST_BATCH_MEMORY (default 4g) for a bigger run
