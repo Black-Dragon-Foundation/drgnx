@@ -81,4 +81,15 @@ tab to its right, not whatever buffer Emacs picks."
       (should-not (memq #'drgnx-chrome--killed kill-buffer-hook))
       (kill-buffer b))))
 
+(ert-deftest drgnx-chrome-edge/turning-chrome-off-takes-the-tabs-it-noted ()
+  "Chrome on notes each editor window's shown buffer as its tab (*scratch* in a new session); off, the windows have no
+tabs, history or preview left (a module turned off leaves nothing)."
+  (drgnx-chrome-edge-test--with dir
+    (let ((a (drgnx-chrome-edge-test--open dir "a.txt")) (w (selected-window)))
+      (should (equal (window-parameter w 'drgnx-tabs) (list a)))
+      (should (window-parameter w 'drgnx-tab-history))
+      (drgnx-chrome-mode -1)
+      (dolist (p '(drgnx-tabs drgnx-tab-history drgnx-preview))
+        (should-not (window-parameter w p))))))
+
 ;;; wb-chrome-edge-test.el ends here
