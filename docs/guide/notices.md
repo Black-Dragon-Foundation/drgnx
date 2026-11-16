@@ -62,8 +62,10 @@ second to open the list.
 
 - **Needs you (N):** what waits on you. Each row has the button that takes you there. It goes when its source stops
   holding it, so it has no Dismiss.
-- **Problems (✕ F ⚠ W):** what is wrong now, newest first, with what to do about it. **Dismiss** hides a problem
-  until it comes back with other text.
+- **Issues (✕ F ⚠ W):** what is wrong with drgnx itself now (a module that did not start), newest first, with what
+  to do about it, and what to know (a module waiting for packages, an info line not counted in the status bar).
+  **Dismiss** hides an issue until it comes back with other text. Errors and warnings in your code are in the
+  **Problems** view (`lang/eglot`, [modules](modules.md)), not here.
 - **Recent:** what happened lately, newest first (a repeat shows as `×N`). **Dismiss** hides an event.
 
 An empty section says "Nothing here." The list follows changes by itself; `g` draws it again. The command

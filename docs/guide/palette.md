@@ -4,18 +4,23 @@ The palette runs any command by name: **View: Command Palette**, or the key your
 Type part of a label (words in any order, when `extra/completion` is on) and press Return. `#` followed by words is a
 Semantic Search question. `C-g` cancels.
 
-The rows come in three groups (palette.html):
+The palette has two modes, as VS Code's:
 
-- **Commands**: every command you can run here, its category, when you last ran it and its keys.
-- **Files**: the files of the current project (the ones open in buffers first, at most 5000), each with its folder.
-  Return visits the file; `Tab` shows it in the window you came from without leaving the palette, and closing the
-  palette without choosing it puts that window back.
-- **Agents**: with `tools/agents` on, "Ask an agent" with what you typed, the default profile's model beside it.
-  Return on it, `Ctrl+Return` from any row, or `@` before your words starts an agent of the default profile in this
-  project, opens its panel and gives it your words (**Agents: Ask an Agent…** does the same from anywhere).
+- **Commands** (View: Command Palette, `Ctrl+Shift+P` in the VS Code profile): every command you can run **here**,
+  its category, when you last ran it and its keys. A command that belongs to a view (keyed in that view's keymap, such
+  as the Work map's or the agent panel's) is listed only while you are in that view, and a mouse handler (a click on a
+  header) is never listed. With nothing typed, the commands you ran from the palette come first, newest first, then
+  every other command by name. Below them, with `tools/agents` on, **Agents**: "Ask an agent" with what you typed, the
+  default profile's model beside it. Return on it, `Ctrl+Return` from any row, or `@` before your words starts an
+  agent of the default profile in this project, opens its panel and gives it your words (**Agents: Ask an Agent…**
+  does the same from anywhere).
+- **Files** (Go: Quick Open, `Ctrl+P`, or a click on the title row's search box): the files of the current project,
+  each as its icon, its name and its folder. Return visits the file; `Tab` shows it in the window you came from
+  without leaving the list, and closing it without choosing the file puts that window back. `>` typed first switches
+  to the commands, with what follows it typed already.
 
-The hint at the input row's right edge names them: Commands, `#` code, `@` agents. The footer shows the keys: move,
-run, preview, close.
+The hint at the input row's right edge names what the mode searches: Commands, `#` code, `@` agents; or Files, `>`
+commands. The footer shows the keys: move, run, preview, close.
 
 ## Floating under Glitnir
 
@@ -62,15 +67,15 @@ takes that scale's sizes.
 
 Rows are in the UI font, 32 logical pixels high in the floating palette and 24 in the minibuffer. A row shows its
 own icon (a command may name one, as Undo's arrow) or else its category's, and the command's title, then the category and, for a command you ran lately, when ("Tests · used 2
-min ago") in the faint secondary colour, and its key as keycaps at the right edge. Each group (Commands, Files, Agents)
+min ago") in the faint secondary colour, and its key as keycaps at the right edge. Each group (Commands, Agents)
 has its name above its rows, with no count. The letters you
 typed are in the accent colour, semibold; the current row is the selection colour, one rounded fill 6 pixels in from the list's sides, its text 8 more inside the fill (as the sidebar's rows; every row and group title keeps the same left inset, lined up with the input row's icon, so nothing moves as the selection does). The keycaps
 (`Ctrl` `Shift` `P`; in a terminal the names alone, `Ctrl Shift P`) come from the key profile you use; a capital letter shows its Shift (`Alt` `Shift` `F` for `M-F`, `Alt` `F` for `M-f`). On the current row the
 keycaps and hints turn from the faint secondary colour to the muted one, so they stay readable on the selection. A row's
 keycaps are small drawn chips, as tall as their text, so the current row's fill stays one unbroken rounded shape around them.
-The groups always come in this order: Commands, then Files, then Agents, so "Ask an agent" is the last row and never the
-one chosen while a command or a file matches. With nothing typed, the commands you ran from the palette come first,
-newest first, then the rest in their usual order. Once you type, how well a row matches comes first, as in VS Code:
+The groups always come in this order: Commands, then Agents, so "Ask an agent" is the last row and never the
+one chosen while a command matches. With nothing typed, the commands you ran from the palette come first,
+newest first, then the rest by name. Once you type, how well a row matches comes first, as in VS Code:
 each word you type counts more at the start of a word of the title than inside one, and more again when it starts the
 word after the previous one's ("run te" puts Run Tests in This File above Run in Terminal…). A command you ran
 recently only wins between rows that match about as well. The history is kept in `palette-history.eld` in drgnx's

@@ -569,7 +569,7 @@ given) instead of selecting the placeholder: it makes one, which the rules show 
                '(((help-mode apropos-mode Info-mode Man-mode shortdoc-mode finder-mode) help)
                  ("\\`\\*\\(Help\\|info\\|eldoc.*\\|Apropos\\|Shortdoc .*\\|Finder.*\\|Holidays\\)\\*\\'" help)
                  ((compilation-mode occur-mode xref--xref-buffer-mode) results)
-                 ((flymake-diagnostics-buffer-mode flymake-project-diagnostics-mode) problems)
+                 ((drgnx-problems-mode flymake-diagnostics-buffer-mode flymake-project-diagnostics-mode) problems)
                  ("\\`\\*Flycheck errors\\*\\'" problems)
                  ((messages-buffer-mode debugger-mode ert-results-mode process-menu-mode timer-list-mode) output)
                  ("\\`\\*\\(Warnings\\|Backtrace\\|Messages\\|timer-list\\|Process List\\)\\*\\'" output)

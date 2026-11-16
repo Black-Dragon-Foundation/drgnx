@@ -107,7 +107,8 @@
      view
      (append (drgnx-notices--section 'needs-you (format "Needs you (%d)" (length needs)) needs)
              (drgnx-notices--section 'problems
-                                     (format "Problems (%s %d %s %d)" (drgnx-face-glyph 'fail) (cdr problems)
+                                     ;; drgnx's own issues: "Problems" is the code's view (audit D1)
+                                     (format "Issues (%s %d %s %d)" (drgnx-face-glyph 'fail) (cdr problems)
                                              (drgnx-face-glyph 'warn) (car problems))
                                      (drgnx-notices :life 'condition))
              (drgnx-notices--section 'recent "Recent" (drgnx-notices :life 'event)))

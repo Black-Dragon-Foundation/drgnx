@@ -468,6 +468,36 @@ fn breakpoints_section() {
 
 /// A closed section shows its header alone; the model has a node per line, `expanded` when open, with its parent and
 /// fields, and the order of the lines.
+/// The 2026-11-16 audit (R1): with no session, every open section says why it is empty (VS Code's "Not paused",
+/// "No breakpoints") instead of showing nothing; a section with rows has no such line, a closed one none either.
+#[test]
+fn empty_sections_say_so() {
+    let ls = build(&[], &Opened::default(), &HashMap::new());
+    for name in ["variables", "watch", "callstack", "breakpoints"] {
+        let e = line(&ls, &format!("empty:{name}"));
+        assert_eq!(e.kind, "empty");
+        assert_eq!(
+            e.parent.as_deref(),
+            Some(format!("section:{name}").as_str())
+        );
+        assert!(!e.label.is_empty());
+    }
+    assert!(line(&ls, "empty:breakpoints").label.contains("breakpoint"));
+    let ls = build(
+        &[session(1, vec![v("x", "1", 0)])],
+        &Opened::default(),
+        &HashMap::new(),
+    );
+    assert!(
+        !ls.iter()
+            .any(|l| l.id == "empty:variables" || l.id == "empty:callstack")
+    );
+    let mut opened = Opened::default();
+    opened.set("section:watch", false);
+    let ls = build(&[], &opened, &HashMap::new());
+    assert!(!ls.iter().any(|l| l.id == "empty:watch"));
+}
+
 #[test]
 fn sections_close_and_the_model_follows_the_lines() {
     let mut opened = Opened::default();

@@ -151,9 +151,14 @@ run around it; elsewhere the text keycap (`drgnx-palette-keycap')."
     (pcase-dolist (`(,label . ,file) rows) (puthash label file h))
     h))
 
+(defvar drgnx-palette--file-root nil
+  "While Quick Open (the palette's files mode) reads: the folder its rows are relative to.")
+
 (defun drgnx-palette--file (label)
-  "The file of the Files row LABEL, or nil when LABEL is no file's row."
-  (and drgnx-palette--file-rows (gethash (substring-no-properties label) drgnx-palette--file-rows)))
+  "The file of the Files row LABEL, or nil when LABEL is no file's row.  In Quick Open every row is a file."
+  (cond (drgnx-palette--file-rows (gethash (substring-no-properties label) drgnx-palette--file-rows))
+        ((and drgnx-palette--file-root (stringp label) (not (string-empty-p label)))
+         (expand-file-name (substring-no-properties label) drgnx-palette--file-root))))
 
 (defface drgnx-palette-group '((t :inherit (drgnx-ui-caption drgnx-text-subtle) :weight semibold :slant normal))
   "A group's title in the palette: Commands, Files, Agents."
@@ -205,6 +210,22 @@ bot and the typed text in the accent colour for the row that asks an agent."
                                           'chevron-right nil #'equal))
                            'drgnx-text-muted)
           " " (drgnx-palette--title label)))
+
+(defface drgnx-palette-match '((t :inherit drgnx-accent :weight semibold))
+  "The letters typed, in a row Sjá picked (orderless marks its own rows with its match faces, the same look)."
+  :group 'drgnx-look)
+
+(defun drgnx-palette--mark-typed (shown input)
+  "SHOWN (a row: an icon, a space, the title) with each word of INPUT marked in `drgnx-palette-match' where it first
+occurs in the title, ignoring case (audit P2: Sjá picks the rows, so no completion style marks them).  SHOWN itself
+when INPUT is nil or blank."
+  (let ((words (and input (split-string (downcase input) "[ \t]+" t))))
+    (if (null words)
+        shown
+      (let* ((s (copy-sequence shown)) (low (downcase s)) (start (1+ (or (string-search " " s) -1))))
+        (dolist (w words s)
+          (when-let* ((pos (string-search w low start)))
+            (add-face-text-property pos (+ pos (length w)) 'drgnx-palette-match nil s)))))))
 
 (defface drgnx-palette-asked '((t :inherit drgnx-accent))
   "The typed text in the row that asks an agent (palette.html: the quoted words in the accent colour)."
@@ -286,6 +307,7 @@ bot and the typed text in the accent colour for the row that asks an agent."
 Closing the palette without choosing the file puts the window back."
   (interactive)
   (when-let* ((file (drgnx-palette--file (drgnx-palette--candidate)))
+              ((file-regular-p file))
               (win (minibuffer-selected-window)))
     (let* ((old (get-file-buffer file)) (b (or old (find-file-noselect file))))
       (unless drgnx-palette--preview (setq drgnx-palette--preview (list win (window-buffer win))))
@@ -525,10 +547,55 @@ is left out (it would break the list's lines)."
   '(drgnx-palette drgnx-palette--style-try drgnx-palette--style-all "The candidates Sjá picked.")
   "The entry for `completion-styles-alist', bound only while the palette reads with Sjá.")
 
+(defun drgnx-palette--active-maps ()
+  "The keymaps active in the current buffer, their parents too: a hash KEYMAP → t."
+  (let ((h (make-hash-table :test #'eq)))
+    (dolist (m (current-active-maps t))
+      (while (and (keymapp m) (not (gethash m h)))
+        (puthash m t h)
+        (setq m (keymap-parent m))))
+    h))
+
+(defun drgnx-palette--map-here-p (sym active)
+  "Non-nil when the keymap named SYM works in the current buffer: it is one of ACTIVE (`drgnx-palette--active-maps'),
+or a prefix key of the active maps reaches it (by its value or, for a prefix command, its name)."
+  (or (eq sym 'global-map)
+      (and (boundp sym) (keymapp (symbol-value sym))
+           (or (gethash (symbol-value sym) active)
+               (where-is-internal (symbol-value sym) nil t)
+               (and (fboundp sym) (where-is-internal sym nil t))))
+      nil))
+
+(defun drgnx-palette--needs-event-p (fn)
+  "Non-nil when FN is a mouse handler: its interactive spec reads an event (\"e\"), which no palette run has."
+  (and (functionp fn) (not (and (symbolp fn) (autoloadp (symbol-function fn))))
+       (let ((spec (cadr (interactive-form fn))))
+         (and (stringp spec) (string-match-p "\\`[*@^]*e" spec)))))
+
+(defun drgnx-palette--here-p (cmd active cache)
+  "Non-nil when CMD belongs here (audit P3, VS Code's `when'): its keymap (`:map') is the global map or one active in
+the current buffer (ACTIVE; CACHE remembers each map's answer for one listing), and it needs no mouse event."
+  (and (not (drgnx-palette--needs-event-p (drgnx-cmd-command cmd)))
+       (let ((sym (cdr (drgnx-commands--keymap-spec (drgnx-cmd-map cmd)))))
+         (let ((v (gethash sym cache :none)))
+           (if (eq v :none) (puthash sym (drgnx-palette--map-here-p sym active) cache) v)))))
+
 (defun drgnx-palette-candidates ()
-  "(LABEL . ID) for every command the palette offers, in registry order."
-  (mapcar (lambda (c) (cons (drgnx-commands-label c) (drgnx-cmd-id c)))
-          (seq-filter #'drgnx-surfaces--showable-p (drgnx-commands-all))))
+  "(LABEL . ID) for every command the palette offers in the current buffer: those that can run (`:when') and belong
+here (`drgnx-palette--here-p').  The ones run from the palette lately come first, newest first, then the rest by label
+\(VS Code's \"recently used\", then \"other commands\"), never in the order modules defined them."
+  (let* ((active (drgnx-palette--active-maps)) (cache (make-hash-table :test #'eq))
+         (rank (make-hash-table :test #'eq)) (i 0)
+         (cands (mapcar (lambda (c) (cons (drgnx-commands-label c) (drgnx-cmd-id c)))
+                        (seq-filter (lambda (c) (and (drgnx-surfaces--showable-p c) (drgnx-palette--here-p c active cache)))
+                                    (drgnx-commands-all)))))
+    (dolist (e (drgnx-palette--history))
+      (unless (gethash (car e) rank) (puthash (car e) i rank))
+      (setq i (1+ i)))
+    (sort cands (lambda (a b)
+                  (let ((ra (gethash (cdr a) rank)) (rb (gethash (cdr b) rank)))
+                    (cond ((and ra rb) (< ra rb)) (ra t) (rb nil)
+                          (t (string-lessp (downcase (car a)) (downcase (car b))))))))))
 
 (defun drgnx-palette--search (question)
   "Run Semantic Search for QUESTION; an empty one prompts for it."
@@ -561,7 +628,8 @@ runs it; several is an \"Ambiguous\" error naming up to three; none is \"No comm
   (require 'nidhogg-views nil t)
   (let* ((cands (drgnx-palette-candidates))
          (ids (drgnx-palette--ids cands))
-         (file-rows (drgnx-palette-files))
+         ;; commands only, as VS Code's Ctrl+Shift+P (audit P2): the project's files are Quick Open's (Ctrl+P)
+         (file-rows nil)
          (drgnx-palette--file-rows (drgnx-palette--file-table file-rows))
          (drgnx-palette--cands cands)
          (drgnx-palette--ask-now nil)
@@ -588,7 +656,9 @@ runs it; several is an \"Ambiguous\" error naming up to three; none is \"No comm
                                                               (car (split-string key " (" t))))))))))))
          (group (lambda (label transform)
                   (if transform
-                      (drgnx-palette--memoized label 0 (lambda () (drgnx-palette--shown label)))
+                      (drgnx-palette--mark-typed (drgnx-palette--memoized label 0 (lambda () (drgnx-palette--shown label)))
+                                                 (and drgnx-palette--pick (minibufferp)
+                                                      (minibuffer-contents-no-properties)))
                     (drgnx-palette--memoized
                      label 2 (lambda () (drgnx-palette--group-title (drgnx-palette-group label)))))))
          (table (if drgnx-palette--pick

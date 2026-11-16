@@ -97,6 +97,17 @@ DATA is the error, (quit) for one.  Added to the global value.  An error in corf
   (when (and (eq (car-safe data) 'quit) (bound-and-true-p completion-in-region-mode) (fboundp 'corfu-quit))
     (ignore-errors (corfu-quit))))
 
+(defvar ispell-complete-word-dict)
+(defvar ispell-alternate-dictionary)
+
+(defun drgnx-completion-text-words ()
+  "The value `text-mode-ispell-word-completion' takes: `completion-at-point' (words of the dictionary in the popup as
+you type in text) only when ispell has a readable word list; nil without one (Fedora installs none by default), where
+every pause in a .txt file was a \"Corfu detected an error\" backtrace from `ispell-lookup-words' (audit D4)."
+  (require 'ispell)
+  (let ((file (or ispell-complete-word-dict ispell-alternate-dictionary)))
+    (and (stringp file) (file-readable-p file) 'completion-at-point)))
+
 (defun drgnx-completion--teardown ()
   "extra/completion's teardown: the quit handler off `command-error-function', and the palette's frame deleted."
   (remove-function (default-value 'command-error-function) #'drgnx-completion--quit-hides-popup)
@@ -113,8 +124,13 @@ DATA is the error, (quit) for one.  Added to the global value.  An error in corf
                                                               (completion-category-overrides ((file (styles partial-completion))))
                                                               (corfu-auto t) (corfu-auto-delay 0.2) (corfu-auto-prefix 2)))
                                 (drgnx-module-set var value))
+                              ;; dictionary words in text buffers only with a word list (audit D4)
+                              (drgnx-module-set 'text-mode-ispell-word-completion (drgnx-completion-text-words))
                               ;; the palette (category drgnx-command) floats in its own child frame under Glitnir
                               (drgnx-module-alist-put 'vertico-multiform-categories 'drgnx-command
+                                                      drgnx-palette-frame-multiform)
+                              ;; and so does Quick Open, the palette's files mode (category drgnx-file)
+                              (drgnx-module-alist-put 'vertico-multiform-categories 'drgnx-file
                                                       drgnx-palette-frame-multiform)
                               (drgnx-module-hook 'minibuffer-exit-hook palette-frame-hide ()
                                 (drgnx-palette-frame-hide))

@@ -200,10 +200,11 @@ the new state; `drgnx-config-refused' for a file with a mistake or a newer one."
     ('failed (drgnx-notify 'modules 'fail (format "%s did not start: %s" name err) :id name :life 'condition
                            :fix "Turn it off in Preferences: Modules, or report the error"
                            :command 'preferences-modules))
-    ('missing-packages (drgnx-notify 'modules 'warn (format "%s waits for packages: %s" name
+    ;; waiting for packages is something to know (the Notices list), not a problem counted in the status bar (audit L2)
+    ('missing-packages (drgnx-notify 'modules 'info (format "%s waits for packages: %s" name
                                                             (mapconcat #'symbol-name missing " "))
                                      :id name :life 'condition :fix "drgnx sync installs them"))
-    ('missing-requires (drgnx-notify 'modules 'warn (format "%s needs %s, which did not start" name
+    ('missing-requires (drgnx-notify 'modules 'info (format "%s needs %s, which did not start" name
                                                             (mapconcat #'symbol-name missing ", "))
                                      :id name :life 'condition))
     (_ (if (and (eq status 'ok) problems)

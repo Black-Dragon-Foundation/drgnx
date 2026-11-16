@@ -55,7 +55,8 @@ stopped line.
 **Variables** (the stopped frame's scopes; values that changed since the last stop are highlighted, big arrays open in
 pages of 100), **Watch** (expressions kept per project, evaluated at every stop), **Call Stack** (threads and frames;
 pick a frame to move the editor and the variables to it) and **Breakpoints** (the exception filters, each with a tick
-box, then every breakpoint with its dot as the gutter shows it and its line at the right). Arrow keys move and open, RET acts on the row, typing after `C-M-f` (`/` in the Emacs and Vim
+box, then every breakpoint with its dot as the gutter shows it and its line at the right). An open section with
+nothing in it says why in one quiet line: "Not paused", "No watch expressions", "Not running", "No breakpoints". Arrow keys move and open, RET acts on the row, typing after `C-M-f` (`/` in the Emacs and Vim
 profiles) filters it, F2 (`e`, `c`) sets a value; Copy Value, Copy as Expression and Add to Watch are in the
 palette. Its header starts the configuration picked there. While the program runs, the last stop's values stay,
 dimmed. A big list keeps its last 64 opened pages open; opening another closes the oldest.

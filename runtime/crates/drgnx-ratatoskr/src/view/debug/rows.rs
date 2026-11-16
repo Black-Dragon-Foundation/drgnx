@@ -242,7 +242,7 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
         "more" => {
             p.push(&l.label, Some("drgnx-debug-view-link"));
         }
-        "chunk" | "hidden" | "label" => {
+        "chunk" | "hidden" | "label" | "empty" => {
             p.push(&l.label, Some("drgnx-debug-view-type"));
         }
         _ => {
