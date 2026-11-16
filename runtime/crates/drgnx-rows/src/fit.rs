@@ -367,9 +367,13 @@ pub(crate) fn advance(m: &dyn Measure, role: &str, c: char) -> f32 {
 pub fn fit(m: &dyn Measure, role: &str, text: &str, width_px: f32) -> String {
     let budget = width_px - SLACK;
     let whole = width(m, role, text);
-    let ellipsis = advance(m, role, ELLIPSIS);
     let drawn = m.measured(role, text).is_some();
-    if whole <= budget || (drawn && whole <= width_px) || whole <= ellipsis {
+    if whole <= budget || (drawn && whole <= width_px) {
+        return text.to_owned();
+    }
+    // the ellipsis is measured only for a text that may be cut: a text that fits asks the editor for nothing more
+    let ellipsis = advance(m, role, ELLIPSIS);
+    if whole <= ellipsis {
         return text.to_owned();
     }
     let room = budget - ellipsis;
