@@ -372,10 +372,10 @@ only with it): an error without it (the rows' `skip-unless' says so first)."
        (let ((root (drgnx-uitest-root-frame)) (buf nil) (win nil))
          (unwind-protect
              (with-selected-frame root
-               (delete-other-windows)
+               (drgnx-work-thirty-only-window)
                (drgnx-work-thirty-start (drgnx-work-gui--bin) ,count)
                (setq buf (drgnx-work-thirty-map t drgnx-work-gui--mode))
-               (delete-other-windows)
+               (drgnx-work-thirty-only-window)
                (setq win (selected-window))
                (set-window-buffer win buf)
                (should (buffer-local-value 'drgnx-view-patch buf))
@@ -721,10 +721,10 @@ rest."
     (let ((root (drgnx-uitest-root-frame)) buf)
       (unwind-protect
           (with-selected-frame root
-            (delete-other-windows)
+            (drgnx-work-thirty-only-window)
             (drgnx-work-thirty-start bin)
             (setq buf (drgnx-work-thirty-map t))
-            (delete-other-windows)
+            (drgnx-work-thirty-only-window)
             (set-window-buffer (selected-window) buf)
             (dolist (theme '(drgnx-dark drgnx-light drgnx-high-contrast))
               (mapc #'disable-theme custom-enabled-themes)

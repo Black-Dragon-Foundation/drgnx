@@ -1442,6 +1442,24 @@ The commands of modules that need no installed package are in it, the later stag
     (should (equal drgnx-persist-state-functions state-fns))
     (should (equal drgnx-persist-after-restore-functions after-fns))))
 
+(ert-deftest drgnx-grid-moves/keys-in-every-profile ()
+  ;; every preset binds the tile commands (Task 8 of the tiling plan), and each of their keys wins any conflict it is in
+  (let ((ids '(tile-move-left tile-move-right tile-move-up tile-move-down tile-swap-left tile-swap-right tile-swap-up
+                              tile-swap-down tile-stack-left tile-stack-right tile-stack-up tile-stack-down tile-unstack
+                              tile-resize tile-resize-left tile-resize-right tile-resize-up tile-resize-down
+                              focus-left focus-right focus-up focus-down)))
+    (pcase-dolist (`(,name . ,layers) drgnx-keys-presets)
+      (let* ((r (drgnx-keys-test--resolve layers))
+             (keys (seq-filter (lambda (b) (memq (plist-get b :id) ids)) (plist-get r :bindings))))
+        (ert-info ((format "%s" name))
+          (should keys)
+          (dolist (b keys)
+            (ert-info ((format "%s" (plist-get b :key)))
+              (should-not (seq-find (lambda (c) (and (equal (plist-get c :key) (plist-get b :key))
+                                                     (not (eq (plist-get (plist-get c :winner) :id)
+                                                              (plist-get b :id)))))
+                                    (plist-get r :conflicts))))))))))
+
 (ert-deftest drgnx-keys/linux-is-unchanged ()
   ;; The macOS work changes nothing on Linux but the keys of the commands it added — and the views
   ;; that took C-S-e, C-S-f, C-S-h and F2 (see `drgnx-keys/views-took-their-keys').
@@ -1538,7 +1556,13 @@ The commands of modules that need no installed package are in it, the later stag
                               kit-activate      ; RET on a kit component's action
                               face-menu         ; a lone Alt opens the menu (Nidhogg's `lone-alt')
                               editor-recent editor-recent-up ; C-<tab>: VS Code's previous editor
-                              tile-full-size))  ; the grid's Full-Size Tile (C-k C-m, C-k RET)
+                              tile-full-size  ; the grid's Full-Size Tile (C-k C-m, C-k RET)
+                              ;; moving tiles by keys: focus (palette before), move, swap, stack, unstack, resize
+                              focus-left focus-right focus-up focus-down
+                              tile-move-left tile-move-right tile-move-up tile-move-down
+                              tile-swap-left tile-swap-right tile-swap-up tile-swap-down
+                              tile-stack-left tile-stack-right tile-stack-up tile-stack-down
+                              tile-unstack tile-resize tile-resize-left tile-resize-right tile-resize-up tile-resize-down))
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

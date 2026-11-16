@@ -59,14 +59,15 @@ the frame was made at)."
            (frames (frame-list))
            (outer (progn (select-window left) (drgnx-ui-grid-ediff--settled left)))
            (others (mapcar (lambda (w) (cons w (window-pixel-edges w))) (list right chat)))
-           (before (window-list nil 'nomini))
+           ;; this frame's windows, by name: the window manager may give the session's own frame the focus meanwhile
+           (before (window-list (window-frame left) 'nomini))
            (control nil))
       (funcall start)
       (redisplay t)
       (setq control (seq-find (lambda (b) (with-current-buffer b (derived-mode-p 'ediff-mode))) (buffer-list)))
       (should control)
       (should (equal (frame-list) frames))                          ; no frame for ediff
-      (let ((added (seq-difference (window-list nil 'nomini) before)))
+      (let ((added (seq-difference (window-list (window-frame left) 'nomini) before)))
         (should (>= (length added) 2))                              ; B and the control window, at least
         (dolist (w (cons left added))
           (should (drgnx-ui-grid-ediff--inside-p (window-pixel-edges w) outer)))
@@ -76,7 +77,7 @@ the frame was made at)."
         (should (equal (window-pixel-edges w) edges)))
       (with-current-buffer control (ediff-really-quit nil))
       (redisplay t)
-      (should (equal (window-list nil 'nomini) before))
+      (should (equal (window-list (window-frame left) 'nomini) before))
       (should (equal (window-pixel-edges left) outer))
       (pcase-dolist (`(,w . ,edges) others) (should (equal (window-pixel-edges w) edges))))))
 

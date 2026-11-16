@@ -90,3 +90,28 @@
     (dolist (cmd '(delete-other-windows evil-window-delete-others evil-window-set-height evil-window-set-width))
       (should (eq (command-remapping cmd nil global-map) 'drgnx-grid-full-size-toggle)))
     (should (eq (key-binding (kbd "C-x 1")) 'drgnx-grid-full-size-toggle))))
+
+(ert-deftest drgnx-grid-editor/grid-off-releases-the-editors ()
+  ;; the grid off (a test's module teardown, the user): editor windows lose the tile parameters and
+  ;; `delete-other-windows' deletes them again; with no tile left the frame's grid bookkeeping is empty
+  (drgnx-grid-test--with
+    (let ((one (selected-window)))
+      (drgnx-grid-mode 1)
+      (unwind-protect (drgnx-grid-editor-test--release one)
+        (when drgnx-grid-mode (drgnx-grid-mode -1))))))
+
+(defun drgnx-grid-editor-test--release (one)
+  "`grid-off-releases-the-editors' with the grid on, ONE the frame's editor window."
+  (let ((two (split-window one nil 'right)))
+    (drgnx-grid--adopt-editors)
+    (should (window-parameter two 'no-delete-other-windows))
+    (should (frame-parameter nil 'drgnx-grid-next-id))
+    (drgnx-grid-mode -1)
+    (dolist (w (list one two))
+      (dolist (p '(drgnx-tile-id no-delete-other-windows delete-window))
+        (should-not (window-parameter w p))))
+    (dolist (p '(drgnx-grid-next-id drgnx-grid--good drgnx-grid-memory drgnx-grid-stack drgnx-grid-full))
+      (should-not (frame-parameter nil p)))
+    (select-window one)
+    (delete-other-windows)
+    (should (equal (window-list nil 'nomini) (list one)))))

@@ -3335,6 +3335,28 @@ more tiles gone in one change, past the grid's own hides (a package's `delete-ot
 store's `windows-changed`). Close Pane (`Esc`, `q`) on a tool tile hides it.
 Tests: `test/unit/grid-rules-test.el` (`drgnx-grid-rules/`).
 
+**Moving tiles** (`wb/drgnx-grid-ops.el`, loaded with the grid). A tile is its whole atom (`drgnx-grid--tile-root`),
+named by its main window (`drgnx-grid-tile-main`).
+
+- `(drgnx-grid-neighbour WINDOW DIRECTION)`: the tile whose facing edge meets WINDOW's tile's in DIRECTION (`left`,
+  `right`, `up`, `down`) and overlaps it most, the one at the cursor's line or column first; by pixel edges across atoms
+  and docks; nil at the grid's edge. Focus Tile (`drgnx-grid-focus-direction`, under `drgnx-wb-focus-direction`).
+- `(drgnx-grid-move WINDOW TARGET ZONE)`, ZONE `left` `right` `above` `below` or `center` (a stack): WINDOW's tile's
+  state (`window-state-get` of its atom with every window parameter made persistent for the call, so ids, stacks,
+  tabs and roles travel) is put into half of TARGET's tile, split on ZONE; the space it leaves goes to its neighbour
+  (R3). Every other tile keeps its edges.
+- `(drgnx-grid-swap A B)`: the two tiles' states trade places; the places keep their sizes.
+- `(drgnx-grid-stack WINDOW ONTO)`: an editor's tabs onto an editor, a tool tile's kinds (a docked area's shown tab)
+  onto a tile of the grid's own; `(drgnx-grid-unstack WINDOW)`: the shown tab into a new tile beside, right when the
+  tile is at least as wide as tall, else below.
+- `(drgnx-grid-resize-mode)`: a transient map; each arrow moves the tile's edge on that side one step
+  (`drgnx-grid-resize-step-px`, 24 logical px; a column or a line in a terminal), the opposite edge at the grid's edge.
+- No room (`drgnx-grid-room-p`: the tile split in two below the least tile size, `drgnx-grid-min-size`): a move, an
+  unstack or a split (`drgnx-grid-split-tile`, the groups' split) changes nothing and says "No room there"; the
+  automatic placements fall back to their dock instead. A move first pushes the grid (`drgnx-grid-push` `move`); a
+  docked tile moved or swapped loses `drgnx-tile-dock`. The pane backend's `:move` and `:stack` are these.
+Tests: `test/unit/grid-moves-test.el`; I11 in `test/live/drgnx-invariants-test.el`.
+
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 
 `drgnx-grid-mode` (global) makes `grid` the pane backend (`drgnx-pane-backend`): pane kinds then live in **tool
@@ -3348,7 +3370,10 @@ tiles**, ordinary windows of the frame's window tree, not side windows. Callers 
   `delete-window` parameter that hides it. It is dedicated (`drgnx`), so `display-buffer` never puts another buffer
   there.
 - An **editor tile** is an editor window (role `editor`) with a `drgnx-tile-id` and `no-delete-other-windows`; its
-  `delete-window` refuses the last one.
+  `delete-window` refuses the last one. So `delete-other-windows` called from Lisp keeps the other editor tiles too;
+  code that wants one editor window deletes the others by `delete-window` (the Work fixture's
+  `drgnx-work-thirty-only-window`). Turning `drgnx-grid-mode` off gives the editor windows these parameters back, and
+  once a frame has no tile its grid frame parameters are emptied (`drgnx-grid--release`).
 - `(drgnx-grid-root &optional FRAME)` is `window-main-window`; `(drgnx-grid-tiles &optional FRAME FILTER)` lists the
   tiles in reading order (`editor`, `tool` or nil for both); `(drgnx-grid-dock DOCK &optional FRAME)` is the tile
   docked there; `(drgnx-grid-toggle-dock DOCK)` hides it or shows it with the kind it showed last.
