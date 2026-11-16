@@ -1,7 +1,7 @@
-//! Records: the org folder's plans, ledgers, DEFERRED, the build board and `board.org` imported into the graph, and
-//! the files written back as views (agent system part 1, Tasks 14, 14b; `docs/develop/records.md`).  The hub writes
-//! view files and never commits them; a hand edit to a view becomes a proposal the user (or a manager, under
-//! `graph.change`) decides.
+//! Records: a project's specs, plans, ledgers, decision records, DEFERRED, the build board and `board.org` adopted
+//! into the graph, and the files kept in step with it (`docs/develop/records.md`).  An edit on either side reaches
+//! the other through a three-way merge per piece; both sides changing one piece keeps the file's text and flags the
+//! record, which the user (or a manager, under `graph.change`) resolves.  The hub never commits the files.
 
 use super::method;
 use crate::registry::Method;
@@ -13,11 +13,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RecordKind {
+    Specs,
     Plans,
     Ledgers,
     Deferred,
     BuildBoard,
     Board,
+    Decisions,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -79,9 +81,10 @@ pub struct ViewStatus {
     pub hash: Option<String>,
     /// The file differs from what the hub last wrote.
     pub changed: bool,
-    /// The open proposal holding the view (it is not rewritten while one is open).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pending: Option<String>,
+    /// The records of the view both sides changed: the file's text is kept, the graph's version stays the record's
+    /// until one is chosen (`records/resolve`).
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub conflicts: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -91,75 +94,62 @@ pub struct Views {
     pub views: Vec<ViewStatus>,
 }
 
-/// Where a proposal is.
+/// Which version of a conflicted record stays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum ProposalStatus {
-    Open,
-    Accepted,
-    Rejected,
-    /// The records it touches changed since it was read: read the file again.
-    Stale,
+pub enum Keep {
+    /// The file's text becomes the record's.
+    File,
+    /// The graph's version is written back into the file.
+    Graph,
 }
 
-/// A graph operation a proposal would apply, as the user reads it.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ProposedOp {
-    /// `create`, `update`, `link` or `unlink`.
-    pub op: String,
-    pub entity: String,
-    /// The fields it sets, by name (`status`, `title`, `body`, …).
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub fields: Vec<String>,
-    /// A field only the user may set (a plan's `matrix`): a manager cannot accept it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_only: Option<bool>,
+pub struct ResolveParams {
+    /// The conflicted record.
+    pub id: Id,
+    pub keep: Keep,
 }
 
-/// A hand edit to a view, read back.
+/// A conflicted record, both versions.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Proposal {
+pub struct Conflict {
     pub id: String,
     pub path: String,
-    pub status: ProposalStatus,
-    /// A unified diff of the edited file against the view.
-    pub diff: String,
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub ops: Vec<ProposedOp>,
-    /// Byte ranges of the edited file that map to no operation (they become a note on accept).
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub unmapped: Vec<(u64, u64)>,
-    /// The graph version it was read against.
-    pub base_version: u64,
-    /// Who edited it, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub by: Option<String>,
+    /// The file's text of the record, and the graph's.
+    pub file: String,
+    pub graph: String,
     pub at: f64,
 }
 
+/// What resolving did.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Proposals {
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub proposals: Vec<Proposal>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct DecideParams {
-    pub id: Id,
-    pub accept: bool,
-}
-
-/// What a decision did: the proposal's new status, the note its unmapped parts became, the backup of a rejected edit.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Decided {
+pub struct Resolved {
     pub id: String,
-    pub status: ProposalStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
+    pub keep: Keep,
+    pub path: String,
+}
+
+/// The `records-conflict` event: records of a file both its file and the graph changed, newly flagged.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecordsConflict {
+    pub path: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub ids: Vec<String>,
+}
+
+/// The `records-notice` event: a project's record files were adopted, once per root; the hub rewrites none of them
+/// before it is sent.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecordsNotice {
+    pub root: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub files: Vec<String>,
+    /// Where the files and the graph store were copied first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup: Option<String>,
 }
@@ -173,37 +163,27 @@ pub struct ViewWritten {
     pub hash: String,
 }
 
-/// The `view-proposal` event: a hand edit became (or replaced) a proposal.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ViewProposal {
-    pub id: String,
-    pub path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub by: Option<String>,
-}
-
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
             "records/import", RecordsImport(ImportParams) -> ImportReport,
             classes: [User], writes: true,
-            doc: "the org folder's record files into the graph (a backup of each first; idempotent), their views written; the hub never commits",
+            doc: "a project's record files adopted into the graph (the files and the store backed up first; idempotent; the notice sent once per root); the hub never commits",
         ),
         method!(
             "records/status", RecordsStatus(ByPath) -> Views,
             classes: [User], writes: false,
-            doc: "the view files: when each was written, whether it changed by hand, the proposal holding it",
+            doc: "the record files: when each was written, whether it changed since, its conflicted records",
         ),
         method!(
-            "records/proposals", RecordsProposals(ByPath) -> Proposals,
+            "records/conflict", RecordsConflict(crate::methods::exec::ById) -> Conflict,
             classes: [User], writes: false,
-            doc: "the proposals hand edits to views became (a view's, or every open one)",
+            doc: "a conflicted record: the file's text and the graph's version",
         ),
         method!(
-            "records/decide", RecordsDecide(DecideParams) -> Decided,
+            "records/resolve", RecordsResolve(ResolveParams) -> Resolved,
             classes: [User], writes: true,
-            doc: "a proposal accepted (its ops applied if its base still holds, else stale) or rejected (the edit backed up); then the view is rewritten",
+            doc: "a conflicted record resolved: the file's text becomes the record's, or the graph's version is written back to the file",
         ),
     ]
 }

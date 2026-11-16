@@ -1,55 +1,73 @@
-//! Records (Tasks 14, 14b; `docs/develop/records.md`): the importer (a backup of every file first, then `saga`'s
-//! graph operations with `Origin::Imported`) and the views — written atomically at the imported file's path after
-//! every change of the records they show (debounced 2 s), never committed, never over a hand edit: a changed view
-//! becomes a proposal (`records/proposals`, `records/decide`) and is not rewritten while one is open.
+//! Records (`docs/develop/records.md`): a project's record files adopted into the graph (the files and the store
+//! backed up first, then `saga`'s graph operations with `Origin::Imported`, then the notice), and kept in step with it
+//! both ways by [`Views::sync`]: a three-way merge per piece against what the hub last wrote or read, under a lock
+//! per file, re-reading the file just before the rename.  A hand edit is applied; a piece both sides changed keeps
+//! the file's text and is flagged until it is resolved.  The hub never commits the files.
 
 use crate::coord::fail;
 use crate::dispatch::Caller;
 use crate::front::Front;
 use norn::store::CoordDb;
 use runstav::methods::records::{
-    ByPath, DecideParams, Decided, ImportParams, ImportReport, ImportedFile, Proposal,
-    ProposalStatus, Proposals, ProposedOp, RecordKind, ViewProposal, ViewStatus, ViewWritten,
-    Views as ViewsAnswer,
+    ByPath, Conflict, ImportParams, ImportReport, ImportedFile, Keep, RecordKind, RecordsConflict,
+    RecordsNotice, ResolveParams, Resolved, ViewStatus, ViewWritten, Views as ViewsAnswer,
 };
 use runstav::wire::{Error, ErrorCode};
 use saga::import::{self, AnyDoc, GraphOp};
-use saga::view::{self, ViewModel};
-use saga::{proposal, status};
+use saga::merge::{self, Act as MergeAct, Base, Merged};
+use saga::{status, view};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use urdr::graph::entity::{self, Changes, EntityNew, Origin};
 use urdr::graph::{Class, TxMeta};
 
-/// The quiet time after the last change of a view's records before the file is rewritten.
-pub const DEBOUNCE: Duration = Duration::from_secs(2);
+/// The quiet time after the last change of a file's records (or of the file) before the two are merged.
+pub const DEBOUNCE: Duration = Duration::from_millis(300);
 
-/// What a flush of one view did.
+/// How many times a merge starts over when the file changed while it ran, before the file is left `busy` until the
+/// next change.
+const TRIES: usize = 3;
+
+/// How many of a piece's last texts the base remembers (a stale editor save brings back one of them).
+const BASE_KEEP: usize = 8;
+
+/// What a sync of one file did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Flush {
     /// The file was written; its hash.
     Written(String),
-    /// The file already had the graph's text.
+    /// The file already had the merged text.
     Unchanged,
-    /// An open proposal holds the view: it is not rewritten until the proposal is decided.
-    Held,
-    /// The file was changed by hand: its edit became (or replaced) the proposal with this id, and the file stays.
-    Proposed(String),
+    /// The file is not rewritten before its project's notice went out.
+    Waiting,
+    /// The file kept changing while the merge ran: tried again at the next change.
+    Busy,
 }
+
+/// The graph's pieces of a file, by id: what the hub last wrote or read of each.
+type Bases = HashMap<String, Base>;
+
+/// A hook the tests run between a merge's read of the file and its write.
+#[cfg(test)]
+type BeforeWrite = Arc<dyn Fn(&Path) + Send + Sync>;
 
 #[derive(Default)]
 struct State {
-    /// Path -> (hash of the text the hub last wrote, when).
+    /// Path -> (hash of the text the hub last wrote or read, when).
     written: HashMap<PathBuf, (String, f64)>,
-    /// Path -> the pieces and versions the hub last wrote: what a hand edit was made against.
-    bases: HashMap<PathBuf, (ViewModel, Vec<i64>)>,
+    /// Path -> the base of every piece.
+    bases: HashMap<PathBuf, Bases>,
+    /// Path -> its lock: one merge of a file at a time.
+    gates: HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>,
     timers: HashMap<PathBuf, tokio::task::JoinHandle<()>>,
+    #[cfg(test)]
+    before_write: Option<BeforeWrite>,
 }
 
-/// The views written and their hashes (the open proposals arrive with Task 14b).  Cheap to clone.
+/// The files kept in step and what the hub knows of each.  Cheap to clone.
 #[derive(Default, Clone)]
 pub struct Views {
     state: Arc<Mutex<State>>,
@@ -107,41 +125,53 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The record files of ROOT: plans and ledgers under `docs/plans/`, `DEFERRED.md`, `BUILD-BOARD.md`; `board.org`
-/// only when ONLY names it.
-fn discover(root: &Path, only: Option<RecordKind>) -> Vec<Found> {
-    let mut md = Vec::new();
-    walk(&root.join("docs/plans"), &mut md);
-    md.sort();
-    let mut out = Vec::new();
-    for p in md {
-        let ledger = p.to_string_lossy().ends_with(".ledger.md");
-        out.push(if ledger {
-            Found {
-                path: p,
-                kind: RecordKind::Ledgers,
-                parse: "ledger",
-            }
-        } else {
-            Found {
-                path: p,
-                kind: RecordKind::Plans,
-                parse: "plan",
-            }
-        });
+fn found(path: PathBuf, kind: RecordKind) -> Found {
+    Found {
+        parse: parse_of(kind),
+        path,
+        kind,
     }
-    for (name, kind, parse) in [
-        ("DEFERRED.md", RecordKind::Deferred, "deferred"),
-        ("BUILD-BOARD.md", RecordKind::BuildBoard, "board-md"),
-        ("board.org", RecordKind::Board, "org"),
+}
+
+/// The `saga` parser of a kind of file.
+fn parse_of(kind: RecordKind) -> &'static str {
+    match kind {
+        RecordKind::Specs => "spec",
+        RecordKind::Plans => "plan",
+        RecordKind::Ledgers => "ledger",
+        RecordKind::Deferred => "deferred",
+        RecordKind::BuildBoard => "board-md",
+        RecordKind::Board => "org",
+        RecordKind::Decisions => "decision",
+    }
+}
+
+/// The record files of ROOT: specs under `docs/specs/`, plans and ledgers under `docs/plans/`, decision records under
+/// `docs/decisions/` and `docs/adr/`, `DEFERRED.md`, `BUILD-BOARD.md`; `board.org` only when ONLY names it.
+fn discover(root: &Path, only: Option<RecordKind>) -> Vec<Found> {
+    let mut out = Vec::new();
+    for (dir, kind) in [
+        ("docs/specs", RecordKind::Specs),
+        ("docs/plans", RecordKind::Plans),
+        ("docs/decisions", RecordKind::Decisions),
+        ("docs/adr", RecordKind::Decisions),
+    ] {
+        let mut md = Vec::new();
+        walk(&root.join(dir), &mut md);
+        md.sort();
+        for p in md {
+            let ledger = kind == RecordKind::Plans && p.to_string_lossy().ends_with(".ledger.md");
+            out.push(found(p, if ledger { RecordKind::Ledgers } else { kind }));
+        }
+    }
+    for (name, kind) in [
+        ("DEFERRED.md", RecordKind::Deferred),
+        ("BUILD-BOARD.md", RecordKind::BuildBoard),
+        ("board.org", RecordKind::Board),
     ] {
         let p = root.join(name);
         if p.is_file() && (kind != RecordKind::Board || only == Some(RecordKind::Board)) {
-            out.push(Found {
-                path: p,
-                kind,
-                parse,
-            });
+            out.push(found(p, kind));
         }
     }
     out.retain(|f| only.is_none_or(|o| o == f.kind));
@@ -187,13 +217,12 @@ fn backup(hub: &Path, root: &Path, found: &[Found], at: f64) -> Result<PathBuf, 
     Ok(dir)
 }
 
-/// A piece's entity data.
+/// A piece's entity data: where it is (its file, kind, key and place) and, for a plan's task, its fields.
 fn data_of(op: &GraphOp, file: &Path, kind: RecordKind) -> Value {
-    let mut r = json!({"seq": op.seq, "role": op.role});
-    if op.seq == 0 {
-        r["file"] = json!(file.to_string_lossy());
-        r["kind"] = json!(kind_name(kind));
-    }
+    let r = json!({
+        "seq": op.seq, "role": op.role, "key": op.key,
+        "file": file.to_string_lossy(), "kind": kind_name(kind),
+    });
     let mut d = json!({"records": r});
     if let Some(t) = &op.task {
         d["number"] = json!(t.number);
@@ -416,7 +445,7 @@ async fn import_one(db: &CoordDb, f: &Found, dry: bool) -> Result<ImportedFile, 
     })
 }
 
-/// A graph piece of a view.
+/// A graph piece of a file.
 struct Piece {
     n: i64,
     id: String,
@@ -425,17 +454,22 @@ struct Piece {
     status: Option<String>,
     body: String,
     ver: i64,
-    updated: i64,
     data: Value,
 }
 
-/// The pieces of the file at PATH from the graph, in order.
+impl Piece {
+    fn seq(&self) -> Option<u64> {
+        self.data["records"]["seq"].as_u64()
+    }
+}
+
+/// The live pieces of the file at PATH from the graph, in order.
 async fn pieces(db: &CoordDb, path: &Path) -> Result<Vec<Piece>, Error> {
     let key = import::source_key(path);
     db.read(move |c| {
         let mut st = c.prepare(
-            "select n, id, kind, status, coalesce(body, ''), data, ver, updated_tx from entity \
-             where source = ?1 and retired_tx is null order by json_extract(data, '$.records.seq')",
+            "select n, id, kind, status, coalesce(body, ''), data, ver from entity \
+             where source = ?1 and retired_tx is null order by json_extract(data, '$.records.seq'), n",
         )?;
         let rows = st
             .query_map([&key], |r| {
@@ -449,7 +483,6 @@ async fn pieces(db: &CoordDb, path: &Path) -> Result<Vec<Piece>, Error> {
                     status: r.get(3)?,
                     body: r.get(4)?,
                     ver: r.get(6)?,
-                    updated: r.get(7)?,
                     data,
                 })
             })?
@@ -460,39 +493,13 @@ async fn pieces(db: &CoordDb, path: &Path) -> Result<Vec<Piece>, Error> {
     .map_err(fail)
 }
 
-/// The pieces of the file at PATH from the graph, in order: its kind, its head entity and the model.
-async fn model(
-    db: &CoordDb,
-    path: &Path,
-) -> Result<Option<(RecordKind, String, ViewModel)>, Error> {
-    Ok(model_full(db, path).await?.map(|(k, r, m, _)| (k, r, m)))
+/// The kind of the file at PATH, from its pieces (none when the graph has none).
+fn kind_in(ps: &[Piece]) -> Option<RecordKind> {
+    ps.iter()
+        .find_map(|p| p.data["records"]["kind"].as_str().and_then(kind_of))
 }
 
-/// [`model`] with each piece's version.
-async fn model_full(
-    db: &CoordDb,
-    path: &Path,
-) -> Result<Option<(RecordKind, String, ViewModel, Vec<i64>)>, Error> {
-    let ps = pieces(db, path).await?;
-    let Some(first) = ps.first() else {
-        return Ok(None);
-    };
-    let Some(kind) = first.data["records"]["kind"].as_str().and_then(kind_of) else {
-        return Ok(None);
-    };
-    let root = first.id.clone();
-    let m = ViewModel {
-        version: ps.iter().map(|p| p.updated).max().unwrap_or(0).max(0) as u64,
-        parts: ps.iter().map(|p| p.body.clone()).collect(),
-        ids: ps.iter().map(|p| p.id.clone()).collect(),
-        kinds: ps.iter().map(|p| p.kind.clone()).collect(),
-        roles: ps.iter().map(|p| p.role.clone()).collect(),
-    };
-    let vers = ps.iter().map(|p| p.ver).collect();
-    Ok(Some((kind, root, m, vers)))
-}
-
-/// Graph statuses written into the text of their pieces (a graph-only change reaches the view): true when a body
+/// Graph statuses written into the text of their pieces (a graph-only change reaches the file): true when a body
 /// changed.
 async fn sync_bodies(db: &CoordDb, path: &Path) -> Result<bool, Error> {
     let mut ups = Vec::new();
@@ -526,20 +533,25 @@ async fn sync_bodies(db: &CoordDb, path: &Path) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// TEXT to PATH: a temporary file beside it, then a rename.
+/// TEXT to PATH: a temporary file beside it, synced, then a rename (the old file is never truncated, so an editor's
+/// own atomic save cannot interleave with half of ours).
 pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".drgnx-tmp");
     let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, text)?;
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(text.as_bytes())?;
+    f.sync_all()?;
     std::fs::rename(&tmp, path)
 }
 
-/// What a view's follower tells the editors.
+/// What the records tell the editors.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ViewEvent {
     Written(ViewWritten),
-    Proposal(ViewProposal),
+    Notice(RecordsNotice),
+    Conflict(RecordsConflict),
 }
 
 impl ViewEvent {
@@ -547,357 +559,154 @@ impl ViewEvent {
     pub fn parts(&self) -> (&'static str, Value) {
         match self {
             ViewEvent::Written(w) => ("view-written", serde_json::to_value(w).unwrap_or_default()),
-            ViewEvent::Proposal(p) => {
-                ("view-proposal", serde_json::to_value(p).unwrap_or_default())
-            }
+            ViewEvent::Notice(n) => (
+                "records-notice",
+                serde_json::to_value(n).unwrap_or_default(),
+            ),
+            ViewEvent::Conflict(c) => (
+                "records-conflict",
+                serde_json::to_value(c).unwrap_or_default(),
+            ),
         }
     }
 }
 
-/// The id of the proposal on the view at PATH (one per view: a second edit replaces it).
-fn proposal_id(path: &Path) -> String {
-    format!("proposal:{}", import::source_key(path).replace(':', "-"))
+fn kv_get(c: &urdr::Connection, key: &str) -> Option<String> {
+    c.query_row("select value from kv where key = ?1", [key], |r| r.get(0))
+        .ok()
 }
 
-fn state_status(state: &str) -> &'static str {
-    match state {
-        "accepted" => "done",
-        "rejected" => "dropped",
-        "stale" => "blocked",
-        _ => "open",
+async fn kv_put(db: &CoordDb, pairs: Vec<(String, Option<String>)>) -> Result<(), Error> {
+    if pairs.is_empty() {
+        return Ok(());
     }
-}
-
-/// The proposal entity ID's data, with its entity number.
-async fn load_proposal(db: &CoordDb, id: &str) -> Result<Option<(i64, Value)>, Error> {
-    let id = id.to_owned();
-    db.read(move |c| {
-        Ok(entity::by_id(c, &id)?
-            .filter(|e| e.kind == "proposal")
-            .map(|e| (e.n, e.data)))
+    db.write(meta(), move |tx| {
+        for (k, v) in &pairs {
+            match v {
+                Some(v) => tx.sql().execute(
+                    "insert or replace into kv (key, value) values (?1, ?2)",
+                    (k, v),
+                )?,
+                None => tx.sql().execute("delete from kv where key = ?1", [k])?,
+            };
+        }
+        Ok(())
     })
     .await
     .map_err(fail)
 }
 
-/// A new copy of TEXT (a rejected edit of the view at PATH) in a new folder of the records backup.
-fn backup_text(hub: &Path, path: &Path, text: &str, at: f64) -> Result<PathBuf, Error> {
-    let base = hub.join("records-backup");
-    let date = today(at);
-    let mut dir = base.join(format!("{date}-rejected"));
-    let mut n = 1;
-    while dir.exists() {
-        n += 1;
-        dir = base.join(format!("{date}-rejected-{n}"));
-    }
-    let rel: PathBuf = path
-        .components()
-        .filter(|c| matches!(c, std::path::Component::Normal(_)))
-        .collect();
-    let to = dir.join(rel);
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| err(format!("backup: {e}")))?;
-    }
-    std::fs::write(&to, text).map_err(|e| err(format!("backup of {}: {e}", path.display())))?;
-    Ok(dir)
+fn adopted_key(path: &Path) -> String {
+    format!("records-adopted:{}", path.to_string_lossy())
 }
 
-fn proposal_of(id: &str, status: Option<&str>, data: &Value, diff: &str) -> Proposal {
-    let state = match data["state"].as_str().or(status).unwrap_or("open") {
-        "accepted" => ProposalStatus::Accepted,
-        "rejected" => ProposalStatus::Rejected,
-        "stale" => ProposalStatus::Stale,
-        _ => ProposalStatus::Open,
-    };
-    let strs = |v: &Value| -> Vec<String> {
-        v.as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let ops = data["ops"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .map(|o| ProposedOp {
-                    op: "update".into(),
-                    entity: o["entity"].as_str().unwrap_or("").to_owned(),
-                    fields: strs(&o["fields"]),
-                    user_only: o["user_only"].as_bool().filter(|b| *b),
+/// The notice listing the file at PATH went out: the hub may rewrite it.
+async fn noticed(db: &CoordDb, path: &Path) -> Result<bool, Error> {
+    let key = adopted_key(path);
+    db.read(move |c| Ok(kv_get(c, &key).is_some()))
+        .await
+        .map_err(fail)
+}
+
+fn base_json(b: &Bases) -> String {
+    let m: serde_json::Map<String, Value> = b
+        .iter()
+        .map(|(id, b)| (id.clone(), json!([b.ver, b.hashes])))
+        .collect();
+    Value::Object(m).to_string()
+}
+
+fn base_of_json(s: &str) -> Bases {
+    let v: Value = serde_json::from_str(s).unwrap_or_default();
+    v.as_object()
+        .map(|m| {
+            m.iter()
+                .map(|(id, b)| {
+                    (
+                        id.clone(),
+                        Base {
+                            ver: b[0].as_i64().unwrap_or(0),
+                            hashes: b[1]
+                                .as_array()
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|h| h.as_str().map(str::to_owned))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                        },
+                    )
                 })
                 .collect()
         })
-        .unwrap_or_default();
-    let unmapped = data["unmapped"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|r| Some((r[0].as_u64()?, r[1].as_u64()?)))
-                .collect()
-        })
-        .unwrap_or_default();
-    Proposal {
-        id: id.to_owned(),
-        path: data["path"].as_str().unwrap_or("").to_owned(),
-        status: state,
-        diff: diff.to_owned(),
-        ops,
-        unmapped,
-        base_version: data["base_version"].as_u64().unwrap_or(0),
-        by: data["by"].as_str().map(str::to_owned),
-        at: data["at"].as_f64().unwrap_or(0.0),
-    }
+        .unwrap_or_default()
 }
 
-/// The proposals (those on the view at ONLY, or all), newest first.
-pub async fn proposals_core(db: &CoordDb, only: Option<&Path>) -> Result<Proposals, Error> {
-    let rows: Vec<(String, Option<String>, String, Option<String>)> = db
-        .read(|c| {
-            let mut st = c.prepare(
-                "select id, status, data, body from entity where kind = 'proposal' and retired_tx is null \
-                 order by updated_tx desc",
-            )?;
-            Ok(st
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-                .collect::<Result<Vec<_>, _>>()?)
-        })
-        .await
-        .map_err(fail)?;
-    let mut out = Vec::new();
-    for (id, status, data, body) in rows {
-        let data: Value = serde_json::from_str(&data).unwrap_or_default();
-        if only.is_some_and(|o| data["path"].as_str().map(Path::new) != Some(o)) {
+/// OLD with each piece of IDS now at its text in TEXTS (newest first, the last [`BASE_KEEP`] kept), at the versions
+/// in VERS; the pieces in HOLD (conflicted) keep their old base, and pieces not in IDS are dropped.
+fn next_base(
+    old: &Bases,
+    ids: &[String],
+    texts: &[String],
+    vers: &HashMap<String, i64>,
+    hold: &HashSet<String>,
+) -> Bases {
+    let mut out = Bases::new();
+    for (id, text) in ids.iter().zip(texts) {
+        let prev = old.get(id);
+        if hold.contains(id) {
+            if let Some(b) = prev {
+                out.insert(id.clone(), b.clone());
+            }
             continue;
         }
-        out.push(proposal_of(
-            &id,
-            status.as_deref(),
-            &data,
-            body.as_deref().unwrap_or(""),
-        ));
-    }
-    Ok(Proposals { proposals: out })
-}
-
-/// What a decision came to.
-pub struct Outcome {
-    pub decided: Decided,
-    /// The view's path, when the decision rewrote it.
-    pub path: Option<PathBuf>,
-}
-
-fn refuse(msg: impl Into<String>) -> Error {
-    Error {
-        code: ErrorCode::NotAllowed,
-        message: msg.into(),
-        path: None,
-    }
-}
-
-/// Decide proposal ID: ACCEPT applies its ops (all or none; `stale` when a record changed since the edit was read),
-/// else the edited text is backed up under HUB; then the view is rewritten.  MANAGER: a manager decides (it cannot
-/// accept an op on a user-only field).
-pub async fn decide_core(
-    db: &CoordDb,
-    views: &Views,
-    hub: &Path,
-    id: &str,
-    accept: bool,
-    manager: bool,
-) -> Result<(Decided, Vec<ViewEvent>), Error> {
-    let Some((pn, data)) = load_proposal(db, id).await? else {
-        return Err(err(format!("no proposal {id}")));
-    };
-    match data["state"].as_str().unwrap_or("open") {
-        "open" => {}
-        "stale" => {
-            return Err(err(
-                "stale: the file changed since it was read; read it again",
-            ));
-        }
-        s => return Err(err(format!("proposal {id} is already {s}"))),
-    }
-    let path = PathBuf::from(data["path"].as_str().unwrap_or(""));
-    let by = if manager { "manager" } else { "user" };
-    let (state, note, backup_dir) = if accept {
-        if manager
-            && data["ops"]
-                .as_array()
-                .is_some_and(|a| a.iter().any(|o| o["user_only"].as_bool() == Some(true)))
-        {
-            return Err(refuse(
-                "the proposal changes a field only the user may set; the user decides it",
-            ));
-        }
-        let ops = data["ops"].as_array().cloned().unwrap_or_default();
-        let base: HashMap<String, i64> = data["base"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|p| Some((p[0].as_str()?.to_owned(), p[1].as_i64()?)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let note_body = (!data["unmapped"].as_array().is_none_or(Vec::is_empty)).then(|| {
-            format!(
-                "Parts of a hand edit to {} that map to no change of the graph:\n\n{}",
-                path.display(),
-                data["diff"].as_str().unwrap_or("")
-            )
-        });
-        let (pid, note_id) = (
-            id.to_owned(),
-            format!("note:{}-unmapped", id.replace(':', "-")),
+        let h = merge::digest_piece(text);
+        let mut hashes = vec![h.clone()];
+        hashes.extend(
+            prev.map(|b| b.hashes.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|x| *x != h),
         );
-        let root = path.clone();
-        let applied = db
-            .write(meta(), move |tx| {
-                let stale = ops.iter().any(|o| {
-                    let id = o["entity"].as_str().unwrap_or("");
-                    match entity::by_id(tx.sql(), id) {
-                        Ok(Some(e)) => e.retired_tx.is_some() || base.get(id) != Some(&e.ver),
-                        _ => true,
-                    }
-                });
-                let (state, note) = if stale {
-                    ("stale", None)
-                } else {
-                    for o in &ops {
-                        let e = entity::by_id(tx.sql(), o["entity"].as_str().unwrap_or(""))?
-                            .ok_or_else(|| {
-                                norn::store::CoordError::Refused("no such record".into())
-                            })?;
-                        entity::update(
-                            tx,
-                            e.n,
-                            Some(e.ver),
-                            Changes {
-                                body: Some(Some(o["body"].as_str().unwrap_or("").to_owned())),
-                                status: o["status"].as_str().map(|s| Some(s.to_owned())),
-                                ..Default::default()
-                            },
-                        )?;
-                    }
-                    let mut made = None;
-                    if let Some(b) = note_body {
-                        let n = match entity::by_id(tx.sql(), &note_id)? {
-                            Some(e) => {
-                                entity::update(
-                                    tx,
-                                    e.n,
-                                    None,
-                                    Changes {
-                                        body: Some(Some(b)),
-                                        ..Default::default()
-                                    },
-                                )?;
-                                e.n
-                            }
-                            None => {
-                                entity::create(
-                                    tx,
-                                    EntityNew {
-                                        id: note_id.clone(),
-                                        kind: "note".into(),
-                                        project: None,
-                                        title: Some(format!("Unmapped edit of {}", root.display())),
-                                        status: Some("open".into()),
-                                        body: Some(b),
-                                        priority: None,
-                                        assignee: None,
-                                        data: json!({}),
-                                        origin: Origin::Inferred,
-                                        source: None,
-                                    },
-                                )?
-                                .n
-                            }
-                        };
-                        if let Some(r) = ops.first().and_then(|o| o["entity"].as_str())
-                            && let Some(re) = entity::by_id(tx.sql(), r)?
-                        {
-                            urdr::graph::link::add(
-                                tx,
-                                n,
-                                "relates",
-                                re.n,
-                                None,
-                                Origin::Inferred,
-                                None,
-                            )?;
-                        }
-                        made = Some(note_id.clone());
-                    }
-                    ("accepted", made)
-                };
-                set_state(tx, &pid, pn, state, by)?;
-                Ok((state, note))
-            })
-            .await
-            .map_err(fail)?;
-        (applied.0, applied.1, None)
-    } else {
-        let edited = data["edited"].as_str().unwrap_or("");
-        let dir = backup_text(hub, &path, edited, now())?;
-        let pid = id.to_owned();
-        db.write(meta(), move |tx| set_state(tx, &pid, pn, "rejected", by))
-            .await
-            .map_err(fail)?;
-        ("rejected", None, Some(dir))
-    };
-    let mut events = Vec::new();
-    if state != "stale"
-        && let Flush::Written(hash) = views.flush(db, &path, true).await?
-        && let Some((kind, _, _)) = model(db, &path).await?
-    {
-        events.push(ViewEvent::Written(ViewWritten {
-            path: path.to_string_lossy().into_owned(),
-            kind,
-            hash,
-        }));
+        hashes.truncate(BASE_KEEP);
+        out.insert(
+            id.clone(),
+            Base {
+                ver: vers.get(id).copied().unwrap_or(0),
+                hashes,
+            },
+        );
     }
-    let status = match state {
-        "accepted" => ProposalStatus::Accepted,
-        "rejected" => ProposalStatus::Rejected,
-        _ => ProposalStatus::Stale,
-    };
-    Ok((
-        Decided {
-            id: id.to_owned(),
-            status,
-            note,
-            backup: backup_dir.map(|d| d.to_string_lossy().into_owned()),
-        },
-        events,
-    ))
+    // a conflicted piece the file deleted keeps its base too
+    for id in hold {
+        if let (false, Some(b)) = (out.contains_key(id), old.get(id)) {
+            out.insert(id.clone(), b.clone());
+        }
+    }
+    out
 }
 
-/// Proposal PID (entity PN) in STATE, decided BY.
-fn set_state(
-    tx: &mut norn::store::WTx<'_>,
-    _pid: &str,
-    pn: i64,
-    state: &str,
-    by: &str,
-) -> Result<(), norn::store::CoordError> {
-    entity::update(
-        tx,
-        pn,
-        None,
-        Changes {
-            status: Some(Some(state_status(state).into())),
-            data_patch: Some(json!({"state": state, "decided_by": by, "decided_at": now()})),
-            ..Default::default()
-        },
-    )?;
-    Ok(())
+/// FILE's pieces given the ids the graph already has for them: a piece the graph knows by another id (one adopted
+/// before the ids were keyed) keeps that id when its text is the graph's.
+fn align(file: &mut [GraphOp], live: &[Piece]) {
+    let ids: HashSet<String> = file.iter().map(|o| o.id.clone()).collect();
+    let mut free: Vec<&Piece> = live.iter().filter(|p| !ids.contains(&p.id)).collect();
+    let known: HashSet<&str> = live.iter().map(|p| p.id.as_str()).collect();
+    for op in file.iter_mut() {
+        if known.contains(op.id.as_str()) {
+            continue;
+        }
+        if let Some(i) = free
+            .iter()
+            .position(|p| p.kind == op.kind && p.body == op.body)
+        {
+            op.id = free.remove(i).id.clone();
+        }
+    }
 }
 
 impl Views {
-    /// The file at PATH differs from what the hub last wrote there (false when the hub wrote nothing yet).
+    /// The file at PATH differs from what the hub last wrote or read there (false when it knows nothing of it yet).
     pub fn changed(&self, path: &Path) -> bool {
         let last = lock(&self.state).written.get(path).map(|w| w.0.clone());
         match (last, std::fs::read_to_string(path)) {
@@ -907,250 +716,200 @@ impl Views {
         }
     }
 
-    fn record(&self, path: &Path, hash: &str, base: (ViewModel, Vec<i64>)) {
-        let mut st = lock(&self.state);
-        st.written
-            .insert(path.to_path_buf(), (hash.to_owned(), now()));
-        st.bases.insert(path.to_path_buf(), base);
+    fn gate(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
+        lock(&self.state)
+            .gates
+            .entry(path.to_path_buf())
+            .or_default()
+            .clone()
     }
 
-    /// The edit EDITED of the view at PATH read into its proposal (new, or the open one replaced).  Its id.
-    async fn propose(&self, db: &CoordDb, path: &Path, edited: String) -> Result<String, Error> {
-        let Some((_, root, cur, cur_vers)) = model_full(db, path).await? else {
-            return Err(err("no such view"));
-        };
-        // the edit was made against what the hub last wrote, not against the graph's changes since
-        let (m, vers) = match lock(&self.state).bases.get(path).cloned() {
-            Some((b, v)) if b.ids == cur.ids => (
-                ViewModel {
-                    version: cur.version,
-                    ..b
-                },
-                v,
-            ),
-            _ => (cur, cur_vers),
-        };
-        let view_text = view::file_text(path, &m);
-        let p = proposal::read(&view_text, &edited, &m);
-        let id = proposal_id(path);
-        let ops: Vec<Value> = p
-            .ops
-            .iter()
-            .map(|o| {
-                let mut fields = vec!["body"];
-                if o.status.is_some() {
-                    fields.push("status");
-                }
-                json!({
-                    "op": "update", "entity": o.id, "fields": fields, "body": o.body, "status": o.status,
-                    "user_only": p.user_only.contains(&o.id),
-                })
-            })
-            .collect();
-        let ids: Vec<String> = p.ops.iter().map(|o| o.id.clone()).collect();
-        let data = json!({
-            "path": path.to_string_lossy(), "state": "open", "ops": ops,
-            "unmapped": p.unmapped.iter().map(|r| json!([r.start, r.end])).collect::<Vec<_>>(),
-            "base_version": p.base_version, "edited": edited, "at": now(), "by": Value::Null,
-        });
-        let (diff, pid) = (p.diff, id.clone());
-        let m_ids = m.ids.clone();
-        let title = format!(
-            "Edit of {}",
-            path.file_name()
-                .map_or(String::new(), |f| f.to_string_lossy().into_owned())
-        );
-        db.write(meta(), move |tx| {
-            let mut data = data;
-            let base: Vec<Value> = ids
-                .iter()
-                .filter_map(|i| Some(json!([i, vers.get(m_ids.iter().position(|x| x == i)?)?])))
-                .collect();
-            data["base"] = json!(base);
-            let n = match entity::by_id(tx.sql(), &pid)? {
-                None => {
-                    entity::create(
-                        tx,
-                        EntityNew {
-                            id: pid.clone(),
-                            kind: "proposal".into(),
-                            project: None,
-                            title: Some(title),
-                            status: Some("open".into()),
-                            body: Some(diff),
-                            priority: None,
-                            assignee: None,
-                            data,
-                            origin: Origin::Inferred,
-                            source: None,
-                        },
-                    )?
-                    .n
-                }
-                Some(e) => {
-                    entity::update(
-                        tx,
-                        e.n,
-                        None,
-                        Changes {
-                            title: Some(Some(title)),
-                            status: Some(Some("open".into())),
-                            body: Some(Some(diff)),
-                            data_patch: Some(data),
-                            ..Default::default()
-                        },
-                    )?;
-                    e.n
-                }
-            };
-            if let Some(r) = entity::by_id(tx.sql(), &root)? {
-                urdr::graph::link::add(tx, n, "proposes", r.n, None, Origin::Inferred, None)?;
-            }
-            Ok(())
-        })
-        .await
-        .map_err(fail)?;
-        Ok(id)
-    }
-
-    /// The hash the hub last wrote at PATH, from the store after a restart (`kv`, key `records-view:PATH`).
-    async fn seed(&self, db: &CoordDb, path: &Path) -> Result<(), Error> {
-        if lock(&self.state).written.contains_key(path) {
-            return Ok(());
+    /// The bases of the file at PATH: kept in memory, from the store after a restart (`kv`, `records-base:PATH`).
+    async fn bases(&self, db: &CoordDb, path: &Path) -> Result<Bases, Error> {
+        if let Some(b) = lock(&self.state).bases.get(path) {
+            return Ok(b.clone());
         }
-        let key = format!("records-view:{}", path.to_string_lossy());
-        let hash: Option<String> = db
+        let key = format!("records-base:{}", path.to_string_lossy());
+        let (b, w) = db
             .read(move |c| {
-                Ok(
-                    c.query_row("select value from kv where key = ?1", [&key], |r| r.get(0))
-                        .ok(),
-                )
+                Ok((
+                    kv_get(c, &key),
+                    kv_get(c, &key.replacen("records-base:", "records-view:", 1)),
+                ))
             })
             .await
             .map_err(fail)?;
-        if let Some(h) = hash {
-            lock(&self.state)
-                .written
-                .entry(path.to_path_buf())
-                .or_insert((h, 0.0));
+        let b = b.map(|s| base_of_json(&s)).unwrap_or_default();
+        let mut st = lock(&self.state);
+        st.bases.insert(path.to_path_buf(), b.clone());
+        if let Some(w) = w {
+            st.written.entry(path.to_path_buf()).or_insert((w, 0.0));
         }
-        Ok(())
+        Ok(b)
     }
 
-    /// HASH, which the hub wrote at PATH, kept in the store (only when it is not the one already kept).
-    async fn persist(
+    /// BASE (and HASH, the file's text now) kept for PATH, in memory and, when either changed, in the store.
+    async fn keep(
         &self,
         db: &CoordDb,
         path: &Path,
-        prior: Option<String>,
-        hash: &str,
+        base: Bases,
+        hash: String,
     ) -> Result<(), Error> {
-        if prior.as_deref() == Some(hash) {
-            return Ok(());
+        let (old_b, old_w) = {
+            let st = lock(&self.state);
+            (
+                st.bases.get(path).cloned(),
+                st.written.get(path).map(|w| w.0.clone()),
+            )
+        };
+        let p = path.to_string_lossy();
+        let mut pairs = Vec::new();
+        if old_b.as_ref() != Some(&base) {
+            pairs.push((format!("records-base:{p}"), Some(base_json(&base))));
         }
-        let (key, hash) = (
-            format!("records-view:{}", path.to_string_lossy()),
-            hash.to_owned(),
-        );
-        db.write(meta(), move |tx| {
-            tx.sql().execute(
-                "insert or replace into kv (key, value) values (?1, ?2)",
-                (&key, &hash),
-            )?;
-            Ok(())
-        })
-        .await
-        .map_err(fail)
+        if old_w.as_deref() != Some(hash.as_str()) {
+            pairs.push((format!("records-view:{p}"), Some(hash.clone())));
+        }
+        {
+            let mut st = lock(&self.state);
+            st.bases.insert(path.to_path_buf(), base);
+            st.written.insert(path.to_path_buf(), (hash, now()));
+        }
+        kv_put(db, pairs).await
     }
 
-    /// The view at PATH rewritten from the graph now (its pieces' text first follows the graph's statuses), unless
-    /// the file was changed by hand or a proposal on it is open: a hand edit becomes the proposal and the file stays
-    /// (FORCE: after an import or a decision, when the file was just read and backed up or decided).
-    pub async fn flush(&self, db: &CoordDb, path: &Path, force: bool) -> Result<Flush, Error> {
+    #[cfg(test)]
+    fn hook(&self) -> Option<BeforeWrite> {
+        lock(&self.state).before_write.clone()
+    }
+
+    /// The file at PATH and its records merged, both ways (`docs/develop/records.md`, "Keeping files and records in
+    /// step"): the file is read, parsed and merged piece by piece with the graph against the base; the graph takes
+    /// the file's changes and the file the graph's, a piece both changed keeps the file's text and is flagged; the
+    /// file is re-read just before the rename and the merge starts over when it changed ([`TRIES`] times, then
+    /// `busy`).  Also how many graph changes it made, and the records it newly flagged.
+    pub async fn sync(&self, db: &CoordDb, path: &Path) -> Result<(Flush, u64), Error> {
+        let (f, acts, _) = self.sync_flagged(db, path).await?;
+        Ok((f, acts))
+    }
+
+    /// [`Views::sync`], with the ids it newly flagged.
+    async fn sync_flagged(
+        &self,
+        db: &CoordDb,
+        path: &Path,
+    ) -> Result<(Flush, u64, Vec<String>), Error> {
+        let gate = self.gate(path);
+        let _held = gate.lock().await;
         sync_bodies(db, path).await?;
-        self.seed(db, path).await?;
-        let prior = lock(&self.state).written.get(path).map(|w| w.0.clone());
-        let Some((_, _, m, vers)) = model_full(db, path).await? else {
-            return Ok(Flush::Unchanged);
+        let Some(kind) = kind_in(&pieces(db, path).await?) else {
+            return Ok((Flush::Unchanged, 0, Vec::new()));
         };
-        let text = view::file_text(path, &m);
-        let hash = view::digest(&text);
-        let current = std::fs::read_to_string(path).ok();
-        if !force
-            && let Some((_, open)) = load_proposal(db, &proposal_id(path)).await?
-            && open["state"].as_str() == Some("open")
-        {
-            return match &current {
-                Some(c) if *c != text && open["edited"].as_str() != Some(c.as_str()) => {
-                    Ok(Flush::Proposed(self.propose(db, path, c.clone()).await?))
-                }
-                _ => Ok(Flush::Held),
+        let may_write = noticed(db, path).await?;
+        let mut base = self.bases(db, path).await?;
+        let mut acts = 0;
+        let mut flagged: Vec<String> = Vec::new();
+        for _ in 0..TRIES {
+            // a missing file retires nothing: its records stay until the project forgets them
+            let Ok(raw) = std::fs::read_to_string(path) else {
+                return Ok((Flush::Unchanged, acts, flagged));
             };
-        }
-        if current.as_deref() == Some(text.as_str()) {
-            self.record(path, &hash, (m, vers));
-            self.persist(db, path, prior, &hash).await?;
-            return Ok(Flush::Unchanged);
-        }
-        let known = lock(&self.state).written.contains_key(path);
-        let by_hand = if known {
-            self.changed(path)
-        } else {
-            current.is_some()
-        };
-        if by_hand
-            && !force
-            && let Some(c) = current.clone()
-        {
-            return Ok(Flush::Proposed(self.propose(db, path, c).await?));
-        }
-        // an edit that landed since the file was read is a proposal too
-        if !force
-            && let Some(again) = std::fs::read_to_string(path)
-                .ok()
-                .filter(|a| Some(a) != current.as_ref())
-        {
-            return Ok(Flush::Proposed(self.propose(db, path, again).await?));
-        }
-        write_atomic(path, &text).map_err(|e| err(format!("{}: {e}", path.display())))?;
-        self.record(path, &hash, (m, vers));
-        self.persist(db, path, prior, &hash).await?;
-        Ok(Flush::Written(hash))
-    }
-
-    /// What a flush of PATH came to, as the event to send.
-    async fn event_of(&self, db: &CoordDb, path: &Path, f: Flush) -> Option<ViewEvent> {
-        match f {
-            Flush::Written(hash) => {
-                let (kind, _, _) = model(db, path).await.ok().flatten()?;
-                Some(ViewEvent::Written(ViewWritten {
-                    path: path.to_string_lossy().into_owned(),
-                    kind,
-                    hash,
-                }))
+            let doc = import::parse(parse_of(kind), view::strip_header(&raw))
+                .ok_or_else(|| err("unknown record kind"))?;
+            let mut ops = import::ops(&doc, path);
+            let live = pieces(db, path).await?;
+            align(&mut ops, &live);
+            let lv: Vec<merge::Live> = live
+                .iter()
+                .map(|p| merge::Live {
+                    id: p.id.clone(),
+                    ver: p.ver,
+                    body: p.body.clone(),
+                    seq: p.seq().unwrap_or(0) as u32,
+                })
+                .collect();
+            let m = merge::merge(&ops, &base, &lv);
+            for id in &m.conflicts {
+                let was = live
+                    .iter()
+                    .find(|p| p.id == *id)
+                    .is_some_and(|p| !p.data["records"]["conflict"].is_null());
+                if !was && !flagged.contains(id) {
+                    flagged.push(id.clone());
+                }
             }
-            Flush::Proposed(id) => Some(ViewEvent::Proposal(ViewProposal {
-                id,
-                path: path.to_string_lossy().into_owned(),
-                by: None,
-            })),
-            _ => None,
+            acts += apply(db, path, kind, &ops, &m, &live).await?;
+            let vers: HashMap<String, i64> = pieces(db, path)
+                .await?
+                .into_iter()
+                .map(|p| (p.id, p.ver))
+                .collect();
+            let hold: HashSet<String> = m.conflicts.iter().cloned().collect();
+            let (ids, bodies): (Vec<String>, Vec<String>) =
+                ops.iter().map(|o| (o.id.clone(), o.body.clone())).unzip();
+            // what the file holds now, which the graph has taken
+            let on_disk = next_base(&base, &ids, &bodies, &vers, &hold);
+            if m.text == raw {
+                self.keep(db, path, on_disk, view::digest(&raw)).await?;
+                return Ok((Flush::Unchanged, acts, flagged));
+            }
+            if !may_write {
+                self.keep(db, path, on_disk, view::digest(&raw)).await?;
+                return Ok((Flush::Waiting, acts, flagged));
+            }
+            #[cfg(test)]
+            if let Some(h) = self.hook() {
+                h(path);
+            }
+            if std::fs::read_to_string(path).ok().as_deref() != Some(raw.as_str()) {
+                base = on_disk;
+                continue;
+            }
+            write_atomic(path, &m.text).map_err(|e| err(format!("{}: {e}", path.display())))?;
+            let hash = view::digest(&m.text);
+            let written = next_base(&base, &m.order, &m.parts, &vers, &hold);
+            self.keep(db, path, written, hash.clone()).await?;
+            return Ok((Flush::Written(hash), acts, flagged));
         }
+        let h = std::fs::read_to_string(path)
+            .map(|t| view::digest(&t))
+            .unwrap_or_default();
+        self.keep(db, path, base, h).await?;
+        Ok((Flush::Busy, acts, flagged))
     }
 
-    /// Every view the graph knows, flushed now: the graph's changes reach the files, hand edits become proposals.
-    pub async fn flush_all(&self, db: &CoordDb) -> Result<Vec<ViewEvent>, Error> {
+    /// What a sync of PATH came to, as the events to send: the write, and the records it newly flagged.
+    fn events_of(path: &Path, kind: RecordKind, f: &Flush, flagged: Vec<String>) -> Vec<ViewEvent> {
+        let mut out = Vec::new();
+        if let Flush::Written(hash) = f {
+            out.push(ViewEvent::Written(ViewWritten {
+                path: path.to_string_lossy().into_owned(),
+                kind,
+                hash: hash.clone(),
+            }));
+        }
+        if !flagged.is_empty() {
+            out.push(ViewEvent::Conflict(RecordsConflict {
+                path: path.to_string_lossy().into_owned(),
+                ids: flagged,
+            }));
+        }
+        out
+    }
+
+    /// Every file the graph knows, synced now.
+    pub async fn sync_all(&self, db: &CoordDb) -> Result<Vec<ViewEvent>, Error> {
         let mut events = Vec::new();
         for v in status_core(db, self, None).await?.views {
             let path = PathBuf::from(&v.path);
-            let f = self.flush(db, &path, false).await?;
-            events.extend(self.event_of(db, &path, f).await);
+            let (f, _, flagged) = self.sync_flagged(db, &path).await?;
+            events.extend(Self::events_of(&path, v.kind, &f, flagged));
         }
         Ok(events)
     }
 
-    /// The records behind the view at PATH changed: rewrite it after [`DEBOUNCE`] of quiet.  EMIT hears each write
-    /// and each new proposal.
+    /// The file at PATH (or its records) changed: merge the two after [`DEBOUNCE`] of quiet.  EMIT hears each write.
     pub fn on_change(
         &self,
         db: CoordDb,
@@ -1161,10 +920,13 @@ impl Views {
         let p = path.clone();
         let h = crate::clock::spawn("records:debounce", async move {
             crate::clock::sleep(DEBOUNCE).await;
-            if let Ok(f) = me.flush(&db, &p, false).await
-                && let Some(e) = me.event_of(&db, &p, f).await
+            let kind = kind_in(&pieces(&db, &p).await.unwrap_or_default());
+            if let Ok((f, _, flagged)) = me.sync_flagged(&db, &p).await
+                && let Some(k) = kind
             {
-                emit(e);
+                for e in Self::events_of(&p, k, &f, flagged) {
+                    emit(e);
+                }
             }
         });
         if let Some(old) = lock(&self.state).timers.insert(path, h) {
@@ -1173,8 +935,250 @@ impl Views {
     }
 }
 
-/// The follower: after every write of the front's methods, [`DEBOUNCE`] of quiet, then every view is flushed
-/// (a graph change reaches its file; a hand edit becomes a proposal) and the editors hear of it.
+/// M's acts carried out on the graph, and its pieces put in its order.  How many acts.
+async fn apply(
+    db: &CoordDb,
+    path: &Path,
+    kind: RecordKind,
+    ops: &[GraphOp],
+    m: &Merged,
+    live: &[Piece],
+) -> Result<u64, Error> {
+    let seqs: HashMap<&str, Option<u64>> = live.iter().map(|p| (p.id.as_str(), p.seq())).collect();
+    let reorder: Vec<(String, usize)> = m
+        .order
+        .iter()
+        .enumerate()
+        .filter(|(i, id)| seqs.get(id.as_str()).is_some_and(|s| *s != Some(*i as u64)))
+        .map(|(i, id)| (id.clone(), i))
+        .collect();
+    if m.acts.is_empty() && reorder.is_empty() {
+        return Ok(0);
+    }
+    let n = m.acts.len() as u64;
+    let (acts, order, ops, file) = (
+        m.acts.clone(),
+        m.order.clone(),
+        ops.to_vec(),
+        path.to_path_buf(),
+    );
+    db.write(meta(), move |tx| {
+        let at = |id: &str, op: &GraphOp| -> GraphOp {
+            let mut op = op.clone();
+            op.id = id.to_owned();
+            if let Some(i) = order.iter().position(|x| x == id) {
+                op.seq = i as u32;
+            }
+            op
+        };
+        for a in &acts {
+            match a {
+                MergeAct::Update { id, op } => {
+                    let op = at(id, op);
+                    if let Some(e) = entity::by_id(tx.sql(), id)? {
+                        entity::update(tx, e.n, None, changes_of(&op, &data_of(&op, &file, kind)))?;
+                    }
+                }
+                MergeAct::Create(op) => {
+                    let op = at(&op.id, op);
+                    let data = data_of(&op, &file, kind);
+                    match entity::by_id(tx.sql(), &op.id)? {
+                        Some(e) => {
+                            if e.retired_tx.is_some() {
+                                entity::unretire(tx, e.n)?;
+                            }
+                            entity::update(tx, e.n, None, changes_of(&op, &data))?;
+                        }
+                        None => {
+                            entity::create(
+                                tx,
+                                EntityNew {
+                                    id: op.id.clone(),
+                                    kind: op.kind.into(),
+                                    project: None,
+                                    title: op.title.clone(),
+                                    status: op.status.clone(),
+                                    body: Some(op.body.clone()),
+                                    priority: None,
+                                    assignee: None,
+                                    data,
+                                    origin: Origin::Imported,
+                                    source: Some(op.source.clone()),
+                                },
+                            )?;
+                        }
+                    }
+                }
+                MergeAct::Retire { id } => {
+                    if let Some(e) = entity::by_id(tx.sql(), id)?
+                        && e.retired_tx.is_none()
+                    {
+                        entity::retire(tx, e.n)?;
+                    }
+                }
+                MergeAct::Conflict { id, file: text } => {
+                    if let Some(e) = entity::by_id(tx.sql(), id)? {
+                        entity::update(
+                            tx,
+                            e.n,
+                            None,
+                            Changes {
+                                data_patch: Some(
+                                    json!({"records": {"conflict": {"file": text, "at": now()}}}),
+                                ),
+                                ..Default::default()
+                            },
+                        )?;
+                    }
+                }
+            }
+        }
+        for (id, i) in &reorder {
+            if let Some(e) = entity::by_id(tx.sql(), id)? {
+                entity::update(
+                    tx,
+                    e.n,
+                    None,
+                    Changes {
+                        data_patch: Some(json!({"records": {"seq": i}})),
+                        ..Default::default()
+                    },
+                )?;
+            }
+        }
+        let placed: Vec<GraphOp> = ops.iter().map(|o| at(&o.id, o)).collect();
+        link_structure(tx, &placed)?;
+        Ok(())
+    })
+    .await
+    .map_err(fail)?;
+    Ok(n)
+}
+
+/// The conflicted record ID: its file, its file text and the graph's version.
+async fn conflict_of(db: &CoordDb, id: &str) -> Result<Conflict, Error> {
+    let id = id.to_owned();
+    let e = db
+        .read(move |c| Ok(entity::by_id(c, &id)?))
+        .await
+        .map_err(fail)?
+        .filter(|e| e.retired_tx.is_none() || !e.data["records"]["conflict"].is_null())
+        .ok_or_else(|| err("no such record"))?;
+    let c = &e.data["records"]["conflict"];
+    if c.is_null() {
+        return Err(err(format!("{} is not in conflict", e.id)));
+    }
+    Ok(Conflict {
+        id: e.id.clone(),
+        path: e.data["records"]["file"].as_str().unwrap_or("").to_owned(),
+        file: c["file"].as_str().unwrap_or("").to_owned(),
+        graph: e.body.clone().unwrap_or_default(),
+        at: c["at"].as_f64().unwrap_or(0.0),
+    })
+}
+
+/// Resolve the conflicted record ID: KEEP the file's text (it becomes the record's) or the graph's version (written
+/// back into the file).  Then the file is synced.
+pub async fn resolve_core(
+    db: &CoordDb,
+    views: &Views,
+    id: &str,
+    keep: Keep,
+) -> Result<(Resolved, Vec<ViewEvent>), Error> {
+    let c = conflict_of(db, id).await?;
+    let path = PathBuf::from(&c.path);
+    {
+        let gate = views.gate(&path);
+        let _held = gate.lock().await;
+        let mut base = views.bases(db, &path).await?;
+        let deleted = c.file.is_empty();
+        let (rid, file_text) = (c.id.clone(), c.file.clone());
+        db.write(meta(), move |tx| {
+            let Some(e) = entity::by_id(tx.sql(), &rid)? else {
+                return Ok(());
+            };
+            let clear = json!({"records": {"conflict": null}});
+            match (keep, deleted) {
+                (Keep::File, true) => {
+                    entity::update(
+                        tx,
+                        e.n,
+                        None,
+                        Changes {
+                            data_patch: Some(clear),
+                            ..Default::default()
+                        },
+                    )?;
+                    entity::retire(tx, e.n)?;
+                }
+                (Keep::File, false) => {
+                    let st = status::status_of(
+                        &e.kind,
+                        e.data["records"]["role"].as_str().unwrap_or(""),
+                        &file_text,
+                    );
+                    entity::update(
+                        tx,
+                        e.n,
+                        None,
+                        Changes {
+                            body: Some(Some(file_text)),
+                            status: st.map(Some),
+                            data_patch: Some(clear),
+                            ..Default::default()
+                        },
+                    )?;
+                }
+                (Keep::Graph, _) => {
+                    entity::update(
+                        tx,
+                        e.n,
+                        None,
+                        Changes {
+                            data_patch: Some(clear),
+                            ..Default::default()
+                        },
+                    )?;
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(fail)?;
+        // the base now says the file's text was seen: the file is unchanged since, so the side kept wins
+        if deleted {
+            base.remove(&c.id);
+        } else {
+            let b = base.entry(c.id.clone()).or_default();
+            let h = merge::digest_piece(&c.file);
+            b.hashes.retain(|x| *x != h);
+            b.hashes.insert(0, h);
+            b.hashes.truncate(BASE_KEEP);
+        }
+        let w = lock(&views.state)
+            .written
+            .get(&path)
+            .map(|w| w.0.clone())
+            .unwrap_or_default();
+        views.keep(db, &path, base, w).await?;
+    }
+    let (f, _, flagged) = views.sync_flagged(db, &path).await?;
+    let kind = kind_in(&pieces(db, &path).await?);
+    let events = kind
+        .map(|k| Views::events_of(&path, k, &f, flagged))
+        .unwrap_or_default();
+    Ok((
+        Resolved {
+            id: c.id,
+            keep,
+            path: c.path,
+        },
+        events,
+    ))
+}
+
+/// The follower: after every write of the front's methods, [`DEBOUNCE`] of quiet, then every file is synced (a graph
+/// change reaches its file, a hand edit its records) and the editors hear of each write.
 pub async fn follow(front: Arc<Front>) {
     let signals = front.writer.signals.clone();
     loop {
@@ -1185,7 +1189,7 @@ pub async fn follow(front: Arc<Front>) {
                 () = crate::clock::sleep(DEBOUNCE) => break,
             }
         }
-        match front.core.records.flush_all(&front.writer.db).await {
+        match front.core.records.sync_all(&front.writer.db).await {
             Ok(events) => {
                 for e in events {
                     let (name, body) = e.parts();
@@ -1197,7 +1201,21 @@ pub async fn follow(front: Arc<Front>) {
     }
 }
 
-/// The importer: ROOT's record files backed up (not on DRY), imported, their views written.  The events to send.
+/// A copy of the graph store (`work.db`) beside the backed-up files.
+async fn backup_store(db: &CoordDb, dir: &Path) -> Result<(), Error> {
+    std::fs::create_dir_all(dir).map_err(|e| err(format!("backup: {e}")))?;
+    let to = dir.join("work.db").to_string_lossy().into_owned();
+    db.read(move |c| {
+        c.execute("vacuum into ?1", [&to])?;
+        Ok(())
+    })
+    .await
+    .map_err(fail)
+}
+
+/// The adoption of ROOT's record files: on the first one the files and the graph store are backed up and the notice
+/// goes out (EMIT) before anything is rewritten; files the graph does not have yet are imported (their text as the
+/// records), the others merged ([`Views::sync`]).  A dry run reads and counts.
 pub async fn import_core(
     db: &CoordDb,
     views: &Views,
@@ -1205,45 +1223,92 @@ pub async fn import_core(
     root: &Path,
     only: Option<RecordKind>,
     dry: bool,
-) -> Result<(ImportReport, Vec<ViewWritten>), Error> {
+    emit: &(dyn Fn(ViewEvent) + Send + Sync),
+) -> Result<ImportReport, Error> {
     let found = discover(root, only);
+    let mut fresh = Vec::new();
+    for f in &found {
+        if !noticed(db, &f.path).await? {
+            fresh.push(f);
+        }
+    }
     let backup_dir = if dry || found.is_empty() {
         None
     } else {
-        Some(backup(hub, root, &found, now())?)
+        let dir = backup(hub, root, &found, now())?;
+        if !fresh.is_empty() {
+            backup_store(db, &dir).await?;
+        }
+        Some(dir)
     };
-    let (mut files, mut events) = (Vec::new(), Vec::new());
+    let mut files = Vec::new();
     for f in &found {
-        files.push(import_one(db, f, dry).await?);
-        if !dry && let Flush::Written(hash) = views.flush(db, &f.path, true).await? {
-            events.push(ViewWritten {
+        let has = !pieces(db, &f.path).await?.is_empty();
+        if dry || !has {
+            files.push(import_one(db, f, dry).await?);
+        } else {
+            files.push(ImportedFile {
                 path: f.path.to_string_lossy().into_owned(),
                 kind: f.kind,
-                hash,
+                entity: pieces(db, &f.path).await?.first().map(|p| p.id.clone()),
+                entities: 0,
+                ops: 0,
             });
         }
     }
-    Ok((
-        ImportReport {
-            dry_run: dry,
-            backup: backup_dir.map(|d| d.to_string_lossy().into_owned()),
+    if dry {
+        return Ok(ImportReport {
+            dry_run: true,
+            backup: None,
             files,
-        },
-        events,
-    ))
+        });
+    }
+    if !fresh.is_empty() {
+        emit(ViewEvent::Notice(RecordsNotice {
+            root: root.to_string_lossy().into_owned(),
+            files: fresh
+                .iter()
+                .map(|f| f.path.to_string_lossy().into_owned())
+                .collect(),
+            backup: backup_dir
+                .as_ref()
+                .map(|d| d.to_string_lossy().into_owned()),
+        }));
+        kv_put(
+            db,
+            fresh
+                .iter()
+                .map(|f| (adopted_key(&f.path), Some("1".to_owned())))
+                .collect(),
+        )
+        .await?;
+    }
+    for (f, row) in found.iter().zip(files.iter_mut()) {
+        let (fl, acts, flagged) = views.sync_flagged(db, &f.path).await?;
+        row.entities += acts;
+        row.ops += acts;
+        for e in Views::events_of(&f.path, f.kind, &fl, flagged) {
+            emit(e);
+        }
+    }
+    Ok(ImportReport {
+        dry_run: false,
+        backup: backup_dir.map(|d| d.to_string_lossy().into_owned()),
+        files,
+    })
 }
 
-/// The views the graph knows, and where each stands.
+/// The files the graph knows, and where each stands.
 pub async fn status_core(
     db: &CoordDb,
     views: &Views,
     only: Option<&Path>,
 ) -> Result<ViewsAnswer, Error> {
-    let roots: Vec<(String, String)> = db
+    let rows: Vec<(String, String)> = db
         .read(|c| {
             let mut st = c.prepare(
                 "select id, data from entity where source like 'records:%' and retired_tx is null \
-                 and json_extract(data, '$.records.seq') = 0",
+                 order by json_extract(data, '$.records.seq'), n",
             )?;
             Ok(st
                 .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -1251,8 +1316,8 @@ pub async fn status_core(
         })
         .await
         .map_err(fail)?;
-    let mut out = Vec::new();
-    for (id, data) in roots {
+    let mut by_file: Vec<(PathBuf, RecordKind, String, Vec<String>)> = Vec::new();
+    for (id, data) in rows {
         let d: Value = serde_json::from_str(&data).unwrap_or_default();
         let (Some(file), Some(kind)) = (
             d["records"]["file"].as_str(),
@@ -1264,26 +1329,35 @@ pub async fn status_core(
         if only.is_some_and(|o| o != path) {
             continue;
         }
+        let conflicted = !d["records"]["conflict"].is_null();
+        match by_file.iter_mut().find(|v| v.0 == path) {
+            Some(v) => {
+                if conflicted {
+                    v.3.push(id);
+                }
+            }
+            None => {
+                let c = if conflicted {
+                    vec![id.clone()]
+                } else {
+                    Vec::new()
+                };
+                by_file.push((path, kind, id, c));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (path, kind, entity, conflicts) in by_file {
+        let _ = views.bases(db, &path).await?;
         let last = lock(&views.state).written.get(&path).cloned();
-        let changed = match &last {
-            Some(_) => views.changed(&path),
-            None => model(db, &path).await?.is_some_and(|(_, _, m)| {
-                std::fs::read_to_string(&path).ok().as_deref()
-                    != Some(view::file_text(&path, &m).as_str())
-            }),
-        };
-        let pending = match load_proposal(db, &proposal_id(&path)).await? {
-            Some((_, d)) if d["state"].as_str() == Some("open") => Some(proposal_id(&path)),
-            _ => None,
-        };
         out.push(ViewStatus {
-            path: file.to_owned(),
+            path: path.to_string_lossy().into_owned(),
             kind,
-            entity: id,
-            written: last.as_ref().map(|l| l.1),
+            entity,
+            written: last.as_ref().map(|l| l.1).filter(|t| *t > 0.0),
+            changed: last.is_some() && views.changed(&path),
             hash: last.map(|l| l.0),
-            changed,
-            pending,
+            conflicts,
         });
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
@@ -1299,22 +1373,28 @@ fn hub_dir(f: &Front) -> Result<PathBuf, Error> {
 
 pub async fn import(f: &Front, _: &Caller, p: ImportParams) -> Result<ImportReport, Error> {
     let hub = hub_dir(f)?;
-    let (report, events) = import_core(
+    let emit = |e: ViewEvent| {
+        let (name, body) = e.parts();
+        f.broadcast(name, body);
+    };
+    import_core(
         &f.writer.db,
         &f.core.records,
         &hub,
         Path::new(p.root.as_str()),
         p.only,
         p.dry_run.unwrap_or(false),
+        &emit,
     )
-    .await?;
-    for e in events {
-        f.broadcast("view-written", serde_json::to_value(e).unwrap_or_default());
-    }
-    Ok(report)
+    .await
 }
 
 pub async fn status(f: &Front, _: &Caller, p: ByPath) -> Result<ViewsAnswer, Error> {
+    // an edit is read when somebody looks
+    for e in f.core.records.sync_all(&f.writer.db).await? {
+        let (name, body) = e.parts();
+        f.broadcast(name, body);
+    }
     status_core(
         &f.writer.db,
         &f.core.records,
@@ -1323,43 +1403,41 @@ pub async fn status(f: &Front, _: &Caller, p: ByPath) -> Result<ViewsAnswer, Err
     .await
 }
 
-pub async fn proposals(f: &Front, _: &Caller, p: ByPath) -> Result<Proposals, Error> {
-    // a hand edit is read when somebody looks
-    for e in f.core.records.flush_all(&f.writer.db).await? {
-        let (name, body) = e.parts();
-        f.broadcast(name, body);
-    }
-    proposals_core(&f.writer.db, p.path.as_ref().map(|a| Path::new(a.as_str()))).await
+pub async fn conflict(
+    f: &Front,
+    _: &Caller,
+    p: runstav::methods::exec::ById,
+) -> Result<Conflict, Error> {
+    conflict_of(&f.writer.db, p.id.as_str()).await
 }
 
-pub async fn decide(f: &Front, _: &Caller, p: DecideParams) -> Result<Decided, Error> {
-    let hub = hub_dir(f)?;
-    let (decided, events) = decide_core(
-        &f.writer.db,
-        &f.core.records,
-        &hub,
-        p.id.as_str(),
-        p.accept,
-        false,
-    )
-    .await?;
+pub async fn resolve(f: &Front, _: &Caller, p: ResolveParams) -> Result<Resolved, Error> {
+    let (r, events) = resolve_core(&f.writer.db, &f.core.records, p.id.as_str(), p.keep).await?;
     for e in events {
         let (name, body) = e.parts();
         f.broadcast(name, body);
     }
-    Ok(decided)
+    Ok(r)
 }
 
-/// The proposal tools' door into the records ([`crate::coord::Signals::records_tool`]).
+fn refuse(msg: impl Into<String>) -> Error {
+    Error {
+        code: ErrorCode::NotAllowed,
+        message: msg.into(),
+        path: None,
+    }
+}
+
+/// The conflict tools' door into the records ([`crate::coord::Signals::records_tool`]).
 pub fn install_tool(front: &Arc<Front>) {
     let weak = Arc::downgrade(front);
-    let door: crate::coord::RecordsTool = Arc::new(move |id, accept, session| {
+    let door: crate::coord::RecordsTool = Arc::new(move |id, keep_file, session| {
         let weak = weak.clone();
         Box::pin(async move {
             let front = weak
                 .upgrade()
                 .ok_or_else(|| "the hub is stopping".to_string())?;
-            tool_call(&front, id, accept, session)
+            tool_call(&front, id, keep_file, session)
                 .await
                 .map_err(|e| e.message)
         })
@@ -1367,17 +1445,18 @@ pub fn install_tool(front: &Arc<Front>) {
     let _ = front.writer.signals.records_tool.set(door);
 }
 
-/// `proposal_read` (ACCEPT none) and `proposal_decide` of an agent: a decision needs the matrix's `graph.change`.
+/// `record_conflict_read` (KEEP_FILE none) and `record_conflict_resolve` of an agent: resolving needs the matrix's
+/// `graph.change`.
 async fn tool_call(
     f: &Front,
     id: String,
-    accept: Option<bool>,
+    keep_file: Option<bool>,
     session: Option<String>,
 ) -> Result<String, Error> {
     use crate::matrix_gate::{ActionCtx, Gate};
     let db = &f.writer.db;
-    // an agent reads and decides the proposals about its own project's files only; a session the hub does not
-    // hold (or one outside any project) reaches none
+    // an agent reads and resolves the conflicts in its own project's files only; a session the hub does not hold (or
+    // one outside any project) reaches none
     let scope = match session.as_deref() {
         Some(s) => crate::runner::effects::scope_of_session(f, s).await.ok(),
         None => None,
@@ -1388,17 +1467,12 @@ async fn tool_call(
         jobs: Vec::new(),
         sessions: Vec::new(),
     });
-    let all = proposals_core(db, None).await?;
-    let p = all
-        .proposals
-        .into_iter()
-        .find(|p| p.id == id)
-        .ok_or_else(|| err(format!("no proposal {id}")))?;
+    let c = conflict_of(db, &id).await?;
     scope
-        .allows_path(Path::new(&p.path))
+        .allows_path(Path::new(&c.path))
         .map_err(|e| refuse(e.to_string()))?;
-    let Some(accept) = accept else {
-        return Ok(json!(p).to_string());
+    let Some(keep_file) = keep_file else {
+        return Ok(json!(c).to_string());
     };
     f.core.matrix.refresh(f);
     let gate = f.core.matrix.clone();
@@ -1432,18 +1506,24 @@ async fn tool_call(
         Gate::Allow => {}
         Gate::Ask(card) => {
             return Err(refuse(format!(
-                "the matrix asks the user first (card {card}); decide again once it is settled"
+                "the matrix asks the user first (card {card}); resolve again once it is settled"
             )));
         }
         Gate::Never(why) => return Err(refuse(why)),
     }
-    let hub = hub_dir(f)?;
-    let (decided, events) = decide_core(db, &f.core.records, &hub, &id, accept, true).await?;
+    // a field only the user sets stays the user's: an agent may keep the graph's version, not the file's
+    if keep_file && merge::touches_user_only(&c.file) {
+        return Err(refuse(
+            "the file's text changes a field only the user may set; the user resolves it",
+        ));
+    }
+    let keep = if keep_file { Keep::File } else { Keep::Graph };
+    let (r, events) = resolve_core(db, &f.core.records, &id, keep).await?;
     for e in events {
         let (name, body) = e.parts();
         f.broadcast(name, body);
     }
-    Ok(json!(decided).to_string())
+    Ok(json!(r).to_string())
 }
 
 #[cfg(test)]
@@ -1501,10 +1581,32 @@ mod tests {
 
     impl Fix {
         async fn import(&self, only: Option<RecordKind>, dry: bool) -> ImportReport {
-            import_core(&self.db, &self.views, &self.hub, &self.root, only, dry)
-                .await
-                .unwrap()
-                .0
+            self.import_heard(only, dry).await.0
+        }
+        async fn import_heard(
+            &self,
+            only: Option<RecordKind>,
+            dry: bool,
+        ) -> (ImportReport, Vec<ViewEvent>) {
+            let heard = Arc::new(Mutex::new(Vec::new()));
+            let h = heard.clone();
+            let emit = move |e: ViewEvent| h.lock().unwrap().push(e);
+            let r = import_core(
+                &self.db,
+                &self.views,
+                &self.hub,
+                &self.root,
+                only,
+                dry,
+                &emit,
+            )
+            .await
+            .unwrap();
+            let heard = heard.lock().unwrap().clone();
+            (r, heard)
+        }
+        async fn sync(&self, p: &Path) -> Flush {
+            self.views.sync(&self.db, p).await.unwrap().0
         }
         async fn count(&self, sql: &'static str) -> i64 {
             self.db
@@ -1524,8 +1626,7 @@ mod tests {
         f.import(Some(RecordKind::Board), false).await;
         for (rel, text) in FILES {
             let written = std::fs::read_to_string(f.root.join(rel)).unwrap();
-            assert_ne!(written, text, "{rel}: the view carries its header");
-            assert_eq!(view::strip_header(&written), text, "{rel}");
+            assert_eq!(written, text, "{rel}: adopting rewrites nothing");
         }
     }
 
@@ -1620,49 +1721,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_changed_view_is_never_overwritten() {
-        let f = fix();
-        f.import(None, false).await;
-        let p = f.root.join("DEFERRED.md");
-        let mine = format!("{}\nmy hand edit\n", std::fs::read_to_string(&p).unwrap());
-        std::fs::write(&p, &mine).unwrap();
-        assert!(f.views.changed(&p));
-        // the graph changes: a row's body
-        f.db.write(meta(), |tx| {
-            let id = tx.sql().query_row(
-                "select id from entity where kind = 'todo' limit 1",
-                [],
-                |r| r.get::<_, String>(0),
-            )?;
-            let n = entity::by_id(tx.sql(), &id)?.unwrap().n;
-            entity::update(
-                tx,
-                n,
-                None,
-                Changes {
-                    body: Some(Some("| X-1 | a | b | c |\n".into())),
-                    ..Default::default()
-                },
-            )?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-        assert!(matches!(
-            f.views.flush(&f.db, &p, false).await.unwrap(),
-            Flush::Proposed(_)
-        ));
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), mine);
-        // an untouched view is rewritten
-        let q = f.root.join("BUILD-BOARD.md");
-        assert!(!f.views.changed(&q));
-        assert!(matches!(
-            f.views.flush(&f.db, &q, false).await.unwrap(),
-            Flush::Unchanged
-        ));
-    }
-
-    #[tokio::test]
     async fn the_backup_is_written_first() {
         let f = fix();
         let r = f.import(None, false).await;
@@ -1678,6 +1736,11 @@ mod tests {
         assert!(
             !b.join("board.org").exists(),
             "board.org is not imported unless named"
+        );
+        // the first adoption copies the graph store too, a readable SQLite file
+        assert!(
+            rusqlite_open(&b.join("work.db")) > 0,
+            "the store copy has its tables"
         );
         // a second import makes a second backup, never overwriting the first
         let r2 = f.import(None, false).await;
@@ -1738,7 +1801,7 @@ mod tests {
         assert_eq!(std::fs::read(f.root.join(".git/index")).unwrap(), index);
     }
 
-    // ---- Task 14b: statuses, views that follow the graph, proposals ----
+    // ---- statuses, files that follow the graph, hand edits and conflicts ----
 
     async fn imported(f: &Fix) -> PathBuf {
         f.import(None, false).await;
@@ -1781,12 +1844,6 @@ mod tests {
         .unwrap();
     }
 
-    async fn the_proposal(f: &Fix) -> Proposal {
-        let all = proposals_core(&f.db, None).await.unwrap().proposals;
-        assert_eq!(all.len(), 1, "{all:?}");
-        all.into_iter().next().unwrap()
-    }
-
     #[tokio::test]
     async fn statuses_are_the_graphs_words() {
         let f = fix();
@@ -1825,10 +1882,7 @@ mod tests {
             },
         )
         .await;
-        assert!(matches!(
-            f.views.flush(&f.db, &p, false).await.unwrap(),
-            Flush::Written(_)
-        ));
+        assert!(matches!(f.sync(&p).await, Flush::Written(_)));
         let t = std::fs::read_to_string(&p).unwrap();
         assert!(t.contains("bold** text | open |"), "{t}");
         // the other rows are as they were, and the file imports back to the same graph
@@ -1837,276 +1891,312 @@ mod tests {
         assert!(again.files.iter().all(|x| x.ops == 0), "{again:?}");
     }
 
-    #[tokio::test]
-    async fn a_status_edit_becomes_a_proposal_not_a_write() {
-        let f = fix();
-        let p = imported(&f).await;
-        let txs = f.count(RECS).await;
-        let mine = edit(&p, "line | open |", "line | done |");
-        let Flush::Proposed(id) = f.views.flush(&f.db, &p, false).await.unwrap() else {
-            panic!("not a proposal");
-        };
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), mine, "the edit stays");
-        assert_eq!(row_status(&f, "M1-2%").await, "open", "nothing written");
-        assert_eq!(f.count(RECS).await, txs);
-        let pr = the_proposal(&f).await;
-        assert_eq!(
-            (pr.id.as_str(), pr.status),
-            (id.as_str(), ProposalStatus::Open)
-        );
-        assert_eq!(pr.ops.len(), 1);
-        assert_eq!(pr.ops[0].fields, ["body", "status"]);
-        assert!(pr.diff.contains("second line | done |"), "{}", pr.diff);
-        assert!(pr.unmapped.is_empty());
-        assert_eq!(
-            f.count("select count(*) from link where kind = 'proposes'")
-                .await,
-            1
-        );
-    }
-
-    #[tokio::test]
-    async fn accept_applies_then_rewrites() {
-        let f = fix();
-        let p = imported(&f).await;
-        let mine = edit(&p, "line | open |", "line | done |");
-        let Flush::Proposed(id) = f.views.flush(&f.db, &p, false).await.unwrap() else {
-            panic!()
-        };
-        let (d, ev) = decide_core(&f.db, &f.views, &f.hub, &id, true, false)
-            .await
-            .unwrap();
-        assert_eq!(d.status, ProposalStatus::Accepted);
-        assert_eq!(row_status(&f, "M1-2%").await, "done");
-        assert_eq!(
-            std::fs::read_to_string(&p).unwrap(),
-            mine,
-            "the graph now says what the file said"
-        );
-        assert!(ev.iter().all(|e| matches!(e, ViewEvent::Written(_))));
-        assert_eq!(the_proposal(&f).await.status, ProposalStatus::Accepted);
-        assert!(!f.views.changed(&p));
-        let st = status_core(&f.db, &f.views, Some(&p)).await.unwrap();
-        assert_eq!(st.views[0].pending, None);
-        assert!(matches!(
-            f.views.flush(&f.db, &p, false).await.unwrap(),
-            Flush::Unchanged
-        ));
-    }
-
-    #[tokio::test]
-    async fn reject_backs_up_then_rewrites() {
-        let f = fix();
-        let p = imported(&f).await;
-        let before = std::fs::read_to_string(&p).unwrap();
-        let mine = edit(&p, "line | open |", "line | done |");
-        let Flush::Proposed(id) = f.views.flush(&f.db, &p, false).await.unwrap() else {
-            panic!()
-        };
-        let (d, _) = decide_core(&f.db, &f.views, &f.hub, &id, false, false)
-            .await
-            .unwrap();
-        assert_eq!(d.status, ProposalStatus::Rejected);
-        let dir = PathBuf::from(d.backup.unwrap());
-        assert!(dir.starts_with(f.hub.join("records-backup")));
-        let rel: PathBuf = p.components().skip(1).collect();
-        assert_eq!(std::fs::read_to_string(dir.join(rel)).unwrap(), mine);
-        assert_eq!(
-            std::fs::read_to_string(&p).unwrap(),
-            before,
-            "the view is back"
-        );
-        assert_eq!(row_status(&f, "M1-2%").await, "open");
-    }
-
-    #[tokio::test]
-    async fn the_view_waits_while_open() {
-        let f = fix();
-        let p = imported(&f).await;
-        let first = edit(&p, "line | open |", "line | done |");
-        let Flush::Proposed(id) = f.views.flush(&f.db, &p, false).await.unwrap() else {
-            panic!()
-        };
-        // the graph changes meanwhile: the view waits
-        set_row(
-            &f,
-            "M2-1%",
-            Changes {
-                status: Some(Some("open".into())),
-                ..Default::default()
-            },
+    fn rusqlite_open(p: &Path) -> i64 {
+        let c = urdr::Connection::open(p).unwrap();
+        c.query_row(
+            "select count(*) from sqlite_master where type = 'table'",
+            [],
+            |r| r.get(0),
         )
-        .await;
-        assert_eq!(f.views.flush(&f.db, &p, false).await.unwrap(), Flush::Held);
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), first);
-        let st = status_core(&f.db, &f.views, Some(&p)).await.unwrap();
-        assert_eq!(st.views[0].pending.as_deref(), Some(id.as_str()));
-        // a second edit replaces the proposal: same id, new diff
-        let second = edit(&p, "Invented register for tests.", "Reworded.");
-        let Flush::Proposed(id2) = f.views.flush(&f.db, &p, false).await.unwrap() else {
-            panic!()
-        };
-        assert_eq!(id2, id);
-        let pr = the_proposal(&f).await;
-        assert!(pr.diff.contains("Reworded."));
-        assert_eq!(pr.ops.len(), 2);
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), second);
+        .unwrap()
+    }
+
+    async fn row_body(f: &Fix, like: &'static str) -> String {
+        f.db.read(move |c| {
+            Ok(c.query_row(
+                "select body from entity where kind = 'todo' and title like ?1 and retired_tx is null",
+                [like],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn conflicts(f: &Fix, p: &Path) -> Vec<String> {
+        status_core(&f.db, &f.views, Some(p))
+            .await
+            .unwrap()
+            .views
+            .into_iter()
+            .flat_map(|v| v.conflicts)
+            .collect()
+    }
+
+    async fn row_id(f: &Fix, like: &'static str) -> String {
+        f.db.read(move |c| {
+            Ok(c.query_row(
+                "select id from entity where kind = 'todo' and title like ?1 and retired_tx is null",
+                [like],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    fn closed() -> Changes {
+        Changes {
+            status: Some(Some("open".into())),
+            ..Default::default()
+        }
     }
 
     #[tokio::test]
-    async fn an_edit_racing_a_rewrite_becomes_a_proposal() {
+    async fn a_hand_edit_survives_a_regeneration() {
         let f = fix();
         let p = imported(&f).await;
-        // the hub has a rewrite due (the graph changed) when a hand edit lands
-        set_row(
-            &f,
-            "M2-1%",
-            Changes {
-                status: Some(Some("open".into())),
-                ..Default::default()
-            },
-        )
-        .await;
-        let mine = edit(
+        // someone edits a row in the file while the graph reopens another
+        edit(
             &p,
-            "Invented register for tests.",
-            "Typed while the hub rewrote.",
+            "Retry budget is hard-coded",
+            "Retry budget is a setting",
         );
-        let r = f.views.flush(&f.db, &p, false).await.unwrap();
-        assert!(matches!(r, Flush::Proposed(_)), "{r:?}");
-        assert_eq!(
-            std::fs::read_to_string(&p).unwrap(),
-            mine,
-            "the edit is never lost"
+        set_row(&f, "M2-1%", closed()).await;
+        assert!(matches!(f.sync(&p).await, Flush::Written(_)));
+        let t = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            t.contains("Retry budget is a setting"),
+            "the hand edit stays: {t}"
         );
         assert!(
-            the_proposal(&f)
-                .await
-                .diff
-                .contains("Typed while the hub rewrote.")
+            t.contains("bold** text | open |"),
+            "the graph's change lands: {t}"
         );
+        assert!(
+            row_body(&f, "M1-2%").await.contains("is a setting"),
+            "the graph took the edit"
+        );
+        assert!(conflicts(&f, &p).await.is_empty());
+        // and nothing more to do
+        assert_eq!(f.sync(&p).await, Flush::Unchanged);
     }
 
     #[tokio::test]
-    async fn stale_base_is_not_applied() {
+    async fn two_writers_on_different_pieces_lose_nothing() {
         let f = fix();
         let p = imported(&f).await;
-        let mine = edit(&p, "line | open |", "line | done |");
-        let Flush::Proposed(id) = f.views.flush(&f.db, &p, false).await.unwrap() else {
-            panic!()
-        };
-        set_row(
-            &f,
-            "M1-2%",
-            Changes {
-                body: Some(Some("| M1-2 | sync | changed meanwhile | open |\n".into())),
-                ..Default::default()
-            },
-        )
-        .await;
-        let (d, ev) = decide_core(&f.db, &f.views, &f.hub, &id, true, false)
-            .await
-            .unwrap();
-        assert_eq!(d.status, ProposalStatus::Stale);
-        assert!(ev.is_empty());
-        assert_eq!(row_status(&f, "M1-2%").await, "open");
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), mine);
-        // read again: the edit becomes a fresh proposal under the same id
-        let Flush::Proposed(id2) = f.views.flush(&f.db, &p, false).await.unwrap() else {
-            panic!()
-        };
-        assert_eq!(id2, id);
-        assert_eq!(the_proposal(&f).await.status, ProposalStatus::Open);
-    }
-
-    #[tokio::test]
-    async fn manager_cannot_accept_a_user_only_field() {
-        let f = fix();
-        let p = imported(&f).await;
+        // a file writer adds a row while the graph closes another
         edit(
             &p,
-            "Invented register for tests.\n",
-            "Invented register for tests.\nmatrix: allow all\n",
+            "| M2-1 |",
+            "| M1-3 | sync | A row added by hand | open |\n| M2-1 |",
         );
-        let Flush::Proposed(id) = f.views.flush(&f.db, &p, false).await.unwrap() else {
-            panic!()
-        };
-        let pr = the_proposal(&f).await;
-        assert_eq!(pr.ops[0].user_only, Some(true));
-        let e = decide_core(&f.db, &f.views, &f.hub, &id, true, true)
-            .await
-            .unwrap_err();
-        assert_eq!(e.code, ErrorCode::NotAllowed);
-        assert_eq!(the_proposal(&f).await.status, ProposalStatus::Open);
-        // a manager may reject it, and the user may accept it
-        let (d, _) = decide_core(&f.db, &f.views, &f.hub, &id, true, false)
-            .await
-            .unwrap();
-        assert_eq!(d.status, ProposalStatus::Accepted);
-    }
-
-    #[tokio::test]
-    async fn prose_edit_becomes_ops_or_a_note() {
-        let f = fix();
-        let p = imported(&f).await;
-        edit(
-            &p,
-            "Invented register for tests.",
-            "Invented register, reworded.",
-        );
+        set_row(&f, "M2-1%", closed()).await;
+        f.sync(&p).await;
         let t = std::fs::read_to_string(&p).unwrap();
-        let row = "| M2-1 | docs | Pipes \\| in prose and **bold** text | closed: not needed |\n";
-        assert!(t.contains(row));
-        std::fs::write(&p, t.replacen(row, "", 1)).unwrap();
-        let Flush::Proposed(id) = f.views.flush(&f.db, &p, false).await.unwrap() else {
-            panic!()
-        };
-        let pr = the_proposal(&f).await;
-        assert_eq!(pr.ops.len(), 1, "the prose is an operation: {pr:?}");
-        assert_eq!(pr.unmapped.len(), 1, "the deleted row maps to nothing");
-        let (d, _) = decide_core(&f.db, &f.views, &f.hub, &id, true, false)
-            .await
-            .unwrap();
-        assert!(d.note.is_some());
-        assert_eq!(
-            f.count(
-                "select count(*) from entity where kind = 'note' and title like 'Unmapped edit%'"
-            )
-            .await,
-            1
+        assert!(
+            t.contains("| M1-3 | sync | A row added by hand | open |"),
+            "{t}"
         );
-        // the record stays, so the view has the row back
-        let back = std::fs::read_to_string(&p).unwrap();
-        assert!(back.contains("M2-1") && back.contains("reworded"));
+        assert!(t.contains("bold** text | open |"), "{t}");
+        assert_eq!(
+            row_status(&f, "M1-3%").await,
+            "open",
+            "the new row is a record"
+        );
+        // the file changes again between the merge's read and its write: the merge starts over and keeps it
+        set_row(&f, "M1-1%", closed()).await;
+        let late = p.clone();
+        lock(&f.views.state).before_write = Some(Arc::new(move |_| {
+            let t = std::fs::read_to_string(&late).unwrap();
+            if !t.contains("written meanwhile") {
+                std::fs::write(
+                    &late,
+                    t.replace("Closing note", "Closing note written meanwhile"),
+                )
+                .unwrap();
+            }
+        }));
+        assert!(matches!(f.sync(&p).await, Flush::Written(_)));
+        let t = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            t.contains("written meanwhile"),
+            "the late edit is kept: {t}"
+        );
+        assert!(
+            t.contains("shown as `a\\|b` | open |"),
+            "the graph's change too: {t}"
+        );
     }
 
     #[tokio::test]
-    async fn a_hub_restart_does_not_turn_its_own_writes_into_proposals() {
+    async fn the_same_piece_on_both_sides_keeps_the_file_and_flags_it() {
         let f = fix();
         let p = imported(&f).await;
-        // the hub restarts (nothing in memory) and the graph changed while it was down
-        let restarted = Views::default();
+        // (a one-line row: the graph's status reaches its text)
+        set_row(&f, "M1-1%", closed()).await;
+        let mine = edit(&p, "A failed `measure`", "A failed measure, edited by hand");
+        let (_, _, flagged) = f.views.sync_flagged(&f.db, &p).await.unwrap();
+        assert_eq!(flagged.len(), 1, "the new conflict is told once");
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            mine,
+            "the file's text is kept"
+        );
+        let id = row_id(&f, "M1-1%").await;
+        assert_eq!(conflicts(&f, &p).await, std::slice::from_ref(&id));
+        assert!(
+            row_body(&f, "M1-1%").await.contains("A failed `measure`"),
+            "the graph keeps its own"
+        );
+        let c = conflict_of(&f.db, &id).await.unwrap();
+        assert!(
+            c.file.contains("edited by hand") && c.graph.contains("| open |"),
+            "{c:?}"
+        );
+        // a second sync changes nothing, loses nothing and tells nothing again
+        assert!(f.views.sync_flagged(&f.db, &p).await.unwrap().2.is_empty());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), mine);
+        // keep the graph's: written back into the file, flag cleared
+        resolve_core(&f.db, &f.views, &id, Keep::Graph)
+            .await
+            .unwrap();
+        let t = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            t.contains("A failed `measure`") && t.contains("`a\\|b` | open |"),
+            "{t}"
+        );
+        assert!(conflicts(&f, &p).await.is_empty());
+        // again, and keep the file's this time
         set_row(
             &f,
-            "M2-1%",
+            "M1-1%",
             Changes {
-                status: Some(Some("open".into())),
+                status: Some(Some("done".into())),
                 ..Default::default()
             },
         )
         .await;
-        let r = restarted.flush(&f.db, &p, false).await.unwrap();
-        assert!(matches!(r, Flush::Written(_)), "{r:?}");
-        assert_eq!(
-            proposals_core(&f.db, None).await.unwrap().proposals.len(),
-            0
+        edit(&p, "A failed `measure`", "A failed thing, the file wins");
+        f.sync(&p).await;
+        assert_eq!(conflicts(&f, &p).await, std::slice::from_ref(&id));
+        resolve_core(&f.db, &f.views, &id, Keep::File)
+            .await
+            .unwrap();
+        assert!(row_body(&f, "M1-1%").await.contains("the file wins"));
+        assert!(
+            std::fs::read_to_string(&p)
+                .unwrap()
+                .contains("the file wins")
         );
-        // and a hand edit after the restart still is one
-        let again = Views::default();
-        edit(&p, "line | open |", "line | done |");
-        assert!(matches!(
-            again.flush(&f.db, &p, false).await.unwrap(),
-            Flush::Proposed(_)
-        ));
+        assert!(conflicts(&f, &p).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_stale_editor_save_is_flagged_not_applied() {
+        let f = fix();
+        let p = imported(&f).await;
+        let old = std::fs::read_to_string(&p).unwrap();
+        set_row(&f, "M2-1%", closed()).await;
+        assert!(matches!(f.sync(&p).await, Flush::Written(_)));
+        // an editor that loaded the file before that write saves it
+        std::fs::write(&p, &old).unwrap();
+        f.sync(&p).await;
+        assert_eq!(
+            row_status(&f, "M2-1%").await,
+            "open",
+            "the graph's change is not undone"
+        );
+        assert_eq!(conflicts(&f, &p).await, [row_id(&f, "M2-1%").await]);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            old,
+            "the file is kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_insert_in_the_middle_of_a_plan_keeps_every_id_and_link() {
+        let f = fix();
+        f.import(None, false).await;
+        let p = f.root.join("docs/plans/drgnx/p.md");
+        const IDS: &str =
+            "select id from entity where kind = 'task' and retired_tx is null order by id";
+        const LINKS: &str =
+            "select count(*) from link where kind = 'parent_of' and tx_to = 4611686018427387904"; // urdr's SENTINEL, 1 << 62
+        async fn ids(f: &Fix) -> Result<Vec<String>, norn::store::CoordError> {
+            f.db.read(|c| {
+                let mut st = c.prepare(IDS)?;
+                Ok(st
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+        }
+        let before: Vec<String> = ids(&f).await.unwrap();
+        let links = f.count(LINKS).await;
+        edit(
+            &p,
+            "## Task 1: `basket`",
+            "## Task 0b: a task added in the middle\n\n- [ ] **Step 1: do it**\n\n## Task 1: `basket`",
+        );
+        f.sync(&p).await;
+        let after: Vec<String> = ids(&f).await.unwrap();
+        assert_eq!(after.len(), before.len() + 1);
+        assert!(
+            before.iter().all(|i| after.contains(i)),
+            "every task keeps its id"
+        );
+        assert_eq!(f.count(LINKS).await, links + 1);
+    }
+
+    #[tokio::test]
+    async fn adoption_alone_writes_no_byte() {
+        let f = fix();
+        let stamp = |f: &Fix| -> Vec<(String, std::time::SystemTime)> {
+            FILES
+                .iter()
+                .map(|(rel, _)| {
+                    let p = f.root.join(rel);
+                    (
+                        std::fs::read_to_string(&p).unwrap(),
+                        std::fs::metadata(&p).unwrap().modified().unwrap(),
+                    )
+                })
+                .collect()
+        };
+        let before = stamp(&f);
+        let (r, heard) = f.import_heard(None, false).await;
+        assert_eq!(stamp(&f), before);
+        // the notice went out once, listing the files, with the backup
+        let notices: Vec<&RecordsNotice> = heard
+            .iter()
+            .filter_map(|e| match e {
+                ViewEvent::Notice(n) => Some(n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].files.len(), r.files.len());
+        assert_eq!(notices[0].backup, r.backup);
+        let (_, again) = f.import_heard(None, false).await;
+        assert!(again.is_empty(), "{again:?}");
+    }
+
+    #[tokio::test]
+    async fn no_rewrite_before_the_notice() {
+        let f = fix();
+        let p = imported(&f).await;
+        kv_put(&f.db, vec![(adopted_key(&p), None)]).await.unwrap();
+        let before = std::fs::read_to_string(&p).unwrap();
+        set_row(&f, "M2-1%", closed()).await;
+        assert_eq!(f.sync(&p).await, Flush::Waiting);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn a_hub_restart_reads_its_own_writes_as_its_own() {
+        let f = fix();
+        let p = imported(&f).await;
+        set_row(&f, "M2-1%", closed()).await;
+        assert!(matches!(f.sync(&p).await, Flush::Written(_)));
+        let written = std::fs::read_to_string(&p).unwrap();
+        // a new hub: the bases come from the store
+        let fresh = Views::default();
+        assert_eq!(fresh.sync(&f.db, &p).await.unwrap().0, Flush::Unchanged);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), written);
+        assert!(conflicts(&f, &p).await.is_empty());
+        assert!(!fresh.changed(&p));
     }
 }

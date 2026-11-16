@@ -42,14 +42,19 @@ never regenerated, which is what keeps it byte-exact.
 
 All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well under 50 ms.
 
-## Importer and views
+## Adopting and keeping in step
 
-`ratatoskr graph import-records --root DIR [--only plans|ledgers|deferred|build-board|board] [--dry-run]` (method
-`records/import`; `records/status` lists the views). The importer finds `docs/plans/**/*.md` (ledgers end in
-`.ledger.md`), `DEFERRED.md` and `BUILD-BOARD.md` under DIR; `board.org` only with `--only board`.
+`ratatoskr graph import-records --root DIR [--only specs|plans|ledgers|decisions|deferred|build-board|board]
+[--dry-run]` (method `records/import`; `records/status` lists the files and their conflicted records). The importer
+finds `docs/specs/**/*.md`, `docs/plans/**/*.md` (ledgers end in `.ledger.md`), `docs/decisions/**/*.md`,
+`docs/adr/**/*.md`, `DEFERRED.md` and `BUILD-BOARD.md` under DIR; `board.org` only with `--only board`.
 
 - **Backup first.** Before anything is imported, every file is copied to `<state>/hub/records-backup/<date>/` (a
-  second import on the same day gets `<date>-2`, never overwriting). A dry run reads and counts and writes nothing.
+  second import on the same day gets `<date>-2`, never overwriting); the first adoption of a file also copies the graph
+  store there (`work.db`, `vacuum into`). A dry run reads and counts and writes nothing.
+- **The notice.** A file's first adoption sends `records-notice {root, files, backup}` (the editor shows it once) and
+  then marks the file adopted (`kv` `records-adopted:PATH`); no file is rewritten before its mark (a sync says
+  `Waiting`). Adoption itself writes no byte: an unchanged graph renders the file as it is.
 - **Pieces.** `saga::import::ops(doc, source)` turns a file into ordered pieces; each piece is one entity
   (`Origin::Imported`, `source = records:<hash of the path>`) whose `body` is the piece's raw text: a plan is its head
   (`plan`), one `task` per task (heading, body and the sections after it) and its tail; a ledger a head and one
@@ -69,37 +74,34 @@ All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well und
   piece: FILE is the file's pieces now, BASE what the hub last wrote or read of each (the digests of its last texts,
   newest first), LIVE the graph's pieces in order. A piece changed on one side takes that side; changed on both to
   different text, or changed in the file back to an older text of the base (a stale editor save), or changed in a
-  user-only field (`saga::proposal::USER_ONLY_FIELDS`), keeps the file's text and is flagged (`Act::Conflict`); a
+  user-only field (`saga::merge::USER_ONLY_FIELDS`), keeps the file's text and is flagged (`Act::Conflict`); a
   piece new in the file is created, one deleted from it retired (flagged when the graph changed it meanwhile); a
   piece new in the graph is placed after its neighbour. An unchanged graph and file render the file byte for byte.
 - **Views.** `saga::view::render` concatenates the pieces in `seq` order: an unchanged graph renders the imported
-  file byte for byte. The hub writes the file back at its path (tmp file + rename) with a one-line header comment,
-  which the importer strips.
+  file byte for byte. The hub writes no header; a file still carrying the old view header loses it at its next write.
 - **Statuses.** `saga::status::normalize` maps a file's word to the graph's (`open running needs-input in-review
   blocked waiting done dropped`): a DEFERRED row's or entry's first status word (`saga::status::normalize_deferred`: `open` is open, `fixed closed done decided mitigated` are `done`, `dropped moot` `dropped`, any other word like `moved` or `kept` stays `open`; `fixed in M2` is `done`), an Org keyword (`STARTED`
   is `running`, `CANCELLED` `dropped`; a keyword of the file's own like `BLOCKED` maps by its word), a plan task by
   its ticks. The raw text stays in the piece's body.
-- **Views follow the graph.** `Views::flush` first writes each piece's graph status into its text
-  (`saga::status::with_status`: a DEFERRED row's status/state cell or an entry's `Status:` bullet word, an Org keyword, a plan task's ticks; a text that
-  already says it, a row of several lines and a keyword of the file's own are left alone), then rewrites the file.
-  The follower (`records::follow`) flushes every view 2 s after the last write of the front's methods; writes by
-  agent tools (their own connection) reach the file at the next such write, a `records/proposals` call or an import.
-- **A hand edit is a proposal.** When the file differs from what the hub last wrote (or, after a restart, from the
-  graph's text), a flush reads it with `saga::proposal::read`: a line diff against the view, one operation per
-  changed piece (its new body, and its status when the new text says another), the parts that map to none
-  (`unmapped`: a piece whose lines were all deleted; a record is never retired by an edit) and the graph version.
-  An inserted line joins the piece before it. The result is a `proposal` entity `proposal:records-<hash>` (one per
-  view; status `open`; `data` holds the ops, the base `ver` of every touched record and the edited text; link
-  `proposes` to the view's head record). The file stays as edited and is not rewritten while the proposal is open
-  (`records/status` shows it as `pending`); a second edit replaces the proposal. Detection happens at a flush (the
-  follower, `records/proposals`, an import), there is no file watcher.
-- **Deciding.** `records/decide` (the user) or the tool `proposal_decide` (a manager or worker, under the matrix's
-  `graph.change`; `proposal_read` shows the diff and ops; an agent reads and decides only proposals about files under its own
-  project's root). Accept applies every op in one transaction if each touched
-  record still has its base version, else the proposal is `stale` (nothing applied; the file is read again at the
-  next flush into a new open proposal); unmapped parts become a `note` related to the record; then the view is
-  rewritten. Reject copies the edited text to `<state>/hub/records-backup/<date>-rejected/` (the file's path
-  below it) and rewrites the view. A manager cannot accept an op on a user-only field
-  (`saga::proposal::USER_ONLY_FIELDS`, now `matrix`: an edited piece with a line `matrix:`); it may reject.
+- **Keeping in step: `Views::sync(path)`.** One function for both directions, under a lock per file. It first writes
+  each piece's graph status into its text (`saga::status::with_status`: a DEFERRED row's status/state cell or an
+  entry's `Status:` bullet word, an Org keyword, a plan task's ticks; a text that already says it, a row of several
+  lines and a keyword of the file's own are left alone). Then it reads the file, parses it, keeps the graph's id for a
+  piece the graph knows by an older id with the same text (`align`: records adopted before the ids were keyed), and
+  merges it with the graph's pieces against the **base** (`saga::merge`, above): the base is, per piece, the digests
+  of the last 8 texts the hub wrote or read (`kv` `records-base:PATH`, kept in memory too). The merge's acts go into
+  one transaction (file edits update records, new pieces are created, deleted ones retired, both-changed ones get
+  `data.records.conflict {file, at}`, and pieces take the merge's order as `seq`); then, when the merged text differs,
+  the file is read again and, if it changed meanwhile, the merge starts over (3 times, then the file is `busy` until
+  the next change); else the text is written (tmp file, `fsync`, rename). The base becomes what was written, except
+  for conflicted pieces, which keep theirs, so they stay flagged and the file keeps its text.
+- **When it runs.** The follower (`records::follow`) syncs every file 300 ms after the last write of the front's
+  methods; `records/status` and an import sync too. Newly flagged records are sent as `records-conflict {path, ids}`.
+- **Resolving.** `records/resolve {id, keep: file|graph}` (the user) or the tool `record_conflict_resolve` (a manager
+  or worker, under the matrix's `graph.change`, only for files under its own project's root; `record_conflict_read` /
+  `records/conflict` show both versions). `file`: the file's text becomes the record's (its status read from it);
+  `graph`: the base takes the file's text, so the next sync sees only the graph changed and writes the graph's version
+  back. Either clears the flag. An agent never keeps a file's change to a user-only field (`saga::merge::USER_ONLY_FIELDS`,
+  now `matrix`); the user may.
 - **Never committed.** The hub runs no git on view files. The files stay modified in the work tree; committing them
   is the user's.

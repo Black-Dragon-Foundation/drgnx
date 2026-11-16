@@ -43,11 +43,16 @@ pub enum Act {
 pub struct Merged {
     pub text: String,
     pub order: Vec<String>,
+    /// Each piece's text, in that order.
+    pub parts: Vec<String>,
     pub acts: Vec<Act>,
     pub conflicts: Vec<String>,
 }
 
-/// The lines of TEXT that set a field only the user may set (`USER_ONLY_FIELDS`), in order.
+/// Fields only the user may set: a file edit that changes one is not applied, it is a conflict the user resolves.
+pub const USER_ONLY_FIELDS: [&str; 1] = ["matrix"];
+
+/// The lines of TEXT that set a field only the user may set ([`USER_ONLY_FIELDS`]), in order.
 fn user_only_lines(text: &str) -> Vec<&str> {
     text.lines()
         .filter(|l| {
@@ -55,12 +60,17 @@ fn user_only_lines(text: &str) -> Vec<&str> {
                 .trim_start()
                 .trim_start_matches(['-', '*', '+', '#', ':', ' '])
                 .to_lowercase();
-            crate::proposal::USER_ONLY_FIELDS.iter().any(|f| {
+            USER_ONLY_FIELDS.iter().any(|f| {
                 t.strip_prefix(f)
                     .is_some_and(|r| r.trim_start().starts_with([':', '=']))
             })
         })
         .collect()
+}
+
+/// TEXT sets a field only the user may set.
+pub fn touches_user_only(text: &str) -> bool {
+    !user_only_lines(text).is_empty()
 }
 
 /// A piece's digest as the base keeps it.
@@ -157,6 +167,6 @@ pub fn merge(file: &[GraphOp], base: &HashMap<String, Base>, live: &[Live]) -> M
         }
     }
     m.text = out.iter().map(|(_, t)| t.as_str()).collect();
-    m.order = out.into_iter().map(|(id, _)| id).collect();
+    (m.order, m.parts) = out.into_iter().unzip();
     m
 }

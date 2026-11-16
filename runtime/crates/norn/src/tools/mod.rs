@@ -321,8 +321,8 @@ pub const CORE_TOOLS: [&str; 9] = [
     "report_submit",
     "plan_read",
     "plan_write",
-    "proposal_read",
-    "proposal_decide",
+    "record_conflict_read",
+    "record_conflict_resolve",
 ];
 
 /// The manager's tools, served on a manager session's socket only (Task 25), each checked by the hub's matrix with
