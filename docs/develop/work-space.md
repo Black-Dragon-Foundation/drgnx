@@ -686,8 +686,11 @@ timer pass (`drgnx-view-hurry`), not after the view's 0.1 s throttle: that throt
    `:duration` 0.16, `:curve 'ease-out`. A window whose picture is not held drops its capture, and the layout jumps
    there; `drgnx-work-map-motion-stats` counts it under `:skipped` (`:legs` counts the layouts that moved).
 4. **End.** A `drgnx-timer-start` keyed `(work-motion-end . VIEW)` takes both parameters off 0.1 s after the leg's
-   duration, so the window is an ordinary one again (Glitnir demotes a window while it holds a capture). A capture whose
-   answer never comes (no hub) goes after a second (`(work-motion-expire . VIEW)`). A new layout during
+   duration, so the window is an ordinary one again (Glitnir demotes a window while it holds a capture). A capture waits for
+   the hub's answer however long it takes (a loaded machine answers in seconds): no timer ends it. The call answers
+   once, with its result or its failure (its deadline, a lost connection), and a call that could not be sent answers
+   at once (`drgnx-work-client-set-then`); a failure takes the captures off (`drgnx-work-map-motion-clear`). (A
+   one-second expiry used to drop the capture under a slow answer: the layout jumped.) A new layout during
    a leg cancels the end and asks for a new capture: Glitnir retargets from the sampled rectangles.
 
 The rectangles are `(X Y W H)` in pixels of the window's text area (`drgnx-work-map--item-rects`): x and w from the
