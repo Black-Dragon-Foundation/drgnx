@@ -257,6 +257,14 @@ other command leaves the ring where it is, a command that leaves the buttons tak
 
 ;;;; Showing it
 
+(defun drgnx-start-put-away (frame)
+  "A folder was opened in FRAME (`drgnx DIR', as `code DIR': the folder and an empty editor): its windows showing the
+page show `*scratch*', and the page does not show itself in FRAME again (`drgnx-start-maybe-show')."
+  (set-frame-parameter frame 'drgnx-start-folder-opened t)
+  (when-let* ((buf (get-buffer drgnx-start-buffer-name)))
+    (dolist (w (get-buffer-window-list buf nil frame))
+      (set-window-buffer w (get-scratch-buffer-create)))))
+
 (defun drgnx-start-dismissed-p ()
   "Non-nil when the user asked not to see the start page again (`:start-dismissed' in face.eld)."
   (and (plist-get (drgnx-face-state-read) :start-dismissed) t))
@@ -301,6 +309,7 @@ Always returns nil, so it can be a hook function."
   (let ((frame (or frame (selected-frame))))
     (condition-case err
         (when-let* (((frame-live-p frame)) ((not (eq (drgnx-state-frame-kind frame) 'child)))
+                    ((not (frame-parameter frame 'drgnx-start-folder-opened)))   ; `drgnx-start-put-away'
                     (window (drgnx-start--window frame))
                     ((window-live-p window)) ((not (window-dedicated-p window)))
                     ((drgnx-start--empty-p window))

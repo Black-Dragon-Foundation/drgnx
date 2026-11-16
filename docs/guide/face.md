@@ -491,7 +491,9 @@ still to come (it goes first), and never by splitting a window, moving focus to 
 anything. It looks at that when drgnx's first window opens (a moment after, once the files you asked for and your saved
 layout are there), when a new window opens on a running drgnx (`emacsclient -c`), when the last
 file tab of the editor closes, and when you close the first-run Welcome (so on a first run the page comes right after
-it). Going to `*scratch*` yourself, with files still open, leaves it alone. In a terminal it
+it). Going to `*scratch*` yourself, with files still open, leaves it alone. A window a folder was opened in from the
+command line (`drgnx DIR`, `drgnx .`) gets no page, as after `code .`: the page goes if it was there, and does not come
+back by itself in that window. In a terminal it
 is the same page in the same place.
 
 **Don't show this again** keeps your choice in `face.eld` in drgnx's state directory (`:start-dismissed`) and puts

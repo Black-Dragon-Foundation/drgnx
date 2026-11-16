@@ -197,7 +197,8 @@ waits for it, and its commands work meanwhile. The right-click menu has
 Open, Close, Close Others, Save All, and for the row's buffer Save, Copy Path, Diff with File and Reveal in Explorer.
 The Explorer's right-click menu also has Reveal in Buffers, Open Folder in Dired and Open in Other Window.
 On a folder's top row it has **Remove Folder from Workspace** (also in the palette): the folder leaves the Explorer,
-nothing on disk changes.
+nothing on disk changes. **Add Folder to Workspace…** (palette) asks for a folder and shows it after the ones the
+Explorer shows; `drgnx DIR` shows DIR alone.
 
 Next Panel Tab (``M-` `` · palette) cycles the panel's tabs; Mode Menu (`C-'` · palette) opens the current major
 mode's menu at the cursor, the menu-bar entry without the menu bar.

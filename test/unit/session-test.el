@@ -287,9 +287,9 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
                 (should (equal (expand-file-name (project-root p)) b))
                 (should (member (expand-file-name "café.py" b) (project-files p)))))
             (should (drgnx-wb-sidebar-showing-p))
-            ;; the other folder: first now, the first one stays
+            ;; the other folder: the only one now, as `code DIR'
             (drgnx-session-open-folder a)
-            (should (equal (drgnx-explorer-roots) (list a b)))
+            (should (equal (drgnx-explorer-roots) (list a)))
             (with-current-buffer (window-buffer (selected-window))
               (should (equal (expand-file-name (project-root (project-current nil))) a))))
         (when (buffer-live-p buf) (kill-buffer buf))
@@ -302,8 +302,8 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
 (ert-deftest drgnx-session/an-opened-folder-replaces-the-folder-drgnx-chose ()
   :tags '(:cond)
   ;; `drgnx DIR' as `code DIR': the folder the Explorer took by itself at the start (the editor's folder, here the
-  ;; home-like H) goes, and the restart does not bring it back; folders the user opened stay; Remove Folder from
-  ;; Workspace takes one out.  Every window showing the Explorer then shows DIR's root row at its top.
+  ;; home-like H) goes, and the restart does not bring it back; so does a folder opened before: DIR is the only one.
+  ;; Add Folder to Workspace adds one; Remove Folder from Workspace takes one out.  Every window showing the Explorer then shows DIR's root row at its top.
   (drgnx-test-with-state
     (let* ((root (file-name-as-directory (make-temp-file "drgnx-session-only" t)))
            (home (file-name-as-directory (expand-file-name "home" root)))
@@ -332,7 +332,9 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
               (should (= (window-start w) (with-current-buffer drgnx-explorer-buffer-name (point-min))))
               (should (equal (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-node-at (window-point w)))
                              (directory-file-name b))))
-            (drgnx-session-open-folder a)                                 ; a folder the user opened stays
+            (drgnx-session-open-folder a)                                 ; the opened folder goes too: one root
+            (should (equal (drgnx-explorer-roots) (list a)))
+            (drgnx-explorer-add-folder b)                                 ; Add Folder to Workspace: a second root
             (should (equal (drgnx-explorer-roots) (list a b)))
             (should (equal (plist-get (drgnx-persist--workbench-state nil) :roots) (list a b)))
             ;; Remove Folder from Workspace on b's root row

@@ -820,15 +820,22 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
   (seq-remove (lambda (r) (member r drgnx-explorer--default-roots)) drgnx-explorer--roots))
 
 (defun drgnx-explorer-open-root (dir)
-  "Make DIR the Explorer's first folder, as `code DIR': the folder it took by itself goes, the ones the user opened
-stay.  Every window showing the Explorer then shows DIR's row at its top."
+  "Make DIR the Explorer's only folder, as `code DIR': every other one goes (`drgnx-explorer-add-folder' adds one).
+Every window showing the Explorer then shows DIR's row at its top."
   (let ((dir (file-name-as-directory (expand-file-name dir))))
-    (drgnx-explorer-set-roots (cons dir (remove dir (drgnx-explorer-chosen-roots))))
+    (drgnx-explorer-set-roots (list dir))
     (with-current-buffer (drgnx-explorer--buffer)
       (goto-char (point-min))
       (dolist (w (get-buffer-window-list (current-buffer) nil t))
         (set-window-start w (point-min))
         (set-window-point w (point-min))))))
+
+(defun drgnx-explorer-add-folder (dir)
+  "Add DIR to the Explorer's folders, after the others (Add Folder to Workspace…): a workspace of several folders."
+  (interactive (list (read-directory-name "Add folder to workspace: " nil nil t)))
+  (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (unless (member dir drgnx-explorer--roots)
+      (drgnx-explorer-set-roots (append drgnx-explorer--roots (list dir))))))
 
 (defun drgnx-explorer-remove-folder ()
   "Remove the folder of the root row here from the Explorer (Remove Folder from Workspace): nothing on disk changes."

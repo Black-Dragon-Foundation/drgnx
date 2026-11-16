@@ -17,6 +17,7 @@
 (declare-function drgnx-wb-view-search "drgnx-wb")
 (declare-function drgnx-wb-focus-editor "drgnx-wb")
 (declare-function drgnx-explorer-setup "drgnx-explorer")
+(declare-function drgnx-explorer-add-folder "drgnx-explorer" (dir))
 (declare-function drgnx-explorer-remove-folder "drgnx-explorer")
 (declare-function drgnx-explorer--root-row-p "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
@@ -231,6 +232,9 @@
                                                  :map 'drgnx-explorer-mode-map :when in-explorer :context 'explorer))
                          ;; A folder of the workspace: its top row's right-click menu.
                          (drgnx-surfaces-define-context 'explorer-root #'drgnx-explorer--root-row-p)
+                         (drgnx-command-define 'explorer-add-folder :category "Explorer" :title "Add Folder to Workspace…"
+                                               :command #'drgnx-explorer-add-folder
+                                               :doc "Show another folder in the Explorer, after the ones it shows (drgnx DIR shows DIR alone)")
                          (drgnx-command-define 'explorer-remove-folder :category "Explorer" :title "Remove Folder from Workspace"
                                                :command #'drgnx-explorer-remove-folder :map 'drgnx-explorer-mode-map
                                                :when in-explorer :context 'explorer-root
