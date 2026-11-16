@@ -8,6 +8,7 @@
 (load (expand-file-name "test/unit/mod-statusbar-test" drgnx-dir) nil t)   ; its fixtures: segments a b c, the store
 (load (expand-file-name "test/unit/mod-topline-test" drgnx-dir) nil t)     ; its fixtures: the line's registry and buffer
 (load (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-menubar" drgnx-dir) nil t)   ; the menu button the row carries
 
 (defvar text-scale-mode-amount)
 (defvar text-scale-mode)
@@ -143,7 +144,7 @@ the attention chip (\"1 needs you\"), the agents chip, then the window controls 
   (drgnx-topline-test--with 'vscode
     (setq-local vc-mode " Git-main")
     (let ((drgnx-notice--needs-you 1) (drgnx-topline-agents-function (lambda () 2))
-          (order '(drgnx-topline-mark drgnx-topline-branch drgnx-topline-search drgnx-topline-attention
+          (order '(drgnx-topline-mark drgnx-topline-search drgnx-topline-attention
                                       drgnx-topline-agents drgnx-topline-minimize drgnx-topline-maximize
                                       drgnx-topline-close)))
       (let* ((items (drgnx-topline--build (current-buffer) 160 t))
@@ -151,7 +152,7 @@ the attention chip (\"1 needs you\"), the agents chip, then the window controls 
         (should (equal (seq-filter (lambda (k) (memq k order)) keys) order))
         (should (string-match-p "1 needs you" (nth 2 (assq 'drgnx-topline-attention items))))
         (should (string-match-p "2" (nth 2 (assq 'drgnx-topline-agents items))))
-        (should (string-match-p "main" (nth 2 (assq 'drgnx-topline-branch items))))
+        (should-not (assq 'drgnx-topline-branch items))
         (should (eq 'drgnx-topline-test-files (nth 3 (assq 'drgnx-topline-search items)))))
       ;; nothing waits and no agent runs: no chips; no drawn title: no controls
       (let* ((drgnx-notice--needs-you 0) (drgnx-topline-agents-function (lambda () 0))
@@ -182,17 +183,25 @@ the attention chip (\"1 needs you\"), the agents chip, then the window controls 
 key as one keycap (it opens the palette), and the attention and agents chips pills on their tints."
   (drgnx-topline-test--with 'vscode
     (cl-letf (((symbol-function 'drgnx-pixels-font-extent) (lambda (&rest _) '(13 . 4)))
-              ((symbol-function 'drgnx-topline--git-root) (lambda (_) "/x/proj/"))
-              ((symbol-function 'drgnx-git-branch) (lambda (_) '(:head "main" :ahead 2 :behind 0))))
+              ((symbol-function 'drgnx-topline--menus-p) (lambda () t)))
       (let* ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten)
              (drgnx-notice--needs-you 1) (drgnx-topline-agents-function (lambda () 2))
              (items (drgnx-topline--build (current-buffer) 160 t 1440))
              (item (lambda (k) (nth 2 (assq k items))))
              (text (lambda (k) (substring-no-properties (funcall item k)))))
         (should (member '(38) (drgnx-look-bars-test--heights (funcall item 'drgnx-topline-mark))))
-        (should (string-match-p "proj" (funcall text 'drgnx-topline-mark)))
-        (should (string-match-p "main ↑2" (funcall text 'drgnx-topline-branch)))
-        (should (memq 'drgnx-chip-quiet (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-branch))))
+        ;; the logo, the menu button, then the project switcher; the branch chip is gone (the status bar has it)
+        (should (string-match-p "proj" (funcall text 'drgnx-topline-project)))
+        (should-not (assq 'drgnx-topline-branch items))
+        (should (assq 'drgnx-topline-menu items))
+        (should (equal (seq-filter (lambda (k) (memq k '(drgnx-topline-mark drgnx-topline-menu drgnx-topline-project
+                                                                            drgnx-topline-search drgnx-topline-attention
+                                                                            drgnx-topline-toggle-sidebar drgnx-topline-toggle-panel
+                                                                            drgnx-topline-toggle-right drgnx-topline-minimize)))
+                                   (mapcar #'car items))
+                       '(drgnx-topline-mark drgnx-topline-menu drgnx-topline-project drgnx-topline-search
+                                            drgnx-topline-attention drgnx-topline-toggle-sidebar drgnx-topline-toggle-panel
+                                            drgnx-topline-toggle-right drgnx-topline-minimize)))
         (should (string-match-p "Search files, commands, symbols" (funcall text 'drgnx-topline-search)))
         ;; the search box is Quick Open (`>' for commands): its keycap the profile's Quick Open key
         (should (string-match-p "Ctrl P" (funcall text 'drgnx-topline-search)))

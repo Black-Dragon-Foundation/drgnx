@@ -27,7 +27,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `brain` | - |
 | `bug` | `modules/extra/drgnx-debug-toolbar.el` |
 | `check` | `modules/tools/drgnx-replace.el`, `modules/ui/drgnx-statusbar.el` |
-| `chevron-down` | `modules/extra/drgnx-debug-console.el`, `modules/extra/drgnx-debug-toolbar.el`, `modules/extra/drgnx-debug-view.el`, `modules/tools/drgnx-replace.el`, `modules/ui/drgnx-look-bridge.el`, `wb/drgnx-explorer.el`, `wb/drgnx-wb.el` |
+| `chevron-down` | `modules/extra/drgnx-debug-console.el`, `modules/extra/drgnx-debug-toolbar.el`, `modules/extra/drgnx-debug-view.el`, `modules/tools/drgnx-replace.el`, `modules/ui/drgnx-look-bridge.el`, `modules/ui/drgnx-topline.el`, `wb/drgnx-explorer.el`, `wb/drgnx-wb.el` |
 | `chevron-left` | - |
 | `chevron-right` | `core/drgnx-palette.el`, `modules/tools/drgnx-replace.el`, `modules/ui/drgnx-look-bridge.el`, `wb/drgnx-explorer.el`, `wb/drgnx-wb.el` |
 | `chevron-up` | - |
@@ -69,11 +69,14 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `list-checks` | `core/drgnx-palette.el` |
 | `lock` | - |
 | `maximize-2` | - |
+| `menu` | - |
 | `message-square` | - |
 | `minimize-2` | - |
 | `minus` | `modules/tools/drgnx-replace.el` |
 | `monitor` | - |
 | `package` | - |
+| `panel-bottom` | - |
+| `panel-left` | - |
 | `panel-right` | `core/drgnx-palette.el` |
 | `pause` | `modules/tools/drgnx-agent-panel-composer.el` |
 | `pencil` | `core/drgnx-palette.el` |

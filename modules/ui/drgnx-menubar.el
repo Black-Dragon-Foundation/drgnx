@@ -217,7 +217,8 @@ On Nidhogg, Left, Right and the pointer over another title move to that menu, un
   (message "Menu bar: %s" drgnx-menubar-visibility))
 
 (defun drgnx-menubar-pick ()
-  "The one button (≡): choose a menu, then open it there."
+  "The menu button (☰): every menu as one list, its submenus opening to the right.  Under the button where a click
+named it, else under the title row's left."
   (interactive)
   (let* ((map (make-sparse-keymap "Menu")))
     (dolist (m (drgnx-menubar-menus))
@@ -275,12 +276,14 @@ them.  Each item is (KEY menu-item TEXT COMMAND :help HELP), the title row's for
 (defun drgnx-menubar-note-click (key x frame)
   "Remember that the title row's item KEY starts at pixel X in FRAME: its menu opens there, and the other titles sit
 beside it."
-  (when-let* ((name (symbol-name key))
-              ((string-prefix-p "drgnx-topline-menu-" name))
-              (id (intern (substring name 19))))
-    (remhash frame drgnx-menubar--titles-x)
-    (when-let* ((span (assq id (drgnx-menubar--spans frame))))
-      (puthash frame (- x (cadr span)) drgnx-menubar--titles-x))))
+  (if (eq key 'drgnx-topline-menu)
+      (puthash frame x drgnx-menubar--titles-x)           ; the menu button: its list opens under it
+    (when-let* ((name (symbol-name key))
+                ((string-prefix-p "drgnx-topline-menu-" name))
+                (id (intern (substring name 19))))
+      (remhash frame drgnx-menubar--titles-x)
+      (when-let* ((span (assq id (drgnx-menubar--spans frame))))
+        (puthash frame (- x (cadr span)) drgnx-menubar--titles-x)))))
 
 ;;;; The menu bar keymap (macOS, Emacs's own menu bar, F10's text menu)
 

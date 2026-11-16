@@ -613,12 +613,12 @@ the string made last, and allocates nothing; a renamed buffer or another project
     (let ((lines 0) (calls nil))
       (cl-letf (((symbol-function 'frame-parameter) (lambda (_f p) (and (eq p 'menu-bar-lines) lines)))
                 ((symbol-function 'tmm-menubar) (lambda (&rest _) (interactive) (push 'tmm calls)))
-                ((symbol-function 'drgnx-menubar-open) (lambda (id &rest _) (push (list 'menubar id) calls)))
+                ((symbol-function 'drgnx-menubar-pick) (lambda (&rest _) (interactive) (push 'pick calls)))
                 ((symbol-function 'menu-bar-open) (lambda (&rest _) (interactive) (push 'open calls))))
-        ;; the menu bar's mode is on with the module: File opens under the title row
+        ;; the menu bar's mode is on with the module: the ☰ list opens under the title row
         (should drgnx-menubar-mode)
         (call-interactively (key-binding (kbd "<f10>")))
-        (should (equal calls '((menubar file))))
+        (should (equal calls '(pick)))
         (setq calls nil)
         (drgnx-menubar-mode -1)
         (call-interactively (key-binding (kbd "<f10>")))
