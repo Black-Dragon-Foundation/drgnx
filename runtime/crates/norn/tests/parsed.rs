@@ -1018,7 +1018,7 @@ fn importer_plan(c: &mut Connection, file: &str) {
             body: None,
             priority: None,
             assignee: None,
-            data: json!({"records": {"file": file}}),
+            data: json!({"records": {"file": file, "role": "head"}}),
             origin: Origin::Recorded,
             source: None,
         },
@@ -1065,4 +1065,216 @@ fn a_plan_the_importer_holds_is_not_stored_again_from_the_scan() {
         json!({"updates": [{"id": format!("task:{}#1", f.plan), "status": "done"}]}),
     );
     assert!(a.refused.is_empty(), "{a:?}");
+}
+
+fn live_links(c: &Connection) -> Vec<(String, String, String)> {
+    let mut st = c
+        .prepare(
+            "select a.id, l.kind, b.id from link l join entity a on a.n = l.src join entity b on b.n = l.dst \
+             where l.tx_to = ?1 and a.retired_tx is null and b.retired_tx is null order by 1, 2, 3",
+        )
+        .unwrap();
+    st.query_map([urdr::graph::schema::SENTINEL], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    })
+    .unwrap()
+    .map(Result::unwrap)
+    .collect()
+}
+
+/// The copy-shaped case: the scanner's plan, task, a commit of its ledger, a branch and a ruling, with their links; then
+/// the importer holds the file.  Every link of the scanner's entities is on the importer's after the next scan.
+#[test]
+fn the_links_of_the_scanners_entities_move_to_the_importers_before_they_retire() {
+    let f = fx();
+    let mut c = db();
+    put(&mut c, &f.deny, json!({"sources": [plan_source(&f.plan)]}));
+    let ledger = format!("{}.ledger.md", f.plan.trim_end_matches(".md"));
+    {
+        let mut tx = Tx::for_test(&mut c, scan(), guard());
+        let mk = |tx: &mut Tx<'_>, id: &str, kind: &str, data: Value| {
+            entity::create(
+                tx,
+                EntityNew {
+                    id: id.into(),
+                    kind: kind.into(),
+                    project: None,
+                    title: Some(id.into()),
+                    status: None,
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data,
+                    origin: Origin::Parsed,
+                    source: Some(kind.into()),
+                },
+            )
+            .unwrap()
+            .n
+        };
+        let plan = entity::by_id(tx.sql(), &format!("plan:{}", f.plan))
+            .unwrap()
+            .unwrap()
+            .n;
+        let task = entity::by_id(tx.sql(), &format!("task:{}#1", f.plan))
+            .unwrap()
+            .unwrap()
+            .n;
+        let commit = mk(
+            &mut tx,
+            "commit:abc1234abc1234abc1234abc1234abc1234abcd",
+            "commit",
+            json!({}),
+        );
+        let branch = mk(&mut tx, "branch:/r/.git:feat", "branch", json!({}));
+        let ruling = mk(&mut tx, "ruling:ledger#7", "ruling", json!({}));
+        urdr::graph::link::add(
+            &mut tx,
+            commit,
+            "implements",
+            task,
+            None,
+            Origin::Inferred,
+            Some(&ledger),
+        )
+        .unwrap();
+        urdr::graph::link::add(
+            &mut tx,
+            plan,
+            "on_branch",
+            branch,
+            None,
+            Origin::Inferred,
+            Some("branch"),
+        )
+        .unwrap();
+        urdr::graph::link::add(
+            &mut tx,
+            task,
+            "parent_of",
+            ruling,
+            None,
+            Origin::Parsed,
+            Some(&ledger),
+        )
+        .unwrap();
+        tx.commit_for_test().unwrap();
+    }
+    let before = live_links(&c);
+    let kinds = |ls: &[(String, String, String)], k: &str| ls.iter().filter(|l| l.1 == k).count();
+    assert_eq!(kinds(&before, "implements"), 1);
+    importer_plan(&mut c, &f.plan);
+    {
+        let mut tx = Tx::for_test(
+            &mut c,
+            TxMeta::new("user", Class::User, "records/import"),
+            guard(),
+        );
+        entity::create(
+            &mut tx,
+            EntityNew {
+                id: "task:rec-38377cd08b08-111111111111".into(),
+                kind: "task".into(),
+                project: None,
+                title: Some("1 one".into()),
+                status: Some("open".into()),
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({"number": "1", "records": {"file": f.plan, "role": "task"}}),
+                origin: Origin::Imported,
+                source: None,
+            },
+        )
+        .unwrap();
+        tx.commit_for_test().unwrap();
+    }
+    put(&mut c, &f.deny, json!({"sources": [plan_source(&f.plan)]}));
+    let after = live_links(&c);
+    assert!(
+        after.contains(&(
+            "commit:abc1234abc1234abc1234abc1234abc1234abcd".into(),
+            "implements".into(),
+            "task:rec-38377cd08b08-111111111111".into()
+        )),
+        "{after:?}"
+    );
+    assert!(
+        after.contains(&(
+            "plan:rec-38377cd08b08-12cc5f9a0c03".into(),
+            "on_branch".into(),
+            "branch:/r/.git:feat".into()
+        )),
+        "{after:?}"
+    );
+    assert!(
+        after.contains(&(
+            "task:rec-38377cd08b08-111111111111".into(),
+            "parent_of".into(),
+            "ruling:ledger#7".into()
+        )),
+        "{after:?}"
+    );
+    for k in ["implements", "on_branch"] {
+        assert_eq!(kinds(&after, k), kinds(&before, k), "{k}");
+    }
+}
+
+fn count_links(c: &Connection, sql: &str) -> i64 {
+    c.query_row(sql, [urdr::graph::schema::SENTINEL], |r| r.get(0))
+        .unwrap()
+}
+
+/// Against a COPY of a real work.db (`DRGNX_WORKDB_COPY`, never the live one): one empty scan runs the migration, and
+/// the live links by kind, plans, tasks and steps are printed before and after.  Nothing is lost when no kind of link
+/// gets fewer.
+#[test]
+#[ignore = "needs a copy of a real work.db in DRGNX_WORKDB_COPY"]
+fn a_copy_of_the_real_store_loses_no_link() {
+    let path = std::env::var("DRGNX_WORKDB_COPY").expect("DRGNX_WORKDB_COPY");
+    let mut c = Connection::open(path).unwrap();
+    let snap = |c: &Connection| {
+        let mut st = c
+            .prepare(
+                "select l.kind, count(*) from link l join entity a on a.n = l.src join entity b on b.n = l.dst \
+                 where l.tx_to = ?1 and a.retired_tx is null and b.retired_tx is null group by 1 order by 1",
+            )
+            .unwrap();
+        let links: Vec<(String, i64)> = st
+            .query_map([urdr::graph::schema::SENTINEL], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let ents: Vec<(String, i64)> = c
+            .prepare("select kind, count(*) from entity where retired_tx is null and kind in ('plan','spec','task','step') group by 1 order by 1")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        (links, ents)
+    };
+    let before = snap(&c);
+    let deny = DenyList::load(Path::new("/nonexistent"), Path::new("/nonexistent"));
+    let mut tx = Tx::for_test(&mut c, scan(), guard());
+    parsed::put(
+        &mut tx,
+        &deny,
+        serde_json::from_value(json!({"sources": []})).unwrap(),
+    )
+    .unwrap();
+    tx.commit_for_test().unwrap();
+    let after = snap(&c);
+    println!(
+        "BEFORE links {:?}\nBEFORE entities {:?}\nAFTER links {:?}\nAFTER entities {:?}",
+        before.0, before.1, after.0, after.1
+    );
+    for (k, n) in &before.0 {
+        let now = after.0.iter().find(|(a, _)| a == k).map_or(0, |x| x.1);
+        if k != "parent_of" {
+            assert!(now >= *n, "{k}: {n} -> {now}");
+        }
+    }
 }

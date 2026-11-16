@@ -429,6 +429,138 @@ fn live_n(tx: &Tx<'_>, id: &str) -> Result<Option<i64>, WriteError> {
 }
 
 /// Retire every live entity whose source is SOURCE (except KEEP); how many.
+/// Before the scanner's entities of a file the importer holds are retired, their links move to the importer's: the
+/// scanner's `plan:/F` to the importer's plan head of F, `spec:/F` to its spec, `task:/F#N` to its task numbered N (a
+/// commit's `implements`, a plan's `on_branch`, a ruling's `parent_of`, whatever a link of any kind says, with its data,
+/// origin and source).  A link between two scanner entities is the importer's own structure and is not copied; a step
+/// has no counterpart (the importer keeps steps in the task's data).  Then the scanner's entities are retired, all of
+/// them, so none is left half-migrated.
+fn migrate_legacy(tx: &mut Tx<'_>, held: &HashSet<String>) -> Result<(), WriteError> {
+    if held.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<(i64, String, String)> = {
+        let mut st = tx.sql().prepare(
+            "select n, id, kind from entity where retired_tx is null and kind in ('plan', 'spec', 'task', 'step') \
+             and id like '%:/%'",
+        )?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<_, _>>()?
+    };
+    let legacy: Vec<(i64, String, String, String)> = rows
+        .into_iter()
+        .filter_map(|(n, id, kind)| {
+            let file = legacy_file(&id, &kind)?.to_string();
+            held.contains(&file).then_some((n, id, kind, file))
+        })
+        .collect();
+    if legacy.is_empty() {
+        return Ok(());
+    }
+    // each scanner entity's importer counterpart, where it has one
+    let mut ours: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    for (n, id, kind, file) in &legacy {
+        let found: Option<i64> = match kind.as_str() {
+            "plan" | "spec" => tx
+                .sql()
+                .query_row(
+                    // the file's head piece, whatever the importer made of it (a plan a plan names as its spec is
+                    // a plan to the importer)
+                    "select n from entity where retired_tx is null and id like '%:rec-%' \
+                     and json_extract(data, '$.records.file') = ?1 and json_extract(data, '$.records.role') = 'head' \
+                     order by (kind = ?2) desc",
+                    [file.as_str(), kind.as_str()],
+                    |r| r.get(0),
+                )
+                .map(Some)
+                .or_else(none_if_absent)?,
+            "task" => match id.rsplit_once('#') {
+                Some((_, number)) => tx
+                    .sql()
+                    .query_row(
+                        "select n from entity where retired_tx is null and kind = 'task' and id like 'task:rec-%' \
+                         and json_extract(data, '$.records.file') = ?1 and json_extract(data, '$.number') = ?2",
+                        [file.as_str(), number],
+                        |r| r.get(0),
+                    )
+                    .map(Some)
+                    .or_else(none_if_absent)?,
+                None => None,
+            },
+            _ => None,
+        };
+        if let Some(t) = found {
+            ours.insert(*n, t);
+        }
+    }
+    let legacy_ns: HashSet<i64> = legacy.iter().map(|l| l.0).collect();
+    for (n, ..) in &legacy {
+        let Some(&theirs) = ours.get(n) else {
+            continue;
+        };
+        let links: Vec<(i64, String, i64, Option<String>, String, Option<String>)> = {
+            let mut st = tx.sql().prepare(
+                "select src, kind, dst, data, origin, source from link where tx_to = ?1 and (src = ?2 or dst = ?2)",
+            )?;
+            st.query_map((SENTINEL, *n), |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            })?
+            .collect::<Result<_, _>>()?
+        };
+        for (src, lkind, dst, data, origin, source) in links {
+            let other = if src == *n { dst } else { src };
+            // the other end: its own counterpart when it is a scanner entity too (none: a step, whose link is dropped)
+            let other = if legacy_ns.contains(&other) {
+                match ours.get(&other) {
+                    Some(o) => *o,
+                    None => continue,
+                }
+            } else {
+                other
+            };
+            let (from, to) = if src == *n {
+                (theirs, other)
+            } else {
+                (other, theirs)
+            };
+            let origin = match origin.as_str() {
+                "parsed" => Origin::Parsed,
+                "inferred" => Origin::Inferred,
+                "imported" => Origin::Imported,
+                _ => Origin::Recorded,
+            };
+            // an end retired meanwhile cannot take a link: that link was dead already
+            let _ = link::add(
+                tx,
+                from,
+                &lkind,
+                to,
+                data.and_then(|d| serde_json::from_str(&d).ok()),
+                origin,
+                source.as_deref(),
+            );
+        }
+    }
+    for (n, ..) in &legacy {
+        entity::retire(tx, *n)?;
+    }
+    Ok(())
+}
+
+fn none_if_absent<T>(e: urdr::SqliteError) -> Result<Option<T>, urdr::SqliteError> {
+    match e {
+        urdr::SqliteError::QueryReturnedNoRows => Ok(None),
+        e => Err(e),
+    }
+}
+
 /// The file a scanner-made entity (id `plan:/ABS`, `spec:/ABS`, `task:/ABS#N`, `step:/ABS#N.M`) is of, else none.
 fn legacy_file<'a>(id: &'a str, kind: &str) -> Option<&'a str> {
     if !matches!(kind, "plan" | "spec" | "task" | "step") {
@@ -700,6 +832,7 @@ pub fn put_with(
     // and `step:/abs/path#N.M`, would be a second copy of one file on the map.  They are left out of the request (with
     // the links and updates that name them), and `retire_source` below retires the ones stored.
     let held = importer_files(tx)?;
+    migrate_legacy(tx, &held)?;
     let mut dropped: HashSet<String> = HashSet::new();
     if !held.is_empty() {
         for s in accepted.iter_mut() {
