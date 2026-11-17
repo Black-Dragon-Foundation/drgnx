@@ -12,6 +12,9 @@
   (load (expand-file-name (concat "modules/" m) drgnx-code-ui-test--repo) nil t))
 (load (expand-file-name "test/fixtures/ui-hub-fixture" drgnx-code-ui-test--repo) nil t)   ; sticky's Lisp scopes are the hub's
 
+(defvar indent-bars--needs-cleanup)
+(declare-function indent-bars--schedule-remap-cleanup "indent-bars")
+
 (defconst drgnx-code-ui-test--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
 
 (ert-deftest drgnx-ui-code/sticky-guides-smooth ()
@@ -45,7 +48,14 @@
           (let ((shot (plist-get (drgnx-uitest-capture dir) :root)))
             (should (file-exists-p shot))
             (copy-file shot (expand-file-name "code-editing.png" temporary-file-directory) t)
-            (message "code editing screenshot: %s" (expand-file-name "code-editing.png" temporary-file-directory))))
+            (message "code editing screenshot: %s" (expand-file-name "code-editing.png" temporary-file-directory)))
+          ;; killed with the guides on: indent-bars' remap cleanup, pending (a window change schedules it), goes with
+          ;; the buffer, not left holding it
+          (when guides
+            (with-current-buffer buf (setq indent-bars--needs-cleanup nil) (indent-bars--schedule-remap-cleanup))
+            (should (seq-find (lambda (tm) (drgnx-guides--cleanup-timer-p tm buf)) timer-idle-list))
+            (kill-buffer buf)
+            (should-not (seq-find (lambda (tm) (drgnx-guides--cleanup-timer-p tm t)) timer-idle-list))))
       (when (buffer-live-p buf) (kill-buffer buf))
       (dolist (w (window-list root)) (set-window-parameter w 'indent-bars-whr nil))   ; indent-bars' per-window cache
       (drgnx-ui-hub-stop)
