@@ -518,6 +518,9 @@ struct St {
     /// oldest go past [`ENDED_KEPT`].
     ended: BTreeMap<String, (u64, forseti::Verdict)>,
     ended_seq: u64,
+    /// The jobs here whose slice couldn't be read, said once each; and how many times that was said.
+    unread: BTreeSet<String>,
+    unread_said: u32,
     drr: Drr,
     attempts: attempts::Core,
     runners: BTreeMap<String, Remote>,
@@ -823,7 +826,13 @@ pub struct Queue {
     keys: Arc<Keys>,
     /// The logs of keyed attempts, redacted as they are written (by attempt).
     redact: Mutex<HashMap<(String, u32), Redacting>>,
+    /// What each job here uses (MiB), read at each tick ([`Queue::read_local_use`]); none: the jobs here count as
+    /// using nothing beyond their reservations.
+    local_use: Mutex<Option<LocalUse>>,
 }
+
+/// The reader of a job's use on this machine, by job id: its slice's memory less page cache, in MiB.
+pub type LocalUse = Box<dyn Fn(&str) -> Option<u64> + Send + Sync>;
 
 /// The log file of attempt R of a job whose current attempt is CURRENT.
 fn log_file(root: &std::path::Path, r: &JobRef, late: bool) -> PathBuf {
@@ -1037,6 +1046,7 @@ impl Queue {
             wake: tokio::sync::Notify::new(),
             keys: Arc::default(),
             redact: Mutex::default(),
+            local_use: Mutex::default(),
         };
         (Arc::new(q), rx)
     }
@@ -1658,6 +1668,39 @@ impl Queue {
         }
     }
 
+    /// Count what each job here uses from now on, as READ says (design §0.3 R2, C1): the hub gives its jobs' slices.
+    pub fn read_local_use(&self, read: LocalUse) {
+        *self.local_use.lock().unwrap() = Some(read);
+    }
+
+    /// Each running job here counts what its slice uses now: a job whose slice can't be read counts its whole
+    /// reservation, and the queue says so once for it.
+    fn count_local_use(&self, st: &mut St) {
+        let read = self.local_use.lock().unwrap();
+        let Some(read) = read.as_ref() else { return };
+        let St {
+            local_running,
+            unread,
+            unread_said,
+            ..
+        } = st;
+        for (id, rj) in local_running.iter_mut() {
+            rj.current_mib = match read(id) {
+                Some(mib) => mib,
+                None => {
+                    if unread.insert(id.clone()) {
+                        *unread_said += 1;
+                        tracing::warn!(
+                            "runners: job {id}'s slice can't be read; it counts its whole reservation"
+                        );
+                    }
+                    rj.reserve_mib
+                }
+            };
+        }
+        unread.retain(|id| local_running.contains_key(id));
+    }
+
     /// Whether a job of SPEC (its name the job's id) may need what it names: each a job the queue holds or saw end,
     /// and none that waits on it (a cycle, named in order from the new job). The error is in the user's words.
     pub fn check_needs(&self, spec: &JobSpec) -> Result<(), String> {
@@ -2106,6 +2149,8 @@ impl Queue {
     pub fn tick(&self, now: u64) -> Ticked {
         let mut st = self.lock();
         let mut t = Ticked::default();
+        // what the jobs here use now, from their slices: admission's budget and eviction read it
+        self.count_local_use(&mut st);
         for (job, attempt) in st.attempts.graces_due(now) {
             let effects = st.attempts.step(
                 now,

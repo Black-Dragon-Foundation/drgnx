@@ -68,6 +68,13 @@ pub fn stop(slice: &str) -> Result<(), String> {
     run::systemctl_ok(&["stop", "--no-block", slice]).map(|_| ())
 }
 
+/// A job's SLICE once the job ended: stopped, and the properties [`set`] gave it dropped (`revert` removes the
+/// runtime drop-ins, which would otherwise pile up until the next boot, one per job).
+pub fn forget(slice: &str) -> Result<(), String> {
+    stop(slice)?;
+    run::systemctl_ok(&["revert", slice]).map(|_| ())
+}
+
 /// Pins SLICE (under the user manager's cgroup MANAGER) to CPUS (a kernel CPU list; empty: every CPU again). Every
 /// running and new container under it follows at once. BY_SYSTEMD says whether systemd applies `AllowedCPUs` here;
 /// when it does not, the property is still set (it takes over after a re-exec) and the delegated files are written

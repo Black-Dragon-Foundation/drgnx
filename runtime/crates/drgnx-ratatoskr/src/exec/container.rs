@@ -79,9 +79,12 @@ pub fn resolve<'a>(caps: &'a Caps, name: &str) -> Result<&'a str, Refusal> {
     podman::resolve(caps, name).map_err(|r| refuse(r.message))
 }
 
-/// The placement of the hub's own jobs: `drgnx-job-<id>`, no parent slice, labelled with the hub's OWNER tag.
-pub fn placement(owner: &str) -> podman::RunnerArgs {
-    podman::RunnerArgs::local(owner)
+/// The placement of the hub's own jobs: `drgnx-job-<id>`, labelled with the hub's OWNER tag, in SLICE (the job's
+/// `drgnx-job-<id>.slice`, beside its scope) when systemd runs the jobs.
+pub fn placement(owner: &str, slice: Option<&str>) -> podman::RunnerArgs {
+    let mut p = podman::RunnerArgs::local(owner);
+    p.cgroup_parent = slice.map(String::from);
+    p
 }
 
 /// This hub's tag in container names and labels: the 8 hex of its socket's name (`hub-<tag>.sock`), which the hash of
@@ -101,9 +104,14 @@ pub fn tag_of(socket: &Path) -> String {
 }
 
 /// The `podman run` arguments (without the program) for REQ under CAPS: the shared builder with the hub's own
-/// placement ([`placement`] of OWNER).
-pub fn argv(req: &ContainerReq, caps: &Caps, owner: &str) -> Result<Vec<OsString>, Refusal> {
-    podman::argv(req, caps, &placement(owner)).map_err(|r| refuse(r.message))
+/// placement ([`placement`] of OWNER, in SLICE).
+pub fn argv(
+    req: &ContainerReq,
+    caps: &Caps,
+    owner: &str,
+    slice: Option<&str>,
+) -> Result<Vec<OsString>, Refusal> {
+    podman::argv(req, caps, &placement(owner, slice)).map_err(|r| refuse(r.message))
 }
 
 /// The refusal for a hub that found no `podman` on its PATH at start.

@@ -85,13 +85,20 @@ pub fn unit_name(id: &str) -> String {
     format!("drgnx-exec-{id}")
 }
 
-/// Wrap INNER (the starter's launch, or the bare command) in the logging shell and, with `unit`, in a transient scope
-/// with `MemoryMax=MEMORY`.  The child leads a session of its own either way.  NICE runs the command under `nice -n`
-/// (a scope takes no `Nice=`; the same line works with and without a unit).
+/// The slice of job ID on this machine, `drgnx-job-<id>.slice` (its letters and digits): its scope and its containers
+/// run in it, so its `memory.current` is the job's true use (design §0.3 R2).
+pub fn job_slice_name(id: &str) -> String {
+    let plain: String = id.chars().filter(char::is_ascii_alphanumeric).collect();
+    format!("drgnx-job-{plain}.slice")
+}
+
+/// Wrap INNER (the starter's launch, or the bare command) in the logging shell and, with `unit` (name, memory,
+/// slice), in a transient scope with `MemoryMax=MEMORY` inside SLICE.  The child leads a session of its own either way.
+/// NICE runs the command under `nice -n` (a scope takes no `Nice=`; the same line works with and without a unit).
 pub fn wrap(
     inner: Spec,
     dir: &Path,
-    unit: Option<(&str, &str)>,
+    unit: Option<(&str, &str, &str)>,
     nice: Option<i8>,
     shell: &crate::shell_env::ShellEnv,
 ) -> Spec {
@@ -103,7 +110,7 @@ pub fn wrap(
 pub fn wrap_to_hub(
     inner: Spec,
     dir: &Path,
-    unit: Option<(&str, &str)>,
+    unit: Option<(&str, &str, &str)>,
     nice: Option<i8>,
     shell: &crate::shell_env::ShellEnv,
 ) -> Spec {
@@ -114,13 +121,13 @@ fn wrap_with(
     script: &str,
     inner: Spec,
     dir: &Path,
-    unit: Option<(&str, &str)>,
+    unit: Option<(&str, &str, &str)>,
     nice: Option<i8>,
     shell: &crate::shell_env::ShellEnv,
 ) -> Spec {
     let mut args: Vec<OsString> = Vec::new();
     let program = match unit {
-        Some((name, memory)) => {
+        Some((name, memory, slice)) => {
             for a in [
                 "--user",
                 "--scope",
@@ -128,6 +135,7 @@ fn wrap_with(
                 "--collect",
                 "--unit",
                 name,
+                &format!("--slice={slice}"),
                 "-p",
                 &format!("MemoryMax={memory}"),
                 "--",

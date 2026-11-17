@@ -228,6 +228,26 @@ impl LocalRunner {
     }
 }
 
+/// What a job here uses, in MiB: its SLICE's `memory.current` less its page cache, under the user manager's cgroup
+/// MANAGER; none when the slice can't be read (design §0.3 R2).
+#[cfg(target_os = "linux")]
+pub fn slice_used_mib(manager: &Path, slice: &str) -> Option<u64> {
+    let dir = manager.join(sleipnir::linux::probe::slice_path(slice));
+    let s = sleipnir::linux::probe::CgroupStat::read(&dir).ok()?;
+    Some(s.current.saturating_sub(s.file) >> 20)
+}
+
+/// The reader of the hub's own jobs' use the queue counts ([`crate::runners::queue::Queue::read_local_use`]): each
+/// job's slice under this process's user manager.
+#[cfg(target_os = "linux")]
+pub fn local_use() -> Box<dyn Fn(&str) -> Option<u64> + Send + Sync> {
+    let uid = rustix::process::getuid().as_raw();
+    let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let manager =
+        Path::new("/sys/fs/cgroup").join(sleipnir::linux::probe::manager_cgroup(&own, uid));
+    Box::new(move |id| slice_used_mib(&manager, &crate::exec::unit::job_slice_name(id)))
+}
+
 /// A machine with nothing read but what runs: the count admission's.
 fn counted(running: &[RunningJob], last: LastStart, now: u64) -> MachineState {
     MachineState {
