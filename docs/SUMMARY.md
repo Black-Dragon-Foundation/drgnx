@@ -120,5 +120,7 @@
     - [Key hint (kit)](design/components/key-hint.md)
     - [Section header (kit)](design/components/section-header.md)
     - [Card (kit)](design/components/card.md)
+    - [Agent mark (kit)](design/components/agent-mark.md)
+    - [Progress (kit)](design/components/progress.md)
 - [The app icon](design/app-icon.md)
 - [Writing a theme for drgnx](design/theme-authors.md)

@@ -145,9 +145,10 @@
                  '(drgnx-kit-zz-probe-loud :background "accent-fill" :foreground "on-accent"))))
 
 (ert-deftest drgnx-ui-kit/third-party-theme-styles-every-kit-face ()
-  ;; a theme that knows nothing of drgnx still gives every kit face that has colours a fill or a ring, through the
-  ;; standard faces it inherits: checked on the real faces, and on the fixture's specs (the real file may have few
-  ;; faces yet).  A binding with no colours (the row's: the UI font, on the surface's own fill) is exempt.
+  ;; a theme that knows nothing of drgnx still gives every kit face that has colours a fill or a ring (one that has only
+  ;; a text colour, a progress ring's: a text colour), through the standard faces it inherits: checked on the real
+  ;; faces, and on the fixture's specs (the real file may have few faces yet).  A binding with no colours (the row's: the
+  ;; UI font, on the surface's own fill) is exempt.
   (dolist (theme '(modus-vivendi doom-one-fixture))
     (unwind-protect
         (progn
@@ -156,13 +157,16 @@
           (dolist (f (append (drgnx-ui-kit-face-bindings) (drgnx-ui-kit-face-bindings ui-kit-test--fixture)))
             (when-let* ((inherit (plist-get (nth 2 f) :inherit))
                         ((seq-some (lambda (k) (plist-get (nth 2 f) k)) '(:bg :fg :edge))))
-              (should (cl-some (lambda (parent)
-                                 (or (drgnx-face-color parent :background 'gui)
-                                     (plist-get (drgnx-faces--clause-plist parent 'gui) :box)))
-                               inherit))
-              (when (facep (car f))
-                (should (or (drgnx-face-color (car f) :background 'gui)
-                            (plist-get (drgnx-faces--clause-plist (car f) 'gui) :box)))))))
+              (if (seq-some (lambda (k) (plist-get (nth 2 f) k)) '(:bg :edge))
+                  (progn
+                    (should (cl-some (lambda (parent)
+                                       (or (drgnx-face-color parent :background 'gui)
+                                           (plist-get (drgnx-faces--clause-plist parent 'gui) :box)))
+                                     inherit))
+                    (when (facep (car f))
+                      (should (or (drgnx-face-color (car f) :background 'gui)
+                                  (plist-get (drgnx-faces--clause-plist (car f) 'gui) :box)))))
+                (should (cl-some (lambda (parent) (drgnx-face-color parent :foreground 'gui)) inherit))))))
       (mapc #'disable-theme custom-enabled-themes))))
 
 ;;;; The expansion: one with the hub's (test/fixtures/kit, runtime/crates/drgnx-rows/tests/kit_conformance.rs)
@@ -623,6 +627,76 @@
       ;; the twisty (image or glyph) in the subtle role, the icon in the row's colours (the mockups' chevrons)
       (should (equal (funcall subtle e) '((1 2))))
       (should (equal (funcall subtle plain) '((1 2)))))))
+
+;; Agent marks and progress (Task 15)
+(ert-deftest drgnx-ui-kit/progress-has-its-percent-label ()
+  ;; a bar's and a ring's label is "N percent" (rounded half up), on their whole text; a bar is its fill, then the
+  ;; track, and on a terminal its cells between edges
+  (pcase-dolist (`(,kind ,value ,word) '((bar 0.425 "43 percent") (ring 0.6 "60 percent") (bar 0 "0 percent")))
+    (let ((e (drgnx-ui-kit-expand 'progress (list :c "progress" :kind (symbol-name kind) :value value :width 80) 1.0 nil)))
+      (should (equal (list kind word) (list kind (aref (aref (plist-get e :props) 0) 3))))
+      (should (equal "help-echo" (aref (aref (plist-get e :props) 0) 2)))))
+  (let ((e (drgnx-ui-kit-expand 'progress '(:c "progress" :kind "bar" :value 0.25 :width 80) 1.0 nil)))
+    (should (equal [[0 20 4] [1 60 4]] (plist-get e :spaces)))
+    (should (equal [[0 1 "drgnx-kit-progress-fill"] [1 2 "drgnx-kit-progress"]] (plist-get e :runs))))
+  (let ((drgnx-face-glyphs drgnx-ui--default-glyphs))
+    ;; ten cells: three full; 0.35 is three and a half (a half block), on ASCII rounded to four
+    (should (equal "███░░░░░░░" (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.3 :width 80) 1.0 t) :text)))
+    (should (equal "███▌░░░░░░"
+                   (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.35 :width 80) 1.0 t) :text)))
+    (should (equal "[####------]"
+                   (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.35 :width 80) 1.0 'ascii) :text)))
+    (should (equal "2" (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :kind "ring" :value 0.5) 1.0 'ascii) :text)))))
+
+(ert-deftest drgnx-ui-kit/bar-parts-are-images ()
+  ;; a progress bar's parts (spaces of a height in the bar's faces) are drawn as images in `currentColor', the fill's
+  ;; start and the track's end rounded, the joint square; a space of a height in another face stays a space
+  (skip-unless (image-type-available-p 'svg))
+  (let* ((d (drgnx-ui-kit-bar-display '((0 72 4) (1 48 4) (3 10 16))
+                                      '((0 1 "drgnx-kit-progress-fill") (1 2 drgnx-kit-progress) (3 4 "drgnx-explorer-guide"))
+                                      1.0))
+         (fill (cdr (assq 0 d))) (track (cdr (assq 1 d))))
+    (should (equal '(0 1) (sort (mapcar #'car d) #'<)))
+    (should (eq 'image (car fill)))
+    (should (eq 'center (plist-get (cdr fill) :ascent)))
+    (should (string-search "width=\"72\" height=\"4\"" (plist-get (cdr fill) :data)))
+    (should (string-search "fill=\"currentColor\"" (plist-get (cdr fill) :data)))
+    (should (string-search "rx=\"2\"" (plist-get (cdr fill) :data)))
+    ;; the fill's end and the track's start are joined: square there
+    (should (string-search "<rect x=\"36.0\"" (plist-get (cdr fill) :data)))
+    (should-not (string-search "<rect width=\"36.0\"" (plist-get (cdr fill) :data)))
+    (should (string-search "<rect width=\"24.0\"" (plist-get (cdr track) :data)))))
+
+(ert-deftest drgnx-ui-kit/agent-mark-is-its-agents-colour ()
+  ;; the handle on its agent's colour: the kit face (inverse video) over the agent's face, pads either side; "[H]" in
+  ;; the colour on a terminal; its label "agent H"
+  (let ((e (drgnx-ui-kit-expand 'agent-mark '(:c "agent-mark" :slot 3 :handle "Q") 1.0 nil)))
+    (should (equal " Q " (plist-get e :text)))
+    (should (equal [[0 3 "drgnx-kit-agent-mark"] [0 3 "drgnx-agent-3"]] (plist-get e :runs)))
+    (should (equal [[0 5 0] [2 5 0]] (plist-get e :spaces)))
+    (should (equal [[0 3 "help-echo" "agent Q"]] (plist-get e :props))))
+  (should (face-attribute 'drgnx-kit-agent-mark :inverse-video nil t))
+  (let ((e (drgnx-ui-kit-expand 'agent-mark '(:c "agent-mark" :slot 12 :handle "Qx") 1.0 t)))
+    (should (equal "[Qx]" (plist-get e :text)))
+    (should (equal [[0 4 "drgnx-agent-12"]] (plist-get e :runs)))))
+
+(ert-deftest drgnx-ui-kit/agent-cursors-still-move ()
+  ;; the agent cursors live in their own file now (decor keeps the chips, buttons and cards): put, moved at once and
+  ;; batched, removed
+  (load (expand-file-name "modules/ui/drgnx-decor" drgnx-dir) nil t)
+  (load (expand-file-name "modules/ui/drgnx-agent-cursors" drgnx-dir) nil t)
+  (should (featurep 'drgnx-agent-cursors))
+  (should-not (fboundp 'drgnx-decor-cursor-put))
+  (with-temp-buffer
+    (insert (make-string 20 ?x))
+    (let ((ov (drgnx-agent-cursor-put (current-buffer) 'a 2 "#123456" "A")))
+      (unwind-protect
+          (progn
+            (drgnx-agent-cursor-move-now (current-buffer) 'a 9)
+            (should (= 9 (overlay-start ov)))
+            (should (eq ov (drgnx-agent-cursor-overlay (current-buffer) 'a))))
+        (drgnx-agent-cursor-remove (current-buffer) 'a)))
+    (should-not (drgnx-agent-cursor-overlay (current-buffer) 'a))))
 
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

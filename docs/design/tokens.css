@@ -69,6 +69,7 @@ html.ayu {
   --drgnx-key-hint-edge: #6b6e7a;
   --drgnx-card-needs-you-edge: #ff9566;
   --drgnx-progress-track: #212228;
+  --drgnx-progress-fill: #7aa5ff;
 }
 /* light */
 :root[data-theme="light"],
@@ -138,6 +139,7 @@ html.rust {
   --drgnx-key-hint-edge: #898c97;
   --drgnx-card-needs-you-edge: #b8461a;
   --drgnx-progress-track: #e9eaee;
+  --drgnx-progress-fill: #2c5fd4;
 }
 /* hc */
 :root[data-theme="hc"] {
@@ -206,6 +208,7 @@ html.rust {
   --drgnx-key-hint-edge: #c9ccd3;
   --drgnx-card-needs-you-edge: #ffb38a;
   --drgnx-progress-track: #8c909a;
+  --drgnx-progress-fill: #a8c6ff;
 }
 /* a reader whose system asks for more contrast, unless the page chose */
 @media (prefers-contrast: more) {
@@ -276,5 +279,6 @@ html.rust {
     --drgnx-key-hint-edge: #c9ccd3;
     --drgnx-card-needs-you-edge: #ffb38a;
     --drgnx-progress-track: #8c909a;
+    --drgnx-progress-fill: #a8c6ff;
   }
 }

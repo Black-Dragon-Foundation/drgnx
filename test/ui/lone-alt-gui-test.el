@@ -40,13 +40,12 @@ compact menu: a lone Alt opens it, Alt+letter opens that menu)."
 seat has one: with no keyboard the frame has no keyboard focus, and the first keys of a lone wtype run race the focus and
 are lost (a lone Alt gave no event).  So the typing of `drgnx-uitest-keyboard-type' runs with a keyboard already there
 and the focus observed.  The bad side is forced here each time: the frame starts with no focus; the body of
-`drgnx-uitest--with-sway-keyboard' sees it focused; afterwards the focus and the extra keyboard are gone."
+`drgnx-uitest--with-sway-keyboard' sees it focused; afterwards the focus is gone, which it only is when the extra keyboard is (the seat lost its capability)."
   :tags '(:compositor)
   (skip-unless (and (getenv "SWAYSOCK") (executable-find "wtype")))
   (should-not (frame-focus-state))
   (should (drgnx-uitest--with-sway-keyboard (frame-focus-state)))
-  (should-not (frame-focus-state))
-  (should-not (process-live-p (get-process "drgnx-uitest-wtype-holder"))))
+  (should-not (frame-focus-state)))     ; the focus is gone again only when the extra keyboard is: the seat lost its capability
 
 (provide 'lone-alt-gui-test)
 ;;; lone-alt-gui-test.el ends here

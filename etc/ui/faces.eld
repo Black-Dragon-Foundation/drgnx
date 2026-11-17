@@ -512,6 +512,9 @@
  drgnx-kit-button-danger
  drgnx-kit-key-hint-cap
  drgnx-kit-key-hint-menu
+ drgnx-kit-agent-mark
+ drgnx-kit-progress
+ drgnx-kit-progress-fill
  drgnx-kit-section-header
  drgnx-kit-card-plain-single
  drgnx-kit-card-plain-top

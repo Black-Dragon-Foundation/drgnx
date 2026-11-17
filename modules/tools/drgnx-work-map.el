@@ -44,6 +44,7 @@
 (defvar-local drgnx-work-map--selection nil
   "The selected item, (KIND . ID), or nil: the model's selection in Sjá, kept by `drgnx-work-map--nav'.")
 (declare-function drgnx-grid-tiles "drgnx-grid" (&optional frame filter))
+(defvar drgnx-grid-mode)                ; wb/drgnx-grid.el: the tiled grid is on
 (defvar drgnx-work-selection nil
   "The selected item, (KIND . ID), one for every Work view in every frame: a move in one map reaches the others.")
 (defvar drgnx-work-selection-functions nil
@@ -287,9 +288,9 @@ one, every other map takes it and tells its hub view, and `drgnx-work-selection-
 
 (defun drgnx-work--result-frame ()
   "The frame that last had an editor tile in use (torn-out frames included), or nil: where a selected item's result
-shows.  No frame is moved, raised or made for it."
+shows.  No frame is moved, raised or made for it.  With the grid off (or not loaded) there are no tiles: nil."
   (let (best (best-time -1))
-    (dolist (f (frame-list))
+    (dolist (f (and (bound-and-true-p drgnx-grid-mode) (frame-list)))
       (when (and (frame-live-p f) (frame-visible-p f))
         (dolist (w (drgnx-grid-tiles f 'editor))
           (let ((time (window-use-time w)))

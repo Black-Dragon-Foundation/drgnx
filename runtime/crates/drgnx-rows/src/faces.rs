@@ -1030,6 +1030,12 @@ pub enum FaceId {
     KitKeyHintCap,
     /// `drgnx-kit-key-hint-menu`
     KitKeyHintMenu,
+    /// `drgnx-kit-agent-mark`
+    KitAgentMark,
+    /// `drgnx-kit-progress`
+    KitProgress,
+    /// `drgnx-kit-progress-fill`
+    KitProgressFill,
     /// `drgnx-kit-section-header`
     KitSectionHeader,
     /// `drgnx-kit-card-plain-single`
@@ -1060,7 +1066,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 524] = [
+    pub const ALL: [FaceId; 527] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1572,6 +1578,9 @@ impl FaceId {
         FaceId::KitButtonDanger,
         FaceId::KitKeyHintCap,
         FaceId::KitKeyHintMenu,
+        FaceId::KitAgentMark,
+        FaceId::KitProgress,
+        FaceId::KitProgressFill,
         FaceId::KitSectionHeader,
         FaceId::KitCardPlainSingle,
         FaceId::KitCardPlainTop,
@@ -2101,6 +2110,9 @@ impl FaceId {
             FaceId::KitButtonDanger => "drgnx-kit-button-danger",
             FaceId::KitKeyHintCap => "drgnx-kit-key-hint-cap",
             FaceId::KitKeyHintMenu => "drgnx-kit-key-hint-menu",
+            FaceId::KitAgentMark => "drgnx-kit-agent-mark",
+            FaceId::KitProgress => "drgnx-kit-progress",
+            FaceId::KitProgressFill => "drgnx-kit-progress-fill",
             FaceId::KitSectionHeader => "drgnx-kit-section-header",
             FaceId::KitCardPlainSingle => "drgnx-kit-card-plain-single",
             FaceId::KitCardPlainTop => "drgnx-kit-card-plain-top",
@@ -2631,6 +2643,9 @@ impl FaceId {
             "drgnx-kit-button-danger" => FaceId::KitButtonDanger,
             "drgnx-kit-key-hint-cap" => FaceId::KitKeyHintCap,
             "drgnx-kit-key-hint-menu" => FaceId::KitKeyHintMenu,
+            "drgnx-kit-agent-mark" => FaceId::KitAgentMark,
+            "drgnx-kit-progress" => FaceId::KitProgress,
+            "drgnx-kit-progress-fill" => FaceId::KitProgressFill,
             "drgnx-kit-section-header" => FaceId::KitSectionHeader,
             "drgnx-kit-card-plain-single" => FaceId::KitCardPlainSingle,
             "drgnx-kit-card-plain-top" => FaceId::KitCardPlainTop,
