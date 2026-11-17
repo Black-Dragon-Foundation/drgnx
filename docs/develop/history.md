@@ -304,7 +304,10 @@ flight, which ends its hold. A file the hub wrote itself is no second version.
 
 **Methods** (`methods.rs`, `wire.rs`; user only). `history/register {path, worktree_root, buffer_id}` answers `{doc,
 tracked}`: a gitignored file, a credentials file, a personal-notes file and a folder a sandboxed agent worked in are
-`tracked: false` with the reason. `history/batch {buffer_id, changes, region_hash, version}` applies changes (character
+`tracked: false` with the reason. A new document starts from the base commit's text; when no other buffer of it is
+tracked and the file on disk differs (changed since the commit, or in no commit), the disk is recorded at once as an
+outside change (`on_disk_change`, as the watcher would), so the mirror, the marks' lines and the line authors are the
+buffer's before its first batch (the editor resyncs only a modified buffer). `history/batch {buffer_id, changes, region_hash, version}` applies changes (character
 offsets in the document's LF text) as the origin's peer (`user`, or `agent:<session>#<step>` for a change merged in or a
 paired chat's write: the record's cause carries the session and its step, and for a paired chat's write the task and
 the conclusion the session noted with `Hub::note_cause` when it made the write (the last 256 kept); an `agent:` origin
