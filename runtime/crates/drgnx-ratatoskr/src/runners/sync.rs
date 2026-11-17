@@ -190,6 +190,31 @@ pub struct Frozen {
     pub visibility: Visibility,
     /// `drgnx-runners-shared-overlay`: a shared runner may get the overlay, once scanned.
     pub shared_overlay: bool,
+    /// The bytes of the commit's tree (its blobs, as git lists them): the job's history class
+    /// (`forseti::tree_bucket`).
+    #[serde(default)]
+    pub tree_bytes: u64,
+}
+
+/// The bytes of the blobs of TREE in the repository of GIT (`git ls-tree -r -l`).
+fn tree_bytes(git: &Git, tree: &str) -> Result<u64, String> {
+    let out = git_out(
+        git,
+        "size the tree",
+        &["ls-tree", "-r", "-l", "--full-tree", tree],
+    )?;
+    Ok(out
+        .split(|b| *b == b'\n')
+        .filter_map(|line| {
+            // `<mode> <type> <object> <size>\t<path>`; a submodule's size is `-`
+            let meta = line.split(|b| *b == b'\t').next()?;
+            let size = meta
+                .split(|b| *b == b' ')
+                .filter(|f| !f.is_empty())
+                .nth(3)?;
+            std::str::from_utf8(size).ok()?.parse::<u64>().ok()
+        })
+        .sum())
 }
 
 impl Frozen {
@@ -248,7 +273,9 @@ pub fn freeze(
             )
         })?;
     }
+    let tree_bytes = tree_bytes(&user_git(top)?, &inputs.tree)?;
     Ok(Frozen {
+        tree_bytes,
         worktree: top.to_path_buf(),
         repo: repo_id(top, origin.url.as_deref())?,
         input_key: capture::input_key(&inputs),
@@ -691,6 +718,7 @@ mod tests {
             not_on_origin,
             visibility,
             shared_overlay: false,
+            tree_bytes: 0,
         }
     }
 

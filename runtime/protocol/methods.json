@@ -18789,6 +18789,17 @@
               "null"
             ]
           },
+          "needs": {
+            "description": "The jobs (ids) this one needs: it waits, holding nothing, until each passed, and ends as infra if one did not\n(at most 64; each one the queue knows, and no cycle).",
+            "items": {
+              "$ref": "#/$defs/Id"
+            },
+            "maxItems": 64,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "network": {
             "description": "A container job started by the user asks for the proxy network (default: none).  An agent's job gets the\nmatrix's Network cell instead, and this field changes nothing for it.",
             "type": [

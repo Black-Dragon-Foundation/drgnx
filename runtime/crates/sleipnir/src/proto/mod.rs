@@ -76,6 +76,7 @@ mod tests {
             keys: vec!["TOKEN".into()],
             local_only: false,
             writes: vec![],
+            derived: Default::default(),
         }
     }
 

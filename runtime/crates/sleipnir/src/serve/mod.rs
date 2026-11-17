@@ -284,7 +284,7 @@ pub struct Serve<W: Write> {
     bundle: String,
     live: BTreeMap<(String, u32), Live>,
     hello: bool,
-    last_start: Option<u64>,
+    last_start: forseti::LastStart,
     stop_admitting: bool,
     level2_since: Option<Instant>,
     last_kill: Option<Instant>,
@@ -408,7 +408,7 @@ impl<W: Write> Serve<W> {
             bundle,
             live: BTreeMap::new(),
             hello: false,
-            last_start: None,
+            last_start: forseti::LastStart::default(),
             stop_admitting: false,
             level2_since: None,
             last_kill: None,
@@ -443,7 +443,12 @@ impl<W: Write> Serve<W> {
     /// Its last start too: the gap between starts holds across `serve` processes.
     fn load_running(&mut self) {
         for f in self.ours() {
-            self.last_start = self.last_start.max(f.meta.started);
+            if f.meta.started > self.last_start.at {
+                self.last_start = forseti::LastStart {
+                    at: f.meta.started,
+                    small: f.meta.expected.as_ref().is_some_and(forseti::admit::small),
+                };
+            }
             if f.state == AttemptState::Running {
                 let key = (f.meta.r.job.clone(), f.meta.r.attempt);
                 self.live.entry(key).or_insert(Live::new(f.dir, f.meta));
@@ -999,7 +1004,10 @@ impl<W: Write> Serve<W> {
                     eprintln!("sleipnir serve: the attempt's record: {e}");
                 }
                 self.hand_reservation(&meta, pid);
-                self.last_start = Some(at);
+                self.last_start = forseti::LastStart {
+                    at: Some(at),
+                    small: meta.expected.as_ref().is_some_and(forseti::admit::small),
+                };
                 self.images.extend(ran_in);
                 if let Some(l) = self.live.get_mut(&(r.job.clone(), r.attempt)) {
                     l.meta = meta;
@@ -1875,6 +1883,7 @@ pub(crate) fn tests_spec() -> forseti::JobSpec {
         keys: vec![],
         local_only: false,
         writes: vec![],
+        derived: Default::default(),
     }
 }
 

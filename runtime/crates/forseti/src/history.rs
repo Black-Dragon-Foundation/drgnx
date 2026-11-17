@@ -28,19 +28,42 @@ pub struct HistRow {
     pub warm: bool,
 }
 
-/// The key runs of the same work share: the kind, then the suite and the rows selected, or else the command with
-/// paths normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a `.claude/tmp` path
-/// `{tmp}`), so a command run from two worktrees has one history.
+/// The key runs of the same work share: the kind, then the suite (a check's stage), the class of the rows selected
+/// ([`selector_class`]) and the tree's size bucket (`Derived::tree_bucket`), or else the command with paths
+/// normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a `.claude/tmp` path `{tmp}`),
+/// so a command run from two worktrees has one history.
 pub fn history_key(spec: &JobSpec) -> String {
     const SEP: char = '\u{1f}';
     let kind = spec.kind.name();
     if let Some(suite) = &spec.suite {
-        let rows = spec.select.as_deref().unwrap_or("");
-        return format!("{kind}{SEP}suite{SEP}{suite}{SEP}{rows}");
+        let class = selector_class(spec.select.as_deref());
+        let bucket = spec
+            .derived
+            .tree_bucket
+            .map_or(String::new(), |b| b.to_string());
+        return format!("{kind}{SEP}suite{SEP}{suite}{SEP}{class}{SEP}{bucket}");
     }
     let tree = spec.tree.to_string_lossy();
     let args: Vec<String> = spec.command.iter().map(|a| normalise(a, &tree)).collect();
     format!("{kind}{SEP}cmd{SEP}{}", args.join(&SEP.to_string()))
+}
+
+/// The class of a row selector, so selections of one shape share a history: `all` (none), `alt` (an alternation,
+/// `\|`), `prefix` (one `^name/` or `^name-` prefix: letters, digits and `-`, then `/` or `-`), `other`.
+pub fn selector_class(select: Option<&str>) -> &'static str {
+    let Some(s) = select else {
+        return "all";
+    };
+    if s.contains(r"\|") {
+        return "alt";
+    }
+    let prefix = s.strip_prefix('^').is_some_and(|rest| {
+        let name = rest.trim_end_matches(['/', '-']);
+        name.len() + 1 == rest.len()
+            && !name.is_empty()
+            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    if prefix { "prefix" } else { "other" }
 }
 
 /// The start of the path that contains byte `at`: the arg's start, or just after a space, `=` or `:`.
@@ -250,14 +273,60 @@ mod tests {
         );
         assert_eq!(a, c);
         assert_ne!(a, at("/src/main", &["bash", "test/other.sh"]));
-        // A suite's key is its suite and rows, whatever the command.
+        // A suite's key is its suite and its selector's class, whatever the command.
         let mut s = spec("j");
         s.suite = Some("ert".into());
-        s.select = Some("^drgnx-a".into());
+        s.select = Some("^drgnx-a/".into());
         let k = history_key(&s);
         s.command = vec!["anything".into()];
         assert_eq!(history_key(&s), k);
-        s.select = Some("^drgnx-b".into());
+        s.suite = Some("ui1".into());
         assert_ne!(history_key(&s), k);
+    }
+
+    #[test]
+    fn ert_prefixes_of_one_class_share_a_key() {
+        // [D] pure (design §5.3 item 5): `ert=^drgnx-fold/` and `ert=^drgnx-marks/` share a p95.
+        let at = |sel: &str| {
+            let mut s = spec("j");
+            s.suite = Some("ert".into());
+            s.select = Some(sel.into());
+            history_key(&s)
+        };
+        assert_eq!(at("^drgnx-fold/"), at("^drgnx-marks/"));
+        assert_eq!(at("^drgnx-fold-"), at("^drgnx-marks/"));
+        assert_eq!(selector_class(Some("^drgnx-fold/")), "prefix");
+        assert_eq!(selector_class(None), "all");
+    }
+
+    #[test]
+    fn an_alternation_is_another_class() {
+        // [D] pure
+        let at = |sel: Option<&str>| {
+            let mut s = spec("j");
+            s.suite = Some("ert".into());
+            s.select = sel.map(String::from);
+            history_key(&s)
+        };
+        assert_eq!(selector_class(Some(r"^drgnx-a/\|^drgnx-b/")), "alt");
+        assert_eq!(selector_class(Some("moved-down$")), "other");
+        assert_ne!(at(Some(r"^drgnx-a/\|^drgnx-b/")), at(Some("^drgnx-a/")));
+        assert_ne!(at(None), at(Some("^drgnx-a/")));
+        assert_ne!(at(Some("moved-down$")), at(Some("^drgnx-a/")));
+    }
+
+    #[test]
+    fn a_tree_ten_times_bigger_is_another_bucket() {
+        // [D] pure
+        let at = |bytes: Option<u64>| {
+            let mut s = spec("j");
+            s.suite = Some("ert".into());
+            s.derived.tree_bucket = bytes.map(crate::model::tree_bucket);
+            history_key(&s)
+        };
+        assert_eq!(at(Some(100 << 20)), at(Some(120 << 20)));
+        assert_ne!(at(Some(100 << 20)), at(Some(1000 << 20)));
+        assert_eq!(crate::model::tree_bucket(0), 0);
+        assert_eq!(crate::model::tree_bucket(1 << 30), 10);
     }
 }

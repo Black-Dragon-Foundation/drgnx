@@ -68,6 +68,7 @@ fn spec(trust: JobTrust, keys: &[&str]) -> JobSpec {
         keys: keys.iter().map(|k| k.to_string()).collect(),
         local_only: false,
         writes: vec![],
+        derived: Default::default(),
     }
 }
 

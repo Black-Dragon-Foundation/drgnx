@@ -52,7 +52,11 @@ it does not depend on the agent that started it or on the editor, and it survive
   "needs 6144 MiB of memory; …", "this machine is on battery", …). Rows also say where a job runs (`machine`), its
   `priority`, and on a runner its `attempt`. A start may mark a job `heavy` (under the project's
   `drgnx-runners-send heavy`, the default, only heavy jobs may leave this machine), `local_only`, name the `keys` it
-  needs, and the `writes` it may make to the tree. A start with `os: macos` (a Naglfar build, macOS tests) runs only
+  needs, and the `writes` it may make to the tree. A start may name the jobs it `needs` (their ids, at most 64): it
+  waits ("waits for job N"), holding no slot, no memory and no runner, until each of them passed, and ends as infra
+  ("needed job N failed") without running if one did not; a need the queue doesn't know, or one that would make a
+  cycle, refuses the start. A job lifts the jobs it needs to its own priority, running ones included, so a P1 job is
+  never stuck behind a need that a lower priority would let be evicted. A start with `os: macos` (a Naglfar build, macOS tests) runs only
   on a Mac runner, as a host job (never in a container): it counts as heavy, and waits for a Mac that has its
   project's `drgnx-runners-mac-tools` and `drgnx-runners-mac-toolchains`.
 

@@ -154,6 +154,10 @@ pub struct StartParams {
     /// The keys the job needs, by name (never a value; at most 16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keys: Option<Bounded<Vec<Bounded<String, 128>>, 16>>,
+    /// The jobs (ids) this one needs: it waits, holding nothing, until each passed, and ends as infra if one did not
+    /// (at most 64; each one the queue knows, and no cycle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<Bounded<Vec<Id>, 64>>,
     /// The job runs on this machine only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_only: Option<bool>,
