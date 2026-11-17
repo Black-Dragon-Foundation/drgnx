@@ -3702,6 +3702,11 @@ kit_conformance`, read it before committing) and `drgnx-ui-kit/conformance` chec
   plist (`(:c "row" :kind "tree" :depth 2 :twisty t :text "src" :state "selected")`; `:twisty` t open, `:false`
   closed, absent none), TTY nil, t or `ascii`. Returns the hub's row shape: `(:text S :runs [[FROM TO FACE]...] :props
   [[FROM TO NAME VALUE]...] :spaces [[POS W H]...])`.
+- `(drgnx-ui-kit-agent-mark SLOT HANDLE WHERE &optional FRAME)`: an agent's handle on the colour of SLOT (1-12), as a
+  string for WHERE; `(drgnx-ui-kit-progress KIND VALUE WIDTH WHERE &optional FRAME)`: a `bar` WIDTH logical px wide
+  (spaces `drgnx-ui-kit-progress-bar-px` high, the fill then the track, drawn as images by
+  `drgnx-ui-kit-bar-display`, which the inserter calls too) or a `ring`, VALUE 0 to 1. Each carries its
+  spoken label ("agent H", "N percent") as `help-echo`; `docs/design/components/chips-and-keys.md`.
 - `(drgnx-ui-kit-string COMPONENT PROPS WHERE FRAME)`: the same as a propertized string for WHERE, `text`,
   `header-line`, `mode-line` or `tab-line`, at FRAME's scale (or as its terminal draws it). In `text` a pad is
   `(space :width N)` with N = px / `frame-char-width`, canonical characters, so one buffer is right on frames of two

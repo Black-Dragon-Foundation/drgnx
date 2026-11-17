@@ -200,6 +200,60 @@ pub enum Comp {
         #[serde(default)]
         state: State,
     },
+    /// An agent's mark: its HANDLE (one or two letters) on the colour of its SLOT (1–12, `drgnx-agent-identity`).
+    AgentMark { slot: u8, handle: String },
+    /// Progress: a bar WIDTH logical px wide or a ring, VALUE from 0 to 1.
+    Progress {
+        #[serde(default)]
+        kind: ProgressKind,
+        value: f64,
+        #[serde(default)]
+        width: u16,
+    },
+}
+
+/// A progress's kind: the `progress` component's `kind` axis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProgressKind {
+    #[default]
+    Bar,
+    Ring,
+}
+
+impl ProgressKind {
+    fn name(self) -> &'static str {
+        match self {
+            ProgressKind::Bar => "bar",
+            ProgressKind::Ring => "ring",
+        }
+    }
+}
+
+/// A progress bar's height, logical px (`drgnx-ui-kit-progress-bar-px`).
+pub const BAR_PX: u16 = 4;
+/// Logical px of a progress bar's width per terminal cell (`drgnx-ui-kit-progress-cell-px`).
+pub const BAR_CELL_PX: u16 = 8;
+
+/// The agents' colours by slot, 1 first (`drgnx-agent-N`).
+const AGENT_FACES: [FaceId; 12] = [
+    FaceId::Agent1,
+    FaceId::Agent2,
+    FaceId::Agent3,
+    FaceId::Agent4,
+    FaceId::Agent5,
+    FaceId::Agent6,
+    FaceId::Agent7,
+    FaceId::Agent8,
+    FaceId::Agent9,
+    FaceId::Agent10,
+    FaceId::Agent11,
+    FaceId::Agent12,
+];
+
+/// X rounded half up (`drgnx-ui-kit--round`).
+fn round_half_up(x: f64) -> u32 {
+    (x + 0.5 + 1e-9).floor() as u32
 }
 
 /// LOGICAL px at SCALE in device px, rounded half up (`drgnx-px`).
@@ -423,6 +477,94 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 b.face_over(from, to, f.name());
             }
         }
+        Comp::AgentMark { slot, handle } => agent_mark(b, env, *slot, handle),
+        Comp::Progress { kind, value, width } => progress(b, env, *kind, *value, *width),
+    }
+}
+
+/// SLOT's agent mark onto B (`drgnx-ui-kit--agent-mark`): the handle between the pads on the agent's colour (its face
+/// under the kit face's inverse video); on a terminal `[H]` in the colour. Its label is its `help-echo`.
+fn agent_mark(b: &mut RowBuilder, env: &KitEnv, slot: u8, handle: &str) {
+    let agent = AGENT_FACES[usize::from(slot.clamp(1, 12)) - 1].name();
+    let label = format!(
+        "{} {handle}",
+        kit_gen::label(CompId::AgentMark, &[]).unwrap_or_default()
+    );
+    let from = b.pos();
+    if env.tty {
+        b.push(&format!("[{handle}]"), Some(agent));
+    } else {
+        let g = kit_gen::geom(CompId::AgentMark, &[]);
+        let kit = FaceId::KitAgentMark.name();
+        b.pad(px(g.pad.0, env.scale), Some(kit));
+        b.push(handle, Some(kit));
+        b.pad(px(g.pad.1, env.scale), Some(kit));
+        let to = b.pos();
+        b.face(from, to, agent);
+    }
+    let to = b.pos();
+    b.prop(from, to, "help-echo", Value::String(label));
+}
+
+/// Progress onto B (`drgnx-ui-kit--progress`): a bar is the fill (VALUE of the width, rounded half up) then the track,
+/// each a space [`BAR_PX`] high in its face, which the editor draws as the bar's images (`drgnx-ui-kit-bar-display`);
+/// on a terminal its cells (one per [`BAR_CELL_PX`]): the filled ones and a partial block, then the empty ones. A ring is one of
+/// the glyphs `progress-0`..`progress-4`. Its label, "N percent", is its `help-echo`.
+fn progress(b: &mut RowBuilder, env: &KitEnv, kind: ProgressKind, value: f64, width: u16) {
+    let v = value.clamp(0.0, 1.0);
+    let face = comp_face(kit_gen::face(CompId::Progress, &[kind.name()])).unwrap_or("default");
+    let fill_face = FaceId::KitProgressFill.name();
+    let from = b.pos();
+    match kind {
+        ProgressKind::Ring => {
+            let name = format!("progress-{}", round_half_up(4.0 * v));
+            b.push(glyph(env, &name), Some(fill_face));
+        }
+        ProgressKind::Bar if env.tty => {
+            // eighths of a cell: the filled cells, then a partial block where the env draws one (an ASCII terminal
+            // does not: there the fill rounds to whole cells), then the empty ones
+            let cells = round_half_up(f64::from(width) / f64::from(BAR_CELL_PX)).max(1);
+            let units = round_half_up(f64::from(cells) * 8.0 * v);
+            let part = if !units.is_multiple_of(8) {
+                glyph(env, &format!("bar-{}", units % 8))
+            } else {
+                ""
+            };
+            let full = if !units.is_multiple_of(8) && part.is_empty() {
+                round_half_up(f64::from(cells) * v)
+            } else {
+                units / 8
+            };
+            let empty = cells - full - u32::from(!part.is_empty());
+            let fill = format!("{}{part}", glyph(env, "bar-full").repeat(full as usize));
+            b.push(glyph(env, "bar-left"), None);
+            if !fill.is_empty() {
+                b.push(&fill, Some(fill_face));
+            }
+            if empty > 0 {
+                b.push(&glyph(env, "bar-empty").repeat(empty as usize), Some(face));
+            }
+            b.push(glyph(env, "bar-right"), None);
+        }
+        ProgressKind::Bar => {
+            let total = px(width, env.scale);
+            let fill = round_half_up(f64::from(total) * v);
+            let h = px(BAR_PX, env.scale);
+            for (w, f) in [(fill, fill_face), (total - fill, face)] {
+                if w > 0 {
+                    b.space(w, h, f);
+                }
+            }
+        }
+    }
+    let to = b.pos();
+    if to > from {
+        let label = format!(
+            "{} {}",
+            round_half_up(100.0 * v),
+            kit_gen::label(CompId::Progress, &[kind.name()]).unwrap_or_default()
+        );
+        b.prop(from, to, "help-echo", Value::String(label));
     }
 }
 

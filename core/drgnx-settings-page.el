@@ -14,6 +14,7 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'drgnx-ui-kit)
 (require 'subr-x)
 (require 'button)
 (require 'drgnx-paths)
@@ -458,8 +459,7 @@ move each old file to .drgnx/migrated-DATE/.  Returns the number of entries writ
 
 (defun drgnx-settings-page--button (label fn &optional help)
   "A button with LABEL that calls FN."
-  (make-text-button (format " %s " label) nil 'action (lambda (_) (funcall fn)) 'follow-link t
-                    'help-echo (or help label) 'face 'drgnx-chip-quiet))
+  (drgnx-ui-kit-text-button label fn (or help label) 'quiet 'sm))
 
 (defun drgnx-settings-page--visit (file line)
   "Open FILE at LINE."

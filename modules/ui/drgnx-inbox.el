@@ -106,7 +106,7 @@
 
 (defun drgnx-inbox--button (id label key &optional primary)
   "The button LABEL of row KEY running registry command ID."
-  (drgnx-ui-button label (lambda () (drgnx-inbox--press id key)) :face (and primary 'drgnx-ui-button-primary)))
+  (drgnx-ui-button label (lambda () (drgnx-inbox--press id key)) :face (and primary 'drgnx-kit-button-primary)))
 
 (defun drgnx-inbox--header ()
   "The header: `Needs you' at the left, the buttons at the right end of the line."

@@ -36,7 +36,7 @@
     (cl-labels ((walk (x)
                   (when (consp x)
                     (when (symbolp (car x)) (cl-pushnew (car x) out))
-                    (when (and (eq (car x) 'function) (symbolp (car-safe (cdr x))))
+                    (when (and (eq (car x) 'function) (consp (cdr x)) (null (cddr x)) (symbolp (cadr x)))
                       (cl-pushnew (cadr x) out))
                     (while (consp x) (walk (car x)) (setq x (cdr x))))))
       (walk form))
@@ -140,6 +140,14 @@
     (should (equal (drgnx-lint-files--stale sites (list entry '(:file "core/a.el" :fn zz :what write-region)))
                    '((:file "core/a.el" :fn zz :what write-region))))
     (should-not (drgnx-lint-files--stale sites (list entry)))))
+
+(ert-deftest drgnx-lint/the-call-walker-reads-a-function-pair-in-data-as-data ()
+  "`drgnx-lint-files--calls' takes #\='f as a call of f only when the quote is a proper two-element list: the alist
+entry (function . foo) of quoted data is data, and its `car' of a symbol signalled."
+  (should (memq 'foo (drgnx-lint-files--calls '(setq x #'foo))))
+  (should-not (memq 'foo (drgnx-lint-files--calls '(function foo bar))))
+  (should-not (memq 'foo (drgnx-lint-files--calls '(quote ((a . 1) (function . foo))))))
+  (should-not (memq 'foo (drgnx-lint-files--calls '(setq x '((a . 1) (function . foo)))))))
 
 (provide 'lint-files-test)
 ;;; lint-files-test.el ends here

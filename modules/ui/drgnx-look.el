@@ -16,9 +16,11 @@
 (require 'drgnx-wb)
 (require 'drgnx-margins)
 (require 'drgnx-state)                  ; the cards follow the windows and the frame's scale through the store
-;; the decorations module sits beside this file (modules are not on the load path)
+;; the decorations and the agent cursors sit beside this file (modules are not on the load path)
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-agent-cursors)
+  (load (expand-file-name "drgnx-agent-cursors" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 ;; so does the font roles' (their settings are declared when it loads)
 (unless (featurep 'drgnx-look-fonts)
   (load (expand-file-name "drgnx-look-fonts" (file-name-directory (or load-file-name buffer-file-name))) nil t))

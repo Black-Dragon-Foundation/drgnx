@@ -2997,7 +2997,7 @@ row's own background fills the line around the image, which carries the fill its
 (defface drgnx-replace-tick-off '((t :inherit drgnx-text-subtle))
   "An unticked box." :group 'drgnx)
 
-(defface drgnx-replace-sheet-key '((t :inherit drgnx-keycap))
+(defface drgnx-replace-sheet-key '((t :inherit drgnx-kit-key-hint-cap))
   "The key chip on the sheet's Replace button (`Ctrl ↵'): ringed in the button's text colour." :group 'drgnx)
 
 (defface drgnx-replace-sheet-code '((t :inherit drgnx-code-small))
@@ -3251,9 +3251,9 @@ groups line; the hunk's match ids on the whole row)."
           (propertize (format "+%d" (or (plist-get answer :plus) 0)) 'face 'drgnx-replace-plus) " "
           (propertize (format "%s%d" (drgnx-face-glyph 'minus) (or (plist-get answer :minus) 0)) 'face 'drgnx-replace-minus)
           (drgnx-replace--right
-           (concat (drgnx-replace--header-button "Open File" 'search-preview-open 'drgnx-ui-button) " "
+           (concat (drgnx-replace--header-button "Open File" 'search-preview-open 'drgnx-kit-button-secondary) " "
                    (drgnx-replace--header-button "Replace in This File" 'search-preview-replace-file
-                                                 'drgnx-ui-button-primary))))))
+                                                 'drgnx-kit-button-primary))))))
 
 (defun drgnx-replace--header-button (label id face)
   "LABEL as a button in FACE on the header line running registry command ID, with a button's room at either end (a
@@ -3449,8 +3449,8 @@ Measured once per FILES, SKIPPED and hunk (`drgnx-replace--sheet-edge-memo'): ev
 
 (defun drgnx-replace--sheet-buttons ()
   "The sheet's Cancel and Replace: Cancel plain (Esc is every popup's), Replace with its key as one chip."
-  (concat (drgnx-ui-button "Cancel" 'search-sheet-cancel :face 'drgnx-ui-button) (drgnx-replace--gap 8)
-          (drgnx-replace--sheet-button "Replace" 'search-sheet-confirm 'drgnx-ui-button-primary)))
+  (concat (drgnx-ui-button "Cancel" 'search-sheet-cancel :face 'drgnx-kit-button-secondary) (drgnx-replace--gap 8)
+          (drgnx-replace--sheet-button "Replace" 'search-sheet-confirm 'drgnx-kit-button-primary)))
 
 (defun drgnx-replace--sheet-render (key)
   "The sheet's row KEY: its title, a file (chevron, icon, name; its +/−, skipped and unsaved notes at the right edge;

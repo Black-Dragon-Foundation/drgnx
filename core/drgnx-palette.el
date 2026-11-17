@@ -77,7 +77,7 @@ with Shift (M-F is Alt Shift F, not M-f's Alt F) and a letter reads as a capital
   "One keycap showing NAME (\"Ctrl\", \"↵\"): `drgnx-keycap' with 4 px of room inside at either end on a graphical
 frame; on a terminal, which draws no ring, the name alone (a 4 px space is 4 columns there)."
   (let ((pad (if (display-graphic-p) drgnx-palette--keycap-pad "")))
-    (propertize (concat pad name pad) 'face 'drgnx-keycap)))
+    (propertize (concat pad name pad) 'face 'drgnx-kit-key-hint-cap)))
 
 (defun drgnx-palette-keycaps (key)
   "The key description KEY as keycaps (`drgnx-palette-keycap'), one space between."
@@ -110,7 +110,7 @@ size), `:weight' (a face weight) and `:ring' (a colour).  The name is in `curren
 (defun drgnx-palette--keycap-image (name &optional face)
   "The image of a keycap chip showing NAME in FACE's font and ring (default `drgnx-keycap') on the selected frame, as
 tall as its text and as wide as the text keycap; nil when the face has no font there."
-  (when-let* ((face (or face 'drgnx-keycap)) (font (face-font face)) (info (font-info font)))
+  (when-let* ((face (or face 'drgnx-kit-key-hint-cap)) (font (face-font face)) (info (font-info font)))
     (let* ((box (face-attribute face :box nil t))
            (line (max 1 (let ((lw (and (consp box) (plist-get box :line-width))))
                           (if (consp lw) (car lw) (or lw 1)))))

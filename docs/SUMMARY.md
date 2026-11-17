@@ -118,5 +118,7 @@
     - [Row (kit)](design/components/row.md)
     - [Button (kit)](design/components/button.md)
     - [Key hint (kit)](design/components/key-hint.md)
+    - [Agent mark (kit)](design/components/agent-mark.md)
+    - [Progress (kit)](design/components/progress.md)
 - [The app icon](design/app-icon.md)
 - [Writing a theme for drgnx](design/theme-authors.md)
