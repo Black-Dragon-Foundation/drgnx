@@ -271,14 +271,14 @@ buffer."
     buffer))
 
 (defun drgnx-work-thirty-only-window ()
-  "The selected window alone among the frame's editor windows (the map's split from `drgnx-work-thirty-map' gone):
-`delete-other-windows', then each other editor window by its own `delete-window', as the grid keeps editor tiles
-from `delete-other-windows' (a layout survives a package's call: docs/develop/core.md, \"The grid\").  Tool tiles and
-side windows stay, as `delete-other-windows' leaves them."
+  "The selected window alone in its frame, as `delete-other-windows' made it before the grid: every other window goes
+by its own `delete-window' (an editor tile is deleted, a tool tile such as the Work Detail the map opens is hidden), as
+the grid keeps its tiles from `delete-other-windows' (a layout survives a package's call: docs/develop/core.md, \"The
+grid\")."
   (delete-other-windows)
   (dolist (w (window-list nil 'nomini))
-    (unless (or (eq w (selected-window)) (window-parameter w 'drgnx-role) (window-parameter w 'window-side))
-      (delete-window w))))
+    (unless (eq w (selected-window))
+      (when (window-live-p w) (ignore-errors (delete-window w))))))
 
 (defun drgnx-work-thirty-premise (&optional buffer shown)
   "Whether what a workload measures holds, else an error naming what does not: 30 sessions streaming (busy) and, with

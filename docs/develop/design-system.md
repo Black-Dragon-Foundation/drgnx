@@ -86,6 +86,10 @@ focus inverse, the inactive selection underlined, hover nothing, disabled dim.  
 `drgnx-tty-colours/selection-is-inverse-and-unfocused-underlined` and the sheet `drgnx-kit-sheet/state-table` (each
 state's fill, no edge on a hovered or selected row).
 
+A row's twisty and its icon (`:icon`, a file kind or a folder) are images where the frame draws icons (the hub's
+`KitEnv::icons`, Lisp's `drgnx-ui-kit--icons` bound by `drgnx-ui-kit-string`), each followed by the row's `:gap`
+(6 px), at `kit::ICON_PX` (16); elsewhere their glyphs and a space, and an icon with no glyph is left out.
+
 ## The catalogue and the sheets
 
 **Design: Component Catalogue** (`design-component-catalogue`, `modules/ui/drgnx-kit-catalogue.el`) opens

@@ -5,7 +5,7 @@ use super::matrix::Limit;
 use super::method;
 use crate::registry::Method;
 use crate::types::{
-    AbsPath, Bounded, CardAction, Delta, Id, PlanId, Prompt, StringOrNumber, TaskRef, Text, Usd,
+    AbsPath, Bounded, CardAction, Delta, Id, PlanId, Prompt, StringOrNumber, TaskRef, Text,
     null_as_empty,
 };
 use schemars::JsonSchema;

@@ -28,19 +28,32 @@
   (pcase id
     ('row (let ((kind (alist-get 'kind variants)))
             (list :c "row" :kind (symbol-name kind) :depth (if (eq kind 'tree) 1 0)
-                  :twisty (and (eq kind 'tree) :false) :text (format "%s · %s" kind state)
+                  :twisty (and (eq kind 'tree) :false)
+                  :icon (pcase kind ('tree "folder") ('list "file"))   ; the icon slot (a map row has none)
+                  :text (format "%s · %s" kind state)
                   :state (symbol-name state))))
     (_ (list :c (symbol-name id) :text (format "%s · %s" id state) :state (symbol-name state)))))
 
 (defun drgnx-kit-catalogue--hub-row (props scale tty state)
   "PROPS expanded at SCALE (TTY on a terminal) and dressed as the inserter dresses a hub row, in STATE (a patch
 state); the cell's text, its line's height in device px (the expansion's :height) as `drgnx-kit-line-height'."
-  (let* ((e (drgnx-ui-kit-expand 'row props scale tty))
+  (let* ((e (let ((drgnx-ui-kit--icons (and (not tty) (drgnx-ui-kit-icon-function nil))))
+              (drgnx-ui-kit-expand 'row props scale tty)))
+         (props (mapcar (lambda (p) (let ((l (append p nil))) (if (vectorp (nth 3 l)) (append (butlast l) (list (append (nth 3 l) nil))) l)))
+                        (plist-get e :props)))
+         ;; an icon (a `display' image of the Lisp expansion) goes as the hub sends it: an image of the row, its spec
+         ;; in the state's table under its own id
+         (images (delq nil (mapcar (lambda (p)
+                                     (when (equal (nth 2 p) "display")
+                                       (let ((id (format "kit-icon-%x" (sxhash-equal (nth 3 p)))))
+                                         (puthash id (nth 3 p) (drgnx-view-patch-images state))
+                                         (list (nth 0 p) id " "))))
+                                   props)))
          (row (list :text (plist-get e :text)
                     :runs (mapcar (lambda (r) (append r nil)) (plist-get e :runs))
-                    :props (mapcar (lambda (p) (let ((l (append p nil))) (if (vectorp (nth 3 l)) (append (butlast l) (list (append (nth 3 l) nil))) l)))
-                                   (plist-get e :props))
-                    :spaces (mapcar (lambda (s) (append s nil)) (plist-get e :spaces)))))
+                    :props (seq-remove (lambda (p) (equal (nth 2 p) "display")) props)
+                    :spaces (mapcar (lambda (s) (append s nil)) (plist-get e :spaces))
+                    :images images)))
     (propertize (drgnx-view-patch--dress state "kit" row (copy-sequence (plist-get e :text)))
                 'drgnx-kit-line-height (plist-get (plist-get e :height) :unit))))
 

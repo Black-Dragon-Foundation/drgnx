@@ -30,10 +30,17 @@
   "Run START (a function that starts an ediff session from the selected editor tile) and check the layout, then quit.
 On a frame of its own, deleted after: the grid's frame parameters stay off the session's frame."
   (unless (display-graphic-p) (ert-skip "needs a graphical frame"))
-  (let ((frame (make-frame '((width . 160) (height . 50)))))
+  ;; well inside the monitor: a frame near the work area's size is maximized by mutter a while after it maps, which
+  ;; moved every window under the row; the grid fixture's 160 × 50 would be that size, so it is not applied
+  (let ((frame (make-frame '((width . 100) (height . 30)))))
     (unwind-protect
         (with-selected-frame frame
-          (drgnx-ui-grid-ediff--on-frame start))
+          ;; the echo area stays one line: a message wrapping in this narrower frame would take a line from every
+          ;; window under the row
+          (cl-letf (((symbol-function 'set-frame-size) #'ignore))
+            (let ((resize-mini-windows nil))
+              (message nil)
+              (drgnx-ui-grid-ediff--on-frame start))))
       (delete-frame frame))))
 
 (defun drgnx-ui-grid-ediff--settled (window)
