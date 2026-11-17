@@ -332,6 +332,22 @@ by proportion and a split can land a column off."
               (when (and (/= delta 0) (window-resizable-p w delta t nil t))
                 (window-resize w delta t nil t)))))))))
 
+(defun drgnx-look-echo--normal-sizes (node)
+  "Set the normal sizes in NODE, a `window-state-get' node (TYPE . ENTRIES), and in every node under it, from the
+saved pixel sizes: each child's share of its combination.  `window-state-put' shares a root of another size by
+them, and the sizes Emacs keeps can be stale after pixel-wise resizes (a dock's folded section was saved with a
+negative one), so a part gets more than there is and the put fails (\"Cannot resize window\")."
+  (let* ((kids (seq-filter (lambda (e) (and (consp e) (memq (car e) '(leaf vc hc)))) (cdr node)))
+         (horizontal (eq (car node) 'hc))
+         (px (if horizontal 'pixel-width 'pixel-height))
+         (normal (if horizontal 'normal-width 'normal-height))
+         (sum (apply #'+ (mapcar (lambda (k) (or (alist-get px (cdr k)) 0)) kids))))
+    (when (and (memq (car node) '(vc hc)) (> sum 0))
+      (dolist (k kids)
+        (when-let* ((cell (assq normal (cdr k))) (size (alist-get px (cdr k))))
+          (setcdr cell (/ (float size) sum)))))
+    (mapc #'drgnx-look-echo--normal-sizes kids)))
+
 (defun drgnx-look-echo-swap (frame)
   "Replace FRAME with a new frame like it, whose minibuffer follows the setting now (the box when on): the same
 windows and their parameters, buffers and points, the selected window, the frame's parameters, size and place.
@@ -349,6 +365,7 @@ Return the new frame.  Nothing is asked and no buffer is killed: FRAME's buffers
          (selected (eq frame (selected-frame)))
          (new (make-frame `((minibuffer . ,(if drgnx-look-echo--on 'child-frame t)) ,@params))))
     (set-frame-size new (car size) (cadr size) t)
+    (drgnx-look-echo--normal-sizes (cdr state))
     (window-state-put state (frame-root-window new) 'safe)
     (drgnx-look-echo--widths frame new)
     (when selected (select-frame-set-input-focus new))

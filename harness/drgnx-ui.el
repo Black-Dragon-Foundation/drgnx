@@ -1858,6 +1858,50 @@ functions and hook totals measured in the session."
 
 ;;;; GUI test runs
 
+(defun drgnx-ui--hang-report (sess run)
+  "Append to RUN's session.log where the timed-out session SESS hung, before its group is killed: each process of
+the group (PID COMM STATE WCHAN and the syscall it waits in) and the session Emacs's Lisp backtrace, asked over
+its server for 5 s (no answer: it is blocked outside Lisp)."
+  (let* ((pgid (drgnx-ui--read-pgid run))
+         (slurp (lambda (f) (ignore-errors (with-temp-buffer (insert-file-contents f) (string-trim (buffer-string))))))
+         (procs (and pgid
+                     (delq nil (mapcar (lambda (pid)
+                                         (let* ((stat (funcall slurp (format "/proc/%s/stat" pid)))
+                                                (rest (and stat (string-match ") \\(.\\) [0-9]+ \\([0-9]+\\)" stat)
+                                                           (list (match-string 1 stat) (match-string 2 stat)))))
+                                           (and rest (equal (nth 1 rest) pgid)
+                                                (format "  %s %s %s %s syscall %s" pid
+                                                        (funcall slurp (format "/proc/%s/comm" pid)) (car rest)
+                                                        (funcall slurp (format "/proc/%s/wchan" pid))
+                                                        (car (split-string (or (funcall slurp (format "/proc/%s/syscall" pid)) "?")))))))
+                                       (directory-files "/proc" nil "\\`[0-9]+\\'")))))
+         ;; SIGUSR2 (`debug-on-event'): a Lisp loop enters the debugger, whose *Backtrace* the server then reads; a
+         ;; loop in C that never checks for quit stays as it was (no answer)
+         (_ (dolist (l procs)
+              (when (string-match "\\`  \\([0-9]+\\) emacs " l)
+                (ignore-errors (signal-process (string-to-number (match-string 1 l)) 'USR2)))))
+         (_ (let ((deadline (+ (float-time) 2))) (while (< (float-time) deadline) (drgnx-ui--poll-pause 0.1))))
+         (bt (drgnx-ui--run-with-timeout
+              5 (drgnx-ui--emacsclient) "-s" (plist-get sess :socket)
+              "-e" "(if (get-buffer \"*Backtrace*\") (with-current-buffer \"*Backtrace*\" (buffer-substring-no-properties (point-min) (min (point-max) 8000))) (with-output-to-string (backtrace)))")))
+    (ignore-errors
+      (write-region (concat "\ndrgnx-ui: the session timed out; its processes (PID COMM STATE WCHAN):\n"
+                            (mapconcat #'identity procs "\n")
+                            "\ndrgnx-ui: its Emacs's backtrace:\n"
+                            (if (eql (car bt) 0) (cadr bt) (format "no answer (%s)" (car bt)))
+                            ;; no answer: where it is in C, where the image has gdb (the wm image)
+                            (if (or (eql (car bt) 0) (not (executable-find "gdb"))) ""
+                              (mapconcat
+                               (lambda (l)
+                                 (if (string-match "\\`  \\([0-9]+\\) emacs " l)
+                                     (concat "\ndrgnx-ui: its Emacs in C (gdb):\n"
+                                             (cadr (drgnx-ui--run-with-timeout
+                                                    30 "gdb" "-p" (match-string 1 l) "-batch" "-ex" "bt 60")))
+                                   ""))
+                               procs ""))
+                            "\n")
+                    nil (expand-file-name "session.log" run) t 'silent))))
+
 (defun drgnx-ui--kill-group (run)
   "KILL the process group of the session started in RUN (only if it is that session)."
   (let ((pgid (drgnx-ui--read-pgid run)))
@@ -1908,7 +1952,9 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
                     (format "echo $$ > %s; exec %s > %s 2>&1" (shell-quote-argument pgid-file) cmd
                             (shell-quote-argument (expand-file-name "session.log" run)))))))
     (setq drgnx-ui--own (delete (cons :group run) drgnx-ui--own))
-    (when (eq (car r) 'timeout) (drgnx-ui--kill-group run))
+    (when (eq (car r) 'timeout)
+      (drgnx-ui--hang-report sess run)
+      (drgnx-ui--kill-group run))
     ;; whatever is left in the scope (a server whose shell was killed) goes with it
     (when scope (drgnx-ui--run "systemctl" "--user" "stop" (concat name ".scope")))
     (drgnx-ui--run "pkill" "-KILL" "-f" "--" (drgnx-ui--name-pattern name))   ; belt and braces

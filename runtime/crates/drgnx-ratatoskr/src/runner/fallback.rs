@@ -284,7 +284,8 @@ pub(crate) fn set_limits(front: &Front, job: &Job, limits: Vec<Limit>, bind: boo
 }
 
 /// `job/resume`: go on with paused or stopped job ID, with LIMITS for its plan when given; the sessions the
-/// pause held go on, the stopped ones' tasks are free for new agents.
+/// pause held go on, except one a reached limit still holds (its own, a task's), and the stopped ones' tasks are free
+/// for new agents.
 pub async fn resume(front: &Front, caller: &Caller, p: WithLimits) -> Result<JobSummary, Error> {
     let id = p.id.as_str();
     let l: Loaded = load(front, id, false)
@@ -314,6 +315,7 @@ pub async fn resume(front: &Front, caller: &Caller, p: WithLimits) -> Result<Job
         if s.job.as_deref() == Some(id)
             && s.paused == Some(true)
             && s.status != Some(SessionStatus::Exited)
+            && front.core.budgets.holder_of_session(&s.id).is_none()
             && let Ok(sid) = Id::new(s.id.clone())
         {
             let _ = front

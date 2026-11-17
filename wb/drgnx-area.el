@@ -260,7 +260,7 @@ its own title (`drgnx-area-own-title')."
       (drgnx-area--row-with-close
        (concat
         ;; under the grid the area is a docked tile: its grip drags it (`drgnx-grid-drag')
-        (if (and (bound-and-true-p drgnx-grid-mode) (fboundp 'drgnx-grid--grip)) (drgnx-grid--grip) "")
+        (if (and (bound-and-true-p drgnx-grid-mode) (fboundp 'drgnx-grid--grip)) (drgnx-grid--grip (and w (window-frame w))) "")
         (mapconcat (lambda (tab)
                      (let ((face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab))
                            (icon (plist-get (cdr tab) :icon)))
@@ -320,7 +320,7 @@ the close's, then the pieces."
 (defun drgnx-area--horizontal-p (area) (memq (plist-get (alist-get area drgnx-wb--areas) :side) '(left right)))
 
 (declare-function drgnx-grid-delete-part "drgnx-grid" (part))
-(declare-function drgnx-grid--grip "drgnx-grid" ())
+(declare-function drgnx-grid--grip "drgnx-grid" (&optional frame))
 (defvar drgnx-grid-mode)
 (declare-function drgnx-grid-split-dock "drgnx-grid" (dock &optional px frame kinds))
 (declare-function drgnx-grid-add-part "drgnx-grid" (window side &optional px))

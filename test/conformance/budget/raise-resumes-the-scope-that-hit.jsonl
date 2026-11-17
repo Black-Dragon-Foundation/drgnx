@@ -1,0 +1,35 @@
+{"scenario": "budget/raise-resumes-the-scope-that-hit", "requires": ["v1", "test-hooks"], "doc": "Spec G5, Review Focus 2: a worker inside a job reaches its own limit. The plan's usd-est limit is 0.1; the worker's first turn reports 0.01, then its own limit is set to 0.005, so it is reached at once: its job is bound to the worker's scope, so the job pauses with one card on the job about the worker's scope. budget/raise with resume sets the worker's limit, not the run's or the plan's; the job runs again and the worker's next step opens (its next prompt is \"Continue.\")."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")))) (drgnx-agents-routes ((implement \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/p.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit note.txt\nsilent 120\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "job/propose", "params": {"plan": "$ROOT/p.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 11, "method": "budget/set", "params": {"scope": {"plan": "plan:$ROOT/p.md"}, "limits": [{"amount": 0.1, "unit": "usd-est"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 11, "result": {"limits": [{"amount": 0.1, "unit": "usd-est"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 12, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 12, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 13, "method": "budget/get", "params": {"scope": {"run": "$job"}}}, "expect": {"id": 13, "result": {"spent": {"$contains": [{"amount": 0.01, "unit": "usd-est"}]}}}, "within_ms": 90000, "every_ms": 200}
+{"do": "send", "conn": "c", "json": {"id": 14, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 14, "result": {"tasks": [{"n": 1, "agent": "$capture:w"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 15, "method": "budget/set", "params": {"scope": {"worker": "$w"}, "limits": [{"amount": 0.005, "unit": "usd-est"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 15, "result": {"scope": {"worker": "$w"}}}}
+{"do": "expect", "conn": "e", "json": {"event": "budget-limit", "data": {"card": "$capture:card", "data": {"scope": {"worker": "$w"}, "sessions": ["$w"]}}}, "within_ms": 15000}
+{"do": "sql_expect", "sql": "select job from card where id = $card", "rows": [["$job"]]}
+{"do": "poll", "conn": "c", "json": {"id": 16, "method": "agents/get", "params": {"id": "$w"}}, "expect": {"id": 16, "result": {"session": {"paused": true}}}, "within_ms": 10000, "every_ms": 200}
+{"do": "poll", "conn": "c", "json": {"id": 17, "method": "job/status", "params": {"id": "$job"}}, "expect": {"id": 17, "result": {"id": "$job", "status": "paused"}}, "within_ms": 10000, "every_ms": 200}
+{"do": "send", "conn": "c", "json": {"id": 18, "method": "budget/raise", "params": {"card": "$card", "limits": [{"amount": 0.05, "unit": "usd-est"}], "resume": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 18, "result": {"view": {"scope": {"worker": "$w"}, "limits": [{"amount": 0.05, "unit": "usd-est"}]}, "resumed": ["$job", "$w"], "held": []}}}
+{"do": "send", "conn": "c", "json": {"id": 19, "method": "budget/get", "params": {"scope": {"run": "$job"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 19, "result": {"limits": []}}}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "budget/get", "params": {"scope": {"plan": "plan:$ROOT/p.md"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "result": {"limits": [{"amount": 0.1, "unit": "usd-est"}]}}}
+{"do": "file", "path": "$ROOT/w.log", "contains": "\"text\":\"Continue.\"", "within_ms": 15000}
+{"do": "poll", "conn": "c", "json": {"id": 21, "method": "job/status", "params": {"id": "$job"}}, "expect": {"id": 21, "result": {"id": "$job", "status": "running"}}, "within_ms": 10000, "every_ms": 200}

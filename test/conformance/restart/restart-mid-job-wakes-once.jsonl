@@ -2,7 +2,7 @@
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && mkfifo $ROOT/gate"], "expect_code": 0}
-{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--state\" \"$ROOT/mock-state\" \"--log\" \"$ROOT/acp.log\")))))\n"}
 {"do": "start", "hub": "h", "env": {"DRGNX_TEST_PLAIN_JOBS": "1"}}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}

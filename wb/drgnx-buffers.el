@@ -246,6 +246,7 @@ changes and the pointer is not on the row.  A row whose name reaches the close b
   "A row's mouse sensor: the pointer came onto (DIR `entered') or went off (`left') the row at POS in WINDOW.  A row
 with unsaved changes shows its close button instead of ● while the pointer is on it; only that row's tail is drawn
 again."
+  (drgnx-wb-cover-sense window pos dir)  ; a long name's close button over its end
   (when (window-live-p window)
     (with-current-buffer (window-buffer window)
       (when (derived-mode-p 'drgnx-buffers-mode)
@@ -307,6 +308,7 @@ follow the rows."
         (drgnx-buffers--wait-for-hub)
         (require 'drgnx-view-env)
         ;; each row's tail is drawn from the window's right edge: the hub ends a row's text short of what it draws
+        (setq-local drgnx-wb-cover-control (propertize (drgnx-face-glyph 'close) 'help-echo "Close"))
         (setq-local drgnx-view-env-tail #'drgnx-wb-tail-px)
         (drgnx-view-env-register drgnx-buffers-hub-view (current-buffer) #'drgnx-buffers--resend)
         (drgnx-buffers--resend)
@@ -455,8 +457,7 @@ in the editor."
   (drgnx-wb-rows-follow)
   (drgnx-signal-subscribe 'buffer-set-changed #'drgnx-buffers--set-changed)
   (drgnx-signal-subscribe 'modified-changed #'drgnx-buffers--modified-changed)
-  (when (boundp 'mouse-sensor-enabled)                  ; Nidhogg: the ● of a hovered row becomes ×
-    (drgnx-module-set 'mouse-sensor-enabled t))
+  (drgnx-wb-covers-setup "buffers")    ; Nidhogg's sensors: the ● of a hovered row becomes ×, a long name gets its ×
   (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--mark-active)
   (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--scope-sync)
   (drgnx-signal-subscribe 'frame-changed #'drgnx-buffers--scope-sync)           ; another window: its buffers

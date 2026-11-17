@@ -568,6 +568,10 @@ as a prompt.
 
 A frame cannot gain or lose its minibuffer, so turning the echo box on or off (`drgnx-look-echo-row`) replaces each
 graphical frame with one like it: the same windows, buffers, points, window and frame parameters, size and selection.
+The windows go in by `window-state-put` while the new frame may not have the old one's size yet, so they are shared
+out by their normal sizes, which the swap first sets from the saved pixel sizes (`drgnx-look-echo--normal-sizes`):
+Emacs's own can be stale after pixel-wise resizes (a folded dock section was saved with a negative one), and the put
+then fails ("Cannot resize window").
 `drgnx-frame-replaced-functions` runs with OLD and NEW after NEW is up and before OLD is deleted. Whoever keeps a frame
 or a window in a variable moves it there (`drgnx-frame-replaced-window` finds a window's counterpart in NEW) or lets
 it go, from its module's setup through `drgnx-module-hook`, so the teardown removes it. The main window stays main
@@ -2330,6 +2334,15 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   the rows it replaced get their nodes' classes again (PATCHED), so a selection made while a patch waits is still shown once the patch lands; after a reset (which deletes every row, point with it) point goes back to the selection's span. A view names a class with no face to draw none (the Explorer: its selected row is the workbench's, put back after each patch on the row of Sjá's selection, not on the buffer's point, which a patch arriving while another window has the focus can find a row off). Sjá dims off the selection only in a view with chain kinds or a lit list (the Work map, the trail); a search dims its non-matches in any view. `dim` is drawn over runs of whole rows: consecutive rows whose every node is dim share one overlay (`drgnx-view-dim-run`), split and joined as rows change; a dim node in a row with other classes gets its spans' overlays as the other classes do. A class's overlays leave out a span's boxed runs (a chip, `drgnx-view-nav--boxed-p`): a chip keeps its own background on the selected row, which an overlay's face would hide (`drgnx-view-nav/a-class-leaves-a-boxed-run-its-own-face`). A search over 6,400 rows is a few overlays, never one per row (the perf row `view-select-dim` and `drgnx-view-nav/search-dims-non-matches-in-runs` hold it). A hub-fed buffer's paragraphs run left to right (`bidi-paragraph-direction`, set at attach): rows have no blank line between them, so with the direction left to Emacs each redisplay after an edit above the window searched back to the buffer's start for the paragraph and scanned its display properties through every overlay (650 ms at 6,800 rows; `view-remove-above`). Each line still reorders right-to-left text. Row patches carry no
   selection: a removed row takes nothing with it. A view's own marks over the hub's rows go back on after the classes
   through `drgnx-view-patch-patched-functions` (VIEW KEYS), added buffer-locally (the Search view's tick boxes).
+- **The selection on the rows Sjá holds:** a selected node whose spans fill its rows (a list's row, not a card among
+  others on a line, which keeps its spans) is drawn as its whole rows, Sjá's `rowspans` (from a row's first character
+  past its newline), chips and buttons included (`drgnx-view-nav-selection-style`). Where Glitnir draws it is one
+  `row` block per window that shows the view (`glitnir-blocks`, radius 6): its fill lies beneath the rows' glyphs, so a
+  chip or button keeps its own colours and the fill runs on, rounded, from edge to edge; `drgnx-selected` in the
+  selected window and `drgnx-selected-inactive` in the others, following the focus (buffer-local
+  `window-selection-change-functions`). A window that no longer shows the view, or the view's release or kill, leaves
+  no block. Elsewhere (a terminal) one overlay per row covers the whole row in the class face
+  (`rows-sja/the-selection-is-its-whole-row-chips-and-all`, `rows-sja/the-selection-block-is-per-window`).
 - **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or
   `(:view V :clear t)` for none, once the selection has been still for `drgnx-view-delay`, and at most once per
   `drgnx-view-delay` while a key is held (`drgnx-timer-soon`, owned by the buffer).
@@ -2375,7 +2388,13 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   `with-local-quit`), and draws it before returning, so the rows show in the key's own frame as the Lisp listing's
   did; past the limit, and in every timer, hook or follower path, the answer is drawn when it comes. The tail overlays
   (the ⋯ control, the git mark) are made only for rows within a page of what a window shows, the rest when scrolled to
-  (`drgnx-explorer--rows-tails-in`). A single root's row takes no line: the hub sends it as bare invisible text (no
+  (`drgnx-explorer--rows-tails-in`). A row keeps clear only what its tail always draws (the env's `tail`,
+  docs/develop/hub.md): a clean row's name runs to the edge, and when it reaches the ⋯'s place
+  (`drgnx-row-tail-short`) its tail leaves the ⋯ out and the pointer on the row draws it over the end of the name, as
+  VS Code's hover actions (`drgnx-wb-cover-sense`, a Nidhogg mouse sensor on the row: one overlay per window that
+  displays the name's characters from the ⋯'s place as a stretch to that place and the ⋯, so a click there lands on it;
+  detached when the pointer leaves, removed by the module's teardown, `drgnx-wb-covers-setup`). The Buffers panel's
+  close button does the same. A single root's row takes no line: the hub sends it as bare invisible text (no
   icon or chevron image, which a `display` property would show even on invisible text), and the Explorer hides its
   newline with one overlay and gives it no tail (`drgnx-explorer--hide-line`); typing is Sjá's `prefix` over the
   visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
@@ -3399,9 +3418,9 @@ Tests: `test/unit/grid-tree-live-test.el`, `test/ui/grid-full-size-gui-test.el`.
 While a temporary window shows, `drgnx-grid-tree` answers the tree from before the first of them (frame parameter
 `drgnx-grid--good`, the last good tree): temporary windows are never saved. **A grid a package collapsed** — two or
 more tiles gone in one change, past the grid's own hides (a package's `delete-other-windows` with
-`ignore-window-parameters`, or `set-window-configuration`) — is pushed as it was on the frame's layout undo stack
-(`drgnx-grid-push`, frame parameter `drgnx-grid-stack`, newest first, at most 20; `drgnx-grid--watch-foreign` on the
-store's `windows-changed`). Close Pane (`Esc`, `q`) on a tool tile hides it.
+`ignore-window-parameters`, or `set-window-configuration`) — is pushed as it was on the layout undo stack
+(`drgnx-grid-push 'foreign FRAME TREE`; `drgnx-grid--watch-foreign` on the store's `windows-changed`, which already
+coalesces a burst of window changes into one event, so the watch needs no timer of its own). Close Pane (`Esc`, `q`) on a tool tile hides it.
 Tests: `test/unit/grid-rules-test.el` (`drgnx-grid-rules/`).
 
 **Moving tiles** (`wb/drgnx-grid-ops.el`, loaded with the grid). A tile is its whole atom (`drgnx-grid--tile-root`),
@@ -3424,11 +3443,12 @@ named by its main window (`drgnx-grid-tile-main`).
   unstack or a split (`drgnx-grid-split-tile`, the groups' split) changes nothing and says "No room there"; the
   automatic placements fall back to their dock instead. A move first pushes the grid (`drgnx-grid-push` `move`); a
   docked tile moved or swapped loses `drgnx-tile-dock`. The pane backend's `:move` and `:stack` are these.
-- **Drag and drop** (`drgnx-grid--drag`, while `drgnx-grid-drag`): `down-mouse-1` on the grip (`drgnx-grid--grip`,
+- **Drag and drop** (`drgnx-grid--drag`, while `drgnx-grid-drag`): `down-mouse-1` on the grip (`drgnx-grid--grip`: the kit's `grip-vertical` glyph through `drgnx-face-glyph`, ASCII `::` on a non-UTF-8 terminal;
   map `drgnx-grid-grip-map` on the tab line and the header line) starts it: on a tool tile's row (`drgnx-grid--tab-row`),
   a docked area's (`drgnx-area--tab-row`, its header line) and an editor's (`drgnx-chrome--grip`, the row's leading
-  room). A press on a tool tile's tab (`drgnx-grid--tab-press`) is a click when released on the row, else a drag of
-  that kind (`drgnx-grid--drag-source` unstacks it first). The loop reads events under `track-mouse`; each movement
+  room). A press on a tab (`drgnx-grid-tab-press`: a tool tile's, from `drgnx-grid--tab-press`, or an editor's, from
+  `drgnx-chrome--tab-press` with its buffer) is a click when released on the row, else a drag of that kind or buffer
+  (`drgnx-grid--drag-source` unstacks it into a tile of its own first when it is one of several tabs). The loop reads events under `track-mouse`; each movement
   finds the tile and zone (`drgnx-grid-drop-target`, `drgnx-grid-zone`) and replaces only that tile's row line
   (`drgnx-grid--row-param`: the tab line, or a docked area's header line) with "⤓ drop: …" (face `drgnx-grid-drop`);
   the release calls `drgnx-grid--drop` → `drgnx-grid-move`; Esc or `C-g` cancels; the row comes back in an
@@ -3436,6 +3456,26 @@ named by its main window (`drgnx-grid-tile-main`).
   (`drgnx-grid-stack`'s rule), so it says "Nothing moved" too.
 Tests: `test/unit/grid-moves-test.el`, `test/unit/grid-drag-test.el`, `test/ui/grid-drag-gui-test.el` (pointer events
 from `drgnx-uitest-drag-events` on a frame of its own); I11 in `test/live/drgnx-invariants-test.el`.
+
+**The layout snapshot and the undo stack** (`wb/drgnx-grid-frames.el`, loaded with the grid). `(drgnx-grid-snapshot
+&optional WHY)` is every workbench frame's place in the layout as data that reads back: `(:at TIME :why WHY :frames
+(FRAME-SNAP…))`, each FRAME-SNAP `(:id N :role main|aux :monitor KEY :geometry (L T W H) :shell PLIST :tree TREE :full
+ID)` — the main frame first; KEY is `drgnx-monitors--identity`'s; TREE is `drgnx-grid-tree`'s, the tree it goes back to
+while a tile shows full size, whose id is :full; :id is the frame's own number (`drgnx-grid-frame-id`, in a weak
+table, not a frame parameter; a frame a restore makes again gets its old number). Terminal frames take no part (batch frames do, being all the initial terminal's).
+`(drgnx-grid-restore SNAP)` makes again an aux frame SNAP has that is gone (`drgnx-frames--new`), applies each TREE
+(`drgnx-grid-apply-tree`), puts each graphical frame at its geometry, shows its full-size tile again, and deletes the
+aux frames SNAP lacks, their editors' buffers going first in the main frame's last-used editor's tabs (nothing killed,
+saved or asked); a SNAP that `drgnx-grid-valid-snapshot-p` refuses changes nothing and gives one notice.
+`(drgnx-grid-push WHY &optional FRAME TREE)` pushes a snapshot onto `drgnx-grid--stack` (newest first, at most
+`drgnx-grid-stack-max`, 20; WHY one of `drgnx-grid-push-whys`); with FRAME and TREE, that frame's part is TREE (the
+tree before a collapse); a snapshot equal to the newest (time and why aside) is not pushed again. The moves push
+`move` before they change anything; Restore Previous Layout (`layout-restore-previous`, `drgnx-grid-restore-previous`)
+pops and restores, or says "No earlier layout".
+A frame already as SNAP has it (tree, full size, geometry) is left alone, and only the frames a restore changed get
+their chrome again.
+Tests: `test/unit/grid-snapshot-test.el` (`drgnx-grid-snapshot/`: the stack, one frame; batch cannot make a second
+frame) and `test/ui/grid-snapshot-gui-test.el` (`drgnx-ui-grid-snapshot/`: aux frames made, closed and restored).
 
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 
@@ -4086,7 +4126,9 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   that skipped by name (`  SKIP NAME`), so a green tier shows what it did not run.
 - **A frame resized.** The GUI sessions' root frame is fullscreen, and a fullscreen frame keeps its output's size: a
   `set-frame-size` there does nothing, and a row that checked the windows after it passed on the size it had. A row
-  that resizes leaves fullscreen first with `(drgnx-test-frame-fullscreen FRAME nil)` (it waits until the size holds
+  that resizes leaves fullscreen first with `(drgnx-test-frame-fullscreen FRAME nil)` (on Nidhogg's shell it first
+  waits for the compositor's answer, `nhwl--frame-states` without `fullscreen`, since a resize asked before that is
+  dropped and a loaded machine can paint the old size twice first; then it waits until the size holds
   over presented frames, not for it to change: a frame with no bars leaves fullscreen maximized at the size it had,
   and returns the state to put back), then resizes with `(drgnx-test-frame-text-size FRAME WIDTH HEIGHT)`,
   which fails the test unless the text size took (within a character) and still holds over presented frames (a late

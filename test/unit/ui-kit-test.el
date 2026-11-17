@@ -431,11 +431,16 @@
              (load-theme 'drgnx-dark t)
              (should (memq 'drgnx-ui-text (ensure-list (face-attribute 'drgnx-kit-row :inherit nil t)))))
     (mapc #'disable-theme custom-enabled-themes))
+  ;; every character of the row is in a `drgnx-kit-row' run (the twisty's subtle run lies over its own)
   (dolist (tty '(nil t))
     (let* ((e (drgnx-ui-kit-expand 'row '(:kind "tree" :depth 1 :twisty t :text "src") 1.0 tty))
-           (len (length (plist-get e :text))))
-      (should (equal (list tty (vector 0 len "drgnx-kit-row"))
-                     (list tty (aref (plist-get e :runs) 0)))))))
+           (len (length (plist-get e :text)))
+           (bare (cl-loop for i below len
+                          unless (cl-some (lambda (r) (and (equal (aref r 2) "drgnx-kit-row") (<= (aref r 0) i)
+                                                           (< i (aref r 1))))
+                                          (plist-get e :runs))
+                          collect i)))
+      (should (equal (list tty :outside-the-row-face nil) (list tty :outside-the-row-face bare))))))
 
 (ert-deftest drgnx-ui-kit/row-icons-are-images-with-the-gap ()
   ;; the hub's twisty_and_icon_are_images_where_the_env_draws_icons, in Lisp: where icons are drawn, the chevron and
@@ -448,9 +453,15 @@
     (should (equal (mapcar (lambda (p) (list (aref p 0) (aref p 2) (plist-get (cdr (append (aref p 3) nil)) :data)))
                            (plist-get e :props))
                    '((1 "display" "chevron-down 16") (3 "display" "folder 16"))))
-    (let ((plain (drgnx-ui-kit-expand 'row props 1.25 nil)))
+    (let ((plain (drgnx-ui-kit-expand 'row props 1.25 nil))
+          (subtle (lambda (e) (delq nil (mapcar (lambda (r) (and (equal (aref r 2) "drgnx-text-subtle")
+                                                                 (list (aref r 0) (aref r 1))))
+                                                (plist-get e :runs))))))
       (should (string-prefix-p " ⌄ " (plist-get plain :text)))
-      (should (equal (plist-get plain :props) [])))))
+      (should (equal (plist-get plain :props) []))
+      ;; the twisty (image or glyph) in the subtle role, the icon in the row's colours (the mockups' chevrons)
+      (should (equal (funcall subtle e) '((1 2))))
+      (should (equal (funcall subtle plain) '((1 2)))))))
 
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

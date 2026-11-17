@@ -1,0 +1,17 @@
+{"scenario": "work/map-list-budget", "requires": ["v1", "test-hooks"], "doc": "A plan with a limit shows its meter in the List: the plan's row says $0/$40 (spent against the limit, here nothing spent), and a task under it with no spend and no limit shows none. Pattern B."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q -b main && echo one > a.rs && git add a.rs && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--state\" \"$ROOT/state\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict ask)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "m", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [8, 17], "width_px": 1000, "palette": [["accent", "#123456"], ["edge", "#654321"]], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into entity (n,id,kind,title,origin,ver,created_tx,updated_tx) values (9001,'plan:p1','plan','Plan one','recorded',1,1,1),(9002,'task:T1','task','write the thing','recorded',1,1,1),(9003,'task:T2','task','a loose task','recorded',1,1,1)", "insert into link (src,kind,dst,origin,tx_from) values (9001,'parent_of',9002,'recorded',1)"]}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "budget/set", "params": {"scope": {"plan": "plan:p1"}, "limits": [{"amount": 40, "unit": "usd"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "result": {"scope": {"plan": "plan:p1"}}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "m", "ops": {"$text": ["Plan one", "$0/$40"]}}}, "within_ms": 10000}

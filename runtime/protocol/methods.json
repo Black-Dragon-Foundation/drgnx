@@ -11183,6 +11183,334 @@
       "classes": [
         "user"
       ],
+      "doc": "from an open budget card: the card's scope gets LIMITS (its other units kept); with resume, what it paused goes on unless another limit holds it",
+      "name": "budget/raise",
+      "params": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Raise the limit a budget card is about and, with `resume`, let what it paused go on.",
+        "properties": {
+          "card": {
+            "description": "The `budget` card, still open.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limits": {
+            "default": [],
+            "description": "The new limits of the card's scope, one per unit (at most 5); the scope's other units stay as they are.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "maxItems": 5,
+            "type": "array"
+          },
+          "resume": {
+            "default": false,
+            "description": "Let the sessions (or the job) the card paused go on, where no other limit still holds them.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "card"
+        ],
+        "title": "BudgetRaiseParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BudgetHeld": {
+            "additionalProperties": false,
+            "description": "A session or a job a reached limit still holds after a raise, and the scope whose limit it is.",
+            "properties": {
+              "by": {
+                "$ref": "#/$defs/BudgetScope"
+              },
+              "id": {
+                "description": "A session id, or a job id for a job's card.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "by"
+            ],
+            "type": "object"
+          },
+          "BudgetScope": {
+            "description": "What a budget is set on (the limit is kept on the scope's entity); the remaining amount is the least over its\nancestors.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "project": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
+                "properties": {
+                  "plan": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A manager session.",
+                "properties": {
+                  "manager": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "manager"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A worker session.",
+                "properties": {
+                  "worker": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "worker"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "BudgetView": {
+            "additionalProperties": false,
+            "description": "A scope's budget: its own limits, what it spent and what remains (least over its ancestors), each by unit.",
+            "properties": {
+              "limits": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "remaining": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "scope": {
+                "$ref": "#/$defs/BudgetScope"
+              },
+              "spent": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "scope"
+            ],
+            "type": "object"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What `budget/raise` did: the card's scope as it is now, what went on and what a limit still holds.",
+        "properties": {
+          "held": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/BudgetHeld"
+            },
+            "type": "array"
+          },
+          "resumed": {
+            "default": [],
+            "description": "The sessions sent the continue (\"resumed by you\"), or the job resumed.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "$ref": "#/$defs/BudgetView"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "BudgetRaised",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a scope's limits, one per unit (empty clears); the gateway admits usd against the nested minimum",
       "name": "budget/set",
       "params": {
@@ -20702,7 +21030,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a job's forecast: tokens, time and cost per task and for the plan, from the history of similar tasks, with the effect on the week's pace",
+      "doc": "a job's forecast: tokens, time and cost per task and for the plan, from the history of similar tasks, with the effect on the week's pace; with remaining, what is left of a running job from now",
       "name": "forecast/get",
       "params": {
         "$defs": {
@@ -20717,6 +21045,13 @@
         "properties": {
           "job": {
             "$ref": "#/$defs/Id"
+          },
+          "remaining": {
+            "description": "What remains of a running job: finished tasks at their actuals, a running one from the runs longer than it has\nbeen running, the rest from now; times are then wall-clock (seconds since the epoch), not offsets.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "required": [
@@ -20965,6 +21300,15 @@
             ],
             "type": "object"
           },
+          "TaskAt": {
+            "description": "Where a task of a running job stands, in a forecast of what remains.",
+            "enum": [
+              "done",
+              "running",
+              "waiting"
+            ],
+            "type": "string"
+          },
           "TaskForecast": {
             "additionalProperties": false,
             "description": "One task's forecast.",
@@ -20972,6 +21316,17 @@
               "active_secs": {
                 "$ref": "#/$defs/Range",
                 "description": "Seconds spent thinking or running tools."
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TaskAt"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "With `remaining`: where the task stands."
               },
               "basis": {
                 "$ref": "#/$defs/Basis"
@@ -21015,7 +21370,7 @@
                   "p50": 0.0,
                   "p90": 0.0
                 },
-                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros)."
+                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros).  With `remaining`, wall-clock times; a done task's are its actuals."
               },
               "tokens": {
                 "$ref": "#/$defs/Range",
@@ -21574,6 +21929,15 @@
             ],
             "type": "object"
           },
+          "TaskAt": {
+            "description": "Where a task of a running job stands, in a forecast of what remains.",
+            "enum": [
+              "done",
+              "running",
+              "waiting"
+            ],
+            "type": "string"
+          },
           "TaskForecast": {
             "additionalProperties": false,
             "description": "One task's forecast.",
@@ -21581,6 +21945,17 @@
               "active_secs": {
                 "$ref": "#/$defs/Range",
                 "description": "Seconds spent thinking or running tools."
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TaskAt"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "With `remaining`: where the task stands."
               },
               "basis": {
                 "$ref": "#/$defs/Basis"
@@ -21624,7 +21999,7 @@
                   "p50": 0.0,
                   "p90": 0.0
                 },
-                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros)."
+                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros).  With `remaining`, wall-clock times; a done task's are its actuals."
               },
               "tokens": {
                 "$ref": "#/$defs/Range",
@@ -21990,6 +22365,15 @@
             ],
             "type": "object"
           },
+          "TaskAt": {
+            "description": "Where a task of a running job stands, in a forecast of what remains.",
+            "enum": [
+              "done",
+              "running",
+              "waiting"
+            ],
+            "type": "string"
+          },
           "TaskForecast": {
             "additionalProperties": false,
             "description": "One task's forecast.",
@@ -21997,6 +22381,17 @@
               "active_secs": {
                 "$ref": "#/$defs/Range",
                 "description": "Seconds spent thinking or running tools."
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TaskAt"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "With `remaining`: where the task stands."
               },
               "basis": {
                 "$ref": "#/$defs/Basis"
@@ -22040,7 +22435,7 @@
                   "p50": 0.0,
                   "p90": 0.0
                 },
-                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros)."
+                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros).  With `remaining`, wall-clock times; a done task's are its actuals."
               },
               "tokens": {
                 "$ref": "#/$defs/Range",

@@ -52,6 +52,12 @@
   (mapc #'disable-theme custom-enabled-themes)
   (load-theme theme t))
 
+(defun agents-editor-gui--themes-off ()
+  "Give the themes back: none enabled, and the agent faces the look derives from the theme follow it back (a theme left
+enabled, or faces derived from it, is global state the next file sees)."
+  (mapc #'disable-theme custom-enabled-themes)
+  (when (fboundp 'drgnx-look-derive) (drgnx-look-derive)))
+
 (defun agents-editor-gui--rgb (face)
   (let ((c (or (face-foreground face nil t) (face-background face nil t))))
     (mapcar (lambda (v) (round (/ v 257.0))) (color-values c))))
@@ -90,12 +96,21 @@ Agent = range mod 5, state cycles changed, pending, conflict, read."
                                      (_ 'agents-editor-gui-bar))
                              ,(nth agent agents-editor-gui--faces)))))
 
+(defvar-local agents-editor-gui--rows-memo nil "((BODY-PIXELS . TEXT-SCALE) . ROWS): the row count, which only a resize or a text scale changes.")
+
 (defun agents-editor-gui--rows (win start)
   "Rows WIN shows from START: its pixel height over the line height at START (the frame's own line count is
-the default font's, not a scaled buffer's)."
+the default font's, not a scaled buffer's).  Asked once per window size and text scale: `line-pixel-height' measures
+the window's display and takes 10-30 ms when a redisplay is owed (as after every `set-window-start'), which is not
+what a rebuild costs."
   (with-current-buffer (window-buffer win)
-    (save-excursion (goto-char start)
-                    (1+ (ceiling (window-body-height win t) (max 1 (line-pixel-height)))))))
+    (let ((key (cons (window-body-height win t) (bound-and-true-p text-scale-mode-amount))))
+      (if (equal (car agents-editor-gui--rows-memo) key)
+          (cdr agents-editor-gui--rows-memo)
+        (let ((rows (save-excursion (goto-char start)
+                                    (1+ (ceiling (car key) (max 1 (line-pixel-height)))))))
+          (setq agents-editor-gui--rows-memo (cons key rows))
+          rows)))))
 
 (defvar agents-editor-gui--priority nil "An overlay priority for the gutter overlays, or nil.")
 (defvar agents-editor-gui--ring-form 'box "`box' (the card box) or `tint' (a background only), for the cost comparison.")
@@ -105,11 +120,15 @@ the default font's, not a scaled buffer's)."
 (defvar-local agents-editor-gui--active 0)
 (defvar-local agents-editor-gui--table nil)
 
+(defvar agents-editor-gui--phases nil
+  "The steps of each rebuild, newest first: (ROWS LINE OVERLAYS CLEANUP) in ms, so a run over the bar says which step took it.")
+
 (defun agents-editor-gui--rebuild (win &optional start)
   "Put one gutter overlay and one ring overlay on each visible row that lies in a range of the table."
   (with-current-buffer (window-buffer win)
-    (let* ((start (or start (window-start win))) (rows (agents-editor-gui--rows win start))
-           (line (line-number-at-pos start)) (i 0) (table agents-editor-gui--table))
+    (let* ((t0 (float-time)) (start (or start (window-start win))) (rows (agents-editor-gui--rows win start))
+           (t1 (float-time))
+           (line (line-number-at-pos start)) (i 0) (table agents-editor-gui--table) (t2 (float-time)) (t3 nil))
       (unless agents-editor-gui--slots (setq agents-editor-gui--slots (make-vector 400 nil)))
       (save-excursion
         (goto-char start)
@@ -132,11 +151,14 @@ the default font's, not a scaled buffer's)."
                 (overlay-put g 'agents-editor-gui t))
               (cl-incf i)))
           (forward-line 1) (cl-incf line)))
+      (setq t3 (float-time))
       (let ((j i))
         (while (< j agents-editor-gui--active)
           (when-let* ((slot (aref agents-editor-gui--slots j)))
             (delete-overlay (car slot)) (delete-overlay (cdr slot)))
           (cl-incf j)))
+      (push (list (* 1000 (- t1 t0)) (* 1000 (- t2 t1)) (* 1000 (- t3 t2)) (* 1000 (- (float-time) t3)))
+            agents-editor-gui--phases)
       (setq agents-editor-gui--active i))))
 
 (defun agents-editor-gui--clear ()
@@ -227,6 +249,7 @@ bar is 2 ms); then the cost of the redisplay the overlays add; then a picture in
       (let ((rows (agents-editor-gui--rows win (point-min))) direct hooked bare)
         (should (>= rows 80))
         ;; direct: the rebuild alone, 200 scrolls of 37 lines
+        (setq agents-editor-gui--phases nil)
         (dotimes (k 200)
           (let ((pos (save-excursion (goto-char (point-min)) (forward-line (* 3 (% k 100))) (point))))
             (set-window-start win pos)
@@ -267,7 +290,12 @@ bar is 2 ms); then the cost of the redisplay the overlays add; then a picture in
           (agents-editor-gui--note "S1 rebuild rows=%d active-last=%d direct-ms=%S" rows agents-editor-gui--active d)
           (agents-editor-gui--note "S1 redisplay bare-ms=%S with-overlays-ms=%S glitnir=%S scale=%S" b h
                                    (drgnx-uitest-glitnir-p) (drgnx-uitest-device-scale (selected-frame)))
-          (should (<= (plist-get d :p95) 2.0)))
+          (should (or (<= (plist-get d :p95) 2.0)
+                      (ert-fail (list :over-the-bar d
+                                      :slowest-steps-ms-rows-line-overlays-cleanup
+                                      (seq-take (sort (copy-sequence agents-editor-gui--phases)
+                                                      (lambda (a b) (> (apply #'+ a) (apply #'+ b))))
+                                                6))))))
         ;; the picture, both themes
         (set-window-start win (save-excursion (goto-char (point-min)) (forward-line 40) (point)))
         (pcase-dolist (`(,variant . ,theme) agents-editor-gui--themes)
@@ -279,7 +307,7 @@ bar is 2 ms); then the cost of the redisplay the overlays add; then a picture in
           (agents-editor-gui--png (format "s1-rows-%s" variant))
           (should (> agents-editor-gui--active 0)))
         (agents-editor-gui--clear)
-        (mapc #'disable-theme custom-enabled-themes)
+        (agents-editor-gui--themes-off)
         (kill-buffer "*s1-rows*")))))
 
 (defun agents-editor-gui--scroll (win start)
@@ -317,7 +345,7 @@ window, where margins work the same way: the marked row has the agent's colour i
           (agents-editor-gui--png (format "s1-margin-%s" variant))
           (should (>= on 3))
           (should (= off 0))))
-      (mapc #'disable-theme custom-enabled-themes)
+      (agents-editor-gui--themes-off)
       (kill-buffer "*s1-margin*"))))
 
 (provide 'agents-editor-gui-test)
@@ -416,7 +444,7 @@ in the dark, the light and the high-contrast theme: pictures, the gutter and tin
                                          variant tinted plain)
                 (should (< tinted (/ plain 4)))))))
       (drgnx-agents-editor-draw-clear buf)
-      (mapc #'disable-theme custom-enabled-themes)
+      (agents-editor-gui--themes-off)
       (kill-buffer buf))))
 
 ;;;; The agent panel scene (the look's agent-panel.html), in each theme and at the session's scale
@@ -476,9 +504,7 @@ waits for the gate, by eye."
         (drgnx-view-env-teardown)
         (drgnx-view-patch-teardown)
         (set-window-parameter win 'drgnx-view-sja-pinned nil)
-        (mapc #'disable-theme custom-enabled-themes)
-        ;; the agent faces the derive set follow the theme back
-        (when (fboundp 'drgnx-look-derive) (drgnx-look-derive))))))
+        (agents-editor-gui--themes-off)))))
 
 (provide 'agents-editor-gui-test)
 ;;; agents-editor-gui-test.el ends here
