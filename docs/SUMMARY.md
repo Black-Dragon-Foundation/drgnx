@@ -117,6 +117,8 @@
     - [Research trail](design/components/trail.md)
     - [Agent marks and progress](design/components/marks-and-progress.md)
     - [Row (kit)](design/components/row.md)
+    - [Button (kit)](design/components/button.md)
+    - [Key hint (kit)](design/components/key-hint.md)
     - [Agent mark (kit)](design/components/agent-mark.md)
     - [Progress (kit)](design/components/progress.md)
 - [The app icon](design/app-icon.md)

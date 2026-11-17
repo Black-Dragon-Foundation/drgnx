@@ -52,6 +52,23 @@ foot shows only in part)."
   (when-let* ((xy (posn-x-y (posn-at-point pos))))
     (<= (+ (cdr xy) (save-excursion (goto-char pos) (line-pixel-height))) (window-body-height nil t))))
 
+(defun drgnx-kit-sheet--bg (id variants)
+  "The fill token component ID's binding for VARIANTS (values) gives its own face, or nil: the most specific binding
+whose values VARIANTS all have."
+  (let (best (n -1))
+    (dolist (b (plist-get (drgnx-ui-kit-component id) :bind))
+      (when (and (cl-every (lambda (v) (memq v variants)) (car b)) (> (length (car b)) n))
+        (setq best b n (length (car b)))))
+    (plist-get (cdr best) :bg)))
+
+(defun drgnx-kit-sheet--edge (id variants)
+  "The ring token of component ID's binding for VARIANTS (see `drgnx-kit-sheet--bg'), or nil."
+  (let (best (n -1))
+    (dolist (b (plist-get (drgnx-ui-kit-component id) :bind))
+      (when (and (cl-every (lambda (v) (memq v variants)) (car b)) (> (length (car b)) n))
+        (setq best b n (length (car b)))))
+    (plist-get (cdr best) :edge)))
+
 (defvar drgnx-kit-sheet--edges nil
   "Non-nil while a sheet also checks that hovered and selected cells have no edge (`drgnx-kit-sheet/state-table').")
 
@@ -104,9 +121,9 @@ Returns the number of cells checked."
           (should (equal (list what 'height h)
                          (list what 'height (round (* s (save-excursion (goto-char beg) (line-pixel-height))))))))
         ;; (b) the fill inside the start pad, halfway in (clear of a focus ring and of a rounded corner): the state's,
-        ;; an agent mark's its agent's colour (a bar's is checked on its own row, below)
+        ;; the component's own, an agent mark's its agent's colour (a bar's is checked on its own row, below)
         (when (and spaces (not (eq id 'progress)))
-          (let* ((token (or (plist-get (drgnx-ui-kit-state state) :fill)
+          (let* ((token (or (plist-get (drgnx-ui-kit-state state) :fill) (drgnx-kit-sheet--bg id variants)
                             (and (eq id 'agent-mark)
                                  (intern (format "a%d" (plist-get (drgnx-kit-sheet--props id variants state) :slot))))
                             'editor))
@@ -118,6 +135,10 @@ Returns the number of cells checked."
                          (let ((p (posn-point (posn-at-x-y (- (round (/ x s)) (car edges)) (- (round (/ y s)) (cadr edges))))))
                            (list :at p :beg beg :char (and p (char-after p)) :start (window-start))))))
               (should (equal (list what 'fill token want nil) (list what 'fill token got at))))))
+        ;; (b') a component with a ring has it at rest: its leftmost column, halfway down, is the ring's token
+        (when-let* (((eq state 'rest)) (edge (drgnx-kit-sheet--edge id variants)) (x0 (drgnx-kit-sheet--x beg s edges)))
+          (should (equal (list what 'ring edge (drgnx-kit-sheet--rgb (drgnx-look-token edge variant)))
+                         (list what 'ring edge (drgnx-uitest-pixel snap x0 y)))))
         ;; (b'') a progress bar: on the bar's own device row, its fill is VALUE of its width (rounded half up) in the
         ;; fill's colour, then the track's colour
         (when (and (eq id 'progress) (equal variants '(bar)))
@@ -130,7 +151,7 @@ Returns the number of cells checked."
                              (list what 'no-shadow (drgnx-uitest-pixel snap x y)))))))
         ;; the state table's rows (§7.6): a hovered or selected cell has no edge, so its leftmost column and its top
         ;; row are its fill (a 1 px ring would show there)
-        (when (and drgnx-kit-sheet--edges (memq state '(hover selected selected-inactive)))
+        (when (and drgnx-kit-sheet--edges spaces (memq state '(hover selected selected-inactive)))
           (let* ((want (drgnx-kit-sheet--rgb (drgnx-look-token (plist-get (drgnx-ui-kit-state state) :fill) variant)))
                  (x0 (drgnx-kit-sheet--x beg s edges))
                  (top (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point beg)))))))
@@ -174,6 +195,16 @@ picture goes to the evidence folder.  The caller skips a session with no graphic
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'row))
 
+(drgnx-look-gui-deftest drgnx-kit-sheet/button ()
+  "The button's sheet: 4 styles x 2 sizes x 7 states, each pad exact, its own fill (the state's above it), in every theme
+and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'button))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/key-hint ()
+  "The key hint's sheet: its two variants x 7 states in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'key-hint))
 (drgnx-look-gui-deftest drgnx-kit-sheet/agent-mark ()
   "The agent mark's sheet: its handle between exact pads on its agent's colour, in every theme and density."
   (skip-unless (display-graphic-p))

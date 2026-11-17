@@ -40,6 +40,7 @@ pub const DEFAULT_MAX_MESSAGE: usize = 64 << 20;
 pub const FRAME_SLACK: usize = 64;
 /// How long a stopped Chromium has between SIGTERM and SIGKILL.
 pub const STOP_GRACE: Duration = Duration::from_secs(2);
+
 /// How much of Chromium's stderr `DIR/stderr.tail` keeps.
 pub const STDERR_TAIL_MAX: usize = 16 * 1024;
 /// At most one `stderr` event per this.
@@ -71,6 +72,9 @@ pub struct HostCfg {
     pub max_message: usize,
     /// `--headless-shell`: the program is `chrome-headless-shell`, which takes no `--headless`.
     pub headless_shell: bool,
+    /// How long a stopped browser has between SIGTERM and SIGKILL ([`STOP_GRACE`]; a unit test sets its own, so it
+    /// asserts the order and never a clock against the constant).
+    pub stop_grace: Duration,
 }
 
 /// `browser-host`'s arguments.
@@ -144,6 +148,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<HostArgs, Strin
             web_port,
             max_message,
             headless_shell: kind.unwrap_or(false),
+            stop_grace: STOP_GRACE,
         },
         unconfined,
     })
@@ -290,21 +295,45 @@ pub fn serve(cfg: &HostCfg, hub: OwnedFd, ready: OwnedFd) -> i32 {
     };
     let sink = Arc::new(StderrSink::new(cfg.dir.join(STDERR_TAIL_FILE), out.clone()));
     let mut decoder = FrameDecoder::new(cfg.max_message + FRAME_SLACK);
-    let mut browser: Option<Browser> = None;
-    let mut buf = vec![0u8; 64 * 1024];
-    let code = loop {
-        let n = match input.read(&mut buf) {
-            Ok(0) => break EXIT_OK,
-            Ok(n) => n,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            // the hub closed its end before it read what the host last sent (an exit event, say): the hub went,
-            // as with EOF
-            Err(e) if e.kind() == io::ErrorKind::ConnectionReset => break EXIT_OK,
-            Err(e) => break fail(format!("reading the hub: {e}")),
+    // The hub's end is read on a thread of its own, so the frames are taken off the socket while this thread is held
+    // in a stop's grace period (SIGTERM, then SIGKILL after it): the hub's writes never wait on a stopping browser,
+    // and its closing is seen at once; the frames are acted on here, in order, once the stop is done.
+    let (to_main, from_hub) = mpsc::channel::<FromHub>();
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 64 * 1024];
+        let end = loop {
+            let n = match input.read(&mut buf) {
+                Ok(0) => break EXIT_OK,
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                // the hub closed its end before it read what the host last sent (an exit event, say): the hub went,
+                // as with EOF
+                Err(e) if e.kind() == io::ErrorKind::ConnectionReset => break EXIT_OK,
+                Err(e) => {
+                    eprintln!("ratatoskr browser-host: reading the hub: {e}");
+                    break EXIT_FAILED;
+                }
+            };
+            match decoder.push(&buf[..n]) {
+                Ok(frames) => {
+                    if to_main.send(FromHub::Frames(frames)).is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("ratatoskr browser-host: the hub's stream: {e}");
+                    break EXIT_FAILED;
+                }
+            }
         };
-        let frames = match decoder.push(&buf[..n]) {
-            Ok(f) => f,
-            Err(e) => break fail(format!("the hub's stream: {e}")),
+        let _ = to_main.send(FromHub::End(end));
+    });
+    let mut browser: Option<Browser> = None;
+    let code = loop {
+        let frames = match from_hub.recv() {
+            Ok(FromHub::Frames(f)) => f,
+            Ok(FromHub::End(code)) => break code,
+            Err(_) => break EXIT_OK,
         };
         for f in frames {
             if browser.as_ref().is_some_and(Browser::ended) {
@@ -326,6 +355,12 @@ pub fn serve(cfg: &HostCfg, hub: OwnedFd, ready: OwnedFd) -> i32 {
         b.stop("hub");
     }
     code
+}
+
+/// What the thread that reads the hub's end tells the host's own thread.
+enum FromHub {
+    Frames(Vec<heimdall::codec::Frame>),
+    End(i32),
 }
 
 /// One control frame from the hub.
@@ -456,6 +491,8 @@ struct Browser {
     sent: Arc<AtomicBool>,
     /// The stream `sent` goes with.
     out: Out,
+    /// How long [`Browser::stop`] waits before the SIGKILL.
+    grace: Duration,
 }
 
 impl Browser {
@@ -619,6 +656,7 @@ impl Browser {
             done,
             sent,
             out: out.clone(),
+            grace: cfg.stop_grace,
         }
     }
 
@@ -647,7 +685,7 @@ impl Browser {
         eprintln!("ratatoskr browser-host: stopping the browser ({why})");
         self.signal(libc::SIGTERM);
         drop(self.to_chrome.take());
-        if let Err(RecvTimeoutError::Timeout) = self.done.recv_timeout(STOP_GRACE) {
+        if let Err(RecvTimeoutError::Timeout) = self.done.recv_timeout(self.grace) {
             self.signal(libc::SIGKILL);
             let _ = self.done.recv_timeout(Duration::from_secs(5));
         }
@@ -755,11 +793,75 @@ fn cstring(s: &str) -> Result<CString, String> {
     CString::new(s).map_err(|_| format!("a NUL in {s:?}"))
 }
 
-/// Fork and exec Chromium. Everything the child needs is made before the fork, so the child (of a process with
-/// threads) only makes syscalls: its own process group, the death signal (and a check that the host is still its
-/// parent), SIGPIPE back to default and no signal blocked, stdin and stdout on `/dev/null`, stderr on a pipe, the CDP
-/// pipe at fds 3 (in) and 4 (out), every other fd close-on-exec, then `execve` with exactly [`chromium_env`]. A
-/// failed exec reports its errno on a close-on-exec pipe. The error is `(exit code, text)`: 127 not found, else 126.
+/// What the cloned child needs, all made before the clone: it runs on the parent's memory (CLONE_VM) until its exec, so
+/// it only makes syscalls on these values and reports a failed exec by writing `errno`.
+struct Child {
+    me: libc::pid_t,
+    null: RawFd,
+    err: RawFd,
+    cdp_in: RawFd,
+    cdp_out: RawFd,
+    argv: *const *const libc::c_char,
+    envp: *const *const libc::c_char,
+    /// The exec's errno, 0 while no exec failed.
+    errno: std::sync::atomic::AtomicI32,
+}
+
+/// The cloned child's body: its own process group, the death signal (and a check that the host is still its parent),
+/// every signal's handler back to the default, SIGPIPE too and no signal blocked, stdin and stdout on `/dev/null`,
+/// stderr on a pipe, the CDP pipe at fds 3 (in) and 4 (out), every other fd close-on-exec, then `execve`.
+extern "C" fn child_main(arg: *mut libc::c_void) -> libc::c_int {
+    // SAFETY: ARG is the `Child` of the clone that made this process, alive until the parent resumes (the parent is
+    // suspended until this process execs or exits); only syscalls follow, no allocation and no lock.
+    unsafe {
+        let c = &*(arg as *const Child);
+        // refused under a filter that forbids it (the reduced tier's): the host then signals the process alone
+        libc::setpgid(0, 0);
+        let mut sig = 1;
+        while sig < 65 {
+            // a handler of the host's must not run on the memory this process shares with it
+            let mut old: libc::sigaction = std::mem::zeroed();
+            if libc::sigaction(sig, std::ptr::null(), &mut old) == 0
+                && old.sa_sigaction != libc::SIG_DFL
+                && old.sa_sigaction != libc::SIG_IGN
+            {
+                let mut dfl: libc::sigaction = std::mem::zeroed();
+                dfl.sa_sigaction = libc::SIG_DFL;
+                libc::sigaction(sig, &dfl, std::ptr::null_mut());
+            }
+            sig += 1;
+        }
+        let mut none: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut none);
+        let ok = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == 0
+            && libc::getppid() == c.me
+            && libc::signal(libc::SIGPIPE, libc::SIG_DFL) != libc::SIG_ERR
+            && libc::sigprocmask(libc::SIG_SETMASK, &none, std::ptr::null_mut()) == 0
+            && libc::dup2(c.null, 0) >= 0
+            && libc::dup2(c.null, 1) >= 0
+            && libc::dup2(c.err, 2) >= 0
+            && libc::dup2(c.cdp_in, 3) >= 0
+            && libc::dup2(c.cdp_out, 4) >= 0
+            && libc::syscall(
+                libc::SYS_close_range,
+                5u32,
+                u32::MAX,
+                libc::CLOSE_RANGE_CLOEXEC,
+            ) == 0;
+        if ok {
+            libc::execve(*c.argv, c.argv, c.envp);
+        }
+        let errno = io::Error::last_os_error().raw_os_error().unwrap_or(1);
+        c.errno.store(errno, Ordering::SeqCst);
+        libc::_exit(127)
+    }
+}
+
+/// Clone and exec Chromium. Everything the child needs is made before the clone, so the child (which shares the host's
+/// memory, as a `vfork` child does) only makes syscalls. The parent is suspended by the kernel until the child has
+/// exec'd or exited (CLONE_VFORK): nothing is read from a pipe to learn that, so a fork another thread makes between
+/// this one's pipes and its exec, holding copies of them until its own exec, holds nothing back. A failed exec is
+/// reported in `Child::errno`. The error is `(exit code, text)`: 127 not found, else 126.
 fn spawn(cfg: &HostCfg) -> Result<Spawned, (i32, String)> {
     let setup = |e: String| (126, e);
     let argv = chromium_argv(cfg)
@@ -785,7 +887,8 @@ fn spawn(cfg: &HostCfg) -> Result<Spawned, (i32, String)> {
     let (in_r, in_w) = pipe().map_err(io("the CDP pipe"))?;
     let (out_r, out_w) = pipe().map_err(io("the CDP pipe"))?;
     let (err_r, err_w) = pipe().map_err(io("the stderr pipe"))?;
-    let (exec_r, exec_w) = pipe().map_err(io("the exec pipe"))?;
+    #[cfg(test)]
+    tests::fork_holder();
     let null = File::options()
         .read(true)
         .write(true)
@@ -793,62 +896,60 @@ fn spawn(cfg: &HostCfg) -> Result<Spawned, (i32, String)> {
         .map(OwnedFd::from)
         .map_err(io("/dev/null"))?;
     // above every number the child moves them to, so no dup2 there overwrites one before it is used
-    let moved = [&in_r, &out_w, &err_w, &null, &exec_w]
+    let moved = [&in_r, &out_w, &err_w, &null]
         .map(high)
         .into_iter()
         .collect::<io::Result<Vec<_>>>()
         .map_err(io("the browser's fds"))?;
-    let [c_in, c_out, c_err, c_null, exec_fd] = [0, 1, 2, 3, 4].map(|i| moved[i].as_raw_fd());
-    // SAFETY: getpid only reads.
-    let me = unsafe { libc::getpid() };
-    // SAFETY: the child runs only syscalls on values made above (no allocation, no lock), then execs or exits.
-    let pid = unsafe { libc::fork() };
+    let [c_in, c_out, c_err, c_null] = [0, 1, 2, 3].map(|i| moved[i].as_raw_fd());
+    let child = Child {
+        // SAFETY: getpid only reads.
+        me: unsafe { libc::getpid() },
+        null: c_null,
+        err: c_err,
+        cdp_in: c_in,
+        cdp_out: c_out,
+        argv: argv_p.as_ptr(),
+        envp: envp_p.as_ptr(),
+        errno: std::sync::atomic::AtomicI32::new(0),
+    };
+    // the child's own stack (it shares the host's memory, not its stack); the parent is suspended while it uses it
+    let mut stack = vec![0u8; 256 * 1024];
+    // SAFETY: the top of the stack, 16-aligned, for a stack that grows down
+    let top = unsafe { stack.as_mut_ptr().add(stack.len()) };
+    let top = (top as usize & !15) as *mut libc::c_void;
+    // no signal handler may run in the child before its exec, on the memory it shares: block them all around the clone
+    // SAFETY: sigset and pthread_sigmask on values of this frame.
+    let (all, mut before) = unsafe {
+        let mut all: libc::sigset_t = std::mem::zeroed();
+        libc::sigfillset(&mut all);
+        (all, std::mem::zeroed::<libc::sigset_t>())
+    };
+    // SAFETY: as above; the old mask is put back after the clone.
+    unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &all, &mut before) };
+    // SAFETY: CHILD and the stack live until the clone returns (CLONE_VFORK: the child has exec'd or exited); the
+    // child's body makes only syscalls.
+    let pid = unsafe {
+        libc::clone(
+            child_main,
+            top,
+            libc::CLONE_VM | libc::CLONE_VFORK | libc::SIGCHLD,
+            (&child as *const Child).cast_mut().cast(),
+        )
+    };
+    let cloned = io::Error::last_os_error();
+    // SAFETY: puts back the mask saved above.
+    unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &before, std::ptr::null_mut()) };
+    drop(stack);
     if pid < 0 {
-        return Err((126, format!("fork: {}", io::Error::last_os_error())));
+        return Err((126, format!("clone: {cloned}")));
     }
-    if pid == 0 {
-        // SAFETY: the child's own state; it never returns into the host.
-        unsafe {
-            // refused under a filter that forbids it (the reduced tier's): the host then signals the process alone
-            libc::setpgid(0, 0);
-            let mut none: libc::sigset_t = std::mem::zeroed();
-            libc::sigemptyset(&mut none);
-            let ok = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == 0
-                && libc::getppid() == me
-                && libc::signal(libc::SIGPIPE, libc::SIG_DFL) != libc::SIG_ERR
-                && libc::sigprocmask(libc::SIG_SETMASK, &none, std::ptr::null_mut()) == 0
-                && libc::dup2(c_null, 0) >= 0
-                && libc::dup2(c_null, 1) >= 0
-                && libc::dup2(c_err, 2) >= 0
-                && libc::dup2(c_in, 3) >= 0
-                && libc::dup2(c_out, 4) >= 0
-                && libc::syscall(
-                    libc::SYS_close_range,
-                    5u32,
-                    u32::MAX,
-                    libc::CLOSE_RANGE_CLOEXEC,
-                ) == 0;
-            if ok {
-                libc::execve(argv_p[0], argv_p.as_ptr(), envp_p.as_ptr());
-            }
-            let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            libc::write(exec_fd, (&errno as *const i32).cast(), 4);
-            libc::_exit(127);
-        }
-    }
-    // the parent: the same group from this side too, so no signal can come before the child joined it
+    // the same group from this side too, so no signal can come before the child joined it
     // SAFETY: setpgid on our own child; EACCES once it exec'd, which is fine (it joined its group first).
     unsafe { libc::setpgid(pid, pid) };
-    drop((moved, in_r, out_w, err_w, null, exec_w));
-    let mut got = [0u8; 4];
-    let mut exec_r = File::from(exec_r);
-    let n = loop {
-        match exec_r.read(&mut got) {
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            r => break r.unwrap_or(0),
-        }
-    };
-    if n == 0 {
+    drop((moved, in_r, out_w, err_w, null));
+    let errno = child.errno.load(Ordering::SeqCst);
+    if errno == 0 {
         return Ok(Spawned {
             pid,
             to_chrome: in_w,
@@ -856,7 +957,6 @@ fn spawn(cfg: &HostCfg) -> Result<Spawned, (i32, String)> {
             stderr: err_r,
         });
     }
-    let errno = i32::from_ne_bytes(got);
     let mut status = 0;
     // SAFETY: reaps the child that failed to exec.
     unsafe { libc::waitpid(pid, &mut status, 0) };
@@ -887,6 +987,11 @@ mod tests {
 
     impl Fx {
         fn new() -> Fx {
+            // a short grace: a test asserts the order SIGTERM, grace, SIGKILL, exited, never a clock against the constant
+            Fx::with_grace(Duration::from_millis(300))
+        }
+
+        fn with_grace(grace: Duration) -> Fx {
             let dir = tempfile::tempdir().unwrap();
             let cfg = HostCfg {
                 program: stand_in(),
@@ -894,6 +999,7 @@ mod tests {
                 web_port: 3130,
                 max_message: 1 << 20,
                 headless_shell: false,
+                stop_grace: grace,
             };
             let (hub, end) = UnixStream::pair().unwrap();
             let (ready, ready_w) = std::io::pipe().unwrap();
@@ -1054,10 +1160,11 @@ mod tests {
             web_port: 3130,
             max_message: 1,
             headless_shell: false,
+            stop_grace: STOP_GRACE,
         };
         assert_eq!(argv, chromium_argv(&cfg)[1..], "the flags, exactly");
         fx.control(json!({"op": "stop", "why": "idle"}));
-        fx.event("exited", Duration::from_secs(3));
+        fx.event("exited", Duration::from_secs(20));
         assert!(group_gone(pid));
         drop(fx.hub);
     }
@@ -1070,6 +1177,7 @@ mod tests {
             web_port: 3130,
             max_message: DEFAULT_MAX_MESSAGE,
             headless_shell: true,
+            stop_grace: STOP_GRACE,
         };
         let want = "/usr/lib64/chromium-browser/headless_shell --remote-debugging-pipe \
             --user-data-dir=/tmp/drgnx-browser/profile --no-sandbox --disable-gpu \
@@ -1115,16 +1223,103 @@ mod tests {
         fx.reply(2);
     }
 
+    /// A fork of another thread (a test's, here; in the hub any `Command` spawn) made between `spawn`'s pipes and its
+    /// exec holds a copy of every one of them until that child's own exec, which a loaded machine can put off for
+    /// seconds.  Armed, the next `spawn` forks such a child (it sleeps 30 s, until the test kills it) right after making its pipes.
+    static HOLD_FORK: AtomicBool = AtomicBool::new(false);
+    /// The pid of the child [`fork_holder`] made (0: none).
+    static HOLDER: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+    pub(super) fn fork_holder() {
+        if !HOLD_FORK.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        // SAFETY: the child only sleeps and exits (async-signal-safe calls); the parent reaps it on a thread.
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            let ts = libc::timespec {
+                tv_sec: 30,
+                tv_nsec: 0,
+            };
+            // SAFETY: nanosleep and _exit in the forked child.
+            unsafe {
+                libc::nanosleep(&ts, std::ptr::null_mut());
+                libc::_exit(0);
+            }
+        }
+        HOLDER.store(pid, Ordering::SeqCst);
+        std::thread::spawn(move || {
+            let mut st = 0;
+            // SAFETY: reaps the child made above.
+            unsafe { libc::waitpid(pid, &mut st, 0) };
+        });
+    }
+
+    /// `start` answers when the browser has exec'd, not when every other fork's copy of its pipes is gone: a child
+    /// another thread forked between the pipes and the exec (held until the test kills it) does not hold `started` back.
     #[test]
-    fn stop_kills_the_browser_within_3s() {
+    fn a_start_does_not_wait_for_another_threads_fork() {
+        let mut fx = Fx::new();
+        HOLD_FORK.store(true, Ordering::SeqCst);
+        let pid = fx.start();
+        // the order, not a clock: `started` came while the fork that holds copies of the pipes was still alive
+        let holder = HOLDER.load(Ordering::SeqCst);
+        assert!(holder > 0, "the hook forked its child");
+        // SAFETY: signal 0 only checks that the process exists
+        let alive = unsafe { libc::kill(holder, 0) } == 0;
+        // SAFETY: kills the sleeper this test made, which the reaper thread then collects
+        unsafe { libc::kill(holder, libc::SIGKILL) };
+        assert!(alive, "start answered only after the other fork was gone");
+        fx.cdp(r#"{"id":1,"method":"Page.enable"}"#);
+        fx.reply(1);
+        assert!(pid > 0);
+    }
+
+    /// While a stop waits out its grace (the browser ignores SIGTERM), the hub's frames are taken off the socket at
+    /// once, not when the stop is done: a `start` and a CDP message sent into the grace are read (nothing of them is left
+    /// unread in the hub's send queue) long before the grace is over; then they are acted on in order.
+    #[test]
+    fn the_hubs_frames_are_read_while_a_stop_waits_out_its_grace() {
+        let mut fx = Fx::with_grace(Duration::from_secs(20));
+        let pid = fx.start();
+        fx.cdp(r#"{"id":1,"method":"Fake.stubborn"}"#);
+        fx.reply(1);
+        fx.control(json!({"op": "stop", "why": "idle"}));
+        // the host takes the stop and sits in its grace before the next frames are written (a sleep only separates the
+        // writes, so the two cannot be read as one chunk; the check below is on what is read, not on this wait)
+        std::thread::sleep(Duration::from_millis(300));
+        fx.control(json!({"op": "start"}));
+        fx.cdp(r#"{"id":2,"method":"Page.enable"}"#);
+        use std::os::fd::AsRawFd;
+        let fd = fx.hub.as_raw_fd();
+        // the hub's send queue empties: the host read both frames (TIOCOUTQ: bytes sent and not yet read by the peer),
+        // within 10 s of a grace of 20 s
+        skuld::wait_until("the host to read the hub's frames", 10, || {
+            let mut n: libc::c_int = -1;
+            // SAFETY: TIOCOUTQ writes one c_int to the pointer, which lives across the call
+            let r = unsafe { libc::ioctl(fd, libc::TIOCOUTQ, &mut n) };
+            (r == 0 && n == 0).then_some(())
+        });
+        // end the stop's grace here (the browser is killed from outside), then the order: exited, the new browser, its reply
+        // SAFETY: SIGKILL to the browser this test started, its group
+        unsafe { libc::kill(-pid, libc::SIGKILL) };
+        let e = fx.event("exited", Duration::from_secs(20));
+        assert_eq!(e["signal"], libc::SIGKILL, "{e}");
+        let again = fx.event("started", Duration::from_secs(20));
+        assert_ne!(again["pid"].as_i64().unwrap() as libc::pid_t, pid);
+        fx.reply(2);
+    }
+
+    #[test]
+    fn stop_kills_the_browser_by_sigkill_after_the_grace() {
         let mut fx = Fx::new();
         let pid = fx.start();
         // it ignores SIGTERM and the pipe's end from here on: only the SIGKILL after the grace ends it
         fx.cdp(r#"{"id":1,"method":"Fake.stubborn"}"#);
         fx.reply(1);
         fx.control(json!({"op": "stop", "why": "idle"}));
-        // within 3 s (the wait's bound), and by the SIGKILL after the grace: a SIGTERM did not end it
-        let e = fx.event("exited", Duration::from_secs(3));
+        // by the SIGKILL after the grace (a SIGTERM did not end it); the bound is a generous one, the order is the test
+        let e = fx.event("exited", Duration::from_secs(20));
         assert_eq!(e["signal"], libc::SIGKILL, "{e}");
         assert!(group_gone(pid), "nothing of its group is left");
         // a stopped browser starts again
@@ -1158,7 +1353,7 @@ mod tests {
         }
         let _stray = Kill(stray);
         fx.control(json!({"op": "stop", "why": "idle"}));
-        let e = fx.event("exited", Duration::from_secs(3));
+        let e = fx.event("exited", Duration::from_secs(20));
         assert_eq!(e["signal"], libc::SIGTERM, "{e}");
         assert!(group_gone(pid), "nothing of its group is left");
         // the stray wrote once the browser was reaped: nothing of it came before `exited`, nor comes after
@@ -1182,7 +1377,7 @@ mod tests {
         fx.reply(1);
         // the hub is gone
         fx.hub.shutdown(std::net::Shutdown::Both).unwrap();
-        assert_eq!(fx.host_exit(Duration::from_secs(4)), EXIT_OK);
+        assert_eq!(fx.host_exit(Duration::from_secs(20)), EXIT_OK);
         assert!(group_gone(pid), "no browser process is left");
     }
 
@@ -1204,7 +1399,7 @@ mod tests {
         });
         drop(fx.hub);
         let h = fx.host.take().unwrap();
-        skuld::wait_until("the host's exit", 4, || h.is_finished().then_some(()));
+        skuld::wait_until("the host's exit", 20, || h.is_finished().then_some(()));
         assert_eq!(h.join().unwrap(), EXIT_OK);
         assert!(group_gone(pid), "no browser process is left");
     }
@@ -1214,7 +1409,7 @@ mod tests {
         let mut fx = Fx::new();
         let pid = fx.start();
         fx.cdp(r#"{"id":1,"method":"Fake.crash"}"#);
-        let e = fx.event("exited", Duration::from_secs(3));
+        let e = fx.event("exited", Duration::from_secs(20));
         assert_eq!(e["signal"], libc::SIGKILL, "{e}");
         assert_eq!(e["code"], Value::Null, "{e}");
         assert!(group_gone(pid));
@@ -1258,6 +1453,7 @@ mod tests {
             web_port: 3130,
             max_message: 1 << 20,
             headless_shell: false,
+            stop_grace: STOP_GRACE,
         };
         let (out, mut hub) = UnixStream::pair().unwrap();
         let sink = Arc::new(StderrSink::new(

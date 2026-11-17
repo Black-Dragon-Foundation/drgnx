@@ -3679,6 +3679,28 @@ kit_conformance`, read it before committing) and `drgnx-ui-kit/conformance` chec
   pad widths at the scales seen). Per-row path: positional arguments, no `&key`, no `apply`, no closures; after a
   warm-up a call allocates no vector (`drgnx-ui-kit/row-call-allocates-no-closure`).
 
+### Buttons and key hints (Task 12)
+
+- `button` (variants `style` primary, secondary, quiet, danger; `size` md, sm): a label in a rounded box, 26 px tall
+  (22 small) with 12 px (8) of room each side and a 1 px ring inside it; its key hint, when it has one, follows the
+  label after a 6 px gap, inside the button; a click or RET on the label, the room or the 4 px `:hit` padding at each
+  end runs the action. Its faces are `drgnx-kit-button-STYLE` (primary: `button-primary-bg`/`-fg`; secondary: the quiet
+  selection's fill and `button-edge`; quiet: no fill, the muted text; danger: `error` on `error-tint`). A button has
+  colours of its own, so its state's face is *above* them (a disabled label is dim, a hovered one filled, a focused
+  one ringed): the hub's `RowBuilder::face_over` and the first run of the Lisp expansion. `focus-visible` shows only
+  after a key event (`drgnx-ui-kit-focus-visible-p`; the constructor draws a rest button after a mouse event).
+- `key-hint` (variant `cap` or `menu`): the keys in the code font (`drgnx-code-small`), in a 4 px box
+  (`key-hint-edge`) with 5 px each side; `menu` is the text alone (a menu's shortcut column, Task 11). On a terminal
+  `[KEYS]` (`menu`: `KEYS`). Its label is "key" and the string constructor's `help-echo` is "key KEYS".
+- `(drgnx-ui-kit-button LABEL ACTION STYLE SIZE STATE KEY WHERE)` and `(drgnx-ui-kit-key-hint KEYS VARIANT WHERE)`
+  build them as strings for WHERE as `drgnx-ui-kit-string` does. ACTION is a registry id, a command, a function of no
+  arguments (all run through the kit action kind `ui-button`, i.e. `drgnx-ui-kit-run`) or `(KIND . ARGS)` of a kit
+  action. `drgnx-ui-button` keeps its `&key` signature for callers off per-row paths; its faces `drgnx-ui-button` and
+  `drgnx-ui-button-primary` (and `drgnx-button`, `drgnx-work-flow-button*`, `drgnx-keycap`) are aliases of the kit
+  faces once `ui/look` is on.
+- A binding may name `:font` (faces with no colours: the UI or code font): a drgnx theme's spec for a face with
+  colours keeps only those of its `:inherit`, while a third-party theme styles it through the whole `:inherit`.
+
 ### Actions and focus-visible
 
 - A component's action is the property `drgnx-action` = `(KIND ARGS...)` (on the wire `[kind, args...]`). Both dress

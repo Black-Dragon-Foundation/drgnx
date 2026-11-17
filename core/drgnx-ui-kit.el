@@ -359,7 +359,12 @@ binding with no colours (the row's: a font only) keeps its `:inherit' (a theme's
   (mapcar (lambda (f)
             (let ((b (nth 2 f)))
               `(,(car f)
-                ,@(and (not (or (plist-get b :bg) (plist-get b :fg) (plist-get b :edge))) `(:inherit ,(plist-get b :inherit)))
+                ;; a binding with colours keeps only its font faces (`:font': the UI or code font, no colours) of its
+                ;; `:inherit', which a third-party theme styles through; one without colours keeps all of it
+                ,@(let ((inh (if (or (plist-get b :bg) (plist-get b :fg) (plist-get b :edge))
+                                 (plist-get b :font)
+                               (plist-get b :inherit))))
+                    (and inh `(:inherit ,inh)))
                 ,@(and (plist-get b :bg) `(:background ,(funcall tok (plist-get b :bg))))
                 ,@(and (plist-get b :fg) `(:foreground ,(funcall tok (plist-get b :fg))))
                 ,@(and (plist-get b :edge) `(:box (:line-width (-1 . -1) :color ,(funcall tok (plist-get b :edge)))))
@@ -534,6 +539,108 @@ draws SVG icons (`drgnx-look-icons').")
           (let ((h (and (not tty) (drgnx-ui-kit--value (plist-get g :height) chosen))))
             (and h (> h 0) (drgnx-px h nil scale))))))
 
+;;;; The builder: the inline components' expansion, pushed piece by piece like the hub's `RowBuilder'
+
+;; Dynamic state of one expansion (`drgnx-ui-kit--building'), so a component's code takes no closure and no `&key'.
+(defvar drgnx-ui-kit--bpos 0 "The position the next piece starts at.")
+(defvar drgnx-ui-kit--bparts nil "The pieces of text, newest first.")
+(defvar drgnx-ui-kit--bruns nil "The runs ((FROM TO FACE)...), newest first.")
+(defvar drgnx-ui-kit--bspaces nil "The pads ((POS PX 0)...), newest first.")
+(defvar drgnx-ui-kit--bscale 1.0 "The scale of the expansion.")
+(defvar drgnx-ui-kit--btty nil "Non-nil when the expansion is for a terminal (`ascii': ASCII glyphs).")
+
+(defmacro drgnx-ui-kit--building (scale tty &rest body)
+  "BODY with an empty builder at SCALE (TTY: for a terminal)."
+  (declare (indent 2))
+  `(let ((drgnx-ui-kit--bpos 0) (drgnx-ui-kit--bparts nil) (drgnx-ui-kit--bruns nil) (drgnx-ui-kit--bspaces nil)
+         (drgnx-ui-kit--bscale ,scale) (drgnx-ui-kit--btty ,tty))
+     ,@body))
+
+(defun drgnx-ui-kit--b-push (text face)
+  "TEXT in FACE (nil: none) at the end of the builder, merged into the run before it (the hub's `RowBuilder::push')."
+  (let ((end (+ drgnx-ui-kit--bpos (length text))))
+    (push text drgnx-ui-kit--bparts)
+    (setq drgnx-ui-kit--bruns (drgnx-ui-kit--run drgnx-ui-kit--bruns drgnx-ui-kit--bpos end face)
+          drgnx-ui-kit--bpos end)))
+
+(defun drgnx-ui-kit--b-pad (logical chars face)
+  "A pad of LOGICAL px (rounded at the builder's scale) in FACE, or CHARS spaces on a terminal; nothing when empty."
+  (if drgnx-ui-kit--btty
+      (when (> chars 0) (drgnx-ui-kit--b-push (make-string chars ?\s) face))
+    (let ((w (drgnx-px logical nil drgnx-ui-kit--bscale)))
+      (when (> w 0)
+        (push (list drgnx-ui-kit--bpos w 0) drgnx-ui-kit--bspaces)
+        (drgnx-ui-kit--b-push " " face)))))
+
+(defun drgnx-ui-kit--b-under (from to face)
+  "FACE over FROM..TO below the runs so far."
+  (when face (push (list from to face) drgnx-ui-kit--bruns)))
+
+(defun drgnx-ui-kit--b-finish (state-face from to props height)
+  "The builder's (TEXT RUNS PROPS SPACES HEIGHT), STATE-FACE (nil: none) above every run over FROM..TO."
+  (let ((runs (nreverse drgnx-ui-kit--bruns)))
+    (when state-face (push (list from to state-face) runs))
+    (list (mapconcat #'identity (nreverse drgnx-ui-kit--bparts) "") runs props (nreverse drgnx-ui-kit--bspaces) height)))
+
+(defun drgnx-ui-kit--b-action (action from)
+  "The `drgnx-action' and `mouse-face' props of ACTION (:kind :args) over FROM..the end."
+  (and action (list (list from drgnx-ui-kit--bpos 'drgnx-action (cons (plist-get action :kind) (plist-get action :args)))
+                    (list from drgnx-ui-kit--bpos 'mouse-face 'drgnx-hover))))
+
+(defun drgnx-ui-kit--name (props key default)
+  "The symbol of PROPS' string KEY, DEFAULT (a symbol) when absent."
+  (let ((v (plist-get props key))) (if v (intern-soft v) default)))
+
+(defun drgnx-ui-kit--b-key-hint (keys variant)
+  "The key hint of KEYS in VARIANT (`cap' or `menu') on the builder."
+  (let* ((entry (drgnx-ui-kit-component 'key-hint)) (chosen (drgnx-ui-kit--chosen entry (list variant)))
+         (g (plist-get entry :geometry)) (face (drgnx-ui-kit--face 'key-hint chosen))
+         (pad (drgnx-ui-kit--value (plist-get g :pad) chosen)))
+    (if drgnx-ui-kit--btty
+        (drgnx-ui-kit--b-push (if (eq variant 'menu) keys (concat "[" keys "]")) face)
+      (drgnx-ui-kit--b-pad (car pad) 0 face)
+      (drgnx-ui-kit--b-push keys face)
+      (drgnx-ui-kit--b-pad (cdr pad) 0 face))))
+
+(defun drgnx-ui-kit--key-hint (props scale tty)
+  "The `key-hint' component of PROPS (:keys :variant :state) at SCALE, see `drgnx-ui-kit--expand'."
+  (drgnx-ui-kit--building scale tty
+    (drgnx-ui-kit--b-key-hint (or (plist-get props :keys) "") (drgnx-ui-kit--name props :variant 'cap))
+    (drgnx-ui-kit--b-finish (plist-get (drgnx-ui-kit-state (drgnx-ui-kit--name props :state 'rest)) :face)
+                            0 drgnx-ui-kit--bpos nil nil)))
+
+(defun drgnx-ui-kit--button (props scale tty)
+  "The `button' component of PROPS (:label :style :size :state :key :action) at SCALE, see `drgnx-ui-kit--expand'."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'button))
+           (style (drgnx-ui-kit--name props :style 'secondary)) (size (drgnx-ui-kit--name props :size 'md))
+           (chosen (drgnx-ui-kit--chosen entry (list style size)))
+           (g (plist-get entry :geometry)) (face (drgnx-ui-kit--face 'button chosen))
+           (pad (drgnx-ui-kit--value (plist-get g :pad) chosen))
+           (state (plist-get (drgnx-ui-kit-state (drgnx-ui-kit--name props :state 'rest)) :face))
+           (action (plist-get props :action)) (keys (plist-get props :key))
+           (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0))
+           (hit (if (and action (not tty)) (drgnx-px (or (drgnx-ui-kit--value (plist-get g :hit) chosen) 0) nil scale) 0))
+           (key-run nil) start end)
+      (when (> hit 0)
+        (push (list 0 hit 0) drgnx-ui-kit--bspaces) (drgnx-ui-kit--b-push " " nil))
+      (setq start drgnx-ui-kit--bpos)
+      (drgnx-ui-kit--b-pad (car pad) tty-pad face)
+      (drgnx-ui-kit--b-push (or (plist-get props :label) "") face)
+      (when keys
+        (drgnx-ui-kit--b-pad (drgnx-ui-kit--value (plist-get g :gap) chosen) 1 face)
+        (let ((at drgnx-ui-kit--bpos))
+          (drgnx-ui-kit--b-key-hint keys 'cap)
+          (setq key-run (cons at drgnx-ui-kit--bpos))))
+      (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+      (setq end drgnx-ui-kit--bpos)
+      (when (> hit 0)
+        (push (list drgnx-ui-kit--bpos hit 0) drgnx-ui-kit--bspaces) (drgnx-ui-kit--b-push " " nil))
+      (when key-run (drgnx-ui-kit--b-under (car key-run) (cdr key-run) face))
+      (drgnx-ui-kit--b-finish state start end (drgnx-ui-kit--b-action action 0)
+                              (let ((h (and (not tty) (drgnx-ui-kit--value (plist-get g :height) chosen))))
+                                (and h (> h 0) (drgnx-px h nil scale)))))))
+
 (defun drgnx-ui-kit--round (x)
   "X rounded half up, as the hub rounds (`drgnx-px')."
   (floor (+ x 0.5 1e-9)))
@@ -622,6 +729,8 @@ SPACES HEIGHT): RUNS ((FROM TO FACE)...), PROPS ((FROM TO NAME VALUE)...), SPACE
 px, HEIGHT the row's line height in device px or nil (one text line)."
   (pcase component
     ('row (drgnx-ui-kit--row props scale tty))
+    ('button (drgnx-ui-kit--button props scale tty))
+    ('key-hint (drgnx-ui-kit--key-hint props scale tty))
     ('agent-mark (drgnx-ui-kit--agent-mark props scale tty))
     ('progress (drgnx-ui-kit--progress props scale tty))
     (_ (error "drgnx-ui-kit: no component %s" component))))
@@ -745,6 +854,44 @@ with ARGS (transformed when a key of KIND's own ran it).  A KIND not defined is 
         (dolist (key (nth 1 def))
           (when (equal (kbd (car key)) keys) (setq args (funcall (cdr key) args)))))
       (funcall (car def) args))))
+
+;;;; Constructors of the chrome's components
+
+(defun drgnx-ui-kit--run-button (args)
+  "The action kind `ui-button': run the button's own ACTION (the one element of ARGS) as `drgnx-ui-kit-run' does."
+  (drgnx-ui-kit-run (car args)))
+
+(drgnx-ui-kit-define-action 'ui-button #'drgnx-ui-kit--run-button nil)
+
+(defun drgnx-ui-kit--action-spec (action)
+  "ACTION as the props' action plist (:kind :args): a kit action (KIND . ARGS) as it is, anything else (a registry id, a
+command, a function of no arguments) as the kind `ui-button' holding it.  Nil is no action."
+  (cond ((null action) nil)
+        ((and (consp action) (symbolp (car action)) (not (eq (car action) 'lambda)))
+         (list :kind (car action) :args (cdr action)))
+        (t (list :kind 'ui-button :args (list action)))))
+
+(defun drgnx-ui-kit-button (label action style size state key where)
+  "LABEL as a kit button on WHERE (`text', `header-line', `mode-line' or `tab-line') that runs ACTION: a registry id, a
+command, a function of no arguments, or (KIND . ARGS) of a kit action (`drgnx-ui-kit-define-action'); nil is a button
+with no action.  STYLE is `primary', `secondary', `quiet' or `danger', SIZE `md' or `sm', STATE one of the state
+table's (`focus-visible' shows its ring only after a key event, `drgnx-ui-kit-focus-visible-p'), KEY the keys of its key
+hint or nil.  Its `help-echo' and accessible text are LABEL."
+  (let ((s (drgnx-ui-kit-string
+            'button
+            (list :c "button" :label label :style (symbol-name (or style 'secondary)) :size (symbol-name (or size 'md))
+                  :state (symbol-name (if (and (eq state 'focus-visible) (not (drgnx-ui-kit-focus-visible-p))) 'rest (or state 'rest)))
+                  :key key :action (drgnx-ui-kit--action-spec action))
+            where nil)))
+    (put-text-property 0 (length s) 'help-echo label s)
+    s))
+
+(defun drgnx-ui-kit-key-hint (keys variant where)
+  "KEYS as a kit key hint (VARIANT `cap' or `menu', nil is `cap') on WHERE, as `drgnx-ui-kit-button' takes it.  Its
+`help-echo' and accessible text are \"key KEYS\"."
+  (let ((s (drgnx-ui-kit-string 'key-hint (list :c "key-hint" :keys keys :variant (symbol-name (or variant 'cap))) where nil)))
+    (put-text-property 0 (length s) 'help-echo (concat "key " keys) s)
+    s))
 
 ;;;; Focus-visible: the focus ring after a key, not after a click
 

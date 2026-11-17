@@ -645,6 +645,12 @@ given) instead of selecting the placeholder: it makes one, which the rules show 
                                           drgnx-area--output-modes))))
               (buffer-list)))
 
+(defun drgnx-wb-view-output ()
+  "Show the panel's Output tab (Messages, Warnings, …) and move focus to it, as VS Code's View: Output."
+  (interactive)
+  (select-window (drgnx-wb-area-show 'panel 'output))
+  (drgnx-wb-area-redraw 'panel))
+
 (defun drgnx-wb-output-select-channel ()
   "Show one of the Output tab's channels (Messages, Warnings, Backtrace, …) in the panel, chosen by name."
   (interactive)

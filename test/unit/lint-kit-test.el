@@ -145,7 +145,21 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("modules/tools/drgnx-work-space.el" row 1) ("modules/ui/drgnx-decor.el" row 1) ("modules/ui/drgnx-statusbar.el" row 1)
     ("modules/ui/drgnx-topline.el" row 1) ("runtime/crates/drgnx-ratatoskr/src/notebook/views.rs" row 1)
     ("runtime/crates/drgnx-ratatoskr/src/notebook/views/tests.rs" row 2) ("wb/drgnx-chrome.el" row 1)
-    ("wb/drgnx-explorer.el" row 3) ("wb/drgnx-view-nav.el" row 1) ("wb/drgnx-view.el" row 1))
+    ("wb/drgnx-explorer.el" row 3) ("wb/drgnx-view-nav.el" row 1) ("wb/drgnx-view.el" row 1)
+    ;; button and key-hint (Task 12): the kit's buttons' faces, still used where they were
+    ("core/drgnx-freezes.el" button 7) ("core/drgnx-notice-toast.el" button 1) ("core/drgnx-notices.el" button 4)
+    ("core/drgnx-palette.el" key-hint 3) ("modules/extra/drgnx-debug-share.el" button 6)
+    ("modules/tools/drgnx-agent-panel-composer.el" button 3) ("modules/tools/drgnx-extensions-details.el" button 2)
+    ("modules/tools/drgnx-extensions-list.el" button 1) ("modules/tools/drgnx-extensions-plugins.el" button 5)
+    ("modules/tools/drgnx-extensions-trust.el" button 2) ("modules/tools/drgnx-replace.el" button 7)
+    ("modules/tools/drgnx-replace.el" key-hint 1) ("modules/tools/drgnx-search-handoff.el" button 3)
+    ("modules/tools/drgnx-work-flow.el" button 7) ("modules/tools/drgnx-work-flow.el" key-hint 3)
+    ("modules/tools/drgnx-work-space.el" key-hint 2) ("modules/ui/drgnx-decor.el" button 5)
+    ("modules/ui/drgnx-inbox.el" button 7) ("modules/ui/drgnx-start.el" button 2)
+    ("runtime/crates/drgnx-ratatoskr/src/view/panel_review.rs" button 6)
+    ("runtime/crates/drgnx-ratatoskr/src/view/scm/rows.rs" button 3)
+    ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" button 2)
+    ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" key-hint 2))
   "((FILE ID COUNT)...): the forms of a role that is on, left in FILE (only falls).  A branch merged later adds its
 files' counts in its merge commit.")
 

@@ -20,7 +20,7 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--hub '(row agent-mark progress)
+(defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress)
   "The components the hub expands: their cells are drawn as hub rows.")
 
 (defconst drgnx-kit-catalogue--stateless '(agent-mark progress)
@@ -35,6 +35,10 @@
                   :icon (pcase kind ('tree "folder") ('list "file"))   ; the icon slot (a map row has none)
                   :text (format "%s · %s" kind state)
                   :state (symbol-name state))))
+    ('button (list :c "button" :label "Button" :style (symbol-name (alist-get 'style variants))
+                   :size (symbol-name (alist-get 'size variants)) :state (symbol-name state)))
+    ('key-hint (list :c "key-hint" :keys "C-k" :variant (symbol-name (alist-get 'variant variants))
+                     :state (symbol-name state)))
     ('agent-mark (list :c "agent-mark" :slot 2 :handle "Co"))
     ('progress (list :c "progress" :kind (symbol-name (alist-get 'kind variants)) :value 0.6 :width 120))
     (_ (list :c (symbol-name id) :text (format "%s · %s" id state) :state (symbol-name state)))))

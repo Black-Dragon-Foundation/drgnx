@@ -47,6 +47,13 @@ impl RowBuilder {
         self
     }
 
+    /// FACE over `[start, end)` above every run so far (the state of a component that has colours of its own: its
+    /// fill, text and ring replace the component's).
+    pub fn face_over(&mut self, start: u32, end: u32, face: &str) -> &mut Self {
+        self.row.runs.insert(0, (start, end, face.to_owned()));
+        self
+    }
+
     /// The text property NAME = VALUE over `[start, end)`.
     pub fn prop(&mut self, start: u32, end: u32, name: &str, value: Value) -> &mut Self {
         self.row.props.push((start, end, name.to_owned(), value));

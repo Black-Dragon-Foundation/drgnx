@@ -1018,6 +1018,18 @@ pub enum FaceId {
     ToplineStrong,
     /// `drgnx-kit-row`
     KitRow,
+    /// `drgnx-kit-button-primary`
+    KitButtonPrimary,
+    /// `drgnx-kit-button-secondary`
+    KitButtonSecondary,
+    /// `drgnx-kit-button-quiet`
+    KitButtonQuiet,
+    /// `drgnx-kit-button-danger`
+    KitButtonDanger,
+    /// `drgnx-kit-key-hint-cap`
+    KitKeyHintCap,
+    /// `drgnx-kit-key-hint-menu`
+    KitKeyHintMenu,
     /// `drgnx-kit-agent-mark`
     KitAgentMark,
     /// `drgnx-kit-progress`
@@ -1030,7 +1042,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 509] = [
+    pub const ALL: [FaceId; 515] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1536,6 +1548,12 @@ impl FaceId {
         FaceId::ToplineHover,
         FaceId::ToplineStrong,
         FaceId::KitRow,
+        FaceId::KitButtonPrimary,
+        FaceId::KitButtonSecondary,
+        FaceId::KitButtonQuiet,
+        FaceId::KitButtonDanger,
+        FaceId::KitKeyHintCap,
+        FaceId::KitKeyHintMenu,
         FaceId::KitAgentMark,
         FaceId::KitProgress,
         FaceId::KitProgressRing,
@@ -2050,6 +2068,12 @@ impl FaceId {
             FaceId::ToplineHover => "drgnx-topline-hover",
             FaceId::ToplineStrong => "drgnx-topline-strong",
             FaceId::KitRow => "drgnx-kit-row",
+            FaceId::KitButtonPrimary => "drgnx-kit-button-primary",
+            FaceId::KitButtonSecondary => "drgnx-kit-button-secondary",
+            FaceId::KitButtonQuiet => "drgnx-kit-button-quiet",
+            FaceId::KitButtonDanger => "drgnx-kit-button-danger",
+            FaceId::KitKeyHintCap => "drgnx-kit-key-hint-cap",
+            FaceId::KitKeyHintMenu => "drgnx-kit-key-hint-menu",
             FaceId::KitAgentMark => "drgnx-kit-agent-mark",
             FaceId::KitProgress => "drgnx-kit-progress",
             FaceId::KitProgressRing => "drgnx-kit-progress-ring",
@@ -2565,6 +2589,12 @@ impl FaceId {
             "drgnx-topline-hover" => FaceId::ToplineHover,
             "drgnx-topline-strong" => FaceId::ToplineStrong,
             "drgnx-kit-row" => FaceId::KitRow,
+            "drgnx-kit-button-primary" => FaceId::KitButtonPrimary,
+            "drgnx-kit-button-secondary" => FaceId::KitButtonSecondary,
+            "drgnx-kit-button-quiet" => FaceId::KitButtonQuiet,
+            "drgnx-kit-button-danger" => FaceId::KitButtonDanger,
+            "drgnx-kit-key-hint-cap" => FaceId::KitKeyHintCap,
+            "drgnx-kit-key-hint-menu" => FaceId::KitKeyHintMenu,
             "drgnx-kit-agent-mark" => FaceId::KitAgentMark,
             "drgnx-kit-progress" => FaceId::KitProgress,
             "drgnx-kit-progress-ring" => FaceId::KitProgressRing,

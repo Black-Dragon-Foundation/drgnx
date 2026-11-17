@@ -252,4 +252,4 @@
   (let ((nidhogg (let ((drgnx-theme--box-fit t) (drgnx-theme--box-fit-pad t)) (drgnx-design-pages)))
         (stock (let ((drgnx-theme--box-fit nil) (drgnx-theme--box-fit-pad nil)) (drgnx-design-pages))))
     (should (equal nidhogg stock))
-    (should (string-search "`drgnx-work-flow-button`" (cdr (assoc "tokens.md" stock))))))
+    (should (string-search "`drgnx-control`" (cdr (assoc "tokens.md" stock))))))
