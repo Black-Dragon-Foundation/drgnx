@@ -74,9 +74,16 @@ directories in the run directory, TERM, a UTF-8 locale unless one is set; then E
           (list "tmux" "-L" (plist-get sess :name) "-f" "/dev/null")
           args))
 
+(defun drgnx-tty-session--progress (sess limit)
+  "A progress clock of LIMIT s over SESS's processes (`drgnx-ui-progress'): a wait on SESS is out of time only once
+they made no progress for LIMIT s, never because a loaded machine starved them."
+  (drgnx-ui-progress limit (or (drgnx-ui-session-pids-fn sess) #'ignore)))
+
 (defun drgnx-tty-session-tmux (sess &rest args)
-  "Run tmux ARGS (any tmux command) on SESS's own server; return (EXIT . OUTPUT)."
-  (let ((r (apply #'drgnx-ui--run-with-timeout 10 (apply #'drgnx-tty-session--tmux-argv sess args))))
+  "Run tmux ARGS (any tmux command) on SESS's own server; return (EXIT . OUTPUT).  Its 10 s count the time tmux and
+SESS's processes slept (`drgnx-ui--run-with-timeout')."
+  (let* ((drgnx-ui--progress-pids (drgnx-ui-session-pids-fn sess))
+         (r (apply #'drgnx-ui--run-with-timeout 10 (apply #'drgnx-tty-session--tmux-argv sess args))))
     (cons (if (eq (car r) 'timeout) 124 (car r)) (cadr r))))
 
 (defun drgnx-tty-session--tmux-ok (sess &rest args)
@@ -120,27 +127,11 @@ directories in the run directory, TERM, a UTF-8 locale unless one is set; then E
       (drgnx-ui--run "pkill" "-KILL" "-u" (number-to-string (user-uid)) "-f" "--" pattern)
       (sleep-for 0.05))))
 
-(defun drgnx-tty-session--run-of (pid)
-  "The run directory process PID belongs to (its DRGNX_UI_RUN), or nil where /proc cannot tell."
-  (let ((file (format "/proc/%d/environ" pid)))
-    (when (file-readable-p file)
-      (with-temp-buffer
-        (set-buffer-multibyte nil)
-        (ignore-errors (insert-file-contents-literally file))
-        (seq-some (lambda (kv) (and (string-prefix-p "DRGNX_UI_RUN=" kv) (substring kv 13)))
-                  (split-string (buffer-string) "\0" t))))))
-
-(defun drgnx-tty-session--run-pids (run)
-  "This user's processes of the session in RUN (their DRGNX_UI_RUN is RUN), never this one: the session's Emacs and
-what it started, a hub (`ratatoskr ensure' detaches it) or any other child whose command line names no part of RUN."
-  (seq-filter (lambda (pid) (and (/= pid (emacs-pid)) (equal (drgnx-tty-session--run-of pid) run)))
-              (mapcar #'string-to-number (directory-files "/proc" nil "\\`[0-9]+\\'"))))
-
 (defun drgnx-tty-session--end-run-processes (run)
-  "KILL the processes still in the session in RUN (`drgnx-tty-session--run-pids') and return once they are gone, so
+  "KILL the processes still in the session in RUN (`drgnx-ui--run-pids') and return once they are gone, so
 nothing writes into RUN while it is removed.  Signal if one is still there after 10 s."
   (let ((deadline (+ (float-time) 10)) pids)
-    (while (setq pids (drgnx-tty-session--run-pids run))
+    (while (setq pids (drgnx-ui--run-pids run))
       (when (> (float-time) deadline)
         (drgnx-ui--fail "%s: processes %S still run after 10 s" run pids))
       (dolist (pid pids) (ignore-errors (signal-process pid 'KILL)))
@@ -175,7 +166,7 @@ processes of any state root, found by name, and the run directories in ROOT."
           (let ((name (match-string 1 line)))
             (unless (or (drgnx-tty-session--owner-alive-p (string-to-number (match-string 2 line)))
                         (assoc name stale))
-              (push (cons name (drgnx-tty-session--run-of pid)) stale))))))
+              (push (cons name (drgnx-ui--run-of pid)) stale))))))
     (dolist (name (and (file-directory-p root)
                        (directory-files root nil (concat "\\`" drgnx-tty-session-name-regexp "\\'"))))
       (when (and (string-match drgnx-tty-session-name-regexp name)
@@ -276,14 +267,17 @@ starts from it."
   (eq 0 (car (drgnx-tty-session-tmux sess "has-session"))))
 
 (defun drgnx-tty-session--wait-ready (sess timeout)
-  "Wait until SESS's Emacs wrote ready.json and answers on its socket; signal with the screen after TIMEOUT s."
+  "Wait until SESS's Emacs wrote ready.json and answers on its socket; signal with the screen once its pane is gone
+or TIMEOUT s ran out on the session's progress clock (`drgnx-tty-session--progress')."
   (let ((ready (expand-file-name "ready.json" (plist-get sess :run)))
-        (deadline (+ (float-time) timeout))
+        (clock (drgnx-tty-session--progress sess timeout))
         ok)
     (while (not ok)
-      (when (or (> (float-time) deadline) (not (drgnx-tty-session--pane-alive-p sess)))
-        (drgnx-ui--fail "%s: Emacs did not answer on its socket within %ss:\n%s"
-                        (plist-get sess :name) timeout (or (ignore-errors (drgnx-tty-session-screen sess)) "")))
+      (let ((over (if (drgnx-tty-session--pane-alive-p sess) (drgnx-ui-progress-over clock) "its pane is gone")))
+        (when over
+          (drgnx-ui--fail "%s: Emacs did not answer on its socket within %ss (%s):\n%s"
+                          (plist-get sess :name) timeout over
+                          (or (ignore-errors (drgnx-tty-session-screen sess)) ""))))
       (setq ok (and (file-exists-p ready) (ignore-errors (drgnx-tty-session-eval sess t 5))))
       (unless ok (sleep-for 0.1)))))
 
@@ -377,11 +371,12 @@ SESS with :target that window's pane, once the new terminal frame exists (30 s).
                                             (drgnx-tty-session--client-command
                                              sess (drgnx-tty-session--env sess env) args))))
          (client (append (list :target pane) sess))
-         (deadline (+ (float-time) 30)))
+         (clock (drgnx-tty-session--progress sess 30)))
     (while (<= (drgnx-tty-session--client-frames sess) before)
-      (when (> (float-time) deadline)
-        (drgnx-ui--fail "%s: emacsclient -t made no frame within 30s:\n%s"
-                        (plist-get sess :name) (drgnx-tty-session-screen client)))
+      (let ((over (drgnx-ui-progress-over clock)))
+        (when over
+          (drgnx-ui--fail "%s: emacsclient -t made no frame within 30s (%s):\n%s"
+                          (plist-get sess :name) over (drgnx-tty-session-screen client))))
       (sleep-for 0.05))
     client))
 
@@ -488,17 +483,19 @@ text; an unreadable value comes back as its printed text."
     (condition-case nil (car (read-from-string printed)) (invalid-read-syntax printed))))
 
 (defun drgnx-tty-session-wait (sess form &optional timeout)
-  "FORM's value once it is non-nil in SESS's Emacs (polled every 50 ms for TIMEOUT s, default 5);
-else signal that it timed out, with the last screen of a terminal session.  A graphical session (`drgnx-ui-start':
-no tmux pane, no kitty) has no screen to read: its timeout says so instead of failing on the reading, which hid it."
-  (let ((deadline (+ (float-time) (or timeout 5))) v)
+  "FORM's value once it is non-nil in SESS's Emacs (polled every 50 ms for TIMEOUT s, default 5, of SESS's progress
+clock: `drgnx-tty-session--progress'); else signal that it timed out, with the last screen of a terminal session.  A
+graphical session (`drgnx-ui-start': no tmux pane, no kitty) has no screen to read: its timeout says so instead of
+failing on the reading, which hid it."
+  (let ((clock (drgnx-tty-session--progress sess (or timeout 5))) v)
     (while (not (setq v (drgnx-tty-session-eval sess form 5)))
-      (when (> (float-time) deadline)
-        (drgnx-ui--fail "%s: %S stayed nil for %ss; %s"
-                        (plist-get sess :name) form (or timeout 5)
-                        (if (or (plist-get sess :kitty) (plist-get sess :target))
-                            (concat "the screen:\n" (drgnx-tty-session-screen sess))
-                          "a graphical session (no terminal screen to show)")))
+      (let ((over (drgnx-ui-progress-over clock)))
+        (when over
+          (drgnx-ui--fail "%s: %S stayed nil for %ss (%s); %s"
+                          (plist-get sess :name) form (or timeout 5) over
+                          (if (or (plist-get sess :kitty) (plist-get sess :target))
+                              (concat "the screen:\n" (drgnx-tty-session-screen sess))
+                            "a graphical session (no terminal screen to show)"))))
       (sleep-for 0.05))
     v))
 
@@ -552,12 +549,14 @@ is kitty's screen (`drgnx-tty-session-kitty-screen'; ESCAPES is not for it)."
   (drgnx-tty-session--find-in (drgnx-tty-session-screen sess) regexp))
 
 (defun drgnx-tty-session-wait-screen (sess regexp &optional timeout)
-  "(COL . ROW) of REGEXP once it is on SESS's screen (TIMEOUT s, default 5); else signal with the screen."
-  (let ((deadline (+ (float-time) (or timeout 5))) pos)
+  "(COL . ROW) of REGEXP once it is on SESS's screen (TIMEOUT s, default 5, of SESS's progress clock:
+`drgnx-tty-session--progress'); else signal with the screen."
+  (let ((clock (drgnx-tty-session--progress sess (or timeout 5))) pos)
     (while (not (setq pos (drgnx-tty-session-find sess regexp)))
-      (when (> (float-time) deadline)
-        (drgnx-ui--fail "%s: %S not on screen within %ss:\n%s"
-                        (plist-get sess :name) regexp (or timeout 5) (drgnx-tty-session-screen sess)))
+      (let ((over (drgnx-ui-progress-over clock)))
+        (when over
+          (drgnx-ui--fail "%s: %S not on screen within %ss (%s):\n%s"
+                          (plist-get sess :name) regexp (or timeout 5) over (drgnx-tty-session-screen sess))))
       (sleep-for 0.05))
     pos))
 
@@ -590,13 +589,15 @@ CLOSE its close mark; FROM the session asked for the titles) on screen: the work
     (and pos (cons (car pos) (+ top (cdr pos))))))
 
 (defun drgnx-tty-session-wait-screen-below (sess heading regexp &optional timeout)
-  "(COL . ROW) of REGEXP once it is on SESS's screen below HEADING's line (TIMEOUT s, default 5); else signal with the
-screen.  A text in two places (a file in the Open section and in the Files section) is found in the one under HEADING."
-  (let ((deadline (+ (float-time) (or timeout 5))) pos)
+  "(COL . ROW) of REGEXP once it is on SESS's screen below HEADING's line (TIMEOUT s, default 5, of SESS's progress
+clock: `drgnx-tty-session--progress'); else signal with the screen.  A text in two places (a file in the Open section
+and in the Files section) is found in the one under HEADING."
+  (let ((clock (drgnx-tty-session--progress sess (or timeout 5))) pos)
     (while (not (setq pos (drgnx-tty-session-find-below sess heading regexp)))
-      (when (> (float-time) deadline)
-        (drgnx-ui--fail "%s: %S not on screen below %S within %ss:\n%s"
-                        (plist-get sess :name) regexp heading (or timeout 5) (drgnx-tty-session-screen sess)))
+      (let ((over (drgnx-ui-progress-over clock)))
+        (when over
+          (drgnx-ui--fail "%s: %S not on screen below %S within %ss (%s):\n%s"
+                          (plist-get sess :name) regexp heading (or timeout 5) over (drgnx-tty-session-screen sess))))
       (sleep-for 0.05))
     pos))
 
@@ -667,7 +668,7 @@ idle-stage steps) and the input barrier (all of it).")
 \(at 100 ticks a second); or that no Emacs is left in its run."
   (cl-flet ((slurp (f) (ignore-errors (with-temp-buffer (insert-file-contents f) (string-trim (buffer-string))))))
     (let ((pid (seq-find (lambda (p) (string-match-p "emacs" (or (slurp (format "/proc/%d/comm" p)) "")))
-                         (drgnx-tty-session--run-pids (plist-get sess :run)))))
+                         (drgnx-ui--run-pids (plist-get sess :run)))))
       (if (not pid) "no Emacs process is left in its run (it exited)"
         (let* ((stat (or (slurp (format "/proc/%d/stat" pid)) ""))
                (fields (split-string (substring stat (min (length stat) (1+ (or (cl-position ?\) stat :from-end t) -1))))
@@ -693,16 +694,19 @@ idle-stage steps) and the input barrier (all of it).")
 steps all ran (TIMEOUT s, default 30, else signal) and the once-only stages left are reached now.  Every stage ends
 with `drgnx-keys-apply', which rebinds the profile's keys: a row that binds a key or sends C-g calls this first, so no
 stage ends while it runs.  Cheap once done.
-A step can hold the Emacs for seconds (a package's load), so each look waits for an answer as long as TIMEOUT
-leaves, not a fixed 5 s.  When TIMEOUT runs out the error gives the cause: the steps still to run
+TIMEOUT counts SESS's progress clock (`drgnx-tty-session--progress'): a step can hold the Emacs for seconds (a
+package's load), and an Emacs that runs, or that a loaded machine starves, is never out of time; each look waits for
+its answer on a clock of TIMEOUT s too.  When TIMEOUT runs out the error gives the cause: the steps still to run
 \(`kx-unsettled', the rule the input barrier keeps too), or that the Emacs stopped answering and what /proc says."
-  (let* ((limit (or timeout 30)) (deadline (+ (float-time) limit)) (what "its module stages ended") last)
-    (while (let ((left (- deadline (float-time))))
-             (when (<= left 0)
-               (drgnx-tty-session--settle-fail sess what limit (format "still to run: %s" (string-join (cdr last) "; "))))
+  (let* ((limit (or timeout 30)) (clock (drgnx-tty-session--progress sess limit)) (what "its module stages ended")
+         last)
+    (while (let ((over (drgnx-ui-progress-over clock)))
+             (when over
+               (drgnx-tty-session--settle-fail sess what limit (format "%s; still to run: %s" over
+                                                                       (string-join (cdr last) "; "))))
              (let ((why (condition-case err
                             (drgnx-tty-session-eval sess `(progn ,drgnx-tty-session--unsettled-defun (kx-unsettled t))
-                                                    (max 1 left))
+                                                    limit)
                           (drgnx-ui-error
                            (if (string-search ": no answer in " (error-message-string err))
                                (drgnx-tty-session--settle-fail sess what limit (drgnx-tty-session--silent-cause sess last))
@@ -995,11 +999,14 @@ the keyboard is there.")
     (if (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)) "")))
 
 (defun drgnx-tty-session--kitty-wait (sess what pred log)
-  "Wait up to 30 s for PRED (a function of no arguments); else signal that WHAT did not happen, with RUN/LOG."
-  (let ((deadline (+ (float-time) 30)))
+  "Wait up to 30 s of SESS's progress clock (`drgnx-tty-session--progress') for PRED (a function of no arguments);
+else signal that WHAT did not happen, with RUN/LOG."
+  (let ((clock (drgnx-tty-session--progress sess 30)))
     (while (not (funcall pred))
-      (when (> (float-time) deadline)
-        (drgnx-ui--fail "%s: %s within 30s:\n%s" (plist-get sess :name) what (drgnx-tty-session--log sess log)))
+      (let ((over (drgnx-ui-progress-over clock)))
+        (when over
+          (drgnx-ui--fail "%s: %s within 30s (%s):\n%s" (plist-get sess :name) what over
+                          (drgnx-tty-session--log sess log))))
       (sleep-for 0.1))))
 
 (defun drgnx-tty-session--session-bus (bus name)

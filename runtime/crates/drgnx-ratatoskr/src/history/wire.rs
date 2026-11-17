@@ -191,7 +191,8 @@ pub async fn register(f: &Front, _: &Caller, p: w::RegisterParams) -> Result<w::
             &git_dir,
             crate::timeline::snapshot::head_of(&root2).as_deref(),
         );
-        h2.register(&tree, &rel, &id, &deny).map(|r| (tree, r))
+        h2.register(&tree, &rel, &id, &deny, crate::clock::wall_secs())
+            .map(|r| (tree, r))
     })
     .await
     .map_err(|e| internal(e.to_string()))?

@@ -588,8 +588,10 @@ a radius, go through `drgnx-px` ([core.md](core.md#logical-and-device-pixels-drg
 | `(drgnx-uitest-region-equal-p A B RECT &key tolerance ignore-alpha)` | non-nil when every channel differs by at most `tolerance` (default 0) on RECT; nil for different sizes |
 | `(drgnx-uitest-darker-p A B X Y)` | A's pixel has the lower luma (0.2126 R + 0.7152 G + 0.0722 B) |
 | `(drgnx-uitest-bare-frame)` | scroll bars, tool bar, menu bar and `blink-cursor-mode` off, so a snapshot and an export can be equal |
-| `(drgnx-uitest-pointer-set X Y)` | moves the compositor's pointer to the layout position X, Y (logical pixels): `t` when it moved, `failed` when sway refused, `unsupported` anywhere but sway (`swaymsg "seat - cursor set X Y"`), so a row that needs a real pointer (hover) skips there; a hover row runs in the `--compositor sway` pass. Headless sway has no input devices, so its seat has no pointer and `cursor set` reaches no client: the first call makes a virtual pointer (`zwlr_virtual_pointer_manager_v1`, the Wayland wire protocol spoken from Lisp over the session's socket, kept open until the test file ends: `drgnx-run-ert-file-end-hook` closes it before the leak census reads the file), which gives the seat a pointer; `failed` when the compositor offers none |
+| `(drgnx-uitest-pointer-set X Y)` | moves the compositor's pointer to the layout position X, Y (logical pixels): `t` when it moved, `failed` when the compositor refused, `unsupported` where none can be moved (a row that needs this pointer, hover, skips there). Mutter: RemoteDesktop's relative motion, into the layout's top-left corner and out by X, Y (RemoteDesktop moves to a position only with a screen-cast stream). Sway: `swaymsg "seat - cursor set X Y"`; headless sway has no input devices, so its seat has no pointer and `cursor set` reaches no client: the first call makes a virtual pointer (`zwlr_virtual_pointer_manager_v1`, the Wayland wire protocol spoken from Lisp over the session's socket, kept open until the test file ends: `drgnx-run-ert-file-end-hook` closes it before the leak census reads the file), which gives the seat a pointer. KWin: its fake input's absolute motion (`org_kde_kwin_fake_input`, spoken the same way); KWin offers that protocol only to clients it trusts, so the session's KWin runs with `KWIN_WAYLAND_NO_PERMISSION_CHECKS=1` (`drgnx-ui-compositor-argv`, the test container only) |
+| `(drgnx-uitest-frame-origin &optional FRAME)` | where FRAME's top-left corner is in the layout, `(X . Y)` logical pixels, for `drgnx-uitest-pointer-set`: Wayland never tells a client, so the pointer is put on a few layout points and where FRAME saw it gives the corner; nil when FRAME saw it at none |
 | `(drgnx-uitest-pointer-available-p)` | non-nil when the session's compositor is mutter with its RemoteDesktop service on the session bus, so a real pointer can be driven |
+| `(drgnx-uitest-keyboard-type KEYS)` | types KEYS, `((NAME . DOWN) …)` with NAME `Alt_L`, `Shift_L`, `Control_L`, `Super_L` or a lower-case letter, on a real keyboard whose keys go through the compositor and Nidhogg's shell: mutter's RemoteDesktop (`NotifyKeyboardKeysym`; a session of its own per call, stopped after, so the frame's focus is as before; its keyboard's first key reaches no one, so its first keys are a Shift), sway through `wtype` (a virtual keyboard sends its keymap as a file descriptor, which an Emacs network process cannot; one `wtype` per sequence, a modifier as its key and its state: `-P Alt_L -M alt`), KWin's fake input (`keyboard_key`, evdev codes). Returns the events Emacs read after the keys, until none came for half a second. `(drgnx-uitest-keyboard-available-p)` says whether the session has one (the lone-Alt row) |
 | `(drgnx-uitest-pointer-move X Y)` | moves mutter's virtual pointer to the frame position X, Y: to the top-left corner, then relative motion, corrected up to four times from `mouse-pixel-position` |
 | `(drgnx-uitest-pointer-click X Y &optional UNTIL TIMEOUT)` | a real press and release of the left button at X, Y through mutter's RemoteDesktop (`NotifyPointerButton` 272), then reads the key sequences the clicks make and runs their commands, as the command loop would (a nested `recursive-edit` reads no real events in a test run from the server); the keys are kept in `drgnx-uitest-pointer-keys`; it stops when UNTIL returns non-nil or after TIMEOUT seconds |
 
@@ -1232,10 +1234,20 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
 - **Module stages first:** every module stage that ends applies the keys again (`drgnx-keys-apply`), so a row that
   binds a key, or sends C-g, first waits for the daemon's stages: `drgnx-tty-session-wait-stages` (the GUI tier's
   `drgnx-test-wait-stages`) waits until no idle step is pending, then reaches the once-only stages still armed
-  (first input, first file, first graphical frame). Each look waits for the daemon's answer as long as the wait's
-  time (30 s) leaves, since a step can hold the daemon for seconds; when the time runs out the error gives the
-  cause: the idle steps still pending, or that the daemon stopped answering, with its last answer and what /proc
-  says the process does (state, wait channel, CPU time). `drgnx-tty-session-key-barrier` does it before binding `<f7>`.
+  (first input, first file, first graphical frame). Its 30 s are progress time (next item), so a step that holds
+  the daemon for seconds never ends it; when the time runs out the error gives the cause: the idle steps still
+  pending, or that the daemon stopped answering, with its last answer and what /proc says the process does (state,
+  wait channel, CPU time).
+- **Waits count progress, not wall time:** every wait of the tier (an answer on the socket, `drgnx-tty-session-wait`,
+  the screen waits, a tmux call, a new client's frame, kitty's waits, and `drgnx-ui-call` for any session) runs on a
+  progress clock (`drgnx-ui-progress`): its time is the time the session's processes (those whose `DRGNX_UI_RUN`
+  names its run, plus the emacsclient or tmux the wait runs) slept, read from `/proc/PID/schedstat`. A process that
+  runs, or that waits for a CPU on a loaded machine, is making progress, so CPU starvation (four test files at once on
+  a busy builder) never fails a wait, while a session blocked on something that never comes (a prompt, a lost key)
+  fails at the wait's time as before. Time while one of them is in uninterruptible sleep (state D: waiting on the
+  disk, e.g. btrfs's `wait_current_trans` while a loaded machine commits) is not counted either. A cap of ten times
+  that time (at least 60 s) of wall time ends a wait whose processes never stop running or stay on the disk; the error
+  says which ended it, and a no-progress error names each watched process with its state and wait channel. `drgnx-tty-session-key-barrier` does it before binding `<f7>`.
   A row that binds a key of its own uses one no key profile claims (`<f7>`; never `<f9>`, VS Code's breakpoint key),
   or a keymap of its own on `emulation-mode-map-alists`.
 - **C-g only when the row is about C-g:** C-g typed into a terminal is Emacs's interrupt whenever the daemon is not

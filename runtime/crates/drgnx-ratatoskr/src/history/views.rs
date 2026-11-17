@@ -1078,7 +1078,7 @@ mod tests {
     fn tracked(f: &Fx, rel: &str, now: &str, origin: &str) {
         let home = tempfile::tempdir().unwrap();
         let deny = norn::deny::DenyList::load(home.path(), home.path());
-        f.hub.register(&f.tree, rel, "b1", &deny).unwrap();
+        f.hub.register(&f.tree, rel, "b1", &deny, 1.0).unwrap();
         let old = std::fs::read_to_string(f.tree.root.join(rel)).unwrap_or_default();
         let (start, old_len) = (0, old.chars().count());
         let hash = crate::history::methods::hash(now);
@@ -1389,7 +1389,9 @@ mod tests {
         std::fs::write(f.tree.root.join("new.txt"), "").unwrap();
         let home = tempfile::tempdir().unwrap();
         let deny = norn::deny::DenyList::load(home.path(), home.path());
-        f.hub.register(&f.tree, "new.txt", "b2", &deny).unwrap();
+        f.hub
+            .register(&f.tree, "new.txt", "b2", &deny, 1.0)
+            .unwrap();
         let ch = crate::history::methods::BatchChange {
             start: 0,
             old_len: 0,

@@ -162,7 +162,7 @@ mod tests {
         let cfg = repo.path().join(".cfg-none");
         std::fs::create_dir_all(&cfg).unwrap();
         let deny = DenyList::load(&cfg, &cfg);
-        hub.register(&tree, "a.txt", "b1", &deny).unwrap();
+        hub.register(&tree, "a.txt", "b1", &deny, 1.0).unwrap();
         let change = BatchChange {
             // the tree has no base commit: the document starts empty
             start: 0,

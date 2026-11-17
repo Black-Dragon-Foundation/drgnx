@@ -1,0 +1,20 @@
+{"scenario": "view/minimap-labels-new-and-pack-files", "requires": ["v1", "test-hooks"], "doc": "Minimap labels come for a file written after the hub opened its checkout (not in any commit; the editor visits it and registers it), and for a file a fetched pack's grammar reads (Rust): each gets its definitions on minimap/watch, not an empty layer."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q -b main && printf '(defun alpha () 1)\\n' > a.el && printf 'fn main() {}\\n' > r.rs && git add a.el r.rs && git -c user.email=t@example.invalid -c user.name=t commit -qm base"], "expect_code": 0}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "history/register", "params": {"path": "a.el", "worktree_root": "$ROOT/repo", "buffer_id": "b1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"tracked": true}}, "within_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "printf '(defun beta () 2)\\n' > $ROOT/repo/b.el"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "history/register", "params": {"path": "b.el", "worktree_root": "$ROOT/repo", "buffer_id": "b2"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"tracked": true}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "minimap/watch", "params": {"file": "$ROOT/repo/b.el", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/b.el", "layer": "labels", "version": "$number", "items": [[1, 0, "function", "beta"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "history/register", "params": {"path": "r.rs", "worktree_root": "$ROOT/repo", "buffer_id": "b3"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": {"tracked": true}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "minimap/watch", "params": {"file": "$ROOT/repo/r.rs", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/r.rs", "layer": "labels", "version": "$number", "items": [[1, 0, "$string", "main"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}}
