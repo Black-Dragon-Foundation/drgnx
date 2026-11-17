@@ -2044,11 +2044,12 @@ impl Queue {
             return t;
         }
         let eff = forseti::effective_priorities(&queued, &[], &[]);
-        let exp = |_: &JobId| Expected {
-            minutes: forseti::history::DEFAULT_MINUTES,
-            cpu: 1.0,
-            mem_p95_mib: None,
-        };
+        // the order reads each job's history (its runs on this machine, else anywhere)
+        let expected: HashMap<JobId, Expected> = queued
+            .iter()
+            .map(|j| (j.id.clone(), st.expected_on(&j.spec, LOCAL)))
+            .collect();
+        let exp = |id: &JobId| expected[id];
         let order = forseti::queue_order(&queued, &eff, &exp, now);
         let project: HashMap<JobId, String> = queued
             .iter()
@@ -4469,7 +4470,9 @@ mod tests {
             q.record_run(&mut st, &short.spec, "r1", &ran, 50);
         }
         q.submit(job("xh", Priority::P1, 3500), 400);
-        q.submit(job("xs", Priority::P4, 512), 400);
+        // the order reads history, so xs2 (100 s) is placed before xs; xs is small enough to fit after it, so only
+        // the head's room keeps it waiting
+        q.submit(job("xs", Priority::P4, 256), 400);
         q.submit(short, 400);
         q.tick(400);
         let row = |id: &str| q.row(id).unwrap();
