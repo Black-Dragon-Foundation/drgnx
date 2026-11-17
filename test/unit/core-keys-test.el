@@ -18,7 +18,7 @@
 (defvar drgnx-keys-test--strict nil
   "Non-nil: `drgnx-keys-test--with-core-commands' fails when the modules leave state behind after their teardown.")
 
-(defvar drgnx-layouts-pane-fillers)
+(defvar drgnx-pane--kinds)
 (defvar drgnx-layouts-shapes)
 (defvar drgnx-persist-state-functions)
 (defvar drgnx-persist-after-restore-functions)
@@ -1424,20 +1424,20 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
   "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).
 The commands of modules that need no installed package are in it, the later stages' too (diff, review).")
 
-(ert-deftest drgnx-keys/the-later-stages-leave-no-global-hooks-or-pane-fillers ()
+(ert-deftest drgnx-keys/the-later-stages-leave-no-global-hooks-or-pane-kinds ()
   ;; Setting the modules up for the snapshot must not stay: a registered browser pane made the next layouts test
   ;; open a third editor group, the persist hooks changed every later restore.  The registries' libraries load
   ;; first: run alone, the snapshot would otherwise be taken before layouts' defvars give the built-ins.
   (require 'drgnx-persist)
   (require 'drgnx-layouts (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir))
-  (let ((fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
+  (let ((kinds (mapcar #'car drgnx-pane--kinds))
         (shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes)))
         (state-fns (copy-sequence drgnx-persist-state-functions))
         (after-fns (copy-sequence drgnx-persist-after-restore-functions))
         (drgnx-keys-test--later-stages t)
         (drgnx-keys-test--strict t))
     (drgnx-keys-test--with-core-commands (ignore))
-    (should (equal (bound-and-true-p drgnx-layouts-pane-fillers) fillers))
+    (should (equal (mapcar #'car drgnx-pane--kinds) kinds))
     (should (equal (bound-and-true-p drgnx-layouts-shapes) shapes))
     (should (equal drgnx-persist-state-functions state-fns))
     (should (equal drgnx-persist-after-restore-functions after-fns))))

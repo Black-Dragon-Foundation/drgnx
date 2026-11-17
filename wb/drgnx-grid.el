@@ -28,6 +28,7 @@
 (defvar drgnx-rules-never-cover-modes)
 (defvar drgnx-wb-dock-columns)
 (declare-function drgnx-wb-focus-editor "drgnx-wb")
+(declare-function drgnx-area--remember "drgnx-area" (area window))
 (declare-function drgnx-grid--tab-press "drgnx-grid-ops" (event))
 (declare-function drgnx-grid-tab-menu-click "drgnx-grid-frames" (event))
 (declare-function drgnx-grid-grip-press "drgnx-grid-ops" (event))
@@ -257,8 +258,12 @@ its placeholder.  Also the saved start and point, as (BUFFER START POINT); START
                (list (if (buffer-live-p own) own (drgnx-grid--placeholder kind)) nil nil))))))
 
 (defun drgnx-grid--put-buffer (window kind frame &optional buffer)
-  "Show KIND in tool tile WINDOW (its buffer, start and point as left, or BUFFER)."
-  (pcase-let ((`(,b ,start ,point) (drgnx-grid--buffer-for kind frame buffer)))
+  "Show KIND in tool tile WINDOW (its buffer, start and point as left, or BUFFER).  A kind with a `:fill' function (a
+layout's pane: `drgnx-layouts-define-pane') and no BUFFER given fills WINDOW itself."
+  (pcase-let* ((fill (and (not buffer) (plist-get (drgnx-pane-kind (drgnx-grid--entry-kind kind)) :fill)))
+               (`(,b ,start ,point) (if fill
+                                        (progn (funcall fill window) (list (window-buffer window) nil nil))
+                                      (drgnx-grid--buffer-for kind frame buffer))))
     (unless (eq (window-buffer window) b)
       (set-window-buffer window b)
       ;; Emacs preserves a size only for the buffer it was set with: set again for this one
@@ -1137,7 +1142,10 @@ tile's stack (an unknown kind shows its placeholder)."
                 (drgnx-grid--put-row w)))))))
 
 (defun drgnx-grid--delete-leaf (window)
-  "Delete the tile held by WINDOW (live, or an atom's root) as it is, its space to its siblings."
+  "Delete the tile held by WINDOW (live, or an atom's root) as it is, its space to its siblings.  A docked area's tile
+first notes what its tab shows (`drgnx-area--remember'), so the tab comes back with that buffer."
+  (let* ((main (drgnx-grid--main-of window)) (role (window-parameter main 'drgnx-role)))
+    (when (and role (assq role (bound-and-true-p drgnx-wb--areas))) (drgnx-area--remember role main)))
   (let ((ignore-window-parameters t) (window-combination-resize nil))
     (ignore-errors (delete-window window))))
 
@@ -1157,11 +1165,13 @@ shows its placeholder.  No buffer is killed: an editor tile leaving the grid giv
 last.  When the kept tiles are arranged otherwise than TREE has them, only the first stays.  Non-nil when applied."
   (let ((frame (or frame (selected-frame))))
     (if (not (drgnx-grid-valid-tree-p tree))
-        (progn (drgnx-notify 'workbench 'warn "A saved arrangement of the tiles was not valid; nothing changed") nil)
+        (progn (drgnx-notify 'wb 'warn "A saved arrangement of the tiles was not valid; nothing changed") nil)
       (with-selected-frame frame
         (drgnx-grid--adopt-editors frame)
         (let* ((ids (drgnx-grid--tree-ids tree)) (orphans nil)
                (selected (selected-window)))
+          ;; tiles made later get ids above TREE's
+          (set-frame-parameter frame 'drgnx-grid-next-id (apply #'max (or (frame-parameter frame 'drgnx-grid-next-id) 0) ids))
           ;; the tiles TREE does not hold go (an editor's tabs stay with the editors)
           (dolist (w (drgnx-grid--leaf-windows frame))
             (let ((main (drgnx-grid--main-of w)))

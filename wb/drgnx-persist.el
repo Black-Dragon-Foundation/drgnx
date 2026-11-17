@@ -278,24 +278,6 @@ not restored: one message, and the next save keeps a backup of it."
                nil)
       (plist-get r :data))))
 
-(defun drgnx-persist--strip (tree)
-  "The window state TREE without its window parameters: a state file must not set any (drgnx saves
-none — they would come from a crafted file).  A list is walked along its cdr in a loop (a long one cannot
-exhaust the stack; a circular or dotted one ends at 100000 elements); only nesting recurses, and ends at 64 levels.
-Format 3 keeps no window state: its one caller left is the layouts module's, until layouts move to the grid."
-  (drgnx-persist--strip-1 tree 0))
-
-(defun drgnx-persist--strip-1 (tree depth)
-  "`drgnx-persist--strip' of TREE, DEPTH levels down."
-  (if (and (consp tree) (< depth 64))
-      (let ((acc nil) (n 0) (cap (if (proper-list-p tree) most-positive-fixnum 100000)))
-        (while (and (consp tree) (< (setq n (1+ n)) cap))
-          (unless (eq (car-safe (car tree)) 'parameters)
-            (push (drgnx-persist--strip-1 (car tree) (1+ depth)) acc))
-          (setq tree (cdr tree)))
-        (nconc (nreverse acc) (and (not (consp tree)) tree)))   ; the dotted tail stays
-    (and (not (consp tree)) tree)))
-
 (defun drgnx-persist--clamp (px limit) (and (integerp px) (max 1 (min px (floor limit)))))
 
 (defun drgnx-persist--visit (file)
@@ -441,21 +423,6 @@ their chosen sizes and the sidebar view its `:memory'.  A window that rebuilds i
                     :roots (plist-get state :roots)
                     :extra (plist-get state :extra))))))
 
-(defun drgnx-persist--v2-join (type children pxs total)
-  "CHILDREN (nodes) as one node of TYPE (`row' or `col'), each given its part of TOTAL frame pixels: its PXS entry,
-nil an equal share of what the others leave.  One child alone is that child."
-  (if (null (cdr children)) (car children)
-    (let* ((known (apply #'+ (delq nil (copy-sequence pxs))))
-           (rest (max 1 (- total known)))
-           (pxs (mapcar (lambda (p) (or p (max 1 (/ rest (max 1 (cl-count nil pxs)))))) pxs))
-           (sum (float (apply #'+ pxs)))
-           (scale (drgnx-pixels-scale)))
-      (cl-mapc (lambda (c p)
-                 (setf (nth 2 c) (max 1 (min drgnx-grid-tree-max-px (drgnx-grid-tree-to-logical p scale)))
-                       (nth 4 c) (max 1e-4 (min 1.0 (/ p sum)))))
-               children pxs)
-      (append (list type :px nil :share nil) children))))
-
 (defun drgnx-persist--v2-stacked-p (main)
   "Non-nil when the format-2 groups' window state MAIN splits them top and bottom (its first split is vertical)."
   (let ((n 0) found)
@@ -469,7 +436,7 @@ nil an equal share of what the others leave.  One child alone is that child."
 bar with its view), the editor groups (side by side, or stacked as its window state had them) over the panel, and the
 right dock, those shown in STATE at their saved pixel sizes, clamped as a restore clamps them (a dock to half the
 frame's width, the panel to seven tenths of its height)."
-  (let* ((fw (frame-pixel-width)) (fh (frame-pixel-height)) (id 0)
+  (let* ((fw (frame-pixel-width)) (fh (frame-pixel-height)) (scale (drgnx-pixels-scale)) (id 0)
          (next (lambda () (setq id (1+ id))))
          (dock (lambda (k limit) (let ((spec (plist-get state k)))
                                    (and (drgnx-grid-tree--plist-p spec) (plist-get spec :shown)
@@ -488,17 +455,17 @@ frame's width, the panel to seven tenths of its height)."
                                   :shown (and (stringp (plist-get g :shown)) (plist-get g :shown))))
                           (or specs (list nil))))
          (side (- fw (or left 0) (or right 0)))
-         (area (drgnx-persist--v2-join (if stacked 'col 'row) editors
-                                       (mapcar (lambda (g) (and (not stacked) (integerp (plist-get g :px))
-                                                                (plist-get g :px)))
-                                               (or specs (list nil)))
-                                       (if stacked (- fh (or panel 0)) side)))
+         (area (drgnx-grid-tree-join (if stacked 'col 'row) editors
+                                     (mapcar (lambda (g) (and (not stacked) (integerp (plist-get g :px))
+                                                              (plist-get g :px)))
+                                             (or specs (list nil)))
+                                     (if stacked (- fh (or panel 0)) side) scale))
          (area-tile (lambda (k dock px)
                       (and px (list 'tile :px nil :share nil :id (funcall next) :kinds (and (funcall tab k) (list (funcall tab k)))
                                     :shown (funcall tab k) :dock dock
                                     :state (list :area (pcase k (:panel 'panel) (:right 'right)))))))
          (center (if panel
-                     (drgnx-persist--v2-join 'col (list area (funcall area-tile :panel 'bottom panel)) (list nil panel) fh)
+                     (drgnx-grid-tree-join 'col (list area (funcall area-tile :panel 'bottom panel)) (list nil panel) fh scale)
                    area))
          ;; (NODE . PX) side by side: the left dock, the rest, the right dock
          (row (delq nil (list (and left (cons (list 'tile :px nil :share nil :id (funcall next) :kinds '(side-bar)
@@ -507,7 +474,7 @@ frame's width, the panel to seven tenths of its height)."
                                               left))
                               (cons center nil)
                               (and right (cons (funcall area-tile :right 'right right) right)))))
-         (tree (drgnx-persist--v2-join 'row (mapcar #'car row) (mapcar #'cdr row) fw)))
+         (tree (drgnx-grid-tree-join 'row (mapcar #'car row) (mapcar #'cdr row) fw scale)))
     (and (drgnx-grid-valid-tree-p tree) tree)))
 
 ;;;; Restore a window

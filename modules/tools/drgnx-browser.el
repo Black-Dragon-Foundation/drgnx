@@ -27,7 +27,6 @@
 (declare-function xwidget-webkit-reload "xwidget")
 (declare-function project-root "project")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
-(declare-function drgnx-groups--split "drgnx-groups")
 (declare-function drgnx-exec-stop "drgnx-exec")
 (declare-function drgnx-exec-start "drgnx-exec")
 (declare-function drgnx-notify "drgnx-notice")
@@ -37,9 +36,10 @@
 (declare-function drgnx-agents-session-pick "drgnx-agents-session")
 (declare-function drgnx-agent-session-name "drgnx-agents")
 (declare-function drgnx-agent-session-entries "drgnx-agents")
-(declare-function drgnx-layouts--mark-pane "drgnx-layouts")
 (declare-function drgnx-layouts-define-pane "drgnx-layouts")
 (declare-function drgnx-layouts-define-shape "drgnx-layouts")
+(declare-function drgnx-layouts--beside "drgnx-layouts" (editor kinds width scale))
+(declare-function drgnx-layouts-pane-window "drgnx-layouts" (kind))
 (defvar xwidget-webkit-last-session-buffer)
 
 (defvar drgnx-browser--told nil "Non-nil once the message about the missing WebKit has been shown.")
@@ -106,13 +106,9 @@ shown again by the Browser layout.")
   (setq-local header-line-format (and drgnx-browser-mode '(:eval (drgnx-browser--header)))))
 
 (defun drgnx-browser--pane (&optional select)
-  "The window of the browser pane: the editor's right-hand group, made when there is none.  SELECT it too."
-  (let* ((editor (drgnx-wb-editor-window))
-         (pane (or (seq-find (lambda (w) (eq (window-parameter w 'drgnx-layouts-pane) 'browser)) (window-list nil 'nomini))
-                   (with-selected-window editor
-                     (let ((w (if (fboundp 'drgnx-groups--split) (drgnx-groups--split 'right) (split-window editor nil 'right))))
-                       (require 'drgnx-layouts)
-                       (drgnx-layouts--mark-pane (cons w 'browser)))))))
+  "The window of the browser pane: the tile of kind `browser', made beside the editor when none shows
+\(`drgnx-layouts-pane-window').  SELECT it too."
+  (let* ((editor (drgnx-wb-editor-window)) (pane (drgnx-layouts-pane-window 'browser)))
     (if select (select-window pane) (when (window-live-p editor) (select-window editor)))
     pane))
 
@@ -165,18 +161,16 @@ The pane takes the focus, unless KEEP-FOCUS (a timer opening a page must not mov
   "Show the last page (else a hint) in PANE."
   (set-window-buffer pane (if (buffer-live-p drgnx-browser--buffer) drgnx-browser--buffer (drgnx-browser--placeholder))))
 
-(defun drgnx-browser--shape (editor)
-  "The Browser layout's shape: EDITOR with the browser pane to its right (the last page, else a hint)."
-  (let ((pane (with-selected-window editor (drgnx-browser--pane))))
-    (drgnx-browser--fill pane)
-    (select-window editor)
-    pane))
+(defun drgnx-browser--shape (editor width _height scale)
+  "The Browser layout's shape: EDITOR with the browser tile to its right (the last page, else a hint)."
+  (drgnx-layouts--beside editor '(browser) width scale))
 
 (defun drgnx-browser--register-shape ()
-  "Teach the layouts the `editor+browser' shape, and how to fill the pane found again after a restart."
+  "Teach the layouts the `editor+browser' shape, and the pane kind `browser' (filled with the last page, also in a
+tile found again after a restart)."
   (require 'drgnx-layouts)
   (drgnx-layouts-define-shape 'editor+browser #'drgnx-browser--shape)
-  (drgnx-layouts-define-pane 'browser #'drgnx-browser--fill))
+  (drgnx-layouts-define-pane 'browser #'drgnx-browser--fill "Browser"))
 
 ;;;; Test Report
 
@@ -365,13 +359,10 @@ without one; either ends the wait.  An answer that comes after the wait ended is
                           :when (and (eq id 'browser-go) (lambda () (bound-and-true-p drgnx-browser-mode))))))
 
 (defun drgnx-browser--teardown ()
-  "Cancel the polls waiting for a Playwright server's address, close the pane's windows and kill its pages.
-A poll of Test Report belongs to no setup (it is `:core''s), nor does a page."
+  "Cancel the polls waiting for a Playwright server's address and kill the pages (the browser tile, its kind gone
+with the module, shows its placeholder).  A poll of Test Report belongs to no setup (it is `:core''s), nor does a page."
   (dolist (entry (drgnx-timer-pending))
     (when (eq (car-safe (car entry)) 'browser-watch) (drgnx-timer-cancel (car entry))))
-  (dolist (w (window-list nil 'nomini))
-    (when (and (eq (window-parameter w 'drgnx-layouts-pane) 'browser) (cdr (window-list (window-frame w) 'nomini)))
-      (ignore-errors (delete-window w))))
   (let ((kill-buffer-query-functions nil))
     (dolist (b (buffer-list))
       (when (buffer-local-value 'drgnx-browser-mode b) (kill-buffer b))))
@@ -383,7 +374,6 @@ A poll of Test Report belongs to no setup (it is `:core''s), nor does a page."
                      :teardown #'drgnx-browser--teardown
                      :setup
                      (lambda ()
-                       (require 'drgnx-groups)
                        (drgnx-browser--register-shape)
                        (drgnx-browser--define-commands)))
 

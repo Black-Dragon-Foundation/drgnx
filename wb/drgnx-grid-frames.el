@@ -136,7 +136,7 @@ gets its tree (`drgnx-grid-apply-tree') and place, its tile shown full size agai
 lacks is deleted, its editors' buffers becoming tabs of the main frame's editor (nothing is killed, saved or asked).
 A SNAP that is not valid changes nothing and gives one notice.  Non-nil when restored."
   (if (not (drgnx-grid-valid-snapshot-p snap))
-      (progn (drgnx-notify 'workbench 'warn "A saved layout was not valid; nothing changed") nil)
+      (progn (drgnx-notify 'wb 'warn "A saved layout was not valid; nothing changed") nil)
     (let* ((selected (selected-frame))
            (main (or (seq-find (lambda (f) (eq (drgnx-frame-role f) 'main)) (drgnx-grid--snapshot-frames)) selected))
            (kept nil) (changed nil))

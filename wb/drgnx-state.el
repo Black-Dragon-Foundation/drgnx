@@ -160,14 +160,14 @@ observation.  Non-nil if ROLE was defined."
 (defun drgnx-state--kind (window role frame)
   "The pane kind WINDOW (of ROLE, on FRAME) shows, or nil.
 A dock window: its section.  An area: its front tab (an area tab's companion above or below shows none: the tab is
-its main window's).  A grid's tool tile: the kind in front of its stack (`drgnx-pane-stack').  An editor window: its
-layouts pane, or the editor-home kind whose last buffer it shows."
+its main window's).  A grid's tool tile: the kind in front of its stack (`drgnx-pane-stack').  An editor window: the
+editor-home kind whose last buffer it shows."
   (pcase (drgnx-state-role-chrome role)
     ('dock (window-parameter window 'drgnx-section))
     ('tile (car (window-parameter window 'drgnx-pane-stack)))
     ('area (and (not (window-parameter window 'drgnx-area-part)) (drgnx-state--area-front role frame)))
     (_ (and (eq role 'editor)
-            (or (window-parameter window 'drgnx-layouts-pane) (drgnx-state--editor-kind window frame))))))
+            (drgnx-state--editor-kind window frame)))))
 
 (defun drgnx-state--mru-editor (selected records previous)
   "The MRU editor window among RECORDS: SELECTED when it is an editor window; else PREVIOUS (the
@@ -253,7 +253,7 @@ changes the area's buffer anyway.  Walks the windows with `next-window': it allo
                  (eq (window-dedicated-p w) (drgnx-state--win-dedicated r))
                  (cond ((eq role 'editor)
                         (eq (drgnx-state--win-kind r)
-                            (or (window-parameter w 'drgnx-layouts-pane) (car (rassq (window-buffer w) last)))))
+                            (car (rassq (window-buffer w) last))))
                        ((eq (plist-get (cdr (assq role drgnx-state--roles)) :chrome) 'dock)
                         (eq (drgnx-state--win-kind r) (window-parameter w 'drgnx-section)))
                        (t t)))

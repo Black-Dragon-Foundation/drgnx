@@ -22,7 +22,6 @@
 (require 'drgnx-frame-kind)
 (require 'drgnx-notice)
 
-(declare-function drgnx-layouts-define-pane "drgnx-layouts")
 
 (defvar drgnx-pane-backend 'areas
   "Where pane kinds live: `areas' (the docks) or `grid'.
@@ -304,7 +303,8 @@ PLACEHOLDER: a function returning the buffer shown while there is none.
 SIZE: columns or lines the first time (the grid reads it; the docks keep their own).
 VIEW: the sidebar view a `left' kind belongs to.
 SLOT and HEIGHT: as `drgnx-wb-define-section's.
-FILL: a function of the window, as `drgnx-layouts-define-pane's filler.
+FILL: a function of the window that puts the kind's content in it (a layout's pane, `drgnx-layouts-define-pane'): the
+grid calls it in place of BUFFER.
 ON-SHOW and ON-FOCUS: functions of the window.
 STACK: the kind this one stacks with by default (the grid reads it).
 COMPANIONS: a function of the kind's buffer returning (ABOVE BELOW), the buffers shown above and below it in windows of
@@ -341,8 +341,6 @@ still the one defined here.  Defining a new KIND that is in front in an area tha
                                     (lambda (prev) (drgnx-pane--teardown-kind kind prev)))))))
       (unless old (drgnx-pane--show-again kind))
       (drgnx-pane--call-optional :defined kind)
-      (when fill
-        (with-eval-after-load 'drgnx-layouts (drgnx-layouts-define-pane kind fill)))
       kind)))
 
 ;; Every operation that changes windows is a write (`drgnx-state-with-write'): BY says who asked — `user',
