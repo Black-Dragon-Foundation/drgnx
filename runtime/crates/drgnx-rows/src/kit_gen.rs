@@ -27,6 +27,10 @@ pub enum CompId {
     Chip,
     /// `status-dot`
     StatusDot,
+    /// `range-bar`
+    RangeBar,
+    /// `time-axis`
+    TimeAxis,
 }
 
 /// A state of the state table (on the wire, its name: `"selected-inactive"`).
@@ -89,7 +93,7 @@ pub struct Geom {
 
 /// The glyphs the components name: `(name, Unicode, ASCII)`, from the standard table (`drgnx-ui--default-glyphs`);
 /// the env's glyphs (`KitEnv::glyphs`) take precedence.
-pub const GLYPHS: [(&str, &str, &str); 23] = [
+pub const GLYPHS: [(&str, &str, &str); 28] = [
     ("chevron-right", "›", ">"),
     ("chevron-down", "⌄", "v"),
     ("bar-left", "", "["),
@@ -113,6 +117,11 @@ pub const GLYPHS: [(&str, &str, &str); 23] = [
     ("dot", "●", "*"),
     ("circle", "○", "o"),
     ("fail", "✕", "X"),
+    ("range-light", "▓", "="),
+    ("range-late", "▌", "!"),
+    ("range-forecast", "┄", "."),
+    ("seg-think", "·", "."),
+    ("axis-now", "│", "|"),
 ];
 
 const DENSITIES: [&str; 3] = ["compact", "comfortable", "roomy"];
@@ -432,6 +441,40 @@ const STATUS_DOT_GEOM: [[Geom; 3]; 5] = [
 const STATUS_DOT_LABEL: [Option<&str>; 5] = [Some("done"), Some("running"), Some("needs you"), Some("not started"), Some("error")];
 const STATUS_DOT_FACE: [FaceId; 5] = [FaceId::KitStatusDotDone, FaceId::KitStatusDotRunning, FaceId::KitStatusDotNeedsYou, FaceId::KitStatusDotIdle, FaceId::KitStatusDotError];
 
+const RANGE_BAR_AXES: &[&[&str]] = &[&["schedule", "cost", "segment"]];
+const RANGE_BAR_DEFAULTS: &[usize] = &[0];
+const RANGE_BAR_GEOM: [[Geom; 3]; 3] = [
+    [
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const RANGE_BAR_LABEL: [Option<&str>; 3] = [Some("range"), Some("range"), Some("range")];
+const RANGE_BAR_FACE: [FaceId; 3] = [FaceId::KitRangeBar, FaceId::KitRangeBar, FaceId::KitRangeBar];
+
+const TIME_AXIS_AXES: &[&[&str]] = &[];
+const TIME_AXIS_DEFAULTS: &[usize] = &[];
+const TIME_AXIS_GEOM: [[Geom; 3]; 1] = [
+    [
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const TIME_AXIS_LABEL: [Option<&str>; 1] = [Some("time axis")];
+const TIME_AXIS_FACE: [FaceId; 1] = [FaceId::KitTimeAxis];
+
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {
     match id {
@@ -471,6 +514,14 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant);
             STATUS_DOT_GEOM[i][d]
         }
+        CompId::RangeBar => {
+            let (i, d) = index(RANGE_BAR_AXES, RANGE_BAR_DEFAULTS, variant);
+            RANGE_BAR_GEOM[i][d]
+        }
+        CompId::TimeAxis => {
+            let (i, d) = index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant);
+            TIME_AXIS_GEOM[i][d]
+        }
     }
 }
 
@@ -486,6 +537,8 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::Card => CARD_LABEL[index(CARD_AXES, CARD_DEFAULTS, variant).0],
         CompId::Chip => CHIP_LABEL[index(CHIP_AXES, CHIP_DEFAULTS, variant).0],
         CompId::StatusDot => STATUS_DOT_LABEL[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
+        CompId::RangeBar => RANGE_BAR_LABEL[index(RANGE_BAR_AXES, RANGE_BAR_DEFAULTS, variant).0],
+        CompId::TimeAxis => TIME_AXIS_LABEL[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
     }
 }
 
@@ -501,5 +554,7 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::Card => CARD_FACE[index(CARD_AXES, CARD_DEFAULTS, variant).0],
         CompId::Chip => CHIP_FACE[index(CHIP_AXES, CHIP_DEFAULTS, variant).0],
         CompId::StatusDot => STATUS_DOT_FACE[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
+        CompId::RangeBar => RANGE_BAR_FACE[index(RANGE_BAR_AXES, RANGE_BAR_DEFAULTS, variant).0],
+        CompId::TimeAxis => TIME_AXIS_FACE[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
     }
 }

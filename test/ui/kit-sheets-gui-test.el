@@ -100,6 +100,20 @@ the baseline (`:ascent 100') is drawn at the line's end in the fill's face, its 
                     (error "No baseline marker drawn at %s" at)))))
       (save-excursion (goto-char at) (delete-char 1)))))
 
+(defun drgnx-kit-sheet--check-range (what e s edges snap beg)
+  "The range bar E (an expansion) drawn at BEG: down the column halfway into its first part, the part's face colour
+fills the bar's height (`drgnx-ui-kit-range-bar-heights' by the density, logical px) in device px of the cell's line."
+  (let* ((run (aref (plist-get e :runs) 0))
+         (face (intern (aref run 2)))
+         (colour (drgnx-kit-sheet--rgb (face-foreground face nil t)))
+         (x0 (drgnx-kit-sheet--x beg s edges))
+         (xm (+ x0 (/ (aref (aref (plist-get e :spaces) 0) 1) 2)))
+         (top (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point beg)))))))
+         (h (round (* s (save-excursion (goto-char beg) (line-pixel-height)))))
+         (rows (cl-loop for y from top below (+ top h) when (equal colour (drgnx-uitest-pixel snap xm y)) collect y))
+         (want (aref (aref (plist-get e :spaces) 0) 2)))
+    (should (equal (list what 'range-bar-height want) (list what 'range-bar-height (length rows))))))
+
 (defun drgnx-kit-sheet--check-fill (what fill track want total height snap beg s edges)
   "The bar drawn at BEG (WHAT the cell, for the failures), TOTAL device px wide: down the column halfway into its
 fill, the fill (FILL, an (A R G B)) is HEIGHT device px high and its middle on the caption's centre line (within a
@@ -231,7 +245,7 @@ Returns the number of cells checked."
                          (list what 'height (round (* s (save-excursion (goto-char beg) (line-pixel-height))))))))
         ;; (b) the fill inside the start pad, halfway in (clear of a focus ring and of a rounded corner): the state's,
         ;; the component's own, an agent mark's its agent's colour (a bar's is checked on its own row, below)
-        (when (and spaces (not (eq id 'progress)))
+        (when (and spaces (not (memq id '(progress range-bar))))
           (let* ((token (or (plist-get (drgnx-ui-kit-state state) :fill) (drgnx-kit-sheet--bg id variants variant)
                             (and (eq id 'agent-mark)
                                  (intern (format "a%d" (plist-get (drgnx-kit-sheet--props id variants state) :slot))))
@@ -252,6 +266,10 @@ Returns the number of cells checked."
         ;; fill's colour, then the track's colour
         (when (and (eq id 'progress) (equal variants '(bar)))
           (drgnx-kit-sheet--check-bar what (drgnx-kit-sheet--props id variants state) variant scale snap beg s edges))
+        ;; (b4) a range bar: down the column halfway into its first part, that part's colour is the bar's height
+        ;; (10 logical px, 8 compact, 12 roomy) in device px
+        (when (and (eq id 'range-bar) spaces)
+          (drgnx-kit-sheet--check-range what e s edges snap beg))
         ;; (b3) a meter: its bar, tick and span, or no bar
         (when (and (eq id 'progress) (equal variants '(meter)))
           (drgnx-kit-sheet--check-meter what (drgnx-kit-sheet--props id variants state) variant scale snap beg s edges))
@@ -321,6 +339,12 @@ and density."
   "The agent mark's sheet: its handle between exact pads on its agent's colour, in every theme and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'agent-mark))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/range-bar ()
+  "The range bar's sheet: its three variants, each part's space exact and its colour the bar's height tall, in every
+theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'range-bar))
 
 (drgnx-look-gui-deftest drgnx-kit-sheet/progress ()
   "Progress's sheet: a bar (its fill VALUE of its width, then the track) and a ring, in every theme and density."
