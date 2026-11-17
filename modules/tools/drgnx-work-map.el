@@ -225,7 +225,8 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
 
 (defconst drgnx-work-map--through-faces
   '(drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single
-                   drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom drgnx-card-sel-single)
+                   drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom
+                   drgnx-card-sel-single)
   "The faces of a card's rows, plain and selected: a class (the dimming) goes through their box, as for text.")
 
 (defconst drgnx-work-map--nav-faces '(("selected") ("chain") ("dim"))

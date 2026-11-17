@@ -43,7 +43,7 @@ section header shows its title in the heading face."
         (should-not (let ((case-fold-search nil)) (string-match-p "[A-Z][A-Z]" s))))
       (let* ((header (drgnx-wb-section-header "Files")) (i (string-search "Files" header)))
         (should i)
-        (should (memq 'drgnx-wb-section (ensure-list (get-text-property i 'face header))))))))
+        (should (memq 'drgnx-kit-section-header (ensure-list (get-text-property i 'face header))))))))
 
 (ert-deftest drgnx-look-explorer/a-section-header-is-a-chevron-and-its-title ()
   "Pattern D: window-dark.html `.sec': a section's header is its chevron and its title, nothing else: no close button

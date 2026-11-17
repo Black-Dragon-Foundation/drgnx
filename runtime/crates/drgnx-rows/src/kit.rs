@@ -225,6 +225,58 @@ impl Status {
     }
 }
 
+/// A card's kind: what its ring says (`needs-you`: the attention colour, `selected`: a 2 px ring).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CardKind {
+    #[default]
+    Plain,
+    NeedsYou,
+    Selected,
+}
+
+impl CardKind {
+    fn name(self) -> &'static str {
+        match self {
+            CardKind::Plain => "plain",
+            CardKind::NeedsYou => "needs-you",
+            CardKind::Selected => "selected",
+        }
+    }
+}
+
+/// Where a row sits in its card: the ring is open where the card goes on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CardShape {
+    #[default]
+    Single,
+    Top,
+    Mid,
+    Bottom,
+}
+
+impl CardShape {
+    fn name(self) -> &'static str {
+        match self {
+            CardShape::Single => "single",
+            CardShape::Top => "top",
+            CardShape::Mid => "mid",
+            CardShape::Bottom => "bottom",
+        }
+    }
+
+    /// The shape of row I of N.
+    pub fn of(i: usize, n: usize) -> CardShape {
+        match (i, n) {
+            (_, 0 | 1) => CardShape::Single,
+            (0, _) => CardShape::Top,
+            (i, n) if i + 1 == n => CardShape::Bottom,
+            _ => CardShape::Mid,
+        }
+    }
+}
+
 /// A component with its props, as JSON `{"c": "row", …}`.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "c", rename_all = "kebab-case")]
@@ -260,6 +312,28 @@ pub enum Comp {
         key: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
+    },
+    /// A section's header: TITLE (a twisty before it when COLLAPSIBLE, open unless COLLAPSED) and an optional COUNT.
+    SectionHeader {
+        title: String,
+        #[serde(default)]
+        collapsible: bool,
+        #[serde(default)]
+        collapsed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<u32>,
+        #[serde(default)]
+        state: State,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<Action>,
+    },
+    /// One line of a card of KIND in SHAPE: TEXT with the card's room each side.
+    Card {
+        #[serde(default)]
+        kind: CardKind,
+        #[serde(default)]
+        shape: CardShape,
+        text: String,
     },
     /// A key hint: KEYS in their box (or as text, `menu`).
     KeyHint {
@@ -822,6 +896,66 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 put_action(b, from, to, a);
             }
         }
+        Comp::SectionHeader {
+            title,
+            collapsible,
+            collapsed,
+            count,
+            state,
+            action,
+        } => {
+            let variant = [if *collapsible { "yes" } else { "no" }, env.density.name()];
+            let g: Geom = kit_gen::geom(CompId::SectionHeader, &variant);
+            let face = comp_face(kit_gen::face(CompId::SectionHeader, &variant));
+            let from = b.pos();
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+            if *collapsible {
+                let name = match (g.twisty, *collapsed) {
+                    (Some((closed, _)), true) => closed,
+                    (Some((_, open)), false) => open,
+                    (None, _) => "",
+                };
+                let mark = glyph(env, name);
+                match env
+                    .icons
+                    .filter(|_| !env.tty)
+                    .and_then(|i| (i.0)(name, px(ICON_PX, env.scale)))
+                {
+                    Some(id) => {
+                        b.image(id, mark);
+                        pad(b, env, px(g.gap, env.scale), 0, face);
+                    }
+                    None => {
+                        b.push(mark, face);
+                        b.push(" ", face);
+                    }
+                }
+            }
+            b.push(title, face);
+            if let Some(n) = count {
+                pad(b, env, px(g.gap, env.scale), 1, face);
+                b.push(&n.to_string(), Some(FaceId::TextSubtle.name()));
+            }
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+            let to = b.pos();
+            if let Some(f) = state_face(*state) {
+                b.face_over(from, to, f.name());
+            }
+            if !env.tty && g.height > 0 {
+                b.height(1, px(g.height, env.scale));
+            }
+            if let Some(a) = action {
+                put_action(b, from, to, a);
+            }
+        }
+        Comp::Card { kind, shape, text } => {
+            let variant = [kind.name(), shape.name(), env.density.name()];
+            let g: Geom = kit_gen::geom(CompId::Card, &variant);
+            let face = comp_face(kit_gen::face(CompId::Card, &variant));
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+            b.push(text, face);
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+        }
         Comp::KeyHint {
             keys,
             variant,
@@ -1010,6 +1144,22 @@ pub fn expand_rows(env: &KitEnv, key: &str, c: &Comp) -> Vec<Row> {
     let mut b = RowBuilder::new(format!("{key}/0"));
     expand(&mut b, env, c);
     vec![b.finish()]
+}
+
+/// ROWS as the rows of one card of KIND: each row's text under the card's ring face of its shape (single, top, mid,
+/// bottom: the ring is open where the card goes on), put under the runs it has.
+pub fn card_rows(env: &KitEnv, kind: CardKind, mut rows: Vec<Row>) -> Vec<Row> {
+    let n = rows.len();
+    for (i, r) in rows.iter_mut().enumerate() {
+        let variant = [kind.name(), CardShape::of(i, n).name(), env.density.name()];
+        let len = u32::try_from(r.text.chars().count()).unwrap_or(u32::MAX);
+        r.runs.push((
+            0,
+            len,
+            kit_gen::face(CompId::Card, &variant).name().to_owned(),
+        ));
+    }
+    rows
 }
 
 #[cfg(test)]
@@ -1224,6 +1374,50 @@ mod tests {
             expand_rows(&env, "k", &c(true))[0].runs,
             vec![(0, 11, FaceId::KitStatusDotNeedsYou.name().to_owned())]
         );
+    }
+
+    #[test]
+    fn work_cards_are_kit_cards() {
+        // the rows of one card get the ring face of their shape under their own runs: single, top/bottom, top/mid/bottom
+        let env = KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            density: Density::Comfortable,
+            icons: None,
+        };
+        let row = |k: &str| {
+            let mut b = RowBuilder::new(k);
+            b.push("ab", Some(FaceId::TextMuted.name()));
+            b.finish()
+        };
+        let faces = |kind, n: usize| -> Vec<String> {
+            card_rows(&env, kind, (0..n).map(|i| row(&i.to_string())).collect())
+                .iter()
+                .map(|r| r.runs.last().unwrap().2.clone())
+                .collect()
+        };
+        assert_eq!(
+            faces(CardKind::Plain, 1),
+            vec![FaceId::KitCardPlainSingle.name()]
+        );
+        assert_eq!(
+            faces(CardKind::Selected, 3),
+            vec![
+                FaceId::KitCardSelectedTop.name(),
+                FaceId::KitCardSelectedMid.name(),
+                FaceId::KitCardSelectedBottom.name()
+            ]
+        );
+        // under the row's own run: the row's face stays first, the ring covers the whole text
+        let r = &card_rows(&env, CardKind::NeedsYou, vec![row("k")])[0];
+        assert_eq!(r.runs[0].2, FaceId::TextMuted.name());
+        assert_eq!(
+            r.runs[1],
+            (0, 2, FaceId::KitCardNeedsYouSingle.name().to_owned())
+        );
+        assert_eq!(CardShape::of(0, 2), CardShape::Top);
+        assert_eq!(CardShape::of(1, 2), CardShape::Bottom);
     }
 
     #[test]

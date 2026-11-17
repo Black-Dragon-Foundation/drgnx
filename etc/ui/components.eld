@@ -106,6 +106,26 @@
                    ((meter-span) :fg meter-span :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption))
                    ((meter-outline) :fg meter-tick :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption)))
             :replaces nil :helpers nil :lint t)
+  ;; a section's header: the twisty (when collapsible) and the title in the UI font at 12 px, semibold, muted, with an
+  ;; optional count; a click on a collapsible one folds it
+  (section-header :variants ((collapsible no yes)) :defaults (collapsible no)
+                  :geometry (:height 26 :pad (6 . 6) :gap 4 :box nil :radius 0 :hit 0)
+                  :tty (:pad 1 :twisty (chevron-right chevron-down))
+                  :label (:by collapsible (no "section") (yes "section, collapsible"))
+                  :bind ((() :inherit (drgnx-text-muted drgnx-ui-caption) :attrs (:weight semibold)))
+                  :replaces ((drgnx-wb-section . drgnx-kit-section-header)) :helpers nil :lint t)
+  ;; a card: an 8 px ring inside the line (1 px, 2 px when selected; the attention colour when it needs you), the panel's
+  ;; fill; a card of several rows is its top, mid and bottom shapes, whose ring is open where the next row goes on
+  (card :variants ((kind plain needs-you selected) (shape single top mid bottom)) :defaults (kind plain shape single)
+        :geometry (:height 0 :pad (8 . 8) :gap 0 :box t :radius 8 :hit 0)
+        :tty (:pad 1) :label nil
+        :bind (
+((plain single) :bg panel :edge border-strong :ring (1 8 ) :inherit (secondary-selection))               ((plain top) :bg panel :edge border-strong :ring (1 8 bottom) :inherit (secondary-selection))               ((plain mid) :bg panel :edge border-strong :ring (1 8 top bottom) :inherit (secondary-selection))               ((plain bottom) :bg panel :edge border-strong :ring (1 8 top) :inherit (secondary-selection))               ((needs-you single) :bg panel :edge card-needs-you-edge :ring (1 8) :inherit (secondary-selection))               ((needs-you top) :bg panel :edge card-needs-you-edge :ring (1 8 bottom) :inherit (secondary-selection))               ((needs-you mid) :bg panel :edge card-needs-you-edge :ring (1 8 top bottom) :inherit (secondary-selection))               ((needs-you bottom) :bg panel :edge card-needs-you-edge :ring (1 8 top) :inherit (secondary-selection))               ((selected single) :bg panel :edge focus :ring (2 8) :inherit (secondary-selection))               ((selected top) :bg panel :edge focus :ring (2 8 bottom) :inherit (secondary-selection))               ((selected mid) :bg panel :edge focus :ring (2 8 top bottom) :inherit (secondary-selection))               ((selected bottom) :bg panel :edge focus :ring (2 8 top) :inherit (secondary-selection)))
+        :replaces ((drgnx-card-single . drgnx-kit-card-plain-single) (drgnx-card-top . drgnx-kit-card-plain-top)
+                   (drgnx-card-mid . drgnx-kit-card-plain-mid) (drgnx-card-bottom . drgnx-kit-card-plain-bottom)
+                   (drgnx-card-sel-single . drgnx-kit-card-selected-single) (drgnx-card-sel-top . drgnx-kit-card-selected-top)
+                   (drgnx-card-sel-mid . drgnx-kit-card-selected-mid) (drgnx-card-sel-bottom . drgnx-kit-card-selected-bottom))
+        :helpers nil :lint t)
   ;; a chip: a short label in a tinted rounded box, optionally led by an icon; `agent' takes its colour from the agent slot
   ;; (drgnx-agent-N); high contrast has no tint, a 1 px ring in the tone's colour
   (chip :variants ((tone neutral accent warn ok error agent) (fill soft solid)) :defaults (tone neutral fill soft)

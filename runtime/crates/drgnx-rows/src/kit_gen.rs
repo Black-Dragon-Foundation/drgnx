@@ -19,6 +19,10 @@ pub enum CompId {
     AgentMark,
     /// `progress`
     Progress,
+    /// `section-header`
+    SectionHeader,
+    /// `card`
+    Card,
     /// `chip`
     Chip,
     /// `status-dot`
@@ -245,6 +249,90 @@ const PROGRESS_GEOM: [[Geom; 3]; 3] = [
 const PROGRESS_LABEL: [Option<&str>; 3] = [Some("percent"), Some("percent"), Some("percent")];
 const PROGRESS_FACE: [FaceId; 3] = [FaceId::KitProgress, FaceId::KitProgress, FaceId::KitProgress];
 
+const SECTION_HEADER_AXES: &[&[&str]] = &[&["no", "yes"]];
+const SECTION_HEADER_DEFAULTS: &[usize] = &[0];
+const SECTION_HEADER_GEOM: [[Geom; 3]; 2] = [
+    [
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+    ],
+    [
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+    ],
+];
+const SECTION_HEADER_LABEL: [Option<&str>; 2] = [Some("section"), Some("section, collapsible")];
+const SECTION_HEADER_FACE: [FaceId; 2] = [FaceId::KitSectionHeader, FaceId::KitSectionHeader];
+
+const CARD_AXES: &[&[&str]] = &[&["plain", "needs-you", "selected"], &["single", "top", "mid", "bottom"]];
+const CARD_DEFAULTS: &[usize] = &[0, 0];
+const CARD_GEOM: [[Geom; 3]; 12] = [
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const CARD_LABEL: [Option<&str>; 12] = [None, None, None, None, None, None, None, None, None, None, None, None];
+const CARD_FACE: [FaceId; 12] = [FaceId::KitCardPlainSingle, FaceId::KitCardPlainTop, FaceId::KitCardPlainMid, FaceId::KitCardPlainBottom, FaceId::KitCardNeedsYouSingle, FaceId::KitCardNeedsYouTop, FaceId::KitCardNeedsYouMid, FaceId::KitCardNeedsYouBottom, FaceId::KitCardSelectedSingle, FaceId::KitCardSelectedTop, FaceId::KitCardSelectedMid, FaceId::KitCardSelectedBottom];
+
 const CHIP_AXES: &[&[&str]] = &[&["neutral", "accent", "warn", "ok", "error", "agent"], &["soft", "solid"]];
 const CHIP_DEFAULTS: &[usize] = &[0, 0];
 const CHIP_GEOM: [[Geom; 3]; 12] = [
@@ -367,6 +455,14 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(PROGRESS_AXES, PROGRESS_DEFAULTS, variant);
             PROGRESS_GEOM[i][d]
         }
+        CompId::SectionHeader => {
+            let (i, d) = index(SECTION_HEADER_AXES, SECTION_HEADER_DEFAULTS, variant);
+            SECTION_HEADER_GEOM[i][d]
+        }
+        CompId::Card => {
+            let (i, d) = index(CARD_AXES, CARD_DEFAULTS, variant);
+            CARD_GEOM[i][d]
+        }
         CompId::Chip => {
             let (i, d) = index(CHIP_AXES, CHIP_DEFAULTS, variant);
             CHIP_GEOM[i][d]
@@ -386,6 +482,8 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::KeyHint => KEY_HINT_LABEL[index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant).0],
         CompId::AgentMark => AGENT_MARK_LABEL[index(AGENT_MARK_AXES, AGENT_MARK_DEFAULTS, variant).0],
         CompId::Progress => PROGRESS_LABEL[index(PROGRESS_AXES, PROGRESS_DEFAULTS, variant).0],
+        CompId::SectionHeader => SECTION_HEADER_LABEL[index(SECTION_HEADER_AXES, SECTION_HEADER_DEFAULTS, variant).0],
+        CompId::Card => CARD_LABEL[index(CARD_AXES, CARD_DEFAULTS, variant).0],
         CompId::Chip => CHIP_LABEL[index(CHIP_AXES, CHIP_DEFAULTS, variant).0],
         CompId::StatusDot => STATUS_DOT_LABEL[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
     }
@@ -399,6 +497,8 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::KeyHint => KEY_HINT_FACE[index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant).0],
         CompId::AgentMark => AGENT_MARK_FACE[index(AGENT_MARK_AXES, AGENT_MARK_DEFAULTS, variant).0],
         CompId::Progress => PROGRESS_FACE[index(PROGRESS_AXES, PROGRESS_DEFAULTS, variant).0],
+        CompId::SectionHeader => SECTION_HEADER_FACE[index(SECTION_HEADER_AXES, SECTION_HEADER_DEFAULTS, variant).0],
+        CompId::Card => CARD_FACE[index(CARD_AXES, CARD_DEFAULTS, variant).0],
         CompId::Chip => CHIP_FACE[index(CHIP_AXES, CHIP_DEFAULTS, variant).0],
         CompId::StatusDot => STATUS_DOT_FACE[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
     }

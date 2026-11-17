@@ -21,6 +21,8 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Row (kit)](row.md) | a list, tree or map row, as the kit expands it (generated from `etc/ui/components.eld`) |
 | [Button (kit)](button.md) | a label in a rounded box, four styles and two sizes, with its key hint |
 | [Key hint (kit)](key-hint.md) | the keys of an action in the code font, in a small box |
+| [Section header (kit)](section-header.md) | a section's title, with a twisty when it folds and an optional count |
+| [Card (kit)](card.md) | the rows of one card: a ring inside the line, open where the card goes on |
 | [Agent mark (kit)](agent-mark.md) | the agent mark's numbers (generated from `etc/ui/components.eld`) |
 | [Progress (kit)](progress.md) | progress's numbers (generated from `etc/ui/components.eld`) |
 

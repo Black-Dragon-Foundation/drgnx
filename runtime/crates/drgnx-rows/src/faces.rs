@@ -1050,6 +1050,32 @@ pub enum FaceId {
     KitProgressMeterSpan,
     /// `drgnx-kit-progress-meter-outline`
     KitProgressMeterOutline,
+    /// `drgnx-kit-section-header`
+    KitSectionHeader,
+    /// `drgnx-kit-card-plain-single`
+    KitCardPlainSingle,
+    /// `drgnx-kit-card-plain-top`
+    KitCardPlainTop,
+    /// `drgnx-kit-card-plain-mid`
+    KitCardPlainMid,
+    /// `drgnx-kit-card-plain-bottom`
+    KitCardPlainBottom,
+    /// `drgnx-kit-card-needs-you-single`
+    KitCardNeedsYouSingle,
+    /// `drgnx-kit-card-needs-you-top`
+    KitCardNeedsYouTop,
+    /// `drgnx-kit-card-needs-you-mid`
+    KitCardNeedsYouMid,
+    /// `drgnx-kit-card-needs-you-bottom`
+    KitCardNeedsYouBottom,
+    /// `drgnx-kit-card-selected-single`
+    KitCardSelectedSingle,
+    /// `drgnx-kit-card-selected-top`
+    KitCardSelectedTop,
+    /// `drgnx-kit-card-selected-mid`
+    KitCardSelectedMid,
+    /// `drgnx-kit-card-selected-bottom`
+    KitCardSelectedBottom,
     /// `drgnx-kit-chip-neutral-soft`
     KitChipNeutralSoft,
     /// `drgnx-kit-chip-accent-soft`
@@ -1084,7 +1110,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 536] = [
+    pub const ALL: [FaceId; 549] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1606,6 +1632,19 @@ impl FaceId {
         FaceId::KitProgressMeterTickNear,
         FaceId::KitProgressMeterSpan,
         FaceId::KitProgressMeterOutline,
+        FaceId::KitSectionHeader,
+        FaceId::KitCardPlainSingle,
+        FaceId::KitCardPlainTop,
+        FaceId::KitCardPlainMid,
+        FaceId::KitCardPlainBottom,
+        FaceId::KitCardNeedsYouSingle,
+        FaceId::KitCardNeedsYouTop,
+        FaceId::KitCardNeedsYouMid,
+        FaceId::KitCardNeedsYouBottom,
+        FaceId::KitCardSelectedSingle,
+        FaceId::KitCardSelectedTop,
+        FaceId::KitCardSelectedMid,
+        FaceId::KitCardSelectedBottom,
         FaceId::KitChipNeutralSoft,
         FaceId::KitChipAccentSoft,
         FaceId::KitChipWarnSoft,
@@ -2147,6 +2186,19 @@ impl FaceId {
             FaceId::KitProgressMeterTickNear => "drgnx-kit-progress-meter-tick-near",
             FaceId::KitProgressMeterSpan => "drgnx-kit-progress-meter-span",
             FaceId::KitProgressMeterOutline => "drgnx-kit-progress-meter-outline",
+            FaceId::KitSectionHeader => "drgnx-kit-section-header",
+            FaceId::KitCardPlainSingle => "drgnx-kit-card-plain-single",
+            FaceId::KitCardPlainTop => "drgnx-kit-card-plain-top",
+            FaceId::KitCardPlainMid => "drgnx-kit-card-plain-mid",
+            FaceId::KitCardPlainBottom => "drgnx-kit-card-plain-bottom",
+            FaceId::KitCardNeedsYouSingle => "drgnx-kit-card-needs-you-single",
+            FaceId::KitCardNeedsYouTop => "drgnx-kit-card-needs-you-top",
+            FaceId::KitCardNeedsYouMid => "drgnx-kit-card-needs-you-mid",
+            FaceId::KitCardNeedsYouBottom => "drgnx-kit-card-needs-you-bottom",
+            FaceId::KitCardSelectedSingle => "drgnx-kit-card-selected-single",
+            FaceId::KitCardSelectedTop => "drgnx-kit-card-selected-top",
+            FaceId::KitCardSelectedMid => "drgnx-kit-card-selected-mid",
+            FaceId::KitCardSelectedBottom => "drgnx-kit-card-selected-bottom",
             FaceId::KitChipNeutralSoft => "drgnx-kit-chip-neutral-soft",
             FaceId::KitChipAccentSoft => "drgnx-kit-chip-accent-soft",
             FaceId::KitChipWarnSoft => "drgnx-kit-chip-warn-soft",
@@ -2689,6 +2741,19 @@ impl FaceId {
             "drgnx-kit-progress-meter-tick-near" => FaceId::KitProgressMeterTickNear,
             "drgnx-kit-progress-meter-span" => FaceId::KitProgressMeterSpan,
             "drgnx-kit-progress-meter-outline" => FaceId::KitProgressMeterOutline,
+            "drgnx-kit-section-header" => FaceId::KitSectionHeader,
+            "drgnx-kit-card-plain-single" => FaceId::KitCardPlainSingle,
+            "drgnx-kit-card-plain-top" => FaceId::KitCardPlainTop,
+            "drgnx-kit-card-plain-mid" => FaceId::KitCardPlainMid,
+            "drgnx-kit-card-plain-bottom" => FaceId::KitCardPlainBottom,
+            "drgnx-kit-card-needs-you-single" => FaceId::KitCardNeedsYouSingle,
+            "drgnx-kit-card-needs-you-top" => FaceId::KitCardNeedsYouTop,
+            "drgnx-kit-card-needs-you-mid" => FaceId::KitCardNeedsYouMid,
+            "drgnx-kit-card-needs-you-bottom" => FaceId::KitCardNeedsYouBottom,
+            "drgnx-kit-card-selected-single" => FaceId::KitCardSelectedSingle,
+            "drgnx-kit-card-selected-top" => FaceId::KitCardSelectedTop,
+            "drgnx-kit-card-selected-mid" => FaceId::KitCardSelectedMid,
+            "drgnx-kit-card-selected-bottom" => FaceId::KitCardSelectedBottom,
             "drgnx-kit-chip-neutral-soft" => FaceId::KitChipNeutralSoft,
             "drgnx-kit-chip-accent-soft" => FaceId::KitChipAccentSoft,
             "drgnx-kit-chip-warn-soft" => FaceId::KitChipWarnSoft,

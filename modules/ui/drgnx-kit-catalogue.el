@@ -20,11 +20,11 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress chip status-dot)
-  "The components the hub expands: their cells are drawn as hub rows.")
-
-(defconst drgnx-kit-catalogue--stateless '(agent-mark progress)
+(defconst drgnx-kit-catalogue--stateless '(agent-mark progress card)
   "The components that show no state (nothing to hover or select): drawn at rest only.")
+
+(defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress section-header card chip status-dot)
+  "The components the hub expands: their cells are drawn as hub rows.")
 
 (defconst drgnx-kit-catalogue--meters
   (cl-loop for size in '(row card wide)
@@ -52,6 +52,10 @@
                   :state (symbol-name state))))
     ('button (list :c "button" :label "Button" :style (symbol-name (alist-get 'style variants))
                    :size (symbol-name (alist-get 'size variants)) :state (symbol-name state)))
+    ('section-header (list :c "section-header" :title "Section" :count 3 :state (symbol-name state)
+                           :collapsible (if (eq (alist-get 'collapsible variants) 'yes) t :false)))
+    ('card (list :c "card" :kind (symbol-name (alist-get 'kind variants)) :shape (symbol-name (alist-get 'shape variants))
+                 :text "Card" :state (symbol-name state)))
     ('key-hint (list :c "key-hint" :keys "C-k" :variant (symbol-name (alist-get 'variant variants))
                      :state (symbol-name state)))
     ('agent-mark (list :c "agent-mark" :slot 2 :handle "Co"))

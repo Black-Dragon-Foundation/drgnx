@@ -522,6 +522,19 @@
  drgnx-kit-progress-meter-tick-near
  drgnx-kit-progress-meter-span
  drgnx-kit-progress-meter-outline
+ drgnx-kit-section-header
+ drgnx-kit-card-plain-single
+ drgnx-kit-card-plain-top
+ drgnx-kit-card-plain-mid
+ drgnx-kit-card-plain-bottom
+ drgnx-kit-card-needs-you-single
+ drgnx-kit-card-needs-you-top
+ drgnx-kit-card-needs-you-mid
+ drgnx-kit-card-needs-you-bottom
+ drgnx-kit-card-selected-single
+ drgnx-kit-card-selected-top
+ drgnx-kit-card-selected-mid
+ drgnx-kit-card-selected-bottom
  drgnx-kit-chip-neutral-soft
  drgnx-kit-chip-accent-soft
  drgnx-kit-chip-warn-soft

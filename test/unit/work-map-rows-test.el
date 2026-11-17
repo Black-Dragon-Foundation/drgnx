@@ -386,8 +386,8 @@ asks the hub nothing and its keys say the same."
 (ert-deftest drgnx-work-map-rows/the-selected-card-is-the-hubs-and-the-class-only-dims ()
   ;; the hub draws the selected card in its ring faces and the editor goes through both sets of card faces; the
   ;; class `selected' has no face of its own on the map (a tint over the ring would hide it), `dim' has the dim face
-  (dolist (face '(drgnx-card-top drgnx-card-single drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom
-                                 drgnx-card-sel-single))
+  (dolist (face '(drgnx-card-top drgnx-card-single drgnx-card-sel-top
+                                 drgnx-card-sel-mid drgnx-card-sel-bottom drgnx-card-sel-single))
     (should (memq face drgnx-work-map--through-faces)))
   (should (equal '(("selected") ("chain") ("dim")) drgnx-work-map--nav-faces)))
 

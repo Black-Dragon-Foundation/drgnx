@@ -229,8 +229,9 @@ Build it when a title or row is set, never while drawing."
       (plist-get r :data)))
 
   (defun drgnx-ui-kit--colours (binding)
-    "The colours BINDING ((VALUE...) :bg :fg :edge ...) names, as (BG FG EDGE)."
-    (list (plist-get (cdr binding) :bg) (plist-get (cdr binding) :fg) (plist-get (cdr binding) :edge)))
+    "The colours BINDING ((VALUE...) :bg :fg :edge ...) names, as (BG FG EDGE RING ATTRS)."
+    (list (plist-get (cdr binding) :bg) (plist-get (cdr binding) :fg) (plist-get (cdr binding) :edge)
+          (plist-get (cdr binding) :ring) (plist-get (cdr binding) :attrs)))
 
   (defun drgnx-ui-kit-face-bindings (&optional table)
     "((FACE ID BINDING-PLIST)...): the kit faces of TABLE (default the components file), in its order.
@@ -361,6 +362,7 @@ colours (`drgnx-ui-kit-theme-specs')."
      ,@(mapcar (lambda (f)
                  `(defface ,(car f) '((t :inherit ,(let ((i (plist-get (nth 2 f) :inherit)) (font (plist-get (nth 2 f) :font)))
                                                      (if font (append font (cl-remove-if (lambda (x) (memq x font)) i)) i))
+                                         ,@(plist-get (nth 2 f) :attrs)
                                          ,@(and (plist-get (nth 2 f) :inverse) '(:inverse-video t))))
                     ,(format "The kit's `%s' component (etc/ui/components.eld)." (nth 1 f))
                     :group 'drgnx))
@@ -368,12 +370,14 @@ colours (`drgnx-ui-kit-theme-specs')."
 
 (drgnx-ui-kit-define-faces)
 
-(defun drgnx-ui-kit-theme-specs (tok &optional table hc)
+(defun drgnx-ui-kit-theme-specs (tok &optional table hc glitnir)
   "((FACE . ATTRIBUTES)...) of the kit faces of TABLE (default the components file) for one of drgnx's themes: the
-bindings' tokens as colours through TOK (a token name → a colour), the edge as a 1 px box inside the face.  A
-binding with no colours (the row's: a font only) keeps its `:inherit' (a theme's spec replaces the `defface''s); an
-`:inverse' binding keeps its inverse video.  With HC (the high-contrast theme) a binding marked `:hc-ring' has
-no tint: a 1 px ring in its text colour."
+bindings' tokens as colours through TOK (a token name → a colour), the edge as a 1 px box inside the face (`:ring'
+\(WIDTH RADIUS OPEN...) makes it WIDTH px, and where GLITNIR draws, rounded to RADIUS and open on the sides OPEN), and
+`:attrs' (raw face attributes: a weight), and an `:inverse' binding keeps its inverse video.  A binding with no colours
+\(the row's: a font only) keeps its `:inherit' (a theme's spec replaces the `defface''s).  A `:ring' is inside the
+line too (negative widths: nothing moves).  With HC (the high-contrast theme) a binding marked `:hc-ring' has no tint:
+a 1 px ring in its text colour."
   (mapcar (lambda (f)
             (let ((b (nth 2 f)))
               `(,(car f)
@@ -387,7 +391,13 @@ no tint: a 1 px ring in its text colour."
                 ,@(and (plist-get b :fg) `(:foreground ,(funcall tok (plist-get b :fg))))
                 ,@(and hc (plist-get b :hc-ring) (plist-get b :fg)
                        `(:box (:line-width (-1 . -1) :color ,(funcall tok (plist-get b :fg)))))
-                ,@(and (plist-get b :edge) `(:box (:line-width (-1 . -1) :color ,(funcall tok (plist-get b :edge)))))
+                ,@(and (plist-get b :edge)
+                       (let* ((ring (plist-get b :ring)))
+                         `(:box (:line-width ,(let ((w (- (or (car ring) 1)))) (cons w w)) :color ,(funcall tok (plist-get b :edge))
+                                             ,@(and glitnir ring
+                                                    `(:corner-radius ,(nth 1 ring)
+                                                                     ,@(and (nthcdr 2 ring) `(:open ,(nthcdr 2 ring)))))))))
+                ,@(plist-get b :attrs)
                 ,@(and (plist-get b :inverse) '(:inverse-video t)))))
           (drgnx-ui-kit-face-bindings table)))
 
@@ -567,6 +577,7 @@ draws SVG icons (`drgnx-look-icons').")
 (defvar drgnx-ui-kit--bparts nil "The pieces of text, newest first.")
 (defvar drgnx-ui-kit--bruns nil "The runs ((FROM TO FACE)...), newest first.")
 (defvar drgnx-ui-kit--bspaces nil "The pads ((POS PX 0)...), newest first.")
+(defvar drgnx-ui-kit--bprops nil "The props the pieces put themselves (an icon's image), newest first.")
 (defvar drgnx-ui-kit--bscale 1.0 "The scale of the expansion.")
 (defvar drgnx-ui-kit--btty nil "Non-nil when the expansion is for a terminal (`ascii': ASCII glyphs).")
 
@@ -574,6 +585,7 @@ draws SVG icons (`drgnx-look-icons').")
   "BODY with an empty builder at SCALE (TTY: for a terminal)."
   (declare (indent 2))
   `(let ((drgnx-ui-kit--bpos 0) (drgnx-ui-kit--bparts nil) (drgnx-ui-kit--bruns nil) (drgnx-ui-kit--bspaces nil)
+         (drgnx-ui-kit--bprops nil)
          (drgnx-ui-kit--bscale ,scale) (drgnx-ui-kit--btty ,tty))
      ,@body))
 
@@ -601,7 +613,8 @@ draws SVG icons (`drgnx-look-icons').")
   "The builder's (TEXT RUNS PROPS SPACES HEIGHT), STATE-FACE (nil: none) above every run over FROM..TO."
   (let ((runs (nreverse drgnx-ui-kit--bruns)))
     (when state-face (push (list from to state-face) runs))
-    (list (mapconcat #'identity (nreverse drgnx-ui-kit--bparts) "") runs props (nreverse drgnx-ui-kit--bspaces) height)))
+    (list (mapconcat #'identity (nreverse drgnx-ui-kit--bparts) "") runs (append (nreverse drgnx-ui-kit--bprops) props)
+          (nreverse drgnx-ui-kit--bspaces) height)))
 
 (defun drgnx-ui-kit--b-action (action from)
   "The `drgnx-action' and `mouse-face' props of ACTION (:kind :args) over FROM..the end."
@@ -662,6 +675,49 @@ draws SVG icons (`drgnx-look-icons').")
                               (let ((h (and (not tty) (drgnx-ui-kit--value (plist-get g :height) chosen))))
                                 (and h (> h 0) (drgnx-px h nil scale)))))))
 
+(defun drgnx-ui-kit--section-header (props scale tty)
+  "The `section-header' component of PROPS (:title :collapsible :collapsed :count :action) at SCALE, see
+`drgnx-ui-kit--expand'."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'section-header)) (open (eq (plist-get props :collapsible) t))
+           (chosen (drgnx-ui-kit--chosen entry (list (if open 'yes 'no))))
+           (g (plist-get entry :geometry)) (face (drgnx-ui-kit--face 'section-header chosen))
+           (pad (plist-get g :pad)) (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0))
+           (gap (drgnx-ui-kit--value (plist-get g :gap) chosen)) (count (plist-get props :count)))
+      (drgnx-ui-kit--b-pad (car pad) tty-pad face)
+      (when open
+        (let* ((names (plist-get (plist-get entry :tty) :twisty))
+               (name (if (eq (plist-get props :collapsed) t) (car names) (cadr names)))
+               (img (and drgnx-ui-kit--icons (not tty) (funcall drgnx-ui-kit--icons name drgnx-ui-kit-icon-px)))
+               (mark (drgnx-ui-kit--glyph name tty)))
+          (if img
+              (progn (push (list drgnx-ui-kit--bpos (1+ drgnx-ui-kit--bpos) 'display img) drgnx-ui-kit--bprops)
+                     (drgnx-ui-kit--b-push " " nil)
+                     (drgnx-ui-kit--b-pad gap 0 face))
+            (drgnx-ui-kit--b-push (or mark "") face)
+            (drgnx-ui-kit--b-push " " face))))
+      (drgnx-ui-kit--b-push (or (plist-get props :title) "") face)
+      (when count
+        (drgnx-ui-kit--b-pad gap 1 face)
+        (drgnx-ui-kit--b-push (number-to-string count) 'drgnx-text-subtle))
+      (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+      (drgnx-ui-kit--b-finish (plist-get (drgnx-ui-kit-state (drgnx-ui-kit--name props :state 'rest)) :face)
+                              0 drgnx-ui-kit--bpos (drgnx-ui-kit--b-action (plist-get props :action) 0)
+                              (let ((h (and (not tty) (drgnx-ui-kit--value (plist-get g :height) chosen))))
+                                (and h (> h 0) (drgnx-px h nil scale)))))))
+
+(defun drgnx-ui-kit--card (props scale tty)
+  "The `card' component of PROPS (:kind :shape :text): one line of a card at SCALE, see `drgnx-ui-kit--expand'."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'card))
+           (chosen (drgnx-ui-kit--chosen entry (list (drgnx-ui-kit--name props :kind 'plain)
+                                                     (drgnx-ui-kit--name props :shape 'single))))
+           (pad (plist-get (plist-get entry :geometry) :pad)) (face (drgnx-ui-kit--face 'card chosen))
+           (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0)))
+      (drgnx-ui-kit--b-pad (car pad) tty-pad face)
+      (drgnx-ui-kit--b-push (or (plist-get props :text) "") face)
+      (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+      (drgnx-ui-kit--b-finish nil 0 0 nil nil))))
 (defun drgnx-ui-kit--round (x)
   "X rounded half up, as the hub rounds (`drgnx-px')."
   (floor (+ x 0.5 1e-9)))
@@ -955,6 +1011,8 @@ px, HEIGHT the row's line height in device px or nil (one text line)."
     ('row (drgnx-ui-kit--row props scale tty))
     ('button (drgnx-ui-kit--button props scale tty))
     ('key-hint (drgnx-ui-kit--key-hint props scale tty))
+    ('section-header (drgnx-ui-kit--section-header props scale tty))
+    ('card (drgnx-ui-kit--card props scale tty))
     ('agent-mark (drgnx-ui-kit--agent-mark props scale tty))
     ('progress (drgnx-ui-kit--progress props scale tty))
     ('meter (drgnx-ui-kit--meter props scale tty))
@@ -1202,6 +1260,34 @@ hint or nil.  Its `help-echo' and accessible text are LABEL."
   (let ((s (drgnx-ui-kit-string 'key-hint (list :c "key-hint" :keys keys :variant (symbol-name (or variant 'cap))) where nil)))
     (put-text-property 0 (length s) 'help-echo (concat "key " keys) s)
     s))
+
+(defun drgnx-ui-kit-section-header (title collapsible collapsed count where)
+  "TITLE as a kit section header on WHERE: with a twisty (pointing right when COLLAPSED) when COLLAPSIBLE, and COUNT
+(a number or nil) after it.  Its accessible text is \"TITLE, collapsed\" or \"TITLE, expanded\" when collapsible."
+  (let ((s (drgnx-ui-kit-string 'section-header
+                                (list :c "section-header" :title title :collapsible (if collapsible t :false)
+                                      :collapsed (if collapsed t :false) :count count)
+                                where nil)))
+    (put-text-property 0 (length s) 'help-echo
+                       (if collapsible (format "%s, %s" title (if collapsed "collapsed" "expanded")) title) s)
+    s))
+
+(defun drgnx-ui-kit-card-lines (lines kind width)
+  "LINES (strings) as the rows of one card of KIND (`plain', `needs-you' or `selected') WIDTH columns wide, one string.
+Each row is its own box run (a box run spans lines, so rows cannot rely on soft wrap): the text filled to WIDTH
+columns, a boxed `(space :align-to COL)' stretch that closes the run at the card's right edge (COL counts from the
+window's left edge, so the card starts at column 0), and an unboxed newline.  The ring is the card's kit face of the
+row's shape: single, top, mid or bottom, open where the card goes on."
+  (let* ((entry (drgnx-ui-kit-component 'card)) (n (length lines)) (i 0) (out nil))
+    (dolist (line lines)
+      (let* ((shape (cond ((= n 1) 'single) ((= i 0) 'top) ((= i (1- n)) 'bottom) (t 'mid)))
+             (face (drgnx-ui-kit--face 'card (drgnx-ui-kit--chosen entry (list (or kind 'plain) shape)))))
+        (setq i (1+ i))
+        (push (concat (propertize (truncate-string-to-width line width nil ?\s) 'face face)
+                      (propertize " " 'display `(space :align-to ,(1+ width)) 'face face)
+                      "\n")
+              out)))
+    (apply #'concat (nreverse out))))
 
 ;;; A kit button in buffer text that is also a `button.el' button (`push-button', `forward-button' reach it).
 (defun drgnx-ui-kit-text-button (label fn help style size)
