@@ -620,8 +620,10 @@
       (if (nth 1 c)
           (progn
             (should (string-suffix-p (concat "$31 / $40 · " (nth 1 c)) text))
-            (should (equal (vector (- (length text) (length (nth 1 c))) (length text) (symbol-name (nth 2 c)))
-                           (aref (plist-get e :runs) (1- (length (plist-get e :runs)))))))
+            ;; the word's own run, unless it is the caption's (then it joins the text's)
+            (unless (eq (nth 2 c) 'drgnx-ui-caption)
+              (should (equal (vector (- (length text) (length (nth 1 c))) (length text) (symbol-name (nth 2 c)))
+                             (aref (plist-get e :runs) (1- (length (plist-get e :runs))))))))
         (should (string-suffix-p "$31 / $40" text)))
       (should (string-match-p (format "\\`\\(31 of 40\\|31\\) dollars, %s\\'"
                                       (alist-get (intern (car c)) drgnx-ui-kit--meter-states))

@@ -94,12 +94,14 @@
             :bind ((() :fg progress-track :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption))
                    ((fill) :fg progress-fill :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption))
                    ((meter-fill) :fg meter-fill :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption))
-                   ((meter-near) :fg meter-near :inherit (drgnx-ui-caption warning) :font (drgnx-ui-caption))
+                   ((meter-near) :fg meter-near :inherit (drgnx-ui-caption warning error)
+                    :font (drgnx-ui-caption))
                    ((meter-reached) :fg meter-reached :inherit (drgnx-ui-caption error) :font (drgnx-ui-caption))
                    ((meter-tick) :fg meter-tick :bg progress-track
                     :inherit (drgnx-ui-caption shadow secondary-selection) :font (drgnx-ui-caption))
                    ((meter-tick-near) :fg meter-near :bg progress-track
-                    :inherit (drgnx-ui-caption warning secondary-selection) :font (drgnx-ui-caption))
+                    :inherit (drgnx-ui-caption warning error secondary-selection)
+                    :font (drgnx-ui-caption))
                    ((meter-span) :fg meter-span :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption))
                    ((meter-outline) :fg meter-tick :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption)))
             :replaces nil :helpers nil :lint t)))

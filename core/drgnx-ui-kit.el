@@ -744,13 +744,20 @@ the colour of SLOT (1-12, `drgnx-agent-identity')."
 
 (defun drgnx-ui-kit--assemble (items)
   "ITEMS ((:text S FACE) | (:space W H FACE) | (:pad W FACE)...), in order, as (TEXT RUNS SPACES LENGTH): a space and
-a pad are one character each (a pad's height 0, the line's), FACE nil for none.  As the hub's `RowBuilder'."
+a pad are one character each (a pad's height 0, the line's), FACE nil for none; a text's run joins the one before it
+in the same face.  As the hub's `RowBuilder'."
   (let ((parts nil) (runs nil) (spaces nil) (pos 0))
     (dolist (it items)
       (pcase it
         (`(:text ,str ,face)
          (unless (equal str "")
-           (push str parts) (when face (push (list pos (+ pos (length str)) face) runs)) (setq pos (+ pos (length str)))))
+           (push str parts)
+           ;; a run of the face just before joins it, as the builder's `push' joins them
+           (when face
+             (if (and runs (eq (nth 2 (car runs)) face) (= (nth 1 (car runs)) pos))
+                 (setcar runs (list (nth 0 (car runs)) (+ pos (length str)) face))
+               (push (list pos (+ pos (length str)) face) runs)))
+           (setq pos (+ pos (length str)))))
         (`(,(or :space :pad) ,w . ,rest)
          (let ((h (if (eq (car it) :space) (car rest) 0)) (face (if (eq (car it) :space) (cadr rest) (car rest))))
            (push " " parts) (push (list pos w h) spaces) (when face (push (list pos (1+ pos) face) runs))

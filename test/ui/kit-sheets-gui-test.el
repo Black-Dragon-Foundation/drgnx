@@ -98,7 +98,7 @@ the baseline (`:ascent 100') is drawn at the line's end in the fill's face, its 
   "The bar drawn at BEG (WHAT the cell, for the failures), TOTAL device px wide: down the column halfway into its
 fill, the fill (FILL, an (A R G B)) is HEIGHT device px high and its middle on the caption's centre line (within a
 device px: the baseline less half the caption font's ascent less its descent, the line icons and the bar are centred
-on, whatever pads the line box); along its middle row the fill is WANT device px (within one, its rounded start), and
+on, whatever pads the line box); along its middle row the fill is WANT device px (within one per rounded end), and
 the track (TRACK, unless nil or the fill is the whole bar) follows it.  Returns the bar's middle device row."
   (let* ((x0 (drgnx-kit-sheet--x beg s edges))
          (xm (+ x0 (/ want 2)))
@@ -121,7 +121,9 @@ the track (TRACK, unless nil or the fill is the whole bar) follows it.  Returns 
     ;; track's right after them
     (let* ((y (nth (/ (length rows) 2) rows))
            (xs (cl-loop for x from x0 below (+ x0 total 4) when (equal fill (drgnx-uitest-pixel snap x y)) collect x)))
-      (should (equal (list what 'bar-fill want t) (list what 'bar-fill want (<= (abs (- want (length xs))) 1))))
+      ;; within one device px a rounded end, two for a fill that is the whole bar (both ends rounded)
+      (should (equal (list what 'bar-fill want t)
+                     (list what 'bar-fill want (<= (abs (- want (length xs))) (if (>= want total) 2 1)))))
       (when (and track (< want total))
         (should (equal (list what 'bar-track track)
                        (list what 'bar-track (drgnx-uitest-pixel snap (1+ (car (last xs))) y)))))

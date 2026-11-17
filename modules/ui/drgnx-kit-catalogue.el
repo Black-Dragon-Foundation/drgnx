@@ -60,9 +60,10 @@
                  (list :c "progress" :kind (symbol-name (alist-get 'kind variants)) :value 0.6 :width 120)))
     (_ (list :c (symbol-name id) :text (format "%s · %s" id state) :state (symbol-name state)))))
 
-(defun drgnx-kit-catalogue--hub-row (id props scale tty state)
-  "PROPS expanded at SCALE (TTY on a terminal) and dressed as the inserter dresses a hub row, in STATE (a patch
-state); the cell's text, its line's height in device px (the expansion's :height) as `drgnx-kit-line-height'."
+(defun drgnx-kit-catalogue--hub-row (_id props scale tty state)
+  "PROPS (its component the one its :c names) expanded at SCALE (TTY on a terminal) and dressed as the inserter
+dresses a hub row, in STATE (a patch state); the cell's text, its line's height in device px (the expansion's
+:height) as `drgnx-kit-line-height'."
   (let* ((e (let ((drgnx-ui-kit--icons (and (not tty) (drgnx-ui-kit-icon-function nil))))
               (drgnx-ui-kit-expand (intern (plist-get props :c)) props scale tty)))
          (props (mapcar (lambda (p) (let ((l (append p nil))) (if (vectorp (nth 3 l)) (append (butlast l) (list (append (nth 3 l) nil))) l)))
