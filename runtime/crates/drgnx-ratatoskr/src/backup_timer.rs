@@ -16,6 +16,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 /// 03:00, in minutes after local midnight.
 pub const AT_MINUTE: u32 = 3 * 60;
 
+/// How long a hub has run before it starts a copy (seconds): a stop in a hub's first minutes does not wait for one, and
+/// a hub that was down at 03:00 copies at its first tick after it has settled, not in the middle of its start (the
+/// copy is a request on the store's writer, which a shutdown waits out).
+pub const SETTLE: u64 = 300;
+
 /// After a failed copy, how long before the next try (seconds).
 pub const RETRY_AFTER: u64 = 3600;
 
@@ -28,8 +33,9 @@ pub struct Local {
 
 /// Whether a copy is due now: it is 03:00 or later and no good copy was made today, and the last try (if any) is not
 /// recent.  A hub that was down at 03:00 therefore copies at its first tick after it starts.
-pub fn due(now: Local, last_ok: Option<Local>, since_attempt: Option<u64>) -> bool {
-    now.minute >= AT_MINUTE
+pub fn due(now: Local, last_ok: Option<Local>, since_attempt: Option<u64>, up_secs: u64) -> bool {
+    up_secs >= SETTLE
+        && now.minute >= AT_MINUTE
         && last_ok.is_none_or(|l| l.day != now.day)
         && since_attempt.is_none_or(|s| s >= RETRY_AFTER)
 }
@@ -111,7 +117,11 @@ fn newest_copy(dir: &Path) -> Option<u64> {
 }
 
 /// At start: the newest `work-*.db` in DIR is the last good copy (only checked copies are renamed into place).
+/// When this hub's timer was first looked at (its start).
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 pub fn seed(dir: &Path) {
+    STARTED.get_or_init(std::time::Instant::now);
     if let Some(at) = newest_copy(dir) {
         let mut l = LAST.lock().unwrap_or_else(|e| e.into_inner());
         if l.attempt.is_none() {
@@ -166,6 +176,10 @@ pub fn due_at(now: u64) -> bool {
         local(now),
         l.ok_at.map(local),
         l.attempt.map(|(at, _)| now.saturating_sub(at)),
+        STARTED
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_secs(),
     )
 }
 
@@ -181,20 +195,35 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_hub_waits_to_settle_before_its_copy() {
+        // a missed night, past 03:00, nothing copied today: due only once the hub has run SETTLE seconds, so a stop in its
+        // first minutes never waits for a copy
+        assert!(!due(at(5, 14, 0), None, None, 0));
+        assert!(!due(at(5, 14, 0), None, None, SETTLE - 1));
+        assert!(due(at(5, 14, 0), None, None, SETTLE));
+    }
+
+    #[test]
     fn backup_timer_catches_up_after_a_missed_night() {
         // a copy was made on day 10 at 03:00; the clock is a number of minutes since then
         let ok = Some(at(10, 3, 0));
-        assert!(!due(at(10, 3, 1), ok, Some(60)), "already copied today");
-        assert!(!due(at(11, 2, 59), ok, Some(23 * 3600)), "before 03:00");
-        assert!(due(at(11, 3, 0), ok, Some(24 * 3600)), "03:00 sharp");
+        assert!(
+            !due(at(10, 3, 1), ok, Some(60), 3600),
+            "already copied today"
+        );
+        assert!(
+            !due(at(11, 2, 59), ok, Some(23 * 3600), 3600),
+            "before 03:00"
+        );
+        assert!(due(at(11, 3, 0), ok, Some(24 * 3600), 3600), "03:00 sharp");
         // the hub was down all of day 11 and starts on day 12 at 09:12: the first tick copies
-        assert!(due(at(12, 9, 12), ok, Some(54 * 3600)));
+        assert!(due(at(12, 9, 12), ok, Some(54 * 3600), 3600));
         // never copied: a hub started at 14:00 copies, one started at 01:00 waits for 03:00
-        assert!(due(at(5, 14, 0), None, None));
-        assert!(!due(at(5, 1, 0), None, None));
+        assert!(due(at(5, 14, 0), None, None, 3600));
+        assert!(!due(at(5, 1, 0), None, None, 3600));
         // a failed try is not repeated every tick
-        assert!(!due(at(12, 9, 13), ok, Some(60)));
-        assert!(due(at(12, 10, 13), ok, Some(RETRY_AFTER)));
+        assert!(!due(at(12, 9, 13), ok, Some(60), 3600));
+        assert!(due(at(12, 10, 13), ok, Some(RETRY_AFTER), 3600));
     }
 
     /// Pattern D (pure): no clock, no order; one task whose copy panics.
