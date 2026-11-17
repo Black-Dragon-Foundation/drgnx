@@ -48,7 +48,30 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                       (drgnx-ui-session-env s)))
       (drgnx-ui-stop "drgnx-ui-1-00000a")
       (should-not (file-exists-p (file-name-directory (plist-get s :socket))))
-      (should-not (file-exists-p (drgnx-ui-socket-dir "" deep))))))   ; the per-root dir, once empty
+      ;; the shared per-root dir stays: another process may be starting a session in it
+      (should (file-directory-p (drgnx-ui-socket-dir "" deep))))))
+
+(ert-deftest drgnx-ui/a-session-starts-while-another-removes-the-shared-dir ()
+  ;; sessions start and stop from several processes at once: a stop that removed the per-root socket dir once it was
+  ;; empty could fall between another start's making of that dir and the making of its own in it (2026-11-17, kwin:
+  ;; "Creating directory: No such file or directory", exit 255).  A stop leaves the shared dir in place.
+  (drgnx-ui-test--with-state
+    (let* ((shared (drgnx-ui-socket-dir "" root))
+           (real (symbol-function 'make-directory))
+           (stopped nil))
+      (drgnx-ui-prepare-run "drgnx-ui-1-00000c" nil nil root)   ; the session that stops
+      (cl-letf (((symbol-function 'make-directory)
+                 (lambda (dir &optional parents)
+                   (when (and (not stopped) (equal (file-name-directory (directory-file-name dir))
+                                                   (file-name-as-directory shared)))
+                     (setq stopped t)
+                     (drgnx-ui-stop "drgnx-ui-1-00000c"))   ; the other process's stop, at that moment
+                   (funcall real dir parents))))
+        (let ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000b" nil nil root)))
+          (should stopped)
+          (should (file-directory-p (file-name-directory (plist-get s :socket))))
+          (should (= (file-modes shared) #o700))
+          (delete-directory (file-name-directory (plist-get s :socket)) t))))))
 
 (ert-deftest drgnx-ui/socket-dirs-differ-between-state-roots ()
   (drgnx-ui-test--with-state

@@ -1381,8 +1381,9 @@ with LEGACY-OK, which reap passes to also take a legacy drgnx-ui-N."
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
     (when (file-directory-p run) (delete-directory run t))
-    (when (file-directory-p sock) (delete-directory sock t))
-    (ignore-errors (delete-directory (file-name-directory sock))))   ; the per-root dir, once empty
+    ;; the shared per-root dir above it stays: a session starting in another process may be about to make its own
+    ;; dir in it (an empty 0700 dir under the runtime dir, which goes with it)
+    (when (file-directory-p sock) (delete-directory sock t)))
   (list :stopped name))
 
 (defun drgnx-ui--yours-p (owner client)
@@ -1918,8 +1919,7 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
         (drgnx-ui--poll-pause 0.05)))
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
-    (delete-directory (drgnx-ui-socket-dir name) t)
-    (ignore-errors (delete-directory (drgnx-ui-socket-dir "")))
+    (delete-directory (drgnx-ui-socket-dir name) t)   ; the shared per-root dir stays (drgnx-ui-stop)
     (list (if (eq (car r) 'timeout) 124 (car r))
           (and (file-exists-p results) (drgnx-ui--read-json results))
           run)))
