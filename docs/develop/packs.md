@@ -12,6 +12,7 @@ pack.eld                 the manifest (data, read with huginn: nothing is evalua
 queries/tags.scm         definitions, references, docs
 queries/chunks.scm       containers, wrappers, splits, cut points
 queries/inline.scm       optional "not a value" patterns for inline values
+queries/folds.scm        optional fold ranges (below; without it, the definitions of tags.scm fold)
 queries/highlights.scm   the generic mode's highlighting (below)
 test/…                   fixtures and goldens
 README.md, LICENSE       shown as inert text
@@ -199,6 +200,34 @@ the other languages' fixtures) before they were deleted; the byte-for-byte golde
 tests (`chunk_langs.rs`) pass unchanged. References come from each pack's `queries/tags.scm` (the grammars' own tags
 queries; C and shell have small ones of ours), keeping the `@reference.*` matches.
 
+## Fold queries: `queries/folds.scm`
+
+What folds in a file, for the editor's folding and the minimap's fold marks, comes from the pack's `queries/folds.scm`.
+Each capture is a node that folds from its first line to its last: `@fold.KIND` with KIND one of `function`, `class`,
+`comment`, `import`, `test`, `region`, `cell` or `heading`, and plain `@fold` for a block (an `if`'s body, a call's
+arguments, a list). A capture whose name starts with `_` only feeds a predicate; any other name is refused by the check.
+
+- **One range a line.** A node within one line is no range. Of the ranges starting on one line the largest stays, and on a
+  tie the more specific kind (the higher one in the list above, after `block`): `#[test] fn` and its body's block start on
+  different lines, but `describe("…", () => {…})` is one node captured twice, and it stays a test.
+- **Predicates.** `#eq?`, `#not-eq?`, `#any-of?`, `#match?` and `#not-match?` only, and a `#match?` regexp in the subset
+  Emacs and Rust read alike (`^`, `$`, classes, `*`, `+`, `?`, no `\d` or lookaround): the same query runs in Nidhogg's
+  tree-sitter (for a buffer with a parser) and in the hub (for one without). A pattern with another predicate matches
+  nothing in either.
+- **Without a `folds.scm`.** The pack's `tags.scm` folds: each `@definition.KIND` capture becomes `@fold.function`
+  (`function`, `method`, `macro`, `constructor`), `@fold.class` (`class`, `struct`, `interface`, `module`, `enum`,
+  `union`, `trait`, `impl`, `namespace`, `type`) or `@fold`. A pack that has neither has no folds from its grammar; indentation folds it (the `indent` source).
+- **Where it runs.** In a buffer with a tree-sitter parser, Nidhogg runs the query at each reparse over the changed ranges
+  (`nidhogg-treesit-fold-query`). For a file with no parser in the editor, the hub runs it (`hrafn::chunk::folds`; a fetched
+  pack's in its parse worker, the `Folds` request) and sends the ranges as the minimap's `folds` layer, which the line model
+  takes as its `hub` source.
+- **Checking.** `every_pack_folds_scm_compiles_against_its_grammar` (in `hrafn`) compiles each built-in pack's query against
+  its grammar and refuses an unknown capture or predicate; the conformance row `view/minimap-folds-per-language` pins each
+  built-in language's ranges on a fixture (`test/conformance/fixtures/folds`).
+
+The built-in packs' fold queries are drgnx's own; which nodes fold follows nvim-treesitter's `folds.scm` files
+(Apache-2.0, `LICENSES/Apache-2.0.txt`).
+
 ## Inline values, origin trails and debug adapters from packs
 
 What the debugger and the trails knew per language is the pack's:
@@ -272,7 +301,8 @@ image whose .NET SDK is pinned by SHA-512 in `test/container/debug-adapters-imag
 
 A pack that is not built in brings a grammar library somebody else wrote. The hub never loads it: `hrafn::chunk::worker`
 runs it in a worker process, `ratatoskr hrafn-parse --lib FILE --grammar NAME --sha256 HASH` (this binary again), which
-checks the library's hash, loads it, builds the pack's `chunks.scm` and `tags.scm`, and answers requests until its stdin
+checks the library's hash, loads it, builds the pack's `chunks.scm` and `tags.scm` (and its fold query: `folds.scm`, else
+one from `tags.scm`; a fold query that does not build fails only the `Folds` requests), and answers requests until its stdin
 ends. The tree never crosses the process: a request is one file (`path`, `text`, `budget`, at most 4 MiB), the answer is
 its chunks, symbols and references. A file whose extension a fetched pack claims (`hrafn::chunk::worker::claims`; only
 files no built-in language takes) goes through `chunk_file_refs` to the worker; every other outcome is the file read as text.

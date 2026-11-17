@@ -245,7 +245,11 @@ pub fn fetched(env: &runstav::paths::Env) -> Vec<hrafn::chunk::worker::Fetched> 
                 grammar: g.name.clone(),
                 sha256: entry.sha256.clone(),
             },
-            init: Init::from_manifest(&m, chunks_scm, tags_scm),
+            init: Init {
+                // the fold ranges' query is `queries/folds.scm` when the pack has one, else its `tags.scm`'s definitions
+                folds_scm: std::fs::read_to_string(dir.join("queries/folds.scm")).ok(),
+                ..Init::from_manifest(&m, chunks_scm, tags_scm)
+            },
             extensions: m.files.extensions.clone(),
         });
     }
@@ -349,11 +353,14 @@ pub mod fixture {
                     grammar: "c-sharp".into(),
                     sha256: entry.sha256,
                 },
-                init: Init::from_manifest(
-                    m,
-                    read("queries/chunks.scm"),
-                    Some(read("queries/tags.scm")),
-                ),
+                init: Init {
+                    folds_scm: Some(read("queries/folds.scm")),
+                    ..Init::from_manifest(
+                        m,
+                        read("queries/chunks.scm"),
+                        Some(read("queries/tags.scm")),
+                    )
+                },
                 extensions: vec![ext.into()],
             }],
             Arc::new(InProcess),

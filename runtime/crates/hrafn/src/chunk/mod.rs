@@ -7,6 +7,7 @@
 mod definers;
 mod elisp;
 mod engine;
+pub mod folds;
 mod merge;
 mod outline;
 mod refs;

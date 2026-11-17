@@ -1,0 +1,19 @@
+{"scenario": "work/timeline-window-and-filter", "requires": ["v1"], "doc": "Gap G12. A Timeline over a window: its lane holds only the steps in the window, each segment carrying its kind's letter (R, E, Y) in its kind's colour; `work/trail/set {filter: edits}` draws it again without subscribing again, the edit in its colour and the rest greyed; a set on a view that is not a Timeline answers false, and a window that ends before it starts is refused."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into step (session, seq, class, start, end) values ('session:s1', 1, 'tool', 1000.0, 1100.0), ('session:s1', 2, 'tool', 1100.0, 1200.0), ('session:s1', 3, 'user-wait', 1200.0, 1300.0), ('session:s1', 4, 'tool', 5000.0, 5100.0)", "insert into step_detail (step, kind, origin) select id, 'read', 'acp' from step where session = 'session:s1' and seq in (1, 4)", "insert into step_detail (step, kind, origin) select id, 'edit', 'acp' from step where session = 'session:s1' and seq = 2"]}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "t", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [8, 17], "width_px": 1000, "tz": "+0000", "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/trail/subscribe", "params": {"view": "t", "lanes": [{"session": "s1", "label": "one"}], "window": {"from": 1000.0, "to": 1400.0}}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "t", "class": "gui-1", "ops": [{"reset": {"$contains": [{"key": "axis"}, {"key": "lane:s1", "runs": {"$contains": [["$number", "$number", "drgnx-work-seg-read"], ["$number", "$number", "drgnx-work-seg-edit"], ["$number", "$number", "drgnx-work-seg-wait"]]}, "props": {"$contains": [["$number", "$number", "drgnx-work-kind", "R"], ["$number", "$number", "drgnx-work-kind", "E"], ["$number", "$number", "drgnx-work-kind", "Y"], ["$number", "$number", "drgnx-work-step", ["s1", 3]]]}}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"hub": "$number"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "work/trail/set", "params": {"view": "t", "filter": "edits"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "t", "class": "gui-1", "ops": {"$contains": [{"replace": {"$contains": [{"key": "lane:s1", "runs": {"$contains": [["$number", "$number", "drgnx-work-dim"], ["$number", "$number", "drgnx-work-seg-edit"]]}}]}}]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "work/trail/set", "params": {"view": "nope", "filter": "waits"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": false}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "work/trail/set", "params": {"view": "t", "window": {"from": 2000.0, "to": 1000.0}}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "error": {"code": "invalid-params", "message": "$string"}}, "within_ms": 10000}

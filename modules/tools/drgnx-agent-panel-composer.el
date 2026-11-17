@@ -21,6 +21,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-ui-kit)                 ; the bar's buttons
 (require 'drgnx-pixels)
+(require 'drgnx-state)                  ; which frame shows the composer (the store's windows)
 (require 'drgnx-icons)
 (require 'drgnx-modal)                  ; the composer starts in insert state
 
@@ -102,9 +103,30 @@
     (require 'drgnx-history-revert)
     (drgnx-history-fork-here drgnx-agent-panel--session seq)))
 
+(defun drgnx-agent-panel-composer--frame ()
+  "The frame this composer is drawn in, from the workbench state store (`drgnx-state-frames', `drgnx-state-windows'):
+the selected frame when a window of it shows the buffer, else the first recorded frame that does; the selected frame
+when none does.  Its pads and its buttons' widths are that frame's pixels, whichever frame is selected."
+  (let ((buffer (current-buffer)) (selected (selected-frame)))
+    (cl-flet ((shows (f) (seq-some (lambda (w) (eq (window-buffer w) buffer)) (drgnx-state-windows f))))
+      (cond ((shows selected) selected)
+            (t (or (seq-find #'shows (drgnx-state-frames)) selected))))))
+
+(defun drgnx-agent-panel-composer--pad (&optional frame)
+  "The composer bar's right pad (20 logical pixels) in the pixels of FRAME, default the frame it is drawn in."
+  (drgnx-px 20 (or frame (drgnx-agent-panel-composer--frame))))
+
 (defun drgnx-agent-panel-composer--bar ()
   "The composer's bar (agent-panel.html `.composer'): the model and the mode as chips that switch them, Pair when it is
-a command, then Fork, the pause icon (stop after this step) and Send, an arrow, as buttons.  It has no newline."
+a command, then Fork, the pause icon (stop after this step) and Send, an arrow, as buttons.  It has no newline.  It is
+built with the frame it is drawn in selected, so its icons, its buttons' widths and its pad are that frame's pixels
+whichever frame is selected when the panel updates."
+  (let ((buffer (current-buffer)) (frame (drgnx-agent-panel-composer--frame)))
+    (with-selected-frame frame
+      (with-current-buffer buffer (drgnx-agent-panel-composer--bar-in frame)))))
+
+(defun drgnx-agent-panel-composer--bar-in (frame)
+  "`drgnx-agent-panel-composer--bar''s text, built with FRAME selected."
   (let* ((snap drgnx-agent-panel--snap) (model (plist-get snap :model)) (mode (plist-get snap :mode))
          (pair (drgnx-agent-panel-composer--pair-chip))
          (buttons (concat (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'git-fork) " Fork ")
@@ -130,7 +152,8 @@ a command, then Fork, the pause icon (stop after this step) and Send, an arrow, 
               "")
             (if pair (concat (drgnx-agent-panel-composer--click pair #'drgnx-agent-panel-pair nil "C: pair with the agent") " ")
               "")
-            (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width buttons) (drgnx-px 20))))))
+            (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width buttons)
+                                                                     (drgnx-agent-panel-composer--pad frame))))))
             buttons)))
 
 ;;;; Completion in the composer

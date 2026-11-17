@@ -648,7 +648,10 @@ is no command and asks only where somebody can answer (`drgnx-save-ask-can-ask-p
 at once, so nothing is lost and nothing waits. `(drgnx-save-ask-discard BUFFER)` carries out Don't Save: it kills
 BUFFER without asking again and keeps its text first in `drgnx-close-discarded` (the last five, newest first, as
 `(:file FILE :text TEXT :time TIME)`), so a mis-click is not fatal. Close Tab asks it
-([workbench](../guide/workbench.md)).
+([workbench](../guide/workbench.md)). NAME may be a list of names: one question for all of them ("…the following N
+files?", Save All), which is how quitting asks (`drgnx-session-quit-confirm`: that one question, then the running
+programs; Save writes with `save-some-buffers` unasked, Don't Save just quits; a text Don't Save drops at a quit is
+not kept, the process ends) ([opening](../guide/opening.md)).
 
 ## Notices (`drgnx-notice.el`)
 
@@ -3499,6 +3502,22 @@ KEY)`, `(drgnx-shell-set FRAME KEY VALUE)`: `:rail` writes the kit's `drgnx-rail
 commands `shell-toggle-rail`, `-title`, `-right` act on the selected frame. `(drgnx-shell-right-for PLACE)` is
 `work-detail` for `work`, `agents-side` (a placeholder kind until it is defined) for every other place.
 Tests: `test/unit/wb-shell-test.el` (`drgnx-shell/`), `test/ui/tiling-frames-gui-test.el` (`drgnx-ui-tiling-frames/`).
+
+**The tile switcher** (`wb/drgnx-switcher.el`, module `ui/tiles` in `modules/ui/drgnx-tiles.el`: the command
+`tile-switcher`, its timers' owner, a teardown that closes it and deletes the pool). The model is pure over items,
+plists `(:window W :frame F :rank N :edges (L T R B) :local EDGES :terminal BOOL :title S :monitor NAME :letter C)`:
+`drgnx-switcher-items` collects every tile (by its main window) of `drgnx-switcher-frames` (the selected frame first,
+then by monitor and position; child frames and the daemon's initial frame left out), `:edges` in layout pixels;
+`drgnx-switcher-assign` letters them by rank and reading order (`drgnx-grid-letters`); `drgnx-switcher-neighbour
+ITEMS FROM DIRECTION` is the nearest centre in that half-plane, across frames; `drgnx-switcher-cards` picks the 12
+largest of graphical frames. Cards are pooled child frames (`drgnx-switcher--pool`, made on first use, hidden on close,
+deleted by the teardown), centred on the tile; the rest get an overlay letter (`before-string`, inverse video, the
+overlay's `window` the tile's). Keys go through a transient map whose default binding is `drgnx-switcher-key`, left by every close (its exit
+function is kept in the state) (`drgnx-switcher-handle EVENT` returns `closed`, `picked`, `swapped`, `moved` or `replayed`); a replayed key is put on
+`unread-command-events`. The gate: `:ready` is set by the layer timer `(switcher . ready)` after
+`drgnx-switcher-pop-in` (0.12 s; `drgnx-switcher-one-frame` under reduced motion), owner `ui/tiles`; a letter before it
+is replayed. Shift and a letter swap with `drgnx-grid-swap`, inside one frame only.
+Tests: `test/unit/switcher-test.el` (`drgnx-switcher/`), `test/ui/switcher-gui-test.el`, `test/tty/switcher-tty-test.el`.
 
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 

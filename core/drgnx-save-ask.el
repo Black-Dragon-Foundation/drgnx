@@ -10,6 +10,8 @@
 ;; and keeps the text it drops in `drgnx-close-discarded'.  See docs/develop/core.md, "Unsaved changes on close".
 
 ;;; Code:
+(require 'seq)
+(require 'subr-x)
 (require 'drgnx-frame-kind)
 (declare-function drgnx-guard-automatic-p "drgnx-guard")
 
@@ -24,18 +26,37 @@ daemon's own terminal."
        (not (and (fboundp 'drgnx-guard-automatic-p) (drgnx-guard-automatic-p)))
        (not (and (daemonp) (eq (drgnx-state-frame-kind (selected-frame)) 'initial)))))
 
+(defconst drgnx-save-ask--listed 8 "How many file names the question for several files lists before \"and N more\".")
+
+(defun drgnx-save-ask--texts (names)
+  "(QUESTION PROMPT SAVE-LABEL) for NAMES, one buffer name or a list of them (VS Code's wording for one file and for
+several: the dialog lists the files and Save becomes Save All)."
+  (if (or (stringp names) (null (cdr names)))
+      (let ((name (if (stringp names) names (car names))))
+        (list (format "Do you want to save the changes you made to %s?" name)
+              (format "Do you want to save the changes you made to %s?  (s) Save  (d) Don't Save  (c) Cancel " name)
+              "Save"))
+    (let* ((n (length names)) (shown (seq-take names drgnx-save-ask--listed))
+           (more (- n (length shown))))
+      (list (format "Do you want to save the changes to the following %d files?\n%s%s" n
+                    (mapconcat (lambda (s) (concat "  " s)) shown "\n")
+                    (if (> more 0) (format "\n  and %d more" more) ""))
+            (format "Save the changes to %d files (%s%s)?  (s) Save All  (d) Don't Save  (c) Cancel " n
+                    (string-join shown ", ") (if (> more 0) (format ", and %d more" more) ""))
+            "Save All"))))
+
 (defun drgnx-save-ask (name)
-  "Ask whether to save the changes to NAME (a file's buffer name) before it closes: `save', `discard' (Don't Save)
-or `cancel'.  s, d and c answer; Escape and C-g cancel.  A close clicked with the mouse asks in a dialog where the
-frame can show one.  Where nobody can answer (`drgnx-save-ask-can-ask-p') the answer is `cancel', unasked."
+  "Ask whether to save the changes to NAME (a file's buffer name, or a list of them: one question for all) before
+they close: `save', `discard' (Don't Save) or `cancel'.  s, d and c answer; Escape and C-g cancel.  A close clicked
+with the mouse asks in a dialog where the frame can show one.  Where nobody can answer
+\(`drgnx-save-ask-can-ask-p') the answer is `cancel', unasked."
   (if (not (drgnx-save-ask-can-ask-p))
       'cancel
-    (let ((prompt (format "Do you want to save the changes you made to %s?  (s) Save  (d) Don't Save  (c) Cancel "
-                          name)))
+    (pcase-let ((`(,question ,prompt ,save-label) (drgnx-save-ask--texts name)))
       (condition-case nil
           (if (and (consp last-nonmenu-event) use-dialog-box (display-popup-menus-p))
-              (or (x-popup-dialog t (list (format "Do you want to save the changes you made to %s?" name)
-                                          '("Save" . save) '("Don't Save" . discard) '("Cancel" . cancel)))
+              (or (x-popup-dialog t (list question
+                                          (cons save-label 'save) '("Don't Save" . discard) '("Cancel" . cancel)))
                   'cancel)
             (let (answer)
               (while (not answer)

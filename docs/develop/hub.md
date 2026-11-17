@@ -1671,9 +1671,12 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
 | `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
 | `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
+| `work/schedule/set` | user | `{group?: "plan" \| "machine", view: string, window?: {from: number, to: number}}` | `boolean` | no |
+| `work/schedule/subscribe` | user | `{group?: "plan" \| "machine", view: string, window: {from: number, to: number}}` | `{hub: natnum}` | no |
 | `work/target/set` | user | `{item: string, target_at?: number}` | `boolean` | yes |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
-| `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
+| `work/trail/set` | user | `{filter?: "all" \| "edits" \| "waits", follow?: boolean, view: string, window?: {from: number, to: number}}` | `boolean` | no |
+| `work/trail/subscribe` | user | `{filter?: "all" \| "edits" \| "waits", follow?: boolean, lanes?: [{label: string, session: string}], session?: string, view: string, window?: {from: number, to: number}}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -2393,15 +2396,34 @@ The Work space's trail (one session's steps, its conclusions among them) and Tim
 rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display class like the map's ("Rows" below).
 
 - **Methods** (user connections). `work/trail/subscribe {view, session}` opens a trail view of the connection (again,
-  if it is open); `{view, lanes: [{session, label}]}` (up to 256) a Timeline view instead; one of the two. Its rows go
-  to each class the editor sent a `view/env` for (the env's `view` is this view's id) as `view-patch`, the first per
-  class a reset, before the answer `{hub}`. `work/trail/close {view}` ends one; a connection's views end with it.
+  if it is open); `{view, lanes: [{session, label}], window?, follow?, filter?}` (up to 256 lanes: a plan's, a task's or
+  a machine's sessions, as the editor reads them from the map's model) a Timeline view instead; one of the two. Its
+  rows go to each class the editor sent a `view/env` for (the env's `view` is this view's id) as `view-patch`, the
+  first per class a reset, before the answer `{hub}`. `work/trail/set {view, window?, follow?, filter?}` zooms, pans or
+  filters a Timeline without subscribing again (a window given without `follow` stops following; false when the view
+  is not a Timeline). `work/trail/close {view}` ends one (a Schedule or Board too); a connection's views end with it.
+- **Windows.** `window {from, to}` (seconds since the epoch, `from` before `to`, a year at most) is the time a Timeline
+  shows; without one it shows its lanes' last 500 steps each over the time they cover, as before. With one, each lane
+  is one ranged read (`norn::read::steps::window`: the steps that overlap it, an open one from its start, on the index
+  `step_session_start`, the detail's kind joined). `follow` keeps now in view: when the now-line moves, the window
+  moves to end a tenth of its length after now. `filter` is `all`, `edits` (edit segments keep their colour, the rest
+  are `drgnx-work-dim`) or `waits` (`Y M P !`).
 - **Rows.** A trail: `step:ID` per step (the session's last 500, oldest first: its kind's icon, its title, the number of
   each conclusion resting on it, and its time and duration 14 columns from the right edge), the two lines of each
   conclusion's card (`conc:N:0`, `conc:N:1`) after the step it was stamped on, and those on no step shown at the end.
-  A Timeline: `axis` (the range's times), then `lane:SESSION` per lane (its label fitted to 130 px, each step a segment
-  at its time on a track from 140 px), or `none` without lanes. Times are in the env's `tz` (`+HHMM`, as `%z` prints it;
-  anything else is UTC).
+  A Timeline: `axis` (the window's start, "now" and the time where the now-line falls, the window's end), then
+  `lane:SESSION` per lane (its label fitted to 130 px, its steps binned on a track from 140 px to the width less
+  160 px: one column a pixel, a cell on a terminal; `vegvisir::trail::bins`): a column takes the kind with the most
+  time in it (a tie to the earlier kind of the table below) and that kind's longest step there, and neighbouring
+  columns of one step and kind are one segment, so a lane never has more segments than columns. Each segment carries
+  its kind's letter as `drgnx-work-kind` (a terminal draws the letters), its step as `drgnx-work-step` and
+  `drgnx-work-id`; the kinds: `R` read, `S` search, `W` web, `E` edit, `T` tool, `·` think, `J` job, `Y` waiting on
+  you, `M` waiting for a machine, `P` paused, `!` stalled. The now-line is a `│` (`drgnx-work-now`, faced
+  `drgnx-focus-line`, as is the axis's "now") on each row where now falls in the window. Without lanes, `none`.
+  Times are in the env's `tz` (`+HHMM`, as `%z` prints it; anything else is UTC).
+- **The clock.** A Timeline or Schedule draws its axis again each second from what it last read (the diff sends the
+  axis row alone) and its now-line at most once every 5 s, only when it moved (`vegvisir::trail::NowLine`; a move a
+  track does not show changes no row, and nothing goes out); a followed Timeline reads again when its window moves.
 - **Updates.** Every view is read again (the timeline and the conclusions store, as `timeline/get` and
   `work/conclusions` answer) after each write and each closed step, coalesced, one view at a time; each class gets
   only what changed: a new step is an insert of its row, a conclusion replaces the rows of the steps it rests on and
@@ -2420,6 +2442,24 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   `work/map/set` that moves a selection sends the connection's Timelines their model again from what was last read
   (`Trails::map_moved`), no rows. Step nodes carry what opening one needs: `label seq class tool detail-kind path line
   query url` and, in a Timeline, `session`. The rows' node spans are their `drgnx-work-id` props.
+- **The Schedule** (`work::schedule`, pure part `vegvisir::schedule`). `work/schedule/subscribe {view, window, group}`
+  opens a Schedule view: the List of the connection's map view (a shown one first; its filter, folds and order), each
+  row with a bar over `window`; `group` `plan` (the List's spec › plan › task, the default) or `machine` (a heading per
+  machine of the map, `machine:NAME` with its slots, its tasks under it, then `machine:` "Not placed yet" with the
+  tasks no machine holds: a task has a machine only once it started). `work/schedule/set {view, window?, group?}`
+  zooms, pans or regroups it (false when the view is not a Schedule). Rows alone, no model (the List's is the map's):
+  `axis`, then `sched:ITEM` per row (its label indented by depth and fitted to 130 px, its bar's parts as runs with a
+  `drgnx-work-part` of `done`, `p50`, `p90`, `forecast`, `late`, `baseline` or `target`, the now-line, and the state's
+  words right of the track), or `none`. A bar: a task's span is its steps' roll-up (`Rollup.first`/`last`); a task of
+  a running job (`JOB#N`) has its job's forecast of what remains (`forecast/get {remaining}`: start, p50 and p90
+  finish, wall-clock) and its baseline's finish (the run's start, its tasks' first step, plus the baseline's offset); a
+  plan spans its tasks and takes its running job's own wall time (its draws, never a sum of its tasks') and baseline; a
+  spec spans its plans and takes their latest finish. States (the timeline spec's §4): on track, behind (past p50),
+  late (past p90: "past p90 by 0h35"), waiting (its agent waits on you, a machine or a job), slipped (a spec or plan
+  whose p50 is over a quarter of its baseline's wall time past the baseline: "was 14:20"), done ("took 1h10"),
+  forecast (not started, placed at its forecast start); and on a spec or plan with a target, in its place: on target
+  (p90 before it), at risk (p50 before, p90 after), misses target (p50 after; "overdue" once it passed), and when done
+  "met target" or "missed by …". Until the kit's `range-bar`, the parts are today's map faces and stops.
 - **The Board** (`work::trail::board`). `work/board/subscribe {view, map, plans?}` opens a Board view the same way:
   the tasks of `plans` (`plans/get` each, their steps the progress), else every task (`tasks/find`, up to four pages),
   each card naming the agent of the connection's map view `map` that works on it (the agent whose task id is the
@@ -3201,7 +3241,7 @@ The Outline section's rows: the definitions of the file in the editor, built by 
   edit history tracks asks through it (`drgnx-history-ask`: its changes go first), another by its file. The last
   `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
 
-### The minimap's labels (`minimap/watch`)
+### The minimap's labels and folds (`minimap/watch`)
 
 `minimap/watch {file, on}` says the editor shows FILE (absolute, its true name) in a minimap, or no longer. While a
 connection watches it, the hub sends it the file's definitions as the minimap's `labels` layer (`view/minimap.rs`):
@@ -3212,6 +3252,12 @@ Outline's 1 MiB; a larger file gets an empty layer). It is sent before the answe
 hub's clock) after the edits to it pause (`outline::touched` calls `minimap::touched`); a later ask or `on: false`
 drops a pending send. Versions come from one counter for the hub, so a later layer is always newer. A connection's
 watches end with it. MARK sections are not the hub's: Nidhogg's line model finds them.
+
+With the labels goes the file's `folds` layer (`items: [[first line, last line, kind]]`, lines from 1, kind a name from
+`hrafn::chunk::folds::KINDS`): the language pack's fold query over the same text (`hrafn::chunk::folds::of_file`; a
+fetched pack's in its parse worker; [packs.md](packs.md), "Fold queries"). A file with no grammar has no `folds`
+layer. Nidhogg takes it as the line model's `hub` fold source for a buffer that has no tree-sitter parser of its own;
+one with a parser folds by the same query in the editor.
 
 ### The agent panel's rows
 

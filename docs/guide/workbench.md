@@ -374,6 +374,17 @@ in that direction, docks included; at an edge nothing happens).
 Groups are numbered left to right, top to bottom. Diffs and logs (`diff-mode`, `log-view-mode`, magit's diff and log)
 open in the **other group** — the one you used last besides this one — never in a new split.
 
+### Switching tiles
+
+**Switch Tile** (`C-x w w` · `SPC w f`, and the palette) puts a letter on every tile of every window, on every
+monitor: the window you are in first, then the others left to right, and inside each, from the top left. The same
+layout always gets the same letters. The 12 largest tiles show a card in their middle — the letter, large, and the
+tile's name under it (and the monitor's, when your windows are on more than one); the others, and the tiles of a
+terminal window, show the letter at their start. Type a letter to go to that tile (its window comes to the front; no
+window moves), **Shift** and a letter to swap your tile with that one (inside one window), or move with the arrows,
+across windows too, and press RET. Esc closes it; any other key closes it and then does what it does. Letters count once
+the cards are up (a blink, 120 ms, or one frame with reduced motion): one typed sooner goes to the tile you are in.
+
 ### The layout survives a restart
 
 When Emacs exits, the workbench of every window is saved to `$XDG_STATE_HOME/drgnx/workbench.eld`
