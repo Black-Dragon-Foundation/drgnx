@@ -121,6 +121,10 @@ pub struct Init {
     /// The pack's metavariable sigil (`:hrafn :sigil`; `$` when it has none): structural search ([`Request::Find`]).
     #[serde(default)]
     pub sigil: Option<char>,
+    /// The pack's `queries/folds.scm`, when it has one: fold ranges ([`Request::Folds`]; without it, its `tags.scm`'s
+    /// definitions).
+    #[serde(default)]
+    pub folds_scm: Option<String>,
 }
 
 impl Init {
@@ -144,6 +148,7 @@ impl Init {
             sigil: h
                 .and_then(|h| h.sigil.as_deref())
                 .and_then(|s| s.chars().next()),
+            folds_scm: None,
         }
     }
 }
@@ -167,12 +172,17 @@ pub enum Request {
     },
     /// The names inline values show at ROW (from 0) of TEXT.
     Scan { id: u64, text: String, row: usize },
+    /// The fold ranges of TEXT.
+    Folds { id: u64, text: String },
 }
 
 impl Request {
     fn id(&self) -> u64 {
         match self {
-            Request::Chunk { id, .. } | Request::Find { id, .. } | Request::Scan { id, .. } => *id,
+            Request::Chunk { id, .. }
+            | Request::Find { id, .. }
+            | Request::Scan { id, .. }
+            | Request::Folds { id, .. } => *id,
         }
     }
 }
@@ -198,6 +208,10 @@ pub enum Reply {
         id: u64,
         found: Vec<(usize, usize, String)>,
     },
+    Folded {
+        id: u64,
+        folds: Vec<super::folds::Fold>,
+    },
     /// The pattern is not valid in the grammar (the file and the worker are fine).
     BadPattern {
         id: u64,
@@ -216,6 +230,7 @@ impl Reply {
             Reply::Chunked { id, .. }
             | Reply::Found { id, .. }
             | Reply::Scanned { id, .. }
+            | Reply::Folded { id, .. }
             | Reply::BadPattern { id, .. }
             | Reply::Failed { id, .. } => Some(*id),
         }
@@ -322,6 +337,16 @@ fn serve_inner(
         ),
         None => None,
     };
+    // a fold query that does not build costs the folds only (the editor folds by indentation), never the worker
+    let folds = match (&init.folds_scm, &init.tags_scm) {
+        (Some(f), _) => {
+            super::folds::FoldQuery::folds(&language, f).map_err(|e| format!("folds.scm: {e}"))
+        }
+        (None, Some(t)) => {
+            super::folds::FoldQuery::from_tags(&language, t).map_err(|e| format!("tags.scm: {e}"))
+        }
+        (None, None) => Err("the pack has no folds.scm and no tags.scm".to_owned()),
+    };
     send(w, &Reply::Ready { abi }).map_err(|e| e.to_string())?;
     let grammar_for_find = crate::structural::Grammar::from_parts(
         language.clone(),
@@ -343,6 +368,7 @@ fn serve_inner(
                 &grammar_for_find,
                 &lists,
                 &mut patterns,
+                &folds,
             )
         }))
         .unwrap_or_else(|_| Reply::Failed {
@@ -381,6 +407,7 @@ fn answer(
     grammar: &crate::structural::Grammar,
     lists: &crate::inline_scan::Lists,
     patterns: &mut Vec<(String, Result<crate::structural::Pattern, String>)>,
+    folds: &Result<super::folds::FoldQuery, String>,
 ) -> Reply {
     let too_big = |id: u64, text: &str| {
         (text.len() > MAX_TEXT).then(|| Reply::Failed {
@@ -464,6 +491,37 @@ fn answer(
                 Some(tree) => Reply::Scanned {
                     id,
                     found: crate::inline_scan::scan(&tree, &text, row, lists),
+                },
+                None => Reply::Failed {
+                    id,
+                    error: "the file did not parse".into(),
+                },
+            }
+        }
+        Request::Folds { id, text } => {
+            if let Some(r) = too_big(id, &text) {
+                return r;
+            }
+            let q = match folds {
+                Ok(q) => q,
+                Err(error) => {
+                    return Reply::Failed {
+                        id,
+                        error: error.clone(),
+                    };
+                }
+            };
+            let mut parser = tree_sitter::Parser::new();
+            if parser.set_language(language).is_err() {
+                return Reply::Failed {
+                    id,
+                    error: "the grammar does not load into a parser".into(),
+                };
+            }
+            match parser.parse(&text, None) {
+                Some(tree) => Reply::Folded {
+                    id,
+                    folds: q.ranges(&tree, &text),
                 },
                 None => Reply::Failed {
                     id,
@@ -836,6 +894,29 @@ impl Worker {
         }
     }
 
+    /// The fold ranges of TEXT, by the pack's grammar; each within TEXT's lines.
+    pub fn folds(&mut self, text: &str) -> Result<Vec<super::folds::Fold>, WorkerError> {
+        too_big(text)?;
+        let r = self.call(|id| Request::Folds {
+            id,
+            text: text.to_owned(),
+        })?;
+        match r {
+            Reply::Folded { folds, .. } => {
+                let lines = text.lines().count().max(1) as u32;
+                if let Some(f) = folds.iter().find(|f| {
+                    f.first >= f.last
+                        || f.last >= lines
+                        || usize::from(f.kind) >= super::folds::KINDS.len()
+                }) {
+                    return Err(self.fail(format!("a fold range outside the text: {f:?}")));
+                }
+                Ok(folds)
+            }
+            other => Err(self.fail(format!("an answer of the wrong kind: {other:?}"))),
+        }
+    }
+
     /// The names (row, column, text) inline values show for a stop at ROW (from 0) of TEXT, by the pack's grammar.
     pub fn scan(
         &mut self,
@@ -1095,6 +1176,15 @@ pub fn find(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .find(pattern, text)
+}
+
+/// The fold ranges of TEXT by PACK's worker.
+pub fn folds(pack: &str, text: &str) -> Result<Vec<super::folds::Fold>, WorkerError> {
+    entry(pack)?
+        .worker
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .folds(text)
 }
 
 /// The names inline values show for a stop at ROW (from 0) of TEXT, by PACK's worker.
@@ -1758,6 +1848,29 @@ mod tests {
                         found: found.clone(),
                     },
                     Request::Chunk { id, .. } => empty_chunked(id),
+                    // lines 0–1 a block; a text naming a range (first, last, kind) gets that one
+                    Request::Folds { id, text } => Reply::Folded {
+                        id,
+                        folds: vec![match text.split_once("fold ").map(|(_, r)| {
+                            r.lines()
+                                .next()
+                                .unwrap_or_default()
+                                .split_whitespace()
+                                .map(|n| n.parse().unwrap_or(0))
+                                .collect::<Vec<u32>>()
+                        }) {
+                            Some(n) if n.len() == 3 => super::super::folds::Fold {
+                                first: n[0],
+                                last: n[1],
+                                kind: n[2] as u8,
+                            },
+                            _ => super::super::folds::Fold {
+                                first: 0,
+                                last: 1,
+                                kind: 0,
+                            },
+                        }],
+                    },
                 };
                 if send(wr, &reply).is_err() {
                     return;
@@ -1802,6 +1915,17 @@ mod tests {
             assert!(w.find("x", text).is_err(), "{what:?}");
             assert_eq!(kills.load(Ordering::SeqCst), 1, "{what:?}");
         }
+        // a fold backwards, of one line, past the text's lines, of no kind
+        for range in ["2 1 0", "1 1 0", "0 9 0", "0 1 99"] {
+            let (mut w, kills) = answering(vec![], vec![]);
+            assert!(
+                w.folds(&format!("fold {range}\nb\nc\n")).is_err(),
+                "{range}"
+            );
+            assert_eq!(kills.load(Ordering::SeqCst), 1, "{range}");
+        }
+        let (mut w, _) = answering(vec![], vec![]);
+        assert_eq!(w.folds("a\nb\n").unwrap().len(), 1);
         for found in [vec![(9, 0, "x".into())], vec![(0, 0, "n".repeat(10_000))]] {
             let (mut w, kills) = answering(vec![], found.clone());
             assert!(w.scan(text, 0).is_err(), "{found:?}");

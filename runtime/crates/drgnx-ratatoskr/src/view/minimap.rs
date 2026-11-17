@@ -103,6 +103,25 @@ pub fn labels_of(path: &str, text: &str) -> Layer {
     )
 }
 
+/// The fold ranges of TEXT of PATH by its pack's grammar (lines from 1); none for a file no tree-sitter pack parses
+/// (the editor folds those itself), past [`LABELS_MAX`], or when it does not parse.
+pub fn folds_of(path: &str, text: &str) -> Option<Layer> {
+    if text.len() > LABELS_MAX {
+        return None;
+    }
+    let (lang, _) = hrafn::files::classify(path, text.as_bytes());
+    let folds = hrafn::chunk::folds::of_file(path, lang, text)?;
+    Some(Layer::Folds(
+        folds
+            .into_iter()
+            .map(|f| {
+                let kind = hrafn::chunk::folds::KINDS[usize::from(f.kind)];
+                (f.first + 1, f.last + 1, kind.to_owned())
+            })
+            .collect(),
+    ))
+}
+
 /// Every layer's version: one counter for the hub, so a later push is always newer.
 static VERSION: AtomicU64 = AtomicU64::new(1);
 
@@ -118,7 +137,8 @@ impl Watches {
     }
 }
 
-/// Send CONN FILE's labels for its ask GENERATION; nothing when a later ask came meanwhile or it is no longer watched.
+/// Send CONN FILE's labels, and its fold ranges when a pack's grammar parses it, for its ask GENERATION; nothing when a
+/// later ask came meanwhile or it is no longer watched.
 async fn push(f: &Front, conn: u64, file: &str, generation: u64) {
     let current = |f: &Front| {
         lock(&f.core.views.minimaps.files).get(&(conn, file.to_owned())) == Some(&generation)
@@ -126,24 +146,30 @@ async fn push(f: &Front, conn: u64, file: &str, generation: u64) {
     if !current(f) {
         return;
     }
-    let layer = match super::outline::text_within(f, file, LABELS_MAX).await {
+    let layers = match super::outline::text_within(f, file, LABELS_MAX).await {
         Ok(text) => {
             let path = file.to_owned();
-            crate::clock::blocking(move || labels_of(&path, &text))
-                .await
-                .unwrap_or(Layer::Labels(Vec::new()))
+            crate::clock::blocking(move || {
+                let mut v = vec![labels_of(&path, &text)];
+                v.extend(folds_of(&path, &text));
+                v
+            })
+            .await
+            .unwrap_or_else(|_| vec![Layer::Labels(Vec::new())])
         }
-        Err(_) => Layer::Labels(Vec::new()),
+        Err(_) => vec![Layer::Labels(Vec::new())],
     };
     if !current(f) {
         return;
     }
-    let version = VERSION.fetch_add(1, Ordering::Relaxed);
-    f.send_to(
-        conn,
-        "view-model",
-        data(file, version, &layer.name(), layer.items()),
-    );
+    for layer in layers {
+        let version = VERSION.fetch_add(1, Ordering::Relaxed);
+        f.send_to(
+            conn,
+            "view-model",
+            data(file, version, &layer.name(), layer.items()),
+        );
+    }
 }
 
 /// `minimap/watch`: the caller shows P's file in a minimap (its labels are sent before the answer), or no longer.
@@ -301,5 +327,27 @@ mod tests {
             "the fixture differs (UPDATE_SJA_FIXTURES=1 rewrites it, then copy it to Nidhogg); the hub writes:\n{}",
             serde_json::to_string_pretty(&now).unwrap()
         );
+    }
+
+    /// A fetched pack's file folds through its worker, by the same rule as a built-in pack's: the fold query's ranges,
+    /// widened to lines, one a start line, on a tie the more specific kind ([Fact] is a test).
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn a_fetched_packs_file_folds_through_its_worker_as_a_built_in_one() {
+        let _pack = crate::parse_worker::fixture::install_csharp("csharpx", "xcs");
+        let text = "class G\n{\n    [Fact]\n    void M()\n    {\n        Foo(1);\n    }\n}\n";
+        let fetched = folds_of("/r/a.xcs", text).expect("the worker folds it");
+        assert_eq!(
+            fetched,
+            Layer::Folds(vec![
+                (1, 8, "class".into()),
+                (2, 8, "block".into()),
+                (3, 7, "test".into()),
+                (5, 7, "block".into()),
+            ])
+        );
+        assert_eq!(folds_of("/r/a.cs", text), Some(fetched));
+        // a file no pack parses folds by the editor's own rules: no layer
+        assert_eq!(folds_of("/r/a.txt", "a\n  b\n"), None);
     }
 }
