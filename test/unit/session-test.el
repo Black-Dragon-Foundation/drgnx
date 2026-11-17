@@ -15,16 +15,19 @@
 
 (defmacro drgnx-session-test--with (spec &rest body)
   "BODY with the stubs SPEC asks for, in a temp config dir.
-SPEC: (:keep-running BOOL :daemon BOOL :windows LIST :save FN :unsaved LIST :confirm BOOL :processes LIST)
-— :windows the frames that count as windows, :unsaved the file buffers still changed after the save, :processes
-what `process-list' returns.  Binds KILLED (non-nil once `kill-emacs' ran), DELETED (frames deleted), SAVED (calls
-of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save', then each question's text)."
+SPEC: (:keep-running BOOL :daemon BOOL :windows LIST :save FN :unsaved LIST :still LIST :answer SYM :confirm BOOL
+:processes LIST) — :windows the frames that count as windows, :unsaved the buffers changed when the quit asks (the
+Save / Don't Save / Cancel dialog, answered :answer, default `save', and asked with their names), :still the ones
+still changed after Save (default none), :processes what `process-list' returns.  Binds KILLED (non-nil once
+`kill-emacs' ran), DELETED (frames deleted), SAVED (calls of `save-some-buffers', the unasked save of Save),
+DIALOGS (the names each dialog was asked with, newest first), ASKED (confirmations) and EVENTS (newest first:
+`dialog' for the dialog, `save', then each question's text)."
   (declare (indent 1))
   `(let* ((dir (make-temp-file "drgnx-session-test" t))
           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
           (drgnx-keep-running ,(plist-get spec :keep-running))
           (drgnx-settings-apply--entries nil)
-          (killed nil) (deleted nil) (saved 0) (asked 0) (events nil))
+          (killed nil) (deleted nil) (saved 0) (asked 0) (events nil) (dialogs nil))
      (unwind-protect
          (cl-letf (((symbol-function 'daemonp) (lambda () ,(plist-get spec :daemon)))
                    ((symbol-function 'drgnx-session--windows) (lambda () ,(plist-get spec :windows)))
@@ -33,19 +36,22 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
                    ((symbol-function 'delete-frame) (lambda (&optional f _force) (push f deleted)))
                    ((symbol-function 'save-some-buffers)
                     (lambda (&rest _) (cl-incf saved) (push 'save events) (funcall (or ,(plist-get spec :save) #'ignore))))
-                   ((symbol-function 'drgnx-session--unsaved-buffers) (lambda () ,(plist-get spec :unsaved)))
+                   ((symbol-function 'drgnx-session--unsaved-buffers)
+                    (lambda () (if (> saved 0) ,(plist-get spec :still) ,(plist-get spec :unsaved))))
+                   ((symbol-function 'drgnx-save-ask)
+                    (lambda (names) (push 'dialog events) (push names dialogs) (or ,(plist-get spec :answer) 'save)))
                    ((symbol-function 'process-list) (lambda () ,(plist-get spec :processes)))
                    ((symbol-function 'yes-or-no-p)
                     (lambda (prompt) (cl-incf asked) (push prompt events) ,(plist-get spec :confirm))))
-           (ignore killed deleted saved asked events)
+           (ignore killed deleted saved asked events dialogs)
            ,@body)
        (drgnx-settings-teardown 'drgnx-session-keep-running)     ; the choice a test saved is not drgnx's value any more
        (delete-directory dir t))))
 
 (ert-deftest drgnx-session/quit-mode-closing-the-last-window-quits ()
-  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list (selected-frame)) :save (lambda () t))
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list (selected-frame)))
     (drgnx-session-close-frame)
-    (should (= saved 1))
+    (should (= saved 0))
     (should killed)
     (should-not deleted)))
 
@@ -80,29 +86,57 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
     (should (eq (lookup-key special-event-map [delete-frame]) #'drgnx-session-close-frame))))
 
 (ert-deftest drgnx-session/unsaved-work-is-never-lost ()
-  ;; C-g in the save question: drgnx stays, the window stays.
-  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list (selected-frame)) :save (lambda () (signal 'quit nil)))
+  ;; C-g while saving: drgnx stays, the window stays.
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list (selected-frame)) :unsaved (list (current-buffer))
+                                           :save (lambda () (signal 'quit nil)))
     (should (eq 'quit (condition-case nil (progn (drgnx-session-close-frame) 'ran) (quit 'quit))))
     (should-not killed)
     (should-not deleted))
   ;; An error while saving (a read-only directory): the same.
-  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :save (lambda () (error "Disk full")))
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer))
+                                           :save (lambda () (error "Disk full")))
     (should-error (drgnx-session-quit))
     (should-not killed))
-  ;; A file kept unsaved, then "no" to quitting without it: drgnx stays.
-  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf) :confirm nil)
+  ;; Cancel in the dialog: drgnx stays, nothing is saved, no second question.
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer)) :answer 'cancel)
     (drgnx-session-quit)
-    (should (= asked 1))
+    (should (= (length dialogs) 1))
+    (should (= saved 0))
+    (should (= asked 0))
     (should-not killed))
-  ;; …"yes": quits.
-  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf) :confirm t)
+  ;; Don't Save: quits, nothing saved, no second question.
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer)) :answer 'discard)
     (drgnx-session-quit)
+    (should (= saved 0))
+    (should (= asked 0))
     (should killed))
-  ;; Everything saved: no extra question.
+  ;; Save, a file still unsaved after it (a New Untitled buffer left unnamed): drgnx stays.
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer))
+                                           :still (list (current-buffer)))
+    (drgnx-session-quit)
+    (should (= saved 1))
+    (should-not killed))
+  ;; Save, all written: quits.
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer)))
+    (drgnx-session-quit)
+    (should (= saved 1))
+    (should killed))
+  ;; Nothing changed: no dialog at all.
   (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1))
     (drgnx-session-quit)
+    (should-not dialogs)
     (should (= asked 0))
     (should killed)))
+
+(ert-deftest drgnx-session/quit-asks-one-question-for-all-the-changed-files ()
+  "Several changed files: one dialog naming all of them, not one question per file."
+  (let ((a (generate-new-buffer "quit-a.txt")) (b (generate-new-buffer "quit-b.txt")))
+    (unwind-protect
+        (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list a b) :answer 'discard)
+          (drgnx-session-quit)
+          (should (equal dialogs '(("quit-a.txt" "quit-b.txt"))))
+          (should killed))
+      (kill-buffer a) (kill-buffer b))))
 
 ;; M12a-28: the programs a quit would stop are asked about, once.
 (ert-deftest drgnx-session/quit-asks-once-for-running-processes ()
@@ -115,39 +149,35 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
           ;; "no": asked once, and drgnx stays
           (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list p q) :confirm nil)
             (drgnx-session-quit)
-            (should (= saved 1))
             (should (= asked 1))
             (should (string-match-p "\\`1 program is still running (drgnx-session-test-sleep)" (car events)))
             (should-not killed))
           ;; "yes": asked once, quits
           (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list p q) :confirm t)
             (drgnx-session-quit)
-            (should (= saved 1))
             (should (= asked 1))
             (should killed))
           ;; a process that does not ask on exit does not count
           (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list q) :confirm nil)
             (drgnx-session-quit)
-            (should (= saved 1))
             (should (= asked 0))
             (should killed))
-          ;; unsaved changes and a running program, the first "no": that ends it, the programs are not asked about
-          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf)
-                                                   :processes (list p) :confirm nil)
+          ;; unsaved changes and a running program, Cancel: that ends it, the programs are not asked about
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer))
+                                                   :answer 'cancel :processes (list p) :confirm nil)
             (should-not (drgnx-session-quit-confirm))
-            (should (= saved 1))
-            (should (= asked 1))
-            (should (string-match-p "not saved" (car events))))
-          ;; both "yes": save, then the changes question, then the programs question; then it quits
-          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf)
+            (should (= asked 0))
+            (should (equal events '(dialog))))
+          ;; Save, then the programs question; then it quits: two questions in all, the dialog first
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer))
                                                    :processes (list p q r) :confirm t)
             (drgnx-session-quit)
             (should (= saved 1))
-            (should (= asked 2))
+            (should (= asked 1))
             (should killed)
             (let ((order (reverse events)))
-              (should (eq (nth 0 order) 'save))
-              (should (string-match-p "not saved; quit and lose" (nth 1 order)))
+              (should (eq (nth 0 order) 'dialog))
+              (should (eq (nth 1 order) 'save))
               (should (string-match-p "\\`2 programs are still running" (nth 2 order))))))
       (delete-process p)
       (delete-process q)
@@ -424,22 +454,23 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
     (should (equal (plist-get (drgnx-persist--workbench-state nil) :roots) '("/w/a/")))))
 
 (ert-deftest drgnx-session/an-unsaved-untitled-buffer-is-offered-and-never-lost ()
-  ;; Nothing of drgnx-session stubbed: the real `save-some-buffers' offers New Untitled's buffer (its question,
-  ;; `map-y-or-n-p', records the buffers and declines), the buffer still counts as unsaved, "no" keeps drgnx.
+  ;; Nothing of drgnx-session stubbed but the dialog and `kill-emacs': New Untitled's buffer is named in the one
+  ;; question, Cancel keeps drgnx, and where nobody can answer (batch) the answer is Cancel unasked.
   (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)
-  (let ((u (drgnx-basics-new-untitled)) offered killed (asked 0))
+  (let ((u (drgnx-basics-new-untitled)) offered killed)
     (unwind-protect
         (progn
           (with-current-buffer u (insert "typed, never saved"))
-          (cl-letf (((symbol-function 'map-y-or-n-p) (lambda (_prompter _actor list &rest _) (setq offered list) 0))
-                    ((symbol-function 'yes-or-no-p) (lambda (&rest _) (cl-incf asked) nil))
+          (cl-letf (((symbol-function 'drgnx-save-ask) (lambda (names) (setq offered names) 'cancel))
                     ((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t))))
             (drgnx-session-quit))
-          (should (memq u offered))
+          (should (member (buffer-name u) offered))
           (should (memq u (drgnx-session--unsaved-buffers)))
-          (should (= asked 1))
           (should-not killed)
-          (should (buffer-live-p u)))
+          (should (buffer-live-p u))
+          (cl-letf (((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t))))
+            (drgnx-session-quit))                          ; batch: nobody can answer
+          (should-not killed))
       (with-current-buffer u (set-buffer-modified-p nil))
       (kill-buffer u))))
 
