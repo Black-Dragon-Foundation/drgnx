@@ -692,7 +692,7 @@
               (layout-next "SPC l n")
               (layout-pick "SPC l l")
               (layout-restore-previous "SPC l u")
-              (tile-switcher "SPC w f")
+              (tile-switcher "SPC w f" "C-<escape>" :map global-map)
               (shell-toggle-rail :none "the palette")
               (shell-toggle-title :none "the palette")
               (shell-toggle-right :none "the palette")

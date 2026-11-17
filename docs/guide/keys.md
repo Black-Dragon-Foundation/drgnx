@@ -507,7 +507,7 @@ decides which keys it gets, the way VS Code's terminal does:
 - **Editing keys go to the shell**: a control or Alt key (`C-a`, `C-e`, `C-w`, `C-d`, `M-f`) means what readline or zle
   make of it, even when the profile gives it to a drgnx command outside the terminal (VS Code's `C-w` Close Tab, `C-s`
   Save, `C-n` New Untitled). The terminal's reserved keys (`C-x`, `C-c`, `C-g`, `C-h`, `C-u`, `C-q`, `M-x`, `M-:`, `M-!`,
-  `M-&`) stay with Emacs.
+  `M-&`, `C-<escape>`) stay with Emacs; Esc itself always goes to the program.
 - **VS Code's own exceptions, in the VS Code profile**: VS Code's terminal skips the shell for some control keys
   (`terminal.integrated.commandsToSkipShell`), so the VS Code profile gets them in the terminal too: `C-p` Quick Open
   (Go to File), `C-b` Toggle Sidebar, every `C-k` chord (Keyboard Shortcuts, Open Folder, ...), and `C-f`, which is

@@ -228,8 +228,9 @@ graphical window, get none, and each terminal window on one drgnx has its own (k
   F6 p is `C-S-p`, F6 . is `C-.`, F6 Enter is `C-<return>`, F6 Tab is `C-<tab>`, F6 Shift+Tab is `C-S-<tab>`. A
   Shift+punctuation chord is typed with the character Shift makes (`` C-S-` `` is F6 ~); Enter and Backspace, which
   a terminal sends no Shift with, take Alt for it (`C-S-<return>` is F6 Alt+Enter); `C-SPC` is F6 Ctrl+Space. While
-  F6 waits, the echo area says `Ctrl+Shift+…`; `C-g` quits, a key typed before F6 included (C-x F6 C-g); Esc
-  cancels F6 alone; F6 twice is F6. A click, a paste or a focus change after F6 drops F6 and happens as usual.
+  F6 waits, the echo area says `Ctrl+Shift+…`; `C-g` quits, a key typed before F6 included (C-x F6 C-g); F6 Esc
+  is `C-<escape>` (Switch Tile); F6 twice is F6. A click, a paste or a focus change after F6 drops F6 and happens as
+  usual.
 
 The first time a kind of terminal with the layer connects, one message says so: "This terminal can't send Ctrl+Shift
 keys: use Alt+Shift (or F6 then the key). drgnx doctor has details." It is never a question, and it is said once per
@@ -298,6 +299,7 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `` C-S-` `` | New Terminal | — | `F6 ~` |
 | `C-S-g` | Source Control | `Alt+Shift+G` | `F6 g` |
 | `C-S-d` | Run and Debug | `Alt+Shift+D` | `F6 d` |
+| `C-<escape>` | Switch Tile… | — | `F6 Esc` |
 | `C-S-y` | Debug Console | `Alt+Shift+Y` | `F6 y` |
 | `C-S-c` | Copy (in a terminal) | `Alt+Shift+C` | `F6 c` |
 | `C-S-v` | Paste (in a terminal) | `Alt+Shift+V` | `F6 v` |

@@ -682,7 +682,7 @@
               (layout-save :none "the palette")
               (layout-pick :none "the palette")
               (layout-restore-previous "C-k C-z")
-              (tile-switcher :none "Esc Esc and C-<escape> (the next step); the palette")
+              (tile-switcher "C-<escape>")
               (shell-toggle-rail :none "the palette")
               (shell-toggle-title :none "the palette")
               (shell-toggle-right :none "the palette")

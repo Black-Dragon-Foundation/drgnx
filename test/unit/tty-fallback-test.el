@@ -535,13 +535,13 @@ binding are taken off afterwards."
         (tty-fallback-test--reading events
           (should (equal (cons events (drgnx-tty-fallback--prefix nil)) (cons events (key-parse chord))))
           (should (equal (car (last prompts)) "Ctrl+Shift+…"))))
-      ;; twice: F6 itself; ESC alone: nothing; C-g: C-g, so a pending prefix (C-x F6 C-g) quits too
+      ;; twice: F6 itself; ESC alone: C-<escape> (Switch Tile); C-g: C-g, so a pending prefix (C-x F6 C-g) quits too
       (tty-fallback-test--reading (list ?\e ?\[ ?1 ?7 ?~)
         (should (equal (drgnx-tty-fallback--prefix nil) [f6])))
       (tty-fallback-test--reading (list ?\C-g)
         (should (equal (drgnx-tty-fallback--prefix nil) [?\C-g])))
       (tty-fallback-test--reading (list ?\e)
-        (should (equal (drgnx-tty-fallback--prefix nil) [])))
+        (should (equal (drgnx-tty-fallback--prefix nil) [C-escape])))
       ;; a click, a paste or a focus report after F6 is no key: F6 is dropped, and what was read of the
       ;; sequence goes back to the input in order, where Emacs decodes it whole (with the rest still unread)
       (pcase-dolist (`(,read ,rest) '(((?\e ?\[ ?<) (?0 ?\; ?5 ?\; ?5 ?M))              ; SGR mouse press
