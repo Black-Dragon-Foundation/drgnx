@@ -787,7 +787,10 @@ the slot's update lock: the mirror's commit, then the overlay from the blob stor
 inputs ends the attempt `infra: setup`) and runs the job on the slot, or on `slot::private_copy` in
 `tree/` when it writes the tree; it records the slot's id in `attempt.json`. Then it writes `job.json` (the shared
 podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
-slice `drgnx-runner-work-<id>.slice`) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
+slice `drgnx-runner-work-<id>.slice`, which gets `MemoryHigh` at the grant's reservation plus a fifth (at most the cap)
+and `MemoryMax` at its cap, `slices::job_props`; job-exec reverts them at the job's end; the container gets
+`CARGO_BUILD_JOBS = max(1, min(cores, cap / 2.5 GiB))`, `forseti::admit::cargo_jobs`, as a job on the hub's own machine
+does) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
 `RuntimeMaxSec` = the timeout + 60 s (job-exec's own timeout writes the verdict first). The reservation passes to the
 unit's main pid, so it outlives `serve`. Then `started`. Every attempt gets its job helper (the disk watch); a keyed
 one also its key mounts and `drgnx-key exec` (its spec's key names, each into the variable of that name), and one

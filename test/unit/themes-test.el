@@ -384,8 +384,10 @@ takes each text run's own foreground, so a card whose runs differ (a state dot, 
         (let ((box (plist-get (drgnx-faces--clause-plist face 'gui) :box)))
           (should (equal (list face (drgnx-look-token 'border-strong variant) '(-1 . -1))
                          (list face (plist-get box :color) (plist-get box :line-width))))
+          ;; a theme that knows nothing of drgnx draws the ring's fill through the defface's `secondary-selection'
+          ;; (drgnx's own themes keep only a coloured binding's font faces: `drgnx-ui-kit-theme-specs')
           (should (memq 'secondary-selection
-                        (ensure-list (plist-get (drgnx-faces--clause-plist face 'gui) :inherit)))))))))
+                        (ensure-list (plist-get (cdar (get face 'face-defface-spec)) :inherit)))))))))
 
 (ert-deftest drgnx-themes/the-selected-card-s-ring-is-the-accent ()
   "work-space-dark.html `.card.sel': the hub draws the selected card in `drgnx-kit-card-selected-*': a 2 px ring inside the line in the focus colour (the accent),
@@ -397,7 +399,8 @@ in every theme, on the same fill as the others."
         (let* ((spec (drgnx-faces--clause-plist face 'gui)) (box (plist-get spec :box)))
           (should (equal (list face (drgnx-look-token 'focus variant) '(-2 . -2))
                          (list face (plist-get box :color) (plist-get box :line-width))))
-          (should (memq 'secondary-selection (ensure-list (plist-get spec :inherit)))))))))
+          (should (memq 'secondary-selection
+                        (ensure-list (plist-get (cdar (get face 'face-defface-spec)) :inherit)))))))))
 
 (ert-deftest drgnx-themes/the-permission-card-keeps-its-attention-ring ()
   "agent-panel.html: the permission card is ringed in the attention colour.  A card's ring has a colour of its own now

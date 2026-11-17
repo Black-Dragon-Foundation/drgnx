@@ -269,6 +269,8 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-s` | Save As… | `Alt+Shift+S` | `F6 s` |
 | `C-S-t` | Reopen Closed Tab | `Alt+Shift+T` | `F6 t` |
 | `C-S-n` | New Window | `Alt+Shift+N` | `F6 n` |
+| `C-S-w` | Close Window | `Alt+Shift+W` | `F6 w` |
+| `C-S-u` | View: Output | `Alt+Shift+U` | `F6 u` |
 | `` C-` `` | Toggle Terminal | — | `` F6 ` `` |
 | `C-1` | Focus First Editor Group | — | `F6 1` |
 | `C-2` | Focus Second Editor Group | — | `F6 2` |
@@ -280,7 +282,6 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-b` | Focus Buffers | `Alt+Shift+B` | `F6 b` |
 | `C-{` | Fold | — | `F6 {` |
 | `C-}` | Unfold | — | `F6 }` |
-| `C-S-a` | Select All | `Alt+Shift+A` | `F6 a` |
 | `C-S-z` | Redo | `Alt+Shift+Z` | `F6 z` |
 | `C-/` | Toggle Comment | — | `F6 /` |
 | `C-S-k` | Delete Line | `Alt+Shift+K` | `F6 k` |
@@ -452,6 +453,16 @@ dragged to a sliver — and the editor stays; the docks come back at the next si
 fit a dock never shows an error. The two sizes are the settings `drgnx-tty-layout-columns` (120) and
 `drgnx-tty-layout-lines` (30) (`M-x customize-variable`). A window opened for one file (`emacsclient -t FILE`) shows
 the editor only and is left alone.
+
+### Tiles in a terminal
+
+The workbench's tiles work in a terminal as in a graphical window. The sidebar, the panel and the right side are
+tiles, and you can split the editor beside them. A tile's tab row starts with its grip (`⠿`, `::` where the terminal
+does not write UTF-8). Drag the grip with the mouse onto another tile's edge to put the tile there, or onto its middle
+to stack the two. **Full-Size Tile** shows one tile alone and brings every tile back where it was. The status bar is
+the mode line of the editor you used last, and tool tiles have none. When the terminal shrinks, the tiles get smaller
+and none closes; they come back to their sizes when it grows. Each tile keeps at least 12 columns and 3 lines while
+there is room for that.
 
 ## Clipboard
 

@@ -45,7 +45,6 @@
     ("modules/editor/drgnx-clipboard.el" . 1)
     ("modules/editor/drgnx-evil.el" . 1)
     ("modules/lang/drgnx-markdown.el" . 1)
-    ("modules/tools/drgnx-layouts.el" . 2)
     ("modules/tools/drgnx-replace.el" . 3)
     ("modules/ui/drgnx-face.el" . 2)
     ("modules/ui/drgnx-look.el" . 1)

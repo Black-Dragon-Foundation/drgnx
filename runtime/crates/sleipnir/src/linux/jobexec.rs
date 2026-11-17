@@ -363,6 +363,8 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
     let stop_slice = seen.oom || seen.timed_out || seen.stopped;
     let result = judge_run(dir, spec, &seen, &before, &after, t0.elapsed());
     let _ = result.write(dir);
+    // the limits set on the job's slice at launch go with the job (one runtime drop-in per job otherwise)
+    let _ = slices::revert(&spec.slice);
     if stop_slice {
         // the job is one OOM group: the rest of it (its other containers, the podman client) goes with it, and
         // job-exec with them, now that the verdict is written

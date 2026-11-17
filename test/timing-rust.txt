@@ -35,5 +35,10 @@ urdr lib a_lone_write_waits_max_wait_for_company
 verdandi timing undone_by_scan_cost_by_later_deletes
 vegvisir timing core_step_within_50_us release
 vegvisir timing layout_200_items_within_2_ms release
+vegvisir timing activity_open_within_100_ms release
+vegvisir timing schedule_open_within_100_ms release
+vegvisir timing schedule_zoom_within_50_ms release
+vegvisir timing now_line_at_most_once_per_5_s release
+vegvisir timing now_line_patch_within_3_ms release
 drgnx-ratatoskr fleet_drills a_set_spreads_over_two_runners_within_its_bound fleet
 eitri lib a_refused_fifo_is_never_opened

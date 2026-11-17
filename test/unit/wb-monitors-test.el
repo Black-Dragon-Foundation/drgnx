@@ -626,7 +626,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                     (drgnx-monitors-test--quiet 0.1 "the window of the missing monitor is never placed")
                                     (should (equal drgnx-monitors-test--places (list (cons home "DP-1"))))   ; the missing one is not placed
                                     (should (equal messages
-                                                   '("monitors: 1 window's monitor is not connected (DELL U2720Q); the window manager placed it")))
+                                                   '("monitors: 1 window's monitor is not connected (DELL U2720Q); its tabs are in the main window until it is")))
                                     (should-not (frame-parameter one 'fullscreen))))))
 
 (drgnx-platform-test--deftest drgnx-monitors/several-missing-monitors-are-one-message ()
@@ -640,7 +640,7 @@ BODY and torn down after it (`drgnx-test-with-modules'): left on, their timers w
                                   (drgnx-monitors-test--quiet 0.1 "no window of a missing monitor is placed")
                                   (should (equal drgnx-monitors-test--places nil))
                                   (should (equal messages
-                                                 '("monitors: 3 windows' monitors are not connected (DELL U2720Q, 800×600 at 5000,0); the window manager placed them"))))))
+                                                 '("monitors: 3 windows' monitors are not connected (DELL U2720Q, 800×600 at 5000,0); their tabs are in the main window until they are"))))))
 
 (drgnx-platform-test--deftest drgnx-monitors/an-older-state-file-restores-as-before ()
                               ;; Format 2 without :extra (or with extras of other modules only): nothing placed, no message,

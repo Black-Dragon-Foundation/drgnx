@@ -469,6 +469,13 @@ impl ExecSpec {
         }
         s.os = self.place.os;
         s.features = self.place.features.clone();
+        s.needs = self
+            .place
+            .needs
+            .iter()
+            .cloned()
+            .map(forseti::JobId)
+            .collect();
         // a test job whose parser counts rows passes only if it ran some: a run of 0 tests (a selector that matched
         // nothing) proves nothing
         if self
@@ -766,6 +773,11 @@ impl Runner {
                 local: LocalRunner::new(hooks.admission, &root),
                 db: hooks.runtime.clone(),
             });
+            // jobs in slices (systemd) count what their slices use; admitting by count reads nothing
+            #[cfg(target_os = "linux")]
+            if hooks.systemd && hooks.admission == crate::runners::local::Admission::Live {
+                queue.read_local_use(crate::runners::local::local_use());
+            }
             let inner = Arc::new(Inner {
                 root,
                 hooks,
@@ -1355,6 +1367,10 @@ impl Inner {
     /// Record job ID as queued: a meta saying it waits, and its place in the queue (what to start is kept there).
     fn enqueue(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<(), Refusal> {
         let _ = dir;
+        // a job may need only jobs the queue knows, never one that waits on it
+        self.queue
+            .check_needs(&spec.forseti_spec(id, &self.hooks.memory))
+            .map_err(refusal)?;
         let started = now();
         let session = spec.starter.session();
         self.save_meta(&Meta {
@@ -1781,7 +1797,9 @@ impl Inner {
             .await
             .map_err(|e| setup(format!("pulling the image: {e}")))??;
         }
-        let args = match container::argv(&req, &caps, &owner) {
+        // the container runs in the job's slice beside its scope, so the slice holds all the job uses
+        let slice = self.hooks.systemd.then(|| unit::job_slice_name(id));
+        let args = match container::argv(&req, &caps, &owner, slice.as_deref()) {
             Ok(a) => a,
             Err(e) => {
                 if let Some(r) = relay {
@@ -1982,15 +2000,45 @@ impl Inner {
             .memory_max
             .as_deref()
             .unwrap_or(self.hooks.memory.as_str());
+        // cargo builds as many units at once as the job's grant allows (design §3 #4), unless the job says otherwise
+        if status.is_none()
+            && !inner.env.iter().any(|(k, _)| k == "CARGO_BUILD_JOBS")
+            && let Some(cores) = self.queue.local_cores(id)
+        {
+            let grant = forseti::Grant {
+                cores,
+                mem_cap_mib: mem_mib(memory),
+                reserve_mib: 0,
+            };
+            let n = forseti::admit::cargo_jobs(&grant).to_string();
+            inner.env.push(("CARGO_BUILD_JOBS".into(), n.into()));
+        }
         let wrap = if keyed.is_some() {
             unit::wrap_to_hub
         } else {
             unit::wrap
         };
+        // the job's slice holds its scope and its containers: its limit is the job's, whatever runs in it
+        let slice = unit::job_slice_name(id);
+        #[cfg(target_os = "linux")]
+        if name.is_some() {
+            let (s, m) = (slice.clone(), memory.to_string());
+            let set = crate::clock::blocking(move || {
+                sleipnir::linux::slices::set(&s, &[("MemoryMax", m)])
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            if let Err(e) = set {
+                tracing::warn!(
+                    "job {id}: its slice's memory limit not set ({e}); its scope's holds"
+                );
+            }
+        }
         let wrapped = wrap(
             inner,
             dir,
-            name.as_deref().map(|n| (n, memory)),
+            name.as_deref().map(|n| (n, memory, slice.as_str())),
             spec.user.nice,
             &self.hooks.shell_env,
         );
@@ -2283,6 +2331,12 @@ impl Inner {
         }
         let dir = self.dir(id);
         crate::sandbox::remove_made(&dir.join(STUBS));
+        // the job's slice goes with it (what is left in it, and the limit set on it)
+        #[cfg(target_os = "linux")]
+        if self.hooks.systemd && meta.machine.as_deref().is_none_or(|m| m == "local") {
+            let slice = unit::job_slice_name(id);
+            let _ = crate::clock::blocking(move || sleipnir::linux::slices::forget(&slice)).await;
+        }
         // a job here ran on its tree as it was while it ran (a runner's ran on the inputs frozen at its submit): when
         // the tree's key moved since the submit, its facts go, so it is no one's evidence and never reused
         if meta.machine.as_deref().is_none_or(|m| m == "local")
@@ -2983,6 +3037,12 @@ async fn placement(
         net_hosts: vec![],
         os,
         features,
+        needs: p
+            .needs
+            .iter()
+            .flat_map(|n| n.iter())
+            .map(|n| n.as_str().to_string())
+            .collect(),
     })
 }
 

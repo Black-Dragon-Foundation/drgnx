@@ -268,6 +268,7 @@ fn podman_run(id: &str, source: &Path, target: &Path, memory: &str, cmd: &[&str]
             writes_tree: false,
             target: target.to_path_buf(),
             caches: vec![],
+            cargo_jobs: 0,
         }),
     };
     let ra = RunnerArgs::runner(PREFIX, "hubtest", &slices::job_slice(ROOT, id).unwrap());

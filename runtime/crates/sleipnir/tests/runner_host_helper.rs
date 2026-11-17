@@ -460,6 +460,7 @@ mod relay_keys {
                 writes_tree: false,
                 target: dir.join("target"),
                 caches: vec![],
+                cargo_jobs: 0,
             }),
         };
         podman::argv(&req, &caps(id), &ra())

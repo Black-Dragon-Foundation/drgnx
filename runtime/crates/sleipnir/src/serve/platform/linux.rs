@@ -230,6 +230,11 @@ impl Platform for LinuxPlatform {
             .map_err(|_| format!("no row parser {:?}", req.parser))?;
         slices::ensure_tree(SLICE_ROOT, self.profile)?;
         let slice = slices::job_slice(SLICE_ROOT, id)?;
+        // the job's slice throttles past its reservation and is killed at its cap, whatever runs in it (§3 #3)
+        slices::set(
+            &slice,
+            &slices::job_props(meta.grant.reserve_mib, meta.grant.mem_cap_mib),
+        )?;
         let ra = RunnerArgs::runner(&self.prefix, &self.hub_id, &slice);
         // a networked or keyed job's relay: the sidecar's image from the bundle's binary, its name and its argv for the
         // helper (a keyed job reads its keys through it)
@@ -260,6 +265,7 @@ impl Platform for LinuxPlatform {
                 writes_tree: meta.spec.writes_tree,
                 target: dir.join("target"),
                 caches: vec![],
+                cargo_jobs: forseti::admit::cargo_jobs(&meta.grant),
             }),
         };
         let container = podman::name_of(&ra.name_prefix, id).map_err(|r| r.message)?;

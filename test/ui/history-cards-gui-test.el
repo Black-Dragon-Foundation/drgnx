@@ -106,6 +106,16 @@
           (with-current-buffer card (goto-char (point-min)))
           (set-window-start (selected-window) (point-min))
           (drgnx-test-wait-presented :secs 20)
+          ;; a frame is no taller than its monitor: at scale 2 the session's 1600x900 is 450 px high, less than the
+          ;; card's 31 lines, so the text is made smaller until the card fits the window (the picture is still whole)
+          (let ((steps 0))
+            (while (and (< steps 8)
+                        (> (cdr (window-text-pixel-size nil (point-min) (point-max)))
+                           (window-body-height nil t)))
+              (with-current-buffer card (text-scale-decrease 1))
+              (cl-incf steps)
+              (set-window-start (selected-window) (point-min))
+              (drgnx-test-wait-presented :secs 20)))
           ;; a card the frame cannot show whole fails here, with what was waited for, never hangs
           (drgnx-test-wait (lambda ()
                              (and (drgnx-ui-history-cards--visible card "Conversation")
