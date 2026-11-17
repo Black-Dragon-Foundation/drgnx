@@ -162,7 +162,14 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("modules/tools/drgnx-work-flow.el" section-header 2) ("modules/tools/drgnx-work-space.el" card 1)
     ("modules/ui/drgnx-decor.el" card 28)
     ("runtime/crates/drgnx-ratatoskr/src/view/extensions.rs" section-header 1)
-    ("runtime/crates/drgnx-ratatoskr/src/view/extensions/tests.rs" section-header 1))
+    ("runtime/crates/drgnx-ratatoskr/src/view/extensions/tests.rs" section-header 1)
+    ;; the hub's card rows name the old card faces (aliases of the kit's; decor scales their rings)
+    ("runtime/crates/drgnx-ratatoskr/src/view/panel_cards.rs" card 4)
+    ("runtime/crates/drgnx-ratatoskr/src/view/panel_cards/tests.rs" card 6)
+    ("runtime/crates/drgnx-ratatoskr/src/view/panel_review.rs" card 6)
+    ("runtime/crates/drgnx-ratatoskr/src/view/panel_review/tests.rs" card 3)
+    ("runtime/crates/drgnx-ratatoskr/src/work/trail/board.rs" card 3) ("runtime/crates/vegvisir/src/render.rs" card 8)
+    ("runtime/crates/vegvisir/src/trail.rs" card 2))
   "((FILE ID COUNT)...): the forms of a role that is on, left in FILE (only falls).  A branch merged later adds its
 files' counts in its merge commit.")
 
