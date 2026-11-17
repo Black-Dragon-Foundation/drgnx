@@ -361,8 +361,8 @@ colours (`drgnx-ui-kit-theme-specs')."
 bindings' tokens as colours through TOK (a token name → a colour), the edge as a 1 px box inside the face (`:ring'
 \(WIDTH RADIUS OPEN...) makes it WIDTH px, and where GLITNIR draws, rounded to RADIUS and open on the sides OPEN), and
 `:attrs' (raw face attributes: a weight), and an `:inverse' binding keeps its inverse video.  A binding with no colours
-\(the row's: a font only) keeps its `:inherit' (a theme's spec replaces the `defface''s).  A `:ring' is outside the
-line, as the Work map's cards always were."
+\(the row's: a font only) keeps its `:inherit' (a theme's spec replaces the `defface''s).  A `:ring' is inside the
+line too (negative widths: nothing moves)."
   (mapcar (lambda (f)
             (let ((b (nth 2 f)))
               `(,(car f)
@@ -376,7 +376,7 @@ line, as the Work map's cards always were."
                 ,@(and (plist-get b :fg) `(:foreground ,(funcall tok (plist-get b :fg))))
                 ,@(and (plist-get b :edge)
                        (let* ((ring (plist-get b :ring)))
-                         `(:box (:line-width ,(if ring (car ring) '(-1 . -1)) :color ,(funcall tok (plist-get b :edge))
+                         `(:box (:line-width ,(let ((w (- (or (car ring) 1)))) (cons w w)) :color ,(funcall tok (plist-get b :edge))
                                              ,@(and glitnir ring
                                                     `(:corner-radius ,(nth 1 ring)
                                                                      ,@(and (nthcdr 2 ring) `(:open ,(nthcdr 2 ring)))))))))

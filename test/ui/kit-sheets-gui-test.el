@@ -69,14 +69,6 @@ whose values VARIANTS all have."
         (setq best b n (length (car b)))))
     (plist-get (cdr best) :edge)))
 
-(defun drgnx-kit-sheet--ring-px (id variants s)
-  "The device px of the ring outside the line component ID's binding for VARIANTS has at scale S, else 0."
-  (let (best (n -1))
-    (dolist (b (plist-get (drgnx-ui-kit-component id) :bind))
-      (when (and (cl-every (lambda (v) (memq v variants)) (car b)) (> (length (car b)) n))
-        (setq best b n (length (car b)))))
-    (round (* s (or (car (plist-get (cdr best) :ring)) 0)))))
-
 (defvar drgnx-kit-sheet--edges nil
   "Non-nil while a sheet also checks that hovered and selected cells have no edge (`drgnx-kit-sheet/state-table').")
 
@@ -164,8 +156,7 @@ Returns the number of cells checked."
         (when spaces
           (let ((pads (+ (aref (car spaces) 1) (aref (car (last spaces)) 1)))
                 (text (round (* s (string-pixel-width (buffer-substring (1+ beg) (1- end)))))))
-            ;; a ring outside the line (a card's) takes its width off each end's glyph, in device px
-            (should (equal (list what 'width (- (+ pads text) (* 2 (drgnx-kit-sheet--ring-px id variants s))))
+            (should (equal (list what 'width (+ pads text))
                            (list what 'width (- (drgnx-kit-sheet--x end s edges) (drgnx-kit-sheet--x beg s edges)))))))
         ;; (a') a row is its geometry's height (`:height (density tree-row)'), in device px
         (when-let* ((h (plist-get (drgnx-ui-kit-geometry id variants) :height)) ((> h 0)) (h (drgnx-px h nil scale)))

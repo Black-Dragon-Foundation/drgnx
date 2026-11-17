@@ -97,7 +97,7 @@
                   :label (:by collapsible (no "section") (yes "section, collapsible"))
                   :bind ((() :inherit (drgnx-text-muted drgnx-ui-caption) :attrs (:weight semibold)))
                   :replaces ((drgnx-wb-section . drgnx-kit-section-header)) :helpers nil :lint t)
-  ;; a card: an 8 px ring outside the line, as the Work map's cards were (1 px, 2 px when selected; the attention colour when it needs you), the panel's
+  ;; a card: an 8 px ring inside the line (1 px, 2 px when selected; the attention colour when it needs you), the panel's
   ;; fill; a card of several rows is its top, mid and bottom shapes, whose ring is open where the next row goes on
   (card :variants ((kind plain needs-you selected) (shape single top mid bottom)) :defaults (kind plain shape single)
         :geometry (:height 0 :pad (8 . 8) :gap 0 :box t :radius 8 :hit 0)

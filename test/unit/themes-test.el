@@ -381,20 +381,20 @@ takes each text run's own foreground, so a card whose runs differ (a state dot, 
     (drgnx-themes-test--with theme
       (dolist (face '(drgnx-kit-card-plain-top drgnx-kit-card-plain-mid drgnx-kit-card-plain-bottom drgnx-kit-card-plain-single))
         (let ((box (plist-get (drgnx-faces--clause-plist face 'gui) :box)))
-          (should (equal (list face (drgnx-look-token 'border-strong variant) 1)
+          (should (equal (list face (drgnx-look-token 'border-strong variant) '(-1 . -1))
                          (list face (plist-get box :color) (plist-get box :line-width))))
           (should (memq 'secondary-selection
                         (ensure-list (plist-get (drgnx-faces--clause-plist face 'gui) :inherit)))))))))
 
 (ert-deftest drgnx-themes/the-selected-card-s-ring-is-the-accent ()
-  "work-space-dark.html `.card.sel': the hub draws the selected card in `drgnx-kit-card-selected-*': a 2 px ring in the focus colour (the accent),
+  "work-space-dark.html `.card.sel': the hub draws the selected card in `drgnx-kit-card-selected-*': a 2 px ring inside the line in the focus colour (the accent),
 in every theme, on the same fill as the others."
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
       (dolist (face '(drgnx-kit-card-selected-top drgnx-kit-card-selected-mid drgnx-kit-card-selected-bottom
                                                   drgnx-kit-card-selected-single))
         (let* ((spec (drgnx-faces--clause-plist face 'gui)) (box (plist-get spec :box)))
-          (should (equal (list face (drgnx-look-token 'focus variant) 2)
+          (should (equal (list face (drgnx-look-token 'focus variant) '(-2 . -2))
                          (list face (plist-get box :color) (plist-get box :line-width))))
           (should (memq 'secondary-selection (ensure-list (plist-get spec :inherit)))))))))
 

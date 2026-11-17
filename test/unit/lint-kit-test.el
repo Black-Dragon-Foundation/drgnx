@@ -163,7 +163,7 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("modules/ui/drgnx-decor.el" card 28)
     ("runtime/crates/drgnx-ratatoskr/src/view/extensions.rs" section-header 1)
     ("runtime/crates/drgnx-ratatoskr/src/view/extensions/tests.rs" section-header 1)
-    ;; the hub's card rows name the old card faces (aliases of the kit's; decor scales their rings)
+    ;; the hub's card rows name the old card faces (aliases of the kit's; decor draws their rings outside the line, scaled)
     ("runtime/crates/drgnx-ratatoskr/src/view/panel_cards.rs" card 4)
     ("runtime/crates/drgnx-ratatoskr/src/view/panel_cards/tests.rs" card 6)
     ("runtime/crates/drgnx-ratatoskr/src/view/panel_review.rs" card 6)

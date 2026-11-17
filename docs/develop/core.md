@@ -3741,7 +3741,7 @@ kit_conformance`, read it before committing) and `drgnx-ui-kit/conformance` chec
   face is above it. `(drgnx-ui-kit-section-header TITLE COLLAPSIBLE COLLAPSED COUNT WHERE)`; `drgnx-wb-section-header`
   (the dock sections) is built on it; its accessible text is "TITLE, collapsed|expanded".
 - `card` (variants `kind` plain, needs-you, selected; `shape` single, top, mid, bottom): the panel's fill and a ring
-  *outside* the line, as the Work map's cards were (1 px in `border-strong`, `card-needs-you-edge`; 2 px in `focus` when selected), radius 8 where Glitnir
+  *inside* the line (1 px in `border-strong`, `card-needs-you-edge`; 2 px in `focus` when selected), radius 8 where Glitnir
   draws, open on the sides where the card goes on (top: bottom; mid: top and bottom; bottom: top). One `Comp::Card`
   line is the card's room (8 px each side) around its text; `kit::card_rows(env, kind, rows)` puts the shape's face
   under the runs of each row of a card the hub built; `(drgnx-ui-kit-card-lines LINES KIND WIDTH)` is the Lisp
