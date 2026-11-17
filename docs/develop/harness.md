@@ -1249,7 +1249,8 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   pending, or that the daemon stopped answering, with its last answer and what /proc says the process does (state,
   wait channel, CPU time).
 - **Waits count progress, not wall time:** every wait of the tier (an answer on the socket, `drgnx-tty-session-wait`,
-  the screen waits, a tmux call, a new client's frame, kitty's waits, and `drgnx-ui-call` for any session) runs on a
+  the screen waits, a tmux call, a new client's frame, kitty's waits, `drgnx-ui-call` for any session, a session's
+  start until its `ready.json`, and the agent panel replay fixture's waits on its hub) runs on a
   progress clock (`drgnx-ui-progress`): its time is the time the session's processes (those whose `DRGNX_UI_RUN`
   names its run, plus the emacsclient or tmux the wait runs) slept, read from `/proc/PID/schedstat`. A process that
   runs, or that waits for a CPU on a loaded machine, is making progress, so CPU starvation (four test files at once on

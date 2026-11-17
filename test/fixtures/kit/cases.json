@@ -43,6 +43,15 @@
     {"name": "button-action", "comp": {"c": "button", "label": "Go", "style": "primary", "action": {"kind": "kit-test", "args": [1, "a"]}}},
     {"name": "key-hint-cap", "comp": {"c": "key-hint", "keys": "C-k"}},
     {"name": "key-hint-menu", "comp": {"c": "key-hint", "keys": "C-k", "variant": "menu"}},
-    {"name": "key-hint-hover", "comp": {"c": "key-hint", "keys": "C-k", "state": "hover"}}
+    {"name": "key-hint-hover", "comp": {"c": "key-hint", "keys": "C-k", "state": "hover"}},
+    {"name": "agent-mark-1", "comp": {"c": "agent-mark", "slot": 1, "handle": "C"}},
+    {"name": "agent-mark-12", "comp": {"c": "agent-mark", "slot": 12, "handle": "Qx"}},
+    {"name": "progress-bar-0", "comp": {"c": "progress", "kind": "bar", "value": 0, "width": 120}},
+    {"name": "progress-bar-60", "comp": {"c": "progress", "kind": "bar", "value": 0.6, "width": 120}},
+    {"name": "progress-bar-half-odd", "comp": {"c": "progress", "kind": "bar", "value": 0.5, "width": 45}},
+    {"name": "progress-bar-full", "comp": {"c": "progress", "value": 1, "width": 40}},
+    {"name": "progress-ring-0", "comp": {"c": "progress", "kind": "ring", "value": 0}},
+    {"name": "progress-ring-60", "comp": {"c": "progress", "kind": "ring", "value": 0.6}},
+    {"name": "progress-ring-full", "comp": {"c": "progress", "kind": "ring", "value": 1}}
   ]
 }

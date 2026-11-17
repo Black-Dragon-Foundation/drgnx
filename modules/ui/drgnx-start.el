@@ -165,7 +165,7 @@ LOGO non-nil: the logo above the name takes `drgnx-start--logo-lines' and a blan
   "Insert the button LABEL for ID (a registry command ID or `dismiss'), resting on HELP: the look's control (design
 §3.5) in the UI font; PRIMARY: filled with the accent.  On a GRAPHIC frame it has room inside it at either end
 \(`drgnx-ui-button-pad'); a terminal shows the label alone."
-  (let* ((face (if primary 'drgnx-ui-button-primary 'drgnx-ui-button))
+  (let* ((face (if primary 'drgnx-kit-button-primary 'drgnx-kit-button-secondary))
          (pad (if graphic (propertize " " 'display (drgnx-ui-button-pad face)) "")))
     (insert-text-button (concat pad label pad) :type 'drgnx-start-button 'face face 'mouse-face 'highlight
                         'drgnx-start-id id 'help-echo help)))

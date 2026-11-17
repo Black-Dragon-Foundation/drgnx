@@ -151,15 +151,16 @@ drawing, asks the hub for nothing, and its keys move nothing."
 
 (ert-deftest drgnx-work-board/a-cards-bar-is-two-sized-spaces ()
   "Pattern D: a card's progress bar comes as a row of `spaces' (`work::trail::board'): each is shown as a space of
-its width and height in device px, `(space :width (W) :height (H))', in its run's face, the done part
-`drgnx-work-bar' and the rest `drgnx-work-bar-rest'; the bar holds its card's id."
+its width and height in device px, `(space :width (W) :height (H))', in its run's face (the kit's progress bar: the
+done part `drgnx-kit-progress-fill' and the rest `drgnx-kit-progress'), with no graphical frame to draw its images on;
+the bar holds its card's id."
   (drgnx-work-board-rows-test--with
     (with-current-buffer board
       (drgnx-view-apply-patch
        (list :view bview :class "c" :hub 7 :base 1 :version 2 :env_epoch 1 :model 1
              :ops (list (list :insert (list :after "cards:0:1"
                                             :rows (list (list :key "cards:0:2" :text "  "
-                                                              :runs '((0 1 "drgnx-work-bar") (1 2 "drgnx-work-bar-rest"))
+                                                              :runs '((0 1 "drgnx-kit-progress-fill") (1 2 "drgnx-kit-progress"))
                                                               :props '((0 2 "drgnx-work-id" "task:a"))
                                                               :spaces '((0 46 4) (1 138 4)))))))))
       (drgnx-view-draw-now drgnx-view)
@@ -167,9 +168,9 @@ its width and height in device px, `(space :width (W) :height (H))', in its run'
       (forward-line 3)
       (should (equal "  " (buffer-substring-no-properties (point) (line-end-position))))
       (should (equal '(space :width (46) :height (4)) (get-text-property (point) 'display)))
-      (should (memq 'drgnx-work-bar (ensure-list (get-text-property (point) 'face))))
+      (should (memq 'drgnx-kit-progress-fill (ensure-list (get-text-property (point) 'face))))
       (should (equal '(space :width (138) :height (4)) (get-text-property (1+ (point)) 'display)))
-      (should (memq 'drgnx-work-bar-rest (ensure-list (get-text-property (1+ (point)) 'face))))
+      (should (memq 'drgnx-kit-progress (ensure-list (get-text-property (1+ (point)) 'face))))
       (should (equal "task:a" (get-text-property (1+ (point)) 'drgnx-work-id))))))
 
 (ert-deftest drgnx-work-board/board-form-moves-across-columns ()

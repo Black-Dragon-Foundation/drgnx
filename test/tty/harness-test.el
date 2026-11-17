@@ -352,4 +352,51 @@ answering and what /proc says it does (here: sleeping), not a bare timeout."
       (unwind-protect (should (drgnx-tty-session-wait-stages s))
         (drgnx-tty-session-stop s)))))
 
+(ert-deftest drgnx-tty-harness/a-session-booting-past-its-timeout-on-a-busy-machine-becomes-ready ()
+  "A session whose processes still run (or wait to run) when the start's TIMEOUT has passed is booting slowly on a
+loaded machine, not stuck: the start waits until it is ready, counting only the time its processes slept
+\(`drgnx-ui-progress').  Here the session's one process needs 2 s of CPU before it writes ready.json; the timeout is 1 s."
+  (let* ((root (make-temp-file "drgnx-ui-ready" t)) (run (expand-file-name "run" root))
+         (sess (list :name "drgnx-ui-1-0a0a0a" :run run :socket "/s" :scales [1]))
+         (boot nil))
+    (make-directory run)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-ui-state-root) (lambda () root))
+                  ((symbol-function 'drgnx-ui--claim-and-launch)
+                   (lambda (&rest _)
+                     ;; the session's process: DRGNX_UI_RUN names its run, as a launched session's processes do
+                     (let ((process-environment (cons (concat "DRGNX_UI_RUN=" run) process-environment)))
+                       (setq boot (make-process
+                                   :name "kx-boot" :noquery t :connection-type 'pipe
+                                   :command (list "sh" "-c"
+                                                  (concat "while read r q n < /proc/$$/schedstat; [ \"$r\" -lt 2000000000 ]; do :; done;"
+                                                          " cd " (shell-quote-argument run) " &&"
+                                                          " printf '%s' '{\"server_error\":false,\"socket\":\"/s\"}' > ready.json.tmp &&"
+                                                          " mv ready.json.tmp ready.json")))))
+                     sess))
+                  ((symbol-function 'drgnx-ui--own-add) #'ignore)
+                  ((symbol-function 'drgnx-ui--save) #'ignore)
+                  ((symbol-function 'drgnx-ui--lease-dir) #'ignore)
+                  ((symbol-function 'drgnx-ui-alive-p) (lambda (_s) t))
+                  ((symbol-function 'drgnx-ui-call) #'ignore)
+                  ((symbol-function 'drgnx-ui--log-tail) (lambda (_s) "(the session's log)"))
+                  ((symbol-function 'drgnx-ui-stop) #'ignore))
+          (should (equal (plist-get (plist-get (drgnx-ui-start nil nil 1) :ready) :socket) "/s")))
+      (when (process-live-p boot) (delete-process boot))
+      (delete-directory root t))))
+
+(require 'panel-replay-fixture (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-ui-repo-dir))
+(defvar drgnx-panel-replay--hub)
+
+(ert-deftest drgnx-tty-harness/the-panel-replay-hub-busy-past-a-wait-is-not-out-of-time ()
+  "The agent panel's replay fixture waits on its hub (its ping, the panel's load, the entries): a hub that still runs
+\(or waits to run) past the wait's time, as on a loaded machine, is not out of time.  Here the hub needs 2 s of CPU
+before the condition holds; the wait is 1 s."
+  (let ((drgnx-panel-replay--hub
+         (make-process :name "kx-hub" :noquery t :connection-type 'pipe
+                       :command (list "sh" "-c" "while read r q n < /proc/$$/schedstat; [ \"$r\" -lt 2000000000 ]; do :; done"))))
+    (unwind-protect
+        (should (drgnx-panel-replay--wait 1 (lambda () (not (process-live-p drgnx-panel-replay--hub)))))
+      (when (process-live-p drgnx-panel-replay--hub) (delete-process drgnx-panel-replay--hub)))))
+
 ;;; harness-test.el ends here

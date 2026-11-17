@@ -2,6 +2,8 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use rusqlite::{Connection, OpenFlags};
@@ -64,6 +66,56 @@ fn report(path: PathBuf, started: Instant, result: Result<(), String>) -> Report
     }
 }
 
+/// The copies running now, by destination, with the means to interrupt each (a `VACUUM INTO` of a large store runs for
+/// as long as the store is big: a stop must not wait for it).
+static RUNNING: Mutex<Vec<(PathBuf, rusqlite::InterruptHandle)>> = Mutex::new(Vec::new());
+
+/// Set by [`interrupt_all`] (the hub stopping): no copy starts, and one running is interrupted.
+static STOPPING: AtomicBool = AtomicBool::new(false);
+
+/// What a copy that was interrupted reports.
+const INTERRUPTED: &str = "interrupted: the hub is stopping";
+
+/// The hub stops: every copy running is interrupted (its `.tmp` is removed, no partial copy is left) and none starts
+/// after.
+pub fn interrupt_all() {
+    STOPPING.store(true, Ordering::SeqCst);
+    for (_, h) in RUNNING.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+        h.interrupt();
+    }
+}
+
+/// The copy to DEST, interrupted: the connection that runs it is told to stop at its next step.
+pub fn interrupt(dest: &Path) {
+    for (d, h) in RUNNING.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+        if d == dest {
+            h.interrupt();
+        }
+    }
+}
+
+/// A copy to a destination is running while this lives.
+struct Running(PathBuf);
+
+impl Running {
+    fn new(dest: &Path, conn: &Connection) -> Running {
+        RUNNING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((dest.to_path_buf(), conn.get_interrupt_handle()));
+        Running(dest.to_path_buf())
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let mut r = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = r.iter().position(|(d, _)| *d == self.0) {
+            r.remove(i);
+        }
+    }
+}
+
 /// `VACUUM INTO` DEST (through `DEST.tmp`, then renamed), from a pool connection. A copy already at DEST is replaced
 /// only when the new one passed [`check`] (run on `DEST.tmp` before the rename); a failed check deletes the tmp and
 /// leaves DEST as it was. DEST's directory is made 0700, the copy 0600.
@@ -89,6 +141,12 @@ async fn vacuum_verified(
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e.to_string()),
             }
+            if STOPPING.load(Ordering::SeqCst) {
+                return Err(INTERRUPTED.to_string());
+            }
+            let _running = Running::new(&target, conn);
+            #[cfg(test)]
+            tests::hold_if_hooked(conn, &target);
             let copied = conn
                 .execute("VACUUM INTO ?1", [tmp.to_string_lossy().as_ref()])
                 .map_err(|e| e.to_string())
@@ -96,7 +154,13 @@ async fn vacuum_verified(
                     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
                         .map_err(|e| e.to_string())
                 })
-                .and_then(|_| verify(&tmp))
+                .and_then(|_| {
+                    if STOPPING.load(Ordering::SeqCst) {
+                        Err(INTERRUPTED.to_string())
+                    } else {
+                        verify(&tmp)
+                    }
+                })
                 .and_then(|_| std::fs::rename(&tmp, &target).map_err(|e| e.to_string()));
             if copied.is_err() {
                 let _ = std::fs::remove_file(&tmp);
@@ -118,6 +182,8 @@ fn check_inner(dest: &Path) -> Result<(), String> {
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|e| e.to_string())?;
+    // the stop interrupts the check of a large copy too
+    let _running = Running::new(dest, &conn);
     let mut stmt = conn
         .prepare("pragma integrity_check")
         .map_err(|e| e.to_string())?;
@@ -223,6 +289,42 @@ pub fn rotate(dir: &Path, policy: Policy) -> std::io::Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test's hold on the copy to a destination: its first progress step signals `started` and waits for `go`.
+    pub(super) struct Hold {
+        started: std::sync::mpsc::Sender<()>,
+        go: std::sync::Arc<(Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    pub(super) static HOLDS: Mutex<Vec<(PathBuf, std::sync::Arc<Hold>)>> = Mutex::new(Vec::new());
+
+    pub(super) fn hold_if_hooked(conn: &mut Connection, dest: &Path) {
+        let Some(h) = HOLDS
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(d, _)| d == dest)
+            .map(|(_, h)| h.clone())
+        else {
+            return;
+        };
+        let first = AtomicBool::new(true);
+        conn.progress_handler(
+            1,
+            Some(move || {
+                if first.swap(false, Ordering::SeqCst) {
+                    let _ = h.started.send(());
+                    let (m, c) = &*h.go;
+                    let mut go = m.lock().unwrap();
+                    while !*go {
+                        go = c.wait(go).unwrap();
+                    }
+                }
+                false
+            }),
+        )
+        .expect("the test's progress handler installs (without it the copy is never held)");
+    }
     use crate::graph::tx::{Class, TxMeta};
     use crate::graph::writer::Writer;
     use crate::graph::writer::tests::{opts, rule};
@@ -277,6 +379,50 @@ mod tests {
             .query_row("select count(*) from t", [], |r| r.get(0))
             .unwrap();
         assert!((1..=1_001).contains(&n));
+        drop(h);
+        w.shutdown();
+    }
+
+    /// A copy that runs long (held in its first step here) is interrupted by `interrupt`: it returns at once as failed
+    /// and leaves nothing behind, no `.tmp` and no half copy at its destination; the stop does not wait for it.
+    #[tokio::test]
+    async fn an_interrupted_copy_ends_at_once_and_leaves_no_partial_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("work.db");
+        let (w, h) = Writer::spawn(&path, opts(256, 1), rule()).unwrap();
+        h.tick().await;
+        let pool = ReadPool::open(&path, 1);
+        let dest = dir.path().join("backup").join("work-20261024.db");
+        let (started, seen) = std::sync::mpsc::channel();
+        let go = std::sync::Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        HOLDS.lock().unwrap().push((
+            dest.clone(),
+            std::sync::Arc::new(Hold {
+                started,
+                go: go.clone(),
+            }),
+        ));
+        let d = dest.clone();
+        let p = pool.clone();
+        let copy = tokio::spawn(async move { vacuum_into(&p, d).await });
+        // the copy is in its first step, held: it cannot finish by itself now
+        tokio::task::spawn_blocking(move || seen.recv().unwrap())
+            .await
+            .unwrap();
+        interrupt(&dest);
+        {
+            let (m, c) = &*go;
+            *m.lock().unwrap() = true;
+            c.notify_all();
+        }
+        let r = copy.await.unwrap();
+        assert!(!r.ok, "{r:?}");
+        assert!(
+            r.error.as_deref().unwrap_or("").contains("interrupt"),
+            "{r:?}"
+        );
+        assert!(!dest.exists(), "no copy at the destination");
+        assert!(!tmp_of(&dest).exists(), "no partial file");
         drop(h);
         w.shutdown();
     }

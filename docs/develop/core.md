@@ -3244,7 +3244,9 @@ the adapter's `:version` argv, the program's own version flag with no IPC (`sway
 `drgnx-platform-doctor-timeout`. `x11` has no `:tool`: it moves frames by position, and xrandr only counts monitors.
 
 Tests use `test/fixtures/wm/fake-wm.sh`, linked as `swaymsg`, `i3-msg`, `hyprctl` and `niri` into a temp bin: it logs
-its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail.
+its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail. A failing sway or
+i3 row prints its marks: when each call to the fake tool started and ended (with its status), and when a call's time
+limit or a placement's deadline fired, in seconds from the row's start, so a red names the stage that was late.
 
 ## Pane kinds (`wb/drgnx-panes.el`)
 
@@ -3450,8 +3452,10 @@ named by its main window (`drgnx-grid-tile-main`).
   map `drgnx-grid-grip-map` on the tab line and the header line) starts it: on a tool tile's row (`drgnx-grid--tab-row`),
   a docked area's (`drgnx-area--tab-row`, its header line) and an editor's (`drgnx-chrome--grip`, the row's leading
   room). A press on a tab (`drgnx-grid-tab-press`: a tool tile's, from `drgnx-grid--tab-press`, or an editor's, from
-  `drgnx-chrome--tab-press` with its buffer) is a click when released on the row, else a drag of that kind or buffer
-  (`drgnx-grid--drag-source` unstacks it into a tile of its own first when it is one of several tabs). The loop reads events under `track-mouse`; each movement
+  `drgnx-chrome--tab-press` with its buffer) is a click when released on the row (the release is read with `read-key`:
+  on a terminal it is xterm-mouse's bytes, decoded only through `input-decode-map`), else a drag of that kind or buffer
+  (`drgnx-grid--drag-source` unstacks it into a tile of its own first when it is one of several tabs). The loop reads events under `track-mouse`, with `read-key` too (a
+  terminal's motion and release are xterm-mouse's bytes); each movement
   finds the tile and zone (`drgnx-grid-drop-target`, `drgnx-grid-zone`) and replaces only that tile's row line
   (`drgnx-grid--row-param`: the tab line, or a docked area's header line) with "⤓ drop: …" (face `drgnx-grid-drop`);
   the release calls `drgnx-grid--drop` → `drgnx-grid-move`; Esc or `C-g` cancels; the row comes back in an
@@ -3513,11 +3517,37 @@ ITEMS FROM DIRECTION` is the nearest centre in that half-plane, across frames; `
 largest of graphical frames. Cards are pooled child frames (`drgnx-switcher--pool`, made on first use, hidden on close,
 deleted by the teardown), centred on the tile; the rest get an overlay letter (`before-string`, inverse video, the
 overlay's `window` the tile's). Keys go through a transient map whose default binding is `drgnx-switcher-key`, left by every close (its exit
-function is kept in the state) (`drgnx-switcher-handle EVENT` returns `closed`, `picked`, `swapped`, `moved` or `replayed`); a replayed key is put on
+function is kept in the state) (`drgnx-switcher-handle EVENT` returns `closed`, `quit`, `picked`, `swapped`, `moved` or `replayed`); a replayed key is put on
 `unread-command-events`. The gate: `:ready` is set by the layer timer `(switcher . ready)` after
 `drgnx-switcher-pop-in` (0.12 s; `drgnx-switcher-one-frame` under reduced motion), owner `ui/tiles`; a letter before it
 is replayed. Shift and a letter swap with `drgnx-grid-swap`, inside one frame only.
 Tests: `test/unit/switcher-test.el` (`drgnx-switcher/`), `test/ui/switcher-gui-test.el`, `test/tty/switcher-tty-test.el`.
+
+**The Esc double tap** (`wb/drgnx-esc.el`, `drgnx-esc-mode`, turned on by `ui/tiles`) has three parts and never reads
+an event itself:
+- `drgnx-esc--note` on `post-command-hook` records the command and `drgnx-timer-now` of every Esc (`last-command-event`
+  `escape` or ESC), whoever ran it. Close Pane's and quick help's maps sit in front of the detector, so their runs are
+  seen only there; a second Esc such a map ran as a cancel opens the switcher from the hook. Close Pane counts only
+  when it closed nothing (`drgnx-close--closed`).
+- `drgnx-esc--map` at the front of `emulation-mode-map-alists` (placed by `drgnx-modal-order-alists` right after the
+  modules' `drgnx-modal-front-alists`: after Close Pane's and quick help's, before the modal engine's) binds `<escape>` to `drgnx-esc`: within `drgnx-esc-double-tap` of a
+  cancel (`drgnx-esc-cancel-commands`) it opens the switcher, else it runs what `<escape>` means without the map
+  (`key-binding` with `drgnx-esc--on` nil), or gives an unbound Esc back as ESC. In a buffer of
+  `drgnx-esc-process-modes` it runs the major mode's own binding every time (so a terminal tile gets its Esc ahead of
+  evil's).
+- A filter on `input-decode-map`'s `<escape>` (graphical terminals) or ESC (text terminals, wrapping the sequences map
+  that was there) decides at once in a process buffer, the minibuffer, under evil (its own `evil-esc` delay makes a
+  lone `<escape>`), outside the reading of a key sequence that ends in that Esc (a `define-key` or `lookup-key` through
+  ESC gets the map as it was) and where `<escape>` is bound; in a text terminal bytes already waiting go on through the sequences map with ESC → `drgnx-esc-double`
+  added (escape sequences decode; Alt+Esc is the double). Else it waits the window with `sit-for`: a second Esc
+  decodes as the event `drgnx-esc-double` (bound in the front map), another key leaves ESC and that key, none leaves
+  the ESC.
+The switcher opened by a double tap gets `drgnx-switcher-quit-until`: an Esc before it closes the switcher and runs
+`keyboard-escape-quit` (`drgnx-switcher-handle` returns `quit`). `C-<escape>` is Switch Tile in every profile and a
+reserved terminal key (`drgnx-term-reserved-keys`); Esc itself always goes to a terminal's program
+(`drgnx-term-program-events`), whatever the profile binds it to. The fallback layer's F6 prefix reads an Esc alone as
+`escape`, so F6 Esc is `C-<escape>` on a legacy terminal. Tests: `test/unit/esc-test.el` (`drgnx-esc/`),
+`test/tty/esc-tty-test.el`, `test/ui/esc-gui-test.el`.
 
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 
@@ -3668,6 +3698,11 @@ kit_conformance`, read it before committing) and `drgnx-ui-kit/conformance` chec
   plist (`(:c "row" :kind "tree" :depth 2 :twisty t :text "src" :state "selected")`; `:twisty` t open, `:false`
   closed, absent none), TTY nil, t or `ascii`. Returns the hub's row shape: `(:text S :runs [[FROM TO FACE]...] :props
   [[FROM TO NAME VALUE]...] :spaces [[POS W H]...])`.
+- `(drgnx-ui-kit-agent-mark SLOT HANDLE WHERE &optional FRAME)`: an agent's handle on the colour of SLOT (1-12), as a
+  string for WHERE; `(drgnx-ui-kit-progress KIND VALUE WIDTH WHERE &optional FRAME)`: a `bar` WIDTH logical px wide
+  (spaces `drgnx-ui-kit-progress-bar-px` high, the fill then the track, drawn as images by
+  `drgnx-ui-kit-bar-display`, which the inserter calls too) or a `ring`, VALUE 0 to 1. Each carries its
+  spoken label ("agent H", "N percent") as `help-echo`; `docs/design/components/chips-and-keys.md`.
 - `(drgnx-ui-kit-string COMPONENT PROPS WHERE FRAME)`: the same as a propertized string for WHERE, `text`,
   `header-line`, `mode-line` or `tab-line`, at FRAME's scale (or as its terminal draws it). In `text` a pad is
   `(space :width N)` with N = px / `frame-char-width`, canonical characters, so one buffer is right on frames of two

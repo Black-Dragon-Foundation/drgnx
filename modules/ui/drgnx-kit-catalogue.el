@@ -20,8 +20,11 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--hub '(row button key-hint)
+(defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress)
   "The components the hub expands: their cells are drawn as hub rows.")
+
+(defconst drgnx-kit-catalogue--stateless '(agent-mark progress)
+  "The components that show no state (nothing to hover or select): drawn at rest only.")
 
 (defun drgnx-kit-catalogue--props (id variants state)
   "The props of a cell of component ID with VARIANTS ((AXIS . VALUE)...) in STATE: as a hub `Comp' plist."
@@ -36,6 +39,8 @@
                    :size (symbol-name (alist-get 'size variants)) :state (symbol-name state)))
     ('key-hint (list :c "key-hint" :keys "C-k" :variant (symbol-name (alist-get 'variant variants))
                      :state (symbol-name state)))
+    ('agent-mark (list :c "agent-mark" :slot 2 :handle "Co"))
+    ('progress (list :c "progress" :kind (symbol-name (alist-get 'kind variants)) :value 0.6 :width 120))
     (_ (list :c (symbol-name id) :text (format "%s · %s" id state) :state (symbol-name state)))))
 
 (defun drgnx-kit-catalogue--hub-row (id props scale tty state)
@@ -68,7 +73,11 @@ state); the cell's text, its line's height in device px (the expansion's :height
                 (drgnx-kit-catalogue--hub-row id props scale tty patch)
               (drgnx-ui-kit-string id props 'text nil))))
     (put-text-property 0 (length s) 'drgnx-kit-cell (list id (mapcar #'cdr variants) state) s)
-    s))
+    ;; progress beside its caption, as it is used: the bar and the ring on the caption's centre line
+    (if (and (eq id 'progress) (not tty))
+        (concat s (propertize " " 'display `(space :width (,(drgnx-px 12 nil scale))))
+                (propertize (get-text-property 0 'help-echo s) 'face 'drgnx-ui-caption))
+      s)))
 
 (defun drgnx-kit-catalogue--combos (entry)
   "Every combination of ENTRY's variant axes, as ((AXIS . VALUE)...), the last axis fastest; (nil) for none."
@@ -90,7 +99,7 @@ state); the cell's text, its line's height in device px (the expansion's :height
             (insert (propertize (mapconcat (lambda (v) (format "%s %s" (car v) (cdr v))) variants ", ")
                                 'face 'drgnx-text-muted)
                     "\n"))
-          (dolist (state drgnx-ui-kit-states)
+          (dolist (state (if (memq (car c) drgnx-kit-catalogue--stateless) '(rest) drgnx-ui-kit-states))
             (let ((s (drgnx-kit-catalogue--cell (car c) variants state scale tty patch)))
               ;; a hub row's newline carries its height, as the inserter's render puts it
               (insert s (propertize "\n" 'line-height (get-text-property 0 'drgnx-kit-line-height s)))))
