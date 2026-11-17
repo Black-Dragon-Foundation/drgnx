@@ -588,6 +588,7 @@ fn forecast(cost: &[(Unit, f64)], unpriced: &[&str], pace: Vec<PaceEffect>) -> F
         warnings: Vec::new(),
         prices_as_of: "2026-11-01".into(),
         made_at: NOW,
+        baseline: None,
     }
 }
 

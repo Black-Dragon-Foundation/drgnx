@@ -20386,6 +20386,52 @@
       },
       "result": {
         "$defs": {
+          "Baseline": {
+            "description": "When a job's tasks were forecast to start and end, offsets from the run's start (as a task's own `start`, `finish`).",
+            "properties": {
+              "finish": {
+                "$ref": "#/$defs/Range",
+                "description": "The plan's own finish (its wall time)."
+              },
+              "made_at": {
+                "format": "double",
+                "type": "number"
+              },
+              "tasks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/BaselineTask"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "made_at",
+              "finish"
+            ],
+            "type": "object"
+          },
+          "BaselineTask": {
+            "properties": {
+              "finish": {
+                "$ref": "#/$defs/Range"
+              },
+              "n": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "start": {
+                "$ref": "#/$defs/Range"
+              }
+            },
+            "required": [
+              "n",
+              "start",
+              "finish"
+            ],
+            "type": "object"
+          },
           "Basis": {
             "additionalProperties": false,
             "description": "What a task was forecast from, in numbers and in words.",
@@ -20703,6 +20749,17 @@
         "properties": {
           "active_secs": {
             "$ref": "#/$defs/Range"
+          },
+          "baseline": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Baseline"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the forecast said when the job was proposed, kept for an approved job to be compared against; none for a\nproposal and for a forecast made before they were kept."
           },
           "cost": {
             "default": [],
@@ -20827,6 +20884,52 @@
       },
       "result": {
         "$defs": {
+          "Baseline": {
+            "description": "When a job's tasks were forecast to start and end, offsets from the run's start (as a task's own `start`, `finish`).",
+            "properties": {
+              "finish": {
+                "$ref": "#/$defs/Range",
+                "description": "The plan's own finish (its wall time)."
+              },
+              "made_at": {
+                "format": "double",
+                "type": "number"
+              },
+              "tasks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/BaselineTask"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "made_at",
+              "finish"
+            ],
+            "type": "object"
+          },
+          "BaselineTask": {
+            "properties": {
+              "finish": {
+                "$ref": "#/$defs/Range"
+              },
+              "n": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "start": {
+                "$ref": "#/$defs/Range"
+              }
+            },
+            "required": [
+              "n",
+              "start",
+              "finish"
+            ],
+            "type": "object"
+          },
           "Basis": {
             "additionalProperties": false,
             "description": "What a task was forecast from, in numbers and in words.",
@@ -21144,6 +21247,17 @@
         "properties": {
           "active_secs": {
             "$ref": "#/$defs/Range"
+          },
+          "baseline": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Baseline"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the forecast said when the job was proposed, kept for an approved job to be compared against; none for a\nproposal and for a forecast made before they were kept."
           },
           "cost": {
             "default": [],
@@ -47104,5 +47218,5 @@
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 13
+  "schema": 14
 }
