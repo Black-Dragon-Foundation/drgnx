@@ -43,6 +43,11 @@
 
 (defvar-local drgnx-work-map--selection nil
   "The selected item, (KIND . ID), or nil: the model's selection in Sjá, kept by `drgnx-work-map--nav'.")
+(declare-function drgnx-grid-tiles "drgnx-grid" (&optional frame filter))
+(defvar drgnx-work-selection nil
+  "The selected item, (KIND . ID), one for every Work view in every frame: a move in one map reaches the others.")
+(defvar drgnx-work-selection-functions nil
+  "Abnormal hook: called with (KIND ID) when the selection moved, in whichever view.")
 (defvar-local drgnx-work-map--finished nil
   "The id of the item that finished while it was selected; the side panel says so until the selection moves.")
 (defvar-local drgnx-work-map--search nil
@@ -263,6 +268,44 @@ palette in another buffer), a map still waiting for the hub's rows, or an Emacs 
             ((drgnx-work-map-rows-p) (user-error "Work: the map is still loading"))
             (t (user-error "%s" drgnx-work-map-no-sja)))))
 
+(defun drgnx-work--share-selection (origin sel)
+  "SEL, (KIND . ID), is the selection now, moved in the map buffer ORIGIN (or nil: from no map): it becomes the global
+one, every other map takes it and tells its hub view, and `drgnx-work-selection-functions' run."
+  (setq drgnx-work-selection sel)
+  (when sel
+    (dolist (b (drgnx-work-map-buffers))
+      (unless (or (eq b origin) (equal sel (buffer-local-value 'drgnx-work-map--selection b)))
+        (with-current-buffer b (setq drgnx-work-map--selection sel drgnx-work-map--finished nil))
+        (when-let* ((view (buffer-local-value 'drgnx-work-space--view b)))
+          (drgnx-work-client-set view :selected (cdr sel)))))
+    (run-hook-with-args 'drgnx-work-selection-functions (car sel) (cdr sel))))
+
+(defun drgnx-work-select (kind id)
+  "Select the item ID of KIND in every Work view: one selection for all of them."
+  (drgnx-work--share-selection nil (cons kind id)))
+
+(defun drgnx-work--result-frame ()
+  "The frame that last had an editor tile in use (torn-out frames included), or nil: where a selected item's result
+shows.  No frame is moved, raised or made for it."
+  (let (best (best-time -1))
+    (dolist (f (frame-list))
+      (when (and (frame-live-p f) (frame-visible-p f))
+        (dolist (w (drgnx-grid-tiles f 'editor))
+          (let ((time (window-use-time w)))
+            (when (> time best-time) (setq best f best-time time))))))
+    best))
+
+(defun drgnx-work--in-frame (frame fn)
+  "Call FN with FRAME selected for the call only: nothing is raised and focus stays where it was."
+  (with-selected-frame frame (funcall fn)))
+
+(defun drgnx-work--show-in-result-frame (fn)
+  "Call FN (it displays a buffer) in the result frame: the selected one when that is it or there is none."
+  (let ((frame (drgnx-work--result-frame)))
+    (if (and frame (not (eq frame (selected-frame))))
+        (drgnx-work--in-frame frame fn)
+      (funcall fn))))
+
 (defun drgnx-work-map--nav (verb &rest args)
   "Move the selection by VERB and ARGS through `drgnx-view-nav'; keep `drgnx-work-map--selection' as (KIND . ID) and
 run `drgnx-work-map-select-functions' when it moved.  A broken view keeps the selection it had."
@@ -272,6 +315,7 @@ run `drgnx-work-map-select-functions' when it moved.  A broken view keeps the se
            (sel (and id (cons (if (stringp kind) (intern kind) kind) id))))
       (unless (or (equal sel before) (and (null id) (eql 2 (nidhogg-view-get h 'health))))
         (setq drgnx-work-map--selection sel drgnx-work-map--finished nil)
+        (drgnx-work--share-selection (current-buffer) sel)
         (run-hook-with-args 'drgnx-work-map-select-functions (current-buffer)))
       drgnx-work-map--selection)))
 
@@ -347,7 +391,7 @@ view of it straight through `drgnx-view-nav'."
 (defun drgnx-work--open-agent (sid)
   "Open the panel of the hub session SID."
   (if (fboundp 'drgnx-agent-panel-open)
-      (drgnx-agent-panel-open sid)
+      (drgnx-work--show-in-result-frame (lambda () (drgnx-agent-panel-open sid)))
     (message "Work: the agent panel is not on")))
 
 (defun drgnx-work-map--root-named (name)
@@ -359,7 +403,9 @@ view of it straight through `drgnx-view-nav'."
   "Open the item SEL as the design's table says; BESIDE: without moving focus.  LABEL is the item's label and AGENTS
 the session ids a file opens at."
   (let* ((id (cdr sel)) (key (cadr (split-string id ":")))
-         (show (lambda (buffer) (if beside (display-buffer buffer) (pop-to-buffer buffer)))))
+         (show (lambda (buffer)
+                 (drgnx-work--show-in-result-frame
+                  (lambda () (if beside (display-buffer buffer) (pop-to-buffer buffer)))))))
     (pcase (car sel)
       ('agent (drgnx-work--open-agent (substring id (length "agent:"))))
       ('subagent (drgnx-work--open-agent (car (split-string (substring id (length "agent:")) "/"))))

@@ -60,9 +60,9 @@
 
 (ert-deftest drgnx-frames/editors-and-groups-move-to-new-windows ()
   (drgnx-frames-test--with sess
-    ;; Move Editor to New Window: README leaves frame 1's tabs.
+    ;; Move to New Window: a.txt leaves frame 1's tabs.
     (drgnx-frames-test--eval sess "(progn (find-file (expand-file-name \"a.txt\" kx-dir)) (drgnx-chrome-apply nil t) t)")
-    (drgnx-frames-test--eval sess "(progn (drgnx-frames-move-editor) (setq kx-f2 (selected-frame)) t)")
+    (drgnx-frames-test--eval sess "(progn (drgnx-grid-move-tab-to-new-frame) (setq kx-f2 (selected-frame)) t)")
     (drgnx-ui-measure sess nil)
     (should (equal (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-chrome-tabs (frame-first-window kx-f2)))") '("a.txt")))
     (should-not (member "a.txt" (drgnx-frames-test--eval sess "(with-selected-frame kx-f1 (mapcar #'buffer-name (drgnx-chrome-tabs (car (drgnx-groups-list)))))")))
@@ -82,7 +82,7 @@
 
 (ert-deftest drgnx-frames/each-window-lists-its-own-buffers ()
   (drgnx-frames-test--with sess
-    (drgnx-frames-test--eval sess "(progn (find-file (expand-file-name \"a.txt\" kx-dir)) (drgnx-chrome-apply nil t) (drgnx-frames-move-editor) (setq kx-f2 (selected-frame)) (drgnx-chrome-apply kx-f2 t) t)")
+    (drgnx-frames-test--eval sess "(progn (find-file (expand-file-name \"a.txt\" kx-dir)) (drgnx-chrome-apply nil t) (drgnx-grid-move-tab-to-new-frame) (setq kx-f2 (selected-frame)) (drgnx-chrome-apply kx-f2 t) t)")
     (drgnx-ui-measure sess nil)
     (should (equal (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-frame-buffers kx-f2))") '("a.txt")))
     (should-not (member "a.txt" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-frame-buffers kx-f1))")))
@@ -114,7 +114,7 @@
           (drgnx-ui-call sess (format "(progn (setq drgnx-persist-file %S)
                                          (find-file %S) (drgnx-chrome-apply nil t)
                                          (find-file %S) (drgnx-chrome-apply nil t)
-                                         (drgnx-frames-move-editor)
+                                         (drgnx-grid-move-tab-to-new-frame)
                                          (drgnx-uitest--json (list :ok t)))"
                                       file (expand-file-name "README.md" project) (expand-file-name "a.txt" project)))
           (drgnx-ui-measure sess nil)

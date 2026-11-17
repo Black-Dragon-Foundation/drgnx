@@ -387,11 +387,19 @@ async fn a_kernel_that_floods_the_hub_is_killed() {
                 .unwrap();
         }
         let pid = kernel.pid();
+        let mut seen = Vec::new();
         loop {
             match kernel.next().await {
                 KernelEvent::Flood => break,
-                KernelEvent::Exited(e) => panic!("exited before the flood was seen: {e:?}"),
-                _ => {}
+                KernelEvent::Exited(e) => panic!(
+                    "exited before the flood was seen: pid {pid} (kernel id g), exit code {:?} signal {:?} stderr {:?}; \
+                     events before it: {seen:?}",
+                    e.code, e.signal, e.stderr
+                ),
+                KernelEvent::Message(c, m) => {
+                    seen.push(format!("message {c:?} {}", m.header.msg_type))
+                }
+                KernelEvent::Closed(c, why) => seen.push(format!("closed {c:?}: {why}")),
             }
         }
         skuld::wait_until("the flooding kernel's group to go", 30, || {

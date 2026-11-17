@@ -1,0 +1,26 @@
+{"scenario": "work/schedule-by-machine", "requires": ["v1", "test-hooks"], "doc": "Gap G12's Schedule. A Schedule view of the connection's List: by plan, the plan and its tasks in the List's order, each with its state's word; `work/schedule/set {group: machine}` regroups it without subscribing again: a heading per machine with its slots (a reported machine among them), and the tasks no machine holds yet under Not placed yet. A set on a view that is not a Schedule answers false."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && git init -q -b main && echo one > a.rs && git add a.rs && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "m", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [8, 17], "width_px": 1000, "palette": [["accent", "#123456"], ["edge", "#654321"]], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "view/env", "params": {"view": "s", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [8, 17], "width_px": 1000, "tz": "+0000", "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "machines/report", "params": {"machine": "desktop", "ttl": 600, "slots": [{"id": "d1", "kind": "agent-job", "holder": "job-7"}, {"id": "d2", "kind": "build"}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"machine": "desktop"}}, "within_ms": 10000}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into entity (n,id,kind,title,origin,ver,created_tx,updated_tx) values (9001,'plan:p1','plan','Plan one','recorded',1,1,1),(9002,'task:T1','task','write the thing','recorded',1,1,1),(9003,'task:T2','task','test the thing','recorded',1,1,1)", "insert into link (src,kind,dst,origin,tx_from) values (9001,'parent_of',9002,'recorded',1),(9001,'parent_of',9003,'recorded',1)"]}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "m", "ops": {"$text": ["write the", "test the"]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": {"hub": "$any", "version": "$number"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "work/schedule/subscribe", "params": {"view": "s", "window": {"from": 0.0, "to": 3600.0}}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-1", "ops": [{"reset": {"$contains": [{"key": "axis"}, {"key": "sched:plan:p1"}, {"key": "sched:task:T1", "text": {"$text": ["write the", "forecast"]}}, {"key": "sched:task:T2"}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": {"hub": "$number"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "work/schedule/set", "params": {"view": "s", "group": "machine"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-1", "ops": {"$text": ["desktop", "Not placed yet", "write the", "test the"]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": true}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "work/schedule/set", "params": {"view": "m", "group": "plan"}}}
+{"do": "expect", "conn": "e", "json": {"id": 8, "result": false}, "within_ms": 10000}

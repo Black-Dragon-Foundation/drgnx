@@ -51,20 +51,6 @@ shown), under the dark theme.  Everything undone after."
          (eq (get-text-property (cdr s) 'drgnx-buffer (car s)) buffer)
          (equal (get-text-property (cdr s) 'help-echo (car s)) "Close this tab"))))
 
-(defun drgnx-ui-look-tabs--origin ()
-  "Where the focused sway window's client area starts in the layout, (X . Y): sway draws its own title bar above it."
-  (let ((json (with-temp-buffer
-                (call-process "swaymsg" nil t nil "-t" "get_tree")
-                (goto-char (point-min))
-                (json-parse-buffer :object-type 'alist :array-type 'list)))
-        found)
-    (cl-labels ((walk (n)
-                  (when (eq (alist-get 'focused n) t) (setq found n))
-                  (dolist (c (append (alist-get 'nodes n) (alist-get 'floating_nodes n))) (walk c))))
-      (walk json))
-    (let ((rect (alist-get 'rect found)) (win (alist-get 'window_rect found)))
-      (cons (+ (alist-get 'x rect) (alist-get 'x win)) (+ (alist-get 'y rect) (alist-get 'y win))))))
-
 (defun drgnx-ui-look-tabs--near (px rgb)
   (cl-every (lambda (a b) (<= (abs (- a b)) 2)) (cdr px) rgb))
 
@@ -138,17 +124,22 @@ is on the tab, then in a foreground colour, and again in the background after th
                             found))))
       (should xs)
       (should-not (funcall cell-has-fg))
-      (let ((origin (drgnx-ui-look-tabs--origin)))
-        (should (eq t (drgnx-uitest-pointer-set (+ (car origin) (round (/ (+ px-x0 px-x1) 2.0 s)))
-                                                (+ (cdr origin) (round (/ px-y s))))))
+      ;; where the frame is in the compositor's layout, found by the pointer on any compositor the harness drives
+      ;; (this read sway's tree before: under KWin `swaymsg' printed its connection error, read as the number 0)
+      ;; The pointer goes by logical pixels: Lisp pixels over `drgnx-pixels-scale' (a Lisp pixel is a device pixel on
+      ;; the native shell, so dividing by the snapshot's scale, 1 there, put it twice as far at scale 2)
+      (let ((origin (drgnx-uitest-frame-origin)) (ls (drgnx-pixels-scale)))
+        (should origin)
+        (should (eq t (drgnx-uitest-pointer-set (+ (car origin) (round (/ (+ (nth 0 edges) (/ (+ x0 x1) 2.0)) ls)))
+                                                (+ (cdr origin) (round (/ (+ (nth 1 edges) y) ls))))))
         (drgnx-uitest-run nil)                  ; the motion reaches the command loop, which lights the tab
         (drgnx-test-wait-presented)
         ;; Headless sway moves its cursor but the frame may never get the pointer-enter event: then there is no
         ;; hover to see, and the row says so (a skip, listed in the report) instead of failing on a missing event.
         (skip-unless (cadr (mouse-pixel-position)))
         (should (funcall cell-has-fg))
-        (should (eq t (drgnx-uitest-pointer-set (+ (car origin) (round (/ (nth 2 edges) 2.0)))
-                                                (+ (cdr origin) (round (/ (nth 3 edges) 2.0)))))))
+        (should (eq t (drgnx-uitest-pointer-set (+ (car origin) (round (/ (nth 2 edges) 2.0 ls)))
+                                                (+ (cdr origin) (round (/ (nth 3 edges) 2.0 ls)))))))
       (drgnx-uitest-run nil)
       (drgnx-test-wait-presented)
       (should-not (funcall cell-has-fg)))))

@@ -178,12 +178,15 @@ the palette) — drgnx does one of two things, your choice:
   exception: on Linux, if you enabled the systemd user service `drgnx`, it starts at login, as enabled services do.)
 - **Quit when the last window closes:** closing the last window quits drgnx.
 
-Quitting — Quit drgnx, or closing the last window in quit mode — first offers to save each file with changes, and
-each New Untitled buffer (tab) you typed in (it asks for a file name); the `*scratch*` buffer is not offered. Press
-Ctrl+G (`C-g`, Emacs' cancel), or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx
-stays running with everything open: nothing is lost. If terminals or other programs are still running, drgnx then
-asks once whether to quit and stop them (no keeps everything running). A drgnx that is not a daemon has nothing to
-keep running, so closing its last window always quits (asking the same way).
+Quitting — Quit drgnx, or closing the last window in quit mode — asks **one** question when files have changes, as
+VS Code does: "Do you want to save the changes you made to NAME?" for one file, or "…to the following N files?" with
+the files listed (the first eight, then "and N more") for several, answered Save (Save All for several), Don't Save or
+Cancel. Keys: `s`, `d`, `c`; `Escape` and `C-g` cancel; a quit clicked with the mouse (the window's close button) asks
+in a dialog box where the window can show one. Each New Untitled buffer (tab) you typed in counts as a changed file
+(Save asks it for a file name); the `*scratch*` buffer does not. Cancel, or a file still unsaved after Save, and drgnx
+stays running with everything open: nothing is lost. Don't Save quits and the changes go. If terminals or other
+programs are still running, drgnx then asks once whether to quit and stop them (no keeps everything running). A drgnx
+that is not a daemon has nothing to keep running, so closing its last window always quits (asking the same way).
 
 The keys close a window the same way. `C-x C-c` (Save Buffers Kill Terminal) and `C-x 5 0` (Delete Frame) in a
 graphical window do what its close button does: another window is open, so only this one closes; it is the last one,

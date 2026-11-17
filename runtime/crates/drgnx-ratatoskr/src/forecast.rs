@@ -903,7 +903,11 @@ const REMAINING_CACHE_SECS: u64 = 5;
 const REMAINING_CACHE_MAX: usize = 64;
 
 /// What is left of job ID at NOW ([`Remaining`]), with the baseline of an approved job.
-async fn remaining_forecast(front: &Front, id: &str, now: f64) -> Result<wire::Forecast, Error> {
+pub(crate) async fn remaining_forecast(
+    front: &Front,
+    id: &str,
+    now: f64,
+) -> Result<wire::Forecast, Error> {
     let l = crate::runner::load(front, id, false)
         .await?
         .ok_or_else(|| crate::runner::invalid(format!("No job {id}")))?;

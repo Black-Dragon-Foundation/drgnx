@@ -101,7 +101,7 @@ once TEXT is on its screen."
                       s '(condition-case err
                              (progn (find-file-noselect (expand-file-name "kx-move.txt" temporary-file-directory))
                                     (switch-to-buffer "kx-move.txt")
-                                    (call-interactively #'drgnx-frames-move-editor)
+                                    (call-interactively #'drgnx-grid-move-tab-to-new-frame)
                                     'moved)
                            (error (list 'error (error-message-string err)))))
                      'moved))

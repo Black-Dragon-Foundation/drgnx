@@ -6,7 +6,7 @@ use drgnx_rows::fit::Measure;
 use drgnx_rows::svg::Palette;
 use drgnx_rows::{Op, Row};
 use vegvisir::render::Env;
-use vegvisir::trail::{self, Conclusion, Detail, Lane, Step, Zone};
+use vegvisir::trail::{self, Conclusion, Detail, Lane, SegKind, Step, TrailFilter, Window, Zone};
 
 struct Cols;
 
@@ -93,6 +93,23 @@ fn a_conclusion_dirties_only_its_steps() {
     );
 }
 
+/// The Timeline's rows over the time LANES cover, as a view with no window draws them.
+fn timeline(lanes: &[Lane], p: &Palette) -> Vec<Row> {
+    let (from, to) = trail::range(lanes);
+    let e = env(p);
+    trail::timeline_rows(
+        lanes,
+        &e,
+        &Cols,
+        Zone(0),
+        &Window { from, to },
+        trail::track_cols(&e),
+        TrailFilter::All,
+        None,
+        0.0,
+    )
+}
+
 /// [A] A step inside the Timeline's range redraws its own lane only; one past the range moves every lane's scale.
 #[test]
 fn timeline_lane_redraws_only_on_its_range() {
@@ -104,20 +121,10 @@ fn timeline_lane_redraws_only_on_its_range() {
     };
     let a = vec![step(1, 1000.0), step(2, 1100.0)];
     let b = vec![step(3, 1010.0)];
-    let before = trail::timeline_rows(
-        &[lane("a", a.clone()), lane("b", b.clone())],
-        &env(&p),
-        &Cols,
-        Zone(0),
-    );
+    let before = timeline(&[lane("a", a.clone()), lane("b", b.clone())], &p);
     let mut b2 = b.clone();
     b2.push(step(4, 1050.0));
-    let inside = trail::timeline_rows(
-        &[lane("a", a.clone()), lane("b", b2)],
-        &env(&p),
-        &Cols,
-        Zone(0),
-    );
+    let inside = timeline(&[lane("a", a.clone()), lane("b", b2)], &p);
     match drgnx_rows::diff(&before, &inside).as_slice() {
         [Op::Replace(rows)] => assert_eq!(
             rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
@@ -127,7 +134,7 @@ fn timeline_lane_redraws_only_on_its_range() {
     }
     let mut b3 = b;
     b3.push(step(5, 1500.0));
-    let past = trail::timeline_rows(&[lane("a", a), lane("b", b3)], &env(&p), &Cols, Zone(0));
+    let past = timeline(&[lane("a", a), lane("b", b3)], &p);
     match drgnx_rows::diff(&before, &past).as_slice() {
         [Op::Replace(rows)] => assert_eq!(
             rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
@@ -135,6 +142,224 @@ fn timeline_lane_redraws_only_on_its_range() {
         ),
         ops => panic!("the range moved: {ops:?}"),
     }
+}
+
+/// A step of CLASS (and detail KIND) from START to END.
+fn seg(id: i64, class: &str, kind: Option<&str>, start: f64, end: f64) -> Step {
+    Step {
+        id,
+        seq: u64::try_from(id).unwrap(),
+        class: class.into(),
+        tool: None,
+        detail: Detail {
+            kind: kind.map(Into::into),
+            ..Detail::default()
+        },
+        start,
+        end: Some(end),
+    }
+}
+
+/// [Review Focus 4] Ten thousand short steps of every kind on a 200-column track: at most one segment a column, in
+/// order, inside the track; the lane's row holds as few stops.
+#[test]
+fn bins_never_exceed_one_segment_per_column() {
+    let kinds = [
+        ("tool", Some("read")),
+        ("tool", Some("edit")),
+        ("think", None),
+        ("user-wait", None),
+        ("tool", None),
+    ];
+    let steps: Vec<Step> = (0..10_000)
+        .map(|i| {
+            let (c, k) = kinds[i % kinds.len()];
+            seg(i as i64 + 1, c, k, i as f64 * 0.1, i as f64 * 0.1 + 0.08)
+        })
+        .collect();
+    let win = Window {
+        from: 0.0,
+        to: 1000.0,
+    };
+    let bins = trail::bins(&steps, &win, 200, 1000.0);
+    assert!(!bins.is_empty() && bins.len() <= 200, "{}", bins.len());
+    let mut at = 0;
+    for b in &bins {
+        assert!(b.c0 >= at && b.c1 > b.c0 && b.c1 <= 200, "{b:?}");
+        at = b.c1;
+    }
+    let p = Palette::default();
+    let e = env(&p);
+    let rows = trail::timeline_rows(
+        &[Lane {
+            id: "a".into(),
+            label: "a".into(),
+            steps,
+        }],
+        &e,
+        &Cols,
+        Zone(0),
+        &win,
+        200,
+        TrailFilter::All,
+        None,
+        0.0,
+    );
+    // a stop to each segment's start and one to its end
+    assert!(rows[1].stops.len() <= 2 * 200, "{}", rows[1].stops.len());
+}
+
+/// A column takes the kind with the most time in it, and that kind's longest step; a tie goes to the kind earlier in
+/// the spec's table (read before edit).
+#[test]
+fn a_bin_takes_its_longest_kind() {
+    let win = Window {
+        from: 0.0,
+        to: 10.0,
+    };
+    let steps = vec![
+        seg(1, "tool", Some("read"), 0.0, 3.0),
+        seg(2, "tool", Some("edit"), 3.0, 5.0),
+        seg(3, "tool", Some("edit"), 5.0, 9.0),
+        seg(4, "think", None, 9.0, 10.0),
+    ];
+    let b = trail::bins(&steps, &win, 1, 10.0);
+    assert_eq!(b.len(), 1);
+    assert_eq!((b[0].kind, b[0].seq), (SegKind::Edit, 3));
+    let tie = vec![
+        seg(1, "tool", Some("edit"), 0.0, 5.0),
+        seg(2, "tool", Some("read"), 5.0, 10.0),
+    ];
+    assert_eq!(trail::bins(&tie, &win, 1, 10.0)[0].kind, SegKind::Read);
+    // wide steps keep a segment each
+    let wide = trail::bins(&steps, &win, 10, 10.0);
+    assert_eq!(
+        wide.iter().map(|b| (b.c0, b.c1, b.seq)).collect::<Vec<_>>(),
+        [(0, 3, 1), (3, 5, 2), (5, 9, 3), (9, 10, 4)]
+    );
+    // the letters of the spec's table
+    assert_eq!(
+        [
+            SegKind::Read,
+            SegKind::Edit,
+            SegKind::Think,
+            SegKind::WaitYou,
+            SegKind::WaitMachine,
+            SegKind::Paused,
+            SegKind::Stalled
+        ]
+        .map(SegKind::letter),
+        ['R', 'E', '·', 'Y', 'M', 'P', '!']
+    );
+}
+
+/// The Edits filter keeps edit segments in their colour and greys the rest; Waits keeps the waits.
+#[test]
+fn the_edits_filter_keeps_only_edits() {
+    let p = Palette::default();
+    let e = env(&p);
+    let steps = vec![
+        seg(1, "tool", Some("read"), 0.0, 40.0),
+        seg(2, "tool", Some("edit"), 40.0, 70.0),
+        seg(3, "user-wait", None, 70.0, 100.0),
+    ];
+    let win = Window {
+        from: 0.0,
+        to: 100.0,
+    };
+    let faces = |filter| -> Vec<(String, String)> {
+        let rows = trail::timeline_rows(
+            &[Lane {
+                id: "a".into(),
+                label: "a".into(),
+                steps: steps.clone(),
+            }],
+            &e,
+            &Cols,
+            Zone(0),
+            &win,
+            100,
+            filter,
+            None,
+            0.0,
+        );
+        let r = &rows[1];
+        r.props
+            .iter()
+            .filter(|(_, _, n, _)| n == "drgnx-work-kind")
+            .map(|(s, _, _, v)| {
+                let face = r
+                    .runs
+                    .iter()
+                    .find(|(a, _, _)| a == s)
+                    .map(|(_, _, f)| f.clone())
+                    .unwrap_or_default();
+                (v.as_str().unwrap_or("").to_owned(), face)
+            })
+            .collect()
+    };
+    let dim = FaceId::WorkDim.name().to_owned();
+    assert_eq!(
+        faces(TrailFilter::Edits),
+        [
+            ("R".to_owned(), dim.clone()),
+            ("E".to_owned(), FaceId::WorkSegEdit.name().to_owned()),
+            ("Y".to_owned(), dim.clone()),
+        ]
+    );
+    assert_eq!(
+        faces(TrailFilter::Waits),
+        [
+            ("R".to_owned(), dim.clone()),
+            ("E".to_owned(), dim),
+            ("Y".to_owned(), FaceId::WorkSegWait.name().to_owned()),
+        ]
+    );
+}
+
+/// The now-line is drawn again at most once every five seconds, and only when it moved a column.
+#[test]
+fn the_now_line_republishes_at_most_every_five_seconds() {
+    let mut line = trail::NowLine::default();
+    assert!(line.due(100.0, Some(1)));
+    assert!(!line.due(101.0, Some(2)), "a second later");
+    assert!(!line.due(104.9, Some(3)), "under five seconds");
+    assert!(line.due(105.0, Some(3)), "five seconds, moved");
+    assert!(!line.due(111.0, Some(3)), "not moved");
+    assert!(line.due(112.0, Some(4)));
+    // a Timeline lane carries the line where it falls
+    let p = Palette::default();
+    let e = env(&p);
+    let rows = trail::timeline_rows(
+        &[Lane {
+            id: "a".into(),
+            label: "a".into(),
+            steps: vec![seg(1, "think", None, 0.0, 10.0)],
+        }],
+        &e,
+        &Cols,
+        Zone(0),
+        &Window {
+            from: 0.0,
+            to: 100.0,
+        },
+        100,
+        TrailFilter::All,
+        Some(50.0),
+        50.0,
+    );
+    assert!(
+        rows[1]
+            .props
+            .iter()
+            .any(|(_, _, n, _)| n == "drgnx-work-now")
+    );
+    assert!(
+        rows[1]
+            .stops
+            .iter()
+            .any(|(_, px)| *px == trail::TRACK_X + 50)
+    );
 }
 
 /// [A] Steps and conclusions arriving in every order (each arrival a draw from what came so far) end on the rows of

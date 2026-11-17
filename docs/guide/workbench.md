@@ -374,6 +374,17 @@ in that direction, docks included; at an edge nothing happens).
 Groups are numbered left to right, top to bottom. Diffs and logs (`diff-mode`, `log-view-mode`, magit's diff and log)
 open in the **other group** — the one you used last besides this one — never in a new split.
 
+### Switching tiles
+
+**Switch Tile** (`C-x w w` · `SPC w f`, and the palette) puts a letter on every tile of every window, on every
+monitor: the window you are in first, then the others left to right, and inside each, from the top left. The same
+layout always gets the same letters. The 12 largest tiles show a card in their middle — the letter, large, and the
+tile's name under it (and the monitor's, when your windows are on more than one); the others, and the tiles of a
+terminal window, show the letter at their start. Type a letter to go to that tile (its window comes to the front; no
+window moves), **Shift** and a letter to swap your tile with that one (inside one window), or move with the arrows,
+across windows too, and press RET. Esc closes it; any other key closes it and then does what it does. Letters count once
+the cards are up (a blink, 120 ms, or one frame with reduced motion): one typed sooner goes to the tile you are in.
+
 ### The layout survives a restart
 
 When Emacs exits, the workbench of every window is saved to `$XDG_STATE_HOME/drgnx/workbench.eld`
@@ -451,9 +462,15 @@ saved and nothing is moved.
 
 Every frame (OS window) is its own workbench. The first one is the **main** window (when a terminal window held that
 role and every graphical window has closed, the next graphical window takes it back); windows opened later are
-**editor-only** (no sidebar until you toggle one there). Move Editor into New Window, Open Editor in New Window
-(``C-k o`` · palette · `SPC w o`; the file shows in both) and Move Editor Group into New Window (its tabs too) are in
-the palette (Vim `SPC w n` / `SPC w g`). Each window has its **own buffers** — the tabs of its groups; the main window
+**editor-only** (no sidebar until you toggle one there). **Move to New Window** (palette · `SPC w n`, or a right
+click on a tab: its menu) takes the shown tab to a new window: a file leaves its group's tabs, a pane leaves its
+tile's stack, and a tile's only tab takes the tile whole — a conversation with its composer, a terminal with its
+running process, an editor group with its tabs; a docked tile is no dock's there. Restore Previous Layout brings it
+back. (Dragging a tab out of every window does not open one: Emacs gets no release outside its windows, so the menu and
+the command are the ways.) Open Editor in New Window (``C-k o`` · palette · `SPC w o`; the file shows in both) and
+Move Editor Group into New Window (its tabs too; Vim `SPC w g`) are in the palette. **Each window has its own shell**:
+Toggle Rail, Toggle Title Bar and Toggle Right Side in This Window (palette) change only the window you are in; a
+window that shows only Work and its Detail, or one conversation, opens without the rail. Each window has its **own buffers** — the tabs of its groups; the main window
 also has the open files that are a tab nowhere — and the Buffers panel lists those of the window you work in;
 Buffers: Show All Windows (palette · `SPC b a`) lists all. `C-x b` lists the buffers of the window you work in
 first and every other buffer after them: it sorts, it never hides one (the order is set on the `buffer` completion

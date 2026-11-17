@@ -342,13 +342,16 @@ the pointer is placed on the first row, then goes down by a row's height (relati
          (mid (round (* s (/ (+ (nth 0 e) (nth 2 e)) 2.0))))         ; right of the short names, left of the tails
          (ltail (- (nth 2 e) 27))
          (logical (/ (frame-scale-factor frame) s))                  ; Lisp pixels per logical one (mutter's motion)
+         ;; sway's points are the layout's: the frame's corner is where the compositor put it (kwin: not at 0,0)
+         (origin (if (eq kind 'sway) (drgnx-uitest-frame-origin frame) '(0 . 0)))
          (tint (mapcar (lambda (c) (round (* 255 c))) (color-name-to-rgb (face-background 'drgnx-hover frame t))))
          (lit (lambda (snap line)
                 (cl-every (lambda (p c) (<= (abs (- p c)) 6)) (cdr (drgnx-uitest-pixel snap mid (nth (1- line) ys))) tint))))
     ;; the pointer starts on the first row (the point row, left out), wherever an earlier row left it
     (pcase kind
-      ('sway (should (eq t (drgnx-uitest-pointer-set (round (/ (* s ltail) (drgnx-pixels-scale)))
-                                                     (round (/ (* s (car lys)) (drgnx-pixels-scale))))))
+      ('sway (should origin)
+             (should (eq t (drgnx-uitest-pointer-set (+ (car origin) (round (/ (* s ltail) (drgnx-pixels-scale))))
+                                                     (+ (cdr origin) (round (/ (* s (car lys)) (drgnx-pixels-scale)))))))
              (drgnx-uitest-run nil))
       (_ (drgnx-uitest-pointer-move ltail (car lys) frame)))
     (drgnx-test-wait-presented)
@@ -359,8 +362,8 @@ the pointer is placed on the first row, then goes down by a row's height (relati
              for prev = (car lys) then ly
              for ly = (nth (1- line) lys)
              do (pcase kind
-                  ('sway (should (eq t (drgnx-uitest-pointer-set (round (/ (* s ltail) (drgnx-pixels-scale)))
-                                                                 (round (/ (* s ly) (drgnx-pixels-scale)))))))
+                  ('sway (should (eq t (drgnx-uitest-pointer-set (+ (car origin) (round (/ (* s ltail) (drgnx-pixels-scale))))
+                                                                 (+ (cdr origin) (round (/ (* s ly) (drgnx-pixels-scale))))))))
                   (_ (drgnx-uitest--pointer-by 0 (/ (- ly prev) logical))))
              (when touch (write-region (format "%d" line) nil (expand-file-name "m00.txt" root) nil 'silent))
              (cond (fast (redisplay))                                ; the next move comes as soon as it is drawn
