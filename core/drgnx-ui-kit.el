@@ -432,8 +432,22 @@ has and that exists, else `drgnx-kit-ID' when it exists, else nil (the surface's
           (when (facep f) (setq best f best-n (length (car b)))))))
     (or best (let ((f (intern-soft (format "drgnx-kit-%s" id)))) (and (facep f) f)))))
 
+(declare-function drgnx-icons--image "drgnx-icons" (name size))
+
+(defconst drgnx-ui-kit-icon-px 16 "An icon's size in a component, logical px (the hub's `kit::ICON_PX').")
+
+(defvar drgnx-ui-kit--icons nil
+  "While an expansion draws icons: a function of an icon name and a logical size giving its image, or nil (none
+drawn: each icon is its glyph, as the hub's `KitEnv' without icons).  `drgnx-ui-kit-string' binds it on a frame that
+draws SVG icons (`drgnx-look-icons').")
+
+(defun drgnx-ui-kit-icon-function (frame)
+  "The `drgnx-ui-kit--icons' of FRAME: `drgnx-icons--image' where FRAME draws SVG icons, else nil."
+  (and (display-graphic-p frame) (featurep 'drgnx-icons) (eq (bound-and-true-p drgnx-look-icons) 'svg)
+       (image-type-available-p 'svg) #'drgnx-icons--image))
+
 (defun drgnx-ui-kit--row (props scale tty)
-  "The `row' component of PROPS (:kind :depth :twisty :text :state :action) at SCALE, or on a terminal (TTY non-nil,
+  "The `row' component of PROPS (:kind :depth :twisty :icon :text :state :action) at SCALE, or on a terminal (TTY non-nil,
 `ascii' for ASCII glyphs): (TEXT RUNS PROPS SPACES HEIGHT), see `drgnx-ui-kit--expand'."
   (let* ((entry (drgnx-ui-kit-component 'row))
          (kind (or (intern-soft (or (plist-get props :kind) "list")) 'list))
@@ -446,7 +460,7 @@ has and that exists, else `drgnx-kit-ID' when it exists, else nil (the surface's
          (action (plist-get props :action))
          (hit (if (and action (not tty)) (drgnx-px (or (drgnx-ui-kit--value (plist-get g :hit) chosen) 0) nil scale) 0))
          (pad (plist-get g :pad))
-         (pos 0) (runs nil) (spaces nil) (parts nil) start end)
+         (pos 0) (runs nil) (spaces nil) (parts nil) (images nil) start end)
     ;; each part: (TEXT FACE) pushed in order, a space's placeholder noted in SPACES
     (when (> hit 0)
       (push (list pos hit 0) spaces) (push " " parts) (setq pos (1+ pos)))
@@ -460,10 +474,24 @@ has and that exists, else `drgnx-kit-ID' when it exists, else nil (the surface's
         (when (> w 0)
           (push (list pos w 0) spaces) (push " " parts)
           (setq runs (drgnx-ui-kit--run runs pos (1+ pos) face) pos (1+ pos)))))
-    (when twisty
-      (let* ((names (drgnx-ui-kit--value (plist-get tg :twisty) chosen))
-             (s (concat (drgnx-ui-kit--glyph (if (eq twisty t) (cadr names) (car names)) tty) " ")))
-        (push s parts) (setq runs (drgnx-ui-kit--run runs pos (+ pos (length s)) face) pos (+ pos (length s)))))
+    ;; the twisty and the icon: images then the row's gap where icons are drawn (`drgnx-ui-kit--icons'), else glyphs
+    ;; then a space; an icon with no glyph is left out
+    (let ((names (drgnx-ui-kit--value (plist-get tg :twisty) chosen))
+          (gap (drgnx-px (or (drgnx-ui-kit--value (plist-get g :gap) chosen) 0) nil scale))
+          (icon (plist-get props :icon)))
+      (dolist (name (delq nil (list (and twisty (if (eq twisty t) (cadr names) (car names)))
+                                    (and icon (intern icon)))))
+        (let ((img (and drgnx-ui-kit--icons (not tty) (funcall drgnx-ui-kit--icons name drgnx-ui-kit-icon-px)))
+              (mark (drgnx-ui-kit--glyph name tty)))
+          (cond (img
+                 (push (list pos (1+ pos) 'display img) images) (push " " parts) (setq pos (1+ pos))
+                 (when (> gap 0)
+                   (push (list pos gap 0) spaces) (push " " parts)
+                   (setq runs (drgnx-ui-kit--run runs pos (1+ pos) face) pos (1+ pos))))
+                ((and mark (not (string-empty-p mark)))
+                 (let ((s (concat mark " ")))
+                   (push s parts)
+                   (setq runs (drgnx-ui-kit--run runs pos (+ pos (length s)) face) pos (+ pos (length s)))))))))
     (let ((s (or (plist-get props :text) "")))
       (push s parts) (setq runs (drgnx-ui-kit--run runs pos (+ pos (length s)) face) pos (+ pos (length s))))
     (if tty
@@ -481,8 +509,9 @@ has and that exists, else `drgnx-kit-ID' when it exists, else nil (the surface's
     (setq runs (nreverse runs))
     (when state (setq runs (nconc runs (list (list start end state)))))
     (list (mapconcat #'identity (nreverse parts) "") runs
-          (and action (list (list 0 pos 'drgnx-action (cons (plist-get action :kind) (plist-get action :args)))
-                            (list 0 pos 'mouse-face 'drgnx-hover)))
+          (append (nreverse images)
+                  (and action (list (list 0 pos 'drgnx-action (cons (plist-get action :kind) (plist-get action :args)))
+                                    (list 0 pos 'mouse-face 'drgnx-hover))))
           (nreverse spaces)
           ;; the row is the density's height in device px (`:height (density tree-row)'); a terminal's is one line
           (let ((h (and (not tty) (drgnx-ui-kit--value (plist-get g :height) chosen))))
@@ -529,8 +558,9 @@ characters, so one buffer is right on frames of two scales; on a line its px, th
 `mode-line' or `tab-line') on FRAME (nil: the selected one), at FRAME's scale or as its terminal draws it.  A click
 on an action (PROPS :action) runs `kit-activate' (the kind's map, `drgnx-ui-kit-action-map')."
   (let* ((gui (display-graphic-p frame))
-         (e (drgnx-ui-kit--expand component props (if gui (drgnx-pixels-scale frame) 1.0)
-                                  (cond (gui nil) ((drgnx-ui-ascii-frame-p frame) 'ascii) (t t))))
+         (e (let ((drgnx-ui-kit--icons (drgnx-ui-kit-icon-function frame)))
+              (drgnx-ui-kit--expand component props (if gui (drgnx-pixels-scale frame) 1.0)
+                                    (cond (gui nil) ((drgnx-ui-ascii-frame-p frame) 'ascii) (t t)))))
          (s (nth 0 e)))
     (dolist (r (nth 1 e)) (add-face-text-property (nth 0 r) (nth 1 r) (nth 2 r) t s))
     (dolist (p (nth 2 e))

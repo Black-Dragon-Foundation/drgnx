@@ -316,10 +316,7 @@
                                     append (mapcar (lambda (st) (list 'row (list k) st)) drgnx-ui-kit-states))))
             (pcase-dolist (`(,_ ,variants ,state ,beg ,end) cells)
               ;; each cell is the kit's expansion, dressed as the hub's rows are: the state's face on its text
-              (let ((e (drgnx-ui-kit-expand 'row (list :kind (symbol-name (car variants)) :depth (if (eq (car variants) 'tree) 1 0)
-                                                       :twisty (and (eq (car variants) 'tree) :false)
-                                                       :text (format "%s · %s" (car variants) state)
-                                                       :state (symbol-name state))
+              (let ((e (drgnx-ui-kit-expand 'row (drgnx-kit-catalogue--props 'row (list (cons 'kind (car variants))) state)
                                             (drgnx-pixels-scale (selected-frame))
                                             (cond ((display-graphic-p) nil) ((drgnx-ui-ascii-frame-p) 'ascii) (t t)))))
                 (should (equal (plist-get e :text) (buffer-substring-no-properties beg end)))
@@ -439,6 +436,21 @@
            (len (length (plist-get e :text))))
       (should (equal (list tty (vector 0 len "drgnx-kit-row"))
                      (list tty (aref (plist-get e :runs) 0)))))))
+
+(ert-deftest drgnx-ui-kit/row-icons-are-images-with-the-gap ()
+  ;; the hub's twisty_and_icon_are_images_where_the_env_draws_icons, in Lisp: where icons are drawn, the chevron and
+  ;; the icon are images (a `display' prop each), each with the row's gap (6 at 1.25: 8) after it; else glyphs
+  (let* ((props '(:kind "tree" :twisty t :icon "folder" :text "src"))
+         (e (let ((drgnx-ui-kit--icons (lambda (name px) (list 'image :type 'svg :data (format "%s %s" name px)))))
+              (drgnx-ui-kit-expand 'row props 1.25 nil))))
+    (should (equal (plist-get e :text) "     src "))
+    (should (equal (plist-get e :spaces) [[0 8 0] [2 8 0] [4 8 0] [8 8 0]]))
+    (should (equal (mapcar (lambda (p) (list (aref p 0) (aref p 2) (plist-get (cdr (append (aref p 3) nil)) :data)))
+                           (plist-get e :props))
+                   '((1 "display" "chevron-down 16") (3 "display" "folder 16"))))
+    (let ((plain (drgnx-ui-kit-expand 'row props 1.25 nil)))
+      (should (string-prefix-p " ⌄ " (plist-get plain :text)))
+      (should (equal (plist-get plain :props) [])))))
 
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

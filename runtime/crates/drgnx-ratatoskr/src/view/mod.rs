@@ -568,6 +568,7 @@ pub fn kit_env(env: &ViewEnv) -> drgnx_rows::kit::KitEnv<'_> {
         tty: matches!(env.display, Display::Tty),
         glyphs: &env.glyphs,
         density: env.density,
+        icons: None,
     }
 }
 

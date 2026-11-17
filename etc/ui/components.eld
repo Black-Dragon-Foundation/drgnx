@@ -31,7 +31,7 @@
  (components
   ;; a row of a list, a tree (depth and twisty) or a map; its states are the state table's
   (row :variants ((kind list tree map)) :defaults (kind list)
-       :geometry (:height (density tree-row) :pad (6 . 6) :gap 0 :box nil :radius 6 :hit 0
+       :geometry (:height (density tree-row) :pad (6 . 6) :gap 6 :box nil :radius 6 :hit 0
                           :indent (:by kind (list 0) (tree (density tree-indent)) (map 0)))
        :tty (:pad 1 :indent (:by kind (list 0) (tree 2) (map 0)) :twisty (chevron-right chevron-down))
        :label nil
