@@ -391,6 +391,10 @@ impl Agent {
             return;
         };
         let body = json!({"cwd": s.cwd, "turns": s.turns, "history": s.history});
+        // the state folder is made with the first session kept in it
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
         let tmp = path.with_extension("tmp");
         if std::fs::write(&tmp, body.to_string()).is_ok() {
             let _ = std::fs::rename(&tmp, &path);
