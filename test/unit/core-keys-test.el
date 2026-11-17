@@ -1569,7 +1569,8 @@ The commands of modules that need no installed package are in it, the later stag
                               tile-stack-left tile-stack-right tile-stack-up tile-stack-down
                               tile-unstack tile-resize tile-resize-left tile-resize-right tile-resize-up tile-resize-down
                               layout-restore-previous  ; the grid's Restore Previous Layout (C-k C-z)
-                              tile-switcher))          ; Switch Tile (Esc Esc, C-<escape>)
+                              tile-switcher            ; Switch Tile (Esc Esc, C-<escape>)
+                              tile-placeholder-open tile-placeholder-close)) ; a tile placeholder's RET and x
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

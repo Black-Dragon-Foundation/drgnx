@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/grid-fixture" drgnx-dir) nil t)
 (require 'drgnx-persist)
 (require 'drgnx-timer)
 
@@ -11,7 +12,7 @@
   (and (framep frame) (frame-live-p frame) 'gui))
 
 (defmacro drgnx-persist-edge-test--with (dir &rest body)
-  "BODY with rules and chrome on, one editor window, files in DIR, a state file.  The selected frame is a
+  "BODY with rules, chrome and the grid on, one editor window, files in DIR, a state file.  The selected frame is a
 graphical workbench frame for the store."
   (declare (indent 1))
   `(drgnx-test-with-state
@@ -20,40 +21,41 @@ graphical workbench frame for the store."
             (drgnx-persist--pending nil)
             (drgnx-wb--sections nil) (display-buffer-alist nil))
        (cl-letf (((symbol-function 'drgnx-state-frame-kind) #'drgnx-persist-edge-test--kind-gui))
-         (delete-other-windows)
+         (drgnx-grid-test--reset)
          (set-window-parameter (selected-window) 'drgnx-tabs nil)
          (set-window-prev-buffers (selected-window) nil)
          (dolist (p '(drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px)) (set-frame-parameter nil p nil))
          (drgnx-rules-mode 1)
          (drgnx-chrome-mode 1)
+         (drgnx-grid-mode 1)
          (unwind-protect (progn ,@body)
            (drgnx-timer-cancel 'persist-visit)
-           (drgnx-chrome-mode -1)
-           (drgnx-rules-mode -1)
+           (drgnx-persist--refit-done)
            (drgnx-wb-area-hide 'panel)
            (drgnx-wb-hide-sidebar)
-           (delete-other-windows)
+           (drgnx-grid-mode -1)
+           (drgnx-chrome-mode -1)
+           (drgnx-rules-mode -1)
+           (drgnx-grid-test--reset)
            (dolist (w (window-list)) (set-window-parameter w 'drgnx-test-crafted nil))
            (dolist (b (buffer-list))
              (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b))) (kill-buffer b)))
            (delete-directory ,dir t))))))
 
 (ert-deftest drgnx-persist-edge/a-state-file-sets-no-window-parameters ()
-  "M3d-4: the saved window tree is put back without the window parameters it carries (a crafted
-file could set any)."
+  "M3d-4: a tile's saved node sets no window parameter it carries (a crafted file could set any): only what the
+grid reads from a node (its kind, tabs, sizes) is used."
   (drgnx-persist-edge-test--with dir
     (let ((f (expand-file-name "a.txt" dir)))
       (write-region "x\n" nil f nil 'silent)
-      (switch-to-buffer (find-file-noselect f))
-      (drgnx-chrome-apply nil t)
-      (set-window-parameter (selected-window) 'drgnx-test-crafted 'evil)
-      (let ((window-persistent-parameters '((drgnx-test-crafted . writable))))
-        (drgnx-persist-save))
-      (should (string-search "drgnx-test-crafted" (with-temp-buffer (insert-file-contents drgnx-persist-file)
-                                                                    (buffer-string))))
-      (set-window-parameter (selected-window) 'drgnx-test-crafted nil)
+      (with-temp-file drgnx-persist-file
+        (prin1 `(:version 3 :frames ((:role main :tree (editor :px nil :share nil :id 1 :tabs (,f) :shown ,f
+                                                               :parameters ((drgnx-test-crafted . evil)
+                                                                            (delete-window . kill-emacs))))))
+               (current-buffer)))
       (should (drgnx-persist-restore))
       (should-not (seq-some (lambda (w) (window-parameter w 'drgnx-test-crafted)) (window-list)))
+      (should-not (eq (window-parameter (car (drgnx-groups-list)) 'delete-window) 'kill-emacs))
       (should (equal (buffer-file-name (window-buffer (car (drgnx-groups-list)))) f)))))
 
 (ert-deftest drgnx-persist-edge/the-state-file-is-in-the-state-dir ()
@@ -66,8 +68,8 @@ file could set any)."
   "M3e-5: restoring a second window appends its groups' pending tabs; the first window's stay in
 order (the whole shared list was reversed)."
   (drgnx-persist-edge-test--with dir
-    (let ((state '(:left (:shown nil) :panel (:shown nil) :right (:shown nil) :main nil
-                         :groups ((:tabs nil :shown nil) (:tabs nil :shown nil)))))
+    (let ((state '(:tree (row :px nil :share nil (editor :px 40 :share 0.5 :id 1 :tabs nil :shown nil)
+                              (editor :px 40 :share 0.5 :id 2 :tabs nil :shown nil)))))
       (drgnx-persist--restore-frame state)
       (let ((first (mapcar #'car drgnx-persist--pending)))
         (should (equal first (drgnx-groups-list)))
@@ -174,38 +176,7 @@ graphical one comes first."
     (drgnx-persist-edge-test--with-frames (list first 'child 'gui-2)
       (should (equal (drgnx-persist--frames) (list first 'gui-2))))))
 
-(ert-deftest drgnx-persist-edge/saved-widths-are-fitted-only-when-the-area-is-the-same-size ()
-  "I3: the saved pixel widths correct a rounding of a few pixels; in a frame of another size they would be wrong
-(20/20 columns coming back as 20/60), so a group further than two characters from its saved width is left as
-`window-state-put' made it."
-  (drgnx-persist-edge-test--with dir
-    (let ((first (selected-window)))
-      (drgnx-groups-split-right)
-      (let* ((groups (drgnx-groups-list)) (w (window-pixel-width (car groups))))
-        (should (= 2 (length groups)))
-        ;; a rounding away: fitted
-        (drgnx-persist--fit-groups (list (list :px (- w 1)) (list :px 10)))
-        (should (= (window-pixel-width (car groups)) (- w 1)))
-        ;; a different frame: left alone
-        (drgnx-persist--fit-groups (list (list :px (+ w 20)) (list :px 10)))
-        (should (= (window-pixel-width (car groups)) (- w 1)))
-        (ignore first)))))
-
 ;;; wb-persist-edge-test.el ends here
-
-(ert-deftest drgnx-persist-edge/strip-handles-long-and-circular-lists ()
-  "Stripping walks a list iteratively: a very long list does not exhaust the Lisp stack, a circular one ends,
-and the window parameters go in both."
-  (let* ((long (append (make-list 200000 'x) (list '(parameters (a . 1)) 'end)))
-         (out (drgnx-persist--strip long)))
-    (should (= 200001 (length out)))
-    (should (eq 'end (car (last out)))))
-  (let ((circ (list 'a '(parameters (a . 1)) 'b)))
-    (setcdr (last circ) circ)
-    (let ((out (drgnx-persist--strip circ)))
-      (should (proper-list-p out))
-      (should (equal (seq-take out 2) '(a b)))))
-  (should (equal (drgnx-persist--strip '(leaf (parameters (k . v)) (:x 1) . tail)) '(leaf (:x 1) . tail))))
 
 (ert-deftest drgnx-persist-edge/restore-without-px-clears-the-size ()
   "A file with no usable :px resets the dock sizes to their defaults (they are not kept from before)."

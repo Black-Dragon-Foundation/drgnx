@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/grid-fixture" drgnx-dir) nil t)
 (require 'drgnx-persist)
 (require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
@@ -12,28 +13,32 @@
   (and (framep frame) (frame-live-p frame) 'gui))
 
 (defmacro drgnx-persist-test--with (dir &rest body)
-  "BODY with rules and chrome on, a dock section, one editor window, files in DIR, a state file.  The selected
-frame is a graphical workbench frame for the store."
+  "BODY with rules, chrome and the grid on, a dock section, one editor window, files in DIR, a state file.  The
+selected frame is a graphical workbench frame for the store."
   (declare (indent 1))
   `(drgnx-test-with-state
      (let* ((,dir (file-name-as-directory (make-temp-file "drgnx-persist" t)))
             (drgnx-persist-file (expand-file-name "state.eld" ,dir))
+            (drgnx-persist--pending nil)
             (drgnx-wb--sections nil) (display-buffer-alist nil))
        (cl-letf (((symbol-function 'drgnx-state-frame-kind) #'drgnx-persist-test--kind-gui))
-         (delete-other-windows)
+         (drgnx-grid-test--reset)
          (dolist (p '(drgnx-tabs)) (set-window-parameter (selected-window) p nil))
          (set-window-prev-buffers (selected-window) nil)
          (dolist (p '(drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px)) (set-frame-parameter nil p nil))
          (drgnx-wb-define-section 'top :slot 0 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*")))
          (drgnx-rules-mode 1)
          (drgnx-chrome-mode 1)
+         (drgnx-grid-mode 1)
          (unwind-protect (progn ,@body)
            (drgnx-timer-cancel 'persist-visit)
-           (drgnx-chrome-mode -1)
-           (drgnx-rules-mode -1)
+           (drgnx-persist--refit-done)
            (drgnx-wb-area-hide 'panel)
            (drgnx-wb-hide-sidebar)
-           (delete-other-windows)
+           (drgnx-grid-mode -1)
+           (drgnx-chrome-mode -1)
+           (drgnx-rules-mode -1)
+           (drgnx-grid-test--reset)
            (dolist (b (buffer-list))
              (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b))) (kill-buffer b)))
            (when (get-buffer "*drgnx-test-top*") (kill-buffer "*drgnx-test-top*"))
@@ -49,10 +54,19 @@ frame is a graphical workbench frame for the store."
         (drgnx-wb-sidebar-showing-p)
         (and (drgnx-wb-area-window 'panel) (drgnx-wb-area-tab 'panel))))
 
+(defun drgnx-persist-test--one-editor (tabs shown)
+  "A state file's contents: one window whose grid is one editor tile with TABS (files), SHOWN in front."
+  `(:version 3 :frames ((:role main :tree (editor :px nil :share nil :id 1 :tabs ,tabs :shown ,shown)))))
+
+(defun drgnx-persist-test--editors (state)
+  "The editor tiles (tree leaves) of the main window in the state file's contents STATE."
+  (seq-filter (lambda (l) (eq (car l) 'editor))
+              (drgnx-grid-tree-leaves (plist-get (car (plist-get state :frames)) :tree))))
+
 (defun drgnx-persist-test--reset ()
   (drgnx-wb-area-hide 'panel)
   (drgnx-wb-hide-sidebar)
-  (delete-other-windows)
+  (drgnx-grid-test--reset)
   (switch-to-buffer "*scratch*")
   (dolist (p '(drgnx-tabs)) (set-window-parameter (selected-window) p nil))
   (set-window-prev-buffers (selected-window) nil))
@@ -95,8 +109,8 @@ frame is a graphical workbench frame for the store."
 (ert-deftest drgnx-persist/sizes-are-clamped-to-the-frame ()
   (drgnx-persist-test--with dir
     (with-temp-file drgnx-persist-file
-      (prin1 `(:version 1 :left (:shown t :px 100000) :panel (:shown t :px 100000 :tab output) :right (:shown nil)
-                        :groups nil :main nil)
+      (prin1 `(:version 2 :frames ((:role main :left (:shown t :px 100000) :panel (:shown t :px 100000 :tab output)
+                                          :right (:shown nil) :groups nil :main nil)))
              (current-buffer)))
     (drgnx-persist-restore)
     (let ((w (window-pixel-width (drgnx-wb-section-window 'top))))
@@ -123,8 +137,8 @@ frame is a graphical workbench frame for the store."
   ;; I3: nine saved groups, an 80-column frame: no error, the docks still come back.
   (drgnx-persist-test--with dir
     (with-temp-file drgnx-persist-file
-      (prin1 `(:version 1 :left (:shown t :px 20) :panel (:shown nil) :right (:shown nil) :main nil
-                        :groups ,(make-list 9 '(:tabs nil :shown nil)))
+      (prin1 `(:version 2 :frames ((:role main :left (:shown t :px 20) :panel (:shown nil) :right (:shown nil) :main nil
+                                          :groups ,(make-list 9 '(:tabs nil :shown nil)))))
              (current-buffer)))
     (should (drgnx-persist-restore))
     (should (drgnx-wb-sidebar-showing-p))))
@@ -146,10 +160,10 @@ frame is a graphical workbench frame for the store."
   ;; order; remote tabs are never touched (no connection, no password prompt).
   (drgnx-persist-test--with dir
     (with-temp-file drgnx-persist-file
-      (prin1 `(:version 1 :left (:shown nil) :panel (:shown nil) :right (:shown nil) :main nil
-                        :groups ((:tabs (,(expand-file-name "a.txt" dir) "/ssh:nobody@example.invalid:/x"
-                                         ,(expand-file-name "b.txt" dir) ,(expand-file-name "c.txt" dir))
-                                        :shown ,(expand-file-name "b.txt" dir))))
+      (prin1 (drgnx-persist-test--one-editor
+              (list (expand-file-name "a.txt" dir) "/ssh:nobody@example.invalid:/x"
+                    (expand-file-name "b.txt" dir) (expand-file-name "c.txt" dir))
+              (expand-file-name "b.txt" dir))
              (current-buffer)))
     (dolist (n '("a.txt" "b.txt" "c.txt")) (write-region "x\n" nil (expand-file-name n dir) nil 'silent))
     (cl-letf (((symbol-function 'file-remote-p) (lambda (f &rest _) (and (stringp f) (string-prefix-p "/ssh:" f))))
@@ -159,7 +173,8 @@ frame is a graphical workbench frame for the store."
       (should (equal (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list))))
                      (list (expand-file-name "b.txt" dir))))
       (drgnx-persist-save)                              ; saved before the tabs were visited: none lost
-      (should (= 4 (length (plist-get (car (plist-get (car (plist-get (drgnx-persist--read drgnx-persist-file) :frames)) :groups)) :tabs))))
+      (should (= 4 (length (plist-get (cdr (car (drgnx-persist-test--editors (drgnx-persist--read drgnx-persist-file))))
+                                      :tabs))))
       (while (drgnx-persist--visit-pending))
       (should (equal (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list))))
                      (mapcar (lambda (n) (expand-file-name n dir)) '("a.txt" "b.txt" "c.txt")))))))
@@ -171,9 +186,7 @@ frame is a graphical workbench frame for the store."
   (let ((files (mapcar (lambda (n) (expand-file-name n dir)) '("a.txt" "b.txt" "c.txt" "d.txt" "e.txt"))))
     (dolist (f files) (write-region "x\n" nil f nil 'silent))
     (with-temp-file drgnx-persist-file
-      (prin1 `(:version 1 :left (:shown nil) :panel (:shown nil) :right (:shown nil) :main nil
-                        :groups ((:tabs ,files :shown ,(nth 1 files))))
-             (current-buffer)))
+      (prin1 (drgnx-persist-test--one-editor files (nth 1 files)) (current-buffer)))
     files))
 
 (defun drgnx-persist-test--tabs ()
@@ -376,14 +389,14 @@ frame is a graphical workbench frame for the store."
         (set-frame-parameter nil 'drgnx-frame-role role)))))
 
 (ert-deftest drgnx-persist/the-file-lists-every-window ()
-  ;; Format 2: one entry per window (the main one first); format 1 files (one window) still restore.
+  ;; One entry per window (the main one first), each with its grid.
   (drgnx-persist-test--with dir
     (switch-to-buffer (drgnx-persist-test--file dir "a.txt")) (drgnx-chrome-apply nil t)
     (drgnx-persist-save)
     (let ((state (drgnx-persist--read drgnx-persist-file)))
-      (should (eql 2 (plist-get state :version)))
+      (should (eql 3 (plist-get state :version)))
       (should (= 1 (length (plist-get state :frames))))
-      (should (plist-get (car (plist-get state :frames)) :groups)))))
+      (should (drgnx-persist-test--editors state)))))
 
 ;;; Reopening: a daemon that keeps running restores whenever its first window opens after none.
 
@@ -458,13 +471,14 @@ frame is a graphical workbench frame for the store."
 
 (ert-deftest drgnx-persist/the-reopened-window-gets-what-the-last-close-saved ()
   (drgnx-persist-test--with dir
+    ;; made as a terminal frame: a graphical tile's least size is wider than a batch frame
+    (switch-to-buffer (drgnx-persist-test--file dir "a.txt"))
+    (drgnx-chrome-apply nil t)
+    (drgnx-groups-split-right)
+    (switch-to-buffer (drgnx-persist-test--file dir "b.txt"))
+    (drgnx-chrome-apply nil t)
+    (drgnx-wb-show-sidebar)
     (drgnx-persist-test--graphical
-      (switch-to-buffer (drgnx-persist-test--file dir "a.txt"))
-      (drgnx-chrome-apply nil t)
-      (drgnx-groups-split-right)
-      (switch-to-buffer (drgnx-persist-test--file dir "b.txt"))
-      (drgnx-chrome-apply nil t)
-      (drgnx-wb-show-sidebar)
       (let ((before (drgnx-persist-test--layout)))
         (drgnx-persist--on-delete-frame (selected-frame))
         (drgnx-persist-test--reset)
@@ -529,9 +543,14 @@ frame is a graphical workbench frame for the store."
 
 ;;; Task 15: persist on the store — the sizes you chose, and the intent a restore writes
 
-(defun drgnx-persist-test--saved (key)
-  "KEY (`:left', `:panel', `:right') of the selected frame's saved state."
-  (plist-get (drgnx-persist-state) key))
+(defun drgnx-persist-test--size (key)
+  "The size the selected frame's saved state keeps as chosen for KEY (`left', `panel', `right'), or nil."
+  (alist-get key (plist-get (plist-get (drgnx-persist-state) :memory) :sizes)))
+
+(defun drgnx-persist-test--area-leaf (area)
+  "The tree leaf of docked AREA (`panel', `right') in the selected frame's saved state, or nil."
+  (seq-find (lambda (l) (eq (plist-get (plist-get (cdr l) :state) :area) area))
+            (drgnx-grid-tree-leaves (plist-get (drgnx-persist-state) :tree))))
 
 (ert-deftest drgnx-persist/a-squeezed-panel-is-saved-at-the-size-you-chose ()
   ;; a popup (or a layout, or the window manager) squeezed the panel; the size you chose is what is kept
@@ -543,33 +562,33 @@ frame is a graphical workbench frame for the store."
       (drgnx-state-note-intent nil :sizes 'panel panel-chosen :by 'user)
       (drgnx-state-note-intent nil :sizes 'left dock-chosen :by 'user)
       (should-not (eql panel-chosen (window-pixel-height panel)))      ; on screen it is smaller
-      (should (eql panel-chosen (plist-get (drgnx-persist-test--saved :panel) :px)))
-      (should (eql dock-chosen (plist-get (drgnx-persist-test--saved :left) :px)))
+      (should (eql panel-chosen (drgnx-persist-test--size 'panel)))
+      (should (eql dock-chosen (drgnx-persist-test--size 'left)))
       ;; hidden, the same
       (drgnx-wb-area-hide 'panel)
-      (should (eql panel-chosen (plist-get (drgnx-persist-test--saved :panel) :px))))))
+      (should (eql panel-chosen (drgnx-persist-test--size 'panel))))))
 
 (ert-deftest drgnx-persist/no-intent-saves-the-live-size ()
+  ;; with no size chosen, the grid's tree holds the panel at the size it has
   (drgnx-persist-test--with dir
     (drgnx-wb-area-show 'panel 'output)
     (let ((panel (drgnx-wb-area-window 'panel)))
-      (should-not (drgnx-state-intent nil :sizes 'panel))
-      (should (eql (window-pixel-height panel) (plist-get (drgnx-persist-test--saved :panel) :px)))
-      (should (plist-get (drgnx-persist-test--saved :panel) :shown))
-      (should-not (plist-get (drgnx-persist-test--saved :right) :shown)))))
+      (drgnx-state-note-intent nil :sizes 'panel nil :by 'user)
+      (should-not (drgnx-persist-test--size 'panel))
+      (should (eql (window-pixel-height panel) (plist-get (cdr (drgnx-persist-test--area-leaf 'panel)) :px)))
+      (should-not (drgnx-persist-test--area-leaf 'right)))))
 
 (ert-deftest drgnx-persist/a-borrowed-panel-is-saved-at-its-own-size ()
-  ;; a popup borrowing the panel's window: the panel is still shown, at its size, not the popup's
+  ;; a popup borrowing the panel's window: the panel is still saved, with its own tab, at the size you chose
   (drgnx-persist-test--with dir
     (drgnx-wb-area-show 'panel 'output)
     (let ((panel (drgnx-wb-area-window 'panel)))
       (set-window-parameter panel 'drgnx-popup (list :borrowed t :popup (current-buffer)))
       (unwind-protect
           (progn
-            (should (eql (window-pixel-height panel) (plist-get (drgnx-persist-test--saved :panel) :px)))
-            (should (plist-get (drgnx-persist-test--saved :panel) :shown))
+            (should (eq 'output (plist-get (cdr (drgnx-persist-test--area-leaf 'panel)) :shown)))
             (drgnx-state-note-intent nil :sizes 'panel (+ 2 (window-pixel-height panel)) :by 'user)
-            (should (eql (+ 2 (window-pixel-height panel)) (plist-get (drgnx-persist-test--saved :panel) :px))))
+            (should (eql (+ 2 (window-pixel-height panel)) (drgnx-persist-test--size 'panel))))
         (set-window-parameter panel 'drgnx-popup nil)))))
 
 (ert-deftest drgnx-persist/restore-notes-sizes-as-restore ()
@@ -614,8 +633,8 @@ frame is a graphical workbench frame for the store."
 (defun drgnx-persist-test--keys (plist)
   (cl-loop for (k) on plist by #'cddr collect k))
 
-(ert-deftest drgnx-persist/the-file-format-is-unchanged ()
-  ;; what is saved has the shape of the format-2 files already on disk, and such a file restores
+(ert-deftest drgnx-persist/the-file-format-is-3 ()
+  ;; what is saved: each window's role, place, grid, memory, folders and extras; a format-2 file still restores
   (drgnx-persist-test--with dir
     (switch-to-buffer (drgnx-persist-test--file dir "a.txt"))
     (drgnx-chrome-apply nil t)
@@ -625,12 +644,13 @@ frame is a graphical workbench frame for the store."
     (drgnx-persist-save)
     (let* ((state (drgnx-persist--read drgnx-persist-file)) (frame (car (plist-get state :frames))))
       (should (equal (drgnx-persist-test--keys state) '(:version :frames)))
-      (should (equal (drgnx-persist-test--keys frame) '(:role :left :panel :right :roots :main :groups :extra)))
-      (should (equal (drgnx-persist-test--keys (plist-get frame :left)) '(:shown :view :px)))
-      (should (equal (drgnx-persist-test--keys (plist-get frame :panel)) '(:shown :tab :px)))
-      (should (equal (drgnx-persist-test--keys (plist-get frame :right)) '(:shown :tab :px)))
-      (should (equal (drgnx-persist-test--keys (car (plist-get frame :groups))) '(:tabs :shown :px)))
-      (should (eql 5 (plist-get (plist-get frame :panel) :px))))
+      (should (eql 3 (plist-get state :version)))
+      (should (equal (drgnx-persist-test--keys frame) '(:role :monitor :shell :tree :memory :roots :extra)))
+      (should (drgnx-grid-valid-tree-p (plist-get frame :tree)))
+      (should (equal (drgnx-persist-test--keys (plist-get frame :memory)) '(:docks :sizes :view)))
+      (should (eql 5 (alist-get 'panel (plist-get (plist-get frame :memory) :sizes))))
+      (should (equal (mapcar (lambda (l) (plist-get (cdr l) :dock)) (drgnx-grid-tree-leaves (plist-get frame :tree)))
+                     '(left nil bottom))))
     (drgnx-persist-test--reset)
     ;; a file as an earlier drgnx wrote it
     (with-temp-file drgnx-persist-file
@@ -641,7 +661,7 @@ frame is a graphical workbench frame for the store."
     (should (drgnx-persist-restore))
     (should (drgnx-wb-sidebar-showing-p))
     (should (eq 'results (drgnx-wb-area-tab 'panel)))
-    (should (eql 18 (frame-parameter nil 'drgnx-wb-dock-px)))))
+    (should (<= (abs (- 18 (window-pixel-width (drgnx-wb-section-window 'top)))) 1))))
 
 (ert-deftest drgnx-persist/a-page-in-front-does-not-lose-the-last-file ()
   "Audit C3: with a page that is no file (the start page) in front, the save names the file shown before it, and a

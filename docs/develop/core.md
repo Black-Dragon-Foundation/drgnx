@@ -3384,8 +3384,9 @@ AREA)`, the side bar one holding the kind `side-bar` with `(:view VIEW)`; an ato
 
 - an invalid TREE changes nothing and gives one `drgnx-notify` warning;
 - the live tiles whose ids TREE holds stay, the same window objects; the others are deleted and TREE's missing tiles are
-  split off the kept ones (only splits, so the kept windows never move to another parent). When the kept tiles are
-  arranged otherwise than TREE has them, only the first stays and the rest is built around it;
+  split off the kept ones (only splits, so the kept windows never move to another parent), each new window taking an
+  equal part of the room it shares with those still to come (nine editors fit an 80-column frame). When the kept tiles
+  are arranged otherwise than TREE has them, only the first stays and the rest is built around it;
 - sizes are TREE's `:px` at FRAME's scale when a container's children add up to its size, else their `:share`s, set
   pixelwise by moving each child's trailing edge (`adjust-window-trailing-edge`), preserved sizes lifted for the call;
 - a docked area or the side bar fills its new window through its own show, which `drgnx-grid-split-dock` hands the
@@ -3638,6 +3639,34 @@ data and their API. Only their windows are made and deleted by the grid while it
 
 `window-swap-states` cannot swap atoms (on two parts it swaps those two windows only, on two atom roots it signals),
 so moving an atom goes through its state (`window-state-get` on the root). Test: `test/unit/grid-atoms-test.el`.
+
+### Placeholders and the saved grid (`wb/drgnx-grid.el`, `wb/drgnx-persist.el`)
+
+- A tool tile whose kind has no `:placeholder` function and no buffer to show, or whose kind is not defined, shows the
+  **tile placeholder** ` *drgnx tile: KIND*` (`drgnx-grid-tile-placeholder`, mode `drgnx-grid-placeholder-mode`): one
+  line naming the kind (its title, or the bare symbol when undefined) with `RET` (`tile-placeholder-open`: the kind's
+  content when defined, else `drgnx-grid-pick-kind`) and `x` (`tile-placeholder-close`: `drgnx-grid-hide`).
+- The pane backends have three optional operations (`drgnx-pane--call-optional`): `:keeps` (a module's teardown leaves
+  a kind where the backend keeps it: the grid's `drgnx-grid--tile-of`, so a tile is never hidden by a module going
+  off), `:undefined` (`drgnx-grid--kind-undefined`: the kind's tiles show its placeholder in place, the tree and sizes
+  unchanged) and `:defined` (`drgnx-grid--kind-defined`: tiles showing the kind's placeholder show its content).
+- **Format 3** of `workbench.eld` (`drgnx-persist-version`): each window is
+  `(:role :monitor :shell :tree TREE :memory MEMORY :roots :extra)`, plus `:geometry` and `:fullscreen` for a
+  graphical one. TREE is `drgnx-grid--frame-snapshot-tree` (the tree behind a full-size tile), its editor nodes' tabs
+  as files (with the tabs still waiting to be visited) and `:shown` the last file shown when a page is in front.
+  MEMORY is `(:docks DRGNX-GRID-MEMORY :sizes ((KEY . PX)…) :view VIEW)`: the `:sizes` intents of `left`, `panel` (the
+  home `bottom`) and `right`, and the sidebar view.
+- The restore (`drgnx-persist--restore-frame`) checks TREE with `drgnx-grid-valid-tree-p` (one notice and no change
+  when it fails), visits each editor node's shown file, clears the live tiles' ids (so every tile is made from TREE)
+  and applies it (`drgnx-grid-apply-tree`); then each editor tile gets its tabs (the others visited at idle), and
+  MEMORY comes back: the sizes and view as intent `restore` (a missing size clears it, each clamped to the frame), the
+  grid memory only when it is plain data. Until the first command, a change of the frame's size applies TREE again
+  while the frame's tiles are still TREE's (`drgnx-persist--refit`).
+- A format-2 file is migrated on read (`drgnx-persist--from-v2`): `drgnx-persist--grid-from-v2` builds the side bar
+  (`:left`), the editor groups (`:groups`, side by side, or stacked when the saved window state's first split was
+  vertical) over the panel (`:panel`), and the right side (`:right`), at their saved pixels clamped as before; their
+  `:px` become MEMORY's `:sizes`. Other versions are ignored. Tests: `test/unit/grid-persist-test.el`,
+  `wb-persist-test.el`, `wb-persist-edge-test.el`.
 
 ## The UI kit (`drgnx-ui-kit.el`)
 

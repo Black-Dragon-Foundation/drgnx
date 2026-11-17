@@ -160,15 +160,89 @@ Kept out of frame parameters: a buffer object in one would make the saved frame 
           (list (window-buffer window) (window-start window) (window-point window)))))
 
 (defun drgnx-grid--placeholder (entry)
-  "ENTRY's kind's placeholder: its :placeholder function's buffer, else a blank special buffer named after it."
+  "ENTRY's kind's placeholder: its :placeholder function's buffer, else the tile placeholder
+\(`drgnx-grid-tile-placeholder')."
   (let* ((kind (drgnx-grid--entry-kind entry)) (spec (drgnx-pane-kind kind)) (fn (plist-get spec :placeholder))
          (b (and (functionp fn) (funcall fn))))
-    (if (buffer-live-p b) b
-      (or (get-buffer (format " *drgnx %s*" kind))
-          (with-current-buffer (get-buffer-create (format " *drgnx %s*" kind) t)
-            (special-mode)
-            (setq-local cursor-type nil)
-            (current-buffer))))))
+    (if (buffer-live-p b) b (drgnx-grid-tile-placeholder kind))))
+
+;;;; The tile placeholder: a kind whose module is off, or whose content is gone
+
+(defvar drgnx-grid-placeholder-mode-map (make-sparse-keymap)
+  "Keys of a tile placeholder: Open (RET) and Close (x), bound through the command registry.")
+
+(define-derived-mode drgnx-grid-placeholder-mode special-mode "Tile"
+  "A tile whose kind is not defined (its module is off) or has nothing to show.  It fills in place when the kind is
+defined again (`drgnx-grid--kind-defined')."
+  (setq-local cursor-type nil truncate-lines t))
+
+(defvar-local drgnx-grid-placeholder-kind nil "The kind the tile placeholder in this buffer stands for.")
+
+(defun drgnx-grid--placeholder-name (kind) (format " *drgnx tile: %s*" kind))
+
+(defun drgnx-grid-tile-placeholder (kind)
+  "KIND's tile placeholder buffer, ` *drgnx tile: KIND*': one line saying what waits there (its title, or KIND when it
+is not defined) and the keys, RET to open it and x to close the tile.  Its text is written again at each call."
+  (let ((b (get-buffer-create (drgnx-grid--placeholder-name kind) t))
+        (text (if (drgnx-pane-kind kind)
+                  (format "%s · nothing to show · ↵ open · x close" (drgnx-grid--title kind))
+                (format "%s · waits for its module · ↵ choose · x close" kind))))
+    (with-current-buffer b
+      (unless (derived-mode-p 'drgnx-grid-placeholder-mode) (drgnx-grid-placeholder-mode))
+      (setq drgnx-grid-placeholder-kind kind)
+      (unless (equal (buffer-string) text)
+        (let ((inhibit-read-only t)) (erase-buffer) (insert text) (goto-char (point-min)))))
+    b))
+
+(defun drgnx-grid--placeholder-window ()
+  "The tool tile showing the current buffer, a tile placeholder (the selected window when it does)."
+  (if (eq (window-buffer) (current-buffer)) (selected-window) (get-buffer-window (current-buffer))))
+
+(defun drgnx-grid-placeholder-open ()
+  "In a tile placeholder: show its kind's own content in the tile when the kind is defined, else choose what the tile
+shows (`drgnx-grid-pick-kind')."
+  (interactive)
+  (let ((kind drgnx-grid-placeholder-kind) (w (drgnx-grid--placeholder-window)))
+    (when (window-live-p w)
+      (if (drgnx-pane-kind kind)
+          (progn (drgnx-grid--put-buffer w (car (window-parameter w 'drgnx-pane-stack)) (window-frame w))
+                 (drgnx-grid--put-row w))
+        (set-window-parameter w 'drgnx-pane-stack nil)
+        (drgnx-grid-pick-kind w)))))
+
+(defun drgnx-grid-placeholder-close ()
+  "In a tile placeholder: hide its tile (`drgnx-grid-hide')."
+  (interactive)
+  (let ((w (drgnx-grid--placeholder-window)))
+    (when (window-live-p w)
+      (with-selected-frame (window-frame w) (drgnx-grid-hide (car (window-parameter w 'drgnx-pane-stack)))))))
+
+(defun drgnx-grid--kind-tiles (kind)
+  "The tool tiles of every frame whose shown entry is KIND's, as (WINDOW . ENTRY)."
+  (let (out)
+    (dolist (f (frame-list))
+      (dolist (w (window-list f 'nomini))
+        (let ((entry (car (window-parameter w 'drgnx-pane-stack))))
+          (when (and (drgnx-grid-tool-tile-p w) entry (eq (drgnx-grid--entry-kind entry) kind))
+            (push (cons w entry) out)))))
+    out))
+
+(defun drgnx-grid--kind-undefined (kind)
+  "KIND is no longer defined (its module turned off): its tiles stay where they are and show its placeholder."
+  (pcase-dolist (`(,w . ,entry) (drgnx-grid--kind-tiles kind))
+    (setf (alist-get entry (gethash (window-frame w) drgnx-grid--kinds) nil nil #'equal) nil)
+    (set-window-dedicated-p w nil)
+    (set-window-buffer w (drgnx-grid-tile-placeholder kind))
+    (set-window-dedicated-p w 'drgnx)
+    (drgnx-grid--put-row w)))
+
+(defun drgnx-grid--kind-defined (kind)
+  "KIND is defined (again): its tiles that show its placeholder show its content."
+  (pcase-dolist (`(,w . ,entry) (drgnx-grid--kind-tiles kind))
+    (when (eq (window-buffer w) (get-buffer (drgnx-grid--placeholder-name kind)))
+      (set-window-dedicated-p w nil)
+      (drgnx-grid--put-buffer w entry (window-frame w))
+      (drgnx-grid--put-row w))))
 
 (defun drgnx-grid--buffer-for (kind frame &optional buffer)
   "The buffer KIND shows on FRAME: BUFFER when given, else the one it was left on, else its own (`:buffer'), else
@@ -810,7 +884,9 @@ of its own, left of the first; from the third on they stack onto the last instan
 (setf (alist-get 'grid drgnx-pane--backends)
       (list :define #'drgnx-grid--define :show #'drgnx-grid--backend-show :hide #'drgnx-grid--backend-hide
             :window #'drgnx-grid--backend-window :focus #'drgnx-grid--backend-focus
-            :resize #'drgnx-grid--backend-resize :move #'drgnx-grid--backend-move :stack #'drgnx-grid--backend-stack))
+            :resize #'drgnx-grid--backend-resize :move #'drgnx-grid--backend-move :stack #'drgnx-grid--backend-stack
+            :defined #'drgnx-grid--kind-defined :undefined #'drgnx-grid--kind-undefined
+            :keeps #'drgnx-grid--tile-of))
 
 ;;;; Packages' window calls
 
@@ -958,11 +1034,12 @@ never saved."
     (let ((kids (delq nil (mapcar (lambda (c) (drgnx-grid--tree-shape c keep)) (nthcdr 5 node)))))
       (if (cdr kids) (cons (car node) kids) (car kids)))))
 
-(defun drgnx-grid--split-new (window side limit)
-  "A new window split off WINDOW on SIDE, half of it; LIMIT: a parent of their own (`window-combination-limit')."
+(defun drgnx-grid--split-new (window side limit &optional size)
+  "A new window split off WINDOW on SIDE, SIZE pixels of it (nil: half); LIMIT: a parent of their own
+(`window-combination-limit')."
   (let ((drgnx-rules--placing t) (window-combination-limit limit) (window-combination-resize nil)
         (ignore-window-parameters t) (window-resize-pixelwise t) (window-min-width 1) (window-min-height 1))
-    (split-window window nil side t)))
+    (split-window window (and size (- size)) side t)))
 
 (defun drgnx-grid--grow (node w keep)
   "Make NODE's windows from W, the live or internal window holding the part of NODE that has kept tiles (all of it
@@ -978,15 +1055,23 @@ when none has).  Only splits: W and the kept windows stay.  Returns ((NODE . WIN
             (dotimes (i n) (when (nth i kept) (aset wins i (pop live))))
             (push (cons node w) out))
         (aset wins (or (cl-position t kept) 0) w))
-      ;; the others split off their neighbours: after a kept one to its right (below), before it to its left (above)
-      (let ((first (cl-position-if #'identity wins)) (own (not (> (cl-count t kept) 1))))
+      ;; the others split off their neighbours: after a kept one to its right (below), before it to its left (above),
+      ;; each new window taking its equal part of the room the windows still to come share with the one split (halving
+      ;; each time would leave no room for the fifth)
+      (let* ((first (cl-position-if #'identity wins)) (multi (> (cl-count t kept) 1)) (own (not multi))
+             (run (lambda (i step) (let ((m 0)) (while (and (< -1 i n) (null (aref wins i))) (setq m (1+ m) i (+ i step))) m)))
+             (split (lambda (from side m stays)
+                      (drgnx-grid--split-new from side (prog1 own (setq own nil))
+                                             (max 1 (/ (* (window-size from row t) m) (+ m stays)))))))
         (cl-loop for i from (1+ first) below n
                  unless (aref wins i)
-                 do (aset wins i (drgnx-grid--split-new (aref wins (1- i)) (if row 'right 'below) (prog1 own (setq own nil)))))
+                 ;; the first split off the one window that holds all of NODE leaves it room for those before it too
+                 do (aset wins i (funcall split (aref wins (1- i)) (if row 'right 'below) (funcall run i 1)
+                                          (if (and (not multi) (= i (1+ first))) (1+ first) 1))))
         (cl-loop for i downfrom (1- first) to 0
                  unless (aref wins i)
-                 do (aset wins i (drgnx-grid--split-new (aref wins (1+ i)) (if row 'left 'above) (prog1 own (setq own nil)))))
-        (unless (> (cl-count t kept) 1) (push (cons node (window-parent (aref wins first))) out)))
+                 do (aset wins i (funcall split (aref wins (1+ i)) (if row 'left 'above) (funcall run i -1) 1)))
+        (unless multi (push (cons node (window-parent (aref wins first))) out)))
       (dotimes (i n)
         (setq out (nconc out (drgnx-grid--grow (nth i children) (aref wins i) keep))))
       out)))
