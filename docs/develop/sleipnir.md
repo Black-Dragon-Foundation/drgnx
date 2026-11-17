@@ -295,6 +295,17 @@ timeout and the row parser's judgement. The helper's `key-timeout` record (a key
 pauses or evicts a job first leaves `disturbed` in its folder (`jobexec::disturbed(dir, why)`): the result says
 `disturbed: true` (its time is no fair sample), and a red becomes `Suspect`, to be run again undisturbed.
 
+### The progress guard (`linux::progress`)
+
+Whether a job still makes progress, as pure policy over readings once a minute (`Reading`: the log's size, the slice's
+`cpu.stat usage_usec` and `io.stat` bytes, the rows parsed). Progress is output (new log bytes or a parsed row), CPU at
+or above `cpu_floor` (10 %) of one core over the minute, or new IO bytes. The rules, first hit wins: **stall** — no
+progress of any kind for `stall_s` (20 min); **silent** — no output for `silent_s` (45 min), whatever the CPU (a
+livelock); **wall** — `wall_s` since the start, `wall_limit(pack max, p95)` = `min(pack max, 3 × p95)`, or the pack's
+maximum without history. A stop's verdict reason is `stuck (<rule>)`, so `forseti::classify` makes it
+`infra: stuck (<rule>)`: never red, never rerun; the log gets `=== stopped as stuck (<rule>, <N> min): not a test
+result`.
+
 ### Live resizing (`linux::resize`)
 
 The moves on a running job that never throttle it (the job scheduler's "grow and shrink while running"):

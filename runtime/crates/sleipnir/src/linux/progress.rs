@@ -88,33 +88,65 @@ pub struct Tracker {
 impl Tracker {
     /// A tracker from the job's first reading.
     pub fn new(start: Reading) -> Tracker {
-        let _ = start;
-        unimplemented!()
+        Tracker {
+            start: start.at,
+            last: start,
+            output_at: start.at,
+            active_at: start.at,
+        }
     }
 
     /// Takes reading R; the stop when a rule of L is hit.
     pub fn see(&mut self, r: Reading, l: &GuardLimits) -> Option<Stop> {
-        let _ = (r, l);
-        unimplemented!()
+        let window_usec = r.at.saturating_sub(self.last.at) * 1_000_000;
+        let cpu = r.cpu_usec.saturating_sub(self.last.cpu_usec);
+        let output = r.log_bytes > self.last.log_bytes || r.rows > self.last.rows;
+        let busy = window_usec > 0 && cpu as f64 >= l.cpu_floor * window_usec as f64;
+        let io = r.io_bytes > self.last.io_bytes;
+        if output {
+            self.output_at = r.at;
+        }
+        if output || busy || io {
+            self.active_at = r.at;
+        }
+        self.last = r;
+        let since = |t: u64| r.at.saturating_sub(t);
+        let stop = |rule, s: u64| {
+            Some(Stop {
+                rule,
+                minutes: s / 60,
+            })
+        };
+        if since(self.active_at) >= l.stall_s {
+            return stop(Rule::Stall, since(self.active_at));
+        }
+        if since(self.output_at) >= l.silent_s {
+            return stop(Rule::Silent, since(self.output_at));
+        }
+        if since(self.start) >= l.wall_s {
+            return stop(Rule::Wall, since(self.start));
+        }
+        None
     }
 }
 
 /// The wall limit: three times the history's p95, at most the pack's maximum; the pack's maximum without history.
 pub fn wall_limit(pack_max_s: u64, p95_s: Option<u64>) -> u64 {
-    let _ = (pack_max_s, p95_s);
-    unimplemented!()
+    p95_s.map_or(pack_max_s, |p| pack_max_s.min(p.saturating_mul(3)))
 }
 
 /// The verdict's reason for a stop, without the `infra: ` prefix: `stuck (stall)`.
 pub fn verdict_text(s: &Stop) -> String {
-    let _ = s;
-    unimplemented!()
+    format!("stuck ({})", s.rule.name())
 }
 
 /// The line appended to the job's log on a stop.
 pub fn log_line(s: &Stop) -> String {
-    let _ = s;
-    unimplemented!()
+    format!(
+        "=== stopped as stuck ({}, {} min): not a test result",
+        s.rule.name(),
+        s.minutes
+    )
 }
 
 #[cfg(test)]
