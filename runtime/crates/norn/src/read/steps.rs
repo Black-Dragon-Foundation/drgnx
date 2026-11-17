@@ -134,6 +134,43 @@ fn query(
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
+/// One step as a Timeline's window reads it: what its segment needs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowStep {
+    pub id: i64,
+    pub seq: i64,
+    pub class: StepClass,
+    pub start: f64,
+    pub end: Option<f64>,
+    pub tool: Option<String>,
+    /// The detail's kind (`read`, `search`, `fetch`, `edit`, …).
+    pub kind: Option<String>,
+}
+
+/// SESSION's steps (the column's `session:ID`) that overlap `[FROM, TO]`, an open step from its start on, by start:
+/// one query on the index `step_session_start`, the detail's kind joined.
+pub fn window(conn: &Tx, session: &str, from: f64, to: f64) -> Result<Vec<WindowStep>, CoordError> {
+    let mut st = conn.prepare(WINDOW_SQL)?;
+    let rows = st.query_map((session, from, to), |r| {
+        let class: String = r.get(2)?;
+        Ok(WindowStep {
+            id: r.get(0)?,
+            seq: r.get(1)?,
+            class: StepClass::parse(&class).unwrap_or(StepClass::Think),
+            start: r.get(3)?,
+            end: r.get(4)?,
+            tool: r.get(5)?,
+            kind: r.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// [`window`]'s query.
+pub const WINDOW_SQL: &str = "select s.id, s.seq, s.class, s.start, s.end, s.tool, d.kind \
+     from step s indexed by step_session_start left join step_detail d on d.step = s.id \
+     where s.session = ?1 and s.start <= ?3 and (s.end is null or s.end >= ?2) order by s.start, s.seq";
+
 /// What a roll-up is over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
@@ -257,5 +294,41 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// A Timeline's window reads only the steps that overlap it (an open one from its start, one that ends inside
+    /// it), of its own session, in one query on the session-and-start index, with each step's detail kind.
+    #[test]
+    fn the_window_reads_only_its_steps() {
+        let c = db7();
+        c.execute_batch(
+            "with recursive n(i) as (select 1 union all select i + 1 from n where i < 10000) \
+             insert into step (session, seq, class, start, end) select 'session:s', i, 'tool', i * 10, i * 10 + 5 from n; \
+             insert into step (session, seq, class, start, end) values ('session:t', 1, 'tool', 50005, 50006); \
+             insert into step (session, seq, class, start) values ('session:s', 10001, 'think', 30); \
+             insert into step_detail (step, kind, origin) select id, 'edit', 'acp' from step where session = 'session:s' and seq = 5000;",
+        )
+        .unwrap();
+        let w = window(&c, "session:s", 50_002.0, 50_031.0).unwrap();
+        // 5000 ends at 50005 (inside), 5001..=5003 start inside, the open think from 30 on; 5004 starts after
+        assert_eq!(
+            w.iter().map(|s| s.seq).collect::<Vec<_>>(),
+            [10001, 5000, 5001, 5002, 5003]
+        );
+        assert_eq!(w[1].kind.as_deref(), Some("edit"));
+        assert_eq!(w[0].end, None);
+        // the index the plan asked for, and no scan of the table
+        let plan: Vec<String> = c
+            .prepare(&format!("explain query plan {WINDOW_SQL}"))
+            .unwrap()
+            .query_map(("session:s", 0.0, 1.0), |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|d| d.contains("step_session_start")),
+            "{plan:?}"
+        );
+        assert!(!plan.iter().any(|d| d.starts_with("SCAN s")), "{plan:?}");
     }
 }

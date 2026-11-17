@@ -48436,6 +48436,160 @@
       "classes": [
         "user"
       ],
+      "doc": "zoom, pan or regroup one Schedule view of this connection without subscribing again; false when the view is not a Schedule",
+      "name": "work/schedule/set",
+      "params": {
+        "$defs": {
+          "ScheduleGroup": {
+            "description": "How the Schedule groups its rows: the List's (spec, plan, task), or the tasks under the machine they ran on.",
+            "enum": [
+              "plan",
+              "machine"
+            ],
+            "type": "string"
+          },
+          "Window": {
+            "additionalProperties": false,
+            "description": "A span of time a Timeline or the Schedule shows, in seconds since the epoch (`from` before `to`).",
+            "properties": {
+              "from": {
+                "format": "double",
+                "type": "number"
+              },
+              "to": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/schedule/set`'s params: a Schedule view's window or grouping, without subscribing again.",
+        "properties": {
+          "group": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ScheduleGroup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Window"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "ScheduleSet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open (or open again) one Schedule view of this connection over a window: the List's rows of the connection's map view (or its tasks by machine), each with its bar (done, forecast to p50 and p90, baseline, target, state), its rows per display class, the first a reset, before the answer",
+      "name": "work/schedule/subscribe",
+      "params": {
+        "$defs": {
+          "ScheduleGroup": {
+            "description": "How the Schedule groups its rows: the List's (spec, plan, task), or the tasks under the machine they ran on.",
+            "enum": [
+              "plan",
+              "machine"
+            ],
+            "type": "string"
+          },
+          "Window": {
+            "additionalProperties": false,
+            "description": "A span of time a Timeline or the Schedule shows, in seconds since the epoch (`from` before `to`).",
+            "properties": {
+              "from": {
+                "format": "double",
+                "type": "number"
+              },
+              "to": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/schedule/subscribe`'s params: one view of the connection shows the Schedule over `window`: the List's rows\nof the connection's map view, each with its bar.",
+        "properties": {
+          "group": {
+            "$ref": "#/$defs/ScheduleGroup",
+            "default": "plan"
+          },
+          "view": {
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/$defs/Window"
+          }
+        },
+        "required": [
+          "view",
+          "window"
+        ],
+        "title": "ScheduleSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/subscribe`'s answer: the view's patches name this hub and start from a reset.",
+        "properties": {
+          "hub": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hub"
+        ],
+        "title": "TrailSubscribed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "set (or with null clear) the target date of a spec or a plan; true when the item exists",
       "name": "work/target/set",
       "params": {
@@ -48474,7 +48628,7 @@
       "classes": [
         "user"
       ],
-      "doc": "end one trail, Timeline or Board view of this connection (a connection's views end with it)",
+      "doc": "end one trail, Timeline, Schedule or Board view of this connection (a connection's views end with it)",
       "name": "work/trail/close",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -48502,10 +48656,103 @@
       "classes": [
         "user"
       ],
+      "doc": "zoom, pan or filter one Timeline view of this connection without subscribing again: its window (a window without follow stops following), follow (now kept in view) and filter (all, edits, waits); false when the view is not a Timeline",
+      "name": "work/trail/set",
+      "params": {
+        "$defs": {
+          "TrailFilter": {
+            "description": "What a Timeline keeps in colour: every step, the edits, or the waits (on you, a machine, a pause, a stall).",
+            "enum": [
+              "all",
+              "edits",
+              "waits"
+            ],
+            "type": "string"
+          },
+          "Window": {
+            "additionalProperties": false,
+            "description": "A span of time a Timeline or the Schedule shows, in seconds since the epoch (`from` before `to`).",
+            "properties": {
+              "from": {
+                "format": "double",
+                "type": "number"
+              },
+              "to": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/set`'s params: a Timeline view's window, follow and filter, without subscribing again (zoom, pan,\nfilter).  A window given without `follow` stops following.",
+        "properties": {
+          "filter": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TrailFilter"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "follow": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Window"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "TrailSet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "open (or open again) one trail view (a session's steps and conclusions) or Timeline view (a lane per session) of this connection: its rows come as view-patch per display class, the first a reset, before the answer",
       "name": "work/trail/subscribe",
       "params": {
         "$defs": {
+          "TrailFilter": {
+            "description": "What a Timeline keeps in colour: every step, the edits, or the waits (on you, a machine, a pause, a stall).",
+            "enum": [
+              "all",
+              "edits",
+              "waits"
+            ],
+            "type": "string"
+          },
           "TrailLane": {
             "additionalProperties": false,
             "description": "One lane of a Timeline: an agent session and its label.",
@@ -48522,12 +48769,47 @@
               "label"
             ],
             "type": "object"
+          },
+          "Window": {
+            "additionalProperties": false,
+            "description": "A span of time a Timeline or the Schedule shows, in seconds since the epoch (`from` before `to`).",
+            "properties": {
+              "from": {
+                "format": "double",
+                "type": "number"
+              },
+              "to": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`work/trail/subscribe`'s params: one view of the connection shows `session`'s trail, or a Timeline of `lanes`.",
+        "description": "`work/trail/subscribe`'s params: one view of the connection shows `session`'s trail, or a Timeline of `lanes`\n(a plan's, a task's or a machine's sessions: the editor sends the scope's lanes) over `window` (none: the time\ntheir last steps cover), following now when `follow`, with `filter`.",
         "properties": {
+          "filter": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TrailFilter"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "follow": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "lanes": {
             "items": {
               "$ref": "#/$defs/TrailLane"
@@ -48542,6 +48824,16 @@
           },
           "view": {
             "type": "string"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Window"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [

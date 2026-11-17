@@ -449,8 +449,28 @@ pub struct TrailLane {
     pub label: String,
 }
 
-/// `work/trail/subscribe`'s params: one view of the connection shows `session`'s trail, or a Timeline of `lanes`.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+/// A span of time a Timeline or the Schedule shows, in seconds since the epoch (`from` before `to`).
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Window {
+    pub from: f64,
+    pub to: f64,
+}
+
+/// What a Timeline keeps in colour: every step, the edits, or the waits (on you, a machine, a pause, a stall).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum TrailFilter {
+    #[default]
+    All,
+    Edits,
+    Waits,
+}
+
+/// `work/trail/subscribe`'s params: one view of the connection shows `session`'s trail, or a Timeline of `lanes`
+/// (a plan's, a task's or a machine's sessions: the editor sends the scope's lanes) over `window` (none: the time
+/// their last steps cover), following now when `follow`, with `filter`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TrailSubscribe {
     pub view: String,
@@ -458,6 +478,57 @@ pub struct TrailSubscribe {
     pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lanes: Vec<TrailLane>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<Window>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<TrailFilter>,
+}
+
+/// `work/trail/set`'s params: a Timeline view's window, follow and filter, without subscribing again (zoom, pan,
+/// filter).  A window given without `follow` stops following.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrailSet {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<Window>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<TrailFilter>,
+}
+
+/// How the Schedule groups its rows: the List's (spec, plan, task), or the tasks under the machine they ran on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScheduleGroup {
+    #[default]
+    Plan,
+    Machine,
+}
+
+/// `work/schedule/subscribe`'s params: one view of the connection shows the Schedule over `window`: the List's rows
+/// of the connection's map view, each with its bar.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleSubscribe {
+    pub view: String,
+    pub window: Window,
+    #[serde(default)]
+    pub group: ScheduleGroup,
+}
+
+/// `work/schedule/set`'s params: a Schedule view's window or grouping, without subscribing again.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleSet {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<Window>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<ScheduleGroup>,
 }
 
 /// `work/trail/subscribe`'s answer: the view's patches name this hub and start from a reset.
@@ -642,6 +713,9 @@ const LANES_MAX: usize = 256;
 
 fn check_trail_subscribe(p: &TrailSubscribe) -> Result<(), Error> {
     check_view(&p.view)?;
+    if let Some(w) = &p.window {
+        check_window(w)?;
+    }
     let name = |s: &str| !s.is_empty() && s.len() <= NAME_MAX;
     match (&p.session, p.lanes.is_empty()) {
         (Some(s), true) if name(s) => Ok(()),
@@ -661,6 +735,34 @@ fn check_trail_subscribe(p: &TrailSubscribe) -> Result<(), Error> {
 
 fn check_trail_close(p: &TrailClose) -> Result<(), Error> {
     check_view(&p.view)
+}
+
+/// The longest window a Timeline or the Schedule shows: a year.
+pub const WINDOW_MAX: f64 = 366.0 * 86_400.0;
+
+fn check_window(w: &Window) -> Result<(), Error> {
+    if !(w.from.is_finite() && w.to.is_finite() && w.from >= 0.0 && w.to > w.from) {
+        return Err(invalid("window", "from before to, seconds since the epoch"));
+    }
+    if w.to - w.from > WINDOW_MAX {
+        return Err(invalid("window", "a window of a year at most"));
+    }
+    Ok(())
+}
+
+fn check_trail_set(p: &TrailSet) -> Result<(), Error> {
+    check_view(&p.view)?;
+    p.window.as_ref().map_or(Ok(()), check_window)
+}
+
+fn check_schedule_subscribe(p: &ScheduleSubscribe) -> Result<(), Error> {
+    check_view(&p.view)?;
+    check_window(&p.window)
+}
+
+fn check_schedule_set(p: &ScheduleSet) -> Result<(), Error> {
+    check_view(&p.view)?;
+    p.window.as_ref().map_or(Ok(()), check_window)
 }
 
 /// The most plans one Board is scoped to.
@@ -897,9 +999,27 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_trail_subscribe,
         ),
         method!(
+            "work/trail/set", WorkTrailSet(TrailSet) -> bool,
+            classes: [User], writes: false,
+            doc: "zoom, pan or filter one Timeline view of this connection without subscribing again: its window (a window without follow stops following), follow (now kept in view) and filter (all, edits, waits); false when the view is not a Timeline",
+            check: check_trail_set,
+        ),
+        method!(
+            "work/schedule/subscribe", WorkScheduleSubscribe(ScheduleSubscribe) -> TrailSubscribed,
+            classes: [User], writes: false,
+            doc: "open (or open again) one Schedule view of this connection over a window: the List's rows of the connection's map view (or its tasks by machine), each with its bar (done, forecast to p50 and p90, baseline, target, state), its rows per display class, the first a reset, before the answer",
+            check: check_schedule_subscribe,
+        ),
+        method!(
+            "work/schedule/set", WorkScheduleSet(ScheduleSet) -> bool,
+            classes: [User], writes: false,
+            doc: "zoom, pan or regroup one Schedule view of this connection without subscribing again; false when the view is not a Schedule",
+            check: check_schedule_set,
+        ),
+        method!(
             "work/trail/close", WorkTrailClose(TrailClose) -> bool,
             classes: [User], writes: false,
-            doc: "end one trail, Timeline or Board view of this connection (a connection's views end with it)",
+            doc: "end one trail, Timeline, Schedule or Board view of this connection (a connection's views end with it)",
             check: check_trail_close,
         ),
         method!(
