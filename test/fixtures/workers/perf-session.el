@@ -624,14 +624,10 @@ compared, and a round's own list starts wherever the flood is)."
                      (number-sequence 0 120) "")
           "\n(provide 'f" (number-to-string i) ")\n"))
 
-(defun drgnx-perf-w--warming-p ()
-  "Whether the first-open warm-up still has steps (nil where the session has none)."
-  (or (bound-and-true-p drgnx-hooks--warm-left) (and (fboundp 'drgnx-timer-active-p) (drgnx-timer-active-p 'warm-first-open))))
-
 (defun drgnx-perf-w-explorer-first-open-setup ()
-  "A git project of 40 Lisp files with the Explorer on it (the hub's rows, drawn), then the session idle until the
-first-open warm-up (`drgnx-hooks--warm-first-open', started by the session's first frame) is done: a user looks at
-the Explorer a moment before the first click."
+  "A git project the size and shape of the audit's (its ~/code/drgnx: 10,979 files, 308 `.elc'): 40 Lisp files and
+their `.elc' at the root, where the Explorer draws them, and 10,900 other files in 109 folders of 100, one commit; the
+Explorer on it (the hub's rows, drawn)."
   (let ((root (expand-file-name "proj" (drgnx-perf-w--tmpdir))))
     (make-directory root t)
     (setq drgnx-perf-w--fo-files
@@ -640,6 +636,12 @@ the Explorer a moment before the first click."
                              (write-region (drgnx-perf-w--fo-lisp i) nil f nil 'silent)
                              f))
           drgnx-perf-w--fo-i 0 drgnx-perf-w--fo-times nil drgnx-perf-w--fo-gc nil drgnx-perf-w--stats nil)
+    (dotimes (d 109)                    ; the bulk of the audit's tree: collapsed folders, in the repository
+      (let ((dir (expand-file-name (format "dir%03d" d) root)))
+        (make-directory dir t)
+        (dotimes (i 100) (write-region (format "file %d %d\n" d i) nil (expand-file-name (format "n%03d.md" i) dir) nil 'silent))))
+    (dotimes (i 40)                     ; the build output the audit's tree had beside every source file
+      (write-region "" nil (expand-file-name (format "f%02d.elc" i) root) nil 'silent))
     (let ((default-directory root))
       (dolist (args '(("init" "-q") ("add" ".")
                       ("-c" "user.name=t" "-c" "user.email=t@t" "commit" "-q" "--no-gpg-sign" "-m" "t")))
@@ -648,12 +650,6 @@ the Explorer a moment before the first click."
     (drgnx-perf-w--explorer-open root)
     (unless (drgnx-perf--wait 10 (lambda () (drgnx-perf-w--drawn-p (car (last drgnx-perf-w--fo-files)))))
       (error "Premise: the hub's Explorer rows were not drawn in 10 s (rows path %s)" (drgnx-explorer--rows-p)))
-    ;; idle, as a user is before the click: the warm-up's idle steps run in `read-event' waits, not in an eval
-    (let ((limit (+ (float-time) 15)))
-      (while (and (< (float-time) limit) (drgnx-perf-w--warming-p))
-        (read-event nil nil 0.1)))
-    (when (drgnx-perf-w--warming-p)
-      (error "Premise: the first-open warm-up did not finish in 15 s idle"))
     t))
 
 (defun drgnx-perf-w--fo-fire ()
