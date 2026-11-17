@@ -21030,7 +21030,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a job's forecast: tokens, time and cost per task and for the plan, from the history of similar tasks, with the effect on the week's pace",
+      "doc": "a job's forecast: tokens, time and cost per task and for the plan, from the history of similar tasks, with the effect on the week's pace; with remaining, what is left of a running job from now",
       "name": "forecast/get",
       "params": {
         "$defs": {
@@ -21045,6 +21045,13 @@
         "properties": {
           "job": {
             "$ref": "#/$defs/Id"
+          },
+          "remaining": {
+            "description": "What remains of a running job: finished tasks at their actuals, a running one from the runs longer than it has\nbeen running, the rest from now; times are then wall-clock (seconds since the epoch), not offsets.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "required": [
@@ -21293,6 +21300,15 @@
             ],
             "type": "object"
           },
+          "TaskAt": {
+            "description": "Where a task of a running job stands, in a forecast of what remains.",
+            "enum": [
+              "done",
+              "running",
+              "waiting"
+            ],
+            "type": "string"
+          },
           "TaskForecast": {
             "additionalProperties": false,
             "description": "One task's forecast.",
@@ -21300,6 +21316,17 @@
               "active_secs": {
                 "$ref": "#/$defs/Range",
                 "description": "Seconds spent thinking or running tools."
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TaskAt"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "With `remaining`: where the task stands."
               },
               "basis": {
                 "$ref": "#/$defs/Basis"
@@ -21343,7 +21370,7 @@
                   "p50": 0.0,
                   "p90": 0.0
                 },
-                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros)."
+                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros).  With `remaining`, wall-clock times; a done task's are its actuals."
               },
               "tokens": {
                 "$ref": "#/$defs/Range",
@@ -21902,6 +21929,15 @@
             ],
             "type": "object"
           },
+          "TaskAt": {
+            "description": "Where a task of a running job stands, in a forecast of what remains.",
+            "enum": [
+              "done",
+              "running",
+              "waiting"
+            ],
+            "type": "string"
+          },
           "TaskForecast": {
             "additionalProperties": false,
             "description": "One task's forecast.",
@@ -21909,6 +21945,17 @@
               "active_secs": {
                 "$ref": "#/$defs/Range",
                 "description": "Seconds spent thinking or running tools."
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TaskAt"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "With `remaining`: where the task stands."
               },
               "basis": {
                 "$ref": "#/$defs/Basis"
@@ -21952,7 +21999,7 @@
                   "p50": 0.0,
                   "p90": 0.0
                 },
-                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros)."
+                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros).  With `remaining`, wall-clock times; a done task's are its actuals."
               },
               "tokens": {
                 "$ref": "#/$defs/Range",
@@ -22318,6 +22365,15 @@
             ],
             "type": "object"
           },
+          "TaskAt": {
+            "description": "Where a task of a running job stands, in a forecast of what remains.",
+            "enum": [
+              "done",
+              "running",
+              "waiting"
+            ],
+            "type": "string"
+          },
           "TaskForecast": {
             "additionalProperties": false,
             "description": "One task's forecast.",
@@ -22325,6 +22381,17 @@
               "active_secs": {
                 "$ref": "#/$defs/Range",
                 "description": "Seconds spent thinking or running tools."
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TaskAt"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "With `remaining`: where the task stands."
               },
               "basis": {
                 "$ref": "#/$defs/Basis"
@@ -22368,7 +22435,7 @@
                   "p50": 0.0,
                   "p90": 0.0
                 },
-                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros)."
+                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros).  With `remaining`, wall-clock times; a done task's are its actuals."
               },
               "tokens": {
                 "$ref": "#/$defs/Range",

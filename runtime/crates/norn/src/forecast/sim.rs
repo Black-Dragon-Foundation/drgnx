@@ -37,6 +37,28 @@ pub struct TaskTotals {
     /// When the task starts and ends, in seconds from the run's start (its own distribution over the draws).
     pub start: Range,
     pub finish: Range,
+    /// A running task already longer than every observation of its class: drawn from the whole class from now on, its
+    /// finish widened ([`widen`]).
+    pub past_every_run: bool,
+}
+
+/// What is known of a task of a running job, for [`simulate_fixed`]. Times are seconds from now (the draw's origin):
+/// the past is negative.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Fixed {
+    /// Not started: drawn as in a proposal, from now on the free slots.
+    Open,
+    /// Finished: its actuals, the same in every draw, and outside the totals (they are what remains).
+    Done {
+        start: f64,
+        finish: f64,
+        /// By unit; the first is the one the task's cost range shows.
+        cost: Vec<(String, f64)>,
+        tokens: f64,
+    },
+    /// Started ELAPSED seconds ago (START is `-elapsed`): drawn only from observations at least that long, the rest of
+    /// the drawn run left from now, holding a slot until then.
+    Running { start: f64, elapsed: f64 },
 }
 
 /// A plan's ranges. Each is the plan's own distribution, not a sum of its tasks' ranges: p90s do not add up.
@@ -130,6 +152,10 @@ struct Drawn<'p> {
 struct Plan<'a> {
     wants: &'a [Want],
     tasks: Vec<Picks<'a>>,
+    /// One per want ([`Fixed::Open`] past the end of what was given).
+    fixed: Vec<Fixed>,
+    /// A running task no observation of its class is as long as: drawn from the whole class.
+    past_all: Vec<bool>,
     /// How many parents each task waits for. A dep on a task outside the plan is not waited for.
     waits: Vec<usize>,
     children: Vec<Vec<usize>>,
@@ -143,6 +169,7 @@ impl<'a> Plan<'a> {
         obs: &'a [Obs],
         price: Price<'_>,
         slots: usize,
+        fixed: &[Fixed],
     ) -> Self {
         let index: BTreeMap<i64, usize> = wants.iter().enumerate().map(|(i, w)| (w.n, i)).collect();
         let mut waits = vec![0; wants.len()];
@@ -153,22 +180,43 @@ impl<'a> Plan<'a> {
                 children[*parent].push(i);
             }
         }
+        let fixed: Vec<Fixed> = (0..wants.len())
+            .map(|i| fixed.get(i).cloned().unwrap_or(Fixed::Open))
+            .collect();
+        let mut past_all = vec![false; wants.len()];
         let tasks = classes
             .iter()
             .enumerate()
-            .map(|(i, class)| Picks {
-                obs: Table::new(class.picks.iter().map(|&(j, w)| (&obs[j], w))),
-                priced: Table::new(
-                    class
-                        .picks
+            .map(|(i, class)| {
+                // a running task draws only the runs at least as long as it has been running, while there are any
+                let mut picks: Vec<(usize, f64)> = class.picks.clone();
+                if let Fixed::Running { elapsed, .. } = fixed[i] {
+                    let longer: Vec<(usize, f64)> = picks
                         .iter()
-                        .filter_map(|&(j, w)| Some((price(i, &obs[j])?, w))),
-                ),
+                        .copied()
+                        .filter(|&(j, _)| obs[j].wall_secs >= elapsed)
+                        .collect();
+                    if longer.is_empty() {
+                        past_all[i] = true;
+                    } else {
+                        picks = longer;
+                    }
+                }
+                Picks {
+                    obs: Table::new(picks.iter().map(|&(j, w)| (&obs[j], w))),
+                    priced: Table::new(
+                        picks
+                            .iter()
+                            .filter_map(|&(j, w)| Some((price(i, &obs[j])?, w))),
+                    ),
+                }
             })
             .collect();
         Plan {
             wants,
             tasks,
+            fixed,
+            past_all,
             waits,
             children,
             slots,
@@ -188,12 +236,31 @@ impl<'a> Plan<'a> {
         };
         let mut secs = vec![0.0; n];
         for (i, task) in self.tasks.iter().enumerate() {
+            // one number per task whatever it is, so the stream stays as a proposal's
             let u = rng.unit();
+            if let Fixed::Done {
+                start,
+                finish,
+                cost,
+                tokens,
+            } = &self.fixed[i]
+            {
+                drawn.tokens[i] = *tokens;
+                drawn.active[i] = finish - start;
+                drawn.cost[i] = cost.first().map(|(unit, a)| (unit.as_str(), *a));
+                continue;
+            }
             if let Some(o) = task.obs.at(u) {
                 drawn.tokens[i] = o.usage.total() as f64;
                 drawn.active[i] = o.active_secs;
                 drawn.cold_wakes += f64::from(o.cold_wakes);
-                secs[i] = o.wall_secs;
+                secs[i] = match self.fixed[i] {
+                    // what is left of the drawn run, never less than nothing; past every run, a whole one more
+                    Fixed::Running { elapsed, .. } if !self.past_all[i] => {
+                        (o.wall_secs - elapsed).max(0.0)
+                    }
+                    _ => o.wall_secs,
+                };
             }
             drawn.cost[i] = task.priced.at(u).map(|(unit, usd)| (unit.as_str(), *usd));
         }
@@ -210,14 +277,32 @@ impl<'a> Plan<'a> {
     /// the lowest `n`, so a task that waits for its parents leaves its slot to one that can start.
     ///
     /// With the total, each task's `(start, finish)`: a task starts when a slot takes it, after its parents ended.
+    ///
+    /// A done task keeps its own span and frees its children at once; a running one holds a slot from its start until
+    /// `secs` from now (0); the rest start from now.
     fn wall_time(&self, secs: &[f64]) -> (f64, Vec<(f64, f64)>) {
         let mut waits = self.waits.clone();
-        let mut ready: BinaryHeap<_> = (0..waits.len())
-            .filter(|i| waits[*i] == 0)
-            .map(|i| Reverse((self.wants[i].n, i)))
-            .collect();
         let mut running: Vec<(f64, usize)> = Vec::with_capacity(self.slots);
         let mut spans = vec![(0.0, 0.0); secs.len()];
+        for (i, f) in self.fixed.iter().enumerate() {
+            match *f {
+                Fixed::Open => {}
+                Fixed::Done { start, finish, .. } => {
+                    spans[i] = (start, finish);
+                    for &child in &self.children[i] {
+                        waits[child] -= 1;
+                    }
+                }
+                Fixed::Running { start, .. } => {
+                    spans[i] = (start, secs[i]);
+                    running.push((secs[i], i));
+                }
+            }
+        }
+        let mut ready: BinaryHeap<_> = (0..waits.len())
+            .filter(|i| waits[*i] == 0 && self.fixed[*i] == Fixed::Open)
+            .map(|i| Reverse((self.wants[i].n, i)))
+            .collect();
         let mut now = 0.0;
         loop {
             while running.len() < self.slots {
@@ -297,7 +382,25 @@ pub fn simulate(
     seed: u64,
     draws: usize,
 ) -> Totals {
-    let plan = Plan::new(wants, classes, obs, price, slots);
+    simulate_fixed(wants, classes, obs, price, slots, seed, draws, &[])
+}
+
+/// [`simulate`] of what remains of a running job: `fixed[i]` says what is known of `wants[i]` ([`Fixed`]; missing is
+/// open), with now as the origin. Done tasks are their actuals and stay out of the totals, which are what remains; a
+/// running task draws only runs longer than it has been running, and the rest start from now on the free slots, so no
+/// finish is before now. All open is exactly [`simulate`]'s forecast: the same seed gives the same numbers.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_fixed(
+    wants: &[Want],
+    classes: &[Class],
+    obs: &[Obs],
+    price: Price<'_>,
+    slots: usize,
+    seed: u64,
+    draws: usize,
+    fixed: &[Fixed],
+) -> Totals {
+    let plan = Plan::new(wants, classes, obs, price, slots, fixed);
     let mut rng = SplitMix64(seed);
     let mut per_task = vec![Series::default(); wants.len()];
     let mut total = Series::default();
@@ -312,11 +415,20 @@ pub fn simulate(
             series.finish.push(drawn.finish[i]);
             if let Some((unit, amount)) = drawn.cost[i] {
                 series.push_cost(unit, amount);
-                *cost.entry(unit).or_default() += amount;
+                if !matches!(plan.fixed[i], Fixed::Done { .. }) {
+                    *cost.entry(unit).or_default() += amount;
+                }
             }
         }
-        total.tokens.push(drawn.tokens.iter().sum());
-        total.active.push(drawn.active.iter().sum());
+        let remains = |v: &[f64]| -> f64 {
+            v.iter()
+                .zip(&plan.fixed)
+                .filter(|(_, f)| !matches!(f, Fixed::Done { .. }))
+                .map(|(x, _)| x)
+                .sum()
+        };
+        total.tokens.push(remains(&drawn.tokens));
+        total.active.push(remains(&drawn.active));
         for (unit, amount) in cost {
             total.push_cost(unit, amount);
         }
@@ -326,12 +438,22 @@ pub fn simulate(
     Totals {
         per_task: per_task
             .into_iter()
-            .map(|mut s| TaskTotals {
-                tokens: range(std::mem::take(&mut s.tokens)),
-                active: range(std::mem::take(&mut s.active)),
-                start: range(std::mem::take(&mut s.start)),
-                finish: range(std::mem::take(&mut s.finish)),
-                cost: s.cost_ranges(),
+            .enumerate()
+            .map(|(i, mut s)| {
+                let finish = range(std::mem::take(&mut s.finish));
+                TaskTotals {
+                    tokens: range(std::mem::take(&mut s.tokens)),
+                    active: range(std::mem::take(&mut s.active)),
+                    start: range(std::mem::take(&mut s.start)),
+                    // past every run, the spread of its class says too little: at least the small-class floor
+                    finish: if plan.past_all[i] {
+                        widen(finish, 0)
+                    } else {
+                        finish
+                    },
+                    past_every_run: plan.past_all[i],
+                    cost: s.cost_ranges(),
+                }
             })
             .collect(),
         tokens: range(std::mem::take(&mut total.tokens)),
@@ -623,7 +745,7 @@ mod tests {
         let obs = [ob(1, 10.0), ob(1000, 1000.0)];
         let wants = [task(1, &[])];
         let classes = classes(1, &obs);
-        let plan = Plan::new(&wants, &classes, &obs, &unpriced, 1);
+        let plan = Plan::new(&wants, &classes, &obs, &unpriced, 1, &[]);
         let mut rng = SplitMix64(11);
         let seen: BTreeSet<(u64, u64)> = (0..DRAWS)
             .map(|_| plan.draw(&mut rng))
@@ -638,7 +760,7 @@ mod tests {
         let wants = [task(1, &[])];
         let classes = classes(1, &obs);
         let price = |_: usize, o: &Obs| Some(("usd".to_owned(), o.usage.total() as f64));
-        let plan = Plan::new(&wants, &classes, &obs, &price, 1);
+        let plan = Plan::new(&wants, &classes, &obs, &price, 1, &[]);
         let mut rng = SplitMix64(11);
         for _ in 0..DRAWS {
             let d = plan.draw(&mut rng);
@@ -888,5 +1010,170 @@ mod tests {
         near(t.per_task[0].finish.p50, 10.0);
         near(t.per_task[1].start.p50, 10.0);
         near(t.per_task[1].finish.p50, 20.0);
+    }
+
+    // -- what remains of a running job ----------------------------------------------------------------------------
+
+    fn done(start: f64, finish: f64, tokens: f64) -> Fixed {
+        Fixed::Done {
+            start,
+            finish,
+            cost: vec![("usd-est".to_owned(), 2.0)],
+            tokens,
+        }
+    }
+
+    fn running(elapsed: f64) -> Fixed {
+        Fixed::Running {
+            start: -elapsed,
+            elapsed,
+        }
+    }
+
+    #[test]
+    fn open_everywhere_matches_the_proposal_forecast() {
+        let obs = [ob(1, 10.0), ob(5, 40.0), ob(9, 90.0)];
+        let wants = [task(1, &[]), task(2, &[1]), task(3, &[])];
+        let classes = classes(3, &obs);
+        let price = |_: usize, o: &Obs| Some(("usd".to_owned(), o.usage.total() as f64));
+        let open = vec![Fixed::Open; 3];
+        assert_eq!(
+            simulate_fixed(&wants, &classes, &obs, &price, 2, 5, DRAWS, &open),
+            simulate(&wants, &classes, &obs, &price, 2, 5, DRAWS)
+        );
+    }
+
+    #[test]
+    fn done_tasks_are_their_actuals() {
+        let obs = [ob(1, 10.0), ob(1000, 1000.0)];
+        let wants = [task(1, &[]), task(2, &[1])];
+        let classes = classes(2, &obs);
+        let fixed = [done(-500.0, -200.0, 77.0), Fixed::Open];
+        let t = simulate_fixed(&wants, &classes, &obs, &unpriced, 2, 5, DRAWS, &fixed);
+        let d = &t.per_task[0];
+        assert_eq!(
+            d.start,
+            Range {
+                p50: -500.0,
+                p90: -500.0
+            }
+        );
+        assert_eq!(
+            d.finish,
+            Range {
+                p50: -200.0,
+                p90: -200.0
+            }
+        );
+        assert_eq!(
+            d.tokens,
+            Range {
+                p50: 77.0,
+                p90: 77.0
+            }
+        );
+        assert_eq!(d.cost["usd-est"], Range { p50: 2.0, p90: 2.0 });
+        // what remains is the open task alone: its child starts now, not after the done one's drawn time
+        assert_eq!(t.per_task[1].start, Range { p50: 0.0, p90: 0.0 });
+        assert_eq!(t.tokens, t.per_task[1].tokens);
+        assert!(!t.cost.contains_key("usd-est"));
+    }
+
+    #[test]
+    fn a_running_task_draws_only_longer_observations() {
+        // the 10 s run is most of the class: drawn, it would end the task now
+        let obs = [ob(1, 10.0), ob(2, 100.0), ob(3, 300.0)];
+        let wants = [task(1, &[])];
+        let classes = [class(&[(0, 8.0), (1, 1.0), (2, 1.0)])];
+        let t = simulate_fixed(
+            &wants,
+            &classes,
+            &obs,
+            &unpriced,
+            1,
+            5,
+            DRAWS,
+            &[running(50.0)],
+        );
+        let r = &t.per_task[0];
+        // only the 100 s and 300 s runs are as long as 50 s already spent: 50 s or 250 s are left
+        let seen: BTreeSet<u64> = [r.finish.p50, r.finish.p90]
+            .iter()
+            .map(|f| *f as u64)
+            .collect();
+        assert!(seen.is_subset(&BTreeSet::from([50, 250])), "{r:?}");
+        assert!(r.finish.p90 >= 250.0 - 1e-9, "{r:?}");
+        assert_eq!(
+            r.start,
+            Range {
+                p50: -50.0,
+                p90: -50.0
+            }
+        );
+        assert!(r.tokens.p50 >= 2.0, "{r:?}");
+        assert!(!r.past_every_run);
+    }
+
+    /// Review Focus 3: a running task already past every observed duration of its class.
+    #[test]
+    fn a_task_longer_than_every_observation_widens_and_warns() {
+        let obs = [ob(1, 10.0), ob(2, 20.0)];
+        let wants = [task(1, &[])];
+        let classes = classes(1, &obs);
+        let t = simulate_fixed(
+            &wants,
+            &classes,
+            &obs,
+            &unpriced,
+            1,
+            5,
+            DRAWS,
+            &[running(500.0)],
+        );
+        let r = &t.per_task[0];
+        assert!(r.past_every_run);
+        assert!(r.finish.p50 > 0.0, "{r:?}");
+        assert!(r.finish.p90 >= r.finish.p50 * 1.5 - 1e-9, "{r:?}");
+        // and an empty class (no observation at all) neither panics nor ends in the past
+        let none = simulate_fixed(
+            &wants,
+            &[class(&[])],
+            &obs,
+            &unpriced,
+            1,
+            5,
+            DRAWS,
+            &[running(500.0)],
+        );
+        assert!(none.per_task[0].finish.p50 >= 0.0);
+    }
+
+    #[test]
+    fn no_finish_is_before_now() {
+        let obs = [ob(1, 10.0), ob(1, 60.0), ob(1, 61.0)];
+        let wants = [task(1, &[]), task(2, &[]), task(3, &[1])];
+        let classes = classes(3, &obs);
+        let fixed = [running(60.0), running(5.0), Fixed::Open];
+        let t = simulate_fixed(&wants, &classes, &obs, &unpriced, 3, 9, DRAWS, &fixed);
+        for r in &t.per_task {
+            assert!(r.finish.p50 >= 0.0 && r.finish.p90 >= 0.0, "{r:?}");
+        }
+        assert!(t.wall.p50 >= 0.0);
+    }
+
+    #[test]
+    fn the_rest_start_after_now_on_free_slots() {
+        // two slots, one held by a running task for 100 s more: the open tasks share the other, then both
+        let obs = [ob(1, 30.0)];
+        let long = [ob(1, 150.0)];
+        let wants = [task(1, &[]), task(2, &[]), task(3, &[])];
+        let all = [long[0].clone(), obs[0].clone()];
+        let classes = [class(&[(0, 1.0)]), class(&[(1, 1.0)]), class(&[(1, 1.0)])];
+        let fixed = [running(50.0), Fixed::Open, Fixed::Open];
+        let t = simulate_fixed(&wants, &classes, &all, &unpriced, 2, 1, 10, &fixed);
+        near(t.per_task[0].finish.p50, 100.0);
+        near(t.per_task[1].start.p50, 0.0);
+        near(t.per_task[2].start.p50, 30.0);
+        near(t.wall.p50, 100.0);
     }
 }

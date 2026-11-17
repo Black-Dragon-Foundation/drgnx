@@ -782,7 +782,7 @@ tokens, active and wall time, and cost, each as a range ("about 12–41 USD (est
 
 `forecast/plan` forecasts plans that have no job yet (up to 32 plan ids, say every plan of a spec) as one draw on the
 runner's slots: the total is not the sum of each plan's p90, which over-counts. A plan that has a running job is not in
-the draw; it comes back in `running` with its own forecast. Nothing is recorded, and an answer is kept for a minute per
+the draw; it comes back in `running` with what remains of its job. Nothing is recorded, and an answer is kept for a minute per
 set of plan versions (editing a plan misses).
 
 - **A range, not a promise.** The first number is the middle (p50): half the similar runs took less. The second is the
@@ -799,6 +799,12 @@ set of plan versions (editing a plan misses).
 - **When each task runs.** Each task also has a start and a finish, in seconds from the run's start, as a middle and a
   high end of their own: the tasks run on the job's slots in the order the runner takes them, a task starting after
   the tasks it needs. The plan's wall time is the last finish of each simulated run, not the highest finish of any task.
+- **What remains of a running job.** `forecast/get {job, remaining: true}` forecasts from now: a finished task is what it
+  took (its start and finish at the clock, its cost and tokens, the same at both ends), a running task is drawn only
+  from similar runs at least as long as it has run so far, and the tasks still waiting start from now on the free
+  slots. Each task says where it stands (`at`: `done`, `running` or `waiting`), its times are clock times, and the
+  totals are what is left to spend. A task already running longer than every run like it gets a wider range and the
+  warning "T3 is past every run like it"; no finish is ever before now. `forecast/plan` shows a running plan this way.
 - **Wakes and the manager.** The wake line ("of which wakes: 1–3 cold, about 3 USD") is part of the total, not added to
   it. A manager's own spend, where history has one, shows beside the total.
 - **`usd` and `usd-est`.** On a gateway profile the cost is exact dollars (`usd`). On a subscription it is what the

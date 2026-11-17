@@ -1442,7 +1442,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
-| `forecast/get` | user | `{job: Id}` | `Forecast` | no |
+| `forecast/get` | user | `{job: Id, remaining?: boolean}` | `Forecast` | no |
 | `forecast/plan` | user | `{plans: [string]}` | `{forecast: Forecast, running?: [RunningPlan]}` | no |
 | `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
@@ -5066,6 +5066,16 @@ by weight, so one run's tokens, time and cost stay together. Time is a list sche
 whenever one of the slots is free it takes the ready task with the lowest `n`, as the runner does, and a task starts
 once its parents have finished. So wall time shows merge bias: three parallel tasks together end later than the p50 of
 any of them. Each range comes from the plan's own draws, because p90s do not add up.
+
+**What remains** (`sim::simulate_fixed`, `forecast/get {remaining}`). Each task of a running job is a `sim::Fixed`,
+with now as the origin: `Done` (its steps' first start and last end, cost by unit and tokens, from `steps::rollup` of
+`JOB#N`) is the same in every draw and stays out of the totals; `Running` (a step and not finished) draws only from its
+class's picks at least `elapsed` long and holds a slot for what is left of the drawn run; `Open` starts from now on the
+free slots. A running task no pick is as long as draws the whole class as a whole run more, its finish widened with
+the small-class floor, and the hub warns "T{n} is past every run like it". Every task still draws one number, so
+all-`Open` is `simulate`'s forecast exactly. The hub adds now to every start and finish (clock times), keeps done
+tasks unwidened and uncalibrated, runs the draws through `block_in_place` off the async worker, and keeps an answer
+for 5 s per (job, newest step id). `forecast/plan` answers a running plan with it.
 
 The stream is SplitMix64, and `seed_of` is FNV-1a over the inputs: both are written here so that the numbers do not move
 with a library or a compiler. Quantiles are nearest-rank (`quantile`).
