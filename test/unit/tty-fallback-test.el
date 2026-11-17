@@ -588,6 +588,12 @@ binding are taken off afterwards."
                                         t))))))
     (should (= (length table) (with-temp-buffer (insert section) (how-many "^| `" (point-min) (point-max)))))))
 
+;; C-[ is ESC: a key ending in it (C-k C-[) runs on the ESC that starts every key a terminal sends as a sequence, so
+;; C-k then F6, an arrow or Alt+x would run it.  ESC alone (the Vim profile's) is no sequence and fine.
+(ert-deftest drgnx-tty-fallback/no-key-ends-in-esc ()
+  (should-not (seq-filter (lambda (k) (let ((v (key-parse k))) (and (> (length v) 1) (eq (aref v (1- (length v))) ?\e))))
+                          (tty-fallback-test--keys "VS Code"))))
+
 (ert-deftest drgnx-tty-fallback/facts-for-the-doctor ()
   (let ((report '(:terminals (("/dev/pts/3" :caps (:id vte :keys legacy) :fallback t
                                :fallbacks (("C-S-f" nil "M-F" "<f6> f") ("C-S-p" nil nil "<f6> p")))

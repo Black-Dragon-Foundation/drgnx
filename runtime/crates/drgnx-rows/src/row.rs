@@ -79,6 +79,24 @@ pub struct Row {
     /// its window ([`crate::fit_row`]); a builder never sets it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fonts: Vec<(u32, u32, String)>,
+    /// What the editor draws after the row at the window's right edge (the Explorer's and the Buffers panel's tail),
+    /// which the row's text keeps clear of where it is drawn always ([`Tail`]); the hub's own, never sent.
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub tail: Option<Tail>,
+}
+
+/// The tail a row gets at the window's right edge (`drgnx-wb-row-tail`): the hub fits the row's text short of what it
+/// always draws there, the env's `tail` places ([`crate::fit_row::Room::tail`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tail {
+    /// Only a control shown on hover (the ⋯, a close button): nothing is kept; a text that reaches the control's place
+    /// gets `drgnx-row-tail-short`, and the editor leaves the control out of the tail (it shows over the text on hover).
+    Hover,
+    /// A control drawn always (a buffer's unsaved ●): the text ends short of the control's place.
+    Control,
+    /// A git mark (and the control after it): the text ends short of the mark's place.
+    Mark,
 }
 
 #[cfg(feature = "schema")]

@@ -264,6 +264,7 @@ params! {
     BudgetGet(timeline::BudgetGetParams),
     BudgetTreePage(timeline::BudgetTreeParams),
     BudgetSet(timeline::BudgetSetParams),
+    BudgetRaise(timeline::BudgetRaiseParams),
     PaceGet(timeline::PaceParams),
     ForecastGet(forecast::ForecastParams),
     ForecastPlan(forecast::ForecastPlanParams),

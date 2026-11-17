@@ -30,7 +30,7 @@
 (require 'drgnx-git)
 (require 'drgnx-timer)
 (require 'drgnx-file-stream)
-(defvar drgnx-view-env-right-reserve)
+(defvar drgnx-view-env-tail)
 (require 'drgnx-quick-open)                ; Find's rows from the hub (`search/files')
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
@@ -1001,16 +1001,28 @@ The marks and colours of an ordinal are the display's: who is here (tools/agents
 (defun drgnx-explorer--rows-tail (key beg eol)
   "Give KEY's drawn row (BEG to EOL) its tail at the right edge, its overlay moved rather than made again: the ⋯
 control and the hover, and the git mark of the status the hub put on the name (a file's letter, ● for a folder with
-changes inside)."
+changes inside).  A row whose name reaches the ⋯'s place (`drgnx-row-tail-short', from the hub) leaves it out, and
+gets it drawn over the name on hover (`drgnx-wb-cover-sense')."
   (let* ((status (and (< beg eol) (intern-soft (get-text-property (1- eol) 'drgnx-git-status))))
          (status (and (assq status drgnx-git--looks) status))
          (mark (and status (if (and (not (memq status '(ignored untracked)))
                                     (eql 1 (drgnx-view-nav-field "dir" key)))
                                "●" (drgnx-git-letter status))))
-         (o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) nil
-                                       (gethash key drgnx-explorer--tails))))
+         (short (and (< beg eol) (get-text-property beg 'drgnx-row-tail-short)))
+         (o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) (and short 'none)
+                                       (gethash key drgnx-explorer--tails)
+                                       (and short (drgnx-explorer--sensor key)))))
     (overlay-put o 'evaporate t)
     (puthash key o drgnx-explorer--tails)))
+
+(defvar drgnx-explorer--sensors (make-hash-table :test #'equal :weakness 'value)
+  "KEY → its row's `mouse-sensor-functions': one list per row, the same object through every repaint (Nidhogg tells
+runs apart by `eq').")
+
+(defun drgnx-explorer--sensor (key)
+  "The `mouse-sensor-functions' of KEY's row: the hover cover (`drgnx-wb-cover-sense')."
+  (or (gethash key drgnx-explorer--sensors)
+      (puthash key (list #'drgnx-wb-cover-sense) drgnx-explorer--sensors)))
 
 (defvar-local drgnx-explorer--hidden-line nil
   "On the rows path, the overlay that hides the single root's line, its newline included (`drgnx-explorer--hide-line').")
@@ -1125,8 +1137,8 @@ Explorer buffer's: the twin's kill leaves them."
     (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)
     (drgnx-explorer--wait-for-hub)
     (require 'drgnx-view-env)
-    ;; each row's tail is drawn from the window's right edge: the hub fits the rows short of it
-    (setq-local drgnx-view-env-right-reserve #'drgnx-wb-tail-reserve)
+    ;; each row's tail is drawn from the window's right edge: the hub ends a row's text short of what it draws
+    (setq-local drgnx-view-env-tail #'drgnx-wb-tail-px)
     (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--rows-subscribe)
     (drgnx-explorer--rows-subscribe)))
 
@@ -2094,7 +2106,8 @@ is over — its release will not come here (Wayland)."
   (drgnx-modules-push-undo "after-focus-change-function drgnx-explorer"
                            (lambda () (remove-function after-focus-change-function 'drgnx-explorer)))
   (add-hook 'drgnx-git-changed-functions #'drgnx-explorer--git-changed)
-  (add-hook 'drgnx-git-shown-functions #'drgnx-explorer--shown-folders))
+  (add-hook 'drgnx-git-shown-functions #'drgnx-explorer--shown-folders)
+  (drgnx-wb-covers-setup "explorer"))                ; a long name's ⋯ drawn over it on hover
 
 (provide 'drgnx-explorer)
 ;;; drgnx-explorer.el ends here

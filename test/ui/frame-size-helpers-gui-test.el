@@ -67,5 +67,30 @@ fails, naming the size that did not hold, instead of returning on the size it sa
       (let ((err (should-error (drgnx-test-frame-text-size root w h) :type 'ert-test-failed)))
         (should (equal "the frame's text size did not hold" (car-safe (cadr err))))))))
 
+(ert-deftest drgnx-ui-frame-size-helpers/leaving-fullscreen-waits-for-a-late-answer ()
+  "Leaving fullscreen, answered only after four presented frames: the helper returns once the compositor's configure
+no longer says fullscreen (`nhwl--frame-states'), so the resize a row asks next takes; asked while the frame is still
+fullscreen it would be lost (a loaded machine answered the leave after two equal paints of the old size)."
+  (let* ((root (drgnx-uitest-root-frame))
+         (size (list (frame-text-width root) (frame-text-height root)))
+         (full (frame-parameter root 'fullscreen)))
+    (skip-unless (and (display-graphic-p root) full (fboundp 'nhwl--frame-states)))
+    (advice-add 'drgnx-uitest-snapshot :after #'drgnx-frame-size-helpers-test--after-sample)
+    (unwind-protect
+        (let ((drgnx-test-frame-fullscreen-request
+               (lambda (frame state)
+                 (setq drgnx-frame-size-helpers-test--late
+                       (cons 4 (lambda () (set-frame-parameter frame 'fullscreen state)))))))
+          (drgnx-test-frame-fullscreen root nil)
+          (should-not (memq 'fullscreen (nhwl--frame-states root)))
+          (drgnx-test-frame-text-size root (- (car size) 100) (- (cadr size) 100)))
+      (advice-remove 'drgnx-uitest-snapshot #'drgnx-frame-size-helpers-test--after-sample)
+      (when drgnx-frame-size-helpers-test--late
+        (funcall (cdr drgnx-frame-size-helpers-test--late))
+        (setq drgnx-frame-size-helpers-test--late nil))
+      (unless (eq full (frame-parameter root 'fullscreen))
+        (set-frame-size root (car size) (cadr size) t)
+        (drgnx-test-frame-fullscreen root full)))))
+
 (provide 'frame-size-helpers-gui-test)
 ;;; frame-size-helpers-gui-test.el ends here

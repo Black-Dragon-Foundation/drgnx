@@ -514,7 +514,7 @@ mod tests {
     ];
 
     /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
-    const CORE_WRITES: [&str; 13] = [
+    const CORE_WRITES: [&str; 14] = [
         "agents/move",
         "agents/role",
         "exec/bump",
@@ -526,10 +526,31 @@ mod tests {
         "plans/write",
         "brief/set",
         "budget/set",
+        "budget/raise",
         "records/import",
         "records/resolve",
         "work/target/set",
     ];
+
+    /// The newest schema the editor reads (`drgnx-hub-schema-readable-max`, core/drgnx-hub-core.el) is the schema this
+    /// hub writes: a schema bump moves both, and a hub at its own schema is no skew for the editor (the editor's
+    /// `drgnx-hub-client/the-hubs-own-schema-is-no-skew` reads methods.json for the same number).
+    #[test]
+    fn the_editors_readable_schema_is_the_hubs_own() {
+        let lisp = include_str!("../../../../core/drgnx-hub-core.el");
+        let at = lisp
+            .find("(defconst drgnx-hub-schema-readable-max ")
+            .expect("the constant");
+        let n: u32 = lisp[at + "(defconst drgnx-hub-schema-readable-max ".len()..]
+            .split_whitespace()
+            .next()
+            .and_then(|t| t.parse().ok())
+            .expect("a number");
+        assert_eq!(
+            n, SCHEMA,
+            "bump drgnx-hub-schema-readable-max with the schema"
+        );
+    }
 
     /// Every method is the hub's own: each name decodes to a `Params` variant of its own, and every variant is some
     /// method's.  The front's `serve` matches `Params` with no catch-all arm, so a variant it does not serve does not

@@ -1858,6 +1858,50 @@ functions and hook totals measured in the session."
 
 ;;;; GUI test runs
 
+(defun drgnx-ui--hang-report (sess run)
+  "Append to RUN's session.log where the timed-out session SESS hung, before its group is killed: each process of
+the group (PID COMM STATE WCHAN and the syscall it waits in) and the session Emacs's Lisp backtrace, asked over
+its server for 5 s (no answer: it is blocked outside Lisp)."
+  (let* ((pgid (drgnx-ui--read-pgid run))
+         (slurp (lambda (f) (ignore-errors (with-temp-buffer (insert-file-contents f) (string-trim (buffer-string))))))
+         (procs (and pgid
+                     (delq nil (mapcar (lambda (pid)
+                                         (let* ((stat (funcall slurp (format "/proc/%s/stat" pid)))
+                                                (rest (and stat (string-match ") \\(.\\) [0-9]+ \\([0-9]+\\)" stat)
+                                                           (list (match-string 1 stat) (match-string 2 stat)))))
+                                           (and rest (equal (nth 1 rest) pgid)
+                                                (format "  %s %s %s %s syscall %s" pid
+                                                        (funcall slurp (format "/proc/%s/comm" pid)) (car rest)
+                                                        (funcall slurp (format "/proc/%s/wchan" pid))
+                                                        (car (split-string (or (funcall slurp (format "/proc/%s/syscall" pid)) "?")))))))
+                                       (directory-files "/proc" nil "\\`[0-9]+\\'")))))
+         ;; SIGUSR2 (`debug-on-event'): a Lisp loop enters the debugger, whose *Backtrace* the server then reads; a
+         ;; loop in C that never checks for quit stays as it was (no answer)
+         (_ (dolist (l procs)
+              (when (string-match "\\`  \\([0-9]+\\) emacs " l)
+                (ignore-errors (signal-process (string-to-number (match-string 1 l)) 'USR2)))))
+         (_ (let ((deadline (+ (float-time) 2))) (while (< (float-time) deadline) (drgnx-ui--poll-pause 0.1))))
+         (bt (drgnx-ui--run-with-timeout
+              5 (drgnx-ui--emacsclient) "-s" (plist-get sess :socket)
+              "-e" "(if (get-buffer \"*Backtrace*\") (with-current-buffer \"*Backtrace*\" (buffer-substring-no-properties (point-min) (min (point-max) 8000))) (with-output-to-string (backtrace)))")))
+    (ignore-errors
+      (write-region (concat "\ndrgnx-ui: the session timed out; its processes (PID COMM STATE WCHAN):\n"
+                            (mapconcat #'identity procs "\n")
+                            "\ndrgnx-ui: its Emacs's backtrace:\n"
+                            (if (eql (car bt) 0) (cadr bt) (format "no answer (%s)" (car bt)))
+                            ;; no answer: where it is in C, where the image has gdb (the wm image)
+                            (if (or (eql (car bt) 0) (not (executable-find "gdb"))) ""
+                              (mapconcat
+                               (lambda (l)
+                                 (if (string-match "\\`  \\([0-9]+\\) emacs " l)
+                                     (concat "\ndrgnx-ui: its Emacs in C (gdb):\n"
+                                             (cadr (drgnx-ui--run-with-timeout
+                                                    30 "gdb" "-p" (match-string 1 l) "-batch" "-ex" "bt 60")))
+                                   ""))
+                               procs ""))
+                            "\n")
+                    nil (expand-file-name "session.log" run) t 'silent))))
+
 (defun drgnx-ui--kill-group (run)
   "KILL the process group of the session started in RUN (only if it is that session)."
   (let ((pgid (drgnx-ui--read-pgid run)))
@@ -1908,7 +1952,9 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
                     (format "echo $$ > %s; exec %s > %s 2>&1" (shell-quote-argument pgid-file) cmd
                             (shell-quote-argument (expand-file-name "session.log" run)))))))
     (setq drgnx-ui--own (delete (cons :group run) drgnx-ui--own))
-    (when (eq (car r) 'timeout) (drgnx-ui--kill-group run))
+    (when (eq (car r) 'timeout)
+      (drgnx-ui--hang-report sess run)
+      (drgnx-ui--kill-group run))
     ;; whatever is left in the scope (a server whose shell was killed) goes with it
     (when scope (drgnx-ui--run "systemctl" "--user" "stop" (concat name ".scope")))
     (drgnx-ui--run "pkill" "-KILL" "-f" "--" (drgnx-ui--name-pattern name))   ; belt and braces
@@ -2078,15 +2124,18 @@ to know (a Lisp plist: :rc :run :report :lines).  Return 0: whether the file pas
                   "-l" "drgnx-ui" "-f" "drgnx-ui-cli" "--" "test-ui-file" file out)
    :sentinel (lambda (p _e) (unless (process-live-p p) (process-put p :done (float-time))))))
 
-(defun drgnx-ui--run-file-sessions (files jobs out-dir)
+(defun drgnx-ui--run-file-sessions (files jobs out-dir &optional on-start on-end)
   "Run each of FILES in a session of its own, JOBS at once, the results of file N in OUT-DIR/N.json.  Return the
-list of (FILE OUT EXIT SECONDS), in the order of FILES.  A tier stopped meanwhile ends the sessions' Emacsen."
+list of (FILE OUT EXIT SECONDS CHILD-OUTPUT), in the order of FILES.  ON-START is called with a file as its session
+starts, ON-END with its entry as it ends (so a run killed meanwhile has told which files ran).  A tier stopped
+meanwhile ends the sessions' Emacsen."
   (let ((pending (let ((i 0)) (mapcar (lambda (f) (list f (expand-file-name (format "%d.json" (cl-incf i)) out-dir))) files)))
         (running nil) (done nil))
     (unwind-protect
         (while (or pending running)
           (while (and pending (< (length running) jobs))
             (pcase-let ((`(,f ,out) (pop pending)))
+              (when on-start (funcall on-start f))
               (push (list (drgnx-ui--start-file-session f out) f out (float-time)) running)))
           (accept-process-output nil 0.2)
           (dolist (r running)
@@ -2096,6 +2145,7 @@ list of (FILE OUT EXIT SECONDS), in the order of FILES.  A tier stopped meanwhil
                 (push (list f out (process-exit-status p) (- (float-time) t0)
                             (when-let* ((b (process-buffer p))) (and (buffer-live-p b) (with-current-buffer b (buffer-string)))))
                       done)
+                (when on-end (funcall on-end (car done)))
                 (when-let* ((b (process-buffer p))) (when (buffer-live-p b) (kill-buffer b)))
                 (setq running (delq r running))))))
       (dolist (r running) (drgnx-run-ert--end-process (car r) 10)))
@@ -2132,19 +2182,27 @@ characters (saying how many were left out) and made printable (`drgnx-run-ert--p
 session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exit code."
   (let* ((out-dir (make-temp-file "drgnx-ui-files" t)) (t-start (float-time))
          (profile (and (equal (getenv "DRGNX_UI_PROFILE") "1") (list nil)))
-         (runs (drgnx-ui--run-file-sessions files (min (drgnx-ui--test-jobs) (length files)) out-dir))
+         (meta-of (lambda (out) (ignore-errors (car (read-from-string (with-temp-buffer (insert-file-contents (concat out ".meta"))
+                                                                                        (buffer-string)))))))
+         ;; each file's line as it starts and ends, not at the end: a run killed meanwhile (the slot guard) names the
+         ;; file that hung
+         (runs (drgnx-ui--run-file-sessions
+                files (min (drgnx-ui--test-jobs) (length files)) out-dir
+                (lambda (f) (princ (format "ui file %s: started\n" (file-name-nondirectory f))))
+                (pcase-lambda (`(,f ,out ,exit ,secs ,_))
+                  (let ((results (and (file-readable-p out) (drgnx-ui--read-json out))))
+                    (princ (format "ui file %s: %s in %.1fs\n" (file-name-nondirectory f)
+                                   (if results (format "%s/%s passed" (plist-get results :passed) (plist-get results :total))
+                                     (format "no results (exit %s)" (or (plist-get (funcall meta-of out) :rc) exit)))
+                                   secs))))))
          (total 0) (passed 0) (ok t) fails skips)
     (unwind-protect
         (dolist (r runs)
-          (pcase-let* ((`(,f ,out ,exit ,secs ,child-out) (or r (list nil nil nil 0 nil)))
+          (pcase-let* ((`(,f ,out ,exit ,_secs ,child-out) (or r (list nil nil nil 0 nil)))
                        (base (and f (file-name-nondirectory f)))
-                       (meta (and f (ignore-errors (car (read-from-string (with-temp-buffer (insert-file-contents (concat out ".meta")) (buffer-string)))))))
+                       (meta (and f (funcall meta-of out)))
                        (results (and f (file-readable-p out) (drgnx-ui--read-json out))))
             (when f
-              (princ (format "ui file %s: %s in %.1fs\n" base
-                             (if results (format "%s/%s passed" (plist-get results :passed) (plist-get results :total))
-                               (format "no results (exit %s)" (or (plist-get meta :rc) exit)))
-                             secs))
               (if results
                   (progn
                     (cl-incf total (plist-get results :total)) (cl-incf passed (plist-get results :passed))

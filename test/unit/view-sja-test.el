@@ -7,6 +7,7 @@
 
 (defvar view-sja-test--sent nil "What the buffer sent the hub, newest first: (METHOD . PARAMS).")
 (defvar view-sja-test--n 0 "A counter for each test's own view name (Sjá's views are the process's).")
+(defvar drgnx-view-unknown-faces)
 
 (defmacro view-sja-test--with (&rest body)
   "BODY in a fresh buffer `buf' holding the rows of the pair (`view' . \"c\") in Sjá, sending captured."
@@ -182,9 +183,10 @@ decision."
 
 (ert-deftest rows-sja/theme-change-re-resolves ()
   ;; a name that is no face yet is asked again at a redraw (a theme change, a face defined later); a style's face is
-  ;; made again from the faces as they are
+  ;; made again from the faces as they are.  The name is unknown on purpose: its count goes to a table of the test's
+  ;; own, not the strict run's census of stale names (as view-patch-test's)
   (view-sja-test--with
-    (let ((face 'drgnx-sja-test-later))
+    (let ((face 'drgnx-sja-test-later) (drgnx-view-unknown-faces (make-hash-table :test #'equal)))
       (unwind-protect
           (progn
             (view-sja-test--push view (list (list :reset (list (view-sja-test--row "a" "ab" :runs [[0 1 "drgnx-sja-test-later"]

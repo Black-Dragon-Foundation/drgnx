@@ -913,6 +913,7 @@ impl Front {
             | Params::BudgetGet(_)
             | Params::BudgetTreePage(_)
             | Params::BudgetSet(_)
+            | Params::BudgetRaise(_)
             | Params::PaceGet(_)
             | Params::ForecastGet(_)
             | Params::ForecastPlan(_)

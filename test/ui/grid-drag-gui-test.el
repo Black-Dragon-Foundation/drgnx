@@ -104,6 +104,35 @@ grid's own, so the terminal leaves its dock first (in a session its dock is the 
         (should (memq 'g-term stack))
         (should (memq 'g-chat stack))))))
 
+(ert-deftest drgnx-ui-grid-drag/an-editor-tab-dropped-in-the-centre-joins-that-group ()
+  "An editor's tab dragged onto the middle of the other editor: that file is a tab there and no longer here."
+  (drgnx-ui-grid-drag--with
+    (let* ((a (find-file-noselect (make-temp-file "drgnx-drag-a" nil ".txt")))
+           (b (find-file-noselect (make-temp-file "drgnx-drag-b" nil ".txt")))
+           (one (selected-window)) (two (drgnx-groups-split-right)))
+      (unwind-protect
+          (progn
+            (set-window-buffer one a)
+            (set-window-parameter one 'drgnx-tabs (list a b))
+            (drgnx-chrome-apply nil t)
+            (redisplay t)
+            (let* ((e (window-pixel-edges one)) (f (selected-frame))
+                   (tab (seq-some (lambda (x)
+                                    (let ((p (posn-at-x-y x (+ (nth 1 e) 4) f)))
+                                      (and (eq (posn-area p) 'tab-line) (posn-string p)
+                                           (eq (get-text-property (cdr (posn-string p)) 'drgnx-buffer (car (posn-string p))) b)
+                                           p)))
+                                  (number-sequence (nth 0 e) (nth 2 e) 4))))
+              (should tab)
+              (drgnx-uitest-run (drgnx-uitest-drag-events tab (drgnx-ui-grid-drag--at two 0.5 0.5) :lazy t :steps 8))
+              (redisplay t)
+              (should (memq b (window-parameter two 'drgnx-tabs)))
+              (should-not (memq b (window-parameter one 'drgnx-tabs)))))
+        (dolist (buf (list a b))
+          (let ((file (buffer-file-name buf)))
+            (kill-buffer buf)
+            (delete-file file)))))))
+
 (ert-deftest drgnx-ui-grid-drag/drag-a-divider-resizes ()
   "The divider between two editor tiles is Emacs's own: dragged 60 px right, the left tile is 60 px wider."
   (drgnx-ui-grid-drag--with

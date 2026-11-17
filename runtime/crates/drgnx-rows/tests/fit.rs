@@ -300,6 +300,7 @@ fn fitted(row: &mut drgnx_rows::Row, width_px: u32, m: &dyn Measure) -> bool {
             width_px,
             tty: None,
             image_px: &none,
+            tail: None,
         },
     )
 }
@@ -452,4 +453,64 @@ fn a_text_no_wider_than_the_ellipsis_stays_whole() {
     assert_eq!(fit::fit(&s, "code", "8", SLACK + ell / 2.0), "8");
     // wider than the ellipsis: cut as before
     assert_eq!(fit::fit(&s, "code", "88", SLACK + ell / 2.0), "…");
+}
+
+fn fitted_with_tail(
+    row: &mut drgnx_rows::Row,
+    width_px: u32,
+    tail: (u32, u32),
+    m: &dyn Measure,
+) -> bool {
+    let none = |_: &drgnx_rows::ImageId| None;
+    drgnx_rows::fit_row::fit_row(
+        row,
+        m,
+        &drgnx_rows::fit_row::Room {
+            width_px,
+            tty: None,
+            image_px: &none,
+            tail: Some(tail),
+        },
+    )
+}
+
+fn tail_row(text: &str, tail: drgnx_rows::Tail) -> drgnx_rows::Row {
+    let mut b = drgnx_rows::RowBuilder::new("r");
+    b.push(text, None).tail(tail);
+    b.finish()
+}
+
+fn short(row: &drgnx_rows::Row) -> bool {
+    row.props.iter().any(|p| p.2 == drgnx_rows::fit_row::SHORT)
+}
+
+#[test]
+fn a_row_ends_short_of_what_its_tail_always_draws() {
+    let s = tens();
+    // the tail's mark starts 35 px from the edge, its control 24: in 120 px, 100 px of text
+    // a clean row (the ⋯ on hover only) is cut at the full width, and says its text reaches the control's place
+    let mut clean = tail_row("abcdefghij", drgnx_rows::Tail::Hover);
+    assert!(
+        !fitted_with_tail(&mut clean, 120, (35, 24), &s),
+        "a clean row keeps its whole text: {}",
+        clean.text
+    );
+    assert!(short(&clean), "its text reaches the ⋯'s place");
+    // a row with a git mark ends short of the mark: 85 px less the ellipsis (and the slack)
+    let mut marked = tail_row("abcdefghij", drgnx_rows::Tail::Mark);
+    assert!(fitted_with_tail(&mut marked, 120, (35, 24), &s));
+    assert!(
+        marked.text.ends_with('…') && marked.text.chars().count() * 10 <= 85,
+        "{}",
+        marked.text
+    );
+    assert!(!short(&marked));
+    // a control drawn always (a buffer's unsaved ●): short of the control
+    let mut control = tail_row("abcdefghij", drgnx_rows::Tail::Control);
+    assert!(fitted_with_tail(&mut control, 120, (35, 24), &s));
+    assert!(control.text.chars().count() * 10 <= 96, "{}", control.text);
+    // a short clean row leaves the ⋯ its place
+    let mut room = tail_row("abc", drgnx_rows::Tail::Hover);
+    assert!(!fitted_with_tail(&mut room, 120, (35, 24), &s));
+    assert!(!short(&room));
 }

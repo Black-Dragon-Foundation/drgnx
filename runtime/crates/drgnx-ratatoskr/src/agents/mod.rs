@@ -197,6 +197,12 @@ impl Hub {
         self.find(id)?.pause_after_tool()
     }
 
+    /// Session ID, paused by a reached budget, goes on with the continue ("resumed by you"): false when it is not
+    /// paused, the user holds its wheel, or it has exited.
+    pub fn resume_paused(&self, id: &str) -> Result<bool, Error> {
+        Ok(self.find(id)?.resume_paused())
+    }
+
     /// What the supervisor reads of every session the hub holds.
     pub fn observations(&self) -> Vec<crate::supervisor::Obs> {
         let all: Vec<Arc<Session>> = lock(&self.sessions).values().cloned().collect();

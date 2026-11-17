@@ -595,8 +595,8 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 12, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 12. A newer file (above 12) makes the hub read-only; a
+missing file is made at schema 14, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 14. A newer file (above 14) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
@@ -873,6 +873,14 @@ in the same transaction as the change they record:
   second for each scope whose spend moved (bursts coalesce, the last value wins; ancestors count). The burn is a
   per-hour rate over the last hour from an in-memory ring (empty before ten minutes of spend; lost on restart). A
   cost an agent reports is a number or `{"amount", "currency"}`: `budget::cost_amount` reads both, everywhere.
+  `budget/raise` (`budget::raise`) reads the card's `data.scope` and `data.sessions` (as `reached_limit` wrote them),
+  settles the card with choice `raise` and `data.raised` in one write (a second raise is refused), then
+  `Budgets::raise` merges the new limits over the scope's other units and keeps a joint scope joint. What still holds
+  a session is `Budgets::holder_of_session`: the nearest scope on its chain whose own limit its spend has reached. A
+  free session of the card is sent the wheel's no-change give ("Continue.", key `wheel:resumed`) through
+  `Agents::resume_paused`, which does nothing to a session the user's wheel holds (a pause cancels the turn, so a
+  queue delivery alone would leave it idle); a job's card then resumes the job through `fallback::resume`, unless a
+  scope above its run still holds it. `fallback::resume` skips every session a holder still holds.
 - **Retention:** the hub's housekeeping runs the daily prune (`coord/prune`, `norn::write::prune`): by age once a
   day, and on every call the row cap.
 
@@ -1189,7 +1197,7 @@ as the peer `agent:<session>` on the user's branch). Both user only; `history/hu
 
 ## The store
 
-The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 14) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
 card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
@@ -1351,6 +1359,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
 | `budget/get` | user | `{scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
+| `budget/raise` | user | `{card: natnum, limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], resume?: boolean}` | `{held?: [BudgetHeld], resumed?: [string], view: BudgetView}` | yes |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
 | `budget/tree` | user | `{after?: string, depth?: natnum, root?: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{next?: string, nodes?: [BudgetNode]}` | no |
 | `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
@@ -1433,7 +1442,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
-| `forecast/get` | user | `{job: Id}` | `Forecast` | no |
+| `forecast/get` | user | `{job: Id, remaining?: boolean}` | `Forecast` | no |
 | `forecast/plan` | user | `{plans: [string]}` | `{forecast: Forecast, running?: [RunningPlan]}` | no |
 | `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
@@ -1648,7 +1657,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
-| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tail?: [natnum, natnum], tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, faces?: [{avg?: number, face: string, file?: string, index?: natnum, pad?: number, px?: number, role: string, wght?: number}], glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
@@ -2512,10 +2521,13 @@ All of it is in memory only.
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
   width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, glyphs: [[name, glyph]],
-  density?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again. `width_px` is
-  the room a row has: the window's body, less what the view's buffer draws at the right edge after each row (the
-  Explorer's and the Buffers panel's tail, the git mark and the ⋯, placed from that edge: `drgnx-view-env-right-reserve`,
-  `drgnx-wb-tail-reserve`), so a row fitted to it never pushes its tail past the edge. `glyphs` are
+  density?, tail?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again.
+  `width_px` is the window's body. `tail: [mark, control]` is where the view's buffer draws a row's tail after it (the
+  Explorer's and the Buffers panel's: `drgnx-view-env-tail`, `drgnx-wb-tail-px`), px from the right edge: the start
+  of its git mark and of its control. A row ends its text short of what its tail always draws: the mark's place on a
+  row with a git mark, the control's on a row whose control is always shown (a buffer's unsaved ●, every control on
+  a terminal), nothing on a row whose control shows on hover only; such a row whose text reaches the control's place
+  gets `drgnx-row-tail-short`, and its tail leaves the control out (Glitnir paints it over the text on hover). `glyphs` are
   the kit's glyphs as the class's frame draws them (ASCII on a terminal that is not UTF-8); `density` is the user's
   (`compact`, `comfortable` when absent, `roomy`; `drgnx-look-density`), which the kit's sizes follow (a tree level's
   indent), and a change of it is a new epoch. `headless: true` marks a view that Lisp only
@@ -5054,6 +5066,16 @@ by weight, so one run's tokens, time and cost stay together. Time is a list sche
 whenever one of the slots is free it takes the ready task with the lowest `n`, as the runner does, and a task starts
 once its parents have finished. So wall time shows merge bias: three parallel tasks together end later than the p50 of
 any of them. Each range comes from the plan's own draws, because p90s do not add up.
+
+**What remains** (`sim::simulate_fixed`, `forecast/get {remaining}`). Each task of a running job is a `sim::Fixed`,
+with now as the origin: `Done` (its steps' first start and last end, cost by unit and tokens, from `steps::rollup` of
+`JOB#N`) is the same in every draw and stays out of the totals; `Running` (a step and not finished) draws only from its
+class's picks at least `elapsed` long and holds a slot for what is left of the drawn run; `Open` starts from now on the
+free slots. A running task no pick is as long as draws the whole class as a whole run more, its finish widened with
+the small-class floor, and the hub warns "T{n} is past every run like it". Every task still draws one number, so
+all-`Open` is `simulate`'s forecast exactly. The hub adds now to every start and finish (clock times), keeps done
+tasks unwidened and uncalibrated, runs the draws through `block_in_place` off the async worker, and keeps an answer
+for 5 s per (job, newest step id). `forecast/plan` answers a running plan with it.
 
 The stream is SplitMix64, and `seed_of` is FNV-1a over the inputs: both are written here so that the numbers do not move
 with a library or a compiler. Quantiles are nearest-rank (`quantile`).

@@ -1,0 +1,21 @@
+{"scenario": "forecast/remaining-after-two-tasks", "requires": ["v1", "test-hooks"], "doc": "Spec G7: forecast/get with remaining on a job of three tasks, two of them done and the third started long ago. The done tasks are their actuals at the wall clock (p50 = p90 = their steps' first start and last end), the third is running, and since it has run longer than every run like it the answer warns. A second ask with no new step is the kept answer (the same made_at); the proposal's forecast, asked without remaining, has no task state."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-routes ((implement \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: One\n\n**Role:** implement\n\nAdd one.txt.\n\n### Task 2: Two\n\n**Role:** implement\n\nAdd two.txt.\n\n### Task 3: Three\n\n**Role:** implement\n\nAdd three.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "coord/task-status", "params": {"task": "$job#1", "status": "done", "agent": null}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "coord/task-status", "params": {"task": "$job#2", "status": "done", "agent": null}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into step (session, seq, class, start, end, task, cost, cost_unit) values ('session:s1', 1, 'think', 1000.0, 1100.0, '$job#1', 0.25, 'usd-est'), ('session:s2', 1, 'think', 1200.0, 1500.0, '$job#2', 0.5, 'usd-est'), ('session:s3', 1, 'think', 2000.0, null, '$job#3', null, null)"]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "forecast/get", "params": {"job": "$job", "remaining": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"made_at": "$capture:ma", "tasks": [{"n": 1, "at": "done", "start": {"p50": 1000.0, "p90": 1000.0}, "finish": {"p50": 1100.0, "p90": 1100.0}, "cost": [{"unit": "usd-est", "p50": 0.25, "p90": 0.25, "estimate": true}]}, {"n": 2, "at": "done", "start": {"p50": 1200.0, "p90": 1200.0}, "finish": {"p50": 1500.0, "p90": 1500.0}}, {"n": 3, "at": "running", "start": {"p50": 2000.0, "p90": 2000.0}}], "warnings": {"$contains": ["T3 is past every run like it"]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "forecast/get", "params": {"job": "$job", "remaining": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"made_at": "$ma"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "forecast/get", "params": {"job": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"tasks": [{"n": 1, "at": "$absent"}, {"n": 2, "at": "$absent"}, {"n": 3, "at": "$absent"}]}}, "within_ms": 10000}

@@ -691,6 +691,7 @@
               (search-fold :none "a click on the folder's chevron; the palette")
               (layout-next "SPC l n")
               (layout-pick "SPC l l")
+              (layout-restore-previous "SPC l u")
               (layout-agent :none "SPC l n cycles; the palette")
               (layout-editor :none "SPC l n cycles; the palette")
               (layout-zen :none "SPC u z is still Zen Mode (view-zen); the palette")

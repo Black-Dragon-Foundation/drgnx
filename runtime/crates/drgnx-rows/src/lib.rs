@@ -27,5 +27,5 @@ pub mod svg;
 
 pub use builder::RowBuilder;
 pub use patch::{Op, Patch, diff};
-pub use row::{ImageId, Row, RowHeight};
+pub use row::{ImageId, Row, RowHeight, Tail};
 pub use style::{Colour, CursorShape, Face, Style, StyleId, TermMeta};

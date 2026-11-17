@@ -947,15 +947,54 @@ wrong-number-of-arguments (19 rows of this file, once a row loaded the kit)."
       (should (member "DRGNX_TEST_SELECTOR=\"^drgnx-scn/\"" env))
       (should (member "DRGNX_SCENARIO_CONFIG=minimal" env)))))
 
-(defun drgnx-ui-test--file-sessions-here (files _jobs out-dir)
+(defun drgnx-ui-test--file-sessions-here (files _jobs out-dir &optional on-start on-end)
   "`drgnx-ui--run-file-sessions' in this Emacs, no child Emacs: each of FILES through `drgnx-ui-run-ui-file-session',
 so through `drgnx-ui-test-session-function', which a row binds to a stand-in."
   (let ((i 0))
     (mapcar (lambda (f)
               (let ((out (expand-file-name (format "%d.json" (cl-incf i)) out-dir)))
+                (when on-start (funcall on-start f))
                 (drgnx-ui-run-ui-file-session f out)
-                (list f out 0 0.0 nil)))
+                (let ((r (list f out 0 0.0 nil))) (when on-end (funcall on-end r)) r)))
             files)))
+
+(ert-deftest drgnx-ui/a-timed-out-session-says-where-it-hung ()
+  :tags '(:cond)                        ; a real process group stands in for the session's
+  ;; a session killed at its timeout left only "no results" (2026-11-17, kwin: 21 min, then 150 s, in a busy Emacs):
+  ;; before the kill its session.log gets each process of the group with its state and wait, and the Emacs's backtrace
+  ;; or that its server did not answer
+  (let* ((run (make-temp-file "duih" t))
+         (p (make-process :name "duih" :command '("sleep" "30") :noquery t :connection-type 'pipe)))
+    (unwind-protect
+        (progn
+          (write-region (number-to-string (process-id p)) nil (expand-file-name "pgid" run) nil 'silent)
+          (drgnx-ui--hang-report (list :socket (expand-file-name "no-server" run)) run)
+          (let ((log (with-temp-buffer (insert-file-contents (expand-file-name "session.log" run)) (buffer-string))))
+            (should (string-match-p (format "^  %d sleep S " (process-id p)) log))
+            (should (string-match-p "its Emacs's backtrace:\nno answer" log))))
+      (delete-process p)
+      (delete-directory run t))))
+
+(ert-deftest drgnx-ui/each-file-is-told-as-it-starts-and-ends ()
+  :tags '(:cond)                        ; real processes stand in for the files' sessions
+  ;; a run the slot guard kills prints nothing that comes at the end: the per-file runner tells each file's start and
+  ;; end as they happen, so a hung file is named (2026-11-17, a kwin lane killed after 21 min said nothing)
+  (let ((out-dir (make-temp-file "duis" t)) (told nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-ui--start-file-session)
+                   (lambda (file _out)
+                     (make-process :name file :command (list "sh" "-c" (if (equal file "slow") "sleep 2" "true"))
+                                   :noquery t :connection-type 'pipe
+                                   :sentinel (lambda (p _e) (unless (process-live-p p) (process-put p :done (float-time))))))))
+          (drgnx-ui--run-file-sessions
+           '("fast" "slow") 2 out-dir
+           (lambda (f) (push (list 'start f) told))
+           (lambda (r) (push (list 'end (car r) (and (process-live-p (get-process "slow")) t)) told)))
+          (setq told (nreverse told))
+          (should (equal (seq-take told 2) '((start "fast") (start "slow"))))
+          (should (equal (nth 2 told) '(end "fast" t)))      ; told while the slow one still runs
+          (should (equal (car (nth 3 told)) 'end)))
+      (delete-directory out-dir t))))
 
 (defmacro drgnx-ui-test--with-ui-repo (repo &rest body)
   "Run BODY with REPO bound to a fresh checkout holding one GUI test file (test/ui/a-test.el) and `drgnx-ui-repo-dir'

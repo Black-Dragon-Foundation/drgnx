@@ -676,6 +676,7 @@
               (layout-browser :none "the palette")
               (layout-save :none "the palette")
               (layout-pick :none "the palette")
+              (layout-restore-previous "C-x w u")
               (browser-open :none "the palette")
               (browser-test-report :none "the palette")
               (browser-agent-page :none "the palette")

@@ -84,11 +84,23 @@ pub struct TaskForecast {
     #[serde(default, deserialize_with = "null_as_empty")]
     pub cost: Vec<CostRange>,
     /// When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs
-    /// (a manager's row has none: zeros).
+    /// (a manager's row has none: zeros).  With `remaining`, wall-clock times; a done task's are its actuals.
     #[serde(default)]
     pub start: Range,
     #[serde(default)]
     pub finish: Range,
+    /// With `remaining`: where the task stands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<TaskAt>,
+}
+
+/// Where a task of a running job stands, in a forecast of what remains.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskAt {
+    Done,
+    Running,
+    Waiting,
 }
 
 /// The cold wakes in a forecast: "of which", already inside the totals (the history holds its wakes).
@@ -211,6 +223,10 @@ pub struct PlanForecast {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ForecastParams {
     pub job: Id,
+    /// What remains of a running job: finished tasks at their actuals, a running one from the runs longer than it has
+    /// been running, the rest from now; times are then wall-clock (seconds since the epoch), not offsets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -255,7 +271,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "forecast/get", ForecastGet(ForecastParams) -> Forecast,
             classes: [User], writes: false,
-            doc: "a job's forecast: tokens, time and cost per task and for the plan, from the history of similar tasks, with the effect on the week's pace",
+            doc: "a job's forecast: tokens, time and cost per task and for the plan, from the history of similar tasks, with the effect on the week's pace; with remaining, what is left of a running job from now",
         ),
         method!(
             "forecast/plan", ForecastPlan(ForecastPlanParams) -> PlanForecast,

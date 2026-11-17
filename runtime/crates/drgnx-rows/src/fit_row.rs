@@ -13,7 +13,7 @@
 
 use crate::fit::{self, ELLIPSIS, Ink, Measure, SLACK, UI};
 use crate::fit_tty;
-use crate::row::{ImageId, Row};
+use crate::row::{ImageId, Row, Tail};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// A terminal's cell width in px and its width table (`view/env`'s `tty_widths`, `[from, to, width]` ranges).
@@ -27,6 +27,10 @@ pub struct Room<'a> {
     pub tty: Option<Tty<'a>>,
     /// An image's width in px (its SVG's), by id; none: a cell.
     pub image_px: &'a dyn Fn(&ImageId) -> Option<u32>,
+    /// Where a row's tail is drawn (`drgnx-wb-row-tail`), px (a terminal's: columns) from the window's right edge:
+    /// `(mark, control)`, the start of its git mark and of its control (the env's `tail`); none: the view's rows get
+    /// no tail. A row with a [`Tail`] ends its text short of what its tail always draws.
+    pub tail: Option<(u32, u32)>,
 }
 
 /// The font roles of ROW's chars: an index into the returned list per char (0, the buffer's default `ui`). Runs
@@ -241,6 +245,21 @@ pub fn roles_key(at: &[usize], inks: &[Ink], s: usize, e: usize) -> String {
         .join("+")
 }
 
+/// The property a row gets over its text when the text reaches its tail's control's place (a [`Tail::Hover`]): the
+/// editor leaves the control out of the row's tail.
+pub const SHORT: &str = "drgnx-row-tail-short";
+
+/// The px ROW keeps clear at the window's right edge for what its tail always draws (ROOM's `tail` places).
+fn kept(row: &Row, room: &Room) -> u32 {
+    match (row.tail, room.tail) {
+        (Some(Tail::Mark), Some((mark, _))) => mark,
+        (Some(Tail::Control), Some((_, control))) => control,
+        // a terminal shows the control always
+        (Some(Tail::Hover), Some((_, control))) if room.tty.is_some() => control,
+        _ => 0,
+    }
+}
+
 /// ROW fitted to ROOM: each segment that runs past its end cut with an ellipsis, and `fonts` set to the roles its
 /// text is measured in. Returns whether anything was cut.
 pub fn fit_row(row: &mut Row, m: &dyn Measure, room: &Room) -> bool {
@@ -263,7 +282,10 @@ pub fn fit_row(row: &mut Row, m: &dyn Measure, room: &Room) -> bool {
         };
         let (e, limit) = match stops_now.get(k) {
             Some(st) if k < stops_now.len() => (st.0 as usize, st.1 as f32),
-            _ => (n, room.width_px as f32),
+            _ => (
+                n,
+                (room.width_px - kept(row, room).min(room.width_px)) as f32,
+            ),
         };
         if s >= e {
             continue;
@@ -322,6 +344,37 @@ pub fn fit_row(row: &mut Row, m: &dyn Measure, room: &Room) -> bool {
         chars = row.text.chars().collect();
         (at, list) = inks(row, chars.len(), m);
         w = widths(row, &chars, &at, &list, m, room);
+    }
+    // a tail's control shown on hover only is left out where the text reaches its place (the editor shows it over
+    // the text on hover)
+    row.props.retain(|p| p.2 != SHORT);
+    if let (Some(Tail::Hover), Some((_, control)), None) = (row.tail, room.tail, room.tty) {
+        let s = row
+            .stops
+            .iter()
+            .map(|st| st.0 as usize + 1)
+            .max()
+            .unwrap_or(0)
+            .min(chars.len());
+        let x0 = row
+            .stops
+            .iter()
+            .max_by_key(|st| st.0)
+            .map_or(0.0, |st| st.1 as f32);
+        let plain = Plain::of(row, &chars, &w, s, chars.len());
+        let key = roles_key(&at, &list, s, chars.len());
+        let total = room
+            .tty
+            .is_none()
+            .then(|| m.measured(&key, &plain.text))
+            .flatten()
+            .map(|px| px + plain.placed)
+            .unwrap_or_else(|| w[s..].iter().sum());
+        if x0 + total > room.width_px.saturating_sub(control) as f32 {
+            let end = chars.len() as u32;
+            row.props
+                .push((0, end, SHORT.to_owned(), serde_json::Value::Bool(true)));
+        }
     }
     let n = chars.len();
     row.fonts.clear();

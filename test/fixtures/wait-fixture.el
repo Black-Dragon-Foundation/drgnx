@@ -209,6 +209,8 @@ does not take, or does not hold, fails the test (a fullscreen frame keeps its ou
       (ert-fail (list "the frame's text size did not hold" (list width height) :has (funcall size)
                       :fullscreen (frame-parameter frame 'fullscreen))))))
 
+(declare-function nhwl--frame-states "nhwlterm.c" (&optional frame))
+
 (defvar drgnx-test-frame-fullscreen-request (lambda (frame state) (set-frame-parameter frame 'fullscreen state))
   "How `drgnx-test-frame-fullscreen' asks for a state: a function of FRAME and STATE.  A row that checks the helper
 itself binds it to a request answered late.")
@@ -230,6 +232,13 @@ helper left it (a configure answered after a paint would otherwise pass as the o
     (unless (eq state was)
       (when (and was (null state)) (puthash frame (funcall size) drgnx-test--fullscreen-sizes))
       (funcall drgnx-test-frame-fullscreen-request frame state)
+      ;; the compositor's answer (Nidhogg's shell keeps its last configure's states): a resize asked before the leave is
+      ;; answered is dropped, and the size alone cannot tell (a leave can keep the size, two paints can come first)
+      (when (and (fboundp 'nhwl--frame-states) (condition-case nil (progn (nhwl--frame-states frame) t) (error nil)))
+        (drgnx-test-wait (lambda () (ignore-errors (drgnx-uitest-snapshot frame))
+                           (eq (and state t) (and (memq 'fullscreen (nhwl--frame-states frame)) t)))
+                         :secs 8 :what (list "the compositor's answer to fullscreen" state
+                                             :has (nhwl--frame-states frame))))
       (when-let* ((full (and state (gethash frame drgnx-test--fullscreen-sizes))))
         ;; each try a presented frame (a trip through the compositor), as `drgnx-test-wait-presented''s samples
         (drgnx-test-wait (lambda () (ignore-errors (drgnx-uitest-snapshot frame)) (equal full (funcall size)))

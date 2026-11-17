@@ -93,5 +93,31 @@ lisp/nidhogg-frame.el), or in a daemon, which has no first graphical frame."
     (should-not window-system-default-frame-alist)
     (should-not minibuffer-frame-alist)))
 
+(ert-deftest drgnx-look-echo/the-swap-shares-by-the-saved-sizes ()
+  "A saved column of three whose normal sizes are stale (one negative, as a pixel-wise resize left a dock's folded
+section) goes into a smaller window: put as saved it cannot be (\"Cannot resize window\"); with the normal sizes
+taken from the saved sizes (`drgnx-look-echo--normal-sizes') it goes in, each part its share."
+  (let ((window-min-height 1))
+    (delete-other-windows)
+    (let* ((top (selected-window)) (mid (split-window top 4)) (low (split-window mid -2)) (state nil))
+      (ignore low)
+      (setq state (window-state-get (frame-root-window) nil))
+      ;; stale: the first two over 1, the last below 0
+      (let ((kids (seq-filter (lambda (e) (and (consp e) (eq (car e) 'leaf))) (cddr state))))
+        (should (= (length kids) 3))
+        (cl-mapc (lambda (k n) (setcdr (assq 'normal-height (cdr k)) n)) kids '(0.2 0.84 -0.04)))
+      (delete-other-windows)
+      (let ((into (split-window nil (- (window-total-height) 4) nil)))
+        (ignore into)
+        (should-error (window-state-put (copy-tree state) (selected-window) 'safe))
+        (delete-other-windows)
+        (split-window nil (- (window-total-height) 4) nil)
+        (let ((fixed (copy-tree state)))
+          (drgnx-look-echo--normal-sizes (cdr fixed))
+          (window-state-put fixed (selected-window) 'safe)
+          (should (= (length (window-list nil 'nomini)) 4))
+          (should (cl-every (lambda (w) (>= (window-total-height w) 1)) (window-list nil 'nomini)))))
+      (delete-other-windows))))
+
 (provide 'look-echo-test)
 ;;; look-echo-test.el ends here

@@ -25,6 +25,7 @@ fn env(display: Display, scale: f32) -> ViewEnv {
         fonts: vec![],
         cell: (8, 16),
         width_px: 400,
+        tail: None,
         palette: vec![],
         tty_widths: vec![],
         tz: String::new(),

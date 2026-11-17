@@ -132,7 +132,7 @@ A docked tile moved is no dock's any more.  No room: nothing changes, \"No room 
      ((not (drgnx-grid-room-p onto zone)) (drgnx-grid--no-room))
      (t
       (drgnx-grid-leave-full-size frame)
-      (drgnx-grid-push frame 'move)
+      (drgnx-grid-push 'move)
       (let* ((state (drgnx-grid--state me)) (id (window-parameter onto 'drgnx-tile-id))
              (mine (window-parameter me 'drgnx-tile-id))
              (selected (eq (drgnx-grid-tile-main (selected-window)) me)))
@@ -152,7 +152,7 @@ A docked tile moved is no dock's any more.  No room: nothing changes, \"No room 
   (let* ((a (drgnx-grid-tile-main a)) (b (drgnx-grid-tile-main b)) (frame (window-frame a)))
     (when (or (not b) (eq a b)) (drgnx-grid--no-room))
     (drgnx-grid-leave-full-size frame)
-    (drgnx-grid-push frame 'move)
+    (drgnx-grid-push 'move)
     (let* ((selected (eq (drgnx-grid-tile-main (selected-window)) a))
            (sa (drgnx-grid--state a)) (sb (drgnx-grid--state b))
            (ra (drgnx-grid--tile-root a)) (rb (drgnx-grid--tile-root b))
@@ -182,7 +182,7 @@ join a tool tile's stack; WINDOW's tile goes, its space to its neighbour.  Anyth
      ((or (not onto) (eq me onto)) (drgnx-grid--no-room))
      ((and (drgnx-grid-editor-tile-p me) (drgnx-grid-editor-tile-p onto))
       (drgnx-grid-leave-full-size frame)
-      (drgnx-grid-push frame 'move)
+      (drgnx-grid-push 'move)
       (let ((tabs (append (drgnx-chrome-tabs me) (list (window-buffer me))))
             (selected (eq (drgnx-grid-tile-main (selected-window)) me)))
         (set-window-parameter onto 'drgnx-tabs
@@ -198,7 +198,7 @@ join a tool tile's stack; WINDOW's tile goes, its space to its neighbour.  Anyth
      ((and (eq (window-parameter onto 'drgnx-role) 'tile) (not (window-parameter onto 'drgnx-tile-temporary))
            (drgnx-grid--entries me))
       (drgnx-grid-leave-full-size frame)
-      (drgnx-grid-push frame 'move)
+      (drgnx-grid-push 'move)
       (let ((entries (drgnx-grid--entries me)) (selected (eq (drgnx-grid-tile-main (selected-window)) me)))
         (if (eq (window-parameter me 'drgnx-role) 'tile)
             (progn (drgnx-grid--remember me)
@@ -226,7 +226,7 @@ tool tile.  A tile with one tab, or no room: nothing changes.  Returns the new t
       (let* ((shown (window-buffer me)) (rest (remq shown (drgnx-chrome-tabs me))))
         (unless rest (user-error "One tab: nothing to unstack"))
         (unless (drgnx-grid-room-p me side) (drgnx-grid--no-room))
-        (drgnx-grid-push frame 'move)
+        (drgnx-grid-push 'move)
         (let ((new (drgnx-grid-split-tile me side)))
           (set-window-dedicated-p new nil)
           (set-window-parameter me 'drgnx-tabs (remq shown (window-parameter me 'drgnx-tabs)))
@@ -244,7 +244,7 @@ tool tile.  A tile with one tab, or no room: nothing changes.  Returns the new t
                                            (mapcar #'car (plist-get (alist-get area drgnx-wb--areas) :tabs))))))
         (unless (and entries (if stack (cdr stack) others)) (user-error "One tab: nothing to unstack"))
         (unless (drgnx-grid-room-p me side) (drgnx-grid--no-room))
-        (drgnx-grid-push frame 'move)
+        (drgnx-grid-push 'move)
         (let ((new (drgnx-grid--new-tile me side (list (car entries)))))
           (if stack
               (progn (set-window-parameter me 'drgnx-pane-stack (cdr stack))
@@ -391,14 +391,17 @@ movement finds the tile and zone under the pointer and says so on that tile's ta
     result))
 
 (defun drgnx-grid--drag-source (window kind hit)
-  "The tile a drag of WINDOW (with KIND, one tab dragged out of a tool tile's row) drops on HIT: the tile itself, or,
-when KIND is one of several tabs and HIT is another tile, a tile of its own unstacked beside first."
-  (let ((stack (window-parameter window 'drgnx-pane-stack)))
-    (if (and kind (cdr stack) hit (not (eq (drgnx-grid-tile-main (car hit)) (drgnx-grid-tile-main window))))
-        (with-selected-window window
-          (drgnx-grid-show kind)
-          (drgnx-grid-unstack window))
-      window)))
+  "The tile a drag of WINDOW (with KIND, one tab dragged out of its row: a pane kind of a tool tile, or a buffer of an
+editor's tabs) drops on HIT: the tile itself, or, when KIND is one of several tabs and HIT is another tile, a tile of
+its own unstacked beside first (`drgnx-grid-unstack')."
+  (if (and kind hit (not (eq (drgnx-grid-tile-main (car hit)) (drgnx-grid-tile-main window)))
+           (if (bufferp kind)
+               (remq kind (drgnx-chrome-tabs window))
+             (cdr (window-parameter window 'drgnx-pane-stack))))
+      (with-selected-window window
+        (if (bufferp kind) (set-window-buffer window kind) (drgnx-grid-show kind))
+        (drgnx-grid-unstack window))
+    window))
 
 (defun drgnx-grid-grip-press (event)
   "A press on a tile's grip (the ⠿ at its tab line's start): drag the tile (`drgnx-grid--drag').  Off
@@ -407,21 +410,26 @@ when KIND is one of several tabs and HIT is another tile, a tile of its own unst
   (let ((w (posn-window (event-start event))))
     (when (and drgnx-grid-drag (window-live-p w)) (drgnx-grid--drag w))))
 
-(defun drgnx-grid--tab-press (event)
-  "A press on a tool tile's tab: released on the same tab row it is a click (the tab shows); dragged off the row it
-moves that tab's kind (`drgnx-grid--drag-source')."
-  (interactive "e")
-  (let* ((start (event-start event)) (w (posn-window start))
-         (s (posn-string start)) (kind (and s (get-text-property (cdr s) 'drgnx-grid-kind (car s)))))
+(defun drgnx-grid-tab-press (event kind click)
+  "A press on a tab of KIND (a pane kind, or an editor's buffer): released on the same tab row it is a click (CLICK
+called with EVENT); dragged off the row it moves that tab (`drgnx-grid--drag', `drgnx-grid--drag-source').  Off
+\(`drgnx-grid-drag' nil), the click."
+  (let ((w (posn-window (event-start event))) (area (posn-area (event-start event))))
     (when (window-live-p w)
       (if (not drgnx-grid-drag)
-          (drgnx-grid--tab-click event)
+          (funcall click event)
         (let ((ev (read-event)))
-          (if (and (consp ev) (memq (event-basic-type ev) '(mouse-1)) (not (mouse-movement-p ev))
-                   (eq (posn-window (event-end ev)) w) (eq (posn-area (event-end ev)) 'tab-line))
-              (drgnx-grid--tab-click event)
+          (if (and (consp ev) (eq (event-basic-type ev) 'mouse-1) (not (mouse-movement-p ev))
+                   (eq (posn-window (event-end ev)) w) (eq (posn-area (event-end ev)) area))
+              (funcall click event)
             (setq unread-command-events (cons ev unread-command-events))
             (drgnx-grid--drag w kind)))))))
+
+(defun drgnx-grid--tab-press (event)
+  "A press on a tool tile's tab (`drgnx-grid-tab-press')."
+  (interactive "e")
+  (let ((s (posn-string (event-start event))))
+    (drgnx-grid-tab-press event (and s (get-text-property (cdr s) 'drgnx-grid-kind (car s))) #'drgnx-grid--tab-click)))
 
 ;;;; The pane backend's move and stack (`drgnx-pane-move', `drgnx-pane-stack')
 
