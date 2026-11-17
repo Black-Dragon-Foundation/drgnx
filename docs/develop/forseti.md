@@ -75,9 +75,10 @@ The model is a partitionable slot (jobq §5.4): each machine is one pool of core
 carves its share at start.
 
 - **`budget(m, limits)`**:
-  - `mem = MemAvailable − floor − reserve_user − Σ ours − others`. One of our running jobs counts its whole
-    reservation for its first 300 s (a container grows after its setup), then `(reserve − current)⁺`, since what it
-    uses is already gone from `MemAvailable`. `others` is `count_others` over `m.others` on `m.boot_id`; the probe has
+  - `mem = MemAvailable − floor − reserve_user − Σ ours − others`. One of our running jobs counts
+    `(reserve − current)⁺` from its first second, since what it uses is already gone from `MemAvailable` and its
+    reservation (at least its p95 peak × 1.1) leaves it room to grow; counting the whole reservation while young counted
+    the used part twice. `others` is `count_others` over `m.others` on `m.boot_id`; the probe has
     already dropped the reservations whose process is gone. Another scheduler's job counts `max(reserve, current)`
     whole, its use included: careful, since its `current` is that scheduler's last write.
   - `cpu = cores_usable − Σ expected CPU`: a job's mean from history, or its grant's cores when it has none

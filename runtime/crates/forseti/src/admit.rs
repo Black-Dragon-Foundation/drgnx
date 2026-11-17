@@ -7,8 +7,6 @@ use crate::model::{
 };
 use crate::reserve::count_others;
 
-/// A job counts its full reservation for its first 300 s, whatever it uses (a container grows after its setup).
-pub const YOUNG_S: u64 = 300;
 /// The least time between two starts on one machine.
 pub const START_GAP_S: u64 = 10;
 
@@ -19,14 +17,11 @@ pub struct Budget {
     pub cpu: f64,
 }
 
-/// The memory a running job of ours holds beyond what it already uses (which `MemAvailable` has lost): its whole
-/// reservation while young, then `(reserve − current)⁺`.
-pub(crate) fn held_beyond_use(rj: &RunningJob, now: u64) -> u64 {
-    if now.saturating_sub(rj.started) < YOUNG_S {
-        rj.reserve_mib
-    } else {
-        rj.reserve_mib.saturating_sub(rj.current_mib)
-    }
+/// The memory a running job of ours holds beyond what it already uses (which `MemAvailable` has lost):
+/// `(reserve − current)⁺` at every age. The reservation is at least the p95 peak × 1.1 ([`size`]), so its unused rest
+/// is the room the job may still grow into; counting the whole reservation while young counted the used part twice.
+pub(crate) fn held_beyond_use(rj: &RunningJob, _now: u64) -> u64 {
+    rj.reserve_mib.saturating_sub(rj.current_mib)
 }
 
 /// The CPU a running job counts: its expected mean, or its grant's cores when it has no history.
@@ -225,7 +220,7 @@ mod tests {
         m.mem_available_mib = 20_000;
         m.running = vec![running("r", Priority::P4, m.now - 100, 4000, 500)];
         assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048 - 3500);
-        m.running[0].started = m.now - YOUNG_S;
+        m.running[0].started = m.now - 300;
         assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048 - 3500);
         m.running[0].current_mib = 6000;
         assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048);
