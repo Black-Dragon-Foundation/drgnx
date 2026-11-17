@@ -1239,8 +1239,10 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   names its run, plus the emacsclient or tmux the wait runs) slept, read from `/proc/PID/schedstat`. A process that
   runs, or that waits for a CPU on a loaded machine, is making progress, so CPU starvation (four test files at once on
   a busy builder) never fails a wait, while a session blocked on something that never comes (a prompt, a lost key)
-  fails at the wait's time as before. A cap of ten times that time (at least 60 s) of wall time ends a wait whose
-  processes never stop running; the error says which ended it. `drgnx-tty-session-key-barrier` does it before binding `<f7>`.
+  fails at the wait's time as before. Time while one of them is in uninterruptible sleep (state D: waiting on the
+  disk, e.g. btrfs's `wait_current_trans` while a loaded machine commits) is not counted either. A cap of ten times
+  that time (at least 60 s) of wall time ends a wait whose processes never stop running or stay on the disk; the error
+  says which ended it, and a no-progress error names each watched process with its state and wait channel. `drgnx-tty-session-key-barrier` does it before binding `<f7>`.
   A row that binds a key of its own uses one no key profile claims (`<f7>`; never `<f9>`, VS Code's breakpoint key),
   or a keymap of its own on `emulation-mode-map-alists`.
 - **C-g only when the row is about C-g:** C-g typed into a terminal is Emacs's interrupt whenever the daemon is not

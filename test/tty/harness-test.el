@@ -297,6 +297,23 @@ time its processes slept, not wall time, so it gets its answer (a terminal row u
                (should (string-search "made no progress for 1s" over)))
       (delete-process p))))
 
+(ert-deftest drgnx-tty-harness/a-program-waiting-on-the-disk-is-not-out-of-time ()
+  "A process in uninterruptible sleep (state D: a filesystem commit on a loaded machine) is making progress, slowly:
+its wait goes on.  Once it sleeps the plain way again, the wait is over at its limit."
+  (let* ((p (make-process :name "kx-sleep" :noquery t :connection-type 'pipe :command '("sleep" "30")))
+         (clock (drgnx-ui-progress 1 (lambda () (list (process-id p)))))
+         (state "D") over)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-ui--proc-state) (lambda (_pid) state)))
+          (let ((until (+ (float-time) 2)))
+            (while (and (< (float-time) until) (not (setq over (drgnx-ui-progress-over clock))))
+              (accept-process-output nil 0.05)))
+          (should-not over)
+          (setq state "S")
+          (while (not (setq over (drgnx-ui-progress-over clock))) (accept-process-output nil 0.05))
+          (should (string-search "made no progress for 1s" over)))
+      (delete-process p))))
+
 (ert-deftest drgnx-tty-harness/stage-wait-outlasts-an-emacs-busy-past-its-limit ()
   "An Emacs that runs Lisp past the stage wait's time is still making progress: the wait goes on until it answers."
   (let ((s (drgnx-tty-session-start)))

@@ -156,6 +156,25 @@ gone."
                                             (split-string (buffer-string))))))
     (and s (/ (+ (string-to-number (nth 0 s)) (string-to-number (nth 1 s))) 1e9))))
 
+(defun drgnx-ui--proc-stat (pid)
+  "(COMM . STATE) of PID from /proc/PID/stat (STATE one letter as a string: R, S, D …), or nil once it is gone."
+  (let ((stat (ignore-errors (with-temp-buffer (insert-file-contents (format "/proc/%d/stat" pid)) (buffer-string)))))
+    (and stat (string-match "(\\(.*\\)) \\([A-Za-z]\\)" stat)
+         (cons (match-string 1 stat) (match-string 2 stat)))))
+
+(defun drgnx-ui--proc-state (pid)
+  "PID's state letter (`drgnx-ui--proc-stat'), or nil once it is gone."
+  (cdr (drgnx-ui--proc-stat pid)))
+
+(defun drgnx-ui--proc-states (pids)
+  "PIDS as \"COMM STATE WCHAN\" each (/proc/PID/stat and wchan), comma-separated: what a stuck wait was waiting on."
+  (mapconcat (lambda (pid)
+               (let ((stat (drgnx-ui--proc-stat pid))
+                     (wchan (ignore-errors (with-temp-buffer (insert-file-contents (format "/proc/%d/wchan" pid))
+                                                             (buffer-string)))))
+                 (if stat (format "%s %s %s" (car stat) (cdr stat) (or wchan "?")) (format "%d gone" pid))))
+             pids ", "))
+
 (cl-defstruct (drgnx-ui-progress (:constructor drgnx-ui--progress-new) (:copier nil))
   limit cap start last pids-fn samples (slept 0.0))
 
@@ -167,10 +186,10 @@ gone."
 (defun drgnx-ui-progress (limit pids-fn)
   "A clock for a wait of LIMIT s on the processes PIDS-FN gives (a function of no arguments, asked at each look).
 The wait is over once those processes together slept LIMIT s: time in which none of them ran or waited to run
-\(their schedstat).  A process that runs, or that a loaded machine keeps waiting for a CPU, is making progress, so
-CPU starvation never ends a wait; a process blocked on something that never comes (a prompt, a key, a lost
-message) ends it at LIMIT as before.  The cap, `drgnx-ui-progress-cap-factor' times LIMIT (at least
-`drgnx-ui-progress-cap-min' s) of wall time, ends a wait whose processes never stop running.
+\(their schedstat).  A process that runs, or that a loaded machine keeps waiting for a CPU or the disk (state D),
+is making progress, so starvation never ends a wait; a process blocked on something that never comes (a prompt, a
+key, a lost message) ends it at LIMIT as before.  The cap, `drgnx-ui-progress-cap-factor' times LIMIT (at least
+`drgnx-ui-progress-cap-min' s) of wall time, ends a wait whose processes never stop running or stay on the disk.
 `drgnx-ui-progress-over' says when it is over."
   (let* ((now (float-time))
          (clock (drgnx-ui--progress-new :limit limit :start now :last now :pids-fn pids-fn
@@ -186,10 +205,15 @@ message) ends it at LIMIT as before.  The cap, `drgnx-ui-progress-cap-factor' ti
          (active 0.0))
     (dolist (s new)
       (let ((o (assq (car s) old))) (when o (setq active (+ active (- (cdr s) (cdr o)))))))
-    (cl-incf (drgnx-ui-progress-slept clock) (max 0.0 (- now (drgnx-ui-progress-last clock) active)))
+    ;; a process in uninterruptible sleep waits on the disk (a filesystem commit on a loaded machine): progress,
+    ;; slowly, so the time is not charged; one stuck there for good ends the wait at the cap
+    (let ((idle (- now (drgnx-ui-progress-last clock) active)))
+      (when (and (> idle 0) (not (seq-some (lambda (s) (equal (drgnx-ui--proc-state (car s)) "D")) new)))
+        (cl-incf (drgnx-ui-progress-slept clock) idle)))
     (setf (drgnx-ui-progress-last clock) now (drgnx-ui-progress-samples clock) new)
     (cond ((>= (drgnx-ui-progress-slept clock) (drgnx-ui-progress-limit clock))
-           (format "its processes made no progress for %ss (%d watched)" (drgnx-ui-progress-limit clock) (length new)))
+           (format "its processes made no progress for %ss (%d watched: %s)" (drgnx-ui-progress-limit clock) (length new)
+                   (drgnx-ui--proc-states (mapcar #'car new))))
           ((>= (- now (drgnx-ui-progress-start clock)) (drgnx-ui-progress-cap clock))
            (format "its processes still ran at the %ss cap (%d watched)" (drgnx-ui-progress-cap clock)
                    (length new))))))
