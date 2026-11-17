@@ -264,6 +264,20 @@ A component's binding of () is its face `drgnx-kit-ID'; another binding, of vari
   "The semantic face that draws STATE (the state table's :face), or nil (rest)."
   (plist-get (drgnx-ui-kit-state state) :face))
 
+(declare-function drgnx-look-variant "drgnx-theme-gen" (&optional frame))
+
+(defun drgnx-ui-kit-menu-values (&optional frame)
+  "The kit's metrics for Nidhogg's menus (lisp/term/nhwl-menu.el) in FRAME, a plist in logical px.
+:min-width 220, :row-height the density's tree row (26 at comfortable; nil without ui/look: one text line),
+:row-padding (12 . 12), :separator-height 9 (a 1 px rule with 4 px either side, the mockup's), :radius 8 and :shadow,
+nil in high contrast (spec §7.4, menus)."
+  (list :min-width 220
+        :row-height (drgnx-ui-kit--value '(density tree-row) nil)
+        :row-padding '(12 . 12)
+        :separator-height 9
+        :radius 8
+        :shadow (not (and (fboundp 'drgnx-look-variant) (eq (drgnx-look-variant frame) 'hc)))))
+
 (defun drgnx-ui-kit-row-box (&optional ring)
   "A row's `:box': inside the row (negative widths, so nothing moves when it appears), in the fill's own colour (a
 flat button: only its rounded corners show), or with RING (a colour) a 1 px ring in it; rounded (the state table's

@@ -1032,8 +1032,19 @@ look-scenes' types them)."
   (drgnx-look-scene--waiting)
   (drgnx-look-scene--answer))
 
+(declare-function drgnx-menubar-pick "drgnx-menubar")
+
 (defun drgnx-look-scene-menu-list ()
-  "The ☰ list open (F10), a submenu not yet: the menu cards in the look."
+  "The ☰ list open (`drgnx-menubar-pick' on F20, a key of the scene's own: F10 is the default profile's Step Over),
+its first row selected by Down, a submenu not yet: the menu cards in the look."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (keymap-global-set "<f20>" #'drgnx-menubar-pick)
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-context-menu ()
+  "The editor's context menu open (S-F10, `context-menu-open'), its first row selected by Down: the menu card in the
+look, as the ☰ list's."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--editor)
   (drgnx-look-scene--answer))

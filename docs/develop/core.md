@@ -1603,7 +1603,8 @@ lists at each publish.
 - **Where.** `drgnx-scrollbar-mode` (global; module `editor/minimap`, setting `drgnx-minimap-ruler`) gives every
   window `drgnx-scrollbar-window-p` names the strip: editor groups, the docked panes (`drgnx-role` `dock`, `panel`,
   `right`), popup lanes and child frames' windows. Never the minibuffer, chrome (the status bar and other roles), a
-  package's side window, or a window with the parameter `drgnx-minimap-exclude`.
+  package's side window, or a window with the parameter `drgnx-minimap-exclude` or on a frame with it (Nidhogg's
+  menus, `drgnx-menu-look.el`: sized to their rows, a strip would narrow them).
 - **Hidden while it fits.** With `drgnx-minimap-hide-short` the spec carries `:hide-short`, and C draws nothing while
   the window's first row starts the text and a row reaches its end (a window fitted to its lines, the agent panel's
   header, has no row for the final newline's empty line). The fringe keeps the strip's width, so nothing reflows

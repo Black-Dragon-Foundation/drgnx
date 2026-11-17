@@ -653,5 +653,53 @@
         (drgnx-agent-cursor-remove (current-buffer) 'a)))
     (should-not (drgnx-agent-cursor-overlay (current-buffer) 'a))))
 
+;;; Nidhogg's menus fed by the kit (modules/ui/drgnx-menu-look.el)
+
+(defvar nhwl-menu-min-width)
+(defvar nhwl-menu-row-height)
+(defvar nhwl-menu-row-padding)
+(defvar nhwl-menu-separator-height)
+(defvar nhwl-menu-frame-parameters)
+(defvar drgnx-look-density-changed-hook)
+
+(ert-deftest drgnx-ui-kit/menu-feed-undone-by-teardown ()
+  "ui/face's part for Nidhogg's menus sets their options from `drgnx-ui-kit-menu-values' (220 px, the density's row,
+12 px either end, radius 8) and their faces, and follows a change of density or theme; its teardown puts every option,
+face spec and hook back as Nidhogg had them."
+  (skip-unless (and (require 'nhwl-menu nil t) (boundp 'nhwl-menu-separator-height)))
+  (require 'drgnx-menu-look (expand-file-name "modules/ui/drgnx-menu-look" drgnx-dir))
+  (let* ((vars '(nhwl-menu-min-width nhwl-menu-row-height nhwl-menu-row-padding nhwl-menu-separator-height
+                                     nhwl-menu-frame-parameters))
+         (faces '(nhwl-menu nhwl-menu-selected nhwl-menu-key))
+         (before (mapcar #'default-value vars))
+         (specs (mapcar (lambda (f) (get f 'face-defface-spec)) faces))
+         (drgnx-modules--setup-load load-file-name)
+         (drgnx-modules--stacks nil)
+         (drgnx-module--claims (make-hash-table :test 'equal))
+         (drgnx-module--releasers (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (let ((drgnx-modules--current 'test/menu-look)) (drgnx-menu-look-setup))
+          (should (= nhwl-menu-min-width 220))
+          (should (equal nhwl-menu-row-height (plist-get (drgnx-ui-kit-menu-values) :row-height)))
+          (should (equal nhwl-menu-row-padding '(12 . 12)))
+          (should (eql nhwl-menu-separator-height 9))
+          (should (eql (alist-get 'corner-radius nhwl-menu-frame-parameters) 8))
+          (should (alist-get 'drgnx-minimap-exclude nhwl-menu-frame-parameters))   ; no scroll bar strip
+          (should (equal (get 'nhwl-menu-key 'face-defface-spec) '((t :inherit (drgnx-text-subtle drgnx-code-small)))))
+          (should (memq #'drgnx-menu-look--refeed enable-theme-functions))
+          (should (memq #'drgnx-menu-look--refeed (default-value 'drgnx-look-density-changed-hook)))
+          ;; a change the feed follows (here a row height the density gives): set again, as the module
+          (cl-letf (((symbol-function 'drgnx-ui-kit-menu-values)
+                     (lambda (&optional _) (list :min-width 220 :row-height 30 :row-padding '(12 . 12) :separator-height 9 :radius 8 :shadow t))))
+            (drgnx-menu-look--refeed))
+          (should (eql nhwl-menu-row-height 30)))
+      (should-not (drgnx-modules--unwind 'test/menu-look)))
+    (should (equal (mapcar #'default-value vars) before))
+    (should (equal (mapcar (lambda (f) (get f 'face-defface-spec)) faces) specs))
+    (should-not (memq #'drgnx-menu-look--refeed enable-theme-functions))
+    (should-not (memq #'drgnx-menu-look--refeed (default-value 'drgnx-look-density-changed-hook)))
+    (should-not drgnx-menu-look--door)))
+
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here
