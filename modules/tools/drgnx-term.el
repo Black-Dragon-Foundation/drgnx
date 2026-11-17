@@ -269,9 +269,9 @@ the shell.  Key descriptions of one event, e.g. \"C-p\" or \"M-j\"."
 (defconst drgnx-terminal--meta-bit #x8000000 "The meta modifier bit of an event.")
 
 (defconst drgnx-term-reserved-keys
-  '([?\C-c] [?\C-x] [?\C-g] [?\C-h] [?\C-u] [?\C-q] [?\C-\\] [?\e ?x] [?\e ?:] [?\e ?!] [?\e ?&])
+  '([?\C-c] [?\C-x] [?\C-g] [?\C-h] [?\C-u] [?\C-q] [?\C-\\] [?\e ?x] [?\e ?:] [?\e ?!] [?\e ?&] [C-escape])
   "Keys a terminal always leaves to Emacs: C-c (a prefix: drgnx's terminal keys), C-x, C-g, C-h, C-u, C-q, C-\\,
-M-x, M-:, M-! and M-&.  As key vectors (M-x is [?\\e ?x]).")
+M-x, M-:, M-!, M-& and C-<escape> (Switch Tile).  As key vectors (M-x is [?\\e ?x]).")
 
 (defvar drgnx-surfaces-cheatsheet-sections)
 (defvar drgnx-session-running-functions)
@@ -386,13 +386,19 @@ else nil (Emacs's own binding)."
   '(down-mouse-1 mouse-1 drag-mouse-1 down-mouse-2 mouse-2 down-mouse-3 mouse-3 wheel-up wheel-down mouse-4 mouse-5)
   "The mouse events a program that tracks the mouse is sent (with Shift: `drgnx-term-mouse-shift-capture').")
 
+(defconst drgnx-term-program-events '(escape)
+  "Events a terminal always sends to its program, even where the key profile binds them (VS Code's Esc is Cancel
+elsewhere): Esc Esc is the program's (Claude Code's rewind, vim in a shell); `C-<escape>' is Switch Tile there.")
+
 (defun drgnx-term--fill-map (map drgnx)
   "Bind in MAP every raw event (`drgnx-term--raw-events') to `drgnx-term-send-event', but for the reserved keys, the
-events in DRGNX (those reach drgnx: their raw binding goes) and events bound to something else (a terminal key)."
+events in DRGNX (those reach drgnx: their raw binding goes; not `drgnx-term-program-events') and events bound to
+something else (a terminal key)."
   (dolist (ev (drgnx-term--raw-events))
     (unless (member (drgnx-terminal--keys-vector ev) drgnx-term-reserved-keys)
       (let ((cur (lookup-key map (vector ev))))
-        (cond ((memql ev drgnx) (when (eq cur #'drgnx-term-send-event) (define-key map (vector ev) nil t)))
+        (cond ((and (memql ev drgnx) (not (memq ev drgnx-term-program-events)))
+               (when (eq cur #'drgnx-term-send-event) (define-key map (vector ev) nil t)))
               ((or (null cur) (numberp cur)) (define-key map (vector ev) #'drgnx-term-send-event)))))))
 
 (defvar drgnx-term-mode-map

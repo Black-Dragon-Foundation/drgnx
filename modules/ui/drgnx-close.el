@@ -36,6 +36,10 @@ not Close Pane there.  A mode that takes the keyboard for itself adds its predic
 (defvar drgnx-close--here nil
   "Non-nil while the selected window is a lane, an area or a tool tile showing a buffer you do not type into.")
 
+(defvar drgnx-close--closed nil
+  "Non-nil when the last Close Pane closed something; nil when it had nothing to close (an Esc that then counts as a
+cancel for the Esc double tap, wb/drgnx-esc.el).")
+
 (defvar drgnx-close--emulation (list (cons 'drgnx-close--here drgnx-close-mode-map))
   "The `emulation-mode-map-alists' entry: the map is on only where `drgnx-close--here' is.")
 
@@ -71,6 +75,7 @@ elsewhere, the Meta prefix: an ESC goes back to the reader.  Anything else unbou
 sidebar; focus goes to the editor.  Typed as Esc or q in a buffer you can edit, it is the key's own command instead
 \(q types a q); so is Esc in the modal engine's visual state (it leaves the selection)."
   (interactive)
+  (setq drgnx-close--closed nil)
   (if (and (memq last-command-event '(escape ?q))
            (or (not buffer-read-only) (drgnx-close--input-buffer-p (current-buffer))
                (and (eq last-command-event 'escape) (eq drgnx-modal-state 'visual))))
@@ -81,7 +86,8 @@ sidebar; focus goes to the editor.  Typed as Esc or q in a buffer you can edit, 
         ('area (drgnx-wb-area-hide (window-parameter w 'drgnx-role)))
         ('dock (drgnx-wb-hide-sidebar))
         ('tile (delete-window w))                   ; a tool tile hides (the grid's `delete-window'), a temporary one goes
-        (_ (user-error "No pane to close here"))))))
+        (_ (user-error "No pane to close here")))
+      (setq drgnx-close--closed t))))
 
 (define-minor-mode drgnx-close-mode
   "Esc and q close help panes, popups and side panes (the keys come from the key profiles)."

@@ -288,14 +288,17 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
   'replayed)
 
 (defun drgnx-switcher-handle (event)
-  "What the open switcher does with EVENT: `closed', `picked', `swapped', `moved' or `replayed'."
+  "What the open switcher does with EVENT: `closed', `quit', `picked', `swapped', `moved' or `replayed'."
   (let* ((st drgnx-switcher--state) (ready (plist-get st :ready))
          (base (if (characterp event) event (event-basic-type event)))
          (lower (and (characterp event) (drgnx-switcher--by-letter event)))
          (upper (and (characterp event) (/= event (downcase event)) (drgnx-switcher--by-letter (downcase event)))))
     (cond
      ((null st) nil)
-     ((memq event '(?\e escape)) (drgnx-switcher-close) 'closed)
+     ((memq event '(?\e escape))
+      (let ((until (plist-get st :quit-until)))
+        (drgnx-switcher-close)
+        (if (and until (< (drgnx-timer-now) until)) (progn (keyboard-escape-quit) 'quit) 'closed)))
      ((memq base '(left right up down))
       (when-let* ((n (drgnx-switcher-neighbour (plist-get st :items) (plist-get st :current) base)))
         (plist-put st :current n)
@@ -312,6 +315,11 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
           (message "Swap Tile works inside one window")
           'closed)))
      (t (drgnx-switcher--replay event)))))
+
+(defun drgnx-switcher-quit-until (time)
+  "Make an Esc before TIME (`drgnx-timer-now') close the open switcher and run `keyboard-escape-quit' too: Esc Esc Esc
+is quit (wb/drgnx-esc.el)."
+  (when drgnx-switcher--state (plist-put drgnx-switcher--state :quit-until time)))
 
 (defun drgnx-switcher-key ()
   "A key while the switcher is open (`drgnx-switcher-handle')."

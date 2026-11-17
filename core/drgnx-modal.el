@@ -154,14 +154,19 @@ when it turns the map off.")
 (defun drgnx-modal-order-alists ()
   "Put drgnx's emulation keymaps in front of the engine's in `emulation-mode-map-alists'.
 The order: `drgnx-keys--everywhere-alist' (keys that work in every state beat the engine's), the leader
-alist, the panel alist, the modules' `drgnx-modal-front-alists', `drgnx-ai-ghost--emulation', then the rest as
-it was.  The leader, panel and ghost alists always have their place, bound or not: Emacs skips an unbound symbol in
-the list, and a later `add-to-list' of the ghost's finds it already there.  The everywhere alist is put first on every
-call, whatever it holds; it is off (`drgnx-keys--everywhere-on' nil) while there are no `:everywhere' keys, and
-`drgnx-keys--set-everywhere' then also takes it out until the next call here.  Safe to call again;
+alist, the panel alist, the modules' `drgnx-modal-front-alists', `drgnx-esc--emulation' when it is in the list
+\(the Esc double tap: after the maps whose Esc it only watches, Close Pane's and quick help's),
+`drgnx-ai-ghost--emulation', then the rest as it was.  The leader, panel and ghost alists always have their place,
+bound or not: Emacs skips an unbound symbol in the list, and a later `add-to-list' of the ghost's finds it already
+there.  The everywhere alist is put first on every call, whatever it holds; it is off (`drgnx-keys--everywhere-on'
+nil) while there are no `:everywhere' keys, and `drgnx-keys--set-everywhere' then also takes it out until the next
+call here.  Safe to call again;
 `drgnx-modal-sync-engine' calls it after an engine starts, and the engine when it pushed its maps in front again."
   (let ((front `(drgnx-keys--everywhere-alist drgnx-modal--leader-alist drgnx-modal--panel-alist
-                                              ,@drgnx-modal-front-alists drgnx-ai-ghost--emulation)))
+                                              ,@drgnx-modal-front-alists
+                                              ,@(and (memq 'drgnx-esc--emulation emulation-mode-map-alists)
+                                                     '(drgnx-esc--emulation))
+                                              drgnx-ai-ghost--emulation)))
     (setq emulation-mode-map-alists
           (append front (seq-remove (lambda (e) (memq e front)) emulation-mode-map-alists)))))
 
