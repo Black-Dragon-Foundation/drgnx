@@ -2621,10 +2621,6 @@ pub async fn import_core(
     }
     if only.is_none() {
         forget_gone(db, root, &found).await?;
-        // a spec that came back or went is followed by the plans naming it, though the plans did not change
-        for f in &found {
-            plan_spec_links(db, &f.path).await?;
-        }
     }
     Ok(ImportReport {
         dry_run: false,
