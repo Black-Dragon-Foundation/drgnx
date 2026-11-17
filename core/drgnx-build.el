@@ -147,8 +147,10 @@ its own trampolines).")
 symbols or of (SYMBOL . ADVICE) pairs, read from the file's `defvar' or `defconst'.")
 
 (defun drgnx-build--quoted (form)
-  "The symbol FORM quotes (a quote or a function quote of a symbol), else nil."
-  (and (consp form) (memq (car form) '(quote function)) (symbolp (cadr form)) (cadr form)))
+  "The symbol FORM quotes (a quote or a function quote of a symbol), else nil.  FORM is such a quote only as a proper
+two-element list: the pair `(function . foo)' of quoted data (an alist entry) quotes nothing."
+  (and (consp form) (memq (car form) '(quote function)) (consp (cdr form)) (null (cddr form))
+       (symbolp (cadr form)) (cadr form)))
 
 (defun drgnx-build--scan-form (form acc)
   "Add to the list ACC (returned) the symbols FORM advises or replaces: `advice-add', `drgnx-module-advice' and
