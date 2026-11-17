@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The colours of Doom One's default, cursor, shadow, link and syntax faces (the package is not a dependency).  The
+;; The colours of Doom One's default, cursor, shadow, link, success, warning, error and syntax faces (the package is not a dependency).  The
 ;; terminal clause of `default' is unspecified, as in a daemon's first terminal frame: derive must read the graphical
 ;; clause, never `unspecified-bg'.  `drgnx-look-derive' tests load this with `custom-theme-load-path' pointing here.
 
@@ -17,6 +17,9 @@
  '(cursor ((t :background "#528bff")))
  '(shadow ((t :foreground "#5b6268")))
  '(link ((t :foreground "#51afef" :underline t)))
+ '(success ((t :foreground "#98be65")))
+ '(warning ((t :foreground "#ecbe7b")))
+ '(error ((t :foreground "#ff6c6b")))
  '(font-lock-function-name-face ((t :foreground "#c678dd")))
  '(font-lock-keyword-face ((t :foreground "#51afef")))
  '(font-lock-string-face ((t :foreground "#98be65")))

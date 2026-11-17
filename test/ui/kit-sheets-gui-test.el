@@ -394,7 +394,7 @@ are the card's fill), and closed on its top edge."
           (drgnx-test-wait-presented)
           (let* ((s (drgnx-uitest-device-scale (selected-frame))) (snap (drgnx-uitest-snapshot))
                  (edges (window-inside-pixel-edges))
-                 (ring (drgnx-kit-sheet--rgb (drgnx-look-token 'border 'dark)))
+                 (ring (drgnx-kit-sheet--rgb (drgnx-look-token 'border-strong 'dark)))
                  (fill (drgnx-kit-sheet--rgb (drgnx-look-token 'panel 'dark)))
                  (x (round (* s (+ (car edges) 24))))
                  (top (round (* s (cadr edges))))
