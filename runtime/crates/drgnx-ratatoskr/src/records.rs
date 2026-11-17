@@ -2532,13 +2532,19 @@ pub async fn import_core(
     emit: &(dyn Fn(ViewEvent) + Send + Sync),
     deny: &DenyList,
 ) -> Result<ImportReport, Error> {
-    // the user's personal notes (`~/org`) are never read: the hard tier, whatever the user opted in
-    if let RootVerdict::Denied { .. } = deny.check_root(root) {
+    // the user's personal notes (`~/org`) are never read: the hard tier, whatever the user opted in; the one
+    // exception is exactly `~/org/board.org`, which the product reads (`only: board` names it, nothing else of the root)
+    let board_only =
+        only == Some(RecordKind::Board) && deny.check(&root.join("board.org")) == Verdict::Board;
+    if !board_only && let RootVerdict::Denied { .. } = deny.check_root(root) {
         return Err(err(PERSONAL_NOTES_REFUSAL));
     }
     // a file the hard tier denies (a spec a plan names inside `~/org`, even through a link) is never read
     let mut found = discover(root, only);
-    found.retain(|f| deny.check(&f.path) == Verdict::Allowed);
+    found.retain(|f| {
+        let v = deny.check(&f.path);
+        v == Verdict::Allowed || (board_only && f.kind == RecordKind::Board && v == Verdict::Board)
+    });
     let mut fresh = Vec::new();
     for f in &found {
         if !noticed(db, &f.path).await? {
@@ -3976,6 +3982,44 @@ mod tests {
             .unwrap();
         assert!(titles.iter().all(|t| !t.contains("Secret")), "{titles:?}");
         assert!(titles.iter().any(|t| t == "Names it"), "{titles:?}");
+    }
+
+    /// The one file of `~/org` the product reads is `board.org` (named by `only: board`): its items are imported,
+    /// nothing else of `~/org` is, and a full import of `~/org` stays refused.
+    #[tokio::test]
+    async fn the_board_in_the_users_org_is_read_and_nothing_else_of_it() {
+        let f = fix();
+        let home = f._dir.path().join("home");
+        let org = home.join("org");
+        std::fs::create_dir_all(org.join("docs/plans")).unwrap();
+        std::fs::write(
+            org.join("docs/plans/p.md"),
+            "# P\n\n### Task 1: a\n\n- [ ] x\n",
+        )
+        .unwrap();
+        std::fs::write(org.join("notes.org"), "* private\n").unwrap();
+        std::fs::write(org.join("board.org"), "* TODO a board item\n").unwrap();
+        let deny = DenyList::load(&home, &f._dir.path().join("config"));
+        let heard = |_e: ViewEvent| {};
+        let full = import_core(&f.db, &f.views, &f.hub, &org, None, false, &heard, &deny).await;
+        assert_eq!(full.unwrap_err().message, PERSONAL_NOTES_REFUSAL);
+        let got = import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &org,
+            Some(RecordKind::Board),
+            false,
+            &heard,
+            &deny,
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.files.len(), 1, "{got:?}");
+        assert!(got.files[0].path.ends_with("org/board.org"));
+        assert_eq!(live_of(&f, &org.join("board.org")).await > 0, true);
+        assert_eq!(live_of(&f, &org.join("docs/plans/p.md")).await, 0);
+        assert_eq!(live_of(&f, &org.join("notes.org")).await, 0);
     }
 
     /// A root that is itself named `plans` or `specs` classifies by the paths under it alone

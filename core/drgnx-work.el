@@ -334,18 +334,23 @@ nothing to record."
                                            (delq nil (mapcar (lambda (p) (plist-get p :root)) (plist-get (drgnx-projects-read) :projects))))))))
 
 (defun drgnx-work-refresh (&optional roots)
-  "Have the hub read the records of ROOTS (default: `drgnx-work-default-roots') — `records/import', the importer
+  "Have the hub read the records of ROOTS (default: `drgnx-work-default-roots') and of the board
+\(`drgnx-projects-board-file', the one file of ~/org the product reads: `records/import' with only=board) — the importer
 that adopts specs, plans, ledgers and the board's plan links — and collect ended jobs.  In a batch command
-(`drgnx-work--sync') it waits and answers (:files N :refused LIST): N the files the hub's import lists, LIST the roots
+\(`drgnx-work--sync') it waits and answers (:files N :refused LIST): N the files the hub's imports list, LIST the roots
 it refused (a project inside ~/org: the user's personal notes are never read), each (:source (:path ROOT) :why TEXT);
 elsewhere the calls are asynchronous and it answers nil."
-  (let ((files 0) (refused nil))
-    (dolist (root (or roots (drgnx-work-default-roots)))
+  (let ((files 0) (refused nil)
+        (board (drgnx-projects-board-file)))
+    (dolist (call (append (mapcar (lambda (r) (list :root (directory-file-name r))) (or roots (drgnx-work-default-roots)))
+                          ;; the board last: its items link to the plans just read
+                          (and (file-exists-p board)
+                               (list (list :root (directory-file-name (file-name-directory board)) :only "board")))))
       (if drgnx-work--sync
           (condition-case err
-              (cl-incf files (length (plist-get (drgnx-hub-call-sync "records/import" (list :root (directory-file-name root)) 60) :files)))
-            (error (push (list :source (list :path root) :why (error-message-string err)) refused)))
-        (drgnx-work--hub "records/import" (list :root (directory-file-name root)))))
+              (cl-incf files (length (plist-get (drgnx-hub-call-sync "records/import" call 60) :files)))
+            (error (push (list :source (list :path (plist-get call :root)) :why (error-message-string err)) refused)))
+        (drgnx-work--hub "records/import" call)))
     (drgnx-work-collect-jobs)
     (and drgnx-work--sync (list :files files :refused (nreverse refused)))))
 
