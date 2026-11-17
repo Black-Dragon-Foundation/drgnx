@@ -2935,5 +2935,68 @@ palette's child frame is not judged, one under any other child frame is an error
       (with-temp-file file (pp (nreverse log) (current-buffer))))
     (drgnx-look-scene--answer)))
 
+;;;; The minimap open (docs/guide/minimap.md; minimap-folding.html B)
+
+(declare-function nidhogg-view-minimap "nidhogg-views" (what file &optional layer))
+(declare-function drgnx-minimap--spec "drgnx-minimap" (window))
+(declare-function drgnx-minimap--file "drgnx-minimap" (buffer))
+
+(defun drgnx-look-scene--parser-rs ()
+  "minimap-folding.html's parser.rs, about 2,850 lines: five MARK sections, each a struct and an impl of eight
+functions whose bodies nest loops and branches (the minimap's shading and labels have something to show)."
+  (let ((sections '("Tokens" "Parser" "Rows" "Errors" "Tests"))
+        (verbs '("read" "decode" "split" "check" "emit" "merge" "skip" "flush")))
+    (with-temp-buffer
+      (insert "//! parser.rs: rows decoded from a table of tokens.\n\nuse std::collections::HashMap;\n\n")
+      (dolist (sec sections)
+        (insert (format "// MARK: - %s\n\npub struct %s {\n    rows: Vec<Row>,\n    seen: HashMap<u64, usize>,\n}\n\n" sec sec))
+        (insert (format "impl %s {\n" sec))
+        (dolist (v verbs)
+          (insert (format "    fn %s_%s(&self, t: &Table) -> Result<(), Error> {\n" v (downcase sec)))
+          (dotimes (i 6)
+            (insert (format "        for r in t.rows().skip(%d) {\n            if r.len() > %d {\n" i (* 3 i))
+                    (format "                let v = r.decode()?;\n                self.seen.get(&v.key()).copied().unwrap_or(%d);\n" i)
+                    "                match v.kind() {\n                    Kind::Text => self.emit(v)?,\n"
+                    "                    _ => continue,\n                }\n            }\n        }\n"))
+          (insert "        Ok(())\n    }\n\n"))
+        (insert "}\n\n"))
+      (buffer-string))))
+
+(defun drgnx-look-scene--minimap-held (spec-fn window)
+  "Around `drgnx-minimap--spec' (SPEC-FN): WINDOW's spec, with `:open t' when a minimap scene marked WINDOW (the
+pointer's dwell opens it; the GUI rows judge the dwell)."
+  (let ((spec (funcall spec-fn window)))
+    (if (window-parameter window 'drgnx-look-scene-minimap-open) (append spec '(:open t)) spec)))
+
+(defun drgnx-look-scene--minimap-open (theme)
+  "minimap-folding.html's B in THEME: a 2,850-line Rust file in the editor at its line 812, its minimap held open (the
+pointer's dwell is the GUI rows' to judge, `:open' stands for it here) once the hub's labels for the file are in."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-hover"
+    (let ((f (expand-file-name "runtime/src/parser.rs" drgnx-look-scene--project)))
+      (unless (file-exists-p f)
+        (make-directory (file-name-directory f) t)
+        (write-region (drgnx-look-scene--parser-rs) nil f nil 'silent)))
+    (drgnx-look-scene--goto "runtime/src/parser.rs" 812 4 800)
+    (let* ((w (selected-window)) (file (drgnx-minimap--file (window-buffer w))))
+      (drgnx-look-scene--until 20 "minimap labels"
+                               (lambda () (and file (nidhogg-view-minimap 'get file "labels"))))
+      ;; the spec is placed again whenever the strip is (a window change): the window is marked and every placing
+      ;; adds `:open'
+      (set-window-parameter w 'drgnx-look-scene-minimap-open t)
+      (advice-add 'drgnx-minimap--spec :around #'drgnx-look-scene--minimap-held)
+      (set-window-parameter w 'glitnir-minimap (drgnx-minimap--spec w))
+      (drgnx-look-scene--settle-frame)))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-minimap-hover ()
+  "The minimap open over a long Rust file, dark."
+  (drgnx-look-scene--minimap-open 'drgnx-dark))
+
+(defun drgnx-look-scene-minimap-hover-light ()
+  "The minimap open over a long Rust file, light."
+  (drgnx-look-scene--minimap-open 'drgnx-light))
+
 (provide 'drgnx-look-scenes-session)
 ;;; drgnx-look-scenes-session.el ends here

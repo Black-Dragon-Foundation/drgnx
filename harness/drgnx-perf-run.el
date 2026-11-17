@@ -2534,6 +2534,23 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                                                 :lines (plist-get (nidhogg-lines-describe b) :lines))))
                                     (kill-buffer b)))"
                                (or drgnx-perf-run--fixture "")))
+            ;; Fold All over the fixture's first 10,000 lines (indentation ranges, nested): ≤ 50 ms, one overlay a range
+            (fold-all-10k
+             :measure ,(format "(let ((b (generate-new-buffer \" fold-10k\")))
+                                  (unwind-protect
+                                      (with-current-buffer b
+                                        (insert-file-contents %S)
+                                        (goto-char (point-min)) (forward-line 10000) (delete-region (point) (point-max))
+                                        (prog-mode) (goto-char (point-min))
+                                        (let* ((n (length (drgnx-fold-ranges))) (t0 (float-time)))
+                                          (drgnx-fold-fold-all)
+                                          (let ((ms (* 1000 (- (float-time) t0))) (o (length (drgnx-fold--overlays))))
+                                            (drgnx-fold-unfold-all)
+                                            (list :fold_ms (drgnx-perf--round ms) :ranges n
+                                                  :overlays_per_range (drgnx-perf--round (/ (float o) (max n 1)))))))
+                                    (kill-buffer b)))"
+                               (or drgnx-perf-run--fixture ""))
+             :check "(fboundp 'drgnx-fold-fold-all)")
             ;; the model's memory a line, over the whole fixture (≤ 40 B)
             (lines-memory
              :measure ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " " (funcall model t)

@@ -81,6 +81,8 @@
     (scrollbars-terminal :mockup minimap-folding)
     (scrollbars-settings :mockup minimap-folding)
     (scrollbars-shortcuts :mockup minimap-folding)
+    (minimap-hover :mockup minimap-folding)
+    (minimap-hover-light :mockup minimap-folding)
     (work-space-dark :seed "map")
     (work-space-light :seed "map")
     (work-space-hc :seed "map"))

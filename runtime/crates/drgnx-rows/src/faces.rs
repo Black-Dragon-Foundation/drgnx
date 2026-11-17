@@ -328,6 +328,10 @@ pub enum FaceId {
     WbIslandTitle,
     /// `drgnx-wb-island-control`
     WbIslandControl,
+    /// `drgnx-fold-summary`
+    FoldSummary,
+    /// `drgnx-fold-name`
+    FoldName,
     /// `drgnx-minimap-label`
     MinimapLabel,
     /// `drgnx-sticky`
@@ -1012,7 +1016,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 500] = [
+    pub const ALL: [FaceId; 502] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1173,6 +1177,8 @@ impl FaceId {
         FaceId::WbSection,
         FaceId::WbIslandTitle,
         FaceId::WbIslandControl,
+        FaceId::FoldSummary,
+        FaceId::FoldName,
         FaceId::MinimapLabel,
         FaceId::Sticky,
         FaceId::Blame,
@@ -1678,6 +1684,8 @@ impl FaceId {
             FaceId::WbSection => "drgnx-wb-section",
             FaceId::WbIslandTitle => "drgnx-wb-island-title",
             FaceId::WbIslandControl => "drgnx-wb-island-control",
+            FaceId::FoldSummary => "drgnx-fold-summary",
+            FaceId::FoldName => "drgnx-fold-name",
             FaceId::MinimapLabel => "drgnx-minimap-label",
             FaceId::Sticky => "drgnx-sticky",
             FaceId::Blame => "drgnx-blame",
@@ -2184,6 +2192,8 @@ impl FaceId {
             "drgnx-wb-section" => FaceId::WbSection,
             "drgnx-wb-island-title" => FaceId::WbIslandTitle,
             "drgnx-wb-island-control" => FaceId::WbIslandControl,
+            "drgnx-fold-summary" => FaceId::FoldSummary,
+            "drgnx-fold-name" => FaceId::FoldName,
             "drgnx-minimap-label" => FaceId::MinimapLabel,
             "drgnx-sticky" => FaceId::Sticky,
             "drgnx-blame" => FaceId::Blame,

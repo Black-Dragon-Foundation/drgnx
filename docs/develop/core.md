@@ -1647,6 +1647,15 @@ lists at each publish.
   expression (`nidhogg-lines-set-section-regexp`, `drgnx-minimap-mark-regexp`, Rust regex syntax) and finds the MARK
   sections itself; the hub is told the file is shown (`minimap/watch`, once per change of file) and sends the
   definitions. Nidhogg draws the rest (Glitnir's minimap layer: tiles, labels, the pointer).
+- **Folding.** `editor/fold` (`modules/editor/drgnx-fold.el`) reads the line model's one fold table (`nidhogg-lines-folds`,
+  `nidhogg-lines-fold-at`: `(BEG END KIND DEPTH SOURCE)`, BEG the first line's start, END the last line's end). Its
+  sources are numbers: 0 tree-sitter, 1 the hub, 2 headings and 4 indentation (the model finds those itself, again
+  after each change: `nidhogg-lines-set-fold-sources`), 3 notebook cells and 5 manual folds (sent by the module,
+  `nidhogg-lines-set-folds`). Kinds: 0 block, 1 function, 2 class, 3 comment, 4 import, 5 test, 6 region, 7 cell,
+  8 heading (`drgnx-fold-kinds`). A fold is an overlay (`drgnx-fold` t, `invisible`, `display` the summary,
+  `isearch-open-invisible`) from the first line's end to END; after each command the overlays' ranges go to the model
+  (`nidhogg-lines-set-hidden`), which leaves their lines out of the scroll bar and the minimap. Org folds with
+  `org-fold`; `evil-fold-list` gets a provider for `drgnx-fold-mode`.
 - **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
   8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
   at 26 %; all through `drgnx-px`.

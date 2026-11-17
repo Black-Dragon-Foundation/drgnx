@@ -161,6 +161,8 @@
  drgnx-wb-section
  drgnx-wb-island-title
  drgnx-wb-island-control
+ drgnx-fold-summary
+ drgnx-fold-name
  drgnx-minimap-label
  drgnx-sticky
  drgnx-blame

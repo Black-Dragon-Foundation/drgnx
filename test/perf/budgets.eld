@@ -27,6 +27,8 @@
  (minimap-type (:input :p95) 16) (minimap-type (:input :max) 50)
  (minimap-type-250k (:input :p95) 16) (minimap-type-250k (:input :max) 50)
  (lines-build-1mb (:build_ms) 25) (lines-memory (:bytes_per_line) 40)
+ ;; Fold All over 10,000 lines of the fixture (design §8): ≤ 50 ms, at most one overlay a range
+ (fold-all-10k (:fold_ms) 50) (fold-all-10k (:overlays_per_range) 1)
  (debug-edges-scroll (:input :p95) 16) (debug-edges-scroll (:input :max) 50)
  (debug-breakpoint-click (:input :p95) 16) (debug-breakpoint-click (:input :max) 50)
  ;; a step's stop drawn (spec §5): the arrow, band and point moved within a frame (16 ms p95, from the event)

@@ -1369,7 +1369,7 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
     (close-all "C-k C-w" nil) (focus-buffers "C-k e" nil) (focus-buffers "C-S-b" nil)
     (buffers-next "<down>" drgnx-buffers-mode-map) (buffers-previous "<up>" drgnx-buffers-mode-map)
     (buffers-open "RET" drgnx-buffers-mode-map) (buffers-close "<delete>" drgnx-buffers-mode-map)
-    (buffers-filter "C-M-f" drgnx-buffers-mode-map) (edit-fold "C-{" nil) (edit-unfold "C-}" nil)
+    (buffers-filter "C-M-f" drgnx-buffers-mode-map)
     (edit-expand "M-S-<right>" nil) (edit-shrink "M-S-<left>" nil) (edit-select-all "C-S-a" nil)
     (edit-select-line "C-l" nil) (edit-redo "C-S-z" nil) (edit-comment "C-/" nil) (edit-delete-line "C-S-k" nil)
     (edit-move-up "M-<up>" nil) (edit-move-down "M-<down>" nil) (edit-duplicate "M-S-<down>" nil)
@@ -1539,12 +1539,18 @@ The commands of modules that need no installed package are in it, the later stag
                               kit-activate      ; RET on a kit component's action
                               face-menu         ; a lone Alt opens the menu (Nidhogg's `lone-alt')
                               editor-recent editor-recent-up ; C-<tab>: VS Code's previous editor
+                              edit-fold edit-unfold ; registered by editor/fold now: later in the order
+                              fold-toggle fold-recursive unfold-recursive fold-all unfold-all fold-level fold-kind
+                              fold-focus unfold-focus fold-create fold-remove ; editor/fold: VS Code's C-k folding chords
                               tile-full-size))  ; the grid's Full-Size Tile (C-k C-m, C-k RET)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
                            (seq-remove (lambda (b) (memq (plist-get b :id) new)) (plist-get r :bindings)))
                    drgnx-keys-test--linux-snapshot))
+    (should (equal (drgnx-keys-test--keys r 'edit-fold) '("C-{")))
+    (should (equal (drgnx-keys-test--keys r 'fold-toggle) '("C-k C-l")))   ; VS Code's own; Next Layout is C-k l
+    (should (equal (drgnx-keys-test--keys r 'layout-next) '("C-k l")))
     (should (equal (drgnx-keys-test--keys r 'edit-line-start) '("<home>")))
     (should (equal (drgnx-keys-test--keys r 'edit-word-left) '("C-<left>")))
     (should (equal (drgnx-keys-test--keys r 'face-menu) '("<lone-alt>")))   ; ui/face's own command, set up for real

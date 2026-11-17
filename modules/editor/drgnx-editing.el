@@ -1,10 +1,9 @@
-;;; drgnx-editing.el --- Module editor/editing: folding, case, selection -*- lexical-binding: t -*-
+;;; drgnx-editing.el --- Module editor/editing: case, selection, lines -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Editing commands people expect from VS Code, on built-ins: fold and unfold (hideshow in code,
-;; outline elsewhere), change case (camelCase, snake_case, kebab-case, cycle), expand and shrink
+;; Editing commands people expect from VS Code, on built-ins (folding is editor/fold's): change case (camelCase, snake_case, kebab-case, cycle), expand and shrink
 ;; the selection (tree-sitter nodes when the buffer has a parser, else words and balanced
 ;; expressions), go to line; the VS Code line commands (move, select, duplicate, delete, new line
 ;; above/below), redo, comment, back/forward; VS Code's cursor moves and deletes (Home, End, word,
@@ -13,8 +12,6 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
-(require 'hideshow)
-(require 'outline)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-setting)
@@ -22,24 +19,6 @@
 (declare-function treesit-node-start "treesit.c")
 (declare-function treesit-node-end "treesit.c")
 (declare-function treesit-node-parent "treesit.c")
-
-;;;; Fold
-
-(defun drgnx-editing-fold ()
-  "Fold the block at point (code: the definition or block; text: the section)."
-  (interactive)
-  (if (derived-mode-p 'prog-mode)
-      (progn (unless hs-minor-mode (hs-minor-mode 1)) (hs-hide-block))
-    (unless outline-minor-mode (outline-minor-mode 1))
-    (outline-hide-subtree)))
-
-(defun drgnx-editing-unfold ()
-  "Unfold the block at point."
-  (interactive)
-  (if (derived-mode-p 'prog-mode)
-      (progn (unless hs-minor-mode (hs-minor-mode 1)) (hs-show-block))
-    (unless outline-minor-mode (outline-minor-mode 1))
-    (outline-show-subtree)))
 
 ;;;; Case
 
@@ -332,14 +311,12 @@ applies at once."
   :apply #'drgnx-editing--apply-word-wrap :schema '(enum on off))
 
 (drgnx-module-define 'editor/editing
-                     :doc "Fold, change case, expand and shrink the selection, go to line."
+                     :doc "Change case, expand and shrink the selection, go to line."
                      :stage 'startup
                      :setup
                      (lambda ()
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((edit-fold "Fold" drgnx-editing-fold "Fold the block at point")
-                                        (edit-unfold "Unfold" drgnx-editing-unfold "Unfold the block at point")
-                                        (edit-case-cycle "Change Case: Cycle" drgnx-editing-case-cycle "camelCase → snake_case → kebab-case")
+                                      '((edit-case-cycle "Change Case: Cycle" drgnx-editing-case-cycle "camelCase → snake_case → kebab-case")
                                         (edit-case-camel "Change Case: camelCase" drgnx-editing-case-camel "The word or selection in camelCase")
                                         (edit-case-snake "Change Case: snake_case" drgnx-editing-case-snake "The word or selection in snake_case")
                                         (edit-case-kebab "Change Case: kebab-case" drgnx-editing-case-kebab "The word or selection in kebab-case")
