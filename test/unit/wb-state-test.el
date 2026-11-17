@@ -347,9 +347,6 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
       (should (drgnx-state--observe f))
       (should (eq dock (drgnx-state-pane-window 'st-symbols f)))
       (should-not (drgnx-state-pane-window 'outline f))
-      (set-window-parameter g1 'drgnx-layouts-pane 'agent)
-      (should (drgnx-state--observe f))
-      (should (eq g1 (drgnx-state-pane-window 'agent f)))
       (unwind-protect
           (progn
             (puthash f (list (cons 'st-notes (window-buffer g2))) drgnx-pane--last)

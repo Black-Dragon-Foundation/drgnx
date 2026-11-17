@@ -3668,6 +3668,33 @@ so moving an atom goes through its state (`window-state-get` on the root). Test:
   `:px` become MEMORY's `:sizes`. Other versions are ignored. Tests: `test/unit/grid-persist-test.el`,
   `wb-persist-test.el`, `wb-persist-edge-test.el`.
 
+### Layouts on the grid (`modules/tools/drgnx-layouts.el`)
+
+A layout is a way to build a grid TREE; applying one is `drgnx-grid-push 'preset` (so Restore Previous undoes it)
+then putting a tree back, never deleting windows by hand. User guide: `docs/guide/layouts.md`.
+
+- `drgnx-layouts` holds the built-ins as plists: `:left` (a side-bar view, or nil), `:right` and `:panel` (an area
+  tab or pane kind, `keep` for the current dock, nil for none), `:editor` (a shape) and `:px` (sizes, a number or
+  `(logical N)`, `drgnx-layouts--px`). `:frames (A B)` (Work + Code) builds A in this window and B in a second one
+  on the second monitor (`drgnx-layouts--apply-frames`, reusing the window marked `drgnx-layouts-second`); a user's
+  `:tree` is copied as it is, an old `:windows` entry is read through `drgnx-persist--grid-from-v2`.
+- A shape (`drgnx-layouts-define-shape NAME FN`) is a function of (EDITOR WIDTH HEIGHT SCALE) returning the editor
+  part of the tree from the current editor area: `drgnx-layouts--beside EDITOR KINDS` puts pane-kind tiles to its
+  right. `drgnx-layouts--build-tree` joins the side bar, the editor part, the panel and the right side with
+  `drgnx-grid-tree-join`; a dock's tile keeps its current id when the layout keeps it, so its buffer is not remade.
+- A pane (agent, browser, …) is a pane kind with a `:fill` (`drgnx-layouts-define-pane KIND FILL TITLE` →
+  `drgnx-pane-define-kind`): a kind a module defines goes with the module, and its tile shows the kind's placeholder
+  until it is defined again, when it fills in place.
+- Each frame remembers each layout's last arrangement (`(:tree :full)`, frame parameter `drgnx-layouts-state`);
+  coming back puts it back (`drgnx-layouts--put`, visiting each editor's files). Reset Tiles (`tile-reset`) builds the
+  current layout fresh.
+- The arrangements live per project in `$XDG_STATE_HOME/drgnx/layouts/PROJECT.eld` (`drgnx-layouts-store-file`;
+  PROJECT is the work-space id when tools/work-space runs, else `global`): written 2 s after a change
+  (`drgnx-layouts--save-soon`), with the workbench's save, and on exit; read when a frame's project changes
+  (`drgnx-layouts--load-project`), keeping only valid arrangements. The workbench's state keeps only `:layout`.
+- Tests: `test/unit/layouts-grid-test.el`, `mod-layouts-test.el`, `mod-layouts-persist-test.el`,
+  `layouts-eld-test.el`; two windows on two monitors: `test/ui/layouts-presets-gui-test.el`.
+
 ## The UI kit (`drgnx-ui-kit.el`)
 
 What every surface that draws a mark or a button shares. It is in core and requires only the registry and the
@@ -3879,7 +3906,7 @@ Outline dock (`drgnx-outline--index`: "This file is too large for an outline", a
 the status bar (`position` shows `Col N` without the line number, `indent` shows nothing, and the memo's key reads
 `tab-width` instead of scanning the first lines). **A new producer that reads or scans the buffer checks the flag
 too** and returns early. The callers that visit files bind `drgnx-large-file-open`: Persist (`drgnx-persist--visit`)
-and layouts (`drgnx-layouts--put-main`) bind `auto`; Replace's two visits and AI apply-hunk bind `whole`; the agent
+and layouts (`drgnx-layouts--visit`, through Persist's) bind `auto`; Replace's two visits and AI apply-hunk bind `whole`; the agent
 edit review sets it to `whole` in its diff buffer, where diff-mode visits the copy. They keep their
 `(large-file-warning-threshold nil)`: with the module off, Emacs's own question would come back at start.
 A caller that needs the whole file's lines and columns also checks the buffer it is handed: the door reuses an open

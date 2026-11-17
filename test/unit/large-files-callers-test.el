@@ -30,9 +30,8 @@
         (progn
           ;; Persist and layouts: automatic, and Emacs's own question stays off
           (should (equal (drgnx-large-files-callers-test--visit (drgnx-persist--visit file)) '(auto nil)))
-          (should (equal (cl-letf (((symbol-function 'window-state-put) (lambda (&rest _) (find-file-noselect file)))
-                                   ((symbol-function 'drgnx-layouts--reopen-groups) #'ignore))
-                           (drgnx-large-files-callers-test--visit (drgnx-layouts--put-main (list :fill t :main nil))))
+          (should (equal (drgnx-large-files-callers-test--visit
+                          (drgnx-layouts--visit (list 'editor :px nil :share nil :id 1 :tabs nil :shown file)))
                          '(auto nil)))
           ;; Replace's visit (its writes go to buffers open already, or the hub): the whole file
           (with-temp-buffer
