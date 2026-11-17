@@ -794,7 +794,7 @@ impl Map {
         // the plan: the selected item if it is one, else the plan whose block the selected item sits in
         let plan = selected.and_then(|id| {
             let it = m.item(id)?;
-            if it.kind == vegvisir::model::Kind::Plan {
+            if it.kind == vegvisir::Kind::Plan {
                 Some(it.id)
             } else {
                 it.block
