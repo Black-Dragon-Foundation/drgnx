@@ -217,17 +217,30 @@ mod tests {
     }
 
     #[test]
-    fn a_job_counts_its_reservation_for_5_minutes() {
-        // [D] pure
+    fn a_job_holds_its_unused_reservation_at_every_age() {
+        // [D] pure (design §0.3 R1): `MemAvailable` has already lost what a job uses, so it holds only the rest of its
+        // reservation, young or old; past its reservation it holds nothing more.
         let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
         let mut m = machine(Profile::Dedicated);
         m.mem_available_mib = 20_000;
         m.running = vec![running("r", Priority::P4, m.now - 100, 4000, 500)];
-        assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048 - 4000);
+        assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048 - 3500);
         m.running[0].started = m.now - YOUNG_S;
         assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048 - 3500);
         m.running[0].current_mib = 6000;
         assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048);
+    }
+
+    #[test]
+    fn a_young_job_holds_only_what_it_has_not_used() {
+        // [D] pure: the slots-v2 double count (failure #3). A job 10 s old using 3 GiB of a 4 GiB reservation holds
+        // 1 GiB, not 4.
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
+        let mut m = machine(Profile::Dedicated);
+        m.mem_available_mib = 20_480;
+        m.running = vec![running("r", Priority::P4, m.now - 10, 4096, 3072)];
+        assert_eq!(held_beyond_use(&m.running[0], m.now), 1024);
+        assert_eq!(budget(&m, &lim).mem_mib, 20_480 - 2048 - 1024);
     }
 
     #[test]

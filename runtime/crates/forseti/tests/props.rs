@@ -945,3 +945,27 @@ proptest! {
         }
     }
 }
+
+proptest! {
+    /// A running job is counted once: `MemAvailable` has lost what it uses, and the budget holds at most the rest of its
+    /// reservation, at any age (design §0.3 R1; slots-v2 failure #3 was a young job counted twice).
+    #[test]
+    fn budget_never_counts_a_job_twice(
+        reserve in 256u64..16_384,
+        used_pct in 0u64..=150,
+        age in 0u64..1_000,
+    ) {
+        let now = 100_000;
+        let current = reserve * used_pct / 100;
+        let avail = 40_000u64;
+        let mut m = machine(Profile::Dedicated, avail - current.min(avail), now);
+        let g = Grant { cores: 2, mem_cap_mib: reserve * 2, reserve_mib: reserve };
+        let mut r = running("r", Priority::P3, now - age, &g, 10.0);
+        r.current_mib = current;
+        m.running = vec![r];
+        let lim = Limits::for_profile(Profile::Dedicated, 65_536, 16);
+        let b = budget(&m, &lim);
+        let bound = avail as i64 - lim.floor_mib as i64 - lim.reserve_user_mib as i64 - reserve.max(current) as i64;
+        prop_assert!(b.mem_mib >= bound, "budget {} below {} (reserve {}, current {}, age {})", b.mem_mib, bound, reserve, current, age);
+    }
+}
