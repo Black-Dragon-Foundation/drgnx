@@ -354,6 +354,20 @@ its own, `drgnx-area--companions'): the buffer above and the one below in window
                      (alist-get dock drgnx-grid--default-size)))))
         (if (drgnx-grid--horizontal-dock-p dock) (* n (frame-char-width frame)) (* n (frame-char-height frame))))))
 
+(defun drgnx-grid-home-size (dock fraction minimum &optional frame)
+  "Give DOCK (`left', `bottom', `right') on FRAME FRACTION of the frame's columns (lines for `bottom'), at least MINIMUM
+of them: the size its tile has now, when it shows (a tile that cannot be that size stays as it is), and comes back at
+\(the `:sizes' intent, by `auto').  A terminal's layout sizes its docks so (ui/terminal-layout).  Returns the size in
+FRAME's pixels."
+  (let* ((frame (or frame (selected-frame))) (horizontal (drgnx-grid--horizontal-dock-p dock))
+         (unit (if horizontal (frame-char-width frame) (frame-char-height frame)))
+         (px (* unit (max minimum (round (* fraction (if horizontal (frame-width frame) (frame-height frame))))))))
+    (drgnx-state-note-intent frame :sizes dock px :by 'auto)
+    (when-let* ((w (drgnx-grid-dock dock frame)))
+      (let ((root (drgnx-grid--tile-root w)) (window-resize-pixelwise t))
+        (ignore-errors (window-resize root (- px (window-size root horizontal t)) horizontal nil t))))
+    px))
+
 ;;;; Docks
 
 (defun drgnx-grid-dock (dock &optional frame)
@@ -986,7 +1000,11 @@ frame is made (the plain setup, never ediff's frames)."
              (list 'tile :id id :kinds stack :shown (car stack) :dock dock :state nil)))
           ((eq role 'dock)
            (list 'tile :id id :kinds '(side-bar) :shown 'side-bar :dock (or dock 'left)
-                 :state (list :view (drgnx-wb-sidebar-view (window-frame w)))))
+                 :state (list :view (drgnx-wb-sidebar-view (window-frame w))
+                              ;; its sections' heights, logical, top to bottom: the side bar made again has them
+                              :parts (let ((scale (drgnx-pixels-scale (window-frame w))))
+                                       (mapcar (lambda (p) (max 1 (drgnx-grid-tree-to-logical (window-pixel-height p) scale)))
+                                               (drgnx-grid--leaves (drgnx-grid--tile-root w)))))))
           ((and role (assq role drgnx-wb--areas))
            (let ((tab (drgnx-wb-area-tab role)))
              (list 'tile :id id :kinds (and tab (list tab)) :shown tab :dock dock :state (list :area role))))
@@ -1101,6 +1119,20 @@ their :share of it; pixelwise, each taking from the next."
                do (let ((window-resize-pixelwise t) (delta (- target (window-size k row t))))
                     (unless (zerop delta) (ignore-errors (adjust-window-trailing-edge k delta row t))))))))
 
+(defun drgnx-grid--part-heights (window parts scale)
+  "Give the parts of WINDOW's tile (its atom's windows, top to bottom) the heights PARTS, logical pixels at SCALE: in
+proportion when they do not add up to the tile's height.  Nothing when the tile has another number of parts."
+  (let* ((wins (drgnx-grid--leaves (drgnx-grid--tile-root window)))
+         (total (apply #'+ (mapcar #'window-pixel-height wins)))
+         (pxs (mapcar (lambda (l) (drgnx-grid-tree-from-logical l scale)) parts))
+         (sum (apply #'+ pxs)))
+    (when (and (cdr wins) (= (length wins) (length parts)) (> sum 0))
+      (unless (= sum total) (setq pxs (mapcar (lambda (p) (round (* p (/ (float total) sum)))) pxs)))
+      (cl-loop for w in wins for target in pxs for more on wins
+               when (cdr more)
+               do (let ((window-resize-pixelwise t) (delta (- target (window-pixel-height w))))
+                    (unless (zerop delta) (ignore-errors (adjust-window-trailing-edge w delta nil t))))))))
+
 (defun drgnx-grid--sized (frame fn)
   "Call FN with FRAME's preserved sizes (`window-preserve-size') lifted, so it may set any size; then every window that
 had one keeps the size it has now."
@@ -1208,7 +1240,13 @@ last.  When the kept tiles are arranged otherwise than TREE has them, only the f
               (drgnx-grid--sized
                frame (lambda ()
                        (pcase-dolist (`(,node . ,w) made)
-                         (when (and (memq (car node) '(row col)) (window-valid-p w)) (drgnx-grid--size node w scale)))))
+                         (when (and (memq (car node) '(row col)) (window-valid-p w)) (drgnx-grid--size node w scale)))
+                       ;; a side bar made again: its sections as tall as they were, once its own size is set
+                       (pcase-dolist (`(,node . ,w) made)
+                         (when-let* (((eq (car node) 'tile)) ((window-live-p w))
+                                     ((not (memq (window-parameter w 'drgnx-tile-id) keep)))
+                                     (parts (plist-get (plist-get (cdr node) :state) :parts)))
+                           (drgnx-grid--part-heights w parts scale)))))
               (let ((top (apply #'max 0 ids)))
                 (when (> top (or (frame-parameter frame 'drgnx-grid-next-id) 0))
                   (set-frame-parameter frame 'drgnx-grid-next-id top)))))
