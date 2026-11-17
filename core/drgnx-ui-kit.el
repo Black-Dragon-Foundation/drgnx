@@ -270,12 +270,16 @@ A component's binding of () is its face `drgnx-kit-ID'; another binding, of vari
 (defun drgnx-ui-kit-menu-values (&optional frame)
   "The kit's metrics for Nidhogg's menus (lisp/term/nhwl-menu.el) in FRAME, a plist in logical px.
 :min-width 220, :row-height the density's tree row (26 at comfortable; nil without ui/look: one text line),
-:row-padding (12 . 12), :separator-height 9 (a 1 px rule with 4 px either side, the mockup's), :radius 8 and :shadow,
+:row-padding (12 . 12), :separator-height 9 (a 1 px rule with 4 px either side, the mockup's), :selection-inset 4
+and :selection-radius 6 (the state table's selected row: a rounded fill 4 px in from the card's sides), :radius 8 and
+:shadow,
 nil in high contrast (spec §7.4, menus)."
   (list :min-width 220
         :row-height (drgnx-ui-kit--value '(density tree-row) nil)
         :row-padding '(12 . 12)
         :separator-height 9
+        :selection-inset 4
+        :selection-radius 6
         :radius 8
         :shadow (not (and (fboundp 'drgnx-look-variant) (eq (drgnx-look-variant frame) 'hc)))))
 
