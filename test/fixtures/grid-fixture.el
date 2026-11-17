@@ -16,7 +16,7 @@
     (set-window-parameter nil p nil))
   (set-window-dedicated-p nil nil)
   (dolist (p '(drgnx-grid-memory drgnx-grid-next-id drgnx-intent-by drgnx-wb-panel-px drgnx-wb-right-px
-                                 drgnx-wb-dock-px drgnx-wb-areas drgnx-grid-stack drgnx-grid--good))
+                                 drgnx-wb-dock-px drgnx-wb-areas drgnx-grid--good))
     (set-frame-parameter nil p nil))
   (remhash (selected-frame) drgnx-grid--kinds))
 
@@ -25,7 +25,7 @@
 the bottom, `g-chat' at the right, `g-tree' at the left."
   (declare (indent 0))
   `(drgnx-test-with-state
-     (let ((drgnx-pane--kinds nil) (drgnx-pane-backend 'grid) (drgnx-state--kind-owners nil)
+     (let ((drgnx-pane--kinds nil) (drgnx-pane-backend 'grid) (drgnx-state--kind-owners nil) (drgnx-grid--stack nil)
            (drgnx-wb--sections nil) (drgnx-wb--areas (copy-tree drgnx-wb--areas))
            (drgnx-rules--table (copy-sequence drgnx-rules--table))
            (display-buffer-alist nil) (display-buffer-overriding-action '(nil))

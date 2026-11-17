@@ -20,6 +20,7 @@
 (require 'drgnx-state)
 (require 'drgnx-state-intent)
 (require 'drgnx-pixels)
+(require 'drgnx-ui-kit)                 ; the grip's glyph (`drgnx-face-glyph')
 (require 'drgnx-grid-tree)
 (require 'drgnx-panes)
 
@@ -653,8 +654,6 @@ For invoked commands only (`split-editor-right' and `split-editor-down' on a too
 another tile's edge (a split there) or middle (a stack).  Nil: no grip is drawn and drags do nothing."
   :type 'boolean :group 'drgnx-grid)
 
-(defconst drgnx-grid-grip "⠿" "The grip at a tool tile's tab line's start (`drgnx-grid-drag').")
-
 (defvar drgnx-grid-grip-map
   (let ((m (make-sparse-keymap)))
     (define-key m [tab-line down-mouse-1] #'drgnx-grid-grip-press)
@@ -662,10 +661,11 @@ another tile's edge (a split there) or middle (a stack).  Nil: no grip is drawn 
     m)
   "The grip's mouse map: a press drags the tile (`drgnx-grid-grip-press').")
 
-(defun drgnx-grid--grip ()
-  "The grip string for a tab row, or \"\" when `drgnx-grid-drag' is off."
+(defun drgnx-grid--grip (&optional frame)
+  "The grip string for a tab row on FRAME (default the selected one): the kit's `grip-vertical' glyph, its ASCII
+form on a terminal that is not UTF-8 (`drgnx-face-glyph'); \"\" when `drgnx-grid-drag' is off."
   (if drgnx-grid-drag
-      (propertize (concat " " drgnx-grid-grip) 'local-map drgnx-grid-grip-map 'mouse-face 'highlight
+      (propertize (concat " " (drgnx-face-glyph 'grip-vertical frame)) 'local-map drgnx-grid-grip-map 'mouse-face 'highlight
                   'pointer 'hand 'help-echo "Drag to move this tile")
     ""))
 
@@ -681,7 +681,7 @@ another tile's edge (a split there) or middle (a stack).  Nil: no grip is drawn 
   (let* ((stack (window-parameter window 'drgnx-pane-stack)) (shown (car stack))
          (kinds (seq-filter (lambda (k) (member k stack)) (append (drgnx-pane-kinds) stack))))
     (concat
-     (drgnx-grid--grip)
+     (drgnx-grid--grip (window-frame window))
      (mapconcat (lambda (k)
                   (let ((title (drgnx-grid--title k)))
                     (propertize (concat " " title " ")
@@ -1244,12 +1244,6 @@ fitted to BUFFER, at most FRACTION of the frame (default 0.33).  It is no tile: 
     (when (and good (not (drgnx-grid--temporary-windows frame)) (not (equal (drgnx-grid-tree frame) good)))
       (drgnx-grid-apply-tree good frame))))
 
-(defun drgnx-grid-push (frame why &optional tree)
-  "Push TREE (default FRAME's tree now) with WHY on FRAME's layout undo stack (`drgnx-grid-stack', newest first, at
-most 20): Restore Previous Layout goes back to it."
-  (let ((stack (cons (list :why why :tree (or tree (drgnx-grid-tree frame))) (frame-parameter frame 'drgnx-grid-stack))))
-    (set-frame-parameter frame 'drgnx-grid-stack (seq-take stack 20))))
-
 (defun drgnx-grid--watch-foreign (frame)
   "A grid that lost two or more tiles at once, past the grid's own commands (a package's `delete-other-windows' or
 `set-window-configuration': Review Focus 3), is pushed, as it was, on the layout undo stack; then FRAME's tree now is
@@ -1258,7 +1252,7 @@ the last good one."
     (when (and good (not (frame-parameter frame 'drgnx-grid-full)) (not (drgnx-grid--temporary-windows frame)))
       (let* ((live (mapcar (lambda (w) (window-parameter w 'drgnx-tile-id)) (drgnx-grid-tiles frame)))
              (lost (seq-remove (lambda (id) (memq id live)) (drgnx-grid--tree-ids good))))
-        (when (cdr lost) (drgnx-grid-push frame 'foreign good)))))
+        (when (cdr lost) (drgnx-grid-push 'foreign frame good)))))
   (drgnx-grid--note-good frame))
 
 ;; The side bar as one kind: the left dock with the current view's sections (the flow plan's places show it).
@@ -1296,9 +1290,10 @@ once no tile is left the frame's grid bookkeeping is emptied (a frame parameter 
       (when (eq (window-parameter w 'delete-window) #'drgnx-grid--delete-editor)
         (set-window-parameter w 'delete-window nil))))
   (unless (seq-some (lambda (w) (window-parameter w 'drgnx-tile-id)) (window-list frame 'nomini))
-    (dolist (p '(drgnx-grid-next-id drgnx-grid--good drgnx-grid-memory drgnx-grid-stack drgnx-grid-full))
+    (dolist (p '(drgnx-grid-next-id drgnx-grid--good drgnx-grid-memory drgnx-grid-full))
       (when (frame-parameter frame p) (set-frame-parameter frame p nil)))))
 
 (provide 'drgnx-grid)
 (require 'drgnx-grid-ops)               ; moving tiles: it needs this file first
+(require 'drgnx-grid-frames)            ; the layout snapshot and undo stack (`drgnx-grid-push')
 ;;; drgnx-grid.el ends here

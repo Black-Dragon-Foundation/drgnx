@@ -381,26 +381,27 @@
 
 (ert-deftest drgnx-grid-rules/foreign-window-calls-leave-the-grid-recoverable ()
   ;; Review Focus 3: a package puts back a one-window configuration and deletes the other windows past their
-  ;; parameters; the grid as it was is on the stack (`layout-restore-previous', Task 10, brings it back)
+  ;; parameters; the grid as it was is on the stack and Restore Previous Layout brings it back
   (drgnx-grid-test--with
     (drgnx-grid-mode 1)
     (unwind-protect
-        (let ((one (current-window-configuration)))
+        (let ((one (current-window-configuration)) (drgnx-grid--stack nil))
           (dolist (k '(g-tree g-term g-chat)) (drgnx-pane-show k))
           (drgnx-state-sync)
           (let ((tree (drgnx-grid-tree)))
-            (set-frame-parameter nil 'drgnx-grid-stack nil)
+            (setq drgnx-grid--stack nil)
             (set-window-configuration one)
             (let ((ignore-window-parameters t)) (delete-other-windows))
             (drgnx-state-sync)
-            (should (equal (car (frame-parameter nil 'drgnx-grid-stack)) (list :why 'foreign :tree tree)))
+            (should (eq (plist-get (car drgnx-grid--stack) :why) 'foreign))
+            (drgnx-grid-restore-previous)
+            (should (equal (drgnx-grid-tree) tree))
             ;; the grid's own hides are not foreign
-            (set-frame-parameter nil 'drgnx-grid-stack nil)
-            (dolist (k '(g-tree g-term g-chat)) (drgnx-pane-show k))
+            (setq drgnx-grid--stack nil)
             (drgnx-state-sync)
             (dolist (k '(g-tree g-term g-chat)) (drgnx-pane-hide k))
             (drgnx-state-sync)
-            (should-not (frame-parameter nil 'drgnx-grid-stack))))
+            (should-not drgnx-grid--stack)))
       (drgnx-grid-mode -1))))
 
 (ert-deftest drgnx-grid-rules/close-pane-hides-a-tool-tile ()

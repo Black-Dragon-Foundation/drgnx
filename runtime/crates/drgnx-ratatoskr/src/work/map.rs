@@ -770,16 +770,58 @@ impl Map {
         *self.strip.lock().unwrap_or_else(PoisonError::into_inner) = chips;
     }
 
-    /// The chips left of the machines' on the strip: none yet outside a test hub's scene (DEFERRED MAP-STRIP-WK-COST-1).
-    fn strip_chips(&self) -> Vec<String> {
+    /// The chips left of the machines' on the strip: one for each weekly meter, then the selected plan's budget (see
+    /// [`strip_chips_of`]); a test hub's scene overrides them.
+    fn strip_chips(
+        &self,
+        f: &Front,
+        m: &vegvisir::Model,
+        selected: Option<&ItemId>,
+    ) -> Vec<String> {
         #[cfg(feature = "test-hooks")]
-        return self
-            .strip
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        #[cfg(not(feature = "test-hooks"))]
-        Vec::new()
+        {
+            let scene = self
+                .strip
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            if !scene.is_empty() {
+                return scene;
+            }
+        }
+        let now = crate::clock::wall_secs();
+        let paces = f.core.budgets.pace(None, now);
+        // the plan: the selected item if it is one, else the plan whose block the selected item sits in
+        let plan = selected.and_then(|id| {
+            let it = m.item(id)?;
+            if it.kind == vegvisir::Kind::Plan {
+                Some(it.id)
+            } else {
+                it.block
+            }
+        });
+        let budget = plan.and_then(|p| {
+            let scope: runstav::methods::timeline::BudgetScope =
+                serde_json::from_value(json!({"plan": p.as_str()})).ok()?;
+            let b = &f.core.budgets;
+            let state = b.state(&scope);
+            let (unit, spent, limit) = match b.binding(&scope) {
+                Some((u, s, l)) => (u, s, Some(l)),
+                // no limit anywhere: the spend alone, in the first unit that has any
+                None => {
+                    let v = b.view(&scope);
+                    let l = v.spent.iter().find(|l| l.amount > 0.0)?;
+                    (l.unit, l.amount, None)
+                }
+            };
+            Some(PlanBudget {
+                unit,
+                spent,
+                limit,
+                state,
+            })
+        });
+        strip_chips_of(&paces, budget.as_ref(), now)
     }
 
     /// A test hub's scene graph (`orch::scene::map_events`): EVENTS, fed to every map opened.
@@ -1376,7 +1418,7 @@ impl Map {
         }
         // the job chips' elapsed time: whole seconds of the wall clock
         let now = crate::clock::wall_secs() as u64;
-        let extra = self.strip_chips();
+        let extra = self.strip_chips(&f, m, v.selected.as_ref());
         for class in f.core.views.classes(key.conn, &key.view) {
             let k3 = (key.conn, key.view.clone(), class);
             f.core.views.publish_built(&f, &k3, |env, fonts| {
@@ -1931,6 +1973,88 @@ fn card_kind(k: &str) -> CardKind {
 
 /// An open card: id, job, kind, title.
 type Card = (String, String, String, String);
+
+/// The selected plan's binding budget as the strip shows it.
+pub(crate) struct PlanBudget {
+    pub unit: runstav::methods::matrix::Unit,
+    pub spent: f64,
+    /// None: no limit counts for the plan; its spend stands alone.
+    pub limit: Option<f64>,
+    pub state: runstav::methods::timeline::BudgetState,
+}
+
+/// An amount in UNIT as the strip writes it: dollars as `$31`, a share of a window as `11 %`, else the number.
+fn amount_text(unit: runstav::methods::matrix::Unit, v: f64) -> String {
+    use runstav::methods::matrix::Unit;
+    match unit {
+        Unit::Usd | Unit::UsdEst => {
+            if v >= 10.0 {
+                format!("${v:.0}")
+            } else {
+                format!("${v:.2}")
+            }
+        }
+        Unit::LimitShare => format!("{:.0} %", v * 100.0),
+        Unit::Tokens | Unit::Count => {
+            if v >= 1e6 {
+                format!("{:.1}M", v / 1e6)
+            } else if v >= 1e3 {
+                format!("{:.0}k", v / 1e3)
+            } else {
+                format!("{v:.0}")
+            }
+        }
+    }
+}
+
+/// The strip's chips: one for each weekly meter (`Claude wk 41 % · +3.2 %/h`, with `· runs out` when its pace uses
+/// the week up before it resets), then the selected plan's binding budget (`plan $31/$40`, `plan 11 %/15 % wk`, the
+/// spend alone when no limit counts; `· nearing` or `· reached` by its state).  Nothing else.
+pub(crate) fn strip_chips_of(
+    paces: &[runstav::methods::timeline::Pace],
+    budget: Option<&PlanBudget>,
+    now: f64,
+) -> Vec<String> {
+    use runstav::methods::matrix::Unit;
+    use runstav::methods::timeline::BudgetState;
+    let mut out = Vec::new();
+    for p in paces.iter().filter(|p| p.window == "week") {
+        let name = match p.provider.as_str() {
+            "claude" => "Claude".to_owned(),
+            "codex" => "Codex".to_owned(),
+            other => other.to_owned(),
+        };
+        // the seven-day rate when the meter has one, else the 24-hour one
+        let rate = p.rate_7d_per_hour.unwrap_or(p.rate_per_hour);
+        let mut chip = format!(
+            "{name} wk {:.0} % · +{:.1} %/h",
+            p.used_share * 100.0,
+            rate * 100.0
+        );
+        let hours_left = p.resets_at.map(|r| ((r - now) / 3600.0).max(0.0));
+        if hours_left.is_some_and(|h| p.used_share + rate * h >= 1.0) {
+            chip.push_str(" · runs out");
+        }
+        out.push(chip);
+    }
+    if let Some(b) = budget {
+        let spent = amount_text(b.unit, b.spent);
+        let mut chip = match b.limit {
+            Some(l) if b.unit == Unit::LimitShare => {
+                format!("plan {spent}/{} wk", amount_text(b.unit, l))
+            }
+            Some(l) => format!("plan {spent}/{}", amount_text(b.unit, l)),
+            None => format!("plan {spent}"),
+        };
+        match b.state {
+            BudgetState::Nearing => chip.push_str(" · nearing"),
+            BudgetState::Reached => chip.push_str(" · reached"),
+            _ => {}
+        }
+        out.push(chip);
+    }
+    out
+}
 
 /// A card's whole fact for the strip: a proposal's title (`2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min: approve
 /// to start`) becomes `Sign off (JOB): 2 tasks, about 1–3 USD (estimate), 2M tokens, 20 min` (the strip's own prefix,

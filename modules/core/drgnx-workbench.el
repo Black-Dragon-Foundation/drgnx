@@ -12,6 +12,7 @@
 (declare-function drgnx-grid-full-size-toggle "drgnx-grid" (&optional window))
 (declare-function drgnx-grid-unstack-tile "drgnx-grid-ops" ())
 (declare-function drgnx-grid-resize-mode "drgnx-grid-ops" ())
+(declare-function drgnx-grid-restore-previous "drgnx-grid-frames" ())
 (declare-function drgnx-state-mode "drgnx-state")
 (declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-state-intent--user-resized "drgnx-state-intent")
@@ -152,6 +153,10 @@ another buffer (BUFFER-NAME) is left as it was."
                                                :command (intern (format "drgnx-grid-resize-%s" dir))
                                                :doc (format "Grow this tile toward the %s by one step (shrink it at the grid's edge)"
                                                             (downcase title))))
+                       (require 'drgnx-grid-frames)
+                       (drgnx-command-define 'layout-restore-previous :category "View" :title "Restore Previous Layout"
+                                             :command #'drgnx-grid-restore-previous
+                                             :doc "Put back the layout before the last change to it: a move, a preset, a tear-out, a package that collapsed the tiles")
                        (drgnx-command-define 'tile-unstack :category "View" :title "Unstack the Shown Tab" :scope 'window
                                              :command #'drgnx-grid-unstack-tile
                                              :doc "Put this tile's shown tab into a new tile beside it")
