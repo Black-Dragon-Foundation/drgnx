@@ -3364,6 +3364,13 @@ undo stack and saved layouts, and it is applied by rebuilding windows, never by 
 part of its parent, in (0, 1]. `(drgnx-grid-tree-to-logical PX SCALE)` and `(drgnx-grid-tree-from-logical LOGICAL
 SCALE)` convert, rounded half up as `drgnx-px` rounds, so logical → pixels → logical is exact at any scale.
 
+**A scale change.** A window moved to a monitor of another scale, or given another UI scale, keeps its tiles' shares
+(within 0.005): Emacs resizes its windows in proportion, and the grid's preserved sizes do not hold a tile's pixels
+against it. Other windows are not touched. The window keeps its frame pixels, so its logical size, and each tile's,
+changes by the scales' ratio; the next tree records the new logical sizes. The resize step and `drgnx-grid-min-px`
+are logical (`drgnx-px` at the frame's scale). `test/ui/grid-scales-gui-test.el` moves the session's monitor through
+mutter (`gdctl`) from 1.25 to 2.
+
 **Validation.** `(drgnx-grid-valid-tree-p TREE)` is t or nil, and nothing is built from a tree it refuses. It refuses a
 non-list, an object that cannot be written and read back (a buffer, marker, window or frame, also inside a tile's
 `:state`), a depth over 16, more than 64 leaves, a non-symbol kind, a `:px` that is not an integer in 1–20000, a
