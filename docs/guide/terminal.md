@@ -305,6 +305,10 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-+` | Zoom In | — | `F6 +` |
 | `C--` | Zoom Out | — | `F6 -` |
 | `C-0` | Reset Zoom | — | `F6 0` |
+| `C-4` | Fold Level… (after C-k) | — | `F6 4` |
+| `C-5` | Fold Level… (after C-k) | — | `F6 5` |
+| `C-6` | Fold Level… (after C-k) | — | `F6 6` |
+| `C-7` | Fold Level… (after C-k) | — | `F6 7` |
 | `C-!` | Replace This Match (the Replace bar) | — | `F6 !` |
 
 The Replace bar's `S-<return>` (Previous Match) and `C-M-<return>` (Replace All) have no F6 form, since F6 adds Ctrl and
