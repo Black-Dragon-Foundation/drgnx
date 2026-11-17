@@ -17,7 +17,8 @@
 ;;   TTY: :glyph GLYPH-NAME (of `drgnx-face-glyphs'), :twisty (CLOSED OPEN) glyph names, :pad CHARS, :indent CHARS a
 ;;   level (tree rows); :indent may be a (:by AXIS ...) case.
 ;;   LABEL: the word a screen reader speaks, a string or (:by AXIS (VALUE "word")...).
-;;   BINDINGS: (((VARIANT-VALUE...) :bg TOKEN :fg TOKEN :edge TOKEN :inherit (STANDARD-FACE...))...); the binding
+;;   BINDINGS: (((VARIANT-VALUE...) :bg TOKEN :fg TOKEN :edge TOKEN :inherit (STANDARD-FACE...) :font (FACE...))...);
+;;   :font names the inherited faces that carry no colours (the UI or code font): a drgnx theme's spec keeps only those; the binding
 ;;   of () is the component's own face `drgnx-kit-ID', another one `drgnx-kit-ID-VALUE...', made only where its
 ;;   colours differ from the component's own.
 ((state-table
@@ -40,4 +41,25 @@
        ;; every row selection reads the state table (the inactive selection, the full one while focused)
        :replaces ((drgnx-view-selected . drgnx-row-selected) (drgnx-explorer-selected . drgnx-row-selected)
                   (drgnx-work-selected . drgnx-row-selected) (drgnx-notebook-current-row . drgnx-row-selected))
-       :helpers nil :lint t)))
+       :helpers nil :lint t)
+  ;; a button: a label in a rounded box (the 1 px ring is inside the padding), its key hint after the label; 26 px, 22 small
+  (button :variants ((style primary secondary quiet danger) (size md sm)) :defaults (style secondary size md)
+          :geometry (:height (:by size (md 26) (sm 22)) :pad (:by size (md (12 . 12)) (sm (8 . 8))) :gap 6 :box t :radius 6 :hit 4)
+          :tty (:pad 1) :label nil
+          :bind (((primary) :bg button-primary-bg :fg button-primary-fg :inherit (drgnx-control-primary) :font (drgnx-ui-text))
+                 ((secondary) :bg sel-quiet :edge button-edge :inherit (drgnx-control) :font (drgnx-ui-text))
+                 ((quiet) :inherit (drgnx-ui-text drgnx-text-muted))
+                 ((danger) :bg error-tint :fg error :inherit (drgnx-chip-error) :font (drgnx-ui-text)))
+          :replaces ((drgnx-ui-button . drgnx-kit-button-secondary) (drgnx-ui-button-primary . drgnx-kit-button-primary)
+                     (drgnx-button . drgnx-kit-button-secondary) (drgnx-work-flow-button . drgnx-kit-button-secondary)
+                     (drgnx-work-flow-button-primary . drgnx-kit-button-primary))
+          :helpers nil :lint t)
+  ;; a key hint: the keys in the code font in a 4 px box; `menu' is the text alone (a menu's shortcut column)
+  (key-hint :variants ((variant cap menu)) :defaults (variant cap)
+            :geometry (:height 0 :pad (:by variant (cap (5 . 5)) (menu (0 . 0))) :gap 0 :box (:by variant (cap t) (menu nil)) :radius 4)
+            :tty (:pad 0) :label "key"
+            :bind (((cap) :edge key-hint-edge :inherit (drgnx-code-small drgnx-control) :font (drgnx-code-small))
+                   ((menu) :inherit (drgnx-code-small drgnx-text-subtle)))
+            :replaces ((drgnx-keycap . drgnx-kit-key-hint-cap) (drgnx-work-flow-button-key . drgnx-kit-key-hint-cap)
+                       (drgnx-work-flow-key-primary . drgnx-kit-key-hint-cap))
+            :helpers nil :lint t)))

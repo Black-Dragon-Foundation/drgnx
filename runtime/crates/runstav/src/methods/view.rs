@@ -89,6 +89,20 @@ pub struct ViewEnv {
     pub headless: bool,
 }
 
+impl ViewEnv {
+    /// What the kit's expansion reads of this env (`drgnx_rows::kit`): its scale, whether it is a terminal, its
+    /// glyphs and the density; no icons (a view that draws them builds its own).
+    pub fn kit(&self) -> drgnx_rows::kit::KitEnv<'_> {
+        drgnx_rows::kit::KitEnv {
+            scale: self.scale,
+            tty: self.display == Display::Tty,
+            glyphs: &self.glyphs,
+            density: self.density,
+            icons: None,
+        }
+    }
+}
+
 /// `view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an
 /// image it lacks); VERSION is what it holds. The answer is a `reset`. With MODEL, it is VIEW's model the editor's
 /// replica cannot take (a gap, a hub it has no reset from): the answer is a `view-model` reset, and CLASS is not read.

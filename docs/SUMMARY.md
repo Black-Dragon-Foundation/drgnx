@@ -116,5 +116,7 @@
     - [Title row](design/components/title-row.md)
     - [Research trail](design/components/trail.md)
     - [Row (kit)](design/components/row.md)
+    - [Button (kit)](design/components/button.md)
+    - [Key hint (kit)](design/components/key-hint.md)
 - [The app icon](design/app-icon.md)
 - [Writing a theme for drgnx](design/theme-authors.md)

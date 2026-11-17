@@ -5,6 +5,7 @@
 
 use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::{self, Measure};
+use drgnx_rows::kit::{self, ButtonStyle, Comp, KitEnv, Size, State};
 use drgnx_rows::{Row, RowBuilder};
 use serde_json::Value;
 use vegvisir::{Item, ItemId, Model};
@@ -481,7 +482,8 @@ const KEY_PX: f32 = 66.0;
 /// `KEY\tVALUE` line as a muted key and its value in a column (an agent's why-chain and a link in the accent, an
 /// overlap in the warning colour), an action as a button and its key. A job's line carries its id as
 /// `drgnx-work-job`.
-pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -> Vec<Row> {
+pub(crate) fn rows(lines: &[Line], kit: &KitEnv, width_px: u32, m: &dyn Measure) -> Vec<Row> {
+    let scale = kit.scale;
     // the text sits 10 px inside the island's edge, as the design's `.detail` does
     let pad = (10.0 * scale).round() as u32;
     let key_px = (KEY_PX * scale).round() as u32 + pad;
@@ -547,12 +549,19 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                         if n > 0 {
                             b.push("  ", None);
                         }
-                        b.push(&format!(" {} ", pair[0]), Some(FaceId::Button.name()))
-                            .push(" ", None)
-                            .push(
-                                &format!(" {} ", pair.get(1).unwrap_or(&"")),
-                                Some(FaceId::Keycap.name()),
-                            );
+                        // a kit button with its key hint after the label (no click: the keys are the profile's)
+                        kit::expand(
+                            &mut b,
+                            kit,
+                            &Comp::Button {
+                                label: pair[0].to_owned(),
+                                style: ButtonStyle::Secondary,
+                                size: Size::Md,
+                                state: State::Rest,
+                                key: pair.get(1).map(|k| (*k).to_owned()),
+                                action: None,
+                            },
+                        );
                     }
                 }
                 ("touches", Some(("branch", value))) if value.contains(" · worktree ") => {

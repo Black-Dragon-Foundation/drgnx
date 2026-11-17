@@ -505,4 +505,10 @@
  drgnx-topline
  drgnx-topline-hover
  drgnx-topline-strong
- drgnx-kit-row)
+ drgnx-kit-row
+ drgnx-kit-button-primary
+ drgnx-kit-button-secondary
+ drgnx-kit-button-quiet
+ drgnx-kit-button-danger
+ drgnx-kit-key-hint-cap
+ drgnx-kit-key-hint-menu)
