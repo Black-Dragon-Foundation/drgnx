@@ -176,16 +176,20 @@ fn discover(root: &Path, only: Option<RecordKind>) -> Vec<Found> {
             out.push(found(p, kind));
         }
     }
-    // the sdd ledgers, `.superpowers/sdd/<name>/progress.md`, anywhere under the root (not in a build or vendor folder)
-    let mut sdd = Vec::new();
-    walk_sdd(root, 8, &mut sdd);
-    sdd.sort();
-    out.extend(sdd.into_iter().map(|p| found(p, RecordKind::Ledgers)));
+    // what the Lisp scan's walk met: plans, specs and ledgers anywhere under the root (see [`walk_scan`])
+    let mut met = Vec::new();
+    walk_scan(root, root, 7, false, &mut met);
+    met.sort_by(|a, b| a.0.cmp(&b.0));
+    for (p, kind) in met {
+        if !out.iter().any(|f| f.path == p) {
+            out.push(found(p, kind));
+        }
+    }
     out.retain(|f| only.is_none_or(|o| o == f.kind));
     out
 }
 
-/// The folders the scan never enters.
+/// The folders the scan never enters (dot folders are entered: ledgers live in `.superpowers`).
 const SKIP: &[&str] = &[
     ".git",
     "node_modules",
@@ -196,28 +200,98 @@ const SKIP: &[&str] = &[
     "build",
 ];
 
-/// Every `.superpowers/sdd/<name>/progress.md` under DIR, at most DEPTH folders down (links are not followed).
-fn walk_sdd(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+/// `### Task N:` headings of a plan: `### Task 14:`, `### Task 14b.` (a task between 14 and 15), `### Task A1 (now): ...`.
+fn task_heading() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r"(?m)^### Task ([0-9]+[a-z]?|[A-Z][0-9]*)(?:[:.]| |$) *(.*)$")
+            .expect("a fixed pattern")
+    })
+}
+
+/// Whether TEXT has a task heading outside its code fences (a heading in an example is no task).
+fn has_tasks(text: &str) -> bool {
+    let mut fenced = false;
+    let mut open = String::new();
+    for l in text.lines() {
+        if l.trim_start().starts_with("```") {
+            fenced = !fenced;
+            open.push('\n');
+        } else if fenced {
+            open.push('\n');
+        } else {
+            open.push_str(l);
+            open.push('\n');
+        }
+    }
+    task_heading().is_match(&open)
+}
+
+/// The kind of record FILE is under ROOT, by its path under ROOT alone: `*.ledger.md` and
+/// `.superpowers/sdd/*/progress.md` are ledgers, a markdown under a `plans/` folder with task headings a plan, one under
+/// a `specs/` folder a spec (`drgnx-work--classify`).
+fn classify(file: &Path, root: &Path) -> Option<RecordKind> {
+    let rel = file.strip_prefix(root).ok()?;
+    let parts: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let name = parts.last()?;
+    if name.ends_with(".ledger.md") {
+        return Some(RecordKind::Ledgers);
+    }
+    if name == "progress.md"
+        && parts.iter().any(|p| p == "sdd")
+        && parts.iter().any(|p| p == ".superpowers")
+    {
+        return Some(RecordKind::Ledgers);
+    }
+    if !name.ends_with(".md") {
+        return None;
+    }
+    if parts.iter().any(|p| p == "plans") {
+        let text = std::fs::read_to_string(file).ok()?;
+        return has_tasks(&text).then_some(RecordKind::Plans);
+    }
+    parts
+        .iter()
+        .any(|p| p == "specs")
+        .then_some(RecordKind::Specs)
+}
+
+/// Every plan, spec and ledger under DIR (a folder of ROOT), at most DEPTH folders down, links not followed.  Inside a
+/// linked git worktree (its `.git` a file) only its ledgers count: its plans and specs are copies
+/// (`drgnx-work--walk`).  `.claude/tmp` is not entered.
+fn walk_scan(
+    root: &Path,
+    dir: &Path,
+    depth: u32,
+    ledgers_only: bool,
+    out: &mut Vec<(PathBuf, RecordKind)>,
+) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
     for e in rd.flatten() {
-        let Ok(t) = e.file_type() else { continue };
-        if !t.is_dir() {
+        let p = e.path();
+        let Ok(meta) = std::fs::symlink_metadata(&p) else {
+            continue;
+        };
+        let name = e.file_name().to_string_lossy().into_owned();
+        if meta.file_type().is_symlink() {
             continue;
         }
-        let name = e.file_name();
-        let name = name.to_string_lossy();
-        if name == ".superpowers" {
-            if let Ok(subs) = std::fs::read_dir(e.path().join("sdd")) {
-                out.extend(
-                    subs.flatten()
-                        .map(|s| s.path().join("progress.md"))
-                        .filter(|p| p.is_file()),
-                );
+        if meta.is_dir() {
+            let in_claude = dir.file_name().is_some_and(|n| n == ".claude");
+            if depth > 0 && !SKIP.contains(&name.as_str()) && !(name == "tmp" && in_claude) {
+                let linked = std::fs::symlink_metadata(p.join(".git")).is_ok_and(|m| m.is_file());
+                walk_scan(root, &p, depth - 1, ledgers_only || linked, out);
             }
-        } else if depth > 0 && !SKIP.contains(&&*name) {
-            walk_sdd(&e.path(), depth - 1, out);
+        } else if meta.is_file()
+            && let Some(kind) = classify(&p, root)
+            && (!ledgers_only || kind == RecordKind::Ledgers)
+        {
+            out.push((p, kind));
         }
     }
 }
@@ -2813,6 +2887,82 @@ mod tests {
         std::fs::write(&bp, board("")).unwrap();
         f.import(Some(RecordKind::Board), false).await;
         assert_eq!(linked(&f).await, ["absolute"]);
+    }
+
+    /// The files the import finds in a tree that holds what the Lisp scan's walk met: plans and specs outside `docs/`, a
+    /// markdown with no task headings, files under each skipped folder, a link, a folder past the depth, and a linked
+    /// worktree (only its ledgers count).  The expected list is what `drgnx-work--walk` and `drgnx-work--classify`
+    /// returned on this same tree.
+    #[test]
+    fn discover_finds_what_the_lisp_walk_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("proj");
+        let w = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let plan = "# P\n\n### Task 1: a\n\n- [ ] x\n";
+        let ledger = "# SDD ledger — plan: x.md\n";
+        w("a/plans/x.md", plan);
+        w("a/plans/no-tasks.md", "# Only prose\n");
+        w(
+            "a/plans/fenced.md",
+            "# F\n\n```\n### Task 1: in a fence\n```\n",
+        );
+        w("a/plans/x.ledger.md", ledger);
+        w("b/specs/s.md", "# S\n");
+        w("b/notes/n.md", plan);
+        w("c/d/e/plans/deep.md", plan);
+        // a file 7 folders down is read, one 8 down is not (the walk's depth is 7)
+        w("l1/l2/l3/l4/l5/l6/plans/seven.md", plan);
+        w("l1/l2/l3/l4/l5/l6/l7/plans/eight.md", plan);
+        for skipped in [
+            ".git",
+            "node_modules",
+            "eln-cache",
+            "elpa",
+            "target",
+            "dist",
+            "build",
+        ] {
+            w(&format!("{skipped}/plans/hidden.md"), plan);
+        }
+        w(".claude/tmp/plans/tmp.md", plan);
+        w(".claude/plans/kept.md", plan);
+        w(".superpowers/sdd/x/progress.md", ledger);
+        w("notes/progress.md", ledger);
+        // a linked worktree (its .git is a file): only its ledgers count
+        w("wt/.git", "gitdir: /elsewhere\n");
+        w("wt/plans/copy.md", plan);
+        w("wt/docs/plans/copy2.md", plan);
+        w("wt/docs/plans/copy.ledger.md", ledger);
+        // a link is not followed
+        std::fs::create_dir_all(dir.path().join("outside/plans")).unwrap();
+        std::fs::write(dir.path().join("outside/plans/o.md"), plan).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("outside"), root.join("linked")).unwrap();
+        let mut got: Vec<String> = discover(&root, None)
+            .into_iter()
+            .map(|f| {
+                format!(
+                    "{} {}",
+                    f.path.strip_prefix(&root).unwrap().display(),
+                    f.parse
+                )
+            })
+            .collect();
+        got.sort();
+        let want = [
+            ".claude/plans/kept.md plan",
+            ".superpowers/sdd/x/progress.md ledger",
+            "a/plans/x.ledger.md ledger",
+            "a/plans/x.md plan",
+            "b/specs/s.md spec",
+            "c/d/e/plans/deep.md plan",
+            "l1/l2/l3/l4/l5/l6/plans/seven.md plan",
+            "wt/docs/plans/copy.ledger.md ledger",
+        ];
+        assert_eq!(got, want, "{got:#?}");
     }
 
     #[tokio::test]
