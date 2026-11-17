@@ -1415,7 +1415,9 @@ mod drill {
         let cores: u32 = sh(runners[0], "nproc").parse().unwrap();
         let start = clock();
         for i in 0..set {
-            let mut job = d.job(&format!("xset{i}"), work, &[]);
+            // each job its own command, so none has history: a small job with history skips the gap, and the set
+            // would no longer be bound by it
+            let mut job = d.job(&format!("xset{i}"), &format!("{work} {i}"), &[]);
             job.spec.cores = Range {
                 min: cores,
                 max: cores,
