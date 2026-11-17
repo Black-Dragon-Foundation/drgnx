@@ -105,3 +105,24 @@ finds `docs/specs/**/*.md`, `docs/plans/**/*.md` (ledgers end in `.ledger.md`), 
   now `matrix`); the user may.
 - **Never committed.** The hub runs no git on view files. The files stay modified in the work tree; committing them
   is the user's.
+
+## Comment anchors
+
+A paragraph comment's thread (hub.md, "Paragraph comments") keeps where it sits as its `comments_on` link's data,
+`{heading, key, quote, state}`, and finds its place again each time the record's file syncs.
+
+- **Paragraphs.** The record's text (its file, the view header left out; a record with no file, its body) splits into
+  paragraphs: runs of non-blank lines, a fenced block as one. Heading lines are not paragraphs; each paragraph carries
+  the headings above it, outermost first.
+- **Key and quote.** The key is 16 hex digits of the SHA-256 of the paragraph's text with its whitespace folded, so a
+  reflow keeps it. The quote is that folded text, cut at 200 characters. `comments/add` finds the paragraph by `key`,
+  or by `quote` (the first paragraph whose text holds it); a comment on no paragraph is refused.
+- **Re-anchoring.** After each sync of a file (`Views::sync`), every thread on its records is aligned again
+  (`work::comments::realign`):
+  - by key: as it was (`here` or `moved`; a `removed` thread whose paragraph is back is `here`);
+  - else the paragraph most like the quote by words (`similar`'s word ratio, at least 0.4; under the same headings
+    on a tie): `moved`, with that paragraph's key, quote and headings;
+  - else `removed`, with the quote, key and headings kept.
+
+  A changed anchor retires the link and makes it again, so the link's history keeps each place. A thread is never
+  dropped.

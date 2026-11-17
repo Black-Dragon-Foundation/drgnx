@@ -374,6 +374,14 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
     if !bits.is_empty() && word(&it.kind) != "agent" {
         out.push(("head", bits.join(" · ")));
     }
+    // paragraph comments steered to no one: they reach the next agent that writes the record
+    if let Some(n) = f.comments_waiting {
+        let s = if n == 1 { "" } else { "s" };
+        out.push((
+            "head",
+            format!("{n} comment{s} waiting: no agent is writing it"),
+        ));
+    }
     // a job on a machine: where it runs, and why there and not elsewhere (the queue's words)
     if let Some(job) = &f.job
         && let Some(on) = &job.runner

@@ -790,6 +790,20 @@ impl Hub for ToolHub {
         })
     }
 
+    /// A session's answer in a paragraph comment's thread: only the session it was steered to.
+    fn comment_reply(
+        &self,
+        sid: &str,
+        comment: String,
+        text: String,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let (front, sid) = (self.front(), sid.to_owned());
+        Box::pin(async move {
+            let f = front.ok_or("the hub is starting")?;
+            crate::work::comments::reply_from(&f, &sid, &comment, &text).await
+        })
+    }
+
     fn escalated(&self, sid: &str) {
         if let Some(f) = self.front() {
             f.core.huddles.escalated(&f, sid);
