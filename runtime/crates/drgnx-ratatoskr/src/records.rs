@@ -1128,6 +1128,7 @@ async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
     // a ledger in a linked git worktree gives its plan that branch, and whether it is merged (git changes on its own:
     // this is asked every time)
     ledger_branch(db, &plan, &ledger, &marks, &tasks).await?;
+    ledger_rulings(db, &plan, &ledger, &tasks).await?;
     // git is asked again only when the ledger or the plan's task numbers changed since the last time
     let stamp = {
         let text = std::fs::read_to_string(&ledger).unwrap_or_default();
@@ -1145,6 +1146,160 @@ async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
     }
     ledger_commits(db, &plan, &ledger, &marks, &tasks).await?;
     kv_put(db, vec![(key, Some(stamp))]).await
+}
+
+/// A ledger's `Ruling:` lines (bare, or after `Task N...: `) as `ruling` entities, one for each line (id
+/// `ruling:LEDGER#LINE`), each `parent_of` the task it names when the plan has it, else of the plan's head; a ruling
+/// whose line went (or changed) is retired (`drgnx-work--parse-ledger`).  Read from the ledger every time: cheap.
+async fn ledger_rulings(
+    db: &CoordDb,
+    plan: &Path,
+    ledger: &Path,
+    tasks: &[Piece],
+) -> Result<(), Error> {
+    let file = ledger.to_string_lossy().into_owned();
+    let text = std::fs::read_to_string(ledger).unwrap_or_default();
+    let re =
+        regex::Regex::new(r"^(?:Task ([0-9]+)[^:]*: )?Ruling: (.*)$").expect("a fixed pattern");
+    let wanted: Vec<(usize, Option<String>, String)> = text
+        .lines()
+        .enumerate()
+        .filter_map(|(i, l)| {
+            let c = re.captures(l)?;
+            Some((
+                i + 1,
+                c.get(1).map(|m| m.as_str().to_owned()),
+                c[2].trim().to_owned(),
+            ))
+        })
+        .collect();
+    let head = pieces(db, plan)
+        .await?
+        .into_iter()
+        .find(|p| p.role == "head")
+        .map(|p| p.n);
+    let by_number: Vec<(String, i64)> = tasks
+        .iter()
+        .filter_map(|t| Some((t.data["number"].as_str()?.to_owned(), t.n)))
+        .collect();
+    // what each wanted line comes to: its id, its title, its data (the parent's entity number is in it)
+    let comes: Vec<(String, String, Value)> = wanted
+        .iter()
+        .filter_map(|(line, number, title)| {
+            let parent = number
+                .as_ref()
+                .and_then(|n| by_number.iter().find(|(k, _)| k == n).map(|(_, n)| *n))
+                .or(head)?;
+            Some((
+                format!("ruling:{file}#{line}"),
+                title.clone(),
+                json!({"ledger": file, "line": line, "parent": parent}),
+            ))
+        })
+        .collect();
+    // nothing to write when the live rulings of this ledger are what its lines come to
+    let f2 = file.clone();
+    let have: Vec<(String, String, Value)> = db
+        .read(move |c| {
+            let mut q = c.prepare(
+                "select id, coalesce(title, ''), data from entity where kind = 'ruling' and retired_tx is null \
+                 and json_extract(data, '$.ledger') = ?1 order by id",
+            )?;
+            let rows = q
+                .query_map([&f2], |r| {
+                    let data: String = r.get(2)?;
+                    Ok((r.get(0)?, r.get(1)?, serde_json::from_str(&data).unwrap_or(Value::Null)))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .map_err(fail)?;
+    let mut sorted = comes.clone();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    if sorted == have {
+        return Ok(());
+    }
+    db.write(meta(), move |tx| {
+        let mut keep: Vec<String> = Vec::new();
+        for (line, number, title) in &wanted {
+            let id = format!("ruling:{file}#{line}");
+            keep.push(id.clone());
+            let parent = number
+                .as_ref()
+                .and_then(|n| by_number.iter().find(|(k, _)| k == n).map(|(_, n)| *n))
+                .or(head);
+            let Some(parent) = parent else { continue };
+            let data = json!({"ledger": file, "line": line, "parent": parent});
+            let r = match entity::by_id(tx.sql(), &id)? {
+                Some(r) => {
+                    entity::unretire(tx, r.n)?;
+                    if r.title.as_deref() != Some(title.as_str()) || r.data != data {
+                        entity::update(
+                            tx,
+                            r.n,
+                            None,
+                            Changes {
+                                title: Some(Some(title.clone())),
+                                data_patch: Some(data),
+                                ..Default::default()
+                            },
+                        )?;
+                    }
+                    r.n
+                }
+                None => {
+                    entity::create(
+                        tx,
+                        EntityNew {
+                            id,
+                            kind: "ruling".into(),
+                            project: None,
+                            title: Some(title.clone()),
+                            status: None,
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data,
+                            origin: Origin::Parsed,
+                            source: Some(file.clone()),
+                        },
+                    )?
+                    .n
+                }
+            };
+            link::add(
+                tx,
+                parent,
+                "parent_of",
+                r,
+                None,
+                Origin::Inferred,
+                Some(&file),
+            )?;
+        }
+        // a ruling of this ledger no line makes now
+        let gone: Vec<i64> = {
+            let mut q = tx.sql().prepare(
+                "select n, id from entity where kind = 'ruling' and retired_tx is null \
+                 and json_extract(data, '$.ledger') = ?1",
+            )?;
+            q.query_map([&file], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|(_, id)| !keep.contains(id))
+            .map(|(n, _)| n)
+            .collect()
+        };
+        for n in gone {
+            entity::retire(tx, n)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(fail)
 }
 
 /// A ledger that lies in a linked git worktree gives its plan the worktree's branch: a `branch:COMMON:NAME` entity the plan
@@ -2449,6 +2604,66 @@ mod tests {
         assert_eq!(ledger_of(&f, "2").await, "none");
         // the plan's text is untouched
         assert_eq!(std::fs::read_to_string(&pp).unwrap(), plan);
+    }
+
+    /// `(title, parent's role and number)` of the live rulings, by title.
+    async fn rulings(f: &Fix) -> Vec<(String, String, String)> {
+        f.db.read(|c| {
+            let mut q = c.prepare(
+                "select r.title, coalesce(p.kind, ''), coalesce(json_extract(p.data, '$.number'), json_extract(p.data, '$.role'), '') \
+                 from entity r left join link l on l.dst = r.n and l.kind = 'parent_of' and l.tx_to = ?1 \
+                 left join entity p on p.n = l.src where r.kind = 'ruling' and r.retired_tx is null order by r.title",
+            )?;
+            let rows = q
+                .query_map([urdr::graph::schema::SENTINEL], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// `Ruling:` lines of a ledger (bare, or after `Task N...: `) are rulings under their task, else under the plan;
+    /// one that goes from the ledger is retired (`drgnx-work--parse-ledger`).
+    #[tokio::test]
+    async fn a_ledgers_ruling_lines_are_rulings_under_their_task_or_plan() {
+        let f = fix();
+        let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n";
+        let (pp, lp) = (
+            f.root.join("docs/plans/drgnx/pair.md"),
+            f.root.join("docs/plans/drgnx/pair.ledger.md"),
+        );
+        std::fs::write(&pp, plan).unwrap();
+        std::fs::write(
+            &lp,
+            "# SDD ledger — plan: pair.md\nRuling: the tables stay\nTask 2 (b): Ruling: no cache\nTask 9: Ruling: no such task\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let got = rulings(&f).await;
+        let titles: Vec<&str> = got.iter().map(|r| r.0.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["no cache", "no such task", "the tables stay"],
+            "{got:?}"
+        );
+        // a ruling under a task the plan has is under that task; any other is under the plan's head
+        assert_eq!(got[0].1, "task", "{got:?}");
+        assert_eq!(got[0].2, "2", "{got:?}");
+        assert_eq!(got[1].1, got[2].1, "{got:?}");
+        assert_ne!(got[1].1, "task", "{got:?}");
+        // the line goes: its ruling is retired, the others stay, a second import changes nothing
+        std::fs::write(
+            &lp,
+            "# SDD ledger — plan: pair.md\nRuling: the tables stay\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let got = rulings(&f).await;
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].0, "the tables stay");
     }
 
     #[tokio::test]
