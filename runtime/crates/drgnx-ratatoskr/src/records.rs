@@ -847,6 +847,7 @@ impl Views {
     ) -> Result<(Flush, u64, Vec<String>), Error> {
         let r = self.sync_inner(db, path).await?;
         ledger_marks(db, path).await?;
+        board_plan_links(db, path).await?;
         // the comment threads on the file's records find their paragraphs again; a failure leaves them where they were
         if let Err(e) = crate::work::comments::reanchor(db, path).await {
             tracing::warn!(path = %path.display(), "comments not re-anchored: {e}");
@@ -1146,6 +1147,109 @@ async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
     }
     ledger_commits(db, &plan, &ledger, &marks, &tasks).await?;
     kv_put(db, vec![(key, Some(stamp))]).await
+}
+
+/// The board (`*.org`) items whose `:PLAN_FILE:` names a plan the import holds are `parent_of`-linked from that plan's head
+/// (the item as a child of its plan): the name is absolute, or relative to the nearest `:PROJECT_ROOT:` of the item or
+/// a heading above it (none: no link).  A link whose property went (or whose plan is gone) is retired; nothing is written
+/// while the links are what the board says (`drgnx-work--parse-board`).  A plan imported after its board is linked at the
+/// board's next sync.
+async fn board_plan_links(db: &CoordDb, path: &Path) -> Result<(), Error> {
+    if path.extension().and_then(|e| e.to_str()) != Some("org") {
+        return Ok(());
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(());
+    };
+    let doc = saga::org::parse(&text);
+    let mut roots: Vec<(usize, Option<String>)> = Vec::new();
+    let mut wants: Vec<(PathBuf, usize)> = Vec::new();
+    for (i, item) in doc.items.iter().enumerate() {
+        while roots.last().is_some_and(|(l, _)| *l >= item.level) {
+            roots.pop();
+        }
+        let prop = |k: &str| {
+            item.properties
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.clone())
+        };
+        roots.push((item.level, prop("PROJECT_ROOT")));
+        let Some(name) = prop("PLAN_FILE") else {
+            continue;
+        };
+        let named = Path::new(&name);
+        let plan = if named.is_absolute() {
+            named.to_path_buf()
+        } else if let Some(root) = roots.iter().rev().find_map(|(_, r)| r.clone()) {
+            PathBuf::from(root).join(named)
+        } else {
+            continue;
+        };
+        wants.push((plan, i));
+    }
+    let items: Vec<Piece> = pieces(db, path)
+        .await?
+        .into_iter()
+        .filter(|p| p.role == "item")
+        .collect();
+    let mut want: Vec<(i64, i64)> = Vec::new();
+    for (plan, i) in wants {
+        let (Some(item), Some(head)) = (
+            items.get(i),
+            pieces(db, &plan)
+                .await?
+                .into_iter()
+                .find(|p| p.role == "head"),
+        ) else {
+            continue;
+        };
+        want.push((head.n, item.n));
+    }
+    want.sort_unstable();
+    want.dedup();
+    let file = path.to_string_lossy().into_owned();
+    let f2 = file.clone();
+    let have: Vec<(i64, i64)> = db
+        .read(move |c| {
+            let mut q = c.prepare(
+                "select src, dst from link where kind = 'parent_of' and source = ?1 and tx_to = ?2 order by src, dst",
+            )?;
+            let rows = q
+                .query_map((&f2, urdr::graph::schema::SENTINEL), |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .map_err(fail)?;
+    if have == want {
+        return Ok(());
+    }
+    db.write(meta(), move |tx| {
+        for (src, dst) in &want {
+            if !have.contains(&(*src, *dst)) {
+                link::add(
+                    tx,
+                    *src,
+                    "parent_of",
+                    *dst,
+                    None,
+                    Origin::Inferred,
+                    Some(&file),
+                )?;
+            }
+        }
+        for (src, dst) in &have {
+            if !want.contains(&(*src, *dst)) {
+                link::retire(tx, *src, "parent_of", *dst)?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(fail)
 }
 
 /// A ledger's `Ruling:` lines (bare, or after `Task N...: `) as `ruling` entities, one for each line (id
@@ -2664,6 +2768,51 @@ mod tests {
         let got = rulings(&f).await;
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0].0, "the tables stay");
+    }
+
+    /// The plans' board items: a board TODO whose `:PLAN_FILE:` names a plan the import holds is `parent_of`-linked from
+    /// that plan (a relative name is read from the nearest `:PROJECT_ROOT:` above it); drop the property and the link
+    /// is retired (`drgnx-work--parse-board`).
+    #[tokio::test]
+    async fn a_board_todo_with_a_plan_file_is_linked_from_its_plan() {
+        let f = fix();
+        let pp = f.root.join("docs/plans/drgnx/pair.md");
+        std::fs::write(&pp, "# Pair\n\n### Task 1: one\n\n- [ ] a\n").unwrap();
+        let board = |plan_line: &str| {
+            format!(
+                "* Proj\n:PROPERTIES:\n:PROJECT_ROOT: {}\n:END:\n** TODO build it\n:PROPERTIES:\n{plan_line}:END:\n** TODO unrelated\n** TODO absolute\n:PROPERTIES:\n:PLAN_FILE: {}\n:END:\n",
+                f.root.display(),
+                pp.display()
+            )
+        };
+        let bp = f.root.join("board.org");
+        std::fs::write(&bp, board(":PLAN_FILE: docs/plans/drgnx/pair.md\n")).unwrap();
+        f.import(Some(RecordKind::Plans), false).await;
+        f.import(Some(RecordKind::Board), false).await;
+        let linked = |f: &Fix| {
+            let q = "select e.title from link l join entity p on p.n = l.src join entity e on e.n = l.dst \
+                     where l.kind = 'parent_of' and l.tx_to = ?1 and p.title = 'Pair' and e.kind = 'task' \
+                     and json_extract(e.data, '$.records.role') = 'item' order by e.title";
+            let db = f.db.clone();
+            async move {
+                db.read(move |c| {
+                    let mut st = c.prepare(q)?;
+                    let r = st
+                        .query_map([urdr::graph::schema::SENTINEL], |r| r.get::<_, String>(0))?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(r)
+                })
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(linked(&f).await, ["absolute", "build it"]);
+        // a second import writes nothing, and the property going retires its link
+        let again = f.import(Some(RecordKind::Board), false).await;
+        assert!(again.files.iter().all(|x| x.ops == 0), "{again:?}");
+        std::fs::write(&bp, board("")).unwrap();
+        f.import(Some(RecordKind::Board), false).await;
+        assert_eq!(linked(&f).await, ["absolute"]);
     }
 
     #[tokio::test]
