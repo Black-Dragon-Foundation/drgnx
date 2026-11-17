@@ -3358,8 +3358,9 @@ named by its main window (`drgnx-grid-tile-main`).
 - **Drag and drop** (`drgnx-grid--drag`, while `drgnx-grid-drag`): `down-mouse-1` on the grip (`drgnx-grid--grip`,
   map `drgnx-grid-grip-map` on the tab line and the header line) starts it: on a tool tile's row (`drgnx-grid--tab-row`),
   a docked area's (`drgnx-area--tab-row`, its header line) and an editor's (`drgnx-chrome--grip`, the row's leading
-  room). A press on a tool tile's tab (`drgnx-grid--tab-press`) is a click when released on the row, else a drag of
-  that kind (`drgnx-grid--drag-source` unstacks it first). The loop reads events under `track-mouse`; each movement
+  room). A press on a tab (`drgnx-grid-tab-press`: a tool tile's, from `drgnx-grid--tab-press`, or an editor's, from
+  `drgnx-chrome--tab-press` with its buffer) is a click when released on the row, else a drag of that kind or buffer
+  (`drgnx-grid--drag-source` unstacks it into a tile of its own first when it is one of several tabs). The loop reads events under `track-mouse`; each movement
   finds the tile and zone (`drgnx-grid-drop-target`, `drgnx-grid-zone`) and replaces only that tile's row line
   (`drgnx-grid--row-param`: the tab line, or a docked area's header line) with "⤓ drop: …" (face `drgnx-grid-drop`);
   the release calls `drgnx-grid--drop` → `drgnx-grid-move`; Esc or `C-g` cancels; the row comes back in an

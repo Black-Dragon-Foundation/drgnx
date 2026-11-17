@@ -391,14 +391,17 @@ movement finds the tile and zone under the pointer and says so on that tile's ta
     result))
 
 (defun drgnx-grid--drag-source (window kind hit)
-  "The tile a drag of WINDOW (with KIND, one tab dragged out of a tool tile's row) drops on HIT: the tile itself, or,
-when KIND is one of several tabs and HIT is another tile, a tile of its own unstacked beside first."
-  (let ((stack (window-parameter window 'drgnx-pane-stack)))
-    (if (and kind (cdr stack) hit (not (eq (drgnx-grid-tile-main (car hit)) (drgnx-grid-tile-main window))))
-        (with-selected-window window
-          (drgnx-grid-show kind)
-          (drgnx-grid-unstack window))
-      window)))
+  "The tile a drag of WINDOW (with KIND, one tab dragged out of its row: a pane kind of a tool tile, or a buffer of an
+editor's tabs) drops on HIT: the tile itself, or, when KIND is one of several tabs and HIT is another tile, a tile of
+its own unstacked beside first (`drgnx-grid-unstack')."
+  (if (and kind hit (not (eq (drgnx-grid-tile-main (car hit)) (drgnx-grid-tile-main window)))
+           (if (bufferp kind)
+               (remq kind (drgnx-chrome-tabs window))
+             (cdr (window-parameter window 'drgnx-pane-stack))))
+      (with-selected-window window
+        (if (bufferp kind) (set-window-buffer window kind) (drgnx-grid-show kind))
+        (drgnx-grid-unstack window))
+    window))
 
 (defun drgnx-grid-grip-press (event)
   "A press on a tile's grip (the ⠿ at its tab line's start): drag the tile (`drgnx-grid--drag').  Off
@@ -407,21 +410,26 @@ when KIND is one of several tabs and HIT is another tile, a tile of its own unst
   (let ((w (posn-window (event-start event))))
     (when (and drgnx-grid-drag (window-live-p w)) (drgnx-grid--drag w))))
 
-(defun drgnx-grid--tab-press (event)
-  "A press on a tool tile's tab: released on the same tab row it is a click (the tab shows); dragged off the row it
-moves that tab's kind (`drgnx-grid--drag-source')."
-  (interactive "e")
-  (let* ((start (event-start event)) (w (posn-window start))
-         (s (posn-string start)) (kind (and s (get-text-property (cdr s) 'drgnx-grid-kind (car s)))))
+(defun drgnx-grid-tab-press (event kind click)
+  "A press on a tab of KIND (a pane kind, or an editor's buffer): released on the same tab row it is a click (CLICK
+called with EVENT); dragged off the row it moves that tab (`drgnx-grid--drag', `drgnx-grid--drag-source').  Off
+\(`drgnx-grid-drag' nil), the click."
+  (let ((w (posn-window (event-start event))) (area (posn-area (event-start event))))
     (when (window-live-p w)
       (if (not drgnx-grid-drag)
-          (drgnx-grid--tab-click event)
+          (funcall click event)
         (let ((ev (read-event)))
-          (if (and (consp ev) (memq (event-basic-type ev) '(mouse-1)) (not (mouse-movement-p ev))
-                   (eq (posn-window (event-end ev)) w) (eq (posn-area (event-end ev)) 'tab-line))
-              (drgnx-grid--tab-click event)
+          (if (and (consp ev) (eq (event-basic-type ev) 'mouse-1) (not (mouse-movement-p ev))
+                   (eq (posn-window (event-end ev)) w) (eq (posn-area (event-end ev)) area))
+              (funcall click event)
             (setq unread-command-events (cons ev unread-command-events))
             (drgnx-grid--drag w kind)))))))
+
+(defun drgnx-grid--tab-press (event)
+  "A press on a tool tile's tab (`drgnx-grid-tab-press')."
+  (interactive "e")
+  (let ((s (posn-string (event-start event))))
+    (drgnx-grid-tab-press event (and s (get-text-property (cdr s) 'drgnx-grid-kind (car s))) #'drgnx-grid--tab-click)))
 
 ;;;; The pane backend's move and stack (`drgnx-pane-move', `drgnx-pane-stack')
 

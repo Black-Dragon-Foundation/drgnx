@@ -166,8 +166,21 @@ Shortcuts\", \"Extensions\", the start page \"Welcome\").  A file's buffer keeps
                 (if n (concat " " n) "")))
     name))
 
+(declare-function drgnx-grid-tab-press "drgnx-grid-ops" (event kind click))
+
+(defun drgnx-chrome--tab-press (event)
+  "A press on an editor's tab: under the grid with dragging on, a click shows it and a drag off the row moves it
+\(`drgnx-grid-tab-press'); else nothing, and the release is the click."
+  (interactive "e")
+  (when-let* (((and (bound-and-true-p drgnx-grid-mode) (bound-and-true-p drgnx-grid-drag)
+                    (fboundp 'drgnx-grid-tab-press)))
+              (s (posn-string (event-start event)))
+              (b (get-text-property (cdr s) 'drgnx-buffer (car s))))
+    (drgnx-grid-tab-press event b #'drgnx-chrome--select-tab)))
+
 (defvar drgnx-chrome--tab-map
   (let ((m (make-sparse-keymap)))
+    (define-key m [tab-line down-mouse-1] #'drgnx-chrome--tab-press)
     (define-key m [tab-line mouse-1] #'drgnx-chrome--select-tab)
     (define-key m [tab-line mouse-2] #'drgnx-chrome--close-clicked)
     m))
