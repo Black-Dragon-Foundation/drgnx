@@ -4078,7 +4078,7 @@ mod tests {
         .unwrap();
         assert_eq!(got.files.len(), 1, "{got:?}");
         assert!(got.files[0].path.ends_with("org/board.org"));
-        assert_eq!(live_of(&f, &org.join("board.org")).await > 0, true);
+        assert!(live_of(&f, &org.join("board.org")).await > 0);
         assert_eq!(live_of(&f, &org.join("docs/plans/p.md")).await, 0);
         assert_eq!(live_of(&f, &org.join("notes.org")).await, 0);
     }
