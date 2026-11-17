@@ -274,6 +274,8 @@ pub enum FaceId {
     GitConflict,
     /// `drgnx-git-ignored`
     GitIgnored,
+    /// `drgnx-grid-drop`
+    GridDrop,
     /// `drgnx-outline-current`
     OutlineCurrent,
     /// `drgnx-view-match`
@@ -1020,7 +1022,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 504] = [
+    pub const ALL: [FaceId; 505] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1154,6 +1156,7 @@ impl FaceId {
         FaceId::GitDeleted,
         FaceId::GitConflict,
         FaceId::GitIgnored,
+        FaceId::GridDrop,
         FaceId::OutlineCurrent,
         FaceId::ViewMatch,
         FaceId::ViewChain,
@@ -1663,6 +1666,7 @@ impl FaceId {
             FaceId::GitDeleted => "drgnx-git-deleted",
             FaceId::GitConflict => "drgnx-git-conflict",
             FaceId::GitIgnored => "drgnx-git-ignored",
+            FaceId::GridDrop => "drgnx-grid-drop",
             FaceId::OutlineCurrent => "drgnx-outline-current",
             FaceId::ViewMatch => "drgnx-view-match",
             FaceId::ViewChain => "drgnx-view-chain",
@@ -2173,6 +2177,7 @@ impl FaceId {
             "drgnx-git-deleted" => FaceId::GitDeleted,
             "drgnx-git-conflict" => FaceId::GitConflict,
             "drgnx-git-ignored" => FaceId::GitIgnored,
+            "drgnx-grid-drop" => FaceId::GridDrop,
             "drgnx-outline-current" => FaceId::OutlineCurrent,
             "drgnx-view-match" => FaceId::ViewMatch,
             "drgnx-view-chain" => FaceId::ViewChain,

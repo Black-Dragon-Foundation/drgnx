@@ -3422,7 +3422,18 @@ named by its main window (`drgnx-grid-tile-main`).
   unstack or a split (`drgnx-grid-split-tile`, the groups' split) changes nothing and says "No room there"; the
   automatic placements fall back to their dock instead. A move first pushes the grid (`drgnx-grid-push` `move`); a
   docked tile moved or swapped loses `drgnx-tile-dock`. The pane backend's `:move` and `:stack` are these.
-Tests: `test/unit/grid-moves-test.el`; I11 in `test/live/drgnx-invariants-test.el`.
+- **Drag and drop** (`drgnx-grid--drag`, while `drgnx-grid-drag`): `down-mouse-1` on the grip (`drgnx-grid--grip`,
+  map `drgnx-grid-grip-map` on the tab line and the header line) starts it: on a tool tile's row (`drgnx-grid--tab-row`),
+  a docked area's (`drgnx-area--tab-row`, its header line) and an editor's (`drgnx-chrome--grip`, the row's leading
+  room). A press on a tool tile's tab (`drgnx-grid--tab-press`) is a click when released on the row, else a drag of
+  that kind (`drgnx-grid--drag-source` unstacks it first). The loop reads events under `track-mouse`; each movement
+  finds the tile and zone (`drgnx-grid-drop-target`, `drgnx-grid-zone`) and replaces only that tile's row line
+  (`drgnx-grid--row-param`: the tab line, or a docked area's header line) with "⤓ drop: …" (face `drgnx-grid-drop`);
+  the release calls `drgnx-grid--drop` → `drgnx-grid-move`; Esc or `C-g` cancels; the row comes back in an
+  `unwind-protect`. Itself, no tile or no room: "Nothing moved". Stacking onto a docked area is not a stack
+  (`drgnx-grid-stack`'s rule), so it says "Nothing moved" too.
+Tests: `test/unit/grid-moves-test.el`, `test/unit/grid-drag-test.el`, `test/ui/grid-drag-gui-test.el` (pointer events
+from `drgnx-uitest-drag-events` on a frame of its own); I11 in `test/live/drgnx-invariants-test.el`.
 
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 

@@ -134,6 +134,7 @@
  drgnx-git-deleted
  drgnx-git-conflict
  drgnx-git-ignored
+ drgnx-grid-drop
  drgnx-outline-current
  drgnx-view-match
  drgnx-view-chain

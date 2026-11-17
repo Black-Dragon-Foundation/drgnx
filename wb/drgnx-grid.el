@@ -27,6 +27,8 @@
 (defvar drgnx-rules-never-cover-modes)
 (defvar drgnx-wb-dock-columns)
 (declare-function drgnx-wb-focus-editor "drgnx-wb")
+(declare-function drgnx-grid--tab-press "drgnx-grid-ops" (event))
+(declare-function drgnx-grid-grip-press "drgnx-grid-ops" (event))
 (declare-function drgnx-wb-editor-window "drgnx-wb")
 (declare-function drgnx-wb-close-button "drgnx-wb")
 (declare-function drgnx-wb-bar "drgnx-wb")
@@ -640,7 +642,32 @@ For invoked commands only (`split-editor-right' and `split-editor-down' on a too
     (with-selected-window (posn-window (event-start event)) (drgnx-grid-show kind))))
 
 (defvar drgnx-grid--tab-map
-  (let ((m (make-sparse-keymap))) (define-key m [tab-line mouse-1] #'drgnx-grid--tab-click) m))
+  (let ((m (make-sparse-keymap)))
+    (define-key m [tab-line down-mouse-1] #'drgnx-grid--tab-press)
+    (define-key m [tab-line mouse-1] #'drgnx-grid--tab-click)
+    m)
+  "A tool tile's tab: a click shows it, a drag off the row moves it (`drgnx-grid--tab-press').")
+
+(defcustom drgnx-grid-drag t
+  "Non-nil: a tile moves by dragging its grip (the ⠿ at its tab line's start) or one of its tabs off the row onto
+another tile's edge (a split there) or middle (a stack).  Nil: no grip is drawn and drags do nothing."
+  :type 'boolean :group 'drgnx-grid)
+
+(defconst drgnx-grid-grip "⠿" "The grip at a tool tile's tab line's start (`drgnx-grid-drag').")
+
+(defvar drgnx-grid-grip-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [tab-line down-mouse-1] #'drgnx-grid-grip-press)
+    (define-key m [header-line down-mouse-1] #'drgnx-grid-grip-press) ; a docked area's row is its header line
+    m)
+  "The grip's mouse map: a press drags the tile (`drgnx-grid-grip-press').")
+
+(defun drgnx-grid--grip ()
+  "The grip string for a tab row, or \"\" when `drgnx-grid-drag' is off."
+  (if drgnx-grid-drag
+      (propertize (concat " " drgnx-grid-grip) 'local-map drgnx-grid-grip-map 'mouse-face 'highlight
+                  'pointer 'hand 'help-echo "Drag to move this tile")
+    ""))
 
 (defun drgnx-grid--close-click (event)
   "A click on a tool tile's ✕: hide the tile."
@@ -654,6 +681,7 @@ For invoked commands only (`split-editor-right' and `split-editor-down' on a too
   (let* ((stack (window-parameter window 'drgnx-pane-stack)) (shown (car stack))
          (kinds (seq-filter (lambda (k) (member k stack)) (append (drgnx-pane-kinds) stack))))
     (concat
+     (drgnx-grid--grip)
      (mapconcat (lambda (k)
                   (let ((title (drgnx-grid--title k)))
                     (propertize (concat " " title " ")

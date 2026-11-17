@@ -300,6 +300,129 @@ other key ends it and does what it does.  The hint is in the echo area."
   (message "Resize Tiles: arrows grow or shrink, any other key ends")
   (set-transient-map drgnx-grid-resize-map t (lambda () (message nil))))
 
+;;;; Drag and drop inside a frame (`drgnx-grid-drag')
+
+(defface drgnx-grid-drop '((t :inherit highlight))
+  "A drop target's tab line while a tile is dragged over it (\"⤓ drop: split right\")."
+  :group 'drgnx-grid)
+
+(defconst drgnx-grid--zone-words
+  '((left . "split left") (right . "split right") (above . "split up") (below . "split down") (center . "stack"))
+  "What a drop on each zone does, as the target's tab line says it.")
+
+(defvar drgnx-grid--drag-shown nil
+  "The drag's feedback now: (WINDOW ZONE PARAM ITS-OWN-LINE), PARAM the line it is on, or nil.")
+
+(defun drgnx-grid--row-param (window)
+  "The line WINDOW's tab row is on: `header-line-format' for a docked area (its row is its header line), else
+`tab-line-format'."
+  (if (and (memq (window-parameter window 'tab-line-format) '(nil none))
+           (not (memq (window-parameter window 'header-line-format) '(nil none))))
+      'header-line-format
+    'tab-line-format))
+
+(defun drgnx-grid--frame-xy (posn)
+  "POSN's frame pixel position, (X . Y), or nil when it is on no window (outside every frame, on a frame's edge)."
+  (let ((w (posn-window posn)) (xy (posn-x-y posn)))
+    (when (and (window-live-p w) xy)
+      (let ((e (if (posn-area posn) (window-pixel-edges w) (window-body-pixel-edges w))))
+        (cons (+ (nth 0 e) (car xy)) (+ (nth 1 e) (cdr xy)))))))
+
+(defun drgnx-grid-drop-target (frame x y)
+  "The tile of FRAME (default the selected one) under frame pixel X, Y and the zone of it there (`drgnx-grid-zone'),
+as (MAIN-WINDOW . ZONE); nil on no tile."
+  (seq-some (lambda (w) (let ((e (drgnx-grid--edges w)))
+                          (and (<= (nth 0 e) x) (< x (nth 2 e)) (<= (nth 1 e) y) (< y (nth 3 e))
+                               (cons w (drgnx-grid-zone e x y)))))
+            (drgnx-grid-tiles (or frame (selected-frame)))))
+
+(defun drgnx-grid--drag-clear ()
+  "Give the feedback's window its tab line back."
+  (when-let* ((shown drgnx-grid--drag-shown))
+    (setq drgnx-grid--drag-shown nil)
+    (when (window-live-p (car shown)) (set-window-parameter (car shown) (nth 2 shown) (nth 3 shown)))))
+
+(defun drgnx-grid--drag-show (target zone)
+  "Say on TARGET's tab row (`drgnx-grid--row-param'), and on no other, what a drop on ZONE of it does (nil TARGET:
+say it nowhere)."
+  (unless (and drgnx-grid--drag-shown (eq (car drgnx-grid--drag-shown) target) (eq (nth 1 drgnx-grid--drag-shown) zone))
+    (drgnx-grid--drag-clear)
+    (when (window-live-p target)
+      (let ((param (drgnx-grid--row-param target)))
+        (setq drgnx-grid--drag-shown (list target zone param (window-parameter target param)))
+        (set-window-parameter target param
+                              (propertize (format " ⤓ drop: %s " (alist-get zone drgnx-grid--zone-words))
+                                          'face 'drgnx-grid-drop))))))
+
+(defun drgnx-grid--drop (window target zone)
+  "Drop WINDOW's tile on ZONE of TARGET's (`drgnx-grid-move').  On itself, on no tile or where there is no room,
+nothing changes and the echo area says \"Nothing moved\".  Returns the moved tile or nil."
+  (if (or (not (window-live-p target)) (eq (drgnx-grid-tile-main target) (drgnx-grid-tile-main window)))
+      (progn (message "Nothing moved") nil)
+    (condition-case nil (drgnx-grid-move window target zone)
+      (user-error (message "Nothing moved") nil))))
+
+(defun drgnx-grid--drag (window &optional kind)
+  "Drag WINDOW's tile (with KIND, that one tab of a tool tile) under `track-mouse' until a button goes up: each
+movement finds the tile and zone under the pointer and says so on that tile's tab line; the release drops there
+\(`drgnx-grid--drop'); Esc or \\`C-g' cancels.  Returns the moved tile, or nil."
+  (let ((frame (window-frame window)) (done nil) (result nil) (inhibit-quit t))
+    (unwind-protect
+        (track-mouse
+          (setq track-mouse 'dragging)
+          (while (not done)
+            (let ((ev (read-event)))
+              (cond
+               ((mouse-movement-p ev)
+                (let* ((xy (drgnx-grid--frame-xy (event-start ev)))
+                       (hit (and xy (eq (window-frame (posn-window (event-start ev))) frame)
+                                 (drgnx-grid-drop-target frame (car xy) (cdr xy)))))
+                  (if hit (drgnx-grid--drag-show (car hit) (cdr hit)) (drgnx-grid--drag-clear))
+                  (redisplay)))
+               ((and (consp ev) (memq (event-basic-type ev) '(mouse-1 mouse-2 mouse-3)))
+                (setq done t)
+                (drgnx-grid--drag-clear)
+                (let* ((end (event-end ev)) (xy (drgnx-grid--frame-xy end))
+                       (hit (and xy (eq (window-frame (posn-window end)) frame)
+                                 (drgnx-grid-drop-target frame (car xy) (cdr xy)))))
+                  (setq result (drgnx-grid--drop (drgnx-grid--drag-source window kind hit) (car hit) (cdr hit)))))
+               ((memq ev '(27 7 escape)) (setq done t) (message "Nothing moved"))))))
+      (drgnx-grid--drag-clear))
+    result))
+
+(defun drgnx-grid--drag-source (window kind hit)
+  "The tile a drag of WINDOW (with KIND, one tab dragged out of a tool tile's row) drops on HIT: the tile itself, or,
+when KIND is one of several tabs and HIT is another tile, a tile of its own unstacked beside first."
+  (let ((stack (window-parameter window 'drgnx-pane-stack)))
+    (if (and kind (cdr stack) hit (not (eq (drgnx-grid-tile-main (car hit)) (drgnx-grid-tile-main window))))
+        (with-selected-window window
+          (drgnx-grid-show kind)
+          (drgnx-grid-unstack window))
+      window)))
+
+(defun drgnx-grid-grip-press (event)
+  "A press on a tile's grip (the ⠿ at its tab line's start): drag the tile (`drgnx-grid--drag').  Off
+\(`drgnx-grid-drag' nil), nothing."
+  (interactive "e")
+  (let ((w (posn-window (event-start event))))
+    (when (and drgnx-grid-drag (window-live-p w)) (drgnx-grid--drag w))))
+
+(defun drgnx-grid--tab-press (event)
+  "A press on a tool tile's tab: released on the same tab row it is a click (the tab shows); dragged off the row it
+moves that tab's kind (`drgnx-grid--drag-source')."
+  (interactive "e")
+  (let* ((start (event-start event)) (w (posn-window start))
+         (s (posn-string start)) (kind (and s (get-text-property (cdr s) 'drgnx-grid-kind (car s)))))
+    (when (window-live-p w)
+      (if (not drgnx-grid-drag)
+          (drgnx-grid--tab-click event)
+        (let ((ev (read-event)))
+          (if (and (consp ev) (memq (event-basic-type ev) '(mouse-1)) (not (mouse-movement-p ev))
+                   (eq (posn-window (event-end ev)) w) (eq (posn-area (event-end ev)) 'tab-line))
+              (drgnx-grid--tab-click event)
+            (setq unread-command-events (cons ev unread-command-events))
+            (drgnx-grid--drag w kind)))))))
+
 ;;;; The pane backend's move and stack (`drgnx-pane-move', `drgnx-pane-stack')
 
 (defun drgnx-grid--kind-window (kind)
