@@ -228,7 +228,7 @@ outside them) and the footer's hairline."
          (insert (drgnx-debug-share--footer
                   (propertize "drgnx sends nothing itself" 'face 'drgnx-debug-share-label)
                   (drgnx-ui-button "Cancel" 'debug-share-cancel :help "Close the card; nothing is written")
-                  (drgnx-ui-button "Write File" 'debug-share-write :face 'drgnx-ui-button-primary :focus t
+                  (drgnx-ui-button "Write File" 'debug-share-write :face 'drgnx-kit-button-primary :focus t
                                    :help "Seal the run into the file and show its share code")))))
       ('written
        (insert (drgnx-debug-share--gap 16)
@@ -249,7 +249,7 @@ outside them) and the footer's hairline."
                 (drgnx-ui-button (concat (drgnx-look-icon 'copy nil 14) " Copy Code") 'debug-share-copy
                                  :help (format "Copies the code; cleared from the clipboard in %d s"
                                                drgnx-debug-share-clipboard-secs))
-                (drgnx-ui-button "I've Noted It" 'debug-share-noted :face 'drgnx-ui-button-primary :focus t
+                (drgnx-ui-button "I've Noted It" 'debug-share-noted :face 'drgnx-kit-button-primary :focus t
                                  :help "Close the card: the code is not shown again")))))
     (goto-char (point-min))
     (drgnx-debug-share--blocks))

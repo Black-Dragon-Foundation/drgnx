@@ -124,8 +124,8 @@ calls recorded, the inbox's state file in a temporary folder and nothing of the 
     (with-current-buffer drgnx-inbox-buffer-name
       (let ((face (lambda (label) (goto-char (point-min)) (search-forward label)
                     (ensure-list (get-text-property (1- (point)) 'face)))))
-        (should (memq 'drgnx-ui-button-primary (funcall face "Allow once")))
-        (should-not (memq 'drgnx-ui-button-primary (funcall face "Deny")))))))
+        (should (memq 'drgnx-kit-button-primary (funcall face "Allow once")))
+        (should-not (memq 'drgnx-kit-button-primary (funcall face "Deny")))))))
 
 (ert-deftest drgnx-inbox/the-card-lists-as-many-items-as-the-pill-counts ()
   (drgnx-inbox-test--with

@@ -289,7 +289,7 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
             out.text_button(
                 &mut b,
                 " Publish Branch ",
-                FaceId::UiButton.name(),
+                FaceId::KitButtonSecondary.name(),
                 "publish",
                 "Push this branch and track it",
             );
@@ -297,7 +297,7 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
             out.text_button(
                 &mut b,
                 " Sync ",
-                FaceId::UiButton.name(),
+                FaceId::KitButtonSecondary.name(),
                 "sync",
                 "Pull, then push",
             );
@@ -314,7 +314,7 @@ fn repo_block(out: &mut Out, state: &ViewState, r: &RepoState, multi: bool, now:
     out.text_button(
         &mut b,
         &format!("  ✓ Commit on '{on}'  "),
-        FaceId::UiButtonPrimary.name(),
+        FaceId::KitButtonPrimary.name(),
         "commit",
         "Commit (Ctrl+Enter in the message)",
     );

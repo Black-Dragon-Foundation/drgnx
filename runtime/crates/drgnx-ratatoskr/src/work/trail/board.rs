@@ -406,7 +406,11 @@ mod tests {
             let fill = (span as f32 / 4.0).round() as u32;
             assert_eq!(
                 bar.spaces,
-                vec![(1, span, px(4.0)), (3, fill, px(4.0)), (4, span - fill, px(4.0))],
+                vec![
+                    (1, span, px(4.0)),
+                    (3, fill, px(4.0)),
+                    (4, span - fill, px(4.0))
+                ],
                 "scale {scale}: task:b (queued, no steps) then task:a"
             );
             let faces: Vec<&str> = bar.runs.iter().map(|r| r.2.as_str()).collect();
