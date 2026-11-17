@@ -81,7 +81,7 @@ not with the error of reading a screen there is none of (which hid the timeout).
     (cl-letf (((symbol-function 'drgnx-ui--run)
                (lambda (&rest _) (cons 0 "43 tmux -L drgnx-tty-2-1 -f /dev/null -D\n")))
               ((symbol-function 'drgnx-tty-session--owner-alive-p) (lambda (_) nil))
-              ((symbol-function 'drgnx-tty-session--run-of) (lambda (_) "/run/x"))
+              ((symbol-function 'drgnx-ui--run-of) (lambda (_) "/run/x"))
               ((symbol-function 'drgnx-tty-session--remove-stale) (lambda (name run) (push (cons name run) removed))))
       ;; its own namespace: a dead runner's session, removed
       (cl-letf (((symbol-function 'drgnx-tty-session--same-pid-namespace-p) (lambda (_) t)))
