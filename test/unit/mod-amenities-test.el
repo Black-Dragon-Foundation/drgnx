@@ -62,6 +62,25 @@
                                    (dolist (c cmds) (should (drgnx-commands-get c)))))))
     (should (> ran 0))))
 
+(ert-deftest drgnx-guides/a-killed-buffer-leaves-no-indent-bars-timer ()
+  "indent-bars schedules its remap cleanup without keeping the timer; killing a buffer with the guides on (its
+`kill-buffer-hook') and the module's teardown cancel it, and only that buffer's."
+  (load (expand-file-name "modules/extra/drgnx-guides" drgnx-dir) nil t)
+  (let* ((a (generate-new-buffer " guides-a")) (b (generate-new-buffer " guides-b"))
+         (sched (lambda (buf) (run-with-idle-timer 1 nil (apply-partially 'indent-bars--cleanup-stipple-remaps buf))))
+         (ta (funcall sched a)) (tb (funcall sched b)) (other (run-with-idle-timer 1 nil #'ignore)))
+    (unwind-protect
+        (progn
+          (with-current-buffer a (add-hook 'kill-buffer-hook #'drgnx-guides--cancel-timers nil t))
+          (kill-buffer a)
+          (should-not (memq ta timer-idle-list))
+          (should (memq tb timer-idle-list))
+          (drgnx-guides--teardown)
+          (should-not (memq tb timer-idle-list))
+          (should (memq other timer-idle-list)))
+      (mapc #'cancel-timer (list ta tb other))
+      (when (buffer-live-p b) (kill-buffer b)))))
+
 (ert-deftest drgnx-booster/only-with-the-binary ()
   (skip-unless (drgnx-amenities-test--installed-p 'eglot-booster))
   (let ((load-path (append load-path (drgnx-amenities-test--elpa-path))))
