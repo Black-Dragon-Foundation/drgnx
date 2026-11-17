@@ -301,6 +301,18 @@ struct Inner {
     /// The running jobs that write a progress file (`--progress FILE`): the file and what the editors were sent of it.
     progress: Mutex<std::collections::HashMap<String, (PathBuf, progress::Watch)>>,
     unsettled: Arc<Unsettled>,
+    /// Who launches a job a `start` enters: see [`Admit`].
+    admit: Mutex<Admit>,
+}
+
+/// The jobs whose `start` is between entering the queue and its own tick (`owned`: that `start` launches them), and
+/// those another tick (the queue's own, every 2 s) admitted in that window (`claimed`: the `start` takes them back).
+/// A queue tick and this bookkeeping are one step under the lock, so a job admitted at once is launched before its
+/// `start` answers, whichever tick took it.
+#[derive(Default)]
+struct Admit {
+    owned: HashSet<String>,
+    claimed: HashSet<String>,
 }
 
 /// The ended jobs whose end the reader of the ends (the gates' evidence, [`Runner::settling`]) has not taken yet, by
@@ -765,6 +777,7 @@ impl Runner {
                 live: self.live.clone(),
                 events: self.events.clone(),
                 unsettled: self.unsettled.clone(),
+                admit: Mutex::default(),
             });
             fresh = Some(links);
             inner
@@ -1270,6 +1283,17 @@ impl Inner {
         spec: ExecSpec,
         facts: Option<(vordr::facts::Facts, Snap)>,
     ) -> Result<String, Refusal> {
+        self.start_gap(spec, facts, |_| {}).await
+    }
+
+    /// [`Inner::start_with`], calling GAP once the job is in the queue and before this start's own tick: where the
+    /// queue's own tick may run, which a test makes it do.
+    async fn start_gap(
+        self: Arc<Self>,
+        spec: ExecSpec,
+        facts: Option<(vordr::facts::Facts, Snap)>,
+        gap: impl FnOnce(&Arc<Self>),
+    ) -> Result<String, Refusal> {
         if spec.argv.is_empty() || spec.argv[0].is_empty() {
             return Err(refusal("a job needs a command"));
         }
@@ -1290,15 +1314,24 @@ impl Inner {
             }
             return r.map(|()| id);
         }
+        // this start owns the job until its own tick: a tick of the queue's in between (its first, before this start
+        // runs) leaves it claimed for this start rather than launching it on another task
+        self.admit.lock().unwrap().owned.insert(id.clone());
         if let Err(e) = self.enqueue(&id, &dir, &spec) {
+            self.admit.lock().unwrap().owned.remove(&id);
             let _ = std::fs::remove_dir_all(&dir);
             return Err(e);
         }
-        // admitted at once: started here, so a refused launch is the start's answer (the queue's tick, woken only
-        // now, finds it taken; one that waits is its)
-        let t = self.queue.tick(now() as u64);
+        gap(&self);
+        // admitted at once: started here, so a refused launch is the start's answer (one that waits is the queue's)
+        let (t, claimed) = {
+            let mut a = self.admit.lock().unwrap();
+            let t = self.queue.tick(now() as u64);
+            a.owned.remove(&id);
+            (t, a.claimed.remove(&id))
+        };
         self.queue.wake_tick();
-        let mut mine = None;
+        let mut mine = claimed.then(|| self.queue.slot(&id));
         for s in t.starts {
             if s == id {
                 mine = Some(self.queue.slot(&s));
@@ -1451,7 +1484,20 @@ impl Inner {
 
     /// A tick of the queue: start what this machine admits, carry out what ended on runners.
     fn pump(self: &Arc<Self>) {
-        let t = self.queue.tick(now() as u64);
+        let t = {
+            let mut a = self.admit.lock().unwrap();
+            let mut t = self.queue.tick(now() as u64);
+            // a job whose start is on its way is that start's to launch
+            t.starts.retain(|id| {
+                if a.owned.contains(id) {
+                    a.claimed.insert(id.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            t
+        };
         for id in t.starts {
             self.spawn_queued(id);
         }
