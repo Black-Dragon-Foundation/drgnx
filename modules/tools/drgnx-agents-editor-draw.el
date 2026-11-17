@@ -40,6 +40,7 @@
 (defvar drgnx-agents-editor-apply-functions)
 (defvar drgnx-agents-tags)
 (defvar drgnx-hunks-skip-line-function)
+(defvar text-scale-mode-step)
 (declare-function drgnx-hunks-redraw "drgnx-hunks")
 
 (defun drgnx-agents-editor-draw--tags-apply ()
@@ -188,13 +189,24 @@ conflict one, else the last range that holds it."
         (setq found s)))
     found))
 
+(defun drgnx-agents-editor-draw--rows (win)
+  "The rows WIN can show: its body's pixel height over its buffer's line height, with the buffer's text scale counted.
+The window's line count (`window-body-height') is in the frame font's lines, which a scaled buffer does not use: at
+a smaller text scale more rows show, and a walk of that many rows stopped short of the bottom ones."
+  (let* ((font (window-default-font-height win))
+         (spacing (- (window-default-line-height win) font))
+         ;; face-remap.el is loaded once a buffer is scaled (not loaded here: it adds a global hook when loaded)
+         (amount (with-current-buffer (window-buffer win) (bound-and-true-p text-scale-mode-amount)))
+         (line (+ spacing (* font (if (memq amount '(nil 0)) 1 (expt text-scale-mode-step amount))))))
+    (1+ (ceiling (window-body-height win t) (max 1 line)))))
+
 (defun drgnx-agents-editor-draw--rebuild-buffer (buffer)
   "Put a ring row overlay and a strip overlay on each visible row that needs one; free the overlays no row needs."
   (with-current-buffer buffer
     (let ((n 0) (g 0) (strips drgnx-agents-editor-draw--strips) (rings drgnx-agents-editor-draw--rings))
       (when (or strips rings)
         (dolist (win (get-buffer-window-list buffer nil t))
-          (let ((rows (1+ (window-body-height win))))
+          (let ((rows (drgnx-agents-editor-draw--rows win)))
             (save-excursion
               (goto-char (window-start win))
               ;; the visible rows are walked, each told apart by the position its line starts at: the hub's ranges
