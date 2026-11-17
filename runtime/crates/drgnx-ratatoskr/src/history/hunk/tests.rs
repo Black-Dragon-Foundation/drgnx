@@ -68,7 +68,11 @@ fn fx_with(cause: Option<verdandi::Cause>) -> (Fx, OpId) {
     let hist = tempfile::tempdir().unwrap();
     let hub = Hub::open(hist.path()).unwrap();
     let tree = Tree::new(&root, &root.join(".git"), Some(&head));
-    assert!(hub.register(&tree, "a.txt", "b1", &deny).unwrap().tracked);
+    assert!(
+        hub.register(&tree, "a.txt", "b1", &deny, 1.0)
+            .unwrap()
+            .tracked
+    );
     let ch = |start, inserted: &str, origin: &str| BatchChange {
         start,
         old_len: 0,
