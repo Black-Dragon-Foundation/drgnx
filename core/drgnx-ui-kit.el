@@ -340,7 +340,8 @@ Each inherits its binding's standard faces, so any theme styles it; drgnx's them
 colours (`drgnx-ui-kit-theme-specs')."
   `(progn
      ,@(mapcar (lambda (f)
-                 `(defface ,(car f) '((t :inherit ,(plist-get (nth 2 f) :inherit)))
+                 `(defface ,(car f) '((t :inherit ,(let ((i (plist-get (nth 2 f) :inherit)) (font (plist-get (nth 2 f) :font)))
+                                                     (if font (append font (cl-remove-if (lambda (x) (memq x font)) i)) i))))
                     ,(format "The kit's `%s' component (etc/ui/components.eld)." (nth 1 f))
                     :group 'drgnx))
                (drgnx-ui-kit-face-bindings (drgnx-ui-kit--read)))))
@@ -767,7 +768,7 @@ with ARGS (transformed when a key of KIND's own ran it).  A KIND not defined is 
   "The action kind `ui-button': run the button's own ACTION (the one element of ARGS) as `drgnx-ui-kit-run' does."
   (drgnx-ui-kit-run (car args)))
 
-(drgnx-ui-kit-define-action 'ui-button #'drgnx-ui-kit--run-button nil)
+(drgnx-ui-kit-define-action 'ui-button #'drgnx-ui-kit--run-button '(("RET" . identity)))
 
 (defun drgnx-ui-kit--action-spec (action)
   "ACTION as the props' action plist (:kind :args): a kit action (KIND . ARGS) as it is, anything else (a registry id, a
@@ -797,6 +798,17 @@ hint or nil.  Its `help-echo' and accessible text are LABEL."
 `help-echo' and accessible text are \"key KEYS\"."
   (let ((s (drgnx-ui-kit-string 'key-hint (list :c "key-hint" :keys keys :variant (symbol-name (or variant 'cap))) where nil)))
     (put-text-property 0 (length s) 'help-echo (concat "key " keys) s)
+    s))
+
+;;; A kit button in buffer text that is also a `button.el' button (`push-button', `forward-button' reach it).
+(defun drgnx-ui-kit-text-button (label fn help style size)
+  "LABEL as a kit button (STYLE, SIZE: see `drgnx-ui-kit-button') in buffer text that calls FN, a function of no
+arguments; HELP (a string or nil) is its `help-echo'.  It is a `button.el' button too: `push-button' on it calls FN."
+  (let ((s (drgnx-ui-kit-button label fn style size 'rest nil 'text)))
+    (add-text-properties 0 (length s) (list 'category 'default-button 'button t 'follow-link t
+                                            'action (lambda (_) (funcall fn)))
+                         s)
+    (when help (put-text-property 0 (length s) 'help-echo help s))
     s))
 
 ;;;; Focus-visible: the focus ring after a key, not after a click

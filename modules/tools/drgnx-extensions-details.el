@@ -281,7 +281,7 @@ restart then uses them."
       (when-let* ((r (plist-get drgnx-extensions-details--info :row))) (drgnx-extensions-list--normalize r))))
 
 (defun drgnx-extensions-details--button (label fn &optional help)
-  (concat (drgnx-ui-button (format "[%s]" label) fn :help help) " "))
+  (concat (drgnx-ui-kit-text-button (format "[%s]" label) fn help 'secondary 'sm) " "))
 
 (defun drgnx-extensions-details--refresh ()
   "Draw the page again: its state changed."

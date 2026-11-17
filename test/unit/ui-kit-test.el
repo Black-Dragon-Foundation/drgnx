@@ -427,6 +427,20 @@
       (let ((s (drgnx-ui-kit-button "Go" #'ignore 'primary 'md 'focus-visible nil 'header-line)))
         (should (eq 'drgnx-focus (car (ensure-list (get-text-property 3 'face s)))))))))
 
+(ert-deftest drgnx-ui-kit/text-button-is-a-button-el-button ()
+  ;; a kit button in text that `push-button' and `forward-button' reach, the helpers' sites rely on it
+  (let ((ran nil))
+    (ui-kit-test--gui 1.0
+      (with-temp-buffer
+        (insert "a " (drgnx-ui-kit-text-button "[Go]" (lambda () (setq ran t)) "Run it" 'secondary 'sm) " b")
+        (goto-char (point-min))
+        (search-forward "[Go]")
+        (should (button-at (1- (point))))
+        (should (equal (get-text-property (1- (point)) 'help-echo) "Run it"))
+        (should (eq (get-text-property (1- (point)) 'face) 'drgnx-kit-button-secondary))
+        (push-button (1- (point)))
+        (should ran)))))
+
 ;; The unknown-face counter (test mode): a row naming a face that is none, and is not in etc/ui/faces.eld, is counted
 (defvar drgnx-test-strict-faces)
 (defvar drgnx-view-unknown-faces)

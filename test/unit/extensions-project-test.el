@@ -331,9 +331,10 @@ and the rows as the hub sends them."
               (should (string-search "[Turn off in this project]" text)))
             ;; the page's button, as RET on it runs it
             (let* ((text (drgnx-extensions-details--render-actions))
-                   (at (string-search "[Turn off in this project]" text))
-                   (cmd (lookup-key (get-text-property at 'keymap text) (kbd "RET"))))
-              (let ((this-command cmd)) (call-interactively cmd)))
+                   (at (1+ (string-search "[Turn off in this project]" text))))
+              (with-temp-buffer          ; RET on the button, as a user presses it
+                (insert text) (goto-char at)
+                (let ((last-input-event ?\r)) (call-interactively #'drgnx-ui-kit-activate))))
             (should (drgnx-extensions-project-off-p 'fx-rust drgnx-ext-project-test--p))
             (should (string-search "Off in this project" (drgnx-extensions-details--render-header)))
             (should (string-search "[Turn on in this project]" (drgnx-extensions-details--render-actions)))))
