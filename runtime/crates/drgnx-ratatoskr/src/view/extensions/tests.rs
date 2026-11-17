@@ -129,6 +129,7 @@ fn extensions_kinds_are_lucide_icons_on_a_graphical_display() {
         fonts: vec![],
         cell: (8, 16),
         width_px: 800,
+        tail: None,
         palette: vec![],
         tty_widths: vec![],
         tz: String::new(),

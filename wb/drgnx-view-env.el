@@ -243,23 +243,25 @@ class no window shows goes.  When no window shows the buffer's class, the buffer
   "WINDOW's right fringe, in pixels."
   (or (cadr (window-fringes window)) 0))
 
-(defvar-local drgnx-view-env-right-reserve nil
-  "In a hub-fed view's buffer, a function of a window: the pixels (a terminal's: columns) its rows keep free at the
-window's right edge, where the buffer draws something of its own after each row (the Explorer's tail,
-`drgnx-wb-tail-reserve').  Nil: none.")
+(defvar-local drgnx-view-env-tail nil
+  "In a hub-fed view's buffer whose rows get a tail at the window's right edge (the Explorer's, the Buffers panel's,
+`drgnx-wb-row-tail'), a function of a window: (MARK CONTROL), where the tail's git mark and its control start, in
+pixels (a terminal's: columns) from the right edge (`drgnx-wb-tail-px').  The env's `tail': the hub ends a row's text
+short of what its tail always draws.  Nil: the rows get no tail.")
 
-(defun drgnx-view-env--width (window facts &optional buffer)
+(defun drgnx-view-env--width (window facts)
   "The pixels WINDOW (with FACTS) gives a row: its body, less a column when a GUI window has no right fringe (Emacs
-keeps that column for its truncation glyph, and a row as wide as the body would end in a `$'), less what the buffer
-keeps at the right edge (`drgnx-view-env-right-reserve' of BUFFER, the view's own, which its twins in other display
-classes share; default WINDOW's)."
-  (let ((px (window-body-width window t))
-        (reserve (buffer-local-value 'drgnx-view-env-right-reserve
-                                     (if (buffer-live-p buffer) buffer (window-buffer window)))))
-    (max 0 (- (if (and (equal (plist-get facts :display) "gui") (zerop (drgnx-view-env--right-fringe window)))
-                  (- px (or (car (plist-get facts :cell)) 0))
-                px)
-              (if reserve (funcall reserve window) 0)))))
+keeps that column for its truncation glyph, and a row as wide as the body would end in a `$')."
+  (let ((px (window-body-width window t)))
+    (if (and (equal (plist-get facts :display) "gui") (zerop (drgnx-view-env--right-fringe window)))
+        (- px (or (car (plist-get facts :cell)) 0))
+      px)))
+
+(defun drgnx-view-env--tail (window buffer)
+  "The env's `tail' for WINDOW: [MARK CONTROL] from `drgnx-view-env-tail' of BUFFER (the view's own, which its twins
+in other display classes share), or nil."
+  (when-let* ((fn (and (buffer-live-p buffer) (buffer-local-value 'drgnx-view-env-tail buffer))))
+    (apply #'vector (funcall fn window))))
 
 (defun drgnx-view-env--envs (view &optional wins)
   "VIEW's env per display class it shows in now: a list of (CLASS . PARAMS), PARAMS without the epoch.  WIDTH_PX is
@@ -268,22 +270,25 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
   (let ((classes nil))
     (dolist (wf (or wins (drgnx-view-env--window-classes view)))
       (let* ((w (car wf)) (facts (cdr wf)) (class (drgnx-view-env--class facts))
-             (width (drgnx-view-env--width w facts (car (gethash view drgnx-view-env--views)))) (have (assoc class classes)))
+             (width (drgnx-view-env--width w facts)) (have (assoc class classes))
+             (tail (drgnx-view-env--tail w (car (gethash view drgnx-view-env--views)))))
         (if have
             (setf (plist-get (cdr have) :width_px) (min width (plist-get (cdr have) :width_px)))
-          (push (cons class (list :view view :class class :display (plist-get facts :display)
-                                  :scale (plist-get facts :scale)
-                                  :fonts (mapcar (lambda (f) (cl-subseq f 0 8)) (plist-get facts :fonts))
-                                  :cell (plist-get facts :cell) :width_px width
-                                  :palette (drgnx-view-env--palette)
-                                  :tty_widths (let ((t-w (drgnx-view-env--tty-widths))) (if (eq t-w :none) nil t-w))
-                                  :tz (format-time-string "%z")
-                                  :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)
-                                  :glyphs (drgnx-view-env--kit-glyphs (window-frame w))
-                                  ;; the user's density: the kit's sizes that follow it (a change is a new epoch)
-                                  :density (symbol-name (or (bound-and-true-p drgnx-look-density) 'comfortable))
-                                  ;; rows only read, never drawn: the hub fits them to no window
-                                  :headless (if (gethash view drgnx-view-env--headless) t :false)))
+          (push (cons class (append (list :view view :class class :display (plist-get facts :display)
+                                          :scale (plist-get facts :scale)
+                                          :fonts (mapcar (lambda (f) (cl-subseq f 0 8)) (plist-get facts :fonts))
+                                          :cell (plist-get facts :cell) :width_px width
+                                          :palette (drgnx-view-env--palette)
+                                          :tty_widths (let ((t-w (drgnx-view-env--tty-widths))) (if (eq t-w :none) nil t-w))
+                                          :tz (format-time-string "%z")
+                                          :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)
+                                          :glyphs (drgnx-view-env--kit-glyphs (window-frame w))
+                                          ;; the user's density: the kit's sizes that follow it (a change is a new epoch)
+                                          :density (symbol-name (or (bound-and-true-p drgnx-look-density) 'comfortable))
+                                          ;; rows only read, never drawn: the hub fits them to no window
+                                          :headless (if (gethash view drgnx-view-env--headless) t :false))
+                                    ;; where a row's tail is drawn, from the right edge
+                                    (and tail (list :tail tail))))
                 classes))))
     (nreverse classes)))
 

@@ -251,6 +251,7 @@ pub fn rows_in(
         tty: matches!(env.display, Display::Tty)
             .then_some((env.cell.0.max(1), env.tty_widths.as_slice())),
         image_px: &image_px,
+        tail: None,
     };
     let fits = |line: &str, first: bool| {
         let (mut r, _) = notice_row(NOTICE_KEY, line, look, first);

@@ -83,6 +83,12 @@ impl RowBuilder {
         self
     }
 
+    /// The tail the editor draws after this row at the window's right edge ([`crate::row::Tail`]).
+    pub fn tail(&mut self, tail: crate::row::Tail) -> &mut Self {
+        self.row.tail = Some(tail);
+        self
+    }
+
     pub fn finish(self) -> Row {
         self.row
     }
