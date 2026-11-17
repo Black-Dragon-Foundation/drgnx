@@ -3490,6 +3490,31 @@ their chrome again.
 Tests: `test/unit/grid-snapshot-test.el` (`drgnx-grid-snapshot/`: the stack, one frame; batch cannot make a second
 frame) and `test/ui/grid-snapshot-gui-test.el` (`drgnx-ui-grid-snapshot/`: aux frames made, closed and restored).
 
+**Monitor fold-in and return** (`wb/drgnx-monitors.el`). `drgnx-monitors--monitors-changed`
+(`display-monitors-changed-functions`) notes, at the first change of a burst, each aux frame's monitor key and
+FRAME-SNAP (`drgnx-monitors--fold-seen`: the window manager may move a frame off a monitor that went away before the
+burst ends), and debounces `drgnx-monitors--fold-settle` to 1 s of idleness (key `monitors-fold`; idle, as the
+refresh is, so it never runs inside a command or a follow). Settled, each noted key that
+`drgnx-monitors--present-p` (`display-monitor-attributes-list`, by name, else geometry) no longer finds is folded
+(the frames on it matched with `drgnx-monitors--same-p`),
+and each folded key that is present again comes back.
+- `(drgnx-monitors--fold KEY &optional SEEN)` pushes `fold-in`, then for each aux frame on KEY: its editors' buffers go
+  first in the main frame's last-used editor's tabs (`drgnx-grid--fold-buffers`), the tool kinds of its tiles that the
+  main frame lacks are shown there (`drgnx-grid-show`: their dock's tile, or a new one), the entry `(:snap FRAME-SNAP
+  :tabs NAMES :kinds KINDS)` (what the main frame did not have) goes under KEY in `drgnx-monitors--folded`, and the
+  frame is deleted. Nothing is killed, saved or asked.
+- `(drgnx-monitors--unfold KEY)`: the main frame gives back each entry's tabs and kinds (a kind in front is hidden,
+  one behind is taken off its stack), then `drgnx-grid-restore` makes the frames again from a snapshot of now plus
+  the entries' FRAME-SNAPs: their buffers as they are now, each at its geometry.
+- `drgnx-grid-restore` folds an aux FRAME-SNAP whose `:monitor` is absent instead of making it
+  (`drgnx-monitors--fold-snap`); a restart's restore of a window whose monitor is gone folds it
+  (`drgnx-monitors--placing`). `drgnx-monitors--folded` is saved with the main frame (`:monitors-folded`, checked by
+  `drgnx-monitors--folded-p` when read back) and checked again a second after the restore.
+
+Tests: `test/unit/wb-monitors-fold-test.el` (`drgnx-monitors/`: the debounce, a restore folding, the saved list) and
+`test/ui/monitors-fold-gui-test.el` (`drgnx-ui-monitors-fold/`: fold and return of live frames, monitors faked;
+`fold-and-return` unplugs a real monitor under sway, `:compositor`).
+
 **Move to New Window** (`wb/drgnx-grid-frames.el`). `(drgnx-grid-move-to-new-frame &optional WINDOW)` pushes
 `tear-out` and lets the tile leave its frame as a move does (`drgnx-grid--delete-tile`; a frame's last editor stays,
 empty). In a new aux frame (`drgnx-frames--new`) it is the only tile, with a fresh id and no dock: an editor as its
