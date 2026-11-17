@@ -142,6 +142,5 @@
  "test/unit/wb-guard-test.el"
  "test/unit/wb-monitors-test.el"
  "test/unit/work-record-test.el"
- "test/unit/work-scan-test.el"
  "test/unit/work-test.el"
 )

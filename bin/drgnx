@@ -2375,7 +2375,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                run drgnx ARGS (default: test --ui) with a recording backing the outside ends
        drgnx work record [--task ID] [SHA…]
                                link commits (default HEAD) to a task (default $DRGNX_TASK); no commit message changes
-       drgnx work scan [--board FILE] [DIR…]
+       drgnx work scan [DIR…]
                                read specs, plans, ledgers and the board into the work tracker (docs/guide/work.md)
        drgnx work status [--json]
                                every plan: tasks, steps, TODOs and commits done, branch, merged
