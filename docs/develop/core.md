@@ -3434,7 +3434,8 @@ named by its main window (`drgnx-grid-tile-main`).
   room). A press on a tab (`drgnx-grid-tab-press`: a tool tile's, from `drgnx-grid--tab-press`, or an editor's, from
   `drgnx-chrome--tab-press` with its buffer) is a click when released on the row (the release is read with `read-key`:
   on a terminal it is xterm-mouse's bytes, decoded only through `input-decode-map`), else a drag of that kind or buffer
-  (`drgnx-grid--drag-source` unstacks it into a tile of its own first when it is one of several tabs). The loop reads events under `track-mouse`; each movement
+  (`drgnx-grid--drag-source` unstacks it into a tile of its own first when it is one of several tabs). The loop reads events under `track-mouse`, with `read-key` too (a
+  terminal's motion and release are xterm-mouse's bytes); each movement
   finds the tile and zone (`drgnx-grid-drop-target`, `drgnx-grid-zone`) and replaces only that tile's row line
   (`drgnx-grid--row-param`: the tab line, or a docked area's header line) with "⤓ drop: …" (face `drgnx-grid-drop`);
   the release calls `drgnx-grid--drop` → `drgnx-grid-move`; Esc or `C-g` cancels; the row comes back in an
