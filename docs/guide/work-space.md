@@ -277,14 +277,14 @@ The hub says why each job runs where it does. Select an agent whose job runs on 
 "Runs on desk · why: desk: about 4 min, warm cache; laptop: on battery": the machine chosen with its estimate, then why
 each other machine wasn't. A job on the machine you named says "pinned by you".
 
-`M` (Move to Another Machine) moves work. On a job's row in a machine's queue (the side panel of a selected machine)
+`M` (Move to Another Machine) moves work, in every Work view and in the side panel. On a job's row in a machine's queue (the side panel of a selected machine)
 it moves that job; anywhere else on the map, the list or the side panel it moves the selected agent's next jobs. It
 asks for the machine: `local` or one of your runners.
 
 - A job that waits is placed on that machine.
 - A job that runs is never stopped by the move. A card asks "Restart make check on laptop? It stops the run on desk":
   Restart stops it there and runs it again on laptop; Keep leaves it running.
-- An agent's next jobs go to that machine; its current turn is not moved.
+- An agent's next jobs go to that machine, also after the hub restarts; its current turn is not moved.
 
 A machine the hub doesn't know, or one the job may not go to (a private project on a shared runner, a Mac for a Linux
 job, a project that keeps its jobs here), is refused with the reason. Only you can move work: an agent's connection is

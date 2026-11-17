@@ -18,15 +18,15 @@ The kit's `row` component: one definition in `etc/ui/components.eld`, expanded t
 
 | Variant | Density | Height | Pad (start / end) | Gap | Box | Radius | Hit | Indent |
 |---|---|---|---|---|---|---|---|---|
-| list | compact | 22 | 6 / 6 | 0 | no | 6 | 0 | 0 |
-| list | comfortable | 26 | 6 / 6 | 0 | no | 6 | 0 | 0 |
-| list | roomy | 30 | 6 / 6 | 0 | no | 6 | 0 | 0 |
-| tree | compact | 22 | 6 / 6 | 0 | no | 6 | 0 | 12 |
-| tree | comfortable | 26 | 6 / 6 | 0 | no | 6 | 0 | 12 |
-| tree | roomy | 30 | 6 / 6 | 0 | no | 6 | 0 | 14 |
-| map | compact | 22 | 6 / 6 | 0 | no | 6 | 0 | 0 |
-| map | comfortable | 26 | 6 / 6 | 0 | no | 6 | 0 | 0 |
-| map | roomy | 30 | 6 / 6 | 0 | no | 6 | 0 | 0 |
+| list | compact | 22 | 6 / 6 | 6 | no | 6 | 0 | 0 |
+| list | comfortable | 26 | 6 / 6 | 6 | no | 6 | 0 | 0 |
+| list | roomy | 30 | 6 / 6 | 6 | no | 6 | 0 | 0 |
+| tree | compact | 22 | 6 / 6 | 6 | no | 6 | 0 | 12 |
+| tree | comfortable | 26 | 6 / 6 | 6 | no | 6 | 0 | 12 |
+| tree | roomy | 30 | 6 / 6 | 6 | no | 6 | 0 | 14 |
+| map | compact | 22 | 6 / 6 | 6 | no | 6 | 0 | 0 |
+| map | comfortable | 26 | 6 / 6 | 6 | no | 6 | 0 | 0 |
+| map | roomy | 30 | 6 / 6 | 6 | no | 6 | 0 | 0 |
 
 ## On a terminal
 
@@ -40,7 +40,9 @@ None: the row's own text is what a screen reader speaks.
 
 ## Colours
 
-No colours of its own: it draws on the surface it is in, with the states' faces.
+| Binding | Face | Fill | Text | Edge |
+|---|---|---|---|---|
+| own | `drgnx-kit-row` | - | - | - |
 
 ## States
 

@@ -31,7 +31,13 @@
  (components
   ;; a row of a list, a tree (depth and twisty) or a map; its states are the state table's
   (row :variants ((kind list tree map)) :defaults (kind list)
-       :geometry (:height (density tree-row) :pad (6 . 6) :gap 0 :box nil :radius 6 :hit 0
+       :geometry (:height (density tree-row) :pad (6 . 6) :gap 6 :box nil :radius 6 :hit 0
                           :indent (:by kind (list 0) (tree (density tree-indent)) (map 0)))
        :tty (:pad 1 :indent (:by kind (list 0) (tree 2) (map 0)) :twisty (chevron-right chevron-down))
-       :label nil :bind nil :replaces nil :helpers nil :lint nil)))
+       :label nil
+       ;; the UI font (the mockups' lists and trees), no colours of its own: the surface's and the state's
+       :bind ((() :inherit (drgnx-ui-text)))
+       ;; every row selection reads the state table (the inactive selection, the full one while focused)
+       :replaces ((drgnx-view-selected . drgnx-row-selected) (drgnx-explorer-selected . drgnx-row-selected)
+                  (drgnx-work-selected . drgnx-row-selected) (drgnx-notebook-current-row . drgnx-row-selected))
+       :helpers nil :lint t)))

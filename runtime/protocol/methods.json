@@ -12298,6 +12298,347 @@
       "classes": [
         "user"
       ],
+      "doc": "a comment on a paragraph of a spec, plan, decision or task: a new thread, steered to the agent writing the record (never cancelling its turn); with none, it waits",
+      "name": "comments/add",
+      "params": {
+        "$defs": {
+          "Anchor": {
+            "additionalProperties": false,
+            "description": "Where a thread sits: the paragraph under the headings HEADING, found by KEY (a digest of its text, whitespace\nfolded) and shown by QUOTE.  `state`: `here` (the paragraph is as it was), `moved` (it was rewritten: the thread\nfollows the paragraph that replaced it) or `removed` (gone: the quote is kept).",
+            "properties": {
+              "heading": {
+                "default": [],
+                "description": "The headings above the paragraph, outermost first.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "key": {
+                "default": "",
+                "description": "16 hex digits; on `comments/add`, empty: the paragraph is found by `quote`.",
+                "type": "string"
+              },
+              "quote": {
+                "default": "",
+                "description": "The paragraph's text, at most 200 characters.",
+                "type": "string"
+              },
+              "state": {
+                "default": "here",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`comments/add`.",
+        "properties": {
+          "anchor": {
+            "$ref": "#/$defs/Anchor",
+            "description": "The paragraph: its key, or its text as `quote` (the hub finds it and fills the rest)."
+          },
+          "record": {
+            "description": "The record commented on: `spec:ID`, `plan:ID`, `decision:N` or `task:ID`.",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "record",
+          "anchor",
+          "text"
+        ],
+        "title": "AddParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Anchor": {
+            "additionalProperties": false,
+            "description": "Where a thread sits: the paragraph under the headings HEADING, found by KEY (a digest of its text, whitespace\nfolded) and shown by QUOTE.  `state`: `here` (the paragraph is as it was), `moved` (it was rewritten: the thread\nfollows the paragraph that replaced it) or `removed` (gone: the quote is kept).",
+            "properties": {
+              "heading": {
+                "default": [],
+                "description": "The headings above the paragraph, outermost first.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "key": {
+                "default": "",
+                "description": "16 hex digits; on `comments/add`, empty: the paragraph is found by `quote`.",
+                "type": "string"
+              },
+              "quote": {
+                "default": "",
+                "description": "The paragraph's text, at most 200 characters.",
+                "type": "string"
+              },
+              "state": {
+                "default": "here",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`comments/add`'s answer.",
+        "properties": {
+          "anchor": {
+            "$ref": "#/$defs/Anchor"
+          },
+          "comment": {
+            "type": "string"
+          },
+          "sent_to": {
+            "description": "The session it was steered to; none: no agent is writing the record, and the thread waits for one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "comment",
+          "anchor"
+        ],
+        "title": "Added",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a record's comment threads: each one's anchor (here, moved or removed), replies, and the agent it went to",
+      "name": "comments/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`comments/list`.",
+        "properties": {
+          "record": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "record"
+        ],
+        "title": "ListParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Anchor": {
+            "additionalProperties": false,
+            "description": "Where a thread sits: the paragraph under the headings HEADING, found by KEY (a digest of its text, whitespace\nfolded) and shown by QUOTE.  `state`: `here` (the paragraph is as it was), `moved` (it was rewritten: the thread\nfollows the paragraph that replaced it) or `removed` (gone: the quote is kept).",
+            "properties": {
+              "heading": {
+                "default": [],
+                "description": "The headings above the paragraph, outermost first.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "key": {
+                "default": "",
+                "description": "16 hex digits; on `comments/add`, empty: the paragraph is found by `quote`.",
+                "type": "string"
+              },
+              "quote": {
+                "default": "",
+                "description": "The paragraph's text, at most 200 characters.",
+                "type": "string"
+              },
+              "state": {
+                "default": "here",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "Comment": {
+            "additionalProperties": false,
+            "description": "One comment.",
+            "properties": {
+              "at": {
+                "format": "double",
+                "type": "number"
+              },
+              "author": {
+                "description": "`user` or the session that answered.",
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "author",
+              "at"
+            ],
+            "type": "object"
+          },
+          "Thread": {
+            "additionalProperties": false,
+            "description": "A thread: its first comment, where it sits, and the replies in order.",
+            "properties": {
+              "anchor": {
+                "$ref": "#/$defs/Anchor"
+              },
+              "replies": {
+                "items": {
+                  "$ref": "#/$defs/Comment"
+                },
+                "type": "array"
+              },
+              "resolved": {
+                "default": false,
+                "type": "boolean"
+              },
+              "root": {
+                "$ref": "#/$defs/Comment"
+              },
+              "sent_to": {
+                "description": "The session it was steered to; none: it waits (\"no agent is writing it\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "root",
+              "anchor",
+              "replies"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Every thread of a record, oldest first.",
+        "properties": {
+          "threads": {
+            "items": {
+              "$ref": "#/$defs/Thread"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "threads"
+        ],
+        "title": "Threads",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user's reply in a comment's thread, steered to the agent it was sent to",
+      "name": "comments/reply",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`comments/reply`.",
+        "properties": {
+          "comment": {
+            "description": "Any comment of the thread.",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "comment",
+          "text"
+        ],
+        "title": "ReplyParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One comment.",
+        "properties": {
+          "at": {
+            "format": "double",
+            "type": "number"
+          },
+          "author": {
+            "description": "`user` or the session that answered.",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "author",
+          "at"
+        ],
+        "title": "Comment",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a comment's thread marked resolved",
+      "name": "comments/resolve",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`comments/resolve`.",
+        "properties": {
+          "comment": {
+            "description": "Any comment of the thread.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "comment"
+        ],
+        "title": "ResolveParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "settings.el may have changed: its stamp is checked now",
       "name": "config/changed",
       "params": {
@@ -31579,6 +31920,38 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor shows a file in a minimap, or no longer: while it does, the hub sends the file's labels (its definitions, up to 8 MiB of text) on the model's raw path, again after edits pause",
+      "name": "minimap/watch",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`minimap/watch`: the editor shows FILE (absolute) in a minimap (ON), or no longer (not ON).  While a connection\nwatches it, the hub sends the file's minimap labels (its definitions as the Outline reads them, up to\n`MINIMAP_LABELS_MAX` bytes of text) on the model's raw path (`view-model` with `minimap`, docs/develop/hub.md,\n\"The minimap's layers\"), at once and again after the editor's edits to it pause; never per keystroke.",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "file",
+          "on"
+        ],
+        "title": "MinimapWatch",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [

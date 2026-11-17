@@ -76,6 +76,8 @@ pub enum FaceId {
     SelectedQuiet,
     /// `drgnx-selected-inactive`
     SelectedInactive,
+    /// `drgnx-row-selected`
+    RowSelected,
     /// `drgnx-selected-secondary`
     SelectedSecondary,
     /// `drgnx-focus`
@@ -148,6 +150,26 @@ pub enum FaceId {
     HistoryEffect,
     /// `drgnx-history-label`
     HistoryLabel,
+    /// `drgnx-marks-added`
+    MarksAdded,
+    /// `drgnx-marks-changed`
+    MarksChanged,
+    /// `drgnx-marks-deleted`
+    MarksDeleted,
+    /// `drgnx-marks-error`
+    MarksError,
+    /// `drgnx-marks-warning`
+    MarksWarning,
+    /// `drgnx-marks-info`
+    MarksInfo,
+    /// `drgnx-marks-hit`
+    MarksHit,
+    /// `drgnx-marks-bookmark`
+    MarksBookmark,
+    /// `drgnx-marks-symbol`
+    MarksSymbol,
+    /// `drgnx-marks-agent`
+    MarksAgent,
     /// `drgnx-modal-normal`
     ModalNormal,
     /// `drgnx-modal-insert`
@@ -252,6 +274,8 @@ pub enum FaceId {
     GitConflict,
     /// `drgnx-git-ignored`
     GitIgnored,
+    /// `drgnx-grid-drop`
+    GridDrop,
     /// `drgnx-outline-current`
     OutlineCurrent,
     /// `drgnx-view-match`
@@ -308,6 +332,12 @@ pub enum FaceId {
     WbIslandTitle,
     /// `drgnx-wb-island-control`
     WbIslandControl,
+    /// `drgnx-fold-summary`
+    FoldSummary,
+    /// `drgnx-fold-name`
+    FoldName,
+    /// `drgnx-minimap-label`
+    MinimapLabel,
     /// `drgnx-sticky`
     Sticky,
     /// `drgnx-blame`
@@ -986,11 +1016,13 @@ pub enum FaceId {
     ToplineHover,
     /// `drgnx-topline-strong`
     ToplineStrong,
+    /// `drgnx-kit-row`
+    KitRow,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 489] = [
+    pub const ALL: [FaceId; 505] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1025,6 +1057,7 @@ impl FaceId {
         FaceId::Selected,
         FaceId::SelectedQuiet,
         FaceId::SelectedInactive,
+        FaceId::RowSelected,
         FaceId::SelectedSecondary,
         FaceId::Focus,
         FaceId::StatusAttention,
@@ -1061,6 +1094,16 @@ impl FaceId {
         FaceId::HistoryHeading,
         FaceId::HistoryEffect,
         FaceId::HistoryLabel,
+        FaceId::MarksAdded,
+        FaceId::MarksChanged,
+        FaceId::MarksDeleted,
+        FaceId::MarksError,
+        FaceId::MarksWarning,
+        FaceId::MarksInfo,
+        FaceId::MarksHit,
+        FaceId::MarksBookmark,
+        FaceId::MarksSymbol,
+        FaceId::MarksAgent,
         FaceId::ModalNormal,
         FaceId::ModalInsert,
         FaceId::ModalVisual,
@@ -1113,6 +1156,7 @@ impl FaceId {
         FaceId::GitDeleted,
         FaceId::GitConflict,
         FaceId::GitIgnored,
+        FaceId::GridDrop,
         FaceId::OutlineCurrent,
         FaceId::ViewMatch,
         FaceId::ViewChain,
@@ -1141,6 +1185,9 @@ impl FaceId {
         FaceId::WbSection,
         FaceId::WbIslandTitle,
         FaceId::WbIslandControl,
+        FaceId::FoldSummary,
+        FaceId::FoldName,
+        FaceId::MinimapLabel,
         FaceId::Sticky,
         FaceId::Blame,
         FaceId::DebugBisectGood,
@@ -1480,6 +1527,7 @@ impl FaceId {
         FaceId::Topline,
         FaceId::ToplineHover,
         FaceId::ToplineStrong,
+        FaceId::KitRow,
     ];
 
     /// The face's Emacs name.
@@ -1519,6 +1567,7 @@ impl FaceId {
             FaceId::Selected => "drgnx-selected",
             FaceId::SelectedQuiet => "drgnx-selected-quiet",
             FaceId::SelectedInactive => "drgnx-selected-inactive",
+            FaceId::RowSelected => "drgnx-row-selected",
             FaceId::SelectedSecondary => "drgnx-selected-secondary",
             FaceId::Focus => "drgnx-focus",
             FaceId::StatusAttention => "drgnx-status-attention",
@@ -1555,6 +1604,16 @@ impl FaceId {
             FaceId::HistoryHeading => "drgnx-history-heading",
             FaceId::HistoryEffect => "drgnx-history-effect",
             FaceId::HistoryLabel => "drgnx-history-label",
+            FaceId::MarksAdded => "drgnx-marks-added",
+            FaceId::MarksChanged => "drgnx-marks-changed",
+            FaceId::MarksDeleted => "drgnx-marks-deleted",
+            FaceId::MarksError => "drgnx-marks-error",
+            FaceId::MarksWarning => "drgnx-marks-warning",
+            FaceId::MarksInfo => "drgnx-marks-info",
+            FaceId::MarksHit => "drgnx-marks-hit",
+            FaceId::MarksBookmark => "drgnx-marks-bookmark",
+            FaceId::MarksSymbol => "drgnx-marks-symbol",
+            FaceId::MarksAgent => "drgnx-marks-agent",
             FaceId::ModalNormal => "drgnx-modal-normal",
             FaceId::ModalInsert => "drgnx-modal-insert",
             FaceId::ModalVisual => "drgnx-modal-visual",
@@ -1607,6 +1666,7 @@ impl FaceId {
             FaceId::GitDeleted => "drgnx-git-deleted",
             FaceId::GitConflict => "drgnx-git-conflict",
             FaceId::GitIgnored => "drgnx-git-ignored",
+            FaceId::GridDrop => "drgnx-grid-drop",
             FaceId::OutlineCurrent => "drgnx-outline-current",
             FaceId::ViewMatch => "drgnx-view-match",
             FaceId::ViewChain => "drgnx-view-chain",
@@ -1635,6 +1695,9 @@ impl FaceId {
             FaceId::WbSection => "drgnx-wb-section",
             FaceId::WbIslandTitle => "drgnx-wb-island-title",
             FaceId::WbIslandControl => "drgnx-wb-island-control",
+            FaceId::FoldSummary => "drgnx-fold-summary",
+            FaceId::FoldName => "drgnx-fold-name",
+            FaceId::MinimapLabel => "drgnx-minimap-label",
             FaceId::Sticky => "drgnx-sticky",
             FaceId::Blame => "drgnx-blame",
             FaceId::DebugBisectGood => "drgnx-debug-bisect-good",
@@ -1974,6 +2037,7 @@ impl FaceId {
             FaceId::Topline => "drgnx-topline",
             FaceId::ToplineHover => "drgnx-topline-hover",
             FaceId::ToplineStrong => "drgnx-topline-strong",
+            FaceId::KitRow => "drgnx-kit-row",
         }
     }
 
@@ -2014,6 +2078,7 @@ impl FaceId {
             "drgnx-selected" => FaceId::Selected,
             "drgnx-selected-quiet" => FaceId::SelectedQuiet,
             "drgnx-selected-inactive" => FaceId::SelectedInactive,
+            "drgnx-row-selected" => FaceId::RowSelected,
             "drgnx-selected-secondary" => FaceId::SelectedSecondary,
             "drgnx-focus" => FaceId::Focus,
             "drgnx-status-attention" => FaceId::StatusAttention,
@@ -2050,6 +2115,16 @@ impl FaceId {
             "drgnx-history-heading" => FaceId::HistoryHeading,
             "drgnx-history-effect" => FaceId::HistoryEffect,
             "drgnx-history-label" => FaceId::HistoryLabel,
+            "drgnx-marks-added" => FaceId::MarksAdded,
+            "drgnx-marks-changed" => FaceId::MarksChanged,
+            "drgnx-marks-deleted" => FaceId::MarksDeleted,
+            "drgnx-marks-error" => FaceId::MarksError,
+            "drgnx-marks-warning" => FaceId::MarksWarning,
+            "drgnx-marks-info" => FaceId::MarksInfo,
+            "drgnx-marks-hit" => FaceId::MarksHit,
+            "drgnx-marks-bookmark" => FaceId::MarksBookmark,
+            "drgnx-marks-symbol" => FaceId::MarksSymbol,
+            "drgnx-marks-agent" => FaceId::MarksAgent,
             "drgnx-modal-normal" => FaceId::ModalNormal,
             "drgnx-modal-insert" => FaceId::ModalInsert,
             "drgnx-modal-visual" => FaceId::ModalVisual,
@@ -2102,6 +2177,7 @@ impl FaceId {
             "drgnx-git-deleted" => FaceId::GitDeleted,
             "drgnx-git-conflict" => FaceId::GitConflict,
             "drgnx-git-ignored" => FaceId::GitIgnored,
+            "drgnx-grid-drop" => FaceId::GridDrop,
             "drgnx-outline-current" => FaceId::OutlineCurrent,
             "drgnx-view-match" => FaceId::ViewMatch,
             "drgnx-view-chain" => FaceId::ViewChain,
@@ -2130,6 +2206,9 @@ impl FaceId {
             "drgnx-wb-section" => FaceId::WbSection,
             "drgnx-wb-island-title" => FaceId::WbIslandTitle,
             "drgnx-wb-island-control" => FaceId::WbIslandControl,
+            "drgnx-fold-summary" => FaceId::FoldSummary,
+            "drgnx-fold-name" => FaceId::FoldName,
+            "drgnx-minimap-label" => FaceId::MinimapLabel,
             "drgnx-sticky" => FaceId::Sticky,
             "drgnx-blame" => FaceId::Blame,
             "drgnx-debug-bisect-good" => FaceId::DebugBisectGood,
@@ -2469,6 +2548,7 @@ impl FaceId {
             "drgnx-topline" => FaceId::Topline,
             "drgnx-topline-hover" => FaceId::ToplineHover,
             "drgnx-topline-strong" => FaceId::ToplineStrong,
+            "drgnx-kit-row" => FaceId::KitRow,
             _ => return None,
         })
     }

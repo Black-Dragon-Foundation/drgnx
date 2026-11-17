@@ -96,23 +96,23 @@ const ROW_AXES: &[&[&str]] = &[&["list", "tree", "map"]];
 const ROW_DEFAULTS: &[usize] = &[0];
 const ROW_GEOM: [[Geom; 3]; 3] = [
     [
-        Geom { height: 22, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
-        Geom { height: 26, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
-        Geom { height: 30, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 22, pad: (6, 6), gap: 6, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 6, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 30, pad: (6, 6), gap: 6, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
     ],
     [
-        Geom { height: 22, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 12, tty_pad: 1, tty_indent: 2, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
-        Geom { height: 26, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 12, tty_pad: 1, tty_indent: 2, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
-        Geom { height: 30, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 14, tty_pad: 1, tty_indent: 2, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 22, pad: (6, 6), gap: 6, boxed: false, radius: 6, hit: 0, indent: 12, tty_pad: 1, tty_indent: 2, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 6, boxed: false, radius: 6, hit: 0, indent: 12, tty_pad: 1, tty_indent: 2, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 30, pad: (6, 6), gap: 6, boxed: false, radius: 6, hit: 0, indent: 14, tty_pad: 1, tty_indent: 2, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
     ],
     [
-        Geom { height: 22, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
-        Geom { height: 26, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
-        Geom { height: 30, pad: (6, 6), gap: 0, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 22, pad: (6, 6), gap: 6, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 6, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 30, pad: (6, 6), gap: 6, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
     ],
 ];
 const ROW_LABEL: [Option<&str>; 3] = [None, None, None];
-const ROW_FACE: [FaceId; 3] = [FaceId::Default, FaceId::Default, FaceId::Default];
+const ROW_FACE: [FaceId; 3] = [FaceId::KitRow, FaceId::KitRow, FaceId::KitRow];
 
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {

@@ -21,7 +21,7 @@ use runstav::methods::work::{
     PresenceMode, Workspace,
 };
 use runstav::wire::{Error, ErrorCode};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2071,6 +2071,17 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                         ))
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
+                // each record's comment threads that wait for a writer (steered to no one, not resolved)
+                let waiting: BTreeMap<String, u32> = {
+                    let mut q = c.prepare(
+                        "select r.id, count(*) from link l join entity cm on cm.n = l.src \
+                         join entity r on r.n = l.dst where l.kind = 'comments_on' and l.tx_to = ?1 \
+                         and cm.retired_tx is null and json_extract(cm.data, '$.sent_to') is null \
+                         and coalesce(json_extract(cm.data, '$.resolved'), 0) = 0 group by r.id",
+                    )?;
+                    q.query_map([urdr::graph::schema::SENTINEL], |r| Ok((r.get(0)?, r.get(1)?)))?
+                        .collect::<Result<_, _>>()?
+                };
                 let hidden = legacy_duplicates(all.iter().map(|r| (r.0.as_str(), r.5.as_deref())));
                 plan_of.retain(|_, plan| !hidden.contains(plan));
                 // a task with no plan sits under a "No plan" plan item, never skipped
@@ -2098,6 +2109,12 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                         Event::Graph(GraphFact::Target {
                             item: id.clone(),
                             at: target.map(vegvisir::Instant),
+                        })
+                    });
+                    let waiting_ev = matches!(kind.as_str(), "spec" | "plan").then(|| {
+                        Event::Graph(GraphFact::Comments {
+                            item: id.clone(),
+                            waiting: waiting.get(&id).copied().unwrap_or(0),
                         })
                     });
                     out.push(match kind.as_str() {
@@ -2129,6 +2146,7 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                         }
                     });
                     out.extend(target_ev);
+                    out.extend(waiting_ev);
                 }
             }
             for (a, kind, b) in links {

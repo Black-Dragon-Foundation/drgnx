@@ -140,8 +140,13 @@ you, and approved specs and plans not yet started; Completed holds finished item
 (defvar drgnx-work-map-scale nil
   "The display scale the motion's card rectangles are reckoned at; nil: the frame's.  A test binds it.")
 
-(defvar drgnx-work-lens-map
+(defvar drgnx-work-item-map
   (let ((m (make-sparse-keymap))) (set-keymap-parent m special-mode-map) m)
+  "Keys of a Work item wherever it shows: every Work view (through `drgnx-work-lens-map') and the Detail.  The key
+profiles bind them (`drgnx-command-define' with this map).")
+
+(defvar drgnx-work-lens-map
+  (let ((m (make-sparse-keymap))) (set-keymap-parent m drgnx-work-item-map) m)
   "Keys every Work view shares: the map, the Board, the Timeline and the trail (the lens, moving, opening).  The
 key profiles bind them (`drgnx-command-define' with this map); each view's own keymap has it as its parent.")
 (defvar-local drgnx-work-lens--map nil

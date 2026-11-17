@@ -664,7 +664,8 @@ disabled or not yet bound), the stopped line across the ruler."
         (push (list (overlay-start o) 'middle
                     (if (memq (overlay-get o 'drgnx-debug-kind) '(off unverified))
                         'drgnx-debug-ruler-unverified 'drgnx-debug-ruler-breakpoint)
-                    (if (memq (overlay-get o 'drgnx-debug-kind) '(off unverified)) 1 2))
+                    (if (memq (overlay-get o 'drgnx-debug-kind) '(off unverified)) 1 2)
+                    'dot)
               marks)))
     (dolist (stop drgnx-debug-gutter--stops)
       (dolist (o (cdr stop))

@@ -23,6 +23,7 @@
 //! | `records/{import,status}` | [`crate::records`] |
 //! | `records/{proposals,decide}` | [`crate::records`] |
 //! | `machines/{report,list}` | [`crate::work::machines`] |
+//! | `comments/{add,reply,list,resolve}` | [`crate::work::comments`] |
 //! | `runners/*` | [`crate::runners::methods`] |
 //! | `plugins/*` | [`crate::plugins`] |
 //! | `work/conclusions` | [`crate::work::conclusions`] |
@@ -194,6 +195,10 @@ pub async fn serve(
         Params::RecordsResolve(p) => answer(records::resolve(f, c, p).await),
         Params::MachinesReport(p) => answer(work::machines::report(f, c, p).await),
         Params::MachinesMove(p) => answer(work::machines::move_to(f, c, p).await),
+        Params::CommentsAdd(p) => answer(work::comments::add(f, c, p).await),
+        Params::CommentsReply(p) => answer(work::comments::reply(f, c, p).await),
+        Params::CommentsList(p) => answer(work::comments::list(f, c, p).await),
+        Params::CommentsResolve(p) => answer(work::comments::resolve(f, c, p).await),
         Params::MachinesList(p) => answer(work::machines::list(f, c, p).await),
         Params::RunnersList(p) => answer(runners::methods::list(f, c, p).await),
         Params::RunnersProbeHost(p) => answer(runners::methods::probe_host(f, c, p).await),

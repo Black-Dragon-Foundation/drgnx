@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod agents_side;
 pub mod changes;
+pub mod comments;
 pub mod config;
 pub mod coord;
 pub mod debug;
@@ -277,6 +278,10 @@ params! {
     RecordsResolve(records::ResolveParams),
     MachinesReport(work::MachineReport),
     MachinesMove(work::MoveParams),
+    CommentsAdd(comments::AddParams),
+    CommentsReply(comments::ReplyParams),
+    CommentsList(comments::ListParams),
+    CommentsResolve(comments::ResolveParams),
     MachinesList(Empty),
     WorkConclusions(work::ConclusionsParams),
     ReviewEffects(work::EffectsParams),
@@ -305,6 +310,7 @@ params! {
     BuffersSet(view::BuffersSet),
     OutlineSet(view::OutlineSet),
     OutlineScopes(view::OutlineScopesParams),
+    MinimapWatch(view::MinimapWatch),
     TermOpen(term::TermOpen),
     TermConfig(term::TermConfig),
     TermKey(term::TermKey),
@@ -512,6 +518,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(forecast::methods());
     v.extend(say::methods());
     v.extend(records::methods());
+    v.extend(comments::methods());
     v.extend(past::methods());
     v.extend(work::methods());
     v.extend(view::methods());

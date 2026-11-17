@@ -1,0 +1,185 @@
+{
+ "about": "A ratatoskr-mock (claude) session's transcript as the hub keeps its entries, with the subagent parents and step seconds kept beside them (flow Task 11's block tests).",
+ "entries": [
+  {
+   "type": "user",
+   "text": "Add a retry to the fetcher"
+  },
+  {
+   "type": "agent",
+   "text": "I'll look at the fetcher first."
+  },
+  {
+   "type": "tool",
+   "id": "t1",
+   "kind": "read",
+   "title": "Read src/fetch.rs",
+   "status": "completed",
+   "step": 1,
+   "locations": [
+    {
+     "path": "src/fetch.rs"
+    }
+   ]
+  },
+  {
+   "type": "tool",
+   "id": "t2",
+   "kind": "search",
+   "title": "grep retry",
+   "status": "completed",
+   "step": 2
+  },
+  {
+   "type": "thought",
+   "text": "The client has no backoff."
+  },
+  {
+   "type": "tool",
+   "id": "t3",
+   "kind": "read",
+   "title": "Read src/client.rs",
+   "status": "completed",
+   "step": 3
+  },
+  {
+   "type": "tool",
+   "id": "t4",
+   "kind": "edit",
+   "title": "Edit src/fetch.rs",
+   "status": "completed",
+   "step": 4,
+   "content": [
+    {
+     "type": "diff",
+     "path": "src/fetch.rs",
+     "oldText": "fn get() {\n    send()\n}\n",
+     "newText": "fn get() {\n    retry(3, send)\n}\n\nfn retry() {}\n"
+    }
+   ]
+  },
+  {
+   "type": "tool",
+   "id": "t5",
+   "kind": "read",
+   "title": "Read src/fetch.rs",
+   "status": "completed",
+   "step": 5
+  },
+  {
+   "type": "tool",
+   "id": "t6",
+   "kind": "other",
+   "title": "mcp__drgnx__note_add",
+   "status": "completed",
+   "step": 6,
+   "rawInput": {
+    "text": "send() has no backoff",
+    "sources": [
+     {
+      "path": "src/fetch.rs",
+      "lines": [
+       1,
+       3
+      ]
+     },
+     {
+      "url": "https://example.org/backoff"
+     }
+    ]
+   }
+  },
+  {
+   "type": "tool",
+   "id": "t7",
+   "kind": "think",
+   "title": "Task: check the tests",
+   "status": "in_progress",
+   "step": 7
+  },
+  {
+   "type": "tool",
+   "id": "s1",
+   "kind": "read",
+   "title": "Read tests/fetch.rs",
+   "status": "completed",
+   "step": 8
+  },
+  {
+   "type": "tool",
+   "id": "s2",
+   "kind": "search",
+   "title": "grep get(",
+   "status": "completed",
+   "step": 9
+  },
+  {
+   "type": "tool",
+   "id": "s3",
+   "kind": "execute",
+   "title": "cargo test",
+   "status": "completed",
+   "step": 10
+  },
+  {
+   "type": "tool",
+   "id": "t8",
+   "kind": "execute",
+   "title": "cargo build",
+   "status": "completed",
+   "step": 11
+  },
+  {
+   "type": "plan",
+   "entries": [
+    {
+     "content": "Read the fetcher",
+     "status": "completed",
+     "priority": "medium"
+    },
+    {
+     "content": "Add the retry",
+     "status": "in_progress",
+     "priority": "high"
+    },
+    {
+     "content": "Test it",
+     "status": "pending",
+     "priority": "medium"
+    }
+   ]
+  },
+  {
+   "type": "stop",
+   "stopReason": "end_turn"
+  },
+  {
+   "type": "plan",
+   "entries": [
+    {
+     "content": "Read the fetcher",
+     "status": "completed"
+    },
+    {
+     "content": "Add the retry",
+     "status": "completed"
+    },
+    {
+     "content": "Test it",
+     "status": "in_progress"
+    }
+   ]
+  }
+ ],
+ "parents": {
+  "s1": "t7",
+  "s2": "t7",
+  "s3": "t7"
+ },
+ "secs": {
+  "1": 1.2,
+  "2": 0.4,
+  "3": 2.1,
+  "5": 0.3
+ }
+}

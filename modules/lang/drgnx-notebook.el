@@ -75,7 +75,7 @@ theme's own opacity; the theme sets it from the gap token." :group 'drgnx-notebo
   "A view's cut row (`N lines above' and `below'): a quiet tint across the row." :group 'drgnx-notebook)
 (defface drgnx-notebook-error-row '((t :inherit drgnx-chip-error :extend t))
   "An error's rows in a view: the error tint across the row, never a solid block." :group 'drgnx-notebook)
-(defface drgnx-notebook-current-row '((t :inherit drgnx-selected-quiet :extend t))
+(defface drgnx-notebook-current-row '((t :inherit drgnx-row-selected :extend t))
   "The outline's row of the cell point is in: the selected row's look." :group 'drgnx-notebook)
 (defface drgnx-notebook-inverse '((t :inverse-video t))
   "Output text the terminal showed in reverse video (the hub's views name it, never a colour)." :group 'drgnx-notebook)

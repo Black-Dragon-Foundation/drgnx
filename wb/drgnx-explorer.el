@@ -30,6 +30,7 @@
 (require 'drgnx-git)
 (require 'drgnx-timer)
 (require 'drgnx-file-stream)
+(defvar drgnx-view-env-right-reserve)
 (require 'drgnx-quick-open)                ; Find's rows from the hub (`search/files')
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
@@ -60,7 +61,7 @@ Only chains in listings already read are joined: a closed folder is never read f
 (defface drgnx-explorer-directory '((t :inherit default)) "Folder names." :group 'drgnx)
 (defface drgnx-explorer-file '((t :inherit default)) "File names." :group 'drgnx)
 (defface drgnx-explorer-guide '((t :inherit shadow)) "Indent guides and chevrons." :group 'drgnx)
-(defface drgnx-explorer-selected '((t :inherit region)) "Rows selected together (multi-select)." :group 'drgnx)
+(defface drgnx-explorer-selected '((t :inherit drgnx-row-selected)) "Rows selected together (multi-select)." :group 'drgnx)
 
 (defconst drgnx-explorer-buffer-name " *drgnx explorer*" "Internal (a leading space): not in C-x b or ibuffer.")
 
@@ -1124,6 +1125,8 @@ Explorer buffer's: the twin's kill leaves them."
     (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)
     (drgnx-explorer--wait-for-hub)
     (require 'drgnx-view-env)
+    ;; each row's tail is drawn from the window's right edge: the hub fits the rows short of it
+    (setq-local drgnx-view-env-right-reserve #'drgnx-wb-tail-reserve)
     (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--rows-subscribe)
     (drgnx-explorer--rows-subscribe)))
 

@@ -359,6 +359,37 @@ fn runner_job_runs_on_edge_points_at_the_runner() {
     );
 }
 
+/// A spec whose comments no agent is writing it for says so in its Detail; once they are sent (none wait), it does not.
+#[test]
+fn a_spec_with_waiting_comments_says_no_agent_writes_it() {
+    let mut core = Core::new();
+    core.step(Event::Graph(vegvisir::GraphFact::Spec {
+        id: "s".into(),
+        title: "Comments".into(),
+        updated: 0,
+    }));
+    let waiting = |core: &mut Core, n: u32| {
+        core.step(Event::Graph(vegvisir::GraphFact::Comments {
+            item: "spec:s".into(),
+            waiting: n,
+        }));
+        detail::lines(core.model(), Some(&ItemId("spec:s".into())), 0)
+            .into_iter()
+            .filter(|l| l.0 == "head")
+            .map(|l| l.1)
+            .collect::<Vec<_>>()
+    };
+    let lines = waiting(&mut core, 2);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "2 comments waiting: no agent is writing it"),
+        "{lines:?}"
+    );
+    let lines = waiting(&mut core, 0);
+    assert!(!lines.iter().any(|l| l.contains("waiting")), "{lines:?}");
+}
+
 // ---- rows views: the map's rows as patches ------------------------------------------------------------------------
 
 use drgnx_rows::faces::FaceId;

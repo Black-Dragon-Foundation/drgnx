@@ -741,6 +741,9 @@ impl Front {
             Params::OutlineSet(p) => crate::view::outline::set(self, &caller, p)
                 .await
                 .map(|b| json!(b)),
+            Params::MinimapWatch(p) => crate::view::minimap::watch(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
             Params::OutlineScopes(p) => crate::view::outline::scopes(self, p)
                 .await
                 .map(|r| json!(r)),
@@ -930,6 +933,10 @@ impl Front {
             | Params::RecordsResolve(_)
             | Params::MachinesReport(_)
             | Params::MachinesMove(_)
+            | Params::CommentsAdd(_)
+            | Params::CommentsReply(_)
+            | Params::CommentsList(_)
+            | Params::CommentsResolve(_)
             | Params::MachinesList(_)
             | Params::RunnersList(_)
             | Params::RunnersProbeHost(_)

@@ -1358,6 +1358,10 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `changes/close` | user | `{view: string}` | `boolean` | no |
 | `changes/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
 | `changes/subscribe` | user | `{view: string}` | `boolean` | no |
+| `comments/add` | user | `{anchor: {heading?: [string], key?: string, quote?: string, state?: string}, record: string, text: string}` | `{anchor: Anchor, comment: string, sent_to?: string}` | yes |
+| `comments/list` | user | `{record: string}` | `{threads: [Thread]}` | no |
+| `comments/reply` | user | `{comment: string, text: string}` | `{at: number, author: string, id: string, text: string}` | yes |
+| `comments/resolve` | user | `{comment: string}` | `boolean` | yes |
 | `config/changed` | user | `{}` | `boolean` | no |
 | `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no |
 | `coord/agent` | user | `{register?: {base?: string, branch?: string, clear?: ["kind" \| "name" \| "cwd" \| "worktree" \| "branch" \| "base" \| "plan" \| "task" \| "pid"], cwd?: string, id: AgentName, kind?: string, name?: string, pid?: natnum, plan?: string, task?: TaskRef, worktree?: string}, seen?: AgentName}` | `{id?: string, seen?: number}` | yes |
@@ -1516,6 +1520,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
+| `minimap/watch` | user | `{file: string, on: boolean}` | `boolean` | no |
 | `notebook/clear` | user | `{cell?: string, id: string}` | `boolean` | no |
 | `notebook/close` | user | `{id: string}` | `boolean` | no |
 | `notebook/execute` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
@@ -2298,6 +2303,33 @@ session the task's `works_on` link comes from.
   (`work::edits::edited`) or is in one now (the presence model) `overlaps` ("Task 5 edits session.rs: it would need to
   rebase."). `branch`, the change's own branch, leaves out the task the runner made it for (`job/JOB-N`).
 
+### Paragraph comments
+
+A comment on one paragraph of a spec, plan, decision or task (`work/comments.rs`; the user's guide is
+[Writing documents with agents](../guide/documents.md)). Methods: `comments/add {record, anchor, text}` → `{comment,
+sent_to?, anchor}`, `comments/reply {comment, text}` → the reply, `comments/list {record}` → `{threads}`, and
+`comments/resolve {comment}`. All are user-class; the three that write are the hub's writes (`("hub", System)`, through
+`norn::write::work::{new_comment, new_reply, move_anchor, comment_patch}`), which refuse any other author.
+
+- **Records.** A thread is a `comment` entity (`comment:N`, numbered in order; data `{text, author, at, sent_to?,
+  resolved?}`, `author` `user` or the answering session) with a `comments_on` link to the record. The link's data is the
+  thread's anchor `{heading, key, quote, state}` (records.md, "Comment anchors"). Replies are `comment` entities with a
+  `replies_to` link to the thread's first comment; a reply to a reply joins the same thread.
+- **The writer.** On `comments/add`, the hub picks the record's writer: of the live sessions, the one whose write in
+  the record's file is the newest. That is the newest history record of the file's text, by `blame` over the file in
+  the session's tree, that the session made; the file is matched in its own worktree of the same repository too.
+  Failing that, a live session with a `works_on` link to a task of a run whose plan file is the record's file, newest
+  link first.
+- **Delivery.** The comment reaches the writer as `Comment on "<heading>" ¶ "<quote…>": <text> (reply with
+  comment_reply, id comment:N)`: a prompt keyed `comment:N` when the session is free, so an idle writer answers now;
+  while a turn runs, a steer (`steer_in`) ahead of the queued prompts, read at the next turn. Neither cancels a turn. The thread's `sent_to` notes the session. With no writer, `sent_to` stays empty and the thread
+  waits. The delivery pass tries the waiting threads again every 5 s at most, and the Work map's Detail of a waiting
+  spec or plan says "N comments waiting: no agent is writing it" (`GraphFact::Comments`). A user's reply is steered to
+  the thread's session, or to the record's writer now when that session is gone.
+- **`comment_reply {comment, text}`** is a drgnx MCP tool every session has (`norn::tools::comment`, through the hub's
+  `comment_reply`). Only the session the thread was steered to may answer; anyone else is refused ("comment:N was not
+  sent to you"), and nothing is written.
+
 ### The Work map
 
 The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources, lays each map view
@@ -2480,7 +2512,10 @@ All of it is in memory only.
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
   width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, glyphs: [[name, glyph]],
-  density?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again. `glyphs` are
+  density?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again. `width_px` is
+  the room a row has: the window's body, less what the view's buffer draws at the right edge after each row (the
+  Explorer's and the Buffers panel's tail, the git mark and the ⋯, placed from that edge: `drgnx-view-env-right-reserve`,
+  `drgnx-wb-tail-reserve`), so a row fitted to it never pushes its tail past the edge. `glyphs` are
   the kit's glyphs as the class's frame draws them (ASCII on a terminal that is not UTF-8); `density` is the user's
   (`compact`, `comfortable` when absent, `roomy`; `drgnx-look-density`), which the kit's sizes follow (a tree level's
   indent), and a change of it is a new epoch. `headless: true` marks a view that Lisp only
@@ -3151,6 +3186,18 @@ The Outline section's rows: the definitions of the file in the editor, built by 
   edit history tracks asks through it (`drgnx-history-ask`: its changes go first), another by its file. The last
   `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
 
+### The minimap's labels (`minimap/watch`)
+
+`minimap/watch {file, on}` says the editor shows FILE (absolute, its true name) in a minimap, or no longer. While a
+connection watches it, the hub sends it the file's definitions as the minimap's `labels` layer (`view/minimap.rs`):
+a `view-model` line whose data holds `minimap` (`{file, layer: "labels", version, items: [[line, depth, kind,
+name]]}`), on the model's raw path, so the editor hands it to Sjá unparsed. The text is the Outline's (the edit
+history's mirror where it tracks the buffer, else the disk), outlined by Hrafn, up to `LABELS_MAX` (8 MiB, past the
+Outline's 1 MiB; a larger file gets an empty layer). It is sent before the answer, and again `QUIET` (500 ms of the
+hub's clock) after the edits to it pause (`outline::touched` calls `minimap::touched`); a later ask or `on: false`
+drops a pending send. Versions come from one counter for the hub, so a later layer is always newer. A connection's
+watches end with it. MARK sections are not the hub's: Nidhogg's line model finds them.
+
 ### The agent panel's rows
 
 **Two views.** A panel is two hub views of one session (`view/panel.rs`): `agent-panel-top/SID` (`view_of_top`), the
@@ -3287,6 +3334,38 @@ the rows themselves are `agents/session/rows.rs`, pure).
   or folded by hand (`[[entry, open], …]`), and `older` to show 200 entries more. It is per connection and view, and
   is dropped when the view closes or the connection goes.
 - `huddle_rows` builds a huddle thread's rows (`h`, `r:N`, `o`) from its record; the thread still draws in Lisp.
+
+### Conversation blocks
+
+`agents/session/blocks.rs` folds a session's transcript into the blocks the conversation view shows, and reads the
+plan strip. It is pure (no lock, no I/O, no clock); the views that draw it come later in the frontend flow.
+
+- **Blocks.** `You` (a user message), `Markdown` (an agent message, by its entry: its Markdown blocks are the panel's
+  `b:I:N` rows), `Explored {reads, searches, secs, steps}`, `Finding {conclusion, text, sources}`, `Edit {path, plus,
+  minus, hunks}`, `Step` (any other tool call: a shell command, a fetch), `Subagent {call_id, title, blocks}`, `Notice`
+  (a notice, an error or a compaction), and, after them, `Ask`, `Live` and `Queued`.
+- **Explored.** Consecutive `read` and `search` tool calls fold into one block. Any other block, or a turn's end,
+  breaks the run; thoughts, usage and plan entries break nothing. `secs` is the run's steps' seconds (from their
+  timeline steps), summed, then rounded.
+- **Findings.** A `record_decision` or `note_add` call of the drgnx MCP server (any provider's spelling,
+  `work::conclusions::mcp_tool_of`) is a `Finding`: `decision` with "subject: reason", or `finding` with its text, and
+  the sources its call named.
+- **Edits.** A tool call of kind `edit`, or one carrying `diff` content, is an `Edit`: its path, the lines added and
+  removed over its diffs, and their hunks in the new text's lines.
+- **Subagents.** A subagent's tool calls (their `_meta.claudeCode.parentToolUseId`, kept beside the entries and passed
+  in as `Meta::parents`) nest in a `Subagent` block under their `Task` call, whose title is the block's. The steps
+  fold inside it the same way. A call with no parent id stays at the parent's level.
+- **Incremental.** `Folder::append` folds only new entries: onto the last block, or as new blocks. `Folder::update`
+  folds again from the block that holds a changed entry, because a tool call's status and diff arrive after the call.
+  Both answer a `Patch {from, len}`: the blocks before `from` are unchanged, so appending one entry to a 10,000-entry
+  transcript patches one block.
+- **Overlay.** `overlay(entries, asks, running, queued)` gives what follows the transcript, in order:
+  - each waiting permission or question as an `Ask`, its options keyed `y` (allow once), `a` (always), `n` (deny);
+  - while the turn runs, `Live`: the last entry when it is a tool call still running, or a thought;
+  - each queued message as `Queued`.
+- **The plan strip.** `plan_strip(entries)` is the latest plan entry's items as `(text, Done | Doing | Todo)`
+  (`completed`, `in_progress`, anything else). The panel keeps no row for a plan entry: its plan card
+  (`view/panel_cards.rs`, "To do · 1 of 3 done") already shows it.
 
 ### The symbol at a line (`search/symbol-at`)
 
@@ -3826,8 +3905,10 @@ the map's `JobFact.why`; the Detail of a job's agent says "Runs on r1 · why: �
 
 `machines/move {target, machine}` (user class only; `work/machines.rs`, `move_to`) answers `{moved, card?, said}`:
 
-- `session:ID`: the session's next jobs that name no machine are pinned to `machine` (`Queue::prefer`, kept in memory;
-  a job that machine can't take is placed as before). A running turn is not moved.
+- `session:ID`: the session's next jobs that name no machine are pinned to `machine` (`Queue::prefer`; a job that
+  machine can't take is placed as before). The choice is kept in `runtime.db` on the session's `asession` row
+  (column `machine`, migration 11; the row is upserted, so recording the session again keeps it) and comes back
+  after a hub restart with the queue's other state (`queue::kept`). A running turn is not moved.
 - `job:ID` of a waiting job: `Queue::move_job` pins it there (`by_user`) and the queue ticks; `moved: true`.
 - `job:ID` of a running job: nothing stops. The hub opens a `machine-move` card ("Restart make check on laptop? It
   stops the run on desk", choices `restart` and `keep`) and answers its id. Only the card's Restart moves it
