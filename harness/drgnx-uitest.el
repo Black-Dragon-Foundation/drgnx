@@ -958,6 +958,31 @@ runs from the session's server, so the keys are read here."
       (and (getenv "SWAYSOCK") (executable-find "wtype") t)
       (and (drgnx-uitest--kwin-fake-input) t)))
 
+(defun drgnx-uitest--wait-focus (want)
+  "Read events until the selected frame's keyboard focus is WANT (non-nil: held, nil: gone), at most 10 s; whether it is."
+  (let ((limit (+ (float-time) 10)))
+    (while (and (not (eq (and (frame-focus-state) t) want)) (< (float-time) limit)) (read-event nil nil 0.05))
+    (eq (and (frame-focus-state) t) want)))
+
+(defmacro drgnx-uitest--with-sway-keyboard (&rest body)
+  "Run BODY (typing with wtype) with a keyboard already on sway's seat and the frame's focus observed.
+Nidhogg's shell binds `wl_keyboard' only while the seat advertises the keyboard capability (nidhogg shell reader.rs),
+and sway advertises it only while a keyboard exists.  A wtype run that is the only keyboard adds the capability when it
+starts and takes it away when it ends, so its first keys race the shell's `get_keyboard' and the `enter' event: keys
+that come first are lost (a press before the window had the keyboard gives no action, and a lone Alt gave nothing).
+So a second wtype sleeps as the seat's keyboard first, BODY starts once the frame has the focus (an event, not a
+guess), and the sleeper ends after, the focus gone again.  Signals when sway never gives the focus."
+  (declare (indent 0))
+  `(let ((holder (make-process :name "drgnx-uitest-wtype-holder" :command '("wtype" "-s" "600000") :noquery t
+                               :connection-type 'pipe)))
+     (unwind-protect
+         (progn
+           (unless (drgnx-uitest--wait-focus t)
+             (error "drgnx-uitest: sway gave the session's frame no keyboard focus in 10 s"))
+           ,@body)
+       (delete-process holder)
+       (drgnx-uitest--wait-focus nil))))
+
 (defun drgnx-uitest-keyboard-type (keys)
   "Type KEYS, ((NAME . DOWN) …) with NAME in `drgnx-uitest--keys' (Alt_L, Shift_L, Control_L, Super_L or a lower-case
 letter), DOWN non-nil for a press, on this session's real keyboard, in order; return the events Emacs read after
@@ -994,8 +1019,9 @@ Signals where no keyboard can be had."
                                               ((cdr r) (list "-P" name "-M" mod))
                                               (t (list "-m" mod "-p" name)))))
                           rows)))
-        (unless (zerop (apply #'call-process "wtype" nil nil nil args)) (error "drgnx-uitest: wtype %S failed" args))
-        (drgnx-uitest--events-read)))
+        (drgnx-uitest--with-sway-keyboard
+          (unless (zerop (apply #'call-process "wtype" nil nil nil args)) (error "drgnx-uitest: wtype %S failed" args))
+          (drgnx-uitest--events-read))))
      ((drgnx-uitest--kwin-fake-input)
       (dolist (r rows)
         (unless (drgnx-uitest--kwin-send 10 (drgnx-uitest--wl-u32 (nth 2 (car r))) (drgnx-uitest--wl-u32 (if (cdr r) 1 0)))

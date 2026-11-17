@@ -168,11 +168,11 @@ run `drgnx macos-app` again. To remove it, delete `~/Applications/drgnx.app`. Co
 
 ## Keep running or quit
 
-When you close drgnx's last window — its close button, or Close Window (`C-q` in the VS Code profile, ⌘⇧W on a Mac;
+When you close drgnx's last window — its close button, or Close Window (`C-S-w` in the VS Code profile, ⌘⇧W on a Mac;
 the palette) — drgnx does one of two things, your choice:
 
 - **Keep running in the background** (the default, like VS Code on a Mac): drgnx stays running without a window, so
-  the next `drgnx PATH` or `drgnx open` is instant and brings your windows back. File → **Quit drgnx** (⌘Q on a Mac;
+  the next `drgnx PATH` or `drgnx open` is instant and brings your windows back. File → **Quit drgnx** (`C-q` in the VS Code profile, ⌘Q on a Mac;
   in the palette too) stops it; it then stays stopped until you open drgnx again. It never starts at login: the first open
   starts it, and after a reboot or logout the next open starts it fresh with your windows restored. (The one
   exception: on Linux, if you enabled the systemd user service `drgnx`, it starts at login, as enabled services do.)
