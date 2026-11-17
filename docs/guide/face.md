@@ -56,7 +56,7 @@ leaves them out.
 - **How they look:** the menu cards (the ☰ list and the context menus) use the UI sans at the UI size on the overlay
   surface, at least 220 pixels wide, with rows the density's tree row high (26 at comfortable) and 12 pixels of room at
   each end, separators a thin rule in the border colour, rounded at 8 pixels with the popups' shadow (none in high contrast); the selected row is the state table's
-  selection, and the key hints are in the code font, subtle, right-aligned to one column. Nidhogg's menu code
+  selection, a fill rounded at 6 pixels and 4 pixels in from the card's sides, and the key hints are in the code font, subtle, right-aligned to one column. Nidhogg's menu code
   (`lisp/term/nhwl-menu.el`) takes these as its options (group `nhwl-menu`), which the kit fills
   (`drgnx-ui-kit-menu-values`, `modules/ui/drgnx-menu-look.el`) and fills again when the density or the theme changes;
   Nidhogg scales them with the display when a menu opens. The keys follow the usual menu pattern: Down and Up wrap,
