@@ -43,7 +43,7 @@ fn shapes(rows: &[Row]) -> Vec<String> {
         .map(|r| {
             r.runs
                 .iter()
-                .find(|(_, _, f)| f.starts_with("drgnx-card-"))
+                .find(|(_, _, f)| f.starts_with("drgnx-kit-card-"))
                 .map(|(_, _, f)| f.clone())
                 .unwrap_or_default()
         })
@@ -77,7 +77,10 @@ fn a_pin_is_a_single_card_that_names_its_number() {
     );
     assert_eq!(
         shapes(&r),
-        [FaceId::CardSingle.name(), FaceId::CardSingle.name()]
+        [
+            FaceId::KitCardPlainSingle.name(),
+            FaceId::KitCardPlainSingle.name()
+        ]
     );
     assert!(
         r[1].props
@@ -110,10 +113,10 @@ fn the_to_do_list_counts_what_is_done() {
     assert_eq!(
         shapes(&r),
         [
-            FaceId::CardTop.name(),
-            FaceId::CardMid.name(),
-            FaceId::CardMid.name(),
-            FaceId::CardBottom.name()
+            FaceId::KitCardPlainTop.name(),
+            FaceId::KitCardPlainMid.name(),
+            FaceId::KitCardPlainMid.name(),
+            FaceId::KitCardPlainBottom.name()
         ]
     );
     assert_eq!(r[0].key, "p:todo:0");

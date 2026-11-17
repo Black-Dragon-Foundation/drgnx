@@ -2,7 +2,7 @@
 
 The window is **islands on a gap**: the Explorer, each editor group, the agent panel, the terminal and the Work space's
 views are cards, set on a slightly darker surface. This is the look's first impression, and the first thing that goes
-wrong when a new view draws its own background.
+wrong when a new view draws its own background.  (The kit's `card` component, a bordered group of rows, is [Card (kit)](card.md).)
 
 ![Cards on the gap, dark](../img/cards-dark.png)
 

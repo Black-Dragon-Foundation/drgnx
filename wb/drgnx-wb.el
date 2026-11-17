@@ -85,19 +85,9 @@ not the header line's.  FILLED: STRING already reaches the edge."
 section without one, such as a pane kind defined with no `:title') in `drgnx-wb-section', on the island's surface.  A
 click on it folds or unfolds the section (`drgnx-wb-section-click').  Hiding the sidebar is on the island header's ⋯
 \(`drgnx-wb-island-menu')."
-  (let ((room (lambda (px) (if (display-graphic-p) (propertize " " 'display `(space :width (,(drgnx-px px))))  " "))))
-    (propertize
-     (drgnx-wb-bar (concat (funcall room 6)
-                           (let ((chevron (drgnx-look-icon (if collapsed 'chevron-right 'chevron-down) 'drgnx-wb-section 14)))
-                             (if (string-empty-p chevron) (if collapsed "> " "") (concat chevron (funcall room 4))))
-                           (drgnx-wb--heading (string-trim-left (or title "")))))
-     'local-map drgnx-wb--section-map 'pointer 'hand)))
-
-(defun drgnx-wb--heading (title)
-  "TITLE in the section face, keeping the faces and properties it has."
-  (let ((s (copy-sequence title)))
-    (add-face-text-property 0 (length s) 'drgnx-wb-section t s)
-    s))
+  (propertize
+   (drgnx-wb-bar (drgnx-ui-kit-section-header (string-trim-left (or title "")) t collapsed nil 'header-line))
+   'local-map drgnx-wb--section-map 'pointer 'hand))
 
 ;;;; The island header: the sidebar's name and its buttons (window-dark.html `.ph')
 

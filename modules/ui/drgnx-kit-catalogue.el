@@ -20,7 +20,10 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--hub '(row button key-hint)
+(defconst drgnx-kit-catalogue--stateless '(card)
+  "The components with no states (a card's ring is its kind's): their cells are the rest state alone.")
+
+(defconst drgnx-kit-catalogue--hub '(row button key-hint section-header card)
   "The components the hub expands: their cells are drawn as hub rows.")
 
 (defun drgnx-kit-catalogue--props (id variants state)
@@ -34,6 +37,10 @@
                   :state (symbol-name state))))
     ('button (list :c "button" :label "Button" :style (symbol-name (alist-get 'style variants))
                    :size (symbol-name (alist-get 'size variants)) :state (symbol-name state)))
+    ('section-header (list :c "section-header" :title "Section" :count 3 :state (symbol-name state)
+                           :collapsible (if (eq (alist-get 'collapsible variants) 'yes) t :false)))
+    ('card (list :c "card" :kind (symbol-name (alist-get 'kind variants)) :shape (symbol-name (alist-get 'shape variants))
+                 :text "Card" :state (symbol-name state)))
     ('key-hint (list :c "key-hint" :keys "C-k" :variant (symbol-name (alist-get 'variant variants))
                      :state (symbol-name state)))
     (_ (list :c (symbol-name id) :text (format "%s · %s" id state) :state (symbol-name state)))))
@@ -90,7 +97,7 @@ state); the cell's text, its line's height in device px (the expansion's :height
             (insert (propertize (mapconcat (lambda (v) (format "%s %s" (car v) (cdr v))) variants ", ")
                                 'face 'drgnx-text-muted)
                     "\n"))
-          (dolist (state drgnx-ui-kit-states)
+          (dolist (state (if (memq (car c) drgnx-kit-catalogue--stateless) '(rest) drgnx-ui-kit-states))
             (let ((s (drgnx-kit-catalogue--cell (car c) variants state scale tty patch)))
               ;; a hub row's newline carries its height, as the inserter's render puts it
               (insert s (propertize "\n" 'line-height (get-text-property 0 'drgnx-kit-line-height s)))))

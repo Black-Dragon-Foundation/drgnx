@@ -465,7 +465,7 @@ faces a landed kit component replaces (`drgnx-ui-kit-replaced-faces'): they inhe
                       `(,(car spec) ,@(plist-put (copy-sequence (cdr spec)) :box
                                                  (append (plist-get (cdr spec) :box) '(:fit text))))
                     spec))
-                (drgnx-ui-kit-theme-specs #'c)))))))
+                (drgnx-ui-kit-theme-specs #'c nil (featurep 'glitnir))))))))
 
 (defun drgnx-theme--tty-token (tok)
   "TOK for a terminal: the gap and the panel are the editor's colour."

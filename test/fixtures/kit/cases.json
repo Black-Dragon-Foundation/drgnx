@@ -43,6 +43,22 @@
     {"name": "button-action", "comp": {"c": "button", "label": "Go", "style": "primary", "action": {"kind": "kit-test", "args": [1, "a"]}}},
     {"name": "key-hint-cap", "comp": {"c": "key-hint", "keys": "C-k"}},
     {"name": "key-hint-menu", "comp": {"c": "key-hint", "keys": "C-k", "variant": "menu"}},
-    {"name": "key-hint-hover", "comp": {"c": "key-hint", "keys": "C-k", "state": "hover"}}
+    {"name": "key-hint-hover", "comp": {"c": "key-hint", "keys": "C-k", "state": "hover"}},
+    {"name": "section-plain", "comp": {"c": "section-header", "title": "Files"}},
+    {"name": "section-open", "comp": {"c": "section-header", "title": "Changes", "collapsible": true, "count": 12}},
+    {"name": "section-collapsed", "comp": {"c": "section-header", "title": "Staged", "collapsible": true, "collapsed": true}},
+    {"name": "section-action", "comp": {"c": "section-header", "title": "Graph", "collapsible": true, "action": {"kind": "kit-test", "args": ["graph"]}}},
+    {"name": "card-plain-single", "comp": {"c": "card", "kind": "plain", "shape": "single", "text": "Review"}},
+    {"name": "card-plain-top", "comp": {"c": "card", "kind": "plain", "shape": "top", "text": "Review"}},
+    {"name": "card-plain-mid", "comp": {"c": "card", "kind": "plain", "shape": "mid", "text": "Review"}},
+    {"name": "card-plain-bottom", "comp": {"c": "card", "kind": "plain", "shape": "bottom", "text": "Review"}},
+    {"name": "card-needs-you-single", "comp": {"c": "card", "kind": "needs-you", "shape": "single", "text": "Review"}},
+    {"name": "card-needs-you-top", "comp": {"c": "card", "kind": "needs-you", "shape": "top", "text": "Review"}},
+    {"name": "card-needs-you-mid", "comp": {"c": "card", "kind": "needs-you", "shape": "mid", "text": "Review"}},
+    {"name": "card-needs-you-bottom", "comp": {"c": "card", "kind": "needs-you", "shape": "bottom", "text": "Review"}},
+    {"name": "card-selected-single", "comp": {"c": "card", "kind": "selected", "shape": "single", "text": "Review"}},
+    {"name": "card-selected-top", "comp": {"c": "card", "kind": "selected", "shape": "top", "text": "Review"}},
+    {"name": "card-selected-mid", "comp": {"c": "card", "kind": "selected", "shape": "mid", "text": "Review"}},
+    {"name": "card-selected-bottom", "comp": {"c": "card", "kind": "selected", "shape": "bottom", "text": "Review"}}
   ]
 }

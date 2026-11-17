@@ -408,9 +408,9 @@ fn conclusion_rows(
                 0,
                 end,
                 if i == 0 {
-                    FaceId::CardSelTop.name()
+                    FaceId::KitCardSelectedTop.name()
                 } else {
-                    FaceId::CardSelBottom.name()
+                    FaceId::KitCardSelectedBottom.name()
                 },
             )
             .face(0, end, FaceId::WorkPane.name())

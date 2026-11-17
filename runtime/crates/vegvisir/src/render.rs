@@ -491,14 +491,14 @@ fn off_chain(s: &Scene, id: &ItemId) -> bool {
 /// The decoration face of line I of a card of N lines; the selected card's is the ring's (`drgnx-card-sel-*`).
 fn card_face(n: usize, i: usize, selected: bool) -> &'static str {
     match (selected, n, i) {
-        (false, 1, _) => FaceId::CardSingle.name(),
-        (false, _, 0) => FaceId::CardTop.name(),
-        (false, n, i) if i + 1 == n => FaceId::CardBottom.name(),
-        (false, _, _) => FaceId::CardMid.name(),
-        (true, 1, _) => FaceId::CardSelSingle.name(),
-        (true, _, 0) => FaceId::CardSelTop.name(),
-        (true, n, i) if i + 1 == n => FaceId::CardSelBottom.name(),
-        (true, _, _) => FaceId::CardSelMid.name(),
+        (false, 1, _) => FaceId::KitCardPlainSingle.name(),
+        (false, _, 0) => FaceId::KitCardPlainTop.name(),
+        (false, n, i) if i + 1 == n => FaceId::KitCardPlainBottom.name(),
+        (false, _, _) => FaceId::KitCardPlainMid.name(),
+        (true, 1, _) => FaceId::KitCardSelectedSingle.name(),
+        (true, _, 0) => FaceId::KitCardSelectedTop.name(),
+        (true, n, i) if i + 1 == n => FaceId::KitCardSelectedBottom.name(),
+        (true, _, _) => FaceId::KitCardSelectedMid.name(),
     }
 }
 

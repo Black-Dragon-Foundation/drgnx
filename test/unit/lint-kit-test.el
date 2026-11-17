@@ -152,7 +152,17 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("core/drgnx-palette.el" key-hint 1) ("modules/tools/drgnx-work-flow.el" button 7)
     ("modules/tools/drgnx-work-flow.el" key-hint 3) ("modules/ui/drgnx-decor.el" button 5)
     ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" button 2)
-    ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" key-hint 2))
+    ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" key-hint 2)
+    ;; section-header and card (Task 18): the heading and card faces still drawn where they were; decor's card rows
+    ("core/drgnx-history-compare.el" section-header 1) ("core/drgnx-history-revert.el" section-header 1)
+    ("core/drgnx-surfaces.el" section-header 1) ("core/drgnx-type-faces.el" section-header 1)
+    ("modules/extra/drgnx-debug-view.el" section-header 1) ("modules/tools/drgnx-agent-panel.el" section-header 1)
+    ("modules/tools/drgnx-agent-settings.el" section-header 1) ("modules/tools/drgnx-plugins-ui.el" section-header 1)
+    ("modules/tools/drgnx-shortcuts.el" section-header 1) ("modules/tools/drgnx-work-flow.el" card 5)
+    ("modules/tools/drgnx-work-flow.el" section-header 2) ("modules/tools/drgnx-work-space.el" card 1)
+    ("modules/ui/drgnx-decor.el" card 28)
+    ("runtime/crates/drgnx-ratatoskr/src/view/extensions.rs" section-header 1)
+    ("runtime/crates/drgnx-ratatoskr/src/view/extensions/tests.rs" section-header 1))
   "((FILE ID COUNT)...): the forms of a role that is on, left in FILE (only falls).  A branch merged later adds its
 files' counts in its merge commit.")
 

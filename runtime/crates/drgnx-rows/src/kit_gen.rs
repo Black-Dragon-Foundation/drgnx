@@ -15,6 +15,10 @@ pub enum CompId {
     Button,
     /// `key-hint`
     KeyHint,
+    /// `section-header`
+    SectionHeader,
+    /// `card`
+    Card,
 }
 
 /// A state of the state table (on the wire, its name: `"selected-inactive"`).
@@ -182,6 +186,90 @@ const KEY_HINT_GEOM: [[Geom; 3]; 2] = [
 const KEY_HINT_LABEL: [Option<&str>; 2] = [Some("key"), Some("key")];
 const KEY_HINT_FACE: [FaceId; 2] = [FaceId::KitKeyHintCap, FaceId::KitKeyHintMenu];
 
+const SECTION_HEADER_AXES: &[&[&str]] = &[&["no", "yes"]];
+const SECTION_HEADER_DEFAULTS: &[usize] = &[0];
+const SECTION_HEADER_GEOM: [[Geom; 3]; 2] = [
+    [
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+    ],
+    [
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+        Geom { height: 26, pad: (6, 6), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: Some(("chevron-right", "chevron-down")) },
+    ],
+];
+const SECTION_HEADER_LABEL: [Option<&str>; 2] = [Some("section"), Some("section, collapsible")];
+const SECTION_HEADER_FACE: [FaceId; 2] = [FaceId::KitSectionHeader, FaceId::KitSectionHeader];
+
+const CARD_AXES: &[&[&str]] = &[&["plain", "needs-you", "selected"], &["single", "top", "mid", "bottom"]];
+const CARD_DEFAULTS: &[usize] = &[0, 0];
+const CARD_GEOM: [[Geom; 3]; 12] = [
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 0, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const CARD_LABEL: [Option<&str>; 12] = [None, None, None, None, None, None, None, None, None, None, None, None];
+const CARD_FACE: [FaceId; 12] = [FaceId::KitCardPlainSingle, FaceId::KitCardPlainTop, FaceId::KitCardPlainMid, FaceId::KitCardPlainBottom, FaceId::KitCardNeedsYouSingle, FaceId::KitCardNeedsYouTop, FaceId::KitCardNeedsYouMid, FaceId::KitCardNeedsYouBottom, FaceId::KitCardSelectedSingle, FaceId::KitCardSelectedTop, FaceId::KitCardSelectedMid, FaceId::KitCardSelectedBottom];
+
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {
     match id {
@@ -197,6 +285,14 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant);
             KEY_HINT_GEOM[i][d]
         }
+        CompId::SectionHeader => {
+            let (i, d) = index(SECTION_HEADER_AXES, SECTION_HEADER_DEFAULTS, variant);
+            SECTION_HEADER_GEOM[i][d]
+        }
+        CompId::Card => {
+            let (i, d) = index(CARD_AXES, CARD_DEFAULTS, variant);
+            CARD_GEOM[i][d]
+        }
     }
 }
 
@@ -206,6 +302,8 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::Row => ROW_LABEL[index(ROW_AXES, ROW_DEFAULTS, variant).0],
         CompId::Button => BUTTON_LABEL[index(BUTTON_AXES, BUTTON_DEFAULTS, variant).0],
         CompId::KeyHint => KEY_HINT_LABEL[index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant).0],
+        CompId::SectionHeader => SECTION_HEADER_LABEL[index(SECTION_HEADER_AXES, SECTION_HEADER_DEFAULTS, variant).0],
+        CompId::Card => CARD_LABEL[index(CARD_AXES, CARD_DEFAULTS, variant).0],
     }
 }
 
@@ -215,5 +313,7 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::Row => ROW_FACE[index(ROW_AXES, ROW_DEFAULTS, variant).0],
         CompId::Button => BUTTON_FACE[index(BUTTON_AXES, BUTTON_DEFAULTS, variant).0],
         CompId::KeyHint => KEY_HINT_FACE[index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant).0],
+        CompId::SectionHeader => SECTION_HEADER_FACE[index(SECTION_HEADER_AXES, SECTION_HEADER_DEFAULTS, variant).0],
+        CompId::Card => CARD_FACE[index(CARD_AXES, CARD_DEFAULTS, variant).0],
     }
 }

@@ -1030,11 +1030,37 @@ pub enum FaceId {
     KitKeyHintCap,
     /// `drgnx-kit-key-hint-menu`
     KitKeyHintMenu,
+    /// `drgnx-kit-section-header`
+    KitSectionHeader,
+    /// `drgnx-kit-card-plain-single`
+    KitCardPlainSingle,
+    /// `drgnx-kit-card-plain-top`
+    KitCardPlainTop,
+    /// `drgnx-kit-card-plain-mid`
+    KitCardPlainMid,
+    /// `drgnx-kit-card-plain-bottom`
+    KitCardPlainBottom,
+    /// `drgnx-kit-card-needs-you-single`
+    KitCardNeedsYouSingle,
+    /// `drgnx-kit-card-needs-you-top`
+    KitCardNeedsYouTop,
+    /// `drgnx-kit-card-needs-you-mid`
+    KitCardNeedsYouMid,
+    /// `drgnx-kit-card-needs-you-bottom`
+    KitCardNeedsYouBottom,
+    /// `drgnx-kit-card-selected-single`
+    KitCardSelectedSingle,
+    /// `drgnx-kit-card-selected-top`
+    KitCardSelectedTop,
+    /// `drgnx-kit-card-selected-mid`
+    KitCardSelectedMid,
+    /// `drgnx-kit-card-selected-bottom`
+    KitCardSelectedBottom,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 511] = [
+    pub const ALL: [FaceId; 524] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1546,6 +1572,19 @@ impl FaceId {
         FaceId::KitButtonDanger,
         FaceId::KitKeyHintCap,
         FaceId::KitKeyHintMenu,
+        FaceId::KitSectionHeader,
+        FaceId::KitCardPlainSingle,
+        FaceId::KitCardPlainTop,
+        FaceId::KitCardPlainMid,
+        FaceId::KitCardPlainBottom,
+        FaceId::KitCardNeedsYouSingle,
+        FaceId::KitCardNeedsYouTop,
+        FaceId::KitCardNeedsYouMid,
+        FaceId::KitCardNeedsYouBottom,
+        FaceId::KitCardSelectedSingle,
+        FaceId::KitCardSelectedTop,
+        FaceId::KitCardSelectedMid,
+        FaceId::KitCardSelectedBottom,
     ];
 
     /// The face's Emacs name.
@@ -2062,6 +2101,19 @@ impl FaceId {
             FaceId::KitButtonDanger => "drgnx-kit-button-danger",
             FaceId::KitKeyHintCap => "drgnx-kit-key-hint-cap",
             FaceId::KitKeyHintMenu => "drgnx-kit-key-hint-menu",
+            FaceId::KitSectionHeader => "drgnx-kit-section-header",
+            FaceId::KitCardPlainSingle => "drgnx-kit-card-plain-single",
+            FaceId::KitCardPlainTop => "drgnx-kit-card-plain-top",
+            FaceId::KitCardPlainMid => "drgnx-kit-card-plain-mid",
+            FaceId::KitCardPlainBottom => "drgnx-kit-card-plain-bottom",
+            FaceId::KitCardNeedsYouSingle => "drgnx-kit-card-needs-you-single",
+            FaceId::KitCardNeedsYouTop => "drgnx-kit-card-needs-you-top",
+            FaceId::KitCardNeedsYouMid => "drgnx-kit-card-needs-you-mid",
+            FaceId::KitCardNeedsYouBottom => "drgnx-kit-card-needs-you-bottom",
+            FaceId::KitCardSelectedSingle => "drgnx-kit-card-selected-single",
+            FaceId::KitCardSelectedTop => "drgnx-kit-card-selected-top",
+            FaceId::KitCardSelectedMid => "drgnx-kit-card-selected-mid",
+            FaceId::KitCardSelectedBottom => "drgnx-kit-card-selected-bottom",
         }
     }
 
@@ -2579,6 +2631,19 @@ impl FaceId {
             "drgnx-kit-button-danger" => FaceId::KitButtonDanger,
             "drgnx-kit-key-hint-cap" => FaceId::KitKeyHintCap,
             "drgnx-kit-key-hint-menu" => FaceId::KitKeyHintMenu,
+            "drgnx-kit-section-header" => FaceId::KitSectionHeader,
+            "drgnx-kit-card-plain-single" => FaceId::KitCardPlainSingle,
+            "drgnx-kit-card-plain-top" => FaceId::KitCardPlainTop,
+            "drgnx-kit-card-plain-mid" => FaceId::KitCardPlainMid,
+            "drgnx-kit-card-plain-bottom" => FaceId::KitCardPlainBottom,
+            "drgnx-kit-card-needs-you-single" => FaceId::KitCardNeedsYouSingle,
+            "drgnx-kit-card-needs-you-top" => FaceId::KitCardNeedsYouTop,
+            "drgnx-kit-card-needs-you-mid" => FaceId::KitCardNeedsYouMid,
+            "drgnx-kit-card-needs-you-bottom" => FaceId::KitCardNeedsYouBottom,
+            "drgnx-kit-card-selected-single" => FaceId::KitCardSelectedSingle,
+            "drgnx-kit-card-selected-top" => FaceId::KitCardSelectedTop,
+            "drgnx-kit-card-selected-mid" => FaceId::KitCardSelectedMid,
+            "drgnx-kit-card-selected-bottom" => FaceId::KitCardSelectedBottom,
             _ => return None,
         })
     }

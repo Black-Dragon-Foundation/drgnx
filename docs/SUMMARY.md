@@ -118,5 +118,7 @@
     - [Row (kit)](design/components/row.md)
     - [Button (kit)](design/components/button.md)
     - [Key hint (kit)](design/components/key-hint.md)
+    - [Section header (kit)](design/components/section-header.md)
+    - [Card (kit)](design/components/card.md)
 - [The app icon](design/app-icon.md)
 - [Writing a theme for drgnx](design/theme-authors.md)

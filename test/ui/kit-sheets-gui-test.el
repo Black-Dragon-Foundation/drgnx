@@ -183,6 +183,45 @@ and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'key-hint))
 
+(drgnx-look-gui-deftest drgnx-kit-sheet/section-header ()
+  "The section header's sheet: collapsible or not x 7 states, each pad exact, in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'section-header))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/card ()
+  "The card's sheet: 3 kinds x 4 shapes, each pad exact, the panel's fill and the kind's ring, in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'card))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/card-rows-have-no-ring-between-lines ()
+  "A card of three lines (`drgnx-ui-kit-card-lines'): its ring is open between the lines (the pixels each side of a seam
+are the card's fill), and closed on its top edge."
+  (skip-unless (and (display-graphic-p) (fboundp 'glitnir-active-p) (glitnir-active-p)))
+  (drgnx-uitest-bare-frame)
+  (load-theme 'drgnx-dark t)
+  (let ((buf (get-buffer-create " *kit-card*")))
+    (unwind-protect
+        (progn
+          (switch-to-buffer buf)
+          (setq-local cursor-type nil)
+          (erase-buffer)
+          (insert (drgnx-ui-kit-card-lines '("one" "two" "three") 'plain 12))
+          (goto-char (point-min))
+          (drgnx-test-wait-presented)
+          (let* ((s (drgnx-uitest-device-scale (selected-frame))) (snap (drgnx-uitest-snapshot))
+                 (edges (window-inside-pixel-edges))
+                 (ring (drgnx-kit-sheet--rgb (drgnx-look-token 'border 'dark)))
+                 (fill (drgnx-kit-sheet--rgb (drgnx-look-token 'panel 'dark)))
+                 (x (round (* s (+ (car edges) 24))))
+                 (top (round (* s (cadr edges))))
+                 (seam (round (* s (+ (cadr edges)
+                                      (cdr (posn-x-y (posn-at-point (save-excursion (goto-char (point-min)) (forward-line 1) (point))))))))))
+            (should (equal (list 'top ring) (list 'top (drgnx-uitest-pixel snap x top))))
+            (should (equal (list 'above-seam fill) (list 'above-seam (drgnx-uitest-pixel snap x (1- seam)))))
+            (should (equal (list 'below-seam fill) (list 'below-seam (drgnx-uitest-pixel snap x seam))))))
+      (kill-buffer buf)
+      (mapc #'disable-theme custom-enabled-themes))))
+
 (drgnx-look-gui-deftest drgnx-kit-sheet/state-table ()
   "The state table's rows in every theme and density: each state's fill, and no edge round a hovered or selected row."
   (skip-unless (display-graphic-p))

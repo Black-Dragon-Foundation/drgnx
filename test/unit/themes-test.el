@@ -379,7 +379,7 @@ its row taller) and nothing asks for the key."
 takes each text run's own foreground, so a card whose runs differ (a state dot, an overlap mark) breaks into boxes."
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
-      (dolist (face '(drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single))
+      (dolist (face '(drgnx-kit-card-plain-top drgnx-kit-card-plain-mid drgnx-kit-card-plain-bottom drgnx-kit-card-plain-single))
         (let ((box (plist-get (drgnx-faces--clause-plist face 'gui) :box)))
           (should (equal (list face (drgnx-look-token 'border-strong variant) 1)
                          (list face (plist-get box :color) (plist-get box :line-width))))
@@ -387,13 +387,14 @@ takes each text run's own foreground, so a card whose runs differ (a state dot, 
                         (ensure-list (plist-get (drgnx-faces--clause-plist face 'gui) :inherit)))))))))
 
 (ert-deftest drgnx-themes/the-selected-card-s-ring-is-the-accent ()
-  "work-space-dark.html `.card.sel': the hub draws the selected card in `drgnx-card-sel-*': a 2 px ring in the accent,
+  "work-space-dark.html `.card.sel': the hub draws the selected card in `drgnx-kit-card-selected-*': a 2 px ring in the focus colour (the accent),
 in every theme, on the same fill as the others."
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
-      (dolist (face '(drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom drgnx-card-sel-single))
+      (dolist (face '(drgnx-kit-card-selected-top drgnx-kit-card-selected-mid drgnx-kit-card-selected-bottom
+                                                  drgnx-kit-card-selected-single))
         (let* ((spec (drgnx-faces--clause-plist face 'gui)) (box (plist-get spec :box)))
-          (should (equal (list face (drgnx-look-token 'accent variant) 2)
+          (should (equal (list face (drgnx-look-token 'focus variant) 2)
                          (list face (plist-get box :color) (plist-get box :line-width))))
           (should (memq 'secondary-selection (ensure-list (plist-get spec :inherit)))))))))
 
