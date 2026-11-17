@@ -374,6 +374,11 @@ fn check_start(p: &StartParams) -> Result<(), Error> {
     if p.timebox_s.is_some_and(|t| !(1..=86_400).contains(&t)) {
         return Err(invalid("timebox_s", "a time box of 1 to 86400 seconds"));
     }
+    for (name, v) in [("stall_s", p.stall_s), ("silent_s", p.silent_s)] {
+        if v.is_some_and(|t| !(1..=86_400).contains(&t)) {
+            return Err(invalid(name, "a limit of 1 to 86400 seconds"));
+        }
+    }
     if p.no_timebox == Some(true) && p.timebox_s.is_some() {
         return Err(invalid(
             "no_timebox",

@@ -580,7 +580,7 @@ impl CgroupStat {
             oom_kill: key(&events, "oom_kill"),
             oom_group_kill: key(&events, "oom_group_kill"),
             cpu_usec: key(&read("cpu.stat").unwrap_or_default(), "usage_usec"),
-            io_bytes: 0,
+            io_bytes: io_bytes(&read("io.stat").unwrap_or_default()),
             memory_pressure: read("memory.pressure")
                 .ok()
                 .and_then(|t| parse_pressure(&t).ok())
@@ -592,6 +592,17 @@ impl CgroupStat {
     pub fn used_mib(&self) -> u64 {
         self.current.saturating_sub(self.file) / (1024 * 1024)
     }
+}
+
+/// `io.stat`'s `rbytes` and `wbytes` summed over its devices.
+fn io_bytes(text: &str) -> u64 {
+    text.split_whitespace()
+        .filter_map(|w| {
+            w.strip_prefix("rbytes=")
+                .or_else(|| w.strip_prefix("wbytes="))
+        })
+        .filter_map(|n| n.parse::<u64>().ok())
+        .sum()
 }
 
 /// A PSI trigger on a pressure file: [`PsiTrigger::wait`] wakes when the stall the spec names happens.

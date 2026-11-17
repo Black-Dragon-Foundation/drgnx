@@ -37,7 +37,16 @@ it does not depend on the agent that started it or on the editor, and it survive
   `infra`; the last line of its log says why (`infra: proxy: …`). The user's
   job (not an agent's) may send `no_timebox: true` instead: it has no deadline, its row has no `timebox_s`, and only
   `exec/stop` or the hub's stop ends it (with `timebox_s` it is refused). An agent that sends `no_timebox` is refused
-  with `invalid-params`, like the four fields below.
+  with `invalid-params`, like the four fields below. A job with a time box sees its deadline in `DRGNX_JOB_DEADLINE`
+  (epoch seconds; a container job gets it inside the container too), so a harness can dump its state before the end.
+- **Stuck jobs.** The progress guard stops a job that makes no progress, once a minute looking at its log, its
+  slice's CPU and its IO: **stall** is no output, under a tenth of a core and no IO for `stall_s` (default 1200),
+  **silent** is no output for `silent_s` (default 2700) whatever the CPU. Both take 1 to 86400. A stopped job is
+  `infra` (`infra: stuck (stall)`), never a failure: its folder gets `stuck.txt` (the rule, the processes with their
+  state and CPU, `podman top` of its containers, the log's last 60 lines, `memory.events`) and its log ends with
+  `=== stopped as stuck (<rule>, <N> min): not a test result`. On this machine the guard watches a job with a time
+  box that names `stall_s` or `silent_s`, runs a container or runs a test suite; your servers and plain commands are
+  never judged by their output. A runner's jobs always have it.
 - **The end.** The `exec-done` event carries the exit code and a summary: the names of the failing tests (read from
   `cargo test`, ERT and domr output, by the job's kind: `cargo`, `ert`, `domr`, `other`) and at most 20 lines of the log
   (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job

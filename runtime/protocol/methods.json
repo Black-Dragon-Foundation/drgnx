@@ -18856,6 +18856,24 @@
             ],
             "description": "A test job whose suite selects rows: its argv holds `{rows}` where the selector of the rows to run goes (an\nEmacs regexp of the names). Every row runs at first; a job a lost runner sends back runs only the rows that have\nno result yet."
           },
+          "silent_s": {
+            "description": "The progress guard's silent limit: seconds with no output, whatever the CPU, before the job ends\n`infra: stuck (silent)` (1 to 86400; default 2700).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stall_s": {
+            "description": "The progress guard's stall limit: seconds with no output, CPU under a tenth of a core and no IO before the job\nends `infra: stuck (stall)` (1 to 86400; default 1200).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "timebox_s": {
             "description": "Seconds before it is ended: 1 to 86400 (default 3600).",
             "format": "uint64",

@@ -168,6 +168,9 @@ pub struct RunnerArgs {
     pub job_labels: bool,
 }
 
+/// The variable that holds a job's deadline, in epoch seconds.
+pub const DEADLINE_ENV: &str = "DRGNX_JOB_DEADLINE";
+
 impl RunnerArgs {
     /// The hub's own container jobs: `drgnx-job-<id>`, no parent slice, labelled with OWNER_TAG.
     pub fn local(owner_tag: &str) -> RunnerArgs {
@@ -484,6 +487,12 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
         }
         .into(),
     );
+    // a job's deadline passes through from the podman client's environment (job-exec's, the hub's job), so a harness
+    // can dump its state before its time box ends (design §5.7)
+    if ra.job_labels {
+        a.push("-e".into());
+        a.push(DEADLINE_ENV.into());
+    }
     match &req.runner {
         None => {
             a.push("-v".into());
@@ -1143,6 +1152,8 @@ mod tests {
             "--label",
             "drgnx.job=x1a",
             "--network=none",
+            "-e",
+            "DRGNX_JOB_DEADLINE",
             "-v",
             "/work/tree:/work:Z",
             "-w",
@@ -1430,6 +1441,8 @@ mod tests {
         let net = format!("--network=container:{sidecar}");
         v.push(&net);
         v.extend([
+            "-e",
+            "DRGNX_JOB_DEADLINE",
             "-v",
             "/work/tree:/work:Z",
             "-w",
@@ -1504,7 +1517,16 @@ mod tests {
             ["drgnx.owner=0a1b2c3d", "drgnx.job=x1a"],
             "unused",
         );
-        want.retain(|s| s != "-e" && !s.contains("PROXY") && !s.contains("_proxy"));
+        // the proxy variables go, each with its `-e`
+        let proxy = |s: &String| s.contains("PROXY") || s.contains("_proxy");
+        let mut i = 0;
+        while i + 1 < want.len() {
+            if want[i] == "-e" && proxy(&want[i + 1]) {
+                want.drain(i..i + 2);
+            } else {
+                i += 1;
+            }
+        }
         let at = want
             .iter()
             .position(|s| s.starts_with("--network"))
@@ -1516,7 +1538,8 @@ mod tests {
         ra.job_labels = false;
         let b = argv(&req(&["ls", "-l"]), &none, &ra).map(strs).unwrap();
         assert!(!b.iter().any(|s| s.starts_with("drgnx.")));
-        assert_eq!(b.len() + 4, a.len());
+        // no labels and no deadline
+        assert_eq!(b.len() + 6, a.len());
     }
 
     /// [D] The proxy variables never exempt the reserved name the host's grants use: that name goes through the proxy.

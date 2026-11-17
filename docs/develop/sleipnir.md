@@ -306,6 +306,23 @@ maximum without history. A stop's verdict reason is `stuck (<rule>)`, so `forset
 `infra: stuck (<rule>)`: never red, never rerun; the log gets `=== stopped as stuck (<rule>, <N> min): not a test
 result`.
 
+Two hosts share `progress::read` (a slice that can't be read counts a whole core, so such a job only goes silent) and
+`progress::stuck_report` (`stuck.txt`: the rule; the slice's processes with state and CPU seconds; `podman top` of
+each `libpod-<id>.scope`; the log's last 60 lines; `memory.events`). They read every `period_s`: once a minute, or a
+quarter of the shortest limit when that is shorter (the host rows' test settings, at least once a second).
+
+- **job-exec** (`JobExec.stall_s`/`silent_s` from `JobSpec.derived`, none: the defaults) watches the job slice and the
+  attempt's and state dirs' logs in its wait loop. On a stop it writes `stuck.txt`, appends the log line and writes the
+  kill reason `infra: stuck (<rule>)`, which ends the command and stops the slice. Its wall is the timeout, which
+  ends the job first as `timeout`.
+- **The hub** (`exec::Runner::guard`) watches its own jobs' `drgnx-job-<id>.slice` and `log`, as one more arm of the
+  job's watch; a stop writes the same report and line, `why` = `infra: stuck (<rule>)`, and ends the process group
+  (the slice goes at the job's end). Only jobs with a time box that name a limit, run a container or run a test suite
+  are guarded (`guard_of`).
+- **The deadline.** Both hosts put `DRGNX_JOB_DEADLINE` (epoch seconds: start plus the time box) in the command's
+  environment; the shared argv passes it into a job's container (`-e DRGNX_JOB_DEADLINE`, value from the podman
+  client's environment).
+
 ### Live resizing (`linux::resize`)
 
 The moves on a running job that never throttle it (the job scheduler's "grow and shrink while running"):

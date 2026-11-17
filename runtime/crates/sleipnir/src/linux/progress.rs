@@ -9,7 +9,14 @@
 //! - **silent**: no output for `silent_s`, whatever the CPU (a livelock);
 //! - **wall**: `wall_s` since the start (the time box: [`wall_limit`]).
 //!
-//! A stop is `infra: stuck (<rule>)` ([`verdict_text`]): not the job's fault, never red, never rerun.
+//! A stop is `infra: stuck (<rule>)` ([`verdict_text`]): not the job's fault, never red, never rerun. The hosts share
+//! [`read`] and [`stuck_report`].
+
+use super::probe::CgroupStat;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The guard's limits, in seconds; `cpu_floor` is a share of one core.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -155,30 +162,119 @@ pub const STUCK: &str = "stuck.txt";
 /// How often a host reads a job: once a minute, or four times within the shortest of L's limits when that is shorter
 /// (at least once a second).
 pub fn period_s(l: &GuardLimits) -> u64 {
-    let _ = l;
-    unimplemented!()
+    READ_EVERY_S.min(l.stall_s / 4).min(l.silent_s / 4).max(1)
 }
 
-/// A reading at AT of the job's SLICE (its cgroup folder) and LOGS, after PREV.
-pub fn read(
-    at: u64,
-    slice: Option<&std::path::Path>,
-    logs: &[std::path::PathBuf],
-    prev: &Reading,
-) -> Reading {
-    let _ = (at, slice, logs, prev);
-    unimplemented!()
+/// How often a host reads a job with the default limits.
+pub const READ_EVERY_S: u64 = 60;
+
+/// A reading at AT of the job's SLICE (its cgroup folder) and LOGS, after PREV. A slice that can't be read counts a
+/// whole core since PREV and no IO: an unknown is never idle, so such a job can only go silent.
+pub fn read(at: u64, slice: Option<&Path>, logs: &[PathBuf], prev: &Reading) -> Reading {
+    let log_bytes = logs
+        .iter()
+        .map(|p| fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+        .sum();
+    let (cpu_usec, io_bytes) = match slice.map(CgroupStat::read) {
+        Some(Ok(s)) => (s.cpu_usec, s.io_bytes),
+        _ => (
+            prev.cpu_usec + at.saturating_sub(prev.at) * 1_000_000,
+            prev.io_bytes,
+        ),
+    };
+    Reading {
+        at,
+        log_bytes,
+        cpu_usec,
+        io_bytes,
+        rows: 0,
+    }
 }
 
-/// Writes [`STUCK`] into DIR for STOP of the job in SLICE with LOG.
-pub fn stuck_report(
-    dir: &std::path::Path,
-    stop: &Stop,
-    slice: Option<&std::path::Path>,
-    log: &std::path::Path,
-) -> std::io::Result<()> {
-    let _ = (dir, stop, slice, log);
-    unimplemented!()
+/// How long `podman top` may take for one container of the report.
+const TOP_LIMIT: Duration = Duration::from_secs(20);
+
+/// Writes [`STUCK`] into DIR for STOP of the job in SLICE (its cgroup folder) with LOG: the rule, the slice's
+/// processes (pid, state, CPU seconds, name), `podman top` of each container in it, the log's last 60 lines and the
+/// slice's `memory.events`.
+pub fn stuck_report(dir: &Path, stop: &Stop, slice: Option<&Path>, log: &Path) -> io::Result<()> {
+    let mut t = format!(
+        "{}: no progress for {} min\n",
+        verdict_text(stop),
+        stop.minutes
+    );
+    let (mut procs, mut containers) = (vec![], vec![]);
+    if let Some(s) = slice {
+        walk(s, &mut procs, &mut containers);
+    }
+    t.push_str("\n== processes (pid state cpu_s name)\n");
+    // /proc counts in USER_HZ, 100 on every Linux the runner supports
+    let tick = 100.0;
+    for pid in &procs {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        // `pid (comm) state …`, comm may hold spaces: the fields after its closing parenthesis
+        let (name, rest) = match (stat.find('('), stat.rfind(')')) {
+            (Some(a), Some(b)) if a < b => (&stat[a + 1..b], &stat[b + 1..]),
+            _ => ("?", ""),
+        };
+        let f: Vec<&str> = rest.split_whitespace().collect();
+        let ticks = |i: usize| f.get(i).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        let cpu = (ticks(11) + ticks(12)) as f64 / tick;
+        let state = f.first().copied().unwrap_or("?");
+        t.push_str(&format!("{pid} {state} {cpu:.1} {name}\n"));
+    }
+    t.push_str("\n== containers\n");
+    if containers.is_empty() {
+        t.push_str("none\n");
+    }
+    for c in &containers {
+        let top = super::run::limited(Path::new("podman"), &["top", c.as_str()], &[], TOP_LIMIT)
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_else(|e| format!("({e})\n"));
+        t.push_str(&format!("-- {c}\n{top}"));
+    }
+    t.push_str("\n== log (last 60 lines)\n");
+    let text = fs::read(log).unwrap_or_default();
+    let text = String::from_utf8_lossy(&text);
+    let lines: Vec<&str> = text.lines().collect();
+    for l in &lines[lines.len().saturating_sub(60)..] {
+        t.push_str(l);
+        t.push('\n');
+    }
+    t.push_str("\n== memory.events\n");
+    if let Some(s) = slice {
+        t.push_str(&fs::read_to_string(s.join("memory.events")).unwrap_or_default());
+    }
+    let tmp = dir.join(format!(".{STUCK}.tmp"));
+    fs::write(&tmp, t)?;
+    fs::rename(&tmp, dir.join(STUCK))
+}
+
+/// The pids under cgroup DIR, and the containers (podman's `libpod-<id>.scope`).
+fn walk(dir: &Path, procs: &mut Vec<u32>, containers: &mut Vec<String>) {
+    if let Ok(t) = fs::read_to_string(dir.join("cgroup.procs")) {
+        procs.extend(t.lines().filter_map(|l| l.trim().parse::<u32>().ok()));
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut subs: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.path())
+        .collect();
+    subs.sort();
+    for s in subs {
+        if let Some(id) = s
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("libpod-")?.strip_suffix(".scope"))
+            .filter(|id| !id.starts_with("conmon"))
+        {
+            containers.push(id.to_string());
+        }
+        walk(&s, procs, containers);
+    }
 }
 
 #[cfg(test)]
