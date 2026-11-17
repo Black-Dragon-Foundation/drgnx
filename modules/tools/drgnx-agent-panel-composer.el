@@ -102,6 +102,17 @@
     (require 'drgnx-history-revert)
     (drgnx-history-fork-here drgnx-agent-panel--session seq)))
 
+(defun drgnx-agent-panel-composer--frame ()
+  "The frame this composer is drawn in: the selected frame when it shows the buffer, else the frame of a window that
+does; the selected frame when none does.  Its pads are in that frame's pixels, whichever frame is selected."
+  (let ((w (or (and (eq (window-buffer) (current-buffer)) (selected-window))
+               (car (get-buffer-window-list (current-buffer) nil t)))))
+    (if w (window-frame w) (selected-frame))))
+
+(defun drgnx-agent-panel-composer--pad ()
+  "The composer bar's right pad (20 logical pixels) in the pixels of the frame it is drawn in."
+  (drgnx-px 20 (drgnx-agent-panel-composer--frame)))
+
 (defun drgnx-agent-panel-composer--bar ()
   "The composer's bar (agent-panel.html `.composer'): the model and the mode as chips that switch them, Pair when it is
 a command, then Fork, the pause icon (stop after this step) and Send, an arrow, as buttons.  It has no newline."
@@ -130,7 +141,7 @@ a command, then Fork, the pause icon (stop after this step) and Send, an arrow, 
               "")
             (if pair (concat (drgnx-agent-panel-composer--click pair #'drgnx-agent-panel-pair nil "C: pair with the agent") " ")
               "")
-            (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width buttons) (drgnx-px 20))))))
+            (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width buttons) (drgnx-agent-panel-composer--pad))))))
             buttons)))
 
 ;;;; Completion in the composer
