@@ -81,12 +81,20 @@ pub struct Geom {
 
 /// The glyphs the components name: `(name, Unicode, ASCII)`, from the standard table (`drgnx-ui--default-glyphs`);
 /// the env's glyphs (`KitEnv::glyphs`) take precedence.
-pub const GLYPHS: [(&str, &str, &str); 10] = [
+pub const GLYPHS: [(&str, &str, &str); 18] = [
     ("chevron-right", "›", ">"),
     ("chevron-down", "⌄", "v"),
-    ("bar-left", "▕", "["),
+    ("bar-left", "", "["),
     ("bar-full", "█", "#"),
-    ("bar-right", "▏", "]"),
+    ("bar-1", "▏", ""),
+    ("bar-2", "▎", ""),
+    ("bar-3", "▍", ""),
+    ("bar-4", "▌", ""),
+    ("bar-5", "▋", ""),
+    ("bar-6", "▊", ""),
+    ("bar-7", "▉", ""),
+    ("bar-empty", "░", "-"),
+    ("bar-right", "", "]"),
     ("progress-0", "○", "0"),
     ("progress-1", "◔", "1"),
     ("progress-2", "◑", "2"),

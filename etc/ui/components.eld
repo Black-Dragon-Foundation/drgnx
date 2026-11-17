@@ -73,18 +73,20 @@
               :tty (:pad 0) :label "agent"
               :bind ((() :inherit (drgnx-ui-caption) :inverse t))
               :replaces nil :helpers nil :lint t)
-  ;; progress: a bar (4 px tall, `drgnx-ui-kit-progress-bar-px': the fill, then the track) or a ring (one of five
-  ;; glyphs, in the fill's colour); its word is "N percent".  A terminal draws the bar as a cell per 8 px of its width
-  ;; (`drgnx-ui-kit-progress-cell-px') between edges, the filled ones `bar-full' in the fill's colour
+  ;; progress: a bar (4 px tall, `drgnx-ui-kit-progress-bar-px', centred on the line: the fill, rounded at its start,
+  ;; then the track, rounded at its end; each an SVG in `currentColor', so its face's text colour, as the icons are) or
+  ;; a ring (one of five glyphs); its word is "N percent".  A terminal draws the bar as a cell per 8 px of its width
+  ;; (`drgnx-ui-kit-progress-cell-px'): the filled cells `bar-full' and a partial block (`bar-1'..`bar-7', eighths) in
+  ;; the fill's colour, the rest `bar-empty' in the track's; ASCII adds edges (`bar-left', `bar-right')
   (progress :variants ((kind bar ring)) :defaults (kind bar)
             :geometry (:height 0 :pad (0 . 0) :gap 0 :box nil
                                :radius (:by kind (bar 2) (ring 0)) :hit 0)
-            :tty (:pad 0 :glyphs (bar-left bar-full bar-right progress-0 progress-1 progress-2 progress-3 progress-4))
+            :tty (:pad 0 :glyphs (bar-left bar-full bar-1 bar-2 bar-3 bar-4 bar-5 bar-6 bar-7 bar-empty bar-right
+                                           progress-0 progress-1 progress-2 progress-3 progress-4))
             :label "percent"
-            ;; under a theme that knows nothing of drgnx: the track a secondary selection, the fill the highlight,
-            ;; the ring a link's colour
-            :bind ((() :bg progress-track :inherit (drgnx-ui-caption secondary-selection) :font (drgnx-ui-caption))
+            ;; text colours only (the bar's images and glyphs are drawn in them); under a theme that knows nothing of
+            ;; drgnx: the track the shadow's colour, the fill and the ring a link's
+            :bind ((() :fg progress-track :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption))
                    ((ring) :fg progress-fill :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption))
-                   ((fill) :bg progress-fill :fg progress-fill :inherit (drgnx-ui-caption highlight)
-                    :font (drgnx-ui-caption)))
+                   ((fill) :fg progress-fill :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption)))
             :replaces nil :helpers nil :lint t)))

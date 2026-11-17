@@ -581,10 +581,32 @@
     (should (equal [[0 20 4] [1 60 4]] (plist-get e :spaces)))
     (should (equal [[0 1 "drgnx-kit-progress-fill"] [1 2 "drgnx-kit-progress"]] (plist-get e :runs))))
   (let ((drgnx-face-glyphs drgnx-ui--default-glyphs))
-    (should (equal "▕███       ▏" (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.3 :width 80) 1.0 t) :text)))
-    (should (equal "[###       ]" (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.3 :width 80) 1.0 'ascii)
-                                             :text)))
+    ;; ten cells: three full; 0.35 is three and a half (a half block), on ASCII rounded to four
+    (should (equal "███░░░░░░░" (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.3 :width 80) 1.0 t) :text)))
+    (should (equal "███▌░░░░░░"
+                   (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.35 :width 80) 1.0 t) :text)))
+    (should (equal "[####------]"
+                   (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.35 :width 80) 1.0 'ascii) :text)))
     (should (equal "2" (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :kind "ring" :value 0.5) 1.0 'ascii) :text)))))
+
+(ert-deftest drgnx-ui-kit/bar-parts-are-images ()
+  ;; a progress bar's parts (spaces of a height in the bar's faces) are drawn as images in `currentColor', the fill's
+  ;; start and the track's end rounded, the joint square; a space of a height in another face stays a space
+  (skip-unless (image-type-available-p 'svg))
+  (let* ((d (drgnx-ui-kit-bar-display '((0 72 4) (1 48 4) (3 10 16))
+                                      '((0 1 "drgnx-kit-progress-fill") (1 2 drgnx-kit-progress) (3 4 "drgnx-explorer-guide"))
+                                      1.0))
+         (fill (cdr (assq 0 d))) (track (cdr (assq 1 d))))
+    (should (equal '(0 1) (sort (mapcar #'car d) #'<)))
+    (should (eq 'image (car fill)))
+    (should (eq 'center (plist-get (cdr fill) :ascent)))
+    (should (string-search "width=\"72\" height=\"4\"" (plist-get (cdr fill) :data)))
+    (should (string-search "fill=\"currentColor\"" (plist-get (cdr fill) :data)))
+    (should (string-search "rx=\"2\"" (plist-get (cdr fill) :data)))
+    ;; the fill's end and the track's start are joined: square there
+    (should (string-search "<rect x=\"36.0\"" (plist-get (cdr fill) :data)))
+    (should-not (string-search "<rect width=\"36.0\"" (plist-get (cdr fill) :data)))
+    (should (string-search "<rect width=\"24.0\"" (plist-get (cdr track) :data)))))
 
 (ert-deftest drgnx-ui-kit/agent-mark-is-its-agents-colour ()
   ;; the handle on its agent's colour: the kit face (inverse video) over the agent's face, pads either side; "[H]" in

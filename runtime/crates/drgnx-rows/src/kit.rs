@@ -507,7 +507,8 @@ fn agent_mark(b: &mut RowBuilder, env: &KitEnv, slot: u8, handle: &str) {
 }
 
 /// Progress onto B (`drgnx-ui-kit--progress`): a bar is the fill (VALUE of the width, rounded half up) then the track,
-/// each a space [`BAR_PX`] high; on a terminal its cells (one per [`BAR_CELL_PX`]) between its edges. A ring is one of
+/// each a space [`BAR_PX`] high in its face, which the editor draws as the bar's images (`drgnx-ui-kit-bar-display`);
+/// on a terminal its cells (one per [`BAR_CELL_PX`]): the filled ones and a partial block, then the empty ones. A ring is one of
 /// the glyphs `progress-0`..`progress-4`. Its label, "N percent", is its `help-echo`.
 fn progress(b: &mut RowBuilder, env: &KitEnv, kind: ProgressKind, value: f64, width: u16) {
     let v = value.clamp(0.0, 1.0);
@@ -520,17 +521,28 @@ fn progress(b: &mut RowBuilder, env: &KitEnv, kind: ProgressKind, value: f64, wi
             b.push(glyph(env, &name), Some(face));
         }
         ProgressKind::Bar if env.tty => {
+            // eighths of a cell: the filled cells, then a partial block where the env draws one (an ASCII terminal
+            // does not: there the fill rounds to whole cells), then the empty ones
             let cells = round_half_up(f64::from(width) / f64::from(BAR_CELL_PX)).max(1);
-            let full = round_half_up(f64::from(cells) * v);
+            let units = round_half_up(f64::from(cells) * 8.0 * v);
+            let part = if units % 8 > 0 {
+                glyph(env, &format!("bar-{}", units % 8))
+            } else {
+                ""
+            };
+            let full = if units % 8 > 0 && part.is_empty() {
+                round_half_up(f64::from(cells) * v)
+            } else {
+                units / 8
+            };
+            let empty = cells - full - u32::from(!part.is_empty());
+            let fill = format!("{}{part}", glyph(env, "bar-full").repeat(full as usize));
             b.push(glyph(env, "bar-left"), None);
-            if full > 0 {
-                b.push(
-                    &glyph(env, "bar-full").repeat(full as usize),
-                    Some(fill_face),
-                );
+            if !fill.is_empty() {
+                b.push(&fill, Some(fill_face));
             }
-            if cells > full {
-                b.push(&" ".repeat((cells - full) as usize), Some(face));
+            if empty > 0 {
+                b.push(&glyph(env, "bar-empty").repeat(empty as usize), Some(face));
             }
             b.push(glyph(env, "bar-right"), None);
         }

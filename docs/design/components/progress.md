@@ -37,9 +37,9 @@ The kit's `progress` component: one definition in `etc/ui/components.eld`, expan
 
 | Binding | Face | Fill | Text | Edge |
 |---|---|---|---|---|
-| own | `drgnx-kit-progress` | progress-track | - | - |
+| own | `drgnx-kit-progress` | - | progress-track | - |
 | ring | `drgnx-kit-progress-ring` | - | progress-fill | - |
-| fill | `drgnx-kit-progress-fill` | progress-fill | progress-fill | - |
+| fill | `drgnx-kit-progress-fill` | - | progress-fill | - |
 
 ## States
 

@@ -73,7 +73,9 @@ that is not UTF-8: an icon's glyph says less than its picture.  The icon names t
      ;; the Search view's: a chip that opens a menu, Changed Lines Only, Save This Search and a saved search
      (dropdown "▾" . "v") (changed-lines "±" . "+-") (save-search "☆" . "*")
      ;; the kit's progress: a bar's edges and its filled cells on a terminal, and the ring's five steps
-     (bar-left "▕" . "[") (bar-full "█" . "#") (bar-right "▏" . "]")
+     (bar-left "" . "[") (bar-full "█" . "#") (bar-empty "░" . "-") (bar-right "" . "]")
+     (bar-1 "▏" . "") (bar-2 "▎" . "") (bar-3 "▍" . "") (bar-4 "▌" . "") (bar-5 "▋" . "") (bar-6 "▊" . "")
+     (bar-7 "▉" . "")
      (progress-0 "○" . "0") (progress-1 "◔" . "1") (progress-2 "◑" . "2") (progress-3 "◕" . "3") (progress-4 "●" . "4"))
    drgnx-ui--icon-glyphs)
   "The standard glyph table: the default of `drgnx-face-glyphs', and where a name the option lacks is found.")
@@ -666,15 +668,17 @@ video); on a terminal [H] in the colour.  Its label, \"agent HANDLE\", is its `h
               nil)))))
 
 (defconst drgnx-ui-kit-progress-bar-px 4 "A progress bar's height, logical px (the hub's `kit::BAR_PX').")
+(defconst drgnx-ui-kit-progress-radius-px 2 "A progress bar's corner radius, logical px.")
 (defconst drgnx-ui-kit-progress-cell-px 8
   "Logical px of a progress bar's width per terminal cell (the hub's `kit::BAR_CELL_PX').")
 
 (defun drgnx-ui-kit--progress (props scale tty)
   "The `progress' component of PROPS (:kind \"bar\" or \"ring\", :value 0-1, :width logical px) at SCALE or on a
 terminal (TTY, `ascii' for ASCII glyphs).  A bar is the fill (`drgnx-kit-progress-fill', VALUE of the width rounded
-half up) then the track (`drgnx-kit-progress'), each a space `drgnx-ui-kit-progress-bar-px' high; on a terminal its
-cells (one per `drgnx-ui-kit-progress-cell-px') between its edges, the filled ones `bar-full'.  A ring is one of the
-five glyphs `progress-0'..`progress-4'.  Its label, \"N percent\", is its `help-echo'.  As `drgnx-ui-kit--expand'."
+half up) then the track (`drgnx-kit-progress'), each a space `drgnx-ui-kit-progress-bar-px' high, which the
+editor draws as the bar's images (`drgnx-ui-kit-bar-display'); on a terminal its cells (one per
+`drgnx-ui-kit-progress-cell-px'), the filled ones `bar-full' and a partial block, then `bar-empty'.  A ring is one of
+the five glyphs `progress-0'..`progress-4'.  Its label, \"N percent\", is its `help-echo'.  As `drgnx-ui-kit--expand'."
   (let* ((kind (if (equal (plist-get props :kind) "ring") 'ring 'bar))
          (v (max 0.0 (min 1.0 (float (or (plist-get props :value) 0)))))
          (width (or (plist-get props :width) 0))
@@ -686,19 +690,24 @@ five glyphs `progress-0'..`progress-4'.  Its label, \"N percent\", is its `help-
       (let ((g (drgnx-ui-kit--glyph (intern (format "progress-%d" (drgnx-ui-kit--round (* 4 v)))) tty)))
         (push g parts) (push (list 0 (length g) face) runs) (setq pos (length g))))
      (tty
+      ;; eighths of a cell: the filled cells, then a partial block when the env draws one (an ASCII terminal does not:
+      ;; there the fill rounds to whole cells), then the empty ones
       (let* ((cells (max 1 (drgnx-ui-kit--round (/ width (float drgnx-ui-kit-progress-cell-px)))))
-             (full (drgnx-ui-kit--round (* cells v)))
-             (fill (apply #'concat (make-list full (drgnx-ui-kit--glyph 'bar-full tty))))
-             (left (drgnx-ui-kit--glyph 'bar-left tty)))
+             (units (drgnx-ui-kit--round (* cells 8 v)))
+             (part-glyph (and (> (% units 8) 0) (drgnx-ui-kit--glyph (intern (format "bar-%d" (% units 8))) tty)))
+             (full (if (equal part-glyph "") (drgnx-ui-kit--round (* cells v)) (/ units 8)))
+             (part (if (or (null part-glyph) (equal part-glyph "")) "" part-glyph))
+             (fill (concat (apply #'concat (make-list full (drgnx-ui-kit--glyph 'bar-full tty))) part))
+             (empty (apply #'concat (make-list (- cells full (if (equal part "") 0 1)) (drgnx-ui-kit--glyph 'bar-empty tty))))
+             (left (drgnx-ui-kit--glyph 'bar-left tty)) (right (drgnx-ui-kit--glyph 'bar-right tty)))
         (push left parts) (setq pos (length left))
-        (when (> full 0)
+        (unless (equal fill "")
           (push fill parts) (push (list pos (+ pos (length fill)) 'drgnx-kit-progress-fill) runs)
           (setq pos (+ pos (length fill))))
-        (when (> cells full)
-          (push (make-string (- cells full) ?\s) parts) (push (list pos (+ pos (- cells full)) face) runs)
-          (setq pos (+ pos (- cells full))))
-        (let ((right (drgnx-ui-kit--glyph 'bar-right tty)))
-          (push right parts) (setq pos (+ pos (length right))))))
+        (unless (equal empty "")
+          (push empty parts) (push (list pos (+ pos (length empty)) face) runs)
+          (setq pos (+ pos (length empty))))
+        (push right parts) (setq pos (+ pos (length right)))))
      (t
       (let* ((total (drgnx-px width nil scale))
              (fill (drgnx-ui-kit--round (* total v)))
@@ -767,6 +776,59 @@ above 0: a progress bar's) makes it that high."
         (t (or (gethash width drgnx-ui-kit--pads)
                (puthash width `(space :width (,width)) drgnx-ui-kit--pads)))))
 
+;; A progress bar's parts are spaces of a height (the hub's and Lisp's alike); a stretch glyph's background fills its
+;; whole line whatever its height, so the editor draws each part as an image instead: a rectangle in `currentColor'
+;; (the text colour of the part's face, `drgnx-kit-progress-fill' or `drgnx-kit-progress', as the icons take theme
+;; colours: no colour named, nothing redrawn on a theme change), centred on the line, its outer ends rounded.
+
+(defconst drgnx-ui-kit--bar-faces '("drgnx-kit-progress-fill" "drgnx-kit-progress")
+  "The faces of a progress bar's parts, by name.")
+
+(defvar drgnx-ui-kit--bar-images (make-hash-table :test #'equal)
+  "(WIDTH HEIGHT RADIUS START END) → a progress bar part's image.  Emptied at 256 entries (the widths a session's bars
+take; a part is remade at its next draw).")
+
+(defun drgnx-ui-kit-bar-image (width height radius start end)
+  "A part of a progress bar: WIDTH x HEIGHT device px in `currentColor', its START and END corners rounded by RADIUS
+device px where non-nil, centred on the line."
+  (let ((key (list width height radius start end)))
+    (or (gethash key drgnx-ui-kit--bar-images)
+        (progn
+          (when (>= (hash-table-count drgnx-ui-kit--bar-images) 256) (clrhash drgnx-ui-kit--bar-images))
+          (puthash key
+                   (create-image
+                    (concat (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\">" width height)
+                            (format "<rect width=\"%d\" height=\"%d\" rx=\"%d\" fill=\"currentColor\"/>" width height radius)
+                            ;; a joined end is square: a plain half over the rounded one
+                            (unless start (format "<rect width=\"%s\" height=\"%d\" fill=\"currentColor\"/>" (/ width 2.0) height))
+                            (unless end (format "<rect x=\"%s\" width=\"%s\" height=\"%d\" fill=\"currentColor\"/>"
+                                                (/ width 2.0) (/ width 2.0) height))
+                            "</svg>")
+                    'svg t :ascent 'center :scale 1)
+                   drgnx-ui-kit--bar-images)))))
+
+(defun drgnx-ui-kit-bar-display (spaces runs scale)
+  "((POS . DISPLAY)...): the image each progress bar part among SPACES ((POS WIDTH HEIGHT)...) is drawn as, at SCALE;
+a part is a space of a height under a run (FROM TO FACE, FACE a symbol or its name) of `drgnx-ui-kit--bar-faces'.  A
+part next to another is not rounded on that side.  nil where SVG cannot be drawn (the parts stay spaces).  Called per
+hub row: loops, no closures."
+  (let (parts)
+    (dolist (sp spaces)
+      (when (> (or (nth 2 sp) 0) 0)
+        (let ((pos (nth 0 sp)) (hit nil))
+          (dolist (r runs)
+            (when (and (not hit) (<= (nth 0 r) pos) (< pos (nth 1 r))
+                       (member (if (symbolp (nth 2 r)) (symbol-name (nth 2 r)) (nth 2 r)) drgnx-ui-kit--bar-faces))
+              (setq hit t)))
+          (when hit (push sp parts)))))
+    (when (and parts (image-type-available-p 'svg))
+      (let ((at (mapcar #'car parts)) (r (drgnx-px drgnx-ui-kit-progress-radius-px nil scale)) out)
+        (dolist (sp parts out)
+          (push (cons (car sp)
+                      (drgnx-ui-kit-bar-image (nth 1 sp) (nth 2 sp) (min r (/ (nth 2 sp) 2))
+                                              (not (memql (1- (car sp)) at)) (not (memql (1+ (car sp)) at))))
+                out))))))
+
 (defun drgnx-ui-kit-string (component props where frame)
   "COMPONENT with PROPS (as `drgnx-ui-kit-expand') as a propertized string for WHERE (`text', `header-line',
 `mode-line' or `tab-line') on FRAME (nil: the selected one), at FRAME's scale or as its terminal draws it.  A click
@@ -782,8 +844,10 @@ on an action (PROPS :action) runs `kit-activate' (the kind's map, `drgnx-ui-kit-
       (when (eq (nth 2 p) 'drgnx-action)
         (put-text-property (nth 0 p) (nth 1 p) (if (eq where 'text) 'keymap 'local-map)
                            (drgnx-ui-kit-action-map (car (nth 3 p))) s)))
-    (dolist (sp (nth 3 e))
-      (put-text-property (car sp) (1+ (car sp)) 'display (drgnx-ui-kit--pad (nth 1 sp) where frame (nth 2 sp)) s))
+    (let ((bars (and gui (drgnx-ui-kit-bar-display (nth 3 e) (nth 1 e) (drgnx-pixels-scale frame)))))
+      (dolist (sp (nth 3 e))
+        (put-text-property (car sp) (1+ (car sp)) 'display
+                           (or (cdr (assq (car sp) bars)) (drgnx-ui-kit--pad (nth 1 sp) where frame (nth 2 sp))) s)))
     s))
 
 ;;;; Actions: what a click or RET on a component does

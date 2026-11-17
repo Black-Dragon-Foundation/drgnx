@@ -2465,10 +2465,9 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   each card naming the agent of the connection's map view `map` that works on it (the agent whose task id is the
   card's: two tasks of one title never show each other's agent). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
   heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
-  `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: on a GUI two `spaces` 4 px high from
-  4 px in, the steps done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the column less 16 px,
-  in device px at the env's `scale`, rounded half up as `drgnx-px` does; on a terminal the card's text width of `▰`
-  and `▱` in those faces), or `none`. Its model is its own, not the map's: a `card` node per task
+  `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: the kit's `progress` bar from 4 px in,
+  the column less 16 px wide, the steps done its value; on a terminal the card's text width in the kit's cells), or
+  `none`. Its model is its own, not the map's: a `card` node per task
   (fields `label status column plan agent agent-label`) whose links are the `board` form's (`navs.board`: up and down
   in its column, left and right to the nearest column with cards, at the same height or its last card), lists
   `cards` (column by column) and `team` (the cards an agent works on).
@@ -2534,7 +2533,8 @@ it builds for Android too).
   and `mouse-face` over the component, which the editor maps to the kind's one keymap (`docs/develop/core.md`,
   "Actions and focus-visible"). Besides rows the kit has `{"c": "agent-mark", "slot": 1-12, "handle": "Q"}` (the
   handle on its agent's colour) and `{"c": "progress", "kind": "bar"|"ring", "value": 0-1, "width": LOGICAL-PX}` (a bar
-  of `kit::BAR_PX`-high spaces, the fill then the track, or a ring glyph), each with its spoken label as `help-echo`
+  of `kit::BAR_PX`-high spaces, the fill then the track, which the editor draws as images, or a ring glyph), each
+  with its spoken label as `help-echo`
   (`docs/design/components/chips-and-keys.md`). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
   (`tests/kit_conformance.rs` and `drgnx-ui-kit/conformance` over `test/fixtures/kit`) keeps the two equal.
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
