@@ -429,6 +429,93 @@ and its own back after."
         (overlay-put o 'after-string s))))))
 
 
+;;;; The hover ⋯ over a long name
+
+(defvar-local drgnx-wb--covers nil
+  "(WINDOW . OVERLAY): each window's cover, the overlay that draws a hovered row's ⋯ over the end of its name
+\(`drgnx-wb-cover-sense'); one per window, moved from row to row and detached (`delete-overlay') when the pointer
+leaves.")
+
+(defvar-local drgnx-wb-cover-control nil
+  "The control a hovered row's cover draws (`drgnx-wb-cover-sense'): a string, or nil for the ⋯.")
+
+(defun drgnx-wb-cover-sense (window pos dir)
+  "A row's mouse sensor (Nidhogg's `mouse-sensor-functions'): the pointer came onto (DIR `entered') or went off
+\(`left') the row at POS in WINDOW.  A row whose name reaches its control's place (`drgnx-row-tail-short': its tail
+leaves the control out) gets the control drawn over the end of its name while the pointer is on it, as VS Code's hover
+actions: the name's characters from the control's place on are displayed as a stretch to that place and the control,
+so the row keeps its width and the control its place.  Off the row, the cover goes."
+  (when (window-live-p window)
+    (with-current-buffer (window-buffer window)
+      (let ((bol (save-excursion (goto-char pos) (pos-bol))))
+        (if (eq dir 'entered)
+            (drgnx-wb--cover window bol)
+          (when-let* ((o (cdr (assq window drgnx-wb--covers)))
+                      ((overlay-buffer o)) ((= bol (overlay-get o 'drgnx-row-bol))))
+            (delete-overlay o)))))))
+
+(defun drgnx-wb--cover (window bol)
+  "Draw the control over the end of the name of the row at BOL in WINDOW, when the row is short of room for it.
+Reads only what is drawn (the row's tail overlay, the window's glyphs at one point), and reuses WINDOW's cover."
+  (let* ((eol (save-excursion (goto-char bol) (pos-eol)))
+         (tail (and (< bol eol) (get-text-property bol 'drgnx-row-tail-short)
+                    (let ((found nil))
+                      (dolist (o (overlays-at bol) found)
+                        (when (overlay-get o 'drgnx-row-tail) (setq found o))))))
+         (o (cdr (assq window drgnx-wb--covers))))
+    (when (and o (overlay-buffer o)) (delete-overlay o))
+    ;; a deleted window's cover goes with it
+    (dolist (c drgnx-wb--covers)
+      (unless (window-live-p (car c))
+        (delete-overlay (cdr c))
+        (setq drgnx-wb--covers (delq c drgnx-wb--covers))))
+    (when-let* ((tail)
+                (xy (posn-x-y (posn-at-point bol window)))
+                (at-dots (with-selected-frame (window-frame window) (nth 1 (drgnx-wb--tail-places))))
+                (x (- (window-body-width window t) (cadr (drgnx-wb-tail-px window))))
+                ;; `posn-at-x-y' counts Y from the window's top, above its tab and header lines; `posn-at-point' from
+                ;; its text area
+                (at (posn-point (posn-at-x-y (max 0 x) (+ (cdr xy) (window-tab-line-height window)
+                                                          (window-header-line-height window))
+                                             window)))
+                ;; the name's last character at least (its ellipsis): a name the hub cut ending just short of the
+                ;; control's place still gets the control there
+                (k (min at (1- eol)))
+                ((< bol k)))
+      (let* ((row (overlay-get tail 'drgnx-row-face))
+             (sensor (overlay-get tail 'mouse-sensor-functions))
+             (s (concat (propertize " " 'display `(space :align-to (- right ,at-dots)))
+                        (propertize (drgnx-look-hover-control (or drgnx-wb-cover-control drgnx-wb--control) t
+                                                              (window-frame window))
+                                    'drgnx-row-control t))))
+        (when row (add-face-text-property 0 (length s) row t s))
+        (put-text-property 0 (length s) 'mouse-face (if row (drgnx-wb--row-mouse-face row) (drgnx-wb-row-hover-face)) s)
+        (when sensor (put-text-property 0 (length s) 'mouse-sensor-functions sensor s))
+        (unless o
+          (setq o (make-overlay k eol nil t))
+          (push (cons window o) drgnx-wb--covers))
+        (move-overlay o k eol)
+        (overlay-put o 'window window)
+        (overlay-put o 'drgnx-wb-cover t)
+        (overlay-put o 'drgnx-row-bol bol)
+        (overlay-put o 'mouse-sensor-functions sensor)
+        (overlay-put o 'display s)))))
+
+(defun drgnx-wb-covers-clear ()
+  "Remove every buffer's covers (`drgnx-wb-cover-sense'): the teardown of the modules whose rows have them."
+  (dolist (b (buffer-list))
+    (when (buffer-local-value 'drgnx-wb--covers b)
+      (with-current-buffer b
+        (dolist (c drgnx-wb--covers) (delete-overlay (cdr c)))
+        (setq drgnx-wb--covers nil)))))
+
+(defun drgnx-wb-covers-setup (name)
+  "For the module NAME whose rows get covers: turn Nidhogg's mouse sensors on, and remove the covers when it is off."
+  (when (boundp 'mouse-sensor-enabled)
+    (drgnx-module-set 'mouse-sensor-enabled t))
+  (drgnx-modules-push-undo (format "%s: the hover covers" name) #'drgnx-wb-covers-clear))
+
+
 (defun drgnx-wb-shown-spans ()
   "Where the current buffer's rows get tails (the Explorer's and the Buffers panel's hub rows): for each window showing
 it, (FROM . TO) from a page above its start to two pages below it; t when no window shows it (every row)."
