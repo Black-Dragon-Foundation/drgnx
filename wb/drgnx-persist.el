@@ -278,6 +278,24 @@ not restored: one message, and the next save keeps a backup of it."
                nil)
       (plist-get r :data))))
 
+(defun drgnx-persist--strip (tree)
+  "The window state TREE without its window parameters: a state file must not set any (drgnx saves
+none — they would come from a crafted file).  A list is walked along its cdr in a loop (a long one cannot
+exhaust the stack; a circular or dotted one ends at 100000 elements); only nesting recurses, and ends at 64 levels.
+Format 3 keeps no window state: its one caller left is the layouts module's, until layouts move to the grid."
+  (drgnx-persist--strip-1 tree 0))
+
+(defun drgnx-persist--strip-1 (tree depth)
+  "`drgnx-persist--strip' of TREE, DEPTH levels down."
+  (if (and (consp tree) (< depth 64))
+      (let ((acc nil) (n 0) (cap (if (proper-list-p tree) most-positive-fixnum 100000)))
+        (while (and (consp tree) (< (setq n (1+ n)) cap))
+          (unless (eq (car-safe (car tree)) 'parameters)
+            (push (drgnx-persist--strip-1 (car tree) (1+ depth)) acc))
+          (setq tree (cdr tree)))
+        (nconc (nreverse acc) (and (not (consp tree)) tree)))   ; the dotted tail stays
+    (and (not (consp tree)) tree)))
+
 (defun drgnx-persist--clamp (px limit) (and (integerp px) (max 1 (min px (floor limit)))))
 
 (defun drgnx-persist--visit (file)
