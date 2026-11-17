@@ -3477,6 +3477,29 @@ their chrome again.
 Tests: `test/unit/grid-snapshot-test.el` (`drgnx-grid-snapshot/`: the stack, one frame; batch cannot make a second
 frame) and `test/ui/grid-snapshot-gui-test.el` (`drgnx-ui-grid-snapshot/`: aux frames made, closed and restored).
 
+**Move to New Window** (`wb/drgnx-grid-frames.el`). `(drgnx-grid-move-to-new-frame &optional WINDOW)` pushes
+`tear-out` and lets the tile leave its frame as a move does (`drgnx-grid--delete-tile`; a frame's last editor stays,
+empty). In a new aux frame (`drgnx-frames--new`) it is the only tile, with a fresh id and no dock: an editor as its
+window's state (`drgnx-grid--state`: buffer, tabs, start, point, parameters), a tool tile made again from its stack
+and buffer (`drgnx-grid--tool-tile`, `drgnx-grid--put-buffer`), so its companions (a conversation's header and
+composer) are made with it and fitted to the new window, then given its start and point. A whole atom's state cannot
+be put into a frame's only window: `window-state-put` fails with "Cannot resize window". `(drgnx-grid-move-tab-to-new-frame &optional WINDOW KIND)`, the command
+`move-editor-to-new-window` ("Move to New Window"), takes one tab: an editor's file among others leaves the tabs
+(`drgnx-chrome--close`), a kind among a stack's others leaves the stack (`drgnx-grid--fill-leaf` makes its tile there),
+a docked area's other tab is shown first; a tile's only tab moves the tile. A tab's or the grip's right click
+(`drgnx-grid-tab-menu-click`, bound in `drgnx-grid--tab-map`, `drgnx-grid-grip-map`, `drgnx-chrome--tab-map` and
+`drgnx-area--tab-map`) pops `drgnx-grid-tab-menu`. A drag released outside every frame never reaches Lisp (probe P4,
+the tiling ledger), so the menu and the command are the ways; a drop outside does nothing.
+
+**Each window's shell** (`wb/drgnx-frame-shell.el`). Frame parameter `drgnx-shell`, `(:title BOOL :rail BOOL :right BOOL
+:place PLACE)`, given on first ask by `(drgnx-shell-defaults TREE)`: `:rail` nil when the tree is only Work (an editor in
+`drgnx-shell-focus-modes`) and its Detail, or one conversation (`drgnx-shell-focused-p`). `(drgnx-shell-get FRAME
+KEY)`, `(drgnx-shell-set FRAME KEY VALUE)`: `:rail` writes the kit's `drgnx-rail` frame parameter (`hidden` or nil),
+`:right` shows or hides the right dock's tile (`drgnx-grid-toggle-dock`), `:title` is the title bar's to read. The
+commands `shell-toggle-rail`, `-title`, `-right` act on the selected frame. `(drgnx-shell-right-for PLACE)` is
+`work-detail` for `work`, `agents-side` (a placeholder kind until it is defined) for every other place.
+Tests: `test/unit/wb-shell-test.el` (`drgnx-shell/`), `test/ui/tiling-frames-gui-test.el` (`drgnx-ui-tiling-frames/`).
+
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 
 `drgnx-grid-mode` (global) makes `grid` the pane backend (`drgnx-pane-backend`): pane kinds then live in **tool

@@ -29,6 +29,7 @@
 (defvar drgnx-wb-dock-columns)
 (declare-function drgnx-wb-focus-editor "drgnx-wb")
 (declare-function drgnx-grid--tab-press "drgnx-grid-ops" (event))
+(declare-function drgnx-grid-tab-menu-click "drgnx-grid-frames" (event))
 (declare-function drgnx-grid-grip-press "drgnx-grid-ops" (event))
 (declare-function drgnx-wb-editor-window "drgnx-wb")
 (declare-function drgnx-wb-close-button "drgnx-wb")
@@ -646,6 +647,7 @@ For invoked commands only (`split-editor-right' and `split-editor-down' on a too
   (let ((m (make-sparse-keymap)))
     (define-key m [tab-line down-mouse-1] #'drgnx-grid--tab-press)
     (define-key m [tab-line mouse-1] #'drgnx-grid--tab-click)
+    (define-key m [tab-line mouse-3] #'drgnx-grid-tab-menu-click) ; its menu: Move to New Window
     m)
   "A tool tile's tab: a click shows it, a drag off the row moves it (`drgnx-grid--tab-press').")
 
@@ -658,6 +660,8 @@ another tile's edge (a split there) or middle (a stack).  Nil: no grip is drawn 
   (let ((m (make-sparse-keymap)))
     (define-key m [tab-line down-mouse-1] #'drgnx-grid-grip-press)
     (define-key m [header-line down-mouse-1] #'drgnx-grid-grip-press) ; a docked area's row is its header line
+    (define-key m [tab-line mouse-3] #'drgnx-grid-tab-menu-click)
+    (define-key m [header-line mouse-3] #'drgnx-grid-tab-menu-click)
     m)
   "The grip's mouse map: a press drags the tile (`drgnx-grid-grip-press').")
 

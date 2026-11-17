@@ -144,13 +144,6 @@ Sorts, never filters: every buffer stays a candidate."
     (drgnx-signal-post 'tabs-changed)
     f))
 
-(defun drgnx-frames-move-editor ()
-  "Move the shown file to a new window (it leaves this group's tabs)."
-  (interactive)
-  (let* ((g (drgnx-groups--current)) (b (window-buffer g)))
-    (drgnx-chrome--close g b)
-    (drgnx-frames--new b (list b))))
-
 (defun drgnx-frames-open-editor ()
   "Open the shown file in a new window too (both show it)."
   (interactive)

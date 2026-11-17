@@ -72,7 +72,7 @@
 (defun drgnx-wm-move--aux (sess)
   "Move the shown file of SESS's main window into a new window; it is `drgnx-wmt-aux'.  Waits until it is mapped."
   (drgnx-wm-move--eval
-   sess "(progn (with-selected-frame drgnx-wmt-main (drgnx-frames-move-editor) (setq drgnx-wmt-aux (selected-frame))) t)")
+   sess "(progn (with-selected-frame drgnx-wmt-main (drgnx-grid-move-tab-to-new-frame) (setq drgnx-wmt-aux (selected-frame))) t)")
   (should (drgnx-wm-move--until
            (lambda () (eql 2 (drgnx-wm-move--eval sess "(length (drgnx-wmt-gui-frames))")))))
   ;; the window manager has put it somewhere

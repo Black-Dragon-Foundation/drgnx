@@ -40,7 +40,7 @@
 (declare-function drgnx-frames-mode "drgnx-frames")
 (declare-function drgnx-pane--frame-replaced "drgnx-panes")
 (declare-function drgnx-popup--frame-replaced "drgnx-popup")
-(declare-function drgnx-frames-move-editor "drgnx-frames")
+(declare-function drgnx-grid-move-tab-to-new-frame "drgnx-grid-frames" (&optional window kind))
 (declare-function drgnx-frames-open-editor "drgnx-frames")
 (declare-function drgnx-frames-move-group "drgnx-frames")
 (declare-function drgnx-buffers-toggle-all-windows "drgnx-buffers")
@@ -154,6 +154,13 @@ another buffer (BUFFER-NAME) is left as it was."
                                                :doc (format "Grow this tile toward the %s by one step (shrink it at the grid's edge)"
                                                             (downcase title))))
                        (require 'drgnx-grid-frames)
+                       ;; Each window's own shell (docs/guide/workbench.md, "Several windows")
+                       (require 'drgnx-frame-shell)
+                       (pcase-dolist (`(,id ,title ,fn ,doc)
+                                      '((shell-toggle-rail "Toggle Rail in This Window" drgnx-shell-toggle-rail "Show or hide this window's rail; the other windows keep theirs")
+                                        (shell-toggle-title "Toggle Title Bar in This Window" drgnx-shell-toggle-title "Show or hide this window's title bar; the other windows keep theirs")
+                                        (shell-toggle-right "Toggle Right Side in This Window" drgnx-shell-toggle-right "Show or hide this window's right side; the other windows keep theirs")))
+                         (drgnx-command-define id :category "View" :title title :command fn :doc doc))
                        (drgnx-command-define 'layout-restore-previous :category "View" :title "Restore Previous Layout"
                                              :command #'drgnx-grid-restore-previous
                                              :doc "Put back the layout before the last change to it: a move, a preset, a tear-out, a package that collapsed the tiles")
@@ -211,7 +218,7 @@ another buffer (BUFFER-NAME) is left as it was."
                        (require 'drgnx-frames)
                        (drgnx-frames-mode 1)
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((move-editor-to-new-window "Move Editor into New Window" drgnx-frames-move-editor "Move the shown file to a new window")
+                                      '((move-editor-to-new-window "Move to New Window" drgnx-grid-move-tab-to-new-frame "Move the shown tab to a new window: a file leaves its group's tabs, a tile's only tab takes the tile, whole")
                                         (open-editor-in-new-window "Open Editor in New Window" drgnx-frames-open-editor "Show the file in a new window too")
                                         (move-group-to-new-window "Move Editor Group into New Window" drgnx-frames-move-group "Move this group and its tabs to a new window")
                                         (buffers-toggle-all-windows "Buffers: Show All Windows" drgnx-buffers-toggle-all-windows "List the buffers of every window, or of this one")))

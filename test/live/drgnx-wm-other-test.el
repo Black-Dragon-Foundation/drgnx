@@ -73,7 +73,7 @@ and a way to call an asynchronous function whose answer lands in `drgnx-wmt-resu
   "Move the shown file of SESS's main window into a new window, `drgnx-wmt-aux'; wait until the WM has put it on
 a monitor."
   (drgnx-wm-other--eval
-   sess "(progn (with-selected-frame drgnx-wmt-main (drgnx-frames-move-editor) (setq drgnx-wmt-aux (selected-frame))) t)")
+   sess "(progn (with-selected-frame drgnx-wmt-main (drgnx-grid-move-tab-to-new-frame) (setq drgnx-wmt-aux (selected-frame))) t)")
   (should (drgnx-wm-other--until (lambda () (eql 2 (drgnx-wm-other--eval sess "(length (drgnx-wmt-gui-frames))")))))
   (should (drgnx-wm-other--until
            (lambda () (drgnx-wm-other--eval sess "(and (frame-visible-p drgnx-wmt-aux) (drgnx-wmt-monitor drgnx-wmt-aux))")))))
