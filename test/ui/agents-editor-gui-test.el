@@ -120,11 +120,15 @@ what a rebuild costs."
 (defvar-local agents-editor-gui--active 0)
 (defvar-local agents-editor-gui--table nil)
 
+(defvar agents-editor-gui--phases nil
+  "The steps of each rebuild, newest first: (ROWS LINE OVERLAYS CLEANUP) in ms, so a run over the bar says which step took it.")
+
 (defun agents-editor-gui--rebuild (win &optional start)
   "Put one gutter overlay and one ring overlay on each visible row that lies in a range of the table."
   (with-current-buffer (window-buffer win)
-    (let* ((start (or start (window-start win))) (rows (agents-editor-gui--rows win start))
-           (line (line-number-at-pos start)) (i 0) (table agents-editor-gui--table))
+    (let* ((t0 (float-time)) (start (or start (window-start win))) (rows (agents-editor-gui--rows win start))
+           (t1 (float-time))
+           (line (line-number-at-pos start)) (i 0) (table agents-editor-gui--table) (t2 (float-time)) (t3 nil))
       (unless agents-editor-gui--slots (setq agents-editor-gui--slots (make-vector 400 nil)))
       (save-excursion
         (goto-char start)
@@ -147,11 +151,14 @@ what a rebuild costs."
                 (overlay-put g 'agents-editor-gui t))
               (cl-incf i)))
           (forward-line 1) (cl-incf line)))
+      (setq t3 (float-time))
       (let ((j i))
         (while (< j agents-editor-gui--active)
           (when-let* ((slot (aref agents-editor-gui--slots j)))
             (delete-overlay (car slot)) (delete-overlay (cdr slot)))
           (cl-incf j)))
+      (push (list (* 1000 (- t1 t0)) (* 1000 (- t2 t1)) (* 1000 (- t3 t2)) (* 1000 (- (float-time) t3)))
+            agents-editor-gui--phases)
       (setq agents-editor-gui--active i))))
 
 (defun agents-editor-gui--clear ()
@@ -242,6 +249,7 @@ bar is 2 ms); then the cost of the redisplay the overlays add; then a picture in
       (let ((rows (agents-editor-gui--rows win (point-min))) direct hooked bare)
         (should (>= rows 80))
         ;; direct: the rebuild alone, 200 scrolls of 37 lines
+        (setq agents-editor-gui--phases nil)
         (dotimes (k 200)
           (let ((pos (save-excursion (goto-char (point-min)) (forward-line (* 3 (% k 100))) (point))))
             (set-window-start win pos)
@@ -282,7 +290,12 @@ bar is 2 ms); then the cost of the redisplay the overlays add; then a picture in
           (agents-editor-gui--note "S1 rebuild rows=%d active-last=%d direct-ms=%S" rows agents-editor-gui--active d)
           (agents-editor-gui--note "S1 redisplay bare-ms=%S with-overlays-ms=%S glitnir=%S scale=%S" b h
                                    (drgnx-uitest-glitnir-p) (drgnx-uitest-device-scale (selected-frame)))
-          (should (<= (plist-get d :p95) 2.0)))
+          (should (or (<= (plist-get d :p95) 2.0)
+                      (ert-fail (list :over-the-bar d
+                                      :slowest-steps-ms-rows-line-overlays-cleanup
+                                      (seq-take (sort (copy-sequence agents-editor-gui--phases)
+                                                      (lambda (a b) (> (apply #'+ a) (apply #'+ b))))
+                                                6))))))
         ;; the picture, both themes
         (set-window-start win (save-excursion (goto-char (point-min)) (forward-line 40) (point)))
         (pcase-dolist (`(,variant . ,theme) agents-editor-gui--themes)
