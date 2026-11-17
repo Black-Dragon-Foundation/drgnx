@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::history::HistRow;
 use crate::learn::{Learned, Warmth};
-use crate::model::{Job, JobTrust, Os, Priority, RunnerTrust, WaitReason};
+use crate::model::{Job, JobId, JobTrust, Os, Priority, RunnerTrust, Verdict, WaitReason};
 
 /// A runner's state as the hub knows it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,10 +448,77 @@ pub fn why_here(job: &Job, cands: &[Candidate], ctx: &PlaceCtx) -> Option<String
     None
 }
 
+/// Where a job's needs stand ([`need_state`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NeedState {
+    /// Every need passed (or came from the cache), or the queue no longer knows it.
+    Met,
+    /// The first need not ended yet: the job waits and holds nothing.
+    Waiting(JobId),
+    /// A need ended without passing: the job can't run.
+    Failed { job: JobId, verdict: Verdict },
+}
+
+/// A need as the queue knows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NeedSeen {
+    /// Queued or running.
+    Live,
+    Ended(Verdict),
+    /// Never seen, or ended so long ago the queue forgot it.
+    Unknown,
+}
+
+/// The state of NEEDS, each as SEEN reports it: the first one that failed, else the first one not ended, else met.
+/// A need the queue doesn't know counts as met: it was checked at submit, so a forgotten one ended long ago.
+pub fn need_state(needs: &[JobId], seen: &dyn Fn(&JobId) -> NeedSeen) -> NeedState {
+    let mut waiting = None;
+    for n in needs {
+        match seen(n) {
+            NeedSeen::Ended(Verdict::Pass | Verdict::Cached(_)) | NeedSeen::Unknown => {}
+            NeedSeen::Ended(verdict) => {
+                return NeedState::Failed {
+                    job: n.clone(),
+                    verdict,
+                };
+            }
+            NeedSeen::Live => {
+                waiting.get_or_insert_with(|| n.clone());
+            }
+        }
+    }
+    waiting.map_or(NeedState::Met, NeedState::Waiting)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testkit::job;
+
+    #[test]
+    fn a_failed_need_wins_over_a_waiting_one() {
+        // [D] pure
+        let ids = |s: &[&str]| s.iter().map(|x| JobId((*x).into())).collect::<Vec<_>>();
+        let seen = |j: &JobId| match j.0.as_str() {
+            "live" => NeedSeen::Live,
+            "pass" => NeedSeen::Ended(Verdict::Pass),
+            "red" => NeedSeen::Ended(Verdict::Red),
+            _ => NeedSeen::Unknown,
+        };
+        assert_eq!(need_state(&ids(&[]), &seen), NeedState::Met);
+        assert_eq!(need_state(&ids(&["pass", "gone"]), &seen), NeedState::Met);
+        assert_eq!(
+            need_state(&ids(&["pass", "live"]), &seen),
+            NeedState::Waiting(JobId("live".into()))
+        );
+        assert_eq!(
+            need_state(&ids(&["live", "red"]), &seen),
+            NeedState::Failed {
+                job: JobId("red".into()),
+                verdict: Verdict::Red
+            }
+        );
+    }
 
     fn cand(name: &str, trust: RunnerTrust) -> Candidate {
         Candidate {

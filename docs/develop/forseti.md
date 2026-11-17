@@ -75,9 +75,10 @@ The model is a partitionable slot (jobq §5.4): each machine is one pool of core
 carves its share at start.
 
 - **`budget(m, limits)`**:
-  - `mem = MemAvailable − floor − reserve_user − Σ ours − others`. One of our running jobs counts its whole
-    reservation for its first 300 s (a container grows after its setup), then `(reserve − current)⁺`, since what it
-    uses is already gone from `MemAvailable`. `others` is `count_others` over `m.others` on `m.boot_id`; the probe has
+  - `mem = MemAvailable − floor − reserve_user − Σ ours − others`. One of our running jobs counts
+    `(reserve − current)⁺` from its first second, since what it uses is already gone from `MemAvailable` and its
+    reservation (at least its p95 peak × 1.1) leaves it room to grow; counting the whole reservation while young counted
+    the used part twice. `others` is `count_others` over `m.others` on `m.boot_id`; the probe has
     already dropped the reservations whose process is gone. Another scheduler's job counts `max(reserve, current)`
     whole, its use included: careful, since its `current` is that scheduler's last write.
   - `cpu = cores_usable − Σ expected CPU`: a job's mean from history, or its grant's cores when it has none
@@ -86,7 +87,11 @@ carves its share at start.
   it back:
   1. with `fixed_slots(n)`: the count alone (`Threads` at `n` running), and nothing else;
   2. power: `OnBattery` when the limits say no jobs on battery;
-  3. 10 s since the last start (`Gap`);
+  3. `Limits::start_gap_s` (10 s) since the last start (`Gap`), except between two small jobs: none when the job's
+     history peaks under `SMALL_PEAK_MIB` (1 GiB) and so did the last started job's (`MachineState::last_start_small`,
+     from the scheduler's `LastStart`). A job without history keeps the gap. The hub feeds each job's history into
+     admission: its own machine's admission and the `expected` of a runner's offer both come from the job's runs there
+     (else elsewhere);
   4. memory: `budget ≥ mem_min` (`NoRoom`);
   5. CPU: `budget ≥` the job's expected CPU (its `cores.min` with no history), plus `(overcommit − 1) × cores_usable`
      while the running jobs use less than half their grants on average (`Threads`);
@@ -217,9 +222,12 @@ The named reasons are in `classify::infra`: `runner lost`, `preempted`, `disk`, 
 Every finished run leaves a `HistRow { key, machine, grant, wall_s, cpu_s, mem_peak_mib, verdict, disturbed, at,
 warm }`.
 
-- **`history_key(spec)`**: the kind, then the suite and the rows selected, or else the command with paths
-  normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a `.claude/tmp` path `{tmp}`),
-  so one command run from two worktrees has one history.
+- **`history_key(spec)`**: the kind, then the suite (a check's stage), the class of the rows selected
+  (`selector_class`: `all`, `prefix` for one `^name/` or `^name-`, `alt` for an alternation, `other`) and the tree's
+  size bucket (`Derived::tree_bucket`, `floor(log2(MiB))` of the frozen tree, set by the hub at submit); or else the
+  command with paths normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a
+  `.claude/tmp` path `{tmp}`), so one command run from two worktrees has one history. `ert=^drgnx-fold/` and
+  `ert=^drgnx-marks/` share an expected time and memory; a tree ten times bigger keeps its own.
 - **`expected(rows, other, speed_ratio, suite_default)`**: the median time of the last 5 undisturbed runs on this
   machine, with their mean CPU and the p95 of their peak memory; else the same from other machines' rows, the time ×
   the static speed ratio; else the suite's default; else 10 minutes. The last two know no CPU or memory.

@@ -1,6 +1,6 @@
 ;;; layouts-eld-test.el --- batch tests: layouts.eld through the config layer -*- lexical-binding: t -*-
 ;; test-class: det
-;; Save Layout As… needs a frame's arrangement; these tests stub the snapshot, so they check the file side only
+;; Save Layout As… needs a frame's arrangement; these tests stub its grid, so they check the file side only
 ;; (the frame side is in mod-layouts-test.el).  Every test runs under `drgnx-test-with-config'.
 (require 'ert)
 (require 'cl-lib)
@@ -18,6 +18,12 @@
 "
   "A layouts.eld holding comments, an entry named like a built-in layout and two of the user's.")
 
+(defconst drgnx-layouts-eld-test--tree
+  '(row :px nil :share nil
+        (tile :px 200 :share 0.2 :id 2 :kinds (side-bar) :shown side-bar :dock left :state (:view explorer))
+        (editor :px 800 :share 0.8 :id 1 :tabs nil :shown "*scratch*" :point 1 :start 1))
+  "The stubbed frame's grid: the side bar and one editor.")
+
 (defmacro drgnx-layouts-eld-test--with (&rest body)
   "BODY with layouts.eld defined, in a fresh config folder, and the arrangement stubbed."
   (declare (indent 0))
@@ -26,10 +32,8 @@
      (unwind-protect
          (cl-letf (((symbol-function 'drgnx-layouts--close-bars) #'ignore)
                    ((symbol-function 'drgnx-layouts--remember) #'ignore)
-                   ((symbol-function 'drgnx-layouts--snapshot)
-                    (lambda () (list :left '(:shown t :view files :px 200) :panel '(:shown nil :px nil)
-                                     :right '(:shown t :tab agents :px 120))))
-                   ((symbol-function 'window-state-get) (lambda (&rest _) '(window-state :fake t))))
+                   ((symbol-function 'drgnx-layouts--frame-part)
+                    (lambda (_frame) (list :tree drgnx-layouts-eld-test--tree :full nil))))
            ,@body)
        (set-frame-parameter nil 'drgnx-layouts-current nil)
        (set-frame-parameter nil 'drgnx-layouts-previous nil))))
@@ -40,7 +44,7 @@
   (drgnx-layouts-eld-test--with
     (let ((broken "((mine :left files :right nil\n ;; the user's layouts, half typed\n"))
       (drgnx-test-config-put 'layouts broken)
-      (should-error (drgnx-layouts-save "review") :type 'drgnx-config-refused)
+      (should-error (drgnx-layouts-save "triage") :type 'drgnx-config-refused)
       (should (equal (drgnx-layouts-eld-test--text) broken))
       (should (equal (drgnx-layouts-names) (mapcar #'car drgnx-layouts)))
       (should-not (drgnx-layouts-current)))))
@@ -51,13 +55,13 @@
     (should (equal (drgnx-layouts-names) (append (mapcar #'car drgnx-layouts) '(old other))))
     (should-not (assq 'zen (drgnx-layouts--user)))
     ;; a new name is appended
-    (should (eq (drgnx-layouts-save "review") 'review))
+    (should (eq (drgnx-layouts-save "triage") 'triage))
     (let ((text (drgnx-layouts-eld-test--text)))
       (should (string-prefix-p ";; my own notes, kept\n((zen :left nil :right nil :panel nil :editor zen) ; a built-in name, left alone\n" text))
       (should (string-search " ;; between two entries\n" text))
       (should (string-search " (other :left nil :right agents :panel output :editor one)" text))
-      (should (string-search "(review :left files" text)))
-    (should (equal (drgnx-layouts-names) (append (mapcar #'car drgnx-layouts) '(old other review))))
+      (should (string-search "(triage :editor one" text)))
+    (should (equal (drgnx-layouts-names) (append (mapcar #'car drgnx-layouts) '(old other triage))))
     ;; an existing name is replaced where it stands; nothing else changes
     (let ((before (drgnx-layouts-eld-test--text)))
       (drgnx-layouts-save "old")
@@ -65,11 +69,11 @@
         (should-not (equal before after))
         (should (string-prefix-p ";; my own notes, kept\n((zen :left nil" after))
         (should (string-search " ;; between two entries\n" after))
-        (should (string-search "(review :left files" after))
-        (should (< (string-search "(old :left" after) (string-search ";; between" after)))
+        (should (string-search "(triage :editor one" after))
+        (should (< (string-search "(old :editor" after) (string-search ";; between" after)))
         (should (equal (alist-get 'zen (drgnx-config-get 'layouts))
                        '(:left nil :right nil :panel nil :editor zen)))
-        (should (equal (plist-get (alist-get 'old (drgnx-config-get 'layouts)) :windows) '(window-state :fake t)))))
+        (should (equal (plist-get (alist-get 'old (drgnx-config-get 'layouts)) :tree) drgnx-layouts-eld-test--tree))))
     (should (eq (drgnx-layouts-current) 'old))))
 
 (ert-deftest drgnx-layouts-eld/a-new-file-starts-with-its-header ()
@@ -88,7 +92,7 @@
       (let ((message-log-max nil) (inhibit-message t))
         (should (memq 'other (drgnx-layouts-names))))       ; the good copy, not the mistake
       (should (drgnx-config-problem 'layouts))
-      (should-error (drgnx-layouts-save "review") :type 'drgnx-config-refused)
+      (should-error (drgnx-layouts-save "triage") :type 'drgnx-config-refused)
       (should (equal (drgnx-layouts-eld-test--text) bad)))))
 
 (ert-deftest drgnx-layouts-eld/names-nil-t-and-keywords-are-refused ()

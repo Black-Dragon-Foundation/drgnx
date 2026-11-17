@@ -16,16 +16,17 @@
 (defconst drgnx-layouts-persist-test--params
   '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px drgnx-persist-restored
                   drgnx-persist-extra drgnx-layouts-state drgnx-layouts-current drgnx-layouts-previous
-                  drgnx-layouts-zen-return))
+                  drgnx-layouts-zen-return drgnx-layouts-project))
 
 (defmacro drgnx-layouts-persist-test--with (&rest body)
-  "BODY with a state file and config dir in a temp dir, an Explorer and a Search section, one editor
-window, the grid on (as the workbench module turns it on), and the persist hooks as the layouts module wires them.
-Prompts signal an error."
+  "BODY with a state file, config dir and state dir (the projects' layouts) in a temp dir, an Explorer and a Search
+section, one editor window, the grid on (as the workbench module turns it on), the pane kind `agent' and the persist
+hooks as the layouts module wires them.  Prompts signal an error."
   (declare (indent 0))
   `(drgnx-test-with-state
      (let* ((dir (file-name-as-directory (make-temp-file "drgnx-layouts-persist" t)))
-            (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
+            (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "state"))
+                                         process-environment))
             (drgnx-persist-file (expand-file-name "state.eld" dir))
             (drgnx-persist-after-restore-functions nil) (drgnx-persist-state-functions nil)
             (drgnx-config--defs (copy-hash-table drgnx-config--defs))      ; layouts.eld's definition is this test's own
@@ -39,6 +40,8 @@ Prompts signal an error."
        (set-frame-size nil 200 60)
        (drgnx-grid-test--reset)
        (dolist (p drgnx-layouts-persist-test--params) (set-frame-parameter nil p nil))
+       (clrhash drgnx-layouts--project-ids)
+       (drgnx-layouts-define-pane 'agent #'drgnx-layouts--fill-agent "Agent")
        (drgnx-wb-define-section 'files :slot 0 :title "EXPLORER"
                                 :buffer (lambda () (get-buffer-create "*drgnx-lp-explorer*")))
        (drgnx-wb-define-section 'find :slot 0 :view 'search :title "SEARCH"
@@ -55,7 +58,9 @@ Prompts signal an error."
                      ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "prompted")))
                      ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "prompted"))))
              ,@body)
+         (drgnx-timer-cancel '(layouts-save . "global"))
          (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize)
+         (remove-hook 'kill-emacs-hook #'drgnx-layouts--save-all)
          (drgnx-persist--refit-done)
          (drgnx-grid-mode -1)
          (drgnx-chrome-mode -1)
@@ -63,6 +68,7 @@ Prompts signal an error."
          (drgnx-wb-hide-sidebar)
          (drgnx-wb-area-hide 'panel)
          (drgnx-wb-area-hide 'right)
+         (drgnx-pane-undefine-kind 'agent)
          (drgnx-grid-test--reset)
          (set-window-margins nil 0 0)
          (dolist (p drgnx-layouts-persist-test--params) (set-frame-parameter nil p nil))
@@ -78,6 +84,16 @@ Prompts signal an error."
   (drgnx-wb-hide-sidebar)
   (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize)
   (drgnx-persist--restore-into (selected-frame)))
+
+(defun drgnx-layouts-persist-test--edit-store (key value)
+  "Rewrite the project's layouts store (project \"global\"): KEY becomes VALUE."
+  (let* ((file (drgnx-layouts-store-file "global"))
+         (data (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))
+    (with-temp-file file (prin1 (plist-put data key value) (current-buffer)))))
+
+(defun drgnx-layouts-persist-test--tile (kind)
+  "The tile of pane kind KIND, or nil."
+  (seq-find (lambda (w) (memq kind (window-parameter w 'drgnx-pane-stack))) (drgnx-grid-tiles)))
 
 (defun drgnx-layouts-persist-test--edit-state (key value)
   "Rewrite the saved state: KEY of the first frame's extras becomes VALUE (a layout that was deleted, junk)."
@@ -167,65 +183,61 @@ Prompts signal an error."
     (should (eq (drgnx-wb-sidebar-view) 'explorer))
     (should (drgnx-wb-sidebar-showing-p))))
 
+;; Task 15 (tiling plan): the layouts' arrangements live in the project's store (state/layouts/PROJECT.eld), panes
+;; are tiles of a pane kind, and the grid brings its tiles back; the old `:pane'/`:panes' extras are gone.
+
 (ert-deftest drgnx-layouts/agent-pane-after-restart ()
-  "The chat pane is still the layout's pane after a restart: the next layout removes it."
+  "The chat tile is still the layout's after a restart: the next layout removes it."
   (drgnx-layouts-persist-test--with
     (drgnx-layouts-apply 'agent)
     (drgnx-persist-save)
     (drgnx-layouts-persist-test--restart)
-    (let ((groups (drgnx-groups-list)))
-      (should (= 2 (length groups)))
-      (should (eq (window-parameter (cadr groups) 'drgnx-layouts-pane) 'agent))
-      (should (equal (buffer-name (window-buffer (cadr groups))) "*drgnx: no agent*")))
+    (should (= 1 (length (drgnx-groups-list))))
+    (let ((tile (drgnx-layouts-persist-test--tile 'agent)))
+      (should (window-live-p tile))
+      (should (equal (buffer-name (window-buffer tile)) "*drgnx: no agent*")))
     (drgnx-layouts-apply 'editor)
-    (should (= 1 (length (drgnx-groups-list))))))
+    (should (= 1 (length (drgnx-groups-list))))
+    (should-not (drgnx-layouts-persist-test--tile 'agent))))
 
 (ert-deftest drgnx-layouts/browser-pane-after-restart ()
-  "The browser pane is found again after a restart: Open URL does not split a third group."
+  "The browser tile is found again after a restart: Open URL does not make a second one."
   (drgnx-layouts-persist-test--with
-    (let ((drgnx-layouts-shapes (copy-sequence drgnx-layouts-shapes))
-          (drgnx-layouts-pane-fillers (copy-sequence drgnx-layouts-pane-fillers)))
+    (let ((drgnx-layouts-shapes (copy-sequence drgnx-layouts-shapes)))
       (drgnx-browser--register-shape)
-      (drgnx-layouts-apply 'browser)
-      (should (= 2 (length (drgnx-groups-list))))
-      (drgnx-persist-save)
-      (drgnx-layouts-persist-test--restart)
-      (let ((pane (cadr (drgnx-groups-list))))
-        (should (eq (window-parameter pane 'drgnx-layouts-pane) 'browser))
-        (should (equal (buffer-name (window-buffer pane)) "*drgnx: browser*"))
-        (should (eq (drgnx-browser--pane) pane))
-        (should (= 2 (length (drgnx-groups-list)))))
-      (drgnx-layouts-apply 'editor)
-      (should (= 1 (length (drgnx-groups-list)))))))
+      (unwind-protect
+          (progn
+            (drgnx-layouts-apply 'browser)
+            (should (drgnx-layouts-persist-test--tile 'browser))
+            (drgnx-persist-save)
+            (drgnx-layouts-persist-test--restart)
+            (let ((tile (drgnx-layouts-persist-test--tile 'browser)))
+              (should (equal (buffer-name (window-buffer tile)) "*drgnx: browser*"))
+              (should (eq (drgnx-browser--pane) tile))
+              (should (= 1 (length (drgnx-groups-list)))))
+            (drgnx-layouts-apply 'editor)
+            (should-not (drgnx-layouts-persist-test--tile 'browser)))
+        (drgnx-pane-undefine-kind 'browser)))))
 
 (ert-deftest drgnx-layouts/browser-pane-before-its-module-sets-up ()
-  "The browser module sets up after the layouts' restore: the pane is marked without it, and filled once it registers."
+  "The browser module sets up after the layouts' restore: the tile waits as a placeholder, filled once it registers."
   (drgnx-layouts-persist-test--with
-    (let ((drgnx-layouts-shapes (copy-sequence drgnx-layouts-shapes))
-          (drgnx-layouts-pane-fillers (copy-sequence drgnx-layouts-pane-fillers)))
+    (let ((drgnx-layouts-shapes (copy-sequence drgnx-layouts-shapes)))
       (drgnx-browser--register-shape)
-      (drgnx-layouts-apply 'browser)
-      (drgnx-persist-save)
-      (setq drgnx-layouts-pane-fillers (assq-delete-all 'browser drgnx-layouts-pane-fillers)) ; a fresh Emacs
-      (drgnx-layouts-persist-test--restart)
-      (let ((pane (cadr (drgnx-groups-list))))
-        (should (eq (window-parameter pane 'drgnx-layouts-pane) 'browser))   ; marked, nothing to fill it with yet
-        (drgnx-browser--register-shape)                                       ; the browser module's setup
-        (should (equal (buffer-name (window-buffer pane)) "*drgnx: browser*"))
-        (should (eq (drgnx-browser--pane) pane))
-        (should (= 2 (length (drgnx-groups-list)))))
-      (drgnx-layouts-apply 'editor)
-      (should (= 1 (length (drgnx-groups-list)))))))
-
-(ert-deftest drgnx-layouts/an-old-single-pane-is-still-read ()
-  "A workbench saved with `:pane' (one spec, before `:panes') still brings its pane back."
-  (drgnx-layouts-persist-test--with
-    (drgnx-layouts-apply 'agent)
-    (drgnx-persist-save)
-    (drgnx-layouts-persist-test--edit-state :panes nil)
-    (drgnx-layouts-persist-test--edit-state :pane '(1 . agent))
-    (drgnx-layouts-persist-test--restart)
-    (should (eq (window-parameter (cadr (drgnx-groups-list)) 'drgnx-layouts-pane) 'agent))))
+      (unwind-protect
+          (progn
+            (drgnx-layouts-apply 'browser)
+            (drgnx-persist-save)
+            (drgnx-pane-undefine-kind 'browser)                                  ; a fresh Emacs
+            (drgnx-layouts-persist-test--restart)
+            (let ((tile (drgnx-layouts-persist-test--tile 'browser)))
+              (should (window-live-p tile))                                      ; kept, nothing to fill it with yet
+              (should (equal (buffer-name (window-buffer tile)) " *drgnx tile: browser*"))
+              (drgnx-browser--register-shape)                                    ; the browser module's setup
+              (should (equal (buffer-name (window-buffer tile)) "*drgnx: browser*"))
+              (should (eq (drgnx-browser--pane) tile))
+              (should (= 1 (length (drgnx-groups-list))))))
+        (drgnx-pane-undefine-kind 'browser)))))
 
 (ert-deftest drgnx-layouts/arrangement-keeps-groups-tabs-and-files-after-restart ()
   "A remembered arrangement comes back with each group's tabs and shown file, opening the files that are not open."
@@ -259,65 +271,61 @@ Prompts signal an error."
         (delete-directory dir t)))))
 
 (ert-deftest drgnx-layouts/arrangements-after-restart ()
-  "Each layout's last arrangement survives a restart, not only the current layout's name."
+  "Each layout's last arrangement survives a restart (in the project's store), not only the current layout's name."
   (drgnx-layouts-persist-test--with
     (drgnx-layouts-apply 'agent)
-    (drgnx-groups-split-right)                          ; the user's change: a third group …
+    (drgnx-groups-split-right)                          ; the user's change: a second editor …
     (drgnx-wb-area-show 'panel 'output (get-buffer-create "*drgnx-lp-code*")) ; … and the panel
     (drgnx-layouts-apply 'editor)
     (drgnx-persist-save)
+    (should (file-exists-p (drgnx-layouts-store-file "global")))
     (drgnx-layouts-persist-test--restart)
     (should (eq (drgnx-layouts-current) 'editor))
     (drgnx-layouts-apply 'agent)
-    (should (= 3 (length (drgnx-groups-list))))         ; as it was left (a fresh Agent has two)
+    (should (= 2 (length (drgnx-groups-list))))         ; as it was left (a fresh Agent has one)
     (should (drgnx-wb-area-window 'panel))
     (should (eq (drgnx-wb-area-tab 'panel) 'output))
-    (should (eq (window-parameter (nth 2 (drgnx-groups-list)) 'drgnx-layouts-pane) 'agent)) ; the split came before it
+    (should (drgnx-layouts-persist-test--tile 'agent))
     (drgnx-layouts-apply 'editor)
-    (should (= 2 (length (drgnx-groups-list))))))       ; the pane is gone, the user's split stays
+    (should (= 2 (length (drgnx-groups-list))))         ; the chat tile is gone, the user's split stays
+    (should-not (drgnx-layouts-persist-test--tile 'agent))))
 
 (ert-deftest drgnx-layouts/an-arrangement-keeps-one-width-through-restarts ()
-  "Each restart read an arrangement's dock sizes by putting a clamped :px in front of the saved plist, so the saved
-file grew a :px per restart and the first, oldest one won: a daily install's Explorer came back at a stale width.
-An arrangement keeps one :px per area, through any number of restarts; a file that already holds several gives
-the one the plist was saved with (the last)."
+  "A daily install's Explorer once came back at a stale width after restarts.  An arrangement's side bar keeps its
+width through any number of restarts."
   (drgnx-layouts-persist-test--with
     (drgnx-layouts-apply 'agent)
     (drgnx-layouts-apply 'editor)
-    (dotimes (_ 3) (drgnx-persist-save) (drgnx-layouts-persist-test--restart))
-    (let ((left (plist-get (alist-get 'agent (frame-parameter nil 'drgnx-layouts-state)) :left)))
-      (should (= 1 (seq-count (lambda (x) (eq x :px)) left))))
-    (drgnx-persist-save)
-    (let* ((state (drgnx-persist--read drgnx-persist-file))
-           (agent (alist-get 'agent (plist-get (plist-get (car (plist-get state :frames)) :extra) :arrangements))))
-      (drgnx-layouts-persist-test--edit-state
-       :arrangements (list (cons 'agent (plist-put (copy-sequence agent) :left '(:px 3 :px 4 :shown t :view explorer :px 30))))))
-    (drgnx-layouts-persist-test--restart)
-    (let ((left (plist-get (alist-get 'agent (frame-parameter nil 'drgnx-layouts-state)) :left)))
-      (should (equal (seq-count (lambda (x) (eq x :px)) left) 1))
-      (should (eql (plist-get left :px) (min 30 (floor (* 0.5 (frame-pixel-width)))))))))
+    (cl-flet ((left-px ()
+                (let ((part (alist-get 'agent (frame-parameter nil 'drgnx-layouts-state))))
+                  (plist-get (cdr (seq-find (lambda (l) (eq (plist-get (cdr l) :dock) 'left))
+                                            (drgnx-grid-tree-leaves (plist-get part :tree))))
+                             :px))))
+      (let ((px (left-px)))
+        (should (integerp px))
+        (dotimes (_ 3) (drgnx-persist-save) (drgnx-layouts-persist-test--restart))
+        (should (eql (left-px) px))))))
 
 (ert-deftest drgnx-layouts/crafted-arrangements-are-ignored ()
-  "Junk where the arrangements go is no error and gives no arrangement."
+  "Junk where the project's arrangements go is no error and gives no arrangement."
   (drgnx-layouts-persist-test--with
     (drgnx-layouts-apply 'editor)
     (drgnx-persist-save)
-    (dolist (junk '(42 "x" (nope) ((agent . 3)) ((no-such-layout :main (leaf)))
-                       ((agent :main ((parameters (foo . 1)) leaf (buffer "*scratch*"))))))
-      (drgnx-layouts-persist-test--edit-state :arrangements junk)
-      (drgnx-layouts-persist-test--edit-state :pane '(9 . agent))
+    (dolist (junk '(42 "x" (nope) ((agent . 3)) ((no-such-layout :tree (editor)))
+                       ((agent :tree (editor :px 1 :share 0.5 :id x)))))
+      (drgnx-layouts-persist-test--edit-store :arrangements junk)
       (drgnx-layouts-persist-test--restart)
       (should (eq (drgnx-layouts-current) 'editor))
       (should (= 1 (length (drgnx-groups-list))))
-      (should-not (window-parameter (selected-window) 'foo)))
+      (should-not (alist-get 'agent (frame-parameter nil 'drgnx-layouts-state))))
     ;; a damaged arrangement is no arrangement: the layout is built as if never left
-    (drgnx-layouts-persist-test--edit-state :arrangements '((agent :main (leaf) :left 5 :pane (1 . agent))
-                                                            (zen :main (leaf junk)) (browser :main (leaf) :left (:px 99999999))))
+    (drgnx-layouts-persist-test--edit-store :arrangements '((agent :tree (row :px nil :share nil (leaf)) :full nil)
+                                                            (zen :tree junk) (browser :tree (editor) :full "x")))
     (drgnx-layouts-persist-test--restart)
     (drgnx-layouts-apply 'zen)
     (drgnx-layouts-apply 'agent)
-    (should (= 2 (length (drgnx-groups-list))))
-    (should (eq (window-parameter (cadr (drgnx-groups-list)) 'drgnx-layouts-pane) 'agent))))
+    (should (= 1 (length (drgnx-groups-list))))
+    (should (drgnx-layouts-persist-test--tile 'agent))))
 
 (provide 'mod-layouts-persist-test)
 ;;; mod-layouts-persist-test.el ends here

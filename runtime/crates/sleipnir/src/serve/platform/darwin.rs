@@ -118,6 +118,7 @@ impl Platform for DarwinPlatform {
             disk_total_gb: gb(disk.f_blocks),
             on_ac: probe::on_ac(&batt),
             last_start: None,
+            last_start_small: false,
             running: vec![],
             features: vec![],
             reachable: true,

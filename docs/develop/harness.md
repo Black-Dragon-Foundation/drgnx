@@ -272,7 +272,7 @@ let-binds the registries the module touches:
 
 ```elisp
 (drgnx-test-with-modules '(tools/browser) :strict t
-  (should (assq 'browser drgnx-layouts-pane-fillers)))
+  (should (plist-get (drgnx-pane-kind 'browser) :fill)))
 ```
 
 The first argument is a list of module names (evaluated): their files are loaded, and so are the modules they

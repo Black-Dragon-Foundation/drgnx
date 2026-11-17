@@ -21,6 +21,7 @@
 (require 'drgnx-keys-edit)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-m11c1-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-m11c1-ui-test--repo) nil t)
+(load (expand-file-name "test/fixtures/grid-fixture" drgnx-m11c1-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-m11c1-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/ui-hub-fixture" drgnx-m11c1-ui-test--repo) nil t)   ; the Search view's text search is the hub's
 (dolist (m '("tools/drgnx-replace" "tools/drgnx-agent-panel-list" "tools/drgnx-agent-panel" "tools/drgnx-layouts" "tools/drgnx-browser" "tools/drgnx-live"
@@ -80,6 +81,7 @@
            (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
            (drgnx-shortcuts-chord-wait 3.0)
            (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
+           (grid-was (bound-and-true-p drgnx-grid-mode))
            (dired nil))
       (make-directory (concat state "/config") t)
       (unwind-protect
@@ -92,10 +94,12 @@
             (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "Start")
             (drgnx-ui-hub-start drgnx-m11c1-ui-test--repo)
             (with-selected-frame root
-              (delete-other-windows)
+              (drgnx-grid-test--reset)
               (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px drgnx-layouts-state
-                                         drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
+                                         drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return
+                                         drgnx-layouts-project))
                 (set-frame-parameter nil p nil))
+              (unless grid-was (drgnx-grid-mode 1))                 ; the layouts arrange the grid (core/workbench's)
               ;; the workbench: a file list as the Explorer, the Search view, the Agents tab on the right
               (setq dired (dired-noselect repo))
               (with-current-buffer dired (dired-hide-details-mode 1))
@@ -103,6 +107,7 @@
               (drgnx-replace--define-section)
               (drgnx-replace--define-commands)
               (drgnx-layouts--define-commands)
+              (drgnx-layouts-define-pane 'agent #'drgnx-layouts--fill-agent "Agent")
               (drgnx-browser--register-shape)
               (drgnx-browser--define-commands)
               (drgnx-shortcuts--define-commands)
@@ -151,8 +156,10 @@
               (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) 1)))   ; the agent's panel asks the hub, which is not there
                 (drgnx-layouts-apply 'agent))
               (should (eq (drgnx-layouts-current) 'agent))
-              (should (= 2 (length (drgnx-groups-list))))
-              (should (equal (buffer-name (window-buffer (cadr (drgnx-groups-list)))) "*drgnx agent: a1*"))
+              (should (= 1 (length (drgnx-groups-list))))   ; the chat is a tile of kind `agent', not a group
+              (should (equal (buffer-name (window-buffer (seq-find (lambda (w) (memq 'agent (window-parameter w 'drgnx-pane-stack)))
+                                                                   (window-list nil 'nomini))))
+                             "*drgnx agent: a1*"))
               (should (window-live-p (drgnx-wb-area-window 'right)))
               (redisplay t)
               (drgnx-m11c1-ui-test--shot shots "m11c1-layout-agent.png")
@@ -160,7 +167,10 @@
                 (drgnx-layouts-zen))
               (should (eq (drgnx-layouts-current) 'zen))
               (should (= 1 (length (window-list nil 'nomini))))
-              (should (> (or (car (window-margins)) 0) 0))
+              ;; centred: margins that leave `drgnx-layouts-zen-width' columns (none when the window is no wider, as at
+              ;; scale 2)
+              (let* ((m (window-margins)) (width (+ (window-body-width) (or (car m) 0) (or (cdr m) 0))))
+                (should (= (or (car m) 0) (max 0 (/ (- width drgnx-layouts-zen-width) 2)))))
               (redisplay t)
               (drgnx-m11c1-ui-test--shot shots "m11c1-layout-zen.png")
               (drgnx-layouts-zen)                         ; back to Agent
@@ -169,7 +179,7 @@
               ;; 4. the Browser layout without WebKit: the pane says why and how to open a page
               (cl-letf (((symbol-function 'drgnx-browser-webkit-p) (lambda () nil)))
                 (drgnx-layouts-apply 'browser)
-                (let ((pane (seq-find (lambda (w) (eq (window-parameter w 'drgnx-layouts-pane) 'browser)) (window-list nil 'nomini))))
+                (let ((pane (seq-find (lambda (w) (memq 'browser (window-parameter w 'drgnx-pane-stack))) (window-list nil 'nomini))))
                   (should (window-live-p pane))
                   (with-current-buffer (window-buffer pane) (should (string-search "no WebKit" (buffer-string)))))
                 (redisplay t)
@@ -230,16 +240,21 @@
         (drgnx-wb-hide-sidebar)
         (ignore-errors (drgnx-wb-area-hide 'panel))
         (ignore-errors (drgnx-wb-area-hide 'right))
+        (drgnx-timer-cancel '(layouts-save . "global"))
+        (with-selected-frame root
+          (unless grid-was (drgnx-grid-mode -1))
+          (drgnx-pane-undefine-kind 'agent)
+          (drgnx-pane-undefine-kind 'browser)
+          (drgnx-grid-test--reset))
         (drgnx-rules-mode -1)
         (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize)
         (with-selected-frame root
-          (delete-other-windows)
           (set-window-margins nil 0 0)
           ;; the layouts put the editor chrome (tab line, breadcrumbs, mode line) on the window: later tests count lines
-          (dolist (p '(drgnx-tabs drgnx-tab-history drgnx-layouts-pane tab-line-format header-line-format mode-line-format))
+          (dolist (p '(drgnx-tabs drgnx-tab-history tab-line-format header-line-format mode-line-format))
             (set-window-parameter nil p nil))
           (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px drgnx-layouts-state
-                                     drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
+                                     drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return drgnx-layouts-project))
             (set-frame-parameter nil p nil))
           (switch-to-buffer "*scratch*"))
         (dolist (b (append drgnx-m11c1-ui-test--buffers (list drgnx-replace-buffer-name drgnx-replace-bar-buffer-name)))

@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn preempt_takes_the_newest_until_enough() {
-        // [D] pure. Old jobs (past 300 s) free what they use plus their unused reserve.
+        // [D] pure. A job, young or old, frees what it uses plus its unused reserve: the larger of the two (§0.3 R1).
         let mut m = machine(Profile::Dedicated);
         let now = m.now;
         m.running = vec![
@@ -83,15 +83,19 @@ mod tests {
             running("newest", Priority::P5, now - 100, 1000, 800),
             running("p2", Priority::P2, now - 50, 9000, 9000),
         ];
-        // All young: newest frees 800 + 1000, middle 1500 + 2000; P2 is too close to the P1 claimant.
+        // newest frees 1000, middle 2000, oldest 1000; P2 is too close to the P1 claimant.
         let ids = |v: Vec<JobId>| v.into_iter().map(|j| j.0).collect::<Vec<_>>();
         assert_eq!(
-            ids(preempt_victims(Priority::P1, &m, 1500, now, true)),
+            ids(preempt_victims(Priority::P1, &m, 1000, now, true)),
             ["newest"]
         );
         assert_eq!(
-            ids(preempt_victims(Priority::P1, &m, 4000, now, true)),
+            ids(preempt_victims(Priority::P1, &m, 1500, now, true)),
             ["newest", "middle"]
+        );
+        assert_eq!(
+            ids(preempt_victims(Priority::P1, &m, 4000, now, true)),
+            ["newest", "middle", "oldest"]
         );
         assert!(preempt_victims(Priority::P1, &m, 4000, now, false).is_empty());
         assert!(
