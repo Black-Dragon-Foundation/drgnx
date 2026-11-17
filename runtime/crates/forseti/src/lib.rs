@@ -38,8 +38,9 @@ pub use learn::{Ewma, Learned, Warmth};
 pub use model::*;
 // `place::Send` stays in its module: at the root, a glob import would shadow the `Send` trait.
 pub use place::{
-    Accept, Candidate, CloudTerms, FinishEstimate, Pick, PlaceCtx, RunnerState, cloud_counts,
-    filter, finish, finish_with, pick, pick_with, trust_ok, why_here,
+    Accept, Candidate, CloudTerms, FinishEstimate, NeedSeen, NeedState, Pick, PlaceCtx,
+    RunnerState, cloud_counts, filter, finish, finish_with, need_state, pick, pick_with, trust_ok,
+    why_here,
 };
 pub use priority::{check_no_cycle, effective_priorities, promote, queue_order};
 pub use reserve::{count_others, ladder_actor, ladder_acts};

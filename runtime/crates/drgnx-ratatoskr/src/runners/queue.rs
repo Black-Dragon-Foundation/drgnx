@@ -158,6 +158,8 @@ pub struct Placement {
     /// The features it needs: for a Mac job, `xcode-clt` and a `brew:NAME` for each of its project's
     /// `drgnx-runners-mac-tools`.
     pub features: Vec<String>,
+    /// The jobs it needs (`exec/start`'s `needs`): it starts once each passed, and ends as infra if one did not.
+    pub needs: Vec<String>,
 }
 
 /// What a command takes in place of the selector of the rows an attempt runs (`forseti::split::selector`, an Emacs
@@ -194,6 +196,7 @@ impl Default for Placement {
             net_hosts: vec![],
             os: Os::Linux,
             features: vec![],
+            needs: vec![],
         }
     }
 }
@@ -503,11 +506,18 @@ enum Db {
     Flush(tokio::sync::oneshot::Sender<()>),
 }
 
+/// The ends the queue keeps for jobs that need them ([`St::ended`]).
+const ENDED_KEPT: usize = 4096;
+
 #[derive(Default)]
 struct St {
     jobs: BTreeMap<String, QJob>,
     local_running: BTreeMap<String, RunningJob>,
     last_local_start: forseti::LastStart,
+    /// How the jobs that left the queue ended (their order of ending, verdict), so a job that needs one knows; the
+    /// oldest go past [`ENDED_KEPT`].
+    ended: BTreeMap<String, (u64, forseti::Verdict)>,
+    ended_seq: u64,
     drr: Drr,
     attempts: attempts::Core,
     runners: BTreeMap<String, Remote>,
@@ -557,6 +567,39 @@ impl St {
             .get(key)
             .map(|m| m.values().flatten().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Job ID ended with VERDICT (its first end counts: a later release keeps it).
+    fn ended(&mut self, id: &str, verdict: forseti::Verdict) {
+        if self.ended.contains_key(id) {
+            return;
+        }
+        self.ended_seq += 1;
+        self.ended.insert(id.to_string(), (self.ended_seq, verdict));
+        while self.ended.len() > ENDED_KEPT {
+            let Some(oldest) = self
+                .ended
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            self.ended.remove(&oldest);
+        }
+    }
+
+    /// Where the needs of SPEC stand: a need in the queue is live, one that left it ended as it did.
+    fn need_state(&self, spec: &JobSpec) -> forseti::NeedState {
+        forseti::need_state(&spec.needs, &|n| {
+            if self.jobs.contains_key(&n.0) {
+                forseti::NeedSeen::Live
+            } else if let Some((_, v)) = self.ended.get(&n.0) {
+                forseti::NeedSeen::Ended(v.clone())
+            } else {
+                forseti::NeedSeen::Unknown
+            }
+        })
     }
 
     /// What SPEC's history expects on MACHINE: its runs there, else its runs elsewhere (`forseti::expected`); unknown
@@ -1615,6 +1658,44 @@ impl Queue {
         }
     }
 
+    /// Whether a job of SPEC (its name the job's id) may need what it names: each a job the queue holds or saw end,
+    /// and none that waits on it (a cycle, named in order from the new job). The error is in the user's words.
+    pub fn check_needs(&self, spec: &JobSpec) -> Result<(), String> {
+        if spec.needs.is_empty() {
+            return Ok(());
+        }
+        let st = self.lock();
+        if let Some(n) = spec
+            .needs
+            .iter()
+            .find(|n| !st.jobs.contains_key(&n.0) && !st.ended.contains_key(&n.0))
+        {
+            return Err(format!("it needs job {n}, which the queue doesn't know"));
+        }
+        let mut jobs: Vec<Job> = st.jobs.values().map(Self::forseti_job).collect();
+        // the new job too, so a cycle through it shows
+        let new = Submit {
+            id: spec.name.clone(),
+            session: None,
+            own: Priority::P3,
+            spec: spec.clone(),
+            place: Placement::default(),
+            pending: Value::Null,
+            inputs: None,
+        };
+        jobs.push(Self::forseti_job(&QJob::new(new, 0, QState::Queued, 0)));
+        forseti::check_no_cycle(&jobs, spec).map_err(|mut cycle| {
+            if let Some(i) = cycle.iter().position(|j| j.0 == spec.name) {
+                cycle.rotate_left(i);
+            }
+            if let Some(first) = cycle.first().cloned() {
+                cycle.push(first);
+            }
+            let names: Vec<String> = cycle.iter().map(|j| j.0.clone()).collect();
+            format!("its needs make a cycle: {}", names.join(" → "))
+        })
+    }
+
     /// A job enters the queue at NOW, and the queue's tick is woken. With frozen inputs, its trust is theirs (design
     /// §6.6: from what the public origin has, and the keys it names), whatever the spec said, and they are kept in
     /// `rq_input`.
@@ -1753,10 +1834,14 @@ impl Queue {
         else {
             return;
         };
+        if let Some(v) = verdict_of(result) {
+            st.ended(id, v);
+        }
         self.record_run(&mut st, &spec, LOCAL, result, now);
     }
 
-    /// Job ID ended here, or never started: it leaves the queue and frees its room.
+    /// Job ID ended here, or never started: it leaves the queue and frees its room. One that left without a verdict
+    /// ([`Queue::ran_here`]: stopped, timed out, never started) ended cancelled for the jobs that need it.
     pub fn release(&self, id: &str) {
         let mut st = self.lock();
         let ran_here = st.local_running.remove(id).is_some();
@@ -1765,7 +1850,9 @@ impl Queue {
             .get(id)
             .is_some_and(|j| matches!(j.state, QState::Remote(_)));
         if !remote {
-            st.jobs.remove(id);
+            if st.jobs.remove(id).is_some() {
+                st.ended(id, forseti::Verdict::Cancelled);
+            }
             st.attempts.forget(id);
             drop(st);
             self.drop_job(id);
@@ -1782,6 +1869,7 @@ impl Queue {
         match st.jobs.get(id).map(|j| j.state.clone()) {
             Some(QState::Queued) => {
                 st.jobs.remove(id);
+                st.ended(id, forseti::Verdict::Cancelled);
                 drop(st);
                 self.drop_job(id);
                 (true, vec![])
@@ -2033,17 +2121,60 @@ impl Queue {
         for name in names {
             self.health(&mut st, &name, now);
         }
-        let queued: Vec<Job> = st
+        // a job's needs before anything else (design §5.2 item 2): one whose need failed ends as infra, never run; one
+        // whose need hasn't ended waits and holds nothing (no slot, no reservation, no offer)
+        let mut queued: Vec<Job> = vec![];
+        let mut failed: Vec<(String, u32, JobId)> = vec![];
+        for j in st.jobs.values().filter(|j| j.state == QState::Queued) {
+            match st.need_state(&j.s.spec) {
+                forseti::NeedState::Met => queued.push(Self::forseti_job(j)),
+                forseti::NeedState::Waiting(_) => {}
+                forseti::NeedState::Failed { job, .. } => {
+                    failed.push((j.s.id.clone(), j.attempt, job))
+                }
+            }
+        }
+        for (id, attempt, need) in failed {
+            let verdict = forseti::Verdict::Infra(format!("needed job {need} failed"));
+            st.jobs.remove(&id);
+            st.attempts.forget(&id);
+            st.ended(&id, verdict.clone());
+            self.drop_job(&id);
+            t.outcomes.push(Outcome::Done {
+                id,
+                attempt,
+                result: json!({ "verdict": verdict }),
+                shared: None,
+                machine: None,
+                back: None,
+            });
+        }
+        let waits: Vec<(String, JobId)> = st
             .jobs
             .values()
             .filter(|j| j.state == QState::Queued)
-            .map(Self::forseti_job)
+            .filter_map(|j| match st.need_state(&j.s.spec) {
+                forseti::NeedState::Waiting(n) => Some((j.s.id.clone(), n)),
+                _ => None,
+            })
             .collect();
+        for (id, n) in waits {
+            if let Some(j) = st.jobs.get_mut(&id) {
+                j.waiting = Some(wait_text(&WaitReason::Needs(n)));
+            }
+        }
+        // a consumer lifts what it needs, queued or running: eviction reads a running job's priority
+        let all: Vec<Job> = st.jobs.values().map(Self::forseti_job).collect();
+        let eff = forseti::effective_priorities(&all, &[], &[]);
+        for (id, rj) in st.local_running.iter_mut() {
+            if let Some(&p) = eff.get(&JobId(id.clone())) {
+                rj.priority = rj.priority.max(p);
+            }
+        }
         if queued.is_empty() {
             Self::tell_head(&mut st, None);
             return t;
         }
-        let eff = forseti::effective_priorities(&queued, &[], &[]);
         // the order reads each job's history (its runs on this machine, else anywhere)
         let expected: HashMap<JobId, Expected> = queued
             .iter()
@@ -3324,6 +3455,26 @@ impl Queue {
 
     /// Carries out the attempt state machine's EFFECTS.
     fn apply(&self, st: &mut St, effects: Vec<Effect>, now: u64, out: &mut Vec<Outcome>) {
+        let from = out.len();
+        self.apply_effects(st, effects, now, out);
+        // how each job that left ended, for the jobs that need it
+        for o in &out[from..] {
+            match o {
+                Outcome::Done { id, result, .. } => {
+                    let v =
+                        verdict_of(result).unwrap_or(forseti::Verdict::Infra("no verdict".into()));
+                    st.ended(id, v);
+                }
+                Outcome::Lost { id } => st.ended(
+                    id,
+                    forseti::Verdict::Infra(forseti::classify::infra::RUNNER_LOST.into()),
+                ),
+                Outcome::Late { .. } => {}
+            }
+        }
+    }
+
+    fn apply_effects(&self, st: &mut St, effects: Vec<Effect>, now: u64, out: &mut Vec<Outcome>) {
         for e in effects {
             let mut was_on = None;
             // an attempt that ended, or went back to the queue, syncs no more (its bundle file goes), and holds nothing
@@ -4034,7 +4185,8 @@ mod tests {
         assert_eq!(q.tick(100).starts, vec!["img".to_string()]);
         q.submit(needing("use", Priority::P1, &["img"]), 101);
         q.tick(101);
-        assert_eq!(q.row("img").unwrap().priority, Priority::P1.number());
+        // what eviction reads: the running job's priority
+        assert_eq!(q.lock().local_running["img"].priority, Priority::P1);
     }
 
     // [D] pure: a need that ends without passing ends its consumer, never run, as infra naming the need

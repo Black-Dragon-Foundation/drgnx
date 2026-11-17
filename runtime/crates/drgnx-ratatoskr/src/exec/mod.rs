@@ -469,6 +469,13 @@ impl ExecSpec {
         }
         s.os = self.place.os;
         s.features = self.place.features.clone();
+        s.needs = self
+            .place
+            .needs
+            .iter()
+            .cloned()
+            .map(forseti::JobId)
+            .collect();
         // a test job whose parser counts rows passes only if it ran some: a run of 0 tests (a selector that matched
         // nothing) proves nothing
         if self
@@ -1355,6 +1362,10 @@ impl Inner {
     /// Record job ID as queued: a meta saying it waits, and its place in the queue (what to start is kept there).
     fn enqueue(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<(), Refusal> {
         let _ = dir;
+        // a job may need only jobs the queue knows, never one that waits on it
+        self.queue
+            .check_needs(&spec.forseti_spec(id, &self.hooks.memory))
+            .map_err(refusal)?;
         let started = now();
         let session = spec.starter.session();
         self.save_meta(&Meta {
@@ -2983,6 +2994,12 @@ async fn placement(
         net_hosts: vec![],
         os,
         features,
+        needs: p
+            .needs
+            .iter()
+            .flat_map(|n| n.iter())
+            .map(|n| n.as_str().to_string())
+            .collect(),
     })
 }
 
