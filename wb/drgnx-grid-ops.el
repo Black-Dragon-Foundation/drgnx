@@ -371,7 +371,8 @@ movement finds the tile and zone under the pointer and says so on that tile's ta
         (track-mouse
           (setq track-mouse 'dragging)
           (while (not done)
-            (let ((ev (read-event)))
+            ;; `read-key': a terminal's motion and release are decoded only through `input-decode-map'
+            (let ((ev (read-key)))
               (cond
                ((mouse-movement-p ev)
                 (let* ((xy (drgnx-grid--frame-xy (event-start ev)))
@@ -419,8 +420,14 @@ called with EVENT); dragged off the row it moves that tab (`drgnx-grid--drag', `
       (if (not drgnx-grid-drag)
           (funcall click event)
         ;; `read-key', not `read-event': on a terminal the release is xterm-mouse's bytes, decoded only through
-        ;; `input-decode-map' (`read-event' would return their ESC)
-        (let ((ev (read-key)))
+        ;; `input-decode-map' (`read-event' would return their ESC).  Under `track-mouse', so that the first motion
+        ;; off the row is an event (a terminal reports no motion otherwise); motion on the row is skipped.
+        (let ((ev (track-mouse
+                    (let (e)
+                      (while (progn (setq e (read-key))
+                                    (and (mouse-movement-p e) (eq (posn-window (event-start e)) w)
+                                         (eq (posn-area (event-start e)) area))))
+                      e))))
           (if (and (consp ev) (eq (event-basic-type ev) 'mouse-1) (not (mouse-movement-p ev))
                    (eq (posn-window (event-end ev)) w) (eq (posn-area (event-end ev)) area))
               (funcall click event)

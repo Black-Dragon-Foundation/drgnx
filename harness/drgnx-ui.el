@@ -1225,7 +1225,8 @@ many virtual monitors (default 1).  COMPOSITOR: mutter, sway, x11, i3, kwin or n
 `drgnx-ui-default-compositor').  SIZE: WxH in device pixels (nil: $DRGNX_UI_SIZE, else 1600x900).  SCALES: a
 monitor scale for all monitors, or a list, one per monitor (nil: $DRGNX_UI_SCALES \"1 2\", else $DRGNX_UI_SCALE,
 else 1); the session is ready only when its root frame shows the first monitor's scale (10 s, else this
-stops it and fails with \"scale S not applied\"; `drgnx-uitest-scale-ready-p')."
+stops it and fails with \"scale S not applied\"; `drgnx-uitest-scale-ready-p').  TIMEOUT (default 60 s) counts the
+time the session's processes slept (`drgnx-ui-progress'): a session a loaded machine starves of CPU is still booting."
   (let* ((root (drgnx-ui-state-root))
          (_ (make-directory root t))
          (_ (drgnx-ui--prune-eln-cache root))
@@ -1235,18 +1236,20 @@ stops it and fails with \"scale S not applied\"; `drgnx-uitest-scale-ready-p')."
          (run (plist-get sess :run)))
     (drgnx-ui--own-add name root)
     (drgnx-ui--save sess)                 ; stop needs :launcher/:pgid from here on
-    (let ((ready (expand-file-name "ready.json" run))
-          (t0 (float-time))
-          ;; a session waiting for its lease slot (up to 120 s) is not slow to boot
-          (deadline (+ (float-time) (or timeout 60) (if (drgnx-ui--lease-dir) 120 0)))
-          (next-probe 0) prompt)
+    (let* ((ready (expand-file-name "ready.json" run))
+           (t0 (float-time))
+           ;; the session's processes slept TIMEOUT: a session a loaded machine keeps waiting for a CPU is still
+           ;; booting; a session waiting for its lease slot (up to 120 s) is not slow to boot
+           (clock (drgnx-ui-progress (+ (or timeout 60) (if (drgnx-ui--lease-dir) 120 0))
+                                     (or (drgnx-ui-session-pids-fn sess) #'ignore)))
+           (next-probe 0) prompt over)
       (while (and (not (file-exists-p ready)) (not prompt))
-        (when (or (> (float-time) deadline) (not (drgnx-ui-alive-p sess)))
+        (when (or (setq over (drgnx-ui-progress-over clock)) (not (drgnx-ui-alive-p sess)))
           (let ((log (drgnx-ui--log-tail sess)))
             (drgnx-ui-stop name)
             (if-let* ((refusal (drgnx-ui--lease-refusal log)))
                 (drgnx-ui--fail "%s: %s" name refusal)
-              (drgnx-ui--fail "%s did not become ready:\n%s" name log))))
+              (drgnx-ui--fail "%s did not become ready (%s):\n%s" name (or over "its processes are gone") log))))
         ;; Still booting after 2 s: is the configuration asking something?  (The server
         ;; and harness agent start before the configuration's init.el.)
         (when (and (> (float-time) (+ t0 2)) (> (float-time) next-probe))

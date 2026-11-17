@@ -68,6 +68,8 @@
 (defvar drgnx-agents--sessions)
 (defvar drgnx-agent-panel--loaded)
 (defvar drgnx-agent-panel--entries)
+(declare-function drgnx-ui-progress "drgnx-ui" (limit pids-fn))
+(declare-function drgnx-ui-progress-over "drgnx-ui" (clock))
 
 (defun drgnx-panel-replay--chunks ()
   "The recording's chunks, as one-line texts."
@@ -89,9 +91,12 @@
     (concat (mapconcat #'identity prefix "\\n") "\n" (mapconcat #'identity stream "\\n"))))
 
 (defun drgnx-panel-replay--wait (secs pred)
-  "Let the session run until PRED holds (at most SECS s); whether it does."
-  (let ((d (+ (float-time) secs)))
-    (while (and (not (funcall pred)) (< (float-time) d)) (accept-process-output nil 0.05))
+  "Let the session run until PRED holds; whether it does.  SECS counts the time the hub slept (`drgnx-ui-progress'):
+a hub a loaded machine keeps waiting for a CPU (starting up, sending entries) is not out of time."
+  (require 'drgnx-ui)
+  (let ((clock (drgnx-ui-progress secs (lambda () (and (process-live-p drgnx-panel-replay--hub)
+                                                       (list (process-id drgnx-panel-replay--hub)))))))
+    (while (and (not (funcall pred)) (not (drgnx-ui-progress-over clock))) (accept-process-output nil 0.05))
     (and (funcall pred) t)))
 
 (defun drgnx-panel-replay--entries ()
