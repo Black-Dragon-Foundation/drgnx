@@ -149,11 +149,15 @@ pub fn realign(a: &Anchor, paras: &[Para]) -> Anchor {
         };
         return anchor_at(p, state);
     }
-    let q = fold(&a.quote);
+    // words only: `similar`'s word diff counts the spaces between them as tokens too, which makes any two sentences
+    // look alike
+    let q: Vec<&str> = a.quote.split_whitespace().collect();
     let best = paras
         .iter()
         .map(|p| {
-            let r = similar::TextDiff::from_words(q.as_str(), quote_of(&p.text).as_str()).ratio();
+            let quote = quote_of(&p.text);
+            let words: Vec<&str> = quote.split_whitespace().collect();
+            let r = similar::TextDiff::from_slices(&q, &words).ratio();
             (r, p.heading == a.heading, p)
         })
         .filter(|(r, _, _)| *r >= SAME_PARAGRAPH)

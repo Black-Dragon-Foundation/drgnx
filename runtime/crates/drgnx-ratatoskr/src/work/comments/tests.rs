@@ -76,7 +76,7 @@ fn a_comment_steers_the_records_writer() {
     let a = anchor_at(&paragraphs(SPEC)[0], "here");
     assert_eq!(
         steer_text("Comments", &a, "shorter, please", "comment:1"),
-        "Comment on \"Anchors\" ¶ \"Comments are stored as record links and every one reaches the…\": \
+        "Comment on \"Anchors\" ¶ \"Comments are stored as record links and every one reaches th…\": \
          shorter, please (reply with comment_reply, id comment:1)"
     );
 }

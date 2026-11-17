@@ -120,8 +120,8 @@ A paragraph comment's thread (hub.md, "Paragraph comments") keeps where it sits 
 - **Re-anchoring.** After each sync of a file (`Views::sync`), every thread on its records is aligned again
   (`work::comments::realign`):
   - by key: as it was (`here` or `moved`; a `removed` thread whose paragraph is back is `here`);
-  - else the paragraph most like the quote by words (`similar`'s word ratio, at least 0.4; under the same headings
-    on a tie): `moved`, with that paragraph's key, quote and headings;
+  - else the paragraph most like the quote by words (`similar`'s ratio over the words alone, spaces not counted, at
+    least 0.4; under the same headings on a tie): `moved`, with that paragraph's key, quote and headings;
   - else `removed`, with the quote, key and headings kept.
 
   A changed anchor retires the link and makes it again, so the link's history keeps each place. A thread is never
