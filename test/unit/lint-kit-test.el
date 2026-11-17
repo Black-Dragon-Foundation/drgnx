@@ -158,7 +158,7 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("core/drgnx-surfaces.el" section-header 1) ("core/drgnx-type-faces.el" section-header 1)
     ("modules/extra/drgnx-debug-view.el" section-header 1) ("modules/tools/drgnx-agent-panel.el" section-header 1)
     ("modules/tools/drgnx-agent-settings.el" section-header 1) ("modules/tools/drgnx-plugins-ui.el" section-header 1)
-    ("modules/tools/drgnx-shortcuts.el" section-header 1) ("modules/tools/drgnx-work-flow.el" card 5)
+    ("modules/tools/drgnx-shortcuts.el" section-header 1) ("modules/tools/drgnx-work-flow.el" card 5) ("modules/tools/drgnx-work-map.el" card 13)
     ("modules/tools/drgnx-work-flow.el" section-header 2) ("modules/tools/drgnx-work-space.el" card 1)
     ("modules/ui/drgnx-decor.el" card 28)
     ("runtime/crates/drgnx-ratatoskr/src/view/extensions.rs" section-header 1)

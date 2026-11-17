@@ -375,8 +375,8 @@ line, as the Work map's cards always were."
                 ,@(and (plist-get b :bg) `(:background ,(funcall tok (plist-get b :bg))))
                 ,@(and (plist-get b :fg) `(:foreground ,(funcall tok (plist-get b :fg))))
                 ,@(and (plist-get b :edge)
-                       (let* ((ring (plist-get b :ring)) (w (if ring (car ring) -1)))
-                         `(:box (:line-width (,w . ,w) :color ,(funcall tok (plist-get b :edge))
+                       (let* ((ring (plist-get b :ring)))
+                         `(:box (:line-width ,(if ring (car ring) '(-1 . -1)) :color ,(funcall tok (plist-get b :edge))
                                              ,@(and glitnir ring
                                                     `(:corner-radius ,(nth 1 ring)
                                                                      ,@(and (nthcdr 2 ring) `(:open ,(nthcdr 2 ring)))))))))
