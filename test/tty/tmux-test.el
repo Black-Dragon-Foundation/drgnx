@@ -103,8 +103,10 @@ the loop and sets `kx-returned' when it ends."
       (should (eq (plist-get caps :keys) 'mok))
       (should (eq (plist-get caps :c-g) 'waits))
       (should-not (plist-get caps :folded)))
-    (should-not (member "C-S-p" (plist-get (cdr (car (plist-get (drgnx-tty-session-eval s '(drgnx-tty--read-report)) :terminals)))
-                                           :unsendable)))
+    ;; this terminal's entry, by its name: the report keeps every terminal's
+    (let ((entry (drgnx-tty-session-eval s '(cdr (assoc (terminal-name) (plist-get (drgnx-tty--read-report) :terminals))))))
+      (should (eq (plist-get (plist-get entry :caps) :c-g) 'waits))
+      (should-not (member "C-S-p" (plist-get entry :unsendable))))
     (drgnx-tty-session-key s "C-S-p" 'mok)
     (drgnx-tty-session-wait s '(memq 'drgnx-palette kx-commands))
     ;; C-g still closes a prompt (it reaches Emacs as an escape sequence, decoded)
