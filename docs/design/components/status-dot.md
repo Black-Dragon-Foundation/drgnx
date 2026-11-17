@@ -47,11 +47,11 @@ The kit's `status-dot` component: one definition in `etc/ui/components.eld`, exp
 
 | Binding | Face | Fill | Text | Edge |
 |---|---|---|---|---|
-| done | `drgnx-kit-status-dot-done` | - | - | - |
-| running | `drgnx-kit-status-dot-running` | - | - | - |
-| needs-you | `drgnx-kit-status-dot-needs-you` | - | - | - |
-| idle | `drgnx-kit-status-dot-idle` | - | - | - |
-| error | `drgnx-kit-status-dot-error` | - | - | - |
+| done | `drgnx-kit-status-dot-done` | - | ok | - |
+| running | `drgnx-kit-status-dot-running` | - | info | - |
+| needs-you | `drgnx-kit-status-dot-needs-you` | - | attention | - |
+| idle | `drgnx-kit-status-dot-idle` | - | subtle | - |
+| error | `drgnx-kit-status-dot-error` | - | error | - |
 
 ## States
 

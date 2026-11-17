@@ -2525,11 +2525,12 @@ it builds for Android too).
   falls; the standard faces (`default`, `bold`, `error`, …) are left as words.
 - **The kit.** A view builds a kit component (`etc/ui/components.eld`) with `drgnx_rows::kit`: a `Comp` (JSON
   `{"c": "row", "kind": "tree", "depth": 2, "twisty": true, "text": …, "state": "selected", "action": {"kind", "args"}}`)
-  and a `KitEnv` (`view::kit_env(&env)`: the env's scale, whether it is a terminal, its `glyphs` and `density`) go through
+  and a `KitEnv` (`ViewEnv::kit()`: the env's scale, whether it is a terminal, its `glyphs` and `density`) go through
   `kit::expand(&mut builder, &kit_env, &comp)` (inline, onto the row being built) or `kit::expand_rows(&kit_env, key,
   &comp)` (whole rows, keys `KEY/0`, `KEY/1`…). Pads are `RowBuilder::pad` spaces of `floor(logical × scale + 0.5 +
   1e-9)` device px per part; on a terminal, characters, and glyphs in the env's form (else Unicode, `kit::GLYPHS`);
-  the runs are the component's kit face and the state's under it; an `Action` puts `drgnx-action` = `[kind, args…]`
+  the runs are the component's kit face and the state's under it (above it for a component with colours of its own,
+  a button, chip or card: `RowBuilder::face_over`); an `Action` puts `drgnx-action` = `[kind, args…]`
   and `mouse-face` over the component, which the editor maps to the kind's one keymap (`docs/develop/core.md`,
   "Actions and focus-visible"). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
   (`tests/kit_conformance.rs` and `drgnx-ui-kit/conformance` over `test/fixtures/kit`) keeps the two equal.

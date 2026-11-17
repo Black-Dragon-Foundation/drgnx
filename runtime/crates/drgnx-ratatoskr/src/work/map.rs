@@ -1487,7 +1487,7 @@ impl Map {
             let k3 = (key.conn, view.clone(), c);
             f.core.views.publish_built(f, &k3, |env, fonts| {
                 (
-                    detail::rows(&lines, env.scale, env.width_px, fonts),
+                    detail::rows(&lines, &env.kit(), env.width_px, fonts),
                     Vec::new(),
                 )
             });

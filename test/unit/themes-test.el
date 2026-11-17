@@ -126,10 +126,11 @@ high contrast, where tints are black, they are ringed in their own colour."
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
       (should (equal (drgnx-look-token 'gap variant) (drgnx-face-color 'tab-bar :background 'gui)))
-      (pcase-dolist (`(,face ,fg ,bg) '((drgnx-chip-quiet muted sel-quiet) (drgnx-chip-attention attention attention-tint)
-                                        (drgnx-chip-accent accent accent-tint) (drgnx-chip-ok ok ok-tint)
-                                        (drgnx-chip-warn warn warn-tint) (drgnx-chip-error error error-tint)))
-        (should (equal (list face (drgnx-look-token fg variant) (drgnx-look-token bg variant))
+      ;; the kit's chips (etc/ui/components.eld) carry the tints; the attention chip is not the kit's yet
+      (pcase-dolist (`(,face ,fg ,bg) '((drgnx-kit-chip-neutral-soft muted sel-quiet) (drgnx-chip-attention attention attention-tint)
+                                        (drgnx-kit-chip-accent-soft accent accent-tint) (drgnx-kit-chip-ok-soft ok ok-tint)
+                                        (drgnx-kit-chip-warn-soft warn warn-tint) (drgnx-kit-chip-error-soft error error-tint)))
+        (should (equal (list face (drgnx-look-token fg variant) (and (not (and (eq variant 'hc) (string-prefix-p "drgnx-kit-" (symbol-name face)))) (drgnx-look-token bg variant)))
                        (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui))))
         (should (eq (eq variant 'hc) (and (plist-get (drgnx-faces--clause-plist face 'gui) :box) t)))))))
 
@@ -137,8 +138,8 @@ high contrast, where tints are black, they are ringed in their own colour."
   "work-space-dark.html `.mk': a step's number (`drgnx-work-step-number', on this solid chip and the badge's pill) is the accent's fill with its text colour."
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
-      (should (equal (drgnx-face-color 'drgnx-chip-solid :background 'gui) (drgnx-look-token 'accent-fill variant)))
-      (should (equal (drgnx-face-color 'drgnx-chip-solid :foreground 'gui) (drgnx-look-token 'on-accent variant))))))
+      (should (equal (drgnx-face-color 'drgnx-kit-chip-accent-solid :background 'gui) (drgnx-look-token 'accent-fill variant)))
+      (should (equal (drgnx-face-color 'drgnx-kit-chip-accent-solid :foreground 'gui) (drgnx-look-token 'on-accent variant))))))
 
 (ert-deftest drgnx-themes/an-area-s-shown-tab-is-a-pill ()
   "debugging.html `.pt.on': the shown tab of an area's tab row (the bottom panel's Debug Console) is a pill on the

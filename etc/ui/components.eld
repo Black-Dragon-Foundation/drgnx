@@ -17,7 +17,9 @@
 ;;   TTY: :glyph GLYPH-NAME (of `drgnx-face-glyphs'), :twisty (CLOSED OPEN) glyph names, :pad CHARS, :indent CHARS a
 ;;   level (tree rows); :indent may be a (:by AXIS ...) case.
 ;;   LABEL: the word a screen reader speaks, a string or (:by AXIS (VALUE "word")...).
-;;   BINDINGS: (((VARIANT-VALUE...) :bg TOKEN :fg TOKEN :edge TOKEN :inherit (STANDARD-FACE...))...); the binding
+;;   BINDINGS: (((VARIANT-VALUE...) :bg TOKEN :fg TOKEN :edge TOKEN :inherit (STANDARD-FACE...) :font (FACE...))...);
+;;   :hc-ring t: in the high-contrast theme the face has no tint, a 1 px ring in its :fg colour instead.
+;;   :font names the inherited faces that carry no colours (the UI or code font): a drgnx theme's spec keeps only those; the binding
 ;;   of () is the component's own face `drgnx-kit-ID', another one `drgnx-kit-ID-VALUE...', made only where its
 ;;   colours differ from the component's own.
 ((state-table
@@ -41,21 +43,42 @@
        :replaces ((drgnx-view-selected . drgnx-row-selected) (drgnx-explorer-selected . drgnx-row-selected)
                   (drgnx-work-selected . drgnx-row-selected) (drgnx-notebook-current-row . drgnx-row-selected))
        :helpers nil :lint t)
+  ;; a button: a label in a rounded box (the 1 px ring is inside the padding), its key hint after the label; 26 px, 22 small
+  (button :variants ((style primary secondary quiet danger) (size md sm)) :defaults (style secondary size md)
+          :geometry (:height (:by size (md 26) (sm 22)) :pad (:by size (md (12 . 12)) (sm (8 . 8))) :gap 6 :box t :radius 6 :hit 4)
+          :tty (:pad 1) :label nil
+          :bind (((primary) :bg button-primary-bg :fg button-primary-fg :inherit (drgnx-control-primary) :font (drgnx-ui-text))
+                 ((secondary) :bg sel-quiet :edge button-edge :inherit (drgnx-control) :font (drgnx-ui-text))
+                 ((quiet) :inherit (drgnx-ui-text drgnx-text-muted))
+                 ((danger) :bg error-tint :fg error :inherit (drgnx-chip-error) :font (drgnx-ui-text)))
+          :replaces ((drgnx-ui-button . drgnx-kit-button-secondary) (drgnx-ui-button-primary . drgnx-kit-button-primary)
+                     (drgnx-button . drgnx-kit-button-secondary) (drgnx-work-flow-button . drgnx-kit-button-secondary)
+                     (drgnx-work-flow-button-primary . drgnx-kit-button-primary))
+          :helpers nil :lint t)
+  ;; a key hint: the keys in the code font in a 4 px box; `menu' is the text alone (a menu's shortcut column)
+  (key-hint :variants ((variant cap menu)) :defaults (variant cap)
+            :geometry (:height 0 :pad (:by variant (cap (5 . 5)) (menu (0 . 0))) :gap 0 :box (:by variant (cap t) (menu nil)) :radius 4)
+            :tty (:pad 0) :label "key"
+            :bind (((cap) :edge key-hint-edge :inherit (drgnx-code-small drgnx-control) :font (drgnx-code-small))
+                   ((menu) :inherit (drgnx-code-small drgnx-text-subtle)))
+            :replaces ((drgnx-keycap . drgnx-kit-key-hint-cap) (drgnx-work-flow-button-key . drgnx-kit-key-hint-cap)
+                       (drgnx-work-flow-key-primary . drgnx-kit-key-hint-cap))
+            :helpers nil :lint t)
   ;; a chip: a short label in a tinted rounded box, optionally led by an icon; `agent' takes its colour from the agent slot
   ;; (drgnx-agent-N); high contrast has no tint, a 1 px ring in the tone's colour
   (chip :variants ((tone neutral accent warn ok error agent) (fill soft solid)) :defaults (tone neutral fill soft)
         :geometry (:height 20 :pad (7 . 7) :gap 5 :box t :radius 4)
         :tty (:pad 1) :label nil
-        :bind (((neutral soft) :bg sel-quiet :fg muted :inherit (drgnx-ui-caption drgnx-text-muted))
-               ((accent soft) :bg accent-tint :fg accent :inherit (drgnx-ui-caption drgnx-accent))
-               ((warn soft) :bg warn-tint :fg warn :inherit (drgnx-ui-caption warning))
-               ((ok soft) :bg ok-tint :fg ok :inherit (drgnx-ui-caption success))
-               ((error soft) :bg error-tint :fg error :inherit (drgnx-ui-caption error))
-               ((neutral solid) :bg sel :fg on-accent :inherit (drgnx-ui-caption))
-               ((accent solid) :bg accent-fill :fg on-accent :inherit (drgnx-ui-caption))
-               ((warn solid) :bg warn :fg on-accent :inherit (drgnx-ui-caption))
-               ((ok solid) :bg ok :fg on-accent :inherit (drgnx-ui-caption))
-               ((error solid) :bg error :fg on-accent :inherit (drgnx-ui-caption)))
+        :bind (((neutral soft) :hc-ring t :bg sel-quiet :fg muted :inherit (drgnx-ui-caption drgnx-text-muted drgnx-selected-quiet) :font (drgnx-ui-caption))
+               ((accent soft) :hc-ring t :bg accent-tint :fg accent :inherit (drgnx-ui-caption drgnx-accent drgnx-selected-quiet) :font (drgnx-ui-caption))
+               ((warn soft) :hc-ring t :bg warn-tint :fg warn :inherit (drgnx-ui-caption warning drgnx-selected-quiet) :font (drgnx-ui-caption))
+               ((ok soft) :hc-ring t :bg ok-tint :fg ok :inherit (drgnx-ui-caption success drgnx-selected-quiet) :font (drgnx-ui-caption))
+               ((error soft) :hc-ring t :bg error-tint :fg error :inherit (drgnx-ui-caption error drgnx-selected-quiet) :font (drgnx-ui-caption))
+               ((neutral solid) :bg sel :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption))
+               ((accent solid) :bg accent-fill :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption))
+               ((warn solid) :bg warn :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption))
+               ((ok solid) :bg ok :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption))
+               ((error solid) :bg error :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption)))
         :replaces ((drgnx-chip-quiet . drgnx-kit-chip-neutral-soft) (drgnx-chip-accent . drgnx-kit-chip-accent-soft)
                    (drgnx-chip-ok . drgnx-kit-chip-ok-soft) (drgnx-chip-warn . drgnx-kit-chip-warn-soft)
                    (drgnx-chip-error . drgnx-kit-chip-error-soft) (drgnx-chip-solid . drgnx-kit-chip-accent-solid))
@@ -65,9 +88,9 @@
               :geometry (:height 0 :pad (0 . 0) :gap 4 :box nil :radius 0)
               :tty (:glyph (:by status (done ok) (running busy) (needs-you dot) (idle circle) (error fail)) :pad 0)
               :label (:by status (done "done") (running "running") (needs-you "needs you") (idle "not started") (error "error"))
-              :bind (((done) :inherit (drgnx-status-ok))
-                     ((running) :inherit (drgnx-status-info))
-                     ((needs-you) :inherit (drgnx-status-needs-you))
-                     ((idle) :inherit (drgnx-text-subtle))
-                     ((error) :inherit (drgnx-status-fail)))
+              :bind (((done) :fg ok :inherit (drgnx-status-ok))
+                     ((running) :fg info :inherit (drgnx-status-info))
+                     ((needs-you) :fg attention :inherit (drgnx-status-needs-you))
+                     ((idle) :fg subtle :inherit (drgnx-text-subtle))
+                     ((error) :fg error :inherit (drgnx-status-fail)))
               :replaces nil :helpers (drgnx-ui-status) :lint t)))

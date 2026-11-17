@@ -506,6 +506,12 @@
  drgnx-topline-hover
  drgnx-topline-strong
  drgnx-kit-row
+ drgnx-kit-button-primary
+ drgnx-kit-button-secondary
+ drgnx-kit-button-quiet
+ drgnx-kit-button-danger
+ drgnx-kit-key-hint-cap
+ drgnx-kit-key-hint-menu
  drgnx-kit-chip-neutral-soft
  drgnx-kit-chip-accent-soft
  drgnx-kit-chip-warn-soft

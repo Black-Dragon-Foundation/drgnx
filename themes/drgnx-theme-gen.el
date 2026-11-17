@@ -458,7 +458,7 @@ faces a landed kit component replaces (`drgnx-ui-kit-replaced-faces'): they inhe
                                 `(,(intern (format "drgnx-notebook-fg-bright-%s" name)) :foreground ,bright)
                                 `(,(intern (format "drgnx-notebook-bg-bright-%s" name)) :background ,bright))))
         ;; the kit's faces (etc/ui/components.eld): their bindings' tokens
-        (drgnx-ui-kit-theme-specs #'c))))))
+        (drgnx-ui-kit-theme-specs #'c nil hc))))))
 
 (defun drgnx-theme--tty-token (tok)
   "TOK for a terminal: the gap and the panel are the editor's colour."

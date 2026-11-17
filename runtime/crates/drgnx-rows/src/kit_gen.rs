@@ -11,6 +11,10 @@ use crate::faces::FaceId;
 pub enum CompId {
     /// `row`
     Row,
+    /// `button`
+    Button,
+    /// `key-hint`
+    KeyHint,
     /// `chip`
     Chip,
     /// `status-dot`
@@ -123,6 +127,70 @@ const ROW_GEOM: [[Geom; 3]; 3] = [
 const ROW_LABEL: [Option<&str>; 3] = [None, None, None];
 const ROW_FACE: [FaceId; 3] = [FaceId::KitRow, FaceId::KitRow, FaceId::KitRow];
 
+const BUTTON_AXES: &[&[&str]] = &[&["primary", "secondary", "quiet", "danger"], &["md", "sm"]];
+const BUTTON_DEFAULTS: &[usize] = &[1, 0];
+const BUTTON_GEOM: [[Geom; 3]; 8] = [
+    [
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 26, pad: (12, 12), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 22, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 4, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const BUTTON_LABEL: [Option<&str>; 8] = [None, None, None, None, None, None, None, None];
+const BUTTON_FACE: [FaceId; 8] = [FaceId::KitButtonPrimary, FaceId::KitButtonPrimary, FaceId::KitButtonSecondary, FaceId::KitButtonSecondary, FaceId::KitButtonQuiet, FaceId::KitButtonQuiet, FaceId::KitButtonDanger, FaceId::KitButtonDanger];
+
+const KEY_HINT_AXES: &[&[&str]] = &[&["cap", "menu"]];
+const KEY_HINT_DEFAULTS: &[usize] = &[0];
+const KEY_HINT_GEOM: [[Geom; 3]; 2] = [
+    [
+        Geom { height: 0, pad: (5, 5), gap: 0, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (5, 5), gap: 0, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (5, 5), gap: 0, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 4, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 4, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 4, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const KEY_HINT_LABEL: [Option<&str>; 2] = [Some("key"), Some("key")];
+const KEY_HINT_FACE: [FaceId; 2] = [FaceId::KitKeyHintCap, FaceId::KitKeyHintMenu];
+
 const CHIP_AXES: &[&[&str]] = &[&["neutral", "accent", "warn", "ok", "error", "agent"], &["soft", "solid"]];
 const CHIP_DEFAULTS: &[usize] = &[0, 0];
 const CHIP_GEOM: [[Geom; 3]; 12] = [
@@ -229,6 +297,14 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(ROW_AXES, ROW_DEFAULTS, variant);
             ROW_GEOM[i][d]
         }
+        CompId::Button => {
+            let (i, d) = index(BUTTON_AXES, BUTTON_DEFAULTS, variant);
+            BUTTON_GEOM[i][d]
+        }
+        CompId::KeyHint => {
+            let (i, d) = index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant);
+            KEY_HINT_GEOM[i][d]
+        }
         CompId::Chip => {
             let (i, d) = index(CHIP_AXES, CHIP_DEFAULTS, variant);
             CHIP_GEOM[i][d]
@@ -244,6 +320,8 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
 pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
     match id {
         CompId::Row => ROW_LABEL[index(ROW_AXES, ROW_DEFAULTS, variant).0],
+        CompId::Button => BUTTON_LABEL[index(BUTTON_AXES, BUTTON_DEFAULTS, variant).0],
+        CompId::KeyHint => KEY_HINT_LABEL[index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant).0],
         CompId::Chip => CHIP_LABEL[index(CHIP_AXES, CHIP_DEFAULTS, variant).0],
         CompId::StatusDot => STATUS_DOT_LABEL[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
     }
@@ -253,6 +331,8 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
 pub fn face(id: CompId, variant: &[&str]) -> FaceId {
     match id {
         CompId::Row => ROW_FACE[index(ROW_AXES, ROW_DEFAULTS, variant).0],
+        CompId::Button => BUTTON_FACE[index(BUTTON_AXES, BUTTON_DEFAULTS, variant).0],
+        CompId::KeyHint => KEY_HINT_FACE[index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant).0],
         CompId::Chip => CHIP_FACE[index(CHIP_AXES, CHIP_DEFAULTS, variant).0],
         CompId::StatusDot => STATUS_DOT_FACE[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
     }

@@ -56,7 +56,7 @@
                   (push (format "%s: token %s not in %s" id token variant) fails))))))
         ;; every glyph exists
         (let ((tty (plist-get plist :tty)))
-          (dolist (glyph (append (ensure-list (plist-get tty :glyph)) (plist-get tty :twisty)))
+          (dolist (glyph (append (drgnx-ui-kit--glyphs-in (plist-get tty :glyph)) (drgnx-ui-kit--glyphs-in (plist-get tty :twisty))))
             (unless (assq glyph drgnx-ui--default-glyphs) (push (format "%s: no glyph %s" id glyph) fails))))
         ;; every face it replaces is defined in the tree
         (dolist (r (plist-get plist :replaces))
@@ -147,7 +147,8 @@
 (ert-deftest drgnx-ui-kit/third-party-theme-styles-every-kit-face ()
   ;; a theme that knows nothing of drgnx still gives every kit face that has colours a fill or a ring, through the
   ;; standard faces it inherits: checked on the real faces, and on the fixture's specs (the real file may have few
-  ;; faces yet).  A binding with no colours (the row's: the UI font, on the surface's own fill) is exempt.
+  ;; faces yet).  A binding with no fill and no ring (the row's: the UI font, on the surface's own fill; a status dot's:
+  ;; a glyph in a colour of its own text) is exempt.
   (dolist (theme '(modus-vivendi doom-one-fixture))
     (unwind-protect
         (progn
@@ -155,7 +156,7 @@
           (if (get theme 'theme-settings) (enable-theme theme) (load-theme theme t))
           (dolist (f (append (drgnx-ui-kit-face-bindings) (drgnx-ui-kit-face-bindings ui-kit-test--fixture)))
             (when-let* ((inherit (plist-get (nth 2 f) :inherit))
-                        ((seq-some (lambda (k) (plist-get (nth 2 f) k)) '(:bg :fg :edge))))
+                        ((seq-some (lambda (k) (plist-get (nth 2 f) k)) '(:bg :edge))))
               (should (cl-some (lambda (parent)
                                  (or (drgnx-face-color parent :background 'gui)
                                      (plist-get (drgnx-faces--clause-plist parent 'gui) :box)))
@@ -177,6 +178,36 @@
   (with-temp-buffer
     (insert-file-contents (expand-file-name (concat "test/fixtures/kit/" name) drgnx-dir))
     (json-parse-buffer :object-type 'plist :array-type type :null-object nil :false-object :false)))
+
+(ert-deftest drgnx-ui-kit/ascii-terminal-status-dot-has-its-word ()
+  ;; a terminal has no colour to carry the status alone: its dot always has the word, in ASCII where the glyphs are
+  (let ((drgnx-face-glyphs drgnx-ui--default-glyphs))
+    (dolist (s '((done "+ done") (running "@ running") (needs-you "* needs you") (idle "o not started") (error "X error")))
+      (should (equal (plist-get (drgnx-ui-kit-expand 'status-dot (list :c "status-dot" :status (symbol-name (car s))) 1.0 'ascii)
+                                :text)
+                     (cadr s))))
+    ;; on a graphical frame the word is asked for
+    (should (equal (plist-get (drgnx-ui-kit-expand 'status-dot '(:c "status-dot" :status "needs-you") 1.0 nil) :text)
+                   (car (alist-get 'dot drgnx-ui--default-glyphs))))
+    (should (equal (plist-get (drgnx-ui-kit-expand 'status-dot '(:c "status-dot" :status "needs-you" :word t) 1.0 nil) :text)
+                   (concat (car (alist-get 'dot drgnx-ui--default-glyphs)) " needs you")))))
+
+(ert-deftest drgnx-ui-kit/chip-hc-is-ringed ()
+  ;; high contrast has no tints: a soft chip has a 1 px ring in its text colour instead; a solid one keeps its fill
+  (let* ((tok (lambda (token) (symbol-name token)))
+         (soft (assq 'drgnx-kit-chip-ok-soft (drgnx-ui-kit-theme-specs tok nil t)))
+         (solid (assq 'drgnx-kit-chip-ok-solid (drgnx-ui-kit-theme-specs tok nil t)))
+         (normal (assq 'drgnx-kit-chip-ok-soft (drgnx-ui-kit-theme-specs tok nil nil))))
+    (should (equal (plist-get (cdr soft) :box) '(:line-width (-1 . -1) :color "ok")))
+    (should-not (plist-get (cdr soft) :background))
+    (should (equal (plist-get (cdr solid) :background) "ok"))
+    (should (equal (plist-get (cdr normal) :background) "ok-tint"))
+    (should-not (plist-get (cdr normal) :box))))
+
+(ert-deftest drgnx-ui-kit/chip-geometry ()
+  (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :height) 20))
+  (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :pad) '(7 . 7)))
+  (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :radius) 4)))
 
 (ert-deftest drgnx-ui-kit/conformance ()
   ;; each case through `drgnx-ui-kit-expand' equals the hub's expansion of it, as expected.json holds it (the hub's at
@@ -324,6 +355,108 @@
                   (let ((at (get-text-property (1- end) 'face)))
                     (should (memq face (ensure-list at)))))))))
       (kill-buffer buf))))
+
+;;;; Buttons and key hints (Task 12)
+
+(defmacro ui-kit-test--gui (scale &rest body)
+  "BODY as on a graphical frame at SCALE with a 10 px column."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+             ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) ,scale))
+             ((symbol-function 'frame-char-width) (lambda (&optional _) 10)))
+     ,@body))
+
+(ert-deftest drgnx-ui-kit/button-geometry ()
+  ;; md is 26 px with 12 px each side, sm 22 with 8; a key hint sits one gap (6) after the label inside the button; each
+  ;; style has its own kit face and the state's face is above it
+  (let ((go (lambda (style size &rest more)
+              (drgnx-ui-kit-expand 'button (append (list :c "button" :label "Go" :style style :size size) more) 1.0 nil))))
+    (let ((e (funcall go "primary" "md")))
+      (should (equal (plist-get e :spaces) [[0 12 0] [3 12 0]]))
+      (should (equal (plist-get e :height) '(:lines 1 :unit 26)))
+      (should (equal (plist-get e :runs) [[0 4 "drgnx-kit-button-primary"]])))
+    (let ((e (funcall go "quiet" "sm")))
+      (should (equal (plist-get e :spaces) [[0 8 0] [3 8 0]]))
+      (should (equal (plist-get e :height) '(:lines 1 :unit 22)))
+      (should (equal (plist-get e :runs) [[0 4 "drgnx-kit-button-quiet"]])))
+    (should (equal (plist-get (funcall go "danger" "md") :runs) [[0 4 "drgnx-kit-button-danger"]]))
+    (should (equal (plist-get (funcall go "secondary" "md") :runs) [[0 4 "drgnx-kit-button-secondary"]]))
+    ;; 12 px at 1.25 is 15, 26 is 33 (half up)
+    (let ((e (drgnx-ui-kit-expand 'button '(:c "button" :label "Go" :style "primary") 1.25 nil)))
+      (should (equal (plist-get e :spaces) [[0 15 0] [3 15 0]]))
+      (should (equal (plist-get e :height) '(:lines 1 :unit 33))))
+    ;; the key hint: a gap, the keys in their 5 px box, then the end pad; the button's fill runs under the key's box
+    (let ((e (funcall go "secondary" "md" :key "⏎")))
+      (should (equal (plist-get e :text) " Go  ⏎  "))
+      (should (equal (plist-get e :spaces) [[0 12 0] [3 6 0] [4 5 0] [6 5 0] [7 12 0]]))
+      (should (equal (plist-get e :runs)
+                     [[0 4 "drgnx-kit-button-secondary"] [4 7 "drgnx-kit-key-hint-cap"] [7 8 "drgnx-kit-button-secondary"]
+                      [4 7 "drgnx-kit-button-secondary"]])))
+    ;; a state is above the style's own colours
+    (should (equal (aref (plist-get (funcall go "primary" "md" :state "disabled") :runs) 0)
+                   [0 4 "drgnx-text-disabled"]))
+    ;; on a terminal: a space each side, the key as [KEY]
+    (let ((e (drgnx-ui-kit-expand 'button '(:c "button" :label "Go" :key "C-c") 1.0 t)))
+      (should (equal (plist-get e :text) " Go [C-c] "))
+      (should-not (plist-get e :height)))))
+
+(ert-deftest drgnx-ui-kit/key-hint-forms ()
+  (let ((e (drgnx-ui-kit-expand 'key-hint '(:c "key-hint" :keys "C-x") 1.0 nil)))
+    (should (equal (plist-get e :text) " C-x "))
+    (should (equal (plist-get e :spaces) [[0 5 0] [4 5 0]]))
+    (should (equal (plist-get e :runs) [[0 5 "drgnx-kit-key-hint-cap"]])))
+  ;; the menu variant is the text alone, in its own face
+  (let ((e (drgnx-ui-kit-expand 'key-hint '(:c "key-hint" :keys "C-x" :variant "menu") 1.0 nil)))
+    (should (equal (plist-get e :text) "C-x"))
+    (should (equal (plist-get e :spaces) []))
+    (should (equal (plist-get e :runs) [[0 3 "drgnx-kit-key-hint-menu"]])))
+  (should (equal (plist-get (drgnx-ui-kit-expand 'key-hint '(:c "key-hint" :keys "C-x") 1.0 t) :text) "[C-x]"))
+  (should (equal (plist-get (drgnx-ui-kit-expand 'key-hint '(:c "key-hint" :keys "C-x" :variant "menu") 1.0 'ascii) :text) "C-x"))
+  ;; a state is above the ring
+  (should (equal (aref (plist-get (drgnx-ui-kit-expand 'key-hint '(:c "key-hint" :keys "C-x" :state "hover") 1.0 nil) :runs) 0)
+                 [0 5 "drgnx-hover"]))
+  (should (equal (plist-get (drgnx-ui-kit-component 'key-hint) :label) "key")))
+
+(ert-deftest drgnx-ui-kit/button-hit-area-carries-the-action ()
+  ;; the padding at both ends carries the action and the kind's keymap: a click or RET on the padding runs it
+  (let ((ran nil))
+    (ui-kit-test--gui 1.0
+      (let ((s (drgnx-ui-kit-button "Go" (lambda () (push 'ran ran)) 'primary 'md 'rest nil 'text)))
+        (should (equal (substring-no-properties s) "  Go  "))
+        (should (equal (get-text-property 0 'display s) '(space :width 0.4)))      ; 4 px of a 10 px column
+        (dolist (at (list 0 1 3 (1- (length s))))
+          (should (get-text-property at 'drgnx-action s))
+          (should (keymapp (get-text-property at 'keymap s))))
+        (should (equal (get-text-property 0 'mouse-face s) 'drgnx-hover))
+        (with-temp-buffer
+          (insert s)
+          (goto-char 1)
+          (let ((last-input-event ?\r)) (call-interactively #'drgnx-ui-kit-activate))
+          (goto-char (1- (point-max)))
+          (let ((last-input-event ?\r)) (call-interactively #'drgnx-ui-kit-activate)))
+        (should (equal ran '(ran ran)))))
+    ;; a kit action (KIND . ARGS) and a registry-less command are taken as they are
+    (let ((got nil))
+      (unwind-protect
+          (progn
+            (drgnx-ui-kit-define-action 'kit-btn (lambda (args) (setq got args)) nil)
+            (ui-kit-test--gui 1.0
+              (with-temp-buffer
+                (insert (drgnx-ui-kit-button "Go" '(kit-btn 7) 'secondary 'sm 'rest nil 'text))
+                (goto-char 3)
+                (let ((last-input-event ?\r)) (call-interactively #'drgnx-ui-kit-activate))
+                (should (equal got '(7))))))
+        (drgnx-ui-kit-undefine-action 'kit-btn)))))
+
+(ert-deftest drgnx-ui-kit/button-focus-ring-only-after-keys ()
+  ;; the ring (the `focus-visible' state's face) shows after a key event, not after a mouse event
+  (ui-kit-test--gui 1.0
+    (let ((drgnx-ui-kit--focus-visible nil))
+      (let ((s (drgnx-ui-kit-button "Go" #'ignore 'primary 'md 'focus-visible nil 'header-line)))
+        (should-not (memq 'drgnx-focus (ensure-list (get-text-property 3 'face s)))))
+      (setq drgnx-ui-kit--focus-visible t)
+      (let ((s (drgnx-ui-kit-button "Go" #'ignore 'primary 'md 'focus-visible nil 'header-line)))
+        (should (eq 'drgnx-focus (car (ensure-list (get-text-property 3 'face s)))))))))
 
 ;; The unknown-face counter (test mode): a row naming a face that is none, and is not in etc/ui/faces.eld, is counted
 (defvar drgnx-test-strict-faces)
