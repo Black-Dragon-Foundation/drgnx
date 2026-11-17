@@ -3999,6 +3999,87 @@ mod tests {
         assert!(!forseti::admit::small(&st.expected_on(&spec, "r2")));
     }
 
+    /// Job ID (see [`job`]) that needs the jobs NEEDS.
+    fn needing(id: &str, own: Priority, needs: &[&str]) -> Submit {
+        let mut s = job(id, own, 64);
+        s.spec.needs = needs.iter().map(|n| JobId((*n).into())).collect();
+        s
+    }
+
+    // [D] pure (design §5.2 item 2): a job waits for its needs as `needs`, holding no slot and no reservation; it is
+    // placed once they pass
+    #[test]
+    fn a_consumer_waits_as_needs_and_holds_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        // the consumer first: on its own it would take the one slot
+        q.submit(needing("use", Priority::P3, &["img"]), 100);
+        q.submit(job("img", Priority::P3, 64), 101);
+        let t = q.tick(102);
+        assert_eq!(t.starts, vec!["img".to_string()]);
+        let row = q.row("use").unwrap();
+        assert_eq!(row.waiting.as_deref(), Some("waits for job img"), "{row:?}");
+        assert!(!q.lock().local_running.contains_key("use"));
+        q.ran_here("img", &json!({"verdict": "Pass", "wall_s": 5.0}), 110);
+        q.release("img");
+        assert_eq!(q.tick(111).starts, vec!["use".to_string()]);
+    }
+
+    // [D] pure: a P1 job lifts the job it needs to P1, queued or running, so eviction and order see the P1 behind it
+    #[test]
+    fn a_p1_consumer_lifts_its_need_to_p1() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        q.submit(job("img", Priority::P4, 64), 100);
+        assert_eq!(q.tick(100).starts, vec!["img".to_string()]);
+        q.submit(needing("use", Priority::P1, &["img"]), 101);
+        q.tick(101);
+        assert_eq!(q.row("img").unwrap().priority, Priority::P1.number());
+    }
+
+    // [D] pure: a need that ends without passing ends its consumer, never run, as infra naming the need
+    #[test]
+    fn a_need_that_fails_ends_its_consumer_as_infra() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        q.submit(job("img", Priority::P3, 64), 100);
+        q.tick(100);
+        q.submit(needing("use", Priority::P3, &["img"]), 101);
+        q.ran_here("img", &json!({"verdict": "Red", "wall_s": 5.0}), 110);
+        q.release("img");
+        let t = q.tick(111);
+        assert!(t.starts.is_empty());
+        let [Outcome::Done { id, result, .. }] = &t.outcomes[..] else {
+            panic!("{:?}", t.outcomes)
+        };
+        assert_eq!(id, "use");
+        assert_eq!(
+            verdict_of(result),
+            Some(forseti::Verdict::Infra("needed job img failed".into()))
+        );
+        assert!(q.row("use").is_none());
+    }
+
+    // [D] pure: a job may need only jobs the queue knows, and never one that waits on it
+    #[test]
+    fn a_cycle_is_refused_at_submit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        q.submit(needing("b", Priority::P3, &["a"]), 100);
+        let err = q
+            .check_needs(&needing("a", Priority::P3, &["b"]).spec)
+            .unwrap_err();
+        assert!(err.contains("a → b → a"), "{err}");
+        let err = q
+            .check_needs(&needing("c", Priority::P3, &["nope"]).spec)
+            .unwrap_err();
+        assert!(err.contains("nope"), "{err}");
+        assert!(
+            q.check_needs(&needing("d", Priority::P3, &["b"]).spec)
+                .is_ok()
+        );
+    }
+
     use super::super::transport::{Channel, Channels, LinkError, Login, Transport};
 
     fn idle() -> Channels {

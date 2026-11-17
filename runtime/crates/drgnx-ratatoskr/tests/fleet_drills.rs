@@ -1462,6 +1462,50 @@ mod drill {
             "two runners took {two:?}, one took {one:?}"
         );
     }
+
+    /// [C] (design §5.2 item 2, the repin deadlock of 2026-11-17): a runner with room for two, an image job and four
+    /// jobs that need it, the four submitted first. Without `needs` the four took both places and waited on an image
+    /// that never got one; with it, the image job starts first, every consumer starts after it passed, and all pass.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "fleet"]
+    async fn the_repin_deadlock_cannot_happen() {
+        let mut d = Drill::new("needs", "r1", "dedicated");
+        d.link().await;
+        let cores: u32 = sh("r1", "nproc").parse().unwrap();
+        let half = Range {
+            min: (cores / 2).max(1),
+            max: (cores / 2).max(1),
+        };
+        for i in 0..4 {
+            let mut consumer = d.job(&format!("use{i}"), "echo used", &[]);
+            consumer.spec.cores = half.clone();
+            consumer.spec.needs = vec![forseti::JobId("img".into())];
+            d.submit(consumer);
+        }
+        let mut img = d.job("img", "sleep 20; echo built", &[]);
+        img.spec.cores = half.clone();
+        d.submit(img);
+        let ended: Vec<String> = d
+            .drive("every verdict", |_, o, _| {
+                let ended: Vec<String> = o
+                    .iter()
+                    .filter_map(|o| match o {
+                        Outcome::Done { id, result, .. } => {
+                            assert_eq!(result["verdict"], "Pass", "{id}: {result}");
+                            Some(id.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                (ended.len() == 5).then_some(ended)
+            })
+            .await;
+        assert_eq!(
+            ended[0], "img",
+            "a consumer ended before the job it needs: {ended:?}"
+        );
+        d.end().await;
+    }
 }
 
 /// A networked runner job (`fleet.sh test net::`): its relay sidecar under the job's helper, the helper's proxy on
