@@ -28,6 +28,12 @@ down (not into `.git`, `node_modules`, `eln-cache`, `elpa`, `target`, `dist`, `b
 - **the board:** TODOs with a `:PLAN_FILE:` property (onboarding's import) appear under their plan; a relative path
   is resolved against the `:PROJECT_ROOT:` of the project heading the TODO is under (none there: not shown).
 
+The hub's records import reads the same three: it finds `.superpowers/sdd/*/progress.md` ledgers anywhere under a root
+(not under `.git`, `node_modules` or `target`; a `progress.md` elsewhere is no ledger) and names the plan each one
+feeds by its first line; each `Ruling:` line is a ruling entity under its task (the plan's head when the task is not
+in the plan), retired when its line goes; and a board TODO whose `:PLAN_FILE:` names an imported plan is a child of
+that plan (a plan imported after its board is linked at the board's next sync).
+
 A plan is *merged* when all its tasks are done and its branch is in `main`/`master` (or gone). Only files that
 changed since the last scan are read again (a rescan of 30 files takes well under a second). Every scan also
 checks that each linked commit is still on a branch, tag or HEAD: commits a rebase, squash or amend left behind
