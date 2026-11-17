@@ -22,6 +22,7 @@
 
 (declare-function drgnx-grid-tree "drgnx-grid" (&optional frame))
 (declare-function drgnx-grid-apply-tree "drgnx-grid" (tree &optional frame))
+(declare-function drgnx-grid--tree-ids "drgnx-grid" (node))
 (declare-function drgnx-grid-tiles "drgnx-grid" (&optional frame filter))
 (declare-function drgnx-grid-full-size-p "drgnx-grid" (&optional frame))
 (declare-function drgnx-grid-full-size-toggle "drgnx-grid" (&optional window))
@@ -134,6 +135,7 @@ See the Commentary."
   "Put the layout SNAP (`drgnx-grid-snapshot') back: an aux frame it has and that is gone is made again, each frame
 gets its tree (`drgnx-grid-apply-tree') and place, its tile shown full size again when it was, and an aux frame SNAP
 lacks is deleted, its editors' buffers becoming tabs of the main frame's editor (nothing is killed, saved or asked).
+An aux frame whose monitor is not connected is not made: it folds into the main frame (`drgnx-monitors--fold-snap').
 A SNAP that is not valid changes nothing and gives one notice.  Non-nil when restored."
   (if (not (drgnx-grid-valid-snapshot-p snap))
       (progn (drgnx-notify 'wb 'warn "A saved layout was not valid; nothing changed") nil)
@@ -141,22 +143,31 @@ A SNAP that is not valid changes nothing and gives one notice.  Non-nil when res
            (main (or (seq-find (lambda (f) (eq (drgnx-frame-role f) 'main)) (drgnx-grid--snapshot-frames)) selected))
            (kept nil) (changed nil))
       (dolist (s (plist-get snap :frames))
-        (let ((frame (if (eq (plist-get s :role) 'main) main
-                       (or (drgnx-grid--frame-by-id (plist-get s :id))
-                           (let ((f (drgnx-frames--new (get-scratch-buffer-create) nil)))
-                             (when (plist-get s :id) (puthash f (plist-get s :id) drgnx-grid--frame-id-table))
-                             f)))))
-          (push frame kept)
-          ;; a frame already as SNAP has it is left alone
-          (unless (and (equal (car (drgnx-grid-full-size-p frame)) (plist-get s :full))
-                       (equal (drgnx-grid--frame-snapshot-tree frame) (plist-get s :tree)))
-            (push frame changed)
-            (drgnx-grid-forget-full-size frame)
-            (drgnx-grid-apply-tree (plist-get s :tree) frame))
-          (drgnx-grid--place-frame frame s)
-          (when-let* ((id (plist-get s :full)) ((not (drgnx-grid-full-size-p frame)))
-                      (w (seq-find (lambda (w) (eql (window-parameter w 'drgnx-tile-id) id)) (drgnx-grid-tiles frame))))
-            (drgnx-grid-full-size-toggle w))))
+        (if (and (eq (plist-get s :role) 'aux) (plist-get s :monitor)
+                 (not (drgnx-monitors--present-p (plist-get s :monitor))))
+            ;; its monitor is not connected: the window folds into the main one until it is (`drgnx-monitors--fold')
+            (drgnx-monitors--fold-snap s main)
+          (let ((frame (if (eq (plist-get s :role) 'main) main
+                         (or (drgnx-grid--frame-by-id (plist-get s :id))
+                             (let ((f (drgnx-frames--new (get-scratch-buffer-create) nil)))
+                               (when (plist-get s :id) (puthash f (plist-get s :id) drgnx-grid--frame-id-table))
+                               ;; every tile of a frame made again comes from its tree: its first window's id (and
+                               ;; the ids the grid gives it) must not be one of the tree's, or that tile stays unfilled
+                               (set-frame-parameter f 'drgnx-grid-next-id
+                                                    (apply #'max 0 (drgnx-grid--tree-ids (plist-get s :tree))))
+                               (dolist (w (window-list f 'nomini)) (set-window-parameter w 'drgnx-tile-id nil))
+                               f)))))
+            (push frame kept)
+            ;; a frame already as SNAP has it is left alone
+            (unless (and (equal (car (drgnx-grid-full-size-p frame)) (plist-get s :full))
+                         (equal (drgnx-grid--frame-snapshot-tree frame) (plist-get s :tree)))
+              (push frame changed)
+              (drgnx-grid-forget-full-size frame)
+              (drgnx-grid-apply-tree (plist-get s :tree) frame))
+            (drgnx-grid--place-frame frame s)
+            (when-let* ((id (plist-get s :full)) ((not (drgnx-grid-full-size-p frame)))
+                        (w (seq-find (lambda (w) (eql (window-parameter w 'drgnx-tile-id) id)) (drgnx-grid-tiles frame))))
+              (drgnx-grid-full-size-toggle w)))))
       (dolist (f (drgnx-grid--snapshot-frames))
         (unless (or (memq f kept) (eq (drgnx-frame-role f) 'main))
           (drgnx-grid--fold-buffers (drgnx-grid--frame-buffers f) main)
