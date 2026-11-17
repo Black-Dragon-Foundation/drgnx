@@ -51,6 +51,7 @@
   "budget/get": ["user"],
   "budget/tree": ["user"],
   "budget/set": ["user"],
+  "budget/raise": ["user"],
   "buffers/set": ["user"],
   "cards/settle": ["user"],
   "changes/close": ["user"],
@@ -360,7 +361,10 @@
   "work/map/close": ["user"],
   "work/map/set": ["user"],
   "work/map/subscribe": ["user"],
+  "work/schedule/set": ["user"],
+  "work/schedule/subscribe": ["user"],
   "work/target/set": ["user"],
   "work/trail/close": ["user"],
+  "work/trail/set": ["user"],
   "work/trail/subscribe": ["user"]
 }

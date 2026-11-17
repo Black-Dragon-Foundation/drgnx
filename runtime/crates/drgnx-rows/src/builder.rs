@@ -47,6 +47,13 @@ impl RowBuilder {
         self
     }
 
+    /// FACE over `[start, end)` above every run so far (the state of a component that has colours of its own: its
+    /// fill, text and ring replace the component's).
+    pub fn face_over(&mut self, start: u32, end: u32, face: &str) -> &mut Self {
+        self.row.runs.insert(0, (start, end, face.to_owned()));
+        self
+    }
+
     /// The text property NAME = VALUE over `[start, end)`.
     pub fn prop(&mut self, start: u32, end: u32, name: &str, value: Value) -> &mut Self {
         self.row.props.push((start, end, name.to_owned(), value));
@@ -80,6 +87,12 @@ impl RowBuilder {
 
     pub fn height(&mut self, lines: u32, unit: u32) -> &mut Self {
         self.row.height = Some(RowHeight { lines, unit });
+        self
+    }
+
+    /// The tail the editor draws after this row at the window's right edge ([`crate::row::Tail`]).
+    pub fn tail(&mut self, tail: crate::row::Tail) -> &mut Self {
+        self.row.tail = Some(tail);
         self
     }
 

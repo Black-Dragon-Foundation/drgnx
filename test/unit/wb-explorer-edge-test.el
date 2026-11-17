@@ -29,11 +29,14 @@
            (progn
              (drgnx-explorer-edge--tree ,root '("README.md" "docs/guide.md" "docs/sub/" "src/app/main.py" "tests/test_main.py"))
              (delete-other-windows)
-             (drgnx-explorer-setup)
+             ;; set up as a module's setup does, so its teardown below removes what it added
+             (let ((drgnx-modules--current 'test/explorer-edge) (drgnx-modules--setup-load load-file-name))
+               (drgnx-explorer-setup))
              (drgnx-explorer-set-roots (list ,root))
              ,@body)
          (setq drgnx-explorer--find nil)
          (drgnx-wb-hide-sidebar)
+         (drgnx-modules--unwind 'test/explorer-edge)
          (delete-other-windows)
          (drgnx-explorer-set-roots nil)
          (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
@@ -311,7 +314,8 @@
   (drgnx-explorer-edge--with root
     (drgnx-test-with-state
       (let ((drgnx-buffers--pressed nil) (drgnx-buffers--pending nil))
-        (drgnx-buffers-setup)
+        (let ((drgnx-modules--current 'test/explorer-edge) (drgnx-modules--setup-load load-file-name))
+          (drgnx-buffers-setup))                       ; the edge macro's teardown removes it
         (drgnx-wb-show-sidebar)
         (drgnx-explorer-edge--press (drgnx-wb-section-window 'explorer))
         (setq drgnx-buffers--pressed t)

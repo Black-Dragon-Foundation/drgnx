@@ -648,7 +648,10 @@ is no command and asks only where somebody can answer (`drgnx-save-ask-can-ask-p
 at once, so nothing is lost and nothing waits. `(drgnx-save-ask-discard BUFFER)` carries out Don't Save: it kills
 BUFFER without asking again and keeps its text first in `drgnx-close-discarded` (the last five, newest first, as
 `(:file FILE :text TEXT :time TIME)`), so a mis-click is not fatal. Close Tab asks it
-([workbench](../guide/workbench.md)).
+([workbench](../guide/workbench.md)). NAME may be a list of names: one question for all of them ("…the following N
+files?", Save All), which is how quitting asks (`drgnx-session-quit-confirm`: that one question, then the running
+programs; Save writes with `save-some-buffers` unasked, Don't Save just quits; a text Don't Save drops at a quit is
+not kept, the process ends) ([opening](../guide/opening.md)).
 
 ## Notices (`drgnx-notice.el`)
 
@@ -2334,6 +2337,15 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   the rows it replaced get their nodes' classes again (PATCHED), so a selection made while a patch waits is still shown once the patch lands; after a reset (which deletes every row, point with it) point goes back to the selection's span. A view names a class with no face to draw none (the Explorer: its selected row is the workbench's, put back after each patch on the row of Sjá's selection, not on the buffer's point, which a patch arriving while another window has the focus can find a row off). Sjá dims off the selection only in a view with chain kinds or a lit list (the Work map, the trail); a search dims its non-matches in any view. `dim` is drawn over runs of whole rows: consecutive rows whose every node is dim share one overlay (`drgnx-view-dim-run`), split and joined as rows change; a dim node in a row with other classes gets its spans' overlays as the other classes do. A class's overlays leave out a span's boxed runs (a chip, `drgnx-view-nav--boxed-p`): a chip keeps its own background on the selected row, which an overlay's face would hide (`drgnx-view-nav/a-class-leaves-a-boxed-run-its-own-face`). A search over 6,400 rows is a few overlays, never one per row (the perf row `view-select-dim` and `drgnx-view-nav/search-dims-non-matches-in-runs` hold it). A hub-fed buffer's paragraphs run left to right (`bidi-paragraph-direction`, set at attach): rows have no blank line between them, so with the direction left to Emacs each redisplay after an edit above the window searched back to the buffer's start for the paragraph and scanned its display properties through every overlay (650 ms at 6,800 rows; `view-remove-above`). Each line still reorders right-to-left text. Row patches carry no
   selection: a removed row takes nothing with it. A view's own marks over the hub's rows go back on after the classes
   through `drgnx-view-patch-patched-functions` (VIEW KEYS), added buffer-locally (the Search view's tick boxes).
+- **The selection on the rows Sjá holds:** a selected node whose spans fill its rows (a list's row, not a card among
+  others on a line, which keeps its spans) is drawn as its whole rows, Sjá's `rowspans` (from a row's first character
+  past its newline), chips and buttons included (`drgnx-view-nav-selection-style`). Where Glitnir draws it is one
+  `row` block per window that shows the view (`glitnir-blocks`, radius 6): its fill lies beneath the rows' glyphs, so a
+  chip or button keeps its own colours and the fill runs on, rounded, from edge to edge; `drgnx-selected` in the
+  selected window and `drgnx-selected-inactive` in the others, following the focus (buffer-local
+  `window-selection-change-functions`). A window that no longer shows the view, or the view's release or kill, leaves
+  no block. Elsewhere (a terminal) one overlay per row covers the whole row in the class face
+  (`rows-sja/the-selection-is-its-whole-row-chips-and-all`, `rows-sja/the-selection-block-is-per-window`).
 - **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or
   `(:view V :clear t)` for none, once the selection has been still for `drgnx-view-delay`, and at most once per
   `drgnx-view-delay` while a key is held (`drgnx-timer-soon`, owned by the buffer).
@@ -2379,7 +2391,13 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   `with-local-quit`), and draws it before returning, so the rows show in the key's own frame as the Lisp listing's
   did; past the limit, and in every timer, hook or follower path, the answer is drawn when it comes. The tail overlays
   (the ⋯ control, the git mark) are made only for rows within a page of what a window shows, the rest when scrolled to
-  (`drgnx-explorer--rows-tails-in`). A single root's row takes no line: the hub sends it as bare invisible text (no
+  (`drgnx-explorer--rows-tails-in`). A row keeps clear only what its tail always draws (the env's `tail`,
+  docs/develop/hub.md): a clean row's name runs to the edge, and when it reaches the ⋯'s place
+  (`drgnx-row-tail-short`) its tail leaves the ⋯ out and the pointer on the row draws it over the end of the name, as
+  VS Code's hover actions (`drgnx-wb-cover-sense`, a Nidhogg mouse sensor on the row: one overlay per window that
+  displays the name's characters from the ⋯'s place as a stretch to that place and the ⋯, so a click there lands on it;
+  detached when the pointer leaves, removed by the module's teardown, `drgnx-wb-covers-setup`). The Buffers panel's
+  close button does the same. A single root's row takes no line: the hub sends it as bare invisible text (no
   icon or chevron image, which a `display` property would show even on invisible text), and the Explorer hides its
   newline with one overlay and gives it no tail (`drgnx-explorer--hide-line`); typing is Sjá's `prefix` over the
   visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
@@ -3226,7 +3244,9 @@ the adapter's `:version` argv, the program's own version flag with no IPC (`sway
 `drgnx-platform-doctor-timeout`. `x11` has no `:tool`: it moves frames by position, and xrandr only counts monitors.
 
 Tests use `test/fixtures/wm/fake-wm.sh`, linked as `swaymsg`, `i3-msg`, `hyprctl` and `niri` into a temp bin: it logs
-its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail.
+its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail. A failing sway or
+i3 row prints its marks: when each call to the fake tool started and ended (with its status), and when a call's time
+limit or a placement's deadline fired, in seconds from the row's start, so a red names the stage that was late.
 
 ## Pane kinds (`wb/drgnx-panes.el`)
 
@@ -3707,12 +3727,39 @@ kit_conformance`, read it before committing) and `drgnx-ui-kit/conformance` chec
   plist (`(:c "row" :kind "tree" :depth 2 :twisty t :text "src" :state "selected")`; `:twisty` t open, `:false`
   closed, absent none), TTY nil, t or `ascii`. Returns the hub's row shape: `(:text S :runs [[FROM TO FACE]...] :props
   [[FROM TO NAME VALUE]...] :spaces [[POS W H]...])`.
+- `(drgnx-ui-kit-agent-mark SLOT HANDLE WHERE &optional FRAME)`: an agent's handle on the colour of SLOT (1-12), as a
+  string for WHERE; `(drgnx-ui-kit-progress KIND VALUE WIDTH WHERE &optional FRAME)`: a `bar` WIDTH logical px wide
+  (spaces `drgnx-ui-kit-progress-bar-px` high, the fill then the track, drawn as images by
+  `drgnx-ui-kit-bar-display`, which the inserter calls too) or a `ring`, VALUE 0 to 1. Each carries its
+  spoken label ("agent H", "N percent") as `help-echo`; `docs/design/components/chips-and-keys.md`.
 - `(drgnx-ui-kit-string COMPONENT PROPS WHERE FRAME)`: the same as a propertized string for WHERE, `text`,
   `header-line`, `mode-line` or `tab-line`, at FRAME's scale (or as its terminal draws it). In `text` a pad is
   `(space :width N)` with N = px / `frame-char-width`, canonical characters, so one buffer is right on frames of two
   scales; on a line it is `(space :width (PX))`, the spec made once per width (`drgnx-ui-kit--pads`, bounded by the
   pad widths at the scales seen). Per-row path: positional arguments, no `&key`, no `apply`, no closures; after a
   warm-up a call allocates no vector (`drgnx-ui-kit/row-call-allocates-no-closure`).
+
+### Buttons and key hints (Task 12)
+
+- `button` (variants `style` primary, secondary, quiet, danger; `size` md, sm): a label in a rounded box, 26 px tall
+  (22 small) with 12 px (8) of room each side and a 1 px ring inside it; its key hint, when it has one, follows the
+  label after a 6 px gap, inside the button; a click or RET on the label, the room or the 4 px `:hit` padding at each
+  end runs the action. Its faces are `drgnx-kit-button-STYLE` (primary: `button-primary-bg`/`-fg`; secondary: the quiet
+  selection's fill and `button-edge`; quiet: no fill, the muted text; danger: `error` on `error-tint`). A button has
+  colours of its own, so its state's face is *above* them (a disabled label is dim, a hovered one filled, a focused
+  one ringed): the hub's `RowBuilder::face_over` and the first run of the Lisp expansion. `focus-visible` shows only
+  after a key event (`drgnx-ui-kit-focus-visible-p`; the constructor draws a rest button after a mouse event).
+- `key-hint` (variant `cap` or `menu`): the keys in the code font (`drgnx-code-small`), in a 4 px box
+  (`key-hint-edge`) with 5 px each side; `menu` is the text alone (a menu's shortcut column, Task 11). On a terminal
+  `[KEYS]` (`menu`: `KEYS`). Its label is "key" and the string constructor's `help-echo` is "key KEYS".
+- `(drgnx-ui-kit-button LABEL ACTION STYLE SIZE STATE KEY WHERE)` and `(drgnx-ui-kit-key-hint KEYS VARIANT WHERE)`
+  build them as strings for WHERE as `drgnx-ui-kit-string` does. ACTION is a registry id, a command, a function of no
+  arguments (all run through the kit action kind `ui-button`, i.e. `drgnx-ui-kit-run`) or `(KIND . ARGS)` of a kit
+  action. `drgnx-ui-button` keeps its `&key` signature for callers off per-row paths; its faces `drgnx-ui-button` and
+  `drgnx-ui-button-primary` (and `drgnx-button`, `drgnx-work-flow-button*`, `drgnx-keycap`) are aliases of the kit
+  faces once `ui/look` is on.
+- A binding may name `:font` (faces with no colours: the UI or code font): a drgnx theme's spec for a face with
+  colours keeps only those of its `:inherit`, while a third-party theme styles it through the whole `:inherit`.
 
 ### Actions and focus-visible
 

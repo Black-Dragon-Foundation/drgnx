@@ -178,8 +178,11 @@ the loop and sets `kx-returned' when it ends."
     (drgnx-tty-tmux-test--ready s)
     (let* ((conf (expand-file-name "inner.conf" (plist-get s :run)))
            (before (with-temp-buffer (insert-file-contents-literally conf) (buffer-string)))
-           (lines (drgnx-tty-session-eval
-                   s '(plist-get (cdr (car (plist-get (drgnx-tty--read-report) :terminals))) :tmux-conf))))
+           ;; this terminal's entry, by its name; a tmux that did not answer at the setup (a loaded machine) is asked
+           ;; again (`drgnx-tty-frames--tmux-retry'), and its lines come then
+           (lines (drgnx-tty-session-wait
+                   s '(plist-get (cdr (assoc (terminal-name) (plist-get (drgnx-tty--read-report) :terminals))) :tmux-conf)
+                   30)))
       (should (member "set -s set-clipboard on" lines))
       (should (member "set -s extended-keys on" lines))
       (should (member "set -g focus-events on" lines))

@@ -36,6 +36,7 @@
 (declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional a b))
 (declare-function drgnx-view-nav-sja-step "drgnx-view-nav" (&optional ids))
+(declare-function drgnx-view-nav--sel-clear "drgnx-view-nav" ())
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (defvar nidhogg-view--row-decisions)
 
@@ -176,6 +177,7 @@ W's start and point, the end and W's size (the window parameter `drgnx-view-sja-
   (drgnx-timer-cancel (cons 'drgnx-view-sja (current-buffer)))
   (drgnx-timer-cancel (cons 'drgnx-view-sja-revive (current-buffer)))
   (dolist (m (list (drgnx-view-patch-beg s) (drgnx-view-patch-end s))) (when m (set-marker m nil)))
+  (when (fboundp 'drgnx-view-nav--sel-clear) (drgnx-view-nav--sel-clear)) ; no window keeps the selection's row block
   (drgnx-view-model--close s))
 
 (defun drgnx-view-sja--restart (s forget &optional epoch class)

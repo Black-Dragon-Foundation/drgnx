@@ -1,7 +1,8 @@
 //! Budgets, units and pace (Task 20; `docs/guide/agents.md`, "Budgets"): limits on a project, spec, plan, run, task,
 //! manager or worker, each in a named unit, the remaining amount the least over its ancestors; the gateway admits `usd` against
 //! the nested minimum; subscription meters (`_claude/rateLimit`, Codex's window) as `limit-share` estimates; at a
-//! limit the agent is paused with a `budget` card.  Methods `budget/get`, `budget/set`, `pace/get`.
+//! limit the agent is paused with a `budget` card.  Methods `budget/get`, `budget/set`, `budget/raise`, `budget/tree`,
+//! `pace/get`.
 //!
 //! - **Units never mix.**  A limit in one unit is only ever reduced by spend in that unit (`usd` is what the gateway
 //!   measured, `usd-est` what an agent reported at API prices, `limit-share` a subscription window's share, `tokens`,
@@ -24,8 +25,9 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::matrix::{Limit, Unit};
 use runstav::methods::timeline::{
-    BudgetEvent, BudgetGetParams, BudgetNode, BudgetScope, BudgetSetParams, BudgetState,
-    BudgetTree, BudgetTreeParams, BudgetView, Pace, PaceParams, Paces,
+    BudgetEvent, BudgetGetParams, BudgetHeld, BudgetNode, BudgetRaiseParams, BudgetRaised,
+    BudgetScope, BudgetSetParams, BudgetState, BudgetTree, BudgetTreeParams, BudgetView, Pace,
+    PaceParams, Paces,
 };
 use runstav::wire::Error;
 use serde::{Deserialize, Serialize};
@@ -371,6 +373,19 @@ fn remaining_of(st: &St, key: &str) -> Vec<(Unit, f64)> {
     least.into_iter().collect()
 }
 
+/// The nearest of KEY and its ancestors whose own limit its spend has reached.
+fn holder_of(st: &St, key: &str) -> Option<BudgetScope> {
+    chain(st, key).into_iter().find_map(|k| {
+        let reached = st
+            .limits
+            .get(&k)
+            .into_iter()
+            .flatten()
+            .any(|l| spent_against(st, &k, l.unit) >= l.amount);
+        reached.then(|| st.scopes.get(&k).cloned()).flatten()
+    })
+}
+
 /// The limits KEY has that its spend has reached and that were not reported yet.  A joint scope's two dollar limits
 /// are one: reported once, in `usd-est` (an estimate) when any of the spend was estimated.
 fn reached(st: &mut St, key: &str, only: Option<Unit>) -> Vec<Hit> {
@@ -592,6 +607,38 @@ impl Budgets {
         }
         st.limits.insert(k.clone(), limits);
         reached(&mut st, &k, None)
+    }
+
+    /// SCOPE's LIMITS over its own: a unit LIMITS names is replaced, the others stay (a raise of `usd` keeps the
+    /// `limit-share`), and a joint scope stays joint.  The limits it still reaches are returned, as by [`Budgets::set`].
+    pub fn raise(&self, scope: &BudgetScope, limits: Vec<Limit>) -> Vec<Hit> {
+        let (mut merged, joint) = {
+            let st = self.st();
+            let k = key(scope);
+            (
+                st.limits.get(&k).cloned().unwrap_or_default(),
+                st.joint.contains(&k),
+            )
+        };
+        merged.retain(|l| !limits.iter().any(|n| n.unit == l.unit));
+        merged.extend(limits);
+        self.set_limits(scope, merged, joint)
+    }
+
+    /// The nearest scope at or above SCOPE whose own limit its spend has reached: what holds SCOPE's sessions paused.
+    pub fn holder(&self, scope: &BudgetScope) -> Option<BudgetScope> {
+        holder_of(&self.st(), &key(scope))
+    }
+
+    /// [`Budgets::holder`] of session SID's scope (its worker or manager scope); none for a session with no scope.
+    pub fn holder_of_session(&self, sid: &str) -> Option<BudgetScope> {
+        let st = self.st();
+        let k = st
+            .scopes
+            .iter()
+            .find(|(_, s)| session_of(s) == Some(sid))
+            .map(|(k, _)| k.clone())?;
+        holder_of(&st, &k)
     }
 
     /// CHILD counts toward PARENT.
@@ -1248,6 +1295,112 @@ pub async fn set(f: &Front, _: &Caller, p: BudgetSetParams) -> Result<BudgetView
     b.notify(hits);
     refresh_scope(f, &p.scope).await;
     Ok(b.view(&p.scope))
+}
+
+/// `budget/raise`: card P.card (an open `budget` card) is settled as a raise; its scope (the one that hit, never
+/// the run above it) gets P.limits over its other units.  With P.resume, a job's card resumes its job
+/// ([`crate::runner::fallback::resume`]) and any other card sends each session it paused the continue ("resumed by
+/// you"), except where a limit still holds them: those are named in `held`, with the scope that holds them.
+pub async fn raise(f: &Front, c: &Caller, p: BudgetRaiseParams) -> Result<BudgetRaised, Error> {
+    use crate::runner::invalid;
+    let cid = i64::try_from(p.card).map_err(|_| invalid("card"))?;
+    let card = f
+        .writer
+        .db
+        .read(move |c| norn::read::cards::card(c, cid))
+        .await
+        .map_err(crate::coord::fail)?
+        .ok_or_else(|| invalid(format!("No card {cid}")))?;
+    if card.kind.as_deref() != Some("budget") {
+        return Err(invalid(format!("Card {cid} is not a budget card")));
+    }
+    if card.state.as_deref() != Some("open") {
+        return Err(invalid(format!("Card {cid} is already settled")));
+    }
+    let mut data = card.data.clone().unwrap_or(Value::Null);
+    let scope: BudgetScope = data
+        .get("scope")
+        .cloned()
+        .and_then(|s| serde_json::from_value(s).ok())
+        .ok_or_else(|| invalid(format!("Card {cid} names no scope")))?;
+    let limits = p.limits.into_inner();
+    data["raised"] = json!(limits);
+    let settled = f
+        .writer
+        .write(c, "cards/settle", move |tx| {
+            let settled = norn::write::cards::card_settle(tx, cid, "raise", now())?;
+            if settled {
+                let set = norn::write::cards::CardSet {
+                    title: None,
+                    data: Some(data),
+                    state: None,
+                };
+                norn::write::cards::card_set(tx, cid, set, now())?;
+            }
+            Ok(settled)
+        })
+        .await
+        .map_err(crate::coord::fail)?;
+    if !settled {
+        return Err(invalid(format!("Card {cid} is already settled")));
+    }
+    let b = &f.core.budgets;
+    let hits = b.raise(&scope, limits);
+    b.save();
+    b.notify(hits);
+    refresh_scope(f, &scope).await;
+    let paused: Vec<String> = card
+        .data
+        .as_ref()
+        .and_then(|d| d.get("sessions"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    let (mut resumed, mut held) = (Vec::new(), Vec::new());
+    // each session the card paused: still held, or (with resume) sent the continue
+    let mut go_on = |sid: String, resume: bool| match b.holder_of_session(&sid) {
+        Some(by) => held.push(BudgetHeld { id: sid, by }),
+        None if resume && f.core.agents.resume_paused(&sid).unwrap_or(false) => resumed.push(sid),
+        None => {}
+    };
+    match card.job.clone() {
+        Some(job) => {
+            let run = runstav::types::Id::new(job.clone())
+                .map_err(|_| invalid(format!("Card {cid}: no job {job}")))?;
+            let holder = b.holder(&BudgetScope::Run(run.clone()));
+            // the job goes on only when nothing above its run holds it; its paused sessions get the continue first
+            // (a pause cancels a turn: queued nothing, the session would wait idle)
+            for sid in paused {
+                go_on(sid, p.resume && holder.is_none());
+            }
+            match holder {
+                Some(by) => held.insert(0, BudgetHeld { id: job, by }),
+                None if p.resume => {
+                    let w = runstav::methods::jobs::WithLimits {
+                        id: run,
+                        limits: None,
+                    };
+                    crate::runner::fallback::resume(f, c, w).await?;
+                    resumed.insert(0, job);
+                }
+                None => {}
+            }
+        }
+        None => {
+            for sid in paused {
+                go_on(sid, p.resume);
+            }
+        }
+    }
+    f.writer.signals.wrote();
+    Ok(BudgetRaised {
+        view: b.view(&scope),
+        resumed,
+        held,
+    })
 }
 
 pub async fn pace(f: &Front, _: &Caller, p: PaceParams) -> Result<Paces, Error> {

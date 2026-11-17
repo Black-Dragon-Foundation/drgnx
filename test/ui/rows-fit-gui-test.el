@@ -581,54 +581,84 @@ string at EOL, not counted)."
          (aref (aref (font-get-glyphs (font-at p window) p eol) 0) 4)))))
 
 (ert-deftest drgnx-ui-rows-fit/an-explorer-row-leaves-its-tail-room ()
-  "Pattern C (a handshake on the hub's rows): the Explorer in a window exactly as wide as a file's row plus 2 px.  The
-row's tail (the git mark and the ⋯, `drgnx-wb-row-tail') is drawn from the window's right edge, so the hub fits the
-name short of it: no row is drawn wider than the body (a row that filled it pushed its tail 4 px past the edge)."
+  "Pattern C (a handshake on the hub's rows): the Explorer of a repository with a clean file and a modified one, names
+as long, in a window exactly as wide as the clean row plus 2 px.  A row's tail (`drgnx-wb-row-tail') is drawn from
+the window's right edge, and a row keeps clear only what its tail always draws: the clean row (its ⋯ on hover only)
+keeps its whole name and leaves the ⋯ out of its tail, the modified one ends its name short of its git mark, and no
+row is drawn wider than the body (a name that ran into the mark pushed it 4 px past the edge)."
   (skip-unless (display-graphic-p))
   (skip-unless (fboundp 'nidhogg-view--call))
   (require 'drgnx-explorer)
+  (load (expand-file-name "test/fixtures/git-fixture" drgnx-rows-fit-ui-test--repo) nil t)
   (drgnx-rows-demo-with
-    (let* ((dir (file-name-as-directory (make-temp-file "explorer-tail" t)))
-           (name "drgnx-gateway-tail.el")
-           (drgnx-explorer--roots (list dir)) (drgnx-explorer--hub-view nil) (drgnx-explorer-git nil)
-           (drgnx-explorer--expanded (make-hash-table :test #'equal)) (drgnx-explorer--window-asker nil))
-      (write-region "" nil (expand-file-name name dir) nil 'silent)
-      (unwind-protect
-          (let* ((b (drgnx-explorer--buffer))
-                 (w (progn (delete-other-windows) (prog1 (selected-window) (split-window-right))))
-                 (row (lambda () (with-current-buffer b
-                                   (save-excursion (goto-char (point-min))
-                                                   (and (search-forward name nil t) (pos-eol))))))
-                 (settle (lambda (what)
-                           (drgnx-view-env-update drgnx-explorer-hub-view-name)
-                           (drgnx-test-wait (lambda () (drgnx-test-wait-presented) (funcall row)) :secs 20 :what what))))
-            (set-window-buffer w b)
-            (funcall settle "the Explorer's row")
-            ;; the window's body: the row's text as drawn now, plus 2 px
-            (let ((target (+ 2 (drgnx-rows-fit-ui-test--row-end-x w (funcall row))))
-                  (window-resize-pixelwise t))
-              ;; again until it is: a resize can land a few px off (the frame's own rounding)
-              (dotimes (_ 4)
-                (unless (= target (window-body-width w t))
-                  (window-resize w (- target (window-body-width w t)) t t t)
-                  (redisplay t)))
-              (should (equal (list :body target) (list :body (window-body-width w t))))
-              (funcall settle "the Explorer's rows at the narrow width")
-              ;; a refit (the editor's measure of a row close to the edge) goes out after the first patch
-              (ignore-errors (drgnx-test-wait (lambda () (drgnx-test-wait-presented)
-                                                (with-current-buffer b (string-match-p "…" (buffer-string))))
-                                              :secs 5 :what "the row cut"))
-              (drgnx-test-wait-presented)
-              (with-current-buffer b
-                (save-excursion
-                  (goto-char (point-min))
-                  (while (not (eobp))
-                    (when (stringp (ignore-errors (drgnx-view-key-at (point))))
-                      (let ((px (car (window-text-pixel-size w (point) (pos-eol)))))
-                        (should (equal (list (buffer-substring-no-properties (point) (pos-eol)) :px px :body target)
-                                       (list (buffer-substring-no-properties (point) (pos-eol)) :px (min px target)
-                                             :body target)))))
-                    (forward-line 1))))))
-        (delete-other-windows)
-        (when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (kill-buffer b))
-        (delete-directory dir t)))))
+    (drgnx-git-test-with-repo
+      (let* ((clean "drgnx-gateway-tail.el") (marked "mark-gateway-drgnx.el")
+             (drgnx-explorer--roots (list repo)) (drgnx-explorer--hub-view nil) (drgnx-explorer-git t)
+             (drgnx-explorer--expanded (make-hash-table :test #'equal)) (drgnx-explorer--window-asker nil))
+        (drgnx-git-test-write repo clean "a\n")
+        (drgnx-git-test-write repo marked "a\n")
+        (drgnx-git-test repo "add" "-A")
+        (drgnx-git-test repo "commit" "-q" "-m" "both")
+        (drgnx-git-test-write repo marked "b\n")
+        (unwind-protect
+            (let* ((b (drgnx-explorer--buffer))
+                   (w (progn (delete-other-windows) (prog1 (selected-window) (split-window-right))))
+                   (row (lambda (name) (with-current-buffer b
+                                         (save-excursion (goto-char (point-min))
+                                                         (and (search-forward (substring name 0 5) nil t) (pos-eol))))))
+                   (status (lambda () (let ((e (funcall row marked)))
+                                        (and e (with-current-buffer b (get-text-property (1- e) 'drgnx-git-status))))))
+                   (settle (lambda (what)
+                             (drgnx-view-env-update drgnx-explorer-hub-view-name)
+                             (drgnx-test-wait (lambda () (drgnx-test-wait-presented)
+                                                (and (funcall row clean) (funcall status)))
+                                              :secs 20 :what what))))
+              (set-window-buffer w b)
+              (funcall settle "the Explorer's rows, the modified one marked")
+              ;; the window's body: the clean row's text as drawn now, plus 2 px
+              (let ((target (+ 2 (drgnx-rows-fit-ui-test--row-end-x w (funcall row clean))))
+                    (window-resize-pixelwise t))
+                ;; again until it is: a resize can land a few px off (the frame's own rounding)
+                (dotimes (_ 4)
+                  (unless (= target (window-body-width w t))
+                    (window-resize w (- target (window-body-width w t)) t t t)
+                    (redisplay t)))
+                (should (equal (list :body target) (list :body (window-body-width w t))))
+                (funcall settle "the Explorer's rows at the narrow width")
+                (ignore-errors
+                  (drgnx-test-wait (lambda () (drgnx-test-wait-presented)
+                                     (with-current-buffer b
+                                       (let ((e (funcall row marked)))
+                                         (and e (eq (char-before e) ?…)))))
+                                   :secs 20 :what "the modified row cut short of its mark"))
+                (with-current-buffer b
+                  (let* ((e (funcall row marked)) (line (and e (save-excursion (goto-char e) (buffer-substring (pos-bol) e)))))
+                    (should (equal (list :marked line :cut t :env-tail (drgnx-view-env--tail w b))
+                                   (list :marked line :cut (and e (eq (char-before e) ?…))
+                                         :env-tail (drgnx-view-env--tail w b))))))
+                (drgnx-test-wait-presented)
+                (with-current-buffer b
+                  (let* ((mark-at (- target (car (drgnx-wb-tail-px w))))
+                         (ce (funcall row clean)) (me (funcall row marked))
+                         (tail-of (lambda (e) (seq-some (lambda (o) (overlay-get o 'after-string)) (overlays-in e e)))))
+                    ;; the clean row: its whole name, cut at the full body, and no ⋯ in its tail
+                    (let ((line (save-excursion (goto-char ce) (buffer-substring-no-properties (pos-bol) ce))))
+                      (should (equal (list :clean line :whole t) (list :clean line :whole (string-suffix-p clean line)))))
+                    (should (get-text-property (1- ce) 'drgnx-row-tail-short))
+                    (should-not (text-property-any 0 (length (funcall tail-of ce)) 'drgnx-row-control t
+                                                   (funcall tail-of ce)))
+                    ;; the modified row: its name ends short of its mark
+                    (should (equal (list :marked-end (<= (drgnx-rows-fit-ui-test--row-end-x w me) mark-at))
+                                   (list :marked-end t)))
+                    ;; and no row is drawn wider than the body
+                    (save-excursion
+                      (goto-char (point-min))
+                      (while (not (eobp))
+                        (when (stringp (ignore-errors (drgnx-view-key-at (point))))
+                          (let ((px (car (window-text-pixel-size w (point) (pos-eol)))))
+                            (should (equal (list (buffer-substring-no-properties (point) (pos-eol)) :px px :body target)
+                                           (list (buffer-substring-no-properties (point) (pos-eol)) :px (min px target)
+                                                 :body target)))))
+                        (forward-line 1)))))))
+          (delete-other-windows)
+          (when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (kill-buffer b)))))))

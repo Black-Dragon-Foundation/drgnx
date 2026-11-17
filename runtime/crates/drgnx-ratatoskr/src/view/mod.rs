@@ -363,6 +363,7 @@ impl Store {
             tty: matches!(p.env.display, Display::Tty)
                 .then_some((p.env.cell.0.max(1), p.env.tty_widths.as_slice())),
             image_px: &image_px,
+            tail: p.env.tail,
         };
         if p.env.width_px == 0 || p.env.headless {
             return;

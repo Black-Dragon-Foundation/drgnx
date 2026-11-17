@@ -29,6 +29,7 @@ pub mod edits;
 pub mod machines;
 pub mod map;
 pub mod presence;
+pub mod schedule;
 pub mod shell_read;
 pub mod specs;
 pub mod subagents;

@@ -11,6 +11,9 @@
 
 (declare-function nidhogg-lines-describe "nidhogg-lines" (&optional buffer))
 (declare-function nidhogg-lines-disable "nidhogg-lines" (&optional buffer))
+(declare-function nidhogg-treesit-refold "treesit.c" (parser))
+(declare-function treesit-parser-create "treesit.c" (language &optional buffer no-reuse tag))
+(defvar treesit-extra-load-path)
 
 (defconst fold-test--text
   "def a():\n    x = 1\n    if x:\n        y = 2\n    z = 3\ndef b():\n    w = 4\n"
@@ -225,5 +228,69 @@ shows the name; Remove Manual Fold drops it from the model."
                            (should drgnx-fold-mode))
   (should-not drgnx-fold-mode)
   (should-not (drgnx-commands-get 'edit-fold)))
+
+;;;; Tree-sitter folds
+
+(defun fold-test--python-grammar-p ()
+  "Whether a python grammar is here: on the load path, or in the folder DRGNX_TEST_TS_GRAMMARS names (the pack job's,
+which `bin/drgnx test --container' builds).  A grammar that was promised (that variable, or DRGNX_TEST_TS_REQUIRED in
+CI) and is not loadable fails: a skip would hide its absence."
+  (when-let* ((dir (getenv "DRGNX_TEST_TS_GRAMMARS")) ((file-directory-p dir)))
+    (add-to-list 'treesit-extra-load-path dir))
+  (let ((here (and (fboundp 'treesit-available-p) (treesit-available-p) (treesit-language-available-p 'python))))
+    (when (and (not here) (or (getenv "DRGNX_TEST_TS_GRAMMARS") (getenv "DRGNX_TEST_TS_REQUIRED")))
+      (ert-fail "a python grammar was promised (DRGNX_TEST_TS_GRAMMARS or DRGNX_TEST_TS_REQUIRED) and is not loadable"))
+    here))
+
+(defconst fold-test--python
+  "class Point:\n    def norm(self):\n        return 1\ndef test_norm():\n    assert True\n"
+  "A class (lines 1–3) holding a method (2–3), and a test (4–5).")
+
+(defun fold-test--ts-ranges ()
+  "The buffer's fold ranges as (LINE KIND SOURCE), LINE its first line."
+  (mapcar (lambda (r) (list (line-number-at-pos (nth 0 r)) (aref drgnx-fold-kinds (nth 2 r)) (nth 4 r)))
+          (drgnx-fold-ranges)))
+
+(ert-deftest drgnx-fold/a-tree-sitter-buffer-folds-by-its-packs-query ()
+  "A buffer with a tree-sitter parser folds by its pack's `folds.scm', run by Nidhogg at each reparse: kinds from
+the query (a `test_' function a test), no indentation ranges; an edit's new range arrives with the next command; the
+`indent' setting takes the query and its ranges away again."
+  (skip-unless (and (fboundp 'nidhogg-treesit-refold) (fboundp 'nidhogg-lines-set-fold-sources)))
+  (skip-unless (fold-test--python-grammar-p))
+  (clrhash drgnx-fold--queries)
+  (with-temp-buffer
+    (insert fold-test--python)
+    (prog-mode)
+    (treesit-parser-create 'python)
+    (unwind-protect
+        (progn
+          (should (eq (drgnx-fold--wanted) 'treesit))
+          (should (equal (fold-test--ts-ranges) '((1 class 0) (2 function 0) (4 test 0))))
+          (should (local-variable-p 'nidhogg-treesit-fold-query))
+          (drgnx-fold-fold-kind 'test)
+          (should (equal (fold-test--hidden) '(5)))
+          (drgnx-fold-unfold-all)
+          (goto-char (point-max))
+          (insert "def b():\n    return [\n        1,\n    ]\n")
+          (should (equal (fold-test--ts-ranges) '((1 class 0) (2 function 0) (4 test 0) (6 function 0) (7 block 0))))
+          (let ((drgnx-fold-source 'indent))
+            (should-not (seq-find (lambda (r) (eq (nth 2 r) 0)) (fold-test--ts-ranges)))
+            (should-not (local-variable-p 'nidhogg-treesit-fold-query))))
+      (nidhogg-lines-disable))))
+
+(ert-deftest drgnx-fold/a-pack-without-folds-scm-folds-its-definitions ()
+  "A pack's `tags.scm' as a fold query: functions, methods, macros and constructors fold as functions, the type-like
+definitions as classes, any other definition as a block; a reference folds nothing."
+  (should (equal (drgnx-fold--tags-query
+                  "(f) @definition.function (m) @definition.method (c) @definition.class (i) @definition.impl
+(k) @definition.constant (r) @reference.call (n) @name")
+                 "(f) @fold.function (m) @fold.function (c) @fold.class (i) @fold.class
+(k) @fold (r) @reference.call (n) @name")))
+
+(ert-deftest drgnx-fold/a-language-finds-its-pack ()
+  "A tree-sitter language finds the pack whose main grammar it is (C#'s grammar is `c-sharp', its pack `csharp')."
+  (should (equal (file-name-nondirectory (directory-file-name (drgnx-fold--pack-dir 'c-sharp))) "csharp"))
+  (should (equal (file-name-nondirectory (directory-file-name (drgnx-fold--pack-dir 'python))) "python"))
+  (should-not (drgnx-fold--pack-dir 'no-such-language)))
 
 ;;; fold-test.el ends here

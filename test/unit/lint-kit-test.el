@@ -145,7 +145,14 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("modules/tools/drgnx-work-space.el" row 1) ("modules/ui/drgnx-decor.el" row 1) ("modules/ui/drgnx-statusbar.el" row 1)
     ("modules/ui/drgnx-topline.el" row 1) ("runtime/crates/drgnx-ratatoskr/src/notebook/views.rs" row 1)
     ("runtime/crates/drgnx-ratatoskr/src/notebook/views/tests.rs" row 2) ("wb/drgnx-chrome.el" row 1)
-    ("wb/drgnx-explorer.el" row 3) ("wb/drgnx-view-nav.el" row 1) ("wb/drgnx-view.el" row 1))
+    ("wb/drgnx-explorer.el" row 3) ("wb/drgnx-view-nav.el" row 1) ("wb/drgnx-view.el" row 1)
+    ;; button and key-hint (Task 12): `drgnx-keycap' itself; the Flow tile's button and key faces (its keys are drawn by
+    ;; the hub in the Flow's own key faces and a Lisp pass maps them to their buttons, work-flow.el, flow.rs); decor's
+    ;; buttons (Task 15 moves them out)
+    ("core/drgnx-palette.el" key-hint 1) ("modules/tools/drgnx-work-flow.el" button 7)
+    ("modules/tools/drgnx-work-flow.el" key-hint 3) ("modules/ui/drgnx-decor.el" button 5)
+    ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" button 2)
+    ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" key-hint 2))
   "((FILE ID COUNT)...): the forms of a role that is on, left in FILE (only falls).  A branch merged later adds its
 files' counts in its merge commit.")
 
@@ -192,7 +199,10 @@ files' counts in its merge commit.")
                            ;; a definer's own name is not a use of it
                            (when (and doc (symbolp (cadr x))) (setq skip 1))
                            (while (consp x)
-                             (unless (or (eql i skip) (and doc (= i doc) (stringp (car x)) (consp (cdr x))))
+                             ;; a call of a function that shares a replaced face's name (the wrapper `drgnx-ui-button') is
+                             ;; no draw of the face
+                             (unless (or (eql i skip) (and doc (= i doc) (stringp (car x)) (consp (cdr x)))
+                                         (and (eql i 0) (symbolp (car x)) (memq (car x) old) (fboundp (car x))))
                                (walk (car x)))
                              (setq x (cdr x) i (1+ i)))
                            (when x (walk x)))))))

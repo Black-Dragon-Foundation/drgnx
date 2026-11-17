@@ -202,7 +202,7 @@ the agent's adapter enforces, and the restart notice when the approved plugin se
                   (lambda (_r err) (message "%s" (if err (format "%s: %s" method err) (format "%s: done" method))))))
 
 (defun drgnx-agents-hooks--button (label action)
-  (make-text-button (copy-sequence label) nil 'action (lambda (_) (funcall action)) 'follow-link t))
+  (drgnx-ui-kit-text-button label action nil 'secondary 'sm))
 
 (defun drgnx-agents-hooks-context-insert (s)
   "Insert the context breakdown of session S at point: the bar, each part with its items (drop and pin buttons for an

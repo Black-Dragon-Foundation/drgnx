@@ -621,7 +621,13 @@ The selection, the keys and the commands are in `drgnx-work-map.el`; the side pa
   through the model"): the hub sends, with each item, where each arrow goes from it (`vegvisir::nav`, above), and the
   model's classes (`selected`, `match`, `chain`, `dim`) restyle the rows by their `drgnx-work-id` spans.
   `drgnx-work-map--nav` keeps `drgnx-work-map--selection` as `(KIND . ID)` (the kind read from the model with the
-  selection) and runs `drgnx-work-map-select-functions` when it moved. Left, right, why and touches follow the `left`
+  selection) and runs `drgnx-work-map-select-functions` when it moved. The selection is one for every Work view in every
+  frame: a move also sets `drgnx-work-selection`, gives it to every other map buffer (and tells their hub views with
+  `work/map/set {selected}`) and runs `drgnx-work-selection-functions` with (KIND ID); `(drgnx-work-select KIND ID)`
+  does the same from anywhere. A selected item's result (a document, a repository, an agent's panel) shows in
+  `drgnx-work--result-frame`, the frame whose editor tile was used last (torn-out frames included): no frame is moved,
+  raised or made for it; with the grid off (or not loaded: a batch test of the Work map alone) there is no tile, and the
+  result shows in the selected frame. Left, right, why and touches follow the `left`
   `right` `up` `down` links (from nothing, the team's first);
   next and previous agent walk `team`; `g N` walks to entry N of `needs-you` and `n`/`N` cycle it (the list is the
   strip's chips in order, `vegvisir::nav::strip_entries`: the cards, the agents that need you with no card, the open

@@ -365,13 +365,18 @@ The Emacs and Vim profiles keep their own keys, and so does "Emacs editing + VS 
 editing layer takes `C-c`, `C-x` and `C-v`.
 
 **Prefix habits with a selection.** `C-c` and `C-x` are also the start of Emacs's own keys (`C-x b`, `C-x C-s`, a
-mode's `C-c C-c`, the agent and comint buffers' `C-c C-c`). With a selection they wait `drgnx-editing-prefix-delay`
-(0.3 seconds; `M-x customize-variable`; `nil` acts at once) for the next key, as CUA mode does: a key that arrives in
-time drops the selection and goes on as the prefix, so nothing is cut or lost; none, and `C-c` copies and `C-x`
-cuts. So `C-x C-s`, `C-x b` and `C-c C-c` work with a selection when typed at your normal speed, and a lone `C-c`
-or `C-x` acts after a short pause; `C-g` in that moment just drops the selection; a mouse click in that moment is
-no key of the prefix: `C-c` or `C-x` acts, then the click does its own work. A keyboard macro that recorded a
-pause and then a cut replays without the pause, so the key after it becomes a prefix. Cmd+C and Cmd+X on a Mac are no prefix and act at once.
+mode's `C-c C-c`, the agent and comint buffers' `C-c C-c`). In the VS Code profile, Copy and Cut with a selection are
+**instant**, as in VS Code: a selection plus `C-c` copies and `C-x` cuts at once, with no wait for a next key. To reach
+an Emacs prefix while text is selected, drop the selection first (`Escape`, or click), then type the prefix: with no
+selection `C-x C-s`, `C-x b` and `C-c C-c` are Emacs's. The commands behind them are also in the palette (`F1`,
+`C-S-p`) and on `M-x`, and the VS Code profile gives the common ones keys (`C-s` Save, `C-o` Open File, `C-w` Close
+Tab). If you would rather keep the old behaviour, set `drgnx-editing-prefix-delay` (`M-x customize-variable`) to a
+number of seconds, `0.3` was the old default: with a selection `C-c` and `C-x` then wait that long for the next key, as
+CUA mode does. A key that arrives in time drops the selection and goes on as the prefix, so nothing is cut or lost; none,
+and `C-c` copies and `C-x` cuts. `C-g` in that moment just drops the selection; a mouse click in that moment is no key
+of the prefix: `C-c` or `C-x` acts, then the click does its own work. A keyboard macro that recorded a pause and then a
+cut replays without the pause, so the key after it becomes a prefix. Cmd+C and Cmd+X on a Mac are no prefix and always
+act at once.
 
 **The face's commands** ([face.md](face.md)) are in the palette in every profile; few have keys. **Show Quick
 Help** is `C-k C-i` (VS Code) and `SPC k` (Vim); the Emacs profile keeps Emacs' `C-h .` (local help). **Close
@@ -417,12 +422,13 @@ yours (`:mac "S-s-y"` in `keys.eld` binds `s-Y`).
 | Toggle Terminal / New Terminal | ``C-` `` / ``C-S-` `` | Ctrl: ``C-` `` / ``C-S-` `` (Cmd+` is macOS' next window) |
 | Open Previous Editor in Group / Back / Forward | `C-<tab>` / `M-<left>` / `M-<right>` | Ctrl: `C-<tab>` / `C--` / `C-_` (Ctrl+Shift+-) |
 | Next / Previous Tab | `C-<next>` / `C-<prior>` | `M-s-<right>` / `M-s-<left>` (Option+Cmd+→ / ←) |
-| Close Tab / Close Window | `C-w` / `C-q` | `s-w` / `s-W` (Shift+Cmd+W) |
-| Quit drgnx | — (File → Quit; `C-q` closes the window as in VS Code) | `s-q` (offers to save, then stops drgnx) |
+| Close Tab / Close Window | `C-w` / `C-S-w` | `s-w` / `s-W` (Shift+Cmd+W) |
+| Quit drgnx | `C-q` (one Save / Don't Save / Cancel question for changed files) | `s-q` (the same question, then stops drgnx) |
+| View: Output / Color Theme | `C-S-u` / `C-k C-t` | the same (Ctrl+Shift+U; Cmd+K Cmd+T) |
 | Move Editor to Next Group | `C-M-<right>` | `C-s-<right>` (Ctrl+Cmd+→) |
 | Expand / Shrink Selection | `M-S-<right>` / `M-S-<left>` | `C-S-s-<right>` / `C-S-s-<left>` (Ctrl+Shift+Cmd+→ / ←) |
 | Fold / Unfold | `C-{` / `C-}` | `M-s-[` / `M-s-]` (Option+Cmd+[ / ]) |
-| Select All / Save All | `C-S-a` / `C-k s` | `s-a` / `M-s-s` (Option+Cmd+S) |
+| Select All / Save All | `C-a` / `C-k s` | `s-a` / `M-s-s` (Option+Cmd+S) |
 | Source Control | `C-S-g` | Ctrl: `C-S-g` |
 | Preferences: Settings / All Preferences… | `C-,` / — | `s-,` / the palette (All Preferences… lists every Preferences command) |
 | Explorer: Copy Path / Reveal in Finder | `M-S-c` / `M-S-r` | `M-s-c` / `M-s-r` (Option+Cmd+C / R) |

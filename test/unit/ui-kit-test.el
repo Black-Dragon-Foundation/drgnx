@@ -145,9 +145,10 @@
                  '(drgnx-kit-zz-probe-loud :background "accent-fill" :foreground "on-accent"))))
 
 (ert-deftest drgnx-ui-kit/third-party-theme-styles-every-kit-face ()
-  ;; a theme that knows nothing of drgnx still gives every kit face that has colours a fill or a ring, through the
-  ;; standard faces it inherits: checked on the real faces, and on the fixture's specs (the real file may have few
-  ;; faces yet).  A binding with no colours (the row's: the UI font, on the surface's own fill) is exempt.
+  ;; a theme that knows nothing of drgnx still gives every kit face that has colours a fill or a ring (one that has only
+  ;; a text colour, a progress ring's: a text colour), through the standard faces it inherits: checked on the real
+  ;; faces, and on the fixture's specs (the real file may have few faces yet).  A binding with no colours (the row's: the
+  ;; UI font, on the surface's own fill) is exempt.
   (dolist (theme '(modus-vivendi doom-one-fixture))
     (unwind-protect
         (progn
@@ -156,13 +157,16 @@
           (dolist (f (append (drgnx-ui-kit-face-bindings) (drgnx-ui-kit-face-bindings ui-kit-test--fixture)))
             (when-let* ((inherit (plist-get (nth 2 f) :inherit))
                         ((seq-some (lambda (k) (plist-get (nth 2 f) k)) '(:bg :fg :edge))))
-              (should (cl-some (lambda (parent)
-                                 (or (drgnx-face-color parent :background 'gui)
-                                     (plist-get (drgnx-faces--clause-plist parent 'gui) :box)))
-                               inherit))
-              (when (facep (car f))
-                (should (or (drgnx-face-color (car f) :background 'gui)
-                            (plist-get (drgnx-faces--clause-plist (car f) 'gui) :box)))))))
+              (if (seq-some (lambda (k) (plist-get (nth 2 f) k)) '(:bg :edge))
+                  (progn
+                    (should (cl-some (lambda (parent)
+                                       (or (drgnx-face-color parent :background 'gui)
+                                           (plist-get (drgnx-faces--clause-plist parent 'gui) :box)))
+                                     inherit))
+                    (when (facep (car f))
+                      (should (or (drgnx-face-color (car f) :background 'gui)
+                                  (plist-get (drgnx-faces--clause-plist (car f) 'gui) :box)))))
+                (should (cl-some (lambda (parent) (drgnx-face-color parent :foreground 'gui)) inherit))))))
       (mapc #'disable-theme custom-enabled-themes))))
 
 ;;;; The expansion: one with the hub's (test/fixtures/kit, runtime/crates/drgnx-rows/tests/kit_conformance.rs)
@@ -325,6 +329,122 @@
                     (should (memq face (ensure-list at)))))))))
       (kill-buffer buf))))
 
+;;;; Buttons and key hints (Task 12)
+
+(defmacro ui-kit-test--gui (scale &rest body)
+  "BODY as on a graphical frame at SCALE with a 10 px column."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+             ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) ,scale))
+             ((symbol-function 'frame-char-width) (lambda (&optional _) 10)))
+     ,@body))
+
+(ert-deftest drgnx-ui-kit/button-geometry ()
+  ;; md is 26 px with 12 px each side, sm 22 with 8; a key hint sits one gap (6) after the label inside the button; each
+  ;; style has its own kit face and the state's face is above it
+  (let ((go (lambda (style size &rest more)
+              (drgnx-ui-kit-expand 'button (append (list :c "button" :label "Go" :style style :size size) more) 1.0 nil))))
+    (let ((e (funcall go "primary" "md")))
+      (should (equal (plist-get e :spaces) [[0 12 0] [3 12 0]]))
+      (should (equal (plist-get e :height) '(:lines 1 :unit 26)))
+      (should (equal (plist-get e :runs) [[0 4 "drgnx-kit-button-primary"]])))
+    (let ((e (funcall go "quiet" "sm")))
+      (should (equal (plist-get e :spaces) [[0 8 0] [3 8 0]]))
+      (should (equal (plist-get e :height) '(:lines 1 :unit 22)))
+      (should (equal (plist-get e :runs) [[0 4 "drgnx-kit-button-quiet"]])))
+    (should (equal (plist-get (funcall go "danger" "md") :runs) [[0 4 "drgnx-kit-button-danger"]]))
+    (should (equal (plist-get (funcall go "secondary" "md") :runs) [[0 4 "drgnx-kit-button-secondary"]]))
+    ;; 12 px at 1.25 is 15, 26 is 33 (half up)
+    (let ((e (drgnx-ui-kit-expand 'button '(:c "button" :label "Go" :style "primary") 1.25 nil)))
+      (should (equal (plist-get e :spaces) [[0 15 0] [3 15 0]]))
+      (should (equal (plist-get e :height) '(:lines 1 :unit 33))))
+    ;; the key hint: a gap, the keys in their 5 px box, then the end pad; the button's fill runs under the key's box
+    (let ((e (funcall go "secondary" "md" :key "⏎")))
+      (should (equal (plist-get e :text) " Go  ⏎  "))
+      (should (equal (plist-get e :spaces) [[0 12 0] [3 6 0] [4 5 0] [6 5 0] [7 12 0]]))
+      (should (equal (plist-get e :runs)
+                     [[0 4 "drgnx-kit-button-secondary"] [4 7 "drgnx-kit-key-hint-cap"] [7 8 "drgnx-kit-button-secondary"]
+                      [4 7 "drgnx-kit-button-secondary"]])))
+    ;; a state is above the style's own colours
+    (should (equal (aref (plist-get (funcall go "primary" "md" :state "disabled") :runs) 0)
+                   [0 4 "drgnx-text-disabled"]))
+    ;; on a terminal: a space each side, the key as [KEY]
+    (let ((e (drgnx-ui-kit-expand 'button '(:c "button" :label "Go" :key "C-c") 1.0 t)))
+      (should (equal (plist-get e :text) " Go [C-c] "))
+      (should-not (plist-get e :height)))))
+
+(ert-deftest drgnx-ui-kit/key-hint-forms ()
+  (let ((e (drgnx-ui-kit-expand 'key-hint '(:c "key-hint" :keys "C-x") 1.0 nil)))
+    (should (equal (plist-get e :text) " C-x "))
+    (should (equal (plist-get e :spaces) [[0 5 0] [4 5 0]]))
+    (should (equal (plist-get e :runs) [[0 5 "drgnx-kit-key-hint-cap"]])))
+  ;; the menu variant is the text alone, in its own face
+  (let ((e (drgnx-ui-kit-expand 'key-hint '(:c "key-hint" :keys "C-x" :variant "menu") 1.0 nil)))
+    (should (equal (plist-get e :text) "C-x"))
+    (should (equal (plist-get e :spaces) []))
+    (should (equal (plist-get e :runs) [[0 3 "drgnx-kit-key-hint-menu"]])))
+  (should (equal (plist-get (drgnx-ui-kit-expand 'key-hint '(:c "key-hint" :keys "C-x") 1.0 t) :text) "[C-x]"))
+  (should (equal (plist-get (drgnx-ui-kit-expand 'key-hint '(:c "key-hint" :keys "C-x" :variant "menu") 1.0 'ascii) :text) "C-x"))
+  ;; a state is above the ring
+  (should (equal (aref (plist-get (drgnx-ui-kit-expand 'key-hint '(:c "key-hint" :keys "C-x" :state "hover") 1.0 nil) :runs) 0)
+                 [0 5 "drgnx-hover"]))
+  (should (equal (plist-get (drgnx-ui-kit-component 'key-hint) :label) "key")))
+
+(ert-deftest drgnx-ui-kit/button-hit-area-carries-the-action ()
+  ;; the padding at both ends carries the action and the kind's keymap: a click or RET on the padding runs it
+  (let ((ran nil))
+    (ui-kit-test--gui 1.0
+      (let ((s (drgnx-ui-kit-button "Go" (lambda () (push 'ran ran)) 'primary 'md 'rest nil 'text)))
+        (should (equal (substring-no-properties s) "  Go  "))
+        (should (equal (get-text-property 0 'display s) '(space :width 0.4)))      ; 4 px of a 10 px column
+        (dolist (at (list 0 1 3 (1- (length s))))
+          (should (get-text-property at 'drgnx-action s))
+          (should (keymapp (get-text-property at 'keymap s))))
+        (should (equal (get-text-property 0 'mouse-face s) 'drgnx-hover))
+        (with-temp-buffer
+          (insert s)
+          (goto-char 1)
+          (let ((last-input-event ?\r)) (call-interactively #'drgnx-ui-kit-activate))
+          (goto-char (1- (point-max)))
+          (let ((last-input-event ?\r)) (call-interactively #'drgnx-ui-kit-activate)))
+        (should (equal ran '(ran ran)))))
+    ;; a kit action (KIND . ARGS) and a registry-less command are taken as they are
+    (let ((got nil))
+      (unwind-protect
+          (progn
+            (drgnx-ui-kit-define-action 'kit-btn (lambda (args) (setq got args)) nil)
+            (ui-kit-test--gui 1.0
+              (with-temp-buffer
+                (insert (drgnx-ui-kit-button "Go" '(kit-btn 7) 'secondary 'sm 'rest nil 'text))
+                (goto-char 3)
+                (let ((last-input-event ?\r)) (call-interactively #'drgnx-ui-kit-activate))
+                (should (equal got '(7))))))
+        (drgnx-ui-kit-undefine-action 'kit-btn)))))
+
+(ert-deftest drgnx-ui-kit/button-focus-ring-only-after-keys ()
+  ;; the ring (the `focus-visible' state's face) shows after a key event, not after a mouse event
+  (ui-kit-test--gui 1.0
+    (let ((drgnx-ui-kit--focus-visible nil))
+      (let ((s (drgnx-ui-kit-button "Go" #'ignore 'primary 'md 'focus-visible nil 'header-line)))
+        (should-not (memq 'drgnx-focus (ensure-list (get-text-property 3 'face s)))))
+      (setq drgnx-ui-kit--focus-visible t)
+      (let ((s (drgnx-ui-kit-button "Go" #'ignore 'primary 'md 'focus-visible nil 'header-line)))
+        (should (eq 'drgnx-focus (car (ensure-list (get-text-property 3 'face s)))))))))
+
+(ert-deftest drgnx-ui-kit/text-button-is-a-button-el-button ()
+  ;; a kit button in text that `push-button' and `forward-button' reach, the helpers' sites rely on it
+  (let ((ran nil))
+    (ui-kit-test--gui 1.0
+      (with-temp-buffer
+        (insert "a " (drgnx-ui-kit-text-button "[Go]" (lambda () (setq ran t)) "Run it" 'secondary 'sm) " b")
+        (goto-char (point-min))
+        (search-forward "[Go]")
+        (should (button-at (1- (point))))
+        (should (equal (get-text-property (1- (point)) 'help-echo) "Run it"))
+        (should (eq (get-text-property (1- (point)) 'face) 'drgnx-kit-button-secondary))
+        (push-button (1- (point)))
+        (should ran)))))
+
 ;; The unknown-face counter (test mode): a row naming a face that is none, and is not in etc/ui/faces.eld, is counted
 (defvar drgnx-test-strict-faces)
 (defvar drgnx-view-unknown-faces)
@@ -431,11 +551,16 @@
              (load-theme 'drgnx-dark t)
              (should (memq 'drgnx-ui-text (ensure-list (face-attribute 'drgnx-kit-row :inherit nil t)))))
     (mapc #'disable-theme custom-enabled-themes))
+  ;; every character of the row is in a `drgnx-kit-row' run (the twisty's subtle run lies over its own)
   (dolist (tty '(nil t))
     (let* ((e (drgnx-ui-kit-expand 'row '(:kind "tree" :depth 1 :twisty t :text "src") 1.0 tty))
-           (len (length (plist-get e :text))))
-      (should (equal (list tty (vector 0 len "drgnx-kit-row"))
-                     (list tty (aref (plist-get e :runs) 0)))))))
+           (len (length (plist-get e :text)))
+           (bare (cl-loop for i below len
+                          unless (cl-some (lambda (r) (and (equal (aref r 2) "drgnx-kit-row") (<= (aref r 0) i)
+                                                           (< i (aref r 1))))
+                                          (plist-get e :runs))
+                          collect i)))
+      (should (equal (list tty :outside-the-row-face nil) (list tty :outside-the-row-face bare))))))
 
 (ert-deftest drgnx-ui-kit/row-icons-are-images-with-the-gap ()
   ;; the hub's twisty_and_icon_are_images_where_the_env_draws_icons, in Lisp: where icons are drawn, the chevron and
@@ -448,9 +573,85 @@
     (should (equal (mapcar (lambda (p) (list (aref p 0) (aref p 2) (plist-get (cdr (append (aref p 3) nil)) :data)))
                            (plist-get e :props))
                    '((1 "display" "chevron-down 16") (3 "display" "folder 16"))))
-    (let ((plain (drgnx-ui-kit-expand 'row props 1.25 nil)))
+    (let ((plain (drgnx-ui-kit-expand 'row props 1.25 nil))
+          (subtle (lambda (e) (delq nil (mapcar (lambda (r) (and (equal (aref r 2) "drgnx-text-subtle")
+                                                                 (list (aref r 0) (aref r 1))))
+                                                (plist-get e :runs))))))
       (should (string-prefix-p " ⌄ " (plist-get plain :text)))
-      (should (equal (plist-get plain :props) [])))))
+      (should (equal (plist-get plain :props) []))
+      ;; the twisty (image or glyph) in the subtle role, the icon in the row's colours (the mockups' chevrons)
+      (should (equal (funcall subtle e) '((1 2))))
+      (should (equal (funcall subtle plain) '((1 2)))))))
+
+;; Agent marks and progress (Task 15)
+(ert-deftest drgnx-ui-kit/progress-has-its-percent-label ()
+  ;; a bar's and a ring's label is "N percent" (rounded half up), on their whole text; a bar is its fill, then the
+  ;; track, and on a terminal its cells between edges
+  (pcase-dolist (`(,kind ,value ,word) '((bar 0.425 "43 percent") (ring 0.6 "60 percent") (bar 0 "0 percent")))
+    (let ((e (drgnx-ui-kit-expand 'progress (list :c "progress" :kind (symbol-name kind) :value value :width 80) 1.0 nil)))
+      (should (equal (list kind word) (list kind (aref (aref (plist-get e :props) 0) 3))))
+      (should (equal "help-echo" (aref (aref (plist-get e :props) 0) 2)))))
+  (let ((e (drgnx-ui-kit-expand 'progress '(:c "progress" :kind "bar" :value 0.25 :width 80) 1.0 nil)))
+    (should (equal [[0 20 4] [1 60 4]] (plist-get e :spaces)))
+    (should (equal [[0 1 "drgnx-kit-progress-fill"] [1 2 "drgnx-kit-progress"]] (plist-get e :runs))))
+  (let ((drgnx-face-glyphs drgnx-ui--default-glyphs))
+    ;; ten cells: three full; 0.35 is three and a half (a half block), on ASCII rounded to four
+    (should (equal "███░░░░░░░" (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.3 :width 80) 1.0 t) :text)))
+    (should (equal "███▌░░░░░░"
+                   (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.35 :width 80) 1.0 t) :text)))
+    (should (equal "[####------]"
+                   (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.35 :width 80) 1.0 'ascii) :text)))
+    (should (equal "2" (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :kind "ring" :value 0.5) 1.0 'ascii) :text)))))
+
+(ert-deftest drgnx-ui-kit/bar-parts-are-images ()
+  ;; a progress bar's parts (spaces of a height in the bar's faces) are drawn as images in `currentColor', the fill's
+  ;; start and the track's end rounded, the joint square; a space of a height in another face stays a space
+  (skip-unless (image-type-available-p 'svg))
+  (let* ((d (drgnx-ui-kit-bar-display '((0 72 4) (1 48 4) (3 10 16))
+                                      '((0 1 "drgnx-kit-progress-fill") (1 2 drgnx-kit-progress) (3 4 "drgnx-explorer-guide"))
+                                      1.0))
+         (fill (cdr (assq 0 d))) (track (cdr (assq 1 d))))
+    (should (equal '(0 1) (sort (mapcar #'car d) #'<)))
+    (should (eq 'image (car fill)))
+    (should (eq 'center (plist-get (cdr fill) :ascent)))
+    (should (string-search "width=\"72\" height=\"4\"" (plist-get (cdr fill) :data)))
+    (should (string-search "fill=\"currentColor\"" (plist-get (cdr fill) :data)))
+    (should (string-search "rx=\"2\"" (plist-get (cdr fill) :data)))
+    ;; the fill's end and the track's start are joined: square there
+    (should (string-search "<rect x=\"36.0\"" (plist-get (cdr fill) :data)))
+    (should-not (string-search "<rect width=\"36.0\"" (plist-get (cdr fill) :data)))
+    (should (string-search "<rect width=\"24.0\"" (plist-get (cdr track) :data)))))
+
+(ert-deftest drgnx-ui-kit/agent-mark-is-its-agents-colour ()
+  ;; the handle on its agent's colour: the kit face (inverse video) over the agent's face, pads either side; "[H]" in
+  ;; the colour on a terminal; its label "agent H"
+  (let ((e (drgnx-ui-kit-expand 'agent-mark '(:c "agent-mark" :slot 3 :handle "Q") 1.0 nil)))
+    (should (equal " Q " (plist-get e :text)))
+    (should (equal [[0 3 "drgnx-kit-agent-mark"] [0 3 "drgnx-agent-3"]] (plist-get e :runs)))
+    (should (equal [[0 5 0] [2 5 0]] (plist-get e :spaces)))
+    (should (equal [[0 3 "help-echo" "agent Q"]] (plist-get e :props))))
+  (should (face-attribute 'drgnx-kit-agent-mark :inverse-video nil t))
+  (let ((e (drgnx-ui-kit-expand 'agent-mark '(:c "agent-mark" :slot 12 :handle "Qx") 1.0 t)))
+    (should (equal "[Qx]" (plist-get e :text)))
+    (should (equal [[0 4 "drgnx-agent-12"]] (plist-get e :runs)))))
+
+(ert-deftest drgnx-ui-kit/agent-cursors-still-move ()
+  ;; the agent cursors live in their own file now (decor keeps the chips, buttons and cards): put, moved at once and
+  ;; batched, removed
+  (load (expand-file-name "modules/ui/drgnx-decor" drgnx-dir) nil t)
+  (load (expand-file-name "modules/ui/drgnx-agent-cursors" drgnx-dir) nil t)
+  (should (featurep 'drgnx-agent-cursors))
+  (should-not (fboundp 'drgnx-decor-cursor-put))
+  (with-temp-buffer
+    (insert (make-string 20 ?x))
+    (let ((ov (drgnx-agent-cursor-put (current-buffer) 'a 2 "#123456" "A")))
+      (unwind-protect
+          (progn
+            (drgnx-agent-cursor-move-now (current-buffer) 'a 9)
+            (should (= 9 (overlay-start ov)))
+            (should (eq ov (drgnx-agent-cursor-overlay (current-buffer) 'a))))
+        (drgnx-agent-cursor-remove (current-buffer) 'a)))
+    (should-not (drgnx-agent-cursor-overlay (current-buffer) 'a))))
 
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

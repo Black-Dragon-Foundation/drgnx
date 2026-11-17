@@ -114,6 +114,9 @@ a fake `tmux' printing TMUX-OUT on PATH (the display line, then NAME VALUE optio
            (let ((parent (keymap-parent input-decode-map)))
              (unwind-protect (progn ,@body)
                (set-keymap-parent input-decode-map parent))))
+       ;; the fake tmux slower than its 1 s on a loaded machine is a miss, whose retry timer is this fake
+       ;; terminal's: it goes with it, not into the next row's module check
+       (drgnx-timer-cancel (cons 'tmux-retry (selected-frame)))
        (delete-directory bin t))))
 
 (defconst drgnx-tty-keys-test--asked '((tty-mode-set-strings . ("\e[>4;1m")) (tty-mode-reset-strings . ("\e[>4m")))

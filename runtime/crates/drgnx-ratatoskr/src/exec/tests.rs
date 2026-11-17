@@ -2286,6 +2286,31 @@ async fn a_job_admitted_at_once_is_launched_before_start_answers() {
     }
 }
 
+/// The queue's own tick running between a start's entering the queue and its own tick (the interval's first tick can
+/// land there) takes the job; the start still launches it before it answers.  Deterministic: the tick is run in the gap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_the_queues_tick_takes_first_is_still_launched_before_start_answers() {
+    for _ in 0..20 {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let i = r.inner.get().unwrap().clone();
+        let id = i
+            .clone()
+            .start_gap(
+                spec(Starter::User, d.path(), "true", Duration::from_secs(30)),
+                None,
+                |i| i.pump(),
+            )
+            .await
+            .unwrap();
+        let m = i.meta(&id).unwrap();
+        assert!(
+            !m.queued && m.pid.is_some(),
+            "answered before its launch: {m:?}"
+        );
+    }
+}
+
 /// Job SCRIPT run in CWD to its `Done` event (subscribed before the start, so the event is never missed).
 async fn run_to_done(r: &Runner, cwd: &Path, script: &str) -> String {
     let mut events = r.subscribe();

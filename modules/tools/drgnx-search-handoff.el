@@ -275,8 +275,8 @@ brief's size; the hidden files left out, with the key that puts them in."
                        (t "Edits come back as the agent's"))
                  'face 'drgnx-text-subtle)
      (drgnx-search-handoff--at-edge
-      (concat (drgnx-ui-button "Cancel" 'search-handoff-cancel :face 'drgnx-ui-button) (drgnx-search-handoff--gap 8)
-              (drgnx-replace--sheet-button "Send" 'search-handoff-send 'drgnx-ui-button-primary)))
+      (concat (drgnx-ui-button "Cancel" 'search-handoff-cancel :face 'drgnx-kit-button-secondary) (drgnx-search-handoff--gap 8)
+              (drgnx-replace--sheet-button "Send" 'search-handoff-send 'drgnx-kit-button-primary)))
      "\n" (drgnx-search-handoff--room 10 t))))
 
 (defun drgnx-search-handoff--draw (&optional instruction)

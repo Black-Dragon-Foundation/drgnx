@@ -41,6 +41,14 @@ none.  It survives a change of major mode (Change Language Mode).")
       (setq buffer-offer-save t)          ; Quit and Save All offer it: typed text is never dropped unasked
       b)))
 
+(defun drgnx-basics-open-file (file)
+  "Open FILE, asked for starting in the workspace folder (the Explorer's folder that holds this buffer, else its
+project: where VS Code's Open File starts), not in whatever folder the current buffer is in.  Opens as Find File
+does (wildcards, large-file and trust questions included)."
+  (interactive
+   (list (read-file-name "Open File: " (drgnx-session-workspace-folder default-directory))))
+  (find-file file t))
+
 ;;;; A view is never saved (audit: Ctrl+S in the Explorer wrote its rows to a file called " *drgnx explorer*")
 
 (defun drgnx-basics-view-buffer-p (&optional buffer)
@@ -88,8 +96,8 @@ VS Code's Ctrl+S does with focus in a side view; with no editor to save it says 
                          (apply #'drgnx-basics--save-from-view orig args))
                        (drgnx-module-advice #'set-visited-file-name :before no-file-for-view (&rest args)
                          (apply #'drgnx-basics--no-file-for-view args))
-                       (drgnx-command-define 'open-file :category "File" :title "Open File…" :command #'find-file
-                                             :doc "Open a file")
+                       (drgnx-command-define 'open-file :category "File" :title "Open File…" :command #'drgnx-basics-open-file
+                                             :doc "Open a file, asking from the workspace folder")
                        (drgnx-command-define 'save-file :category "File" :title "Save" :command #'save-buffer
                                              :doc "Save this buffer")
                        (drgnx-command-define 'line-numbers :category "View" :title "Toggle Line Numbers"

@@ -1,4 +1,4 @@
-# The store (Urdr): `work.db` schema 12
+# The store (Urdr): `work.db` schema 14
 
 `work.db` holds one knowledge graph across projects: entities and immutable links with transaction-time history,
 written by Ratatoskr only. The graph layer is the generic `urdr::graph` (kinds, link names and policy are the
@@ -289,7 +289,7 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
 - **Schedule.** `drgnx_ratatoskr::backup_timer` (pure `due(now, last_ok, since_attempt)`, the clock injected): a copy
   is due when the local time is 03:00 or later, no good copy was made today, and the last try is over an hour old (a
   failure is retried hourly, not every tick). The hub's 2 s schema tick asks it, so a hub that was off at 03:00 copies
-  at its first tick after it is ready. At start the newest `work-*.db` seeds the record, so a restart does not copy
+  at its first tick after it is ready and has run five minutes (`SETTLE`: the copy is a request on the store's writer, which a shutdown waits out, so a hub stopped in its first minutes never waits for one). At start the newest `work-*.db` seeds the record, so a restart does not copy
   twice a day. No copy starts while an excise runs (`backup_timer::excising`) or the writer is not `Ready`.
 - **Record.** `graph::run_backup` (the body of `graph/backup` and of the timer) logs and records the outcome;
   `status.store.last_backup` (RFC 3339) and `backup_ok` come from it.
@@ -647,7 +647,7 @@ result. What the rule answers for the file it finds:
 | schema 9 | moved to 10, 11 and 12, then `Ready { 12 }` |
 | schema 10 | moved to 11 and 12, then `Ready { 12 }` |
 | schema 11 | moved to 12, then `Ready { 12 }` |
-| schema 12 | `Ready { 12 }` |
+| schema 14 | `Ready { 14 }` |
 | above 12 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
 | below 6 | `NotReady`: "work.db is schema N; open it once with drgnx 6 first, or remove it (installs are disposable)" |
 | a migration that failed | `Failed { reason }`, never tried again in this process (call 18) |
@@ -764,7 +764,7 @@ so older files and fresh ones arrive at 10 too; a crash leaves 9): it builds the
 for), drops the old table and sets `schema = 10`. A table that already has the key (a file made from today's DDL) only
 gets the number. A second move does nothing. Tests: `rebuild_keeps_every_row_and_its_model`,
 `a_second_model_sits_beside_the_first`, `a_table_with_the_key_is_left_alone`, `a_failed_move_changes_nothing`, and
-`tests/entity_vec_schema8.rs` (a schema-8 file through the real opening rule). A file of schema 12 or above is
+`tests/entity_vec_schema8.rs` (a schema-8 file through the real opening rule). A file of schema 14 or above is
 read-only.
 
 ## Schema 11: forecast samples (agent system part 5)

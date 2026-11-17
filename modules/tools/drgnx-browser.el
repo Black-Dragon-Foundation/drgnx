@@ -88,7 +88,7 @@ shown again by the Browser layout.")
                 (lambda (e)
                   (interactive "e")
                   (with-current-buffer (window-buffer (posn-window (event-start e))) (funcall action))))
-    (propertize label 'face 'link 'mouse-face 'highlight 'help-echo help 'keymap map)))
+    (propertize label 'face 'drgnx-kit-button-quiet 'mouse-face 'highlight 'help-echo help 'keymap map)))
 
 (defun drgnx-browser--go-command () (call-interactively #'drgnx-browser-go))
 

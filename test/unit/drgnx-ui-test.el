@@ -958,6 +958,23 @@ so through `drgnx-ui-test-session-function', which a row binds to a stand-in."
                 (let ((r (list f out 0 0.0 nil))) (when on-end (funcall on-end r)) r)))
             files)))
 
+(ert-deftest drgnx-ui/a-timed-out-session-says-where-it-hung ()
+  :tags '(:cond)                        ; a real process group stands in for the session's
+  ;; a session killed at its timeout left only "no results" (2026-11-17, kwin: 21 min, then 150 s, in a busy Emacs):
+  ;; before the kill its session.log gets each process of the group with its state and wait, and the Emacs's backtrace
+  ;; or that its server did not answer
+  (let* ((run (make-temp-file "duih" t))
+         (p (make-process :name "duih" :command '("sleep" "30") :noquery t :connection-type 'pipe)))
+    (unwind-protect
+        (progn
+          (write-region (number-to-string (process-id p)) nil (expand-file-name "pgid" run) nil 'silent)
+          (drgnx-ui--hang-report (list :socket (expand-file-name "no-server" run)) run)
+          (let ((log (with-temp-buffer (insert-file-contents (expand-file-name "session.log" run)) (buffer-string))))
+            (should (string-match-p (format "^  %d sleep S " (process-id p)) log))
+            (should (string-match-p "its Emacs's backtrace:\nno answer" log))))
+      (delete-process p)
+      (delete-directory run t))))
+
 (ert-deftest drgnx-ui/each-file-is-told-as-it-starts-and-ends ()
   :tags '(:cond)                        ; real processes stand in for the files' sessions
   ;; a run the slot guard kills prints nothing that comes at the end: the per-file runner tells each file's start and

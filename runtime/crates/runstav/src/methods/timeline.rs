@@ -357,6 +357,40 @@ pub struct BudgetView {
     pub remaining: Vec<Limit>,
 }
 
+/// Raise the limit a budget card is about and, with `resume`, let what it paused go on.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BudgetRaiseParams {
+    /// The `budget` card, still open.
+    pub card: u64,
+    /// The new limits of the card's scope, one per unit (at most 5); the scope's other units stay as they are.
+    #[serde(default)]
+    pub limits: Bounded<Vec<Limit>, 5>,
+    /// Let the sessions (or the job) the card paused go on, where no other limit still holds them.
+    #[serde(default)]
+    pub resume: bool,
+}
+
+/// A session or a job a reached limit still holds after a raise, and the scope whose limit it is.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetHeld {
+    /// A session id, or a job id for a job's card.
+    pub id: String,
+    pub by: BudgetScope,
+}
+
+/// What `budget/raise` did: the card's scope as it is now, what went on and what a limit still holds.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetRaised {
+    pub view: BudgetView,
+    /// The sessions sent the continue ("resumed by you"), or the job resumed.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub resumed: Vec<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub held: Vec<BudgetHeld>,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct PaceParams {
     /// The 8-day quarter-hour readings of each meter too (`Pace.history`); off by default.
@@ -452,6 +486,10 @@ fn check_budget_set(p: &BudgetSetParams) -> Result<(), Error> {
     check_limits(&p.limits)
 }
 
+fn check_budget_raise(p: &BudgetRaiseParams) -> Result<(), Error> {
+    check_limits(&p.limits)
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -474,6 +512,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: true,
             doc: "a scope's limits, one per unit (empty clears); the gateway admits usd against the nested minimum",
             check: check_budget_set,
+        ),
+        method!(
+            "budget/raise", BudgetRaise(BudgetRaiseParams) -> BudgetRaised,
+            classes: [User], writes: true,
+            doc: "from an open budget card: the card's scope gets LIMITS (its other units kept); with resume, what it paused goes on unless another limit holds it",
+            check: check_budget_raise,
         ),
         method!(
             "pace/get", PaceGet(PaceParams) -> Paces,

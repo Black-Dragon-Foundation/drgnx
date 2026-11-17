@@ -5,8 +5,9 @@
 ;;; Commentary:
 ;; Folding as in VS Code, on Nidhogg's line model (docs/guide/editing.md, "Folding"; docs/develop/core.md, "The ruler
 ;; and the minimap").  The model keeps one table of fold ranges per buffer text, shifted with every edit, from its
-;; sources: indentation and Markdown headings the model finds itself (`nidhogg-lines-set-fold-sources'), notebook
-;; cells and manual folds this module sends (`nidhogg-lines-set-folds').  A command looks a range up
+;; sources: the buffer's tree-sitter parser, through its language pack's fold query, which Nidhogg runs at each reparse
+;; (`nidhogg-treesit-fold-query'); indentation and Markdown headings the model finds itself
+;; (`nidhogg-lines-set-fold-sources'); notebook cells and manual folds this module sends (`nidhogg-lines-set-folds').  A command looks a range up
 ;; (`nidhogg-lines-fold-at', `nidhogg-lines-folds') and hides it with an `invisible' overlay whose `display' is the
 ;; summary (`⋯ N lines'); isearch opens a fold it passes through.  The hidden ranges go back to the model, which leaves
 ;; their lines out of the scroll bar and the minimap.  Org folds through Org's own `org-fold'.  Nothing here runs on a
@@ -27,6 +28,17 @@
 (declare-function nidhogg-lines-set-folds "nidhogg-lines" (buffer source folds &optional max))
 (declare-function nidhogg-lines-set-fold-sources "nidhogg-lines" (buffer indent heading-regexp))
 (declare-function nidhogg-lines-set-hidden "nidhogg-lines" (buffer ranges))
+(declare-function nidhogg-treesit-refold "treesit.c" (parser))
+(declare-function treesit-parser-list "treesit.c" (&optional buffer language tag))
+(declare-function treesit-parser-language "treesit.c" (parser))
+(declare-function treesit-parser-root-node "treesit.c" (parser))
+(declare-function treesit-query-compile "treesit.c" (language query &optional eager))
+(declare-function drgnx-packs-builtins "drgnx-packs")
+(declare-function drgnx-packs-builtin-dir "drgnx-packs")
+(declare-function drgnx-packs-active "drgnx-packs")
+(declare-function drgnx-packs-read-manifest "drgnx-packs" (file))
+(defvar nidhogg-treesit-fold-query)
+(defvar treesit-primary-parser)
 (declare-function org-back-to-heading "org" (&optional invisible-ok))
 (declare-function org-fold-hide-subtree "org-fold")
 (declare-function org-fold-show-subtree "org-fold")
@@ -41,7 +53,12 @@
 ;;;; Settings and faces
 
 (defvar-local drgnx-fold--sources nil
-  "The sources the buffer's line model was last given: `indent', `headings', `cells' or `off'; nil, none yet.")
+  "The sources the buffer's line model was last given: `treesit', `indent', `headings', `cells' or `off'; nil, none
+yet.")
+
+(defvar-local drgnx-fold--bounds nil
+  "The accessible region (BEG . END) the buffer's tree-sitter folds were last run over: a narrowing that changed it
+runs them again (`nidhogg-treesit-refold').")
 
 (defvar-local drgnx-fold--level nil
   "Vim's fold level of the buffer (`z m', `z r'): blocks this deep or deeper are folded (0: all); nil, none.")
@@ -60,8 +77,9 @@
         (overlay-put o 'display (drgnx-fold--summary o))))))
 
 (drgnx-defsetting drgnx-fold-source 'auto
-  "Where fold ranges come from: `auto', the best source the buffer has (Markdown headings, notebook cells, else
-indentation; Org folds its own headings); `indent', indentation always; `off', no folding but manual folds."
+  "Where fold ranges come from: `auto', the best source the buffer has (Markdown headings, notebook cells, the
+buffer's tree-sitter parser through its language pack's fold query, else indentation; Org folds its own headings);
+`indent', indentation always; `off', no folding but manual folds."
   :type '(choice (const auto) (const indent) (const off)) :group 'drgnx-fold :scope 'global
   :apply #'drgnx-fold--setting-changed :schema '(enum auto indent off))
 
@@ -90,6 +108,7 @@ nil, an ellipsis."
   "KIND's number in the line model, or nil."
   (seq-position drgnx-fold-kinds kind))
 
+(defconst drgnx-fold--source-treesit 0 "The model's source number of tree-sitter folds.")
 (defconst drgnx-fold--source-cells 3 "The model's source number of notebook cells.")
 (defconst drgnx-fold--source-manual 5 "The model's source number of manual folds.")
 
@@ -99,12 +118,72 @@ nil, an ellipsis."
 (defun drgnx-fold--org-p ()
   (derived-mode-p 'org-mode))
 
+;;;; Tree-sitter fold queries
+
+(defvar drgnx-fold--queries (make-hash-table :test #'eq)
+  "Each tree-sitter language's compiled fold query, or `none' (no pack, or a query that does not compile).  One
+entry a language; emptied when the module goes off.")
+
+(defun drgnx-fold--tags-query (tags)
+  "TAGS, a pack's `tags.scm', as a fold query: each `@definition.KIND' capture a fold of its kind (function, method,
+macro and constructor a function; class, struct, interface, module, enum, union, trait, impl, namespace and type a
+class; any other a block).  The other captures fold nothing (Nidhogg folds only `@fold' ones)."
+  (replace-regexp-in-string
+   "@definition\\.\\([a-z_]+\\)"
+   (lambda (m)
+     (let ((k (match-string 1 m)))
+       (cond ((member k '("function" "method" "macro" "constructor")) "@fold.function")
+             ((member k '("class" "struct" "interface" "module" "enum" "union" "trait" "impl" "namespace" "type"))
+              "@fold.class")
+             (t "@fold"))))
+   tags t t))
+
+(defun drgnx-fold--pack-dir (language)
+  "The folder of the language pack whose main grammar is LANGUAGE (a symbol): a built-in pack's, else an installed
+one's (`drgnx-packs-active'); nil when no pack has it."
+  (when (require 'drgnx-packs nil t)
+    (let ((main (lambda (m) (plist-get (seq-find (lambda (g) (plist-get g :required)) (plist-get m :grammars)) :name))))
+      (or (when-let* ((p (seq-find (lambda (p) (eq (funcall main (cdr p)) language))
+                                   (ignore-errors (drgnx-packs-builtins)))))
+            (expand-file-name (car p) (drgnx-packs-builtin-dir)))
+          (seq-some (lambda (p)
+                      (let ((file (plist-get (cdr p) :manifest)))
+                        (and file (eq (funcall main (ignore-errors (drgnx-packs-read-manifest file))) language)
+                             (file-name-directory file))))
+                    (plist-get (drgnx-packs-active) :packs))))))
+
+(defun drgnx-fold--query (language)
+  "LANGUAGE's compiled fold query: its pack's `queries/folds.scm', else its `queries/tags.scm' as one
+(`drgnx-fold--tags-query'); nil when it has neither, or it does not compile.  Compiled once a language."
+  (let ((q (gethash language drgnx-fold--queries)))
+    (unless q
+      (setq q (or (when-let* ((dir (drgnx-fold--pack-dir language)))
+                    (let ((folds (expand-file-name "queries/folds.scm" dir))
+                          (tags (expand-file-name "queries/tags.scm" dir)))
+                      (when-let* ((src (cond ((file-readable-p folds)
+                                              (with-temp-buffer (insert-file-contents folds) (buffer-string)))
+                                             ((file-readable-p tags)
+                                              (drgnx-fold--tags-query
+                                               (with-temp-buffer (insert-file-contents tags) (buffer-string)))))))
+                        (ignore-errors (treesit-query-compile language src t)))))
+                  'none))
+      (puthash language q drgnx-fold--queries))
+    (and (not (eq q 'none)) q)))
+
+(defun drgnx-fold--parser ()
+  "The current buffer's tree-sitter parser to fold by: its primary parser, else its first, that has a fold query
+and a Nidhogg that runs it; nil when none."
+  (when (and (fboundp 'nidhogg-treesit-refold) (fboundp 'treesit-parser-list))
+    (seq-find (lambda (p) (drgnx-fold--query (treesit-parser-language p)))
+              (delete-dups (delq nil (cons (bound-and-true-p treesit-primary-parser) (treesit-parser-list)))))))
+
 (defun drgnx-fold--wanted ()
   "The sources the current buffer's model should have."
   (cond ((eq drgnx-fold-source 'off) 'off)
         ((eq drgnx-fold-source 'indent) 'indent)
         ((derived-mode-p 'markdown-mode) 'headings)
         ((derived-mode-p 'drgnx-notebook-mode) 'cells)
+        ((drgnx-fold--parser) 'treesit)
         (t 'indent)))
 
 (defun drgnx-fold--send-cells ()
@@ -132,12 +211,27 @@ nil, an ellipsis."
 buffer cannot fold through the model (no Nidhogg, or Org)."
   (when (and (fboundp 'nidhogg-lines-enable) (not (drgnx-fold--org-p)))
     (nidhogg-lines-enable nil t)
-    (let ((want (drgnx-fold--wanted)))
+    (let* ((want (drgnx-fold--wanted)) (parser (and (eq want 'treesit) (drgnx-fold--parser))))
+      ;; off tree-sitter (another source, or a setting changed): its query and its ranges go
+      (when (and (not (eq want 'treesit)) (local-variable-p 'nidhogg-treesit-fold-query))
+        (kill-local-variable 'nidhogg-treesit-fold-query)
+        (nidhogg-lines-set-folds nil drgnx-fold--source-treesit nil drgnx-fold-max))
       (unless (eq want drgnx-fold--sources)
-        (setq drgnx-fold--sources want)
+        (setq drgnx-fold--sources want drgnx-fold--bounds nil)
         (nidhogg-lines-set-fold-sources nil (eq want 'indent) (and (eq want 'headings) drgnx-fold-markdown-heading))
         (unless (eq want 'cells) (nidhogg-lines-set-folds nil drgnx-fold--source-cells nil drgnx-fold-max)))
-      (when (eq want 'cells) (drgnx-fold--send-cells)))
+      (pcase want
+        ('cells (drgnx-fold--send-cells))
+        ('treesit
+         ;; Nidhogg publishes each reparse's changed ranges itself; a query set after the parse, or a narrowing
+         ;; that moved, runs over the whole tree once
+         (let ((bounds (cons (point-min) (point-max))))
+           (if (and (equal bounds drgnx-fold--bounds)
+                    (eq nidhogg-treesit-fold-query (drgnx-fold--query (treesit-parser-language parser))))
+               (treesit-parser-root-node parser)   ; an edit not yet parsed is, and its ranges go to the model
+             (setq-local nidhogg-treesit-fold-query (drgnx-fold--query (treesit-parser-language parser)))
+             (setq drgnx-fold--bounds bounds)
+             (nidhogg-treesit-refold parser))))))
     t))
 
 (defun drgnx-fold-ranges (&optional beg end)
@@ -518,7 +612,9 @@ nil or empty for none."
     (with-current-buffer b
       (mapc #'delete-overlay (drgnx-fold--overlays))
       (drgnx-fold--report)
-      (setq drgnx-fold--sources nil drgnx-fold--manual nil drgnx-fold--level nil))))
+      (when (local-variable-p 'nidhogg-treesit-fold-query) (kill-local-variable 'nidhogg-treesit-fold-query))
+      (setq drgnx-fold--sources nil drgnx-fold--manual nil drgnx-fold--level nil drgnx-fold--bounds nil)))
+  (clrhash drgnx-fold--queries))
 
 (drgnx-module-define 'editor/fold
                      :doc "Folding as in VS Code on the line model: by indentation, headings and cells; fold all, by level, by kind, all but here; manual and named folds."

@@ -49,6 +49,12 @@ pub struct ViewEnv {
     pub cell: (u32, u32),
     /// The narrowest live window of the class showing the view, body px.
     pub width_px: u32,
+    /// Where the editor draws a row's tail after its text (`drgnx-wb-row-tail`: the Explorer's, the Buffers panel's),
+    /// `[mark, control]` px (a terminal's: columns) from the window's right edge: the start of its git mark and of its
+    /// control. The rows a view gives a tail keep their text short of what it always draws
+    /// (`drgnx_rows::fit_row::Room::tail`). None: the view's rows get no tail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail: Option<(u32, u32)>,
     /// `[role, colour]`: the SVG writer's colours, from the theme.
     #[serde(default)]
     pub palette: Vec<(String, String)>,
@@ -81,6 +87,20 @@ pub struct ViewEnv {
     /// `width_px`, the selected window's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub headless: bool,
+}
+
+impl ViewEnv {
+    /// What the kit's expansion reads of this env (`drgnx_rows::kit`): its scale, whether it is a terminal, its
+    /// glyphs and the density; no icons (a view that draws them builds its own).
+    pub fn kit(&self) -> drgnx_rows::kit::KitEnv<'_> {
+        drgnx_rows::kit::KitEnv {
+            scale: self.scale,
+            tty: self.display == Display::Tty,
+            glyphs: &self.glyphs,
+            density: self.density,
+            icons: None,
+        }
+    }
 }
 
 /// `view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an

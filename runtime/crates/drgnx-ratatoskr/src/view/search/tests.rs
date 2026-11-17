@@ -41,6 +41,7 @@ fn env(class: &str, epoch: u64) -> ViewEnv {
         fonts: vec![],
         cell: (8, 16),
         width_px: 400,
+        tail: None,
         palette: vec![],
         tty_widths: vec![],
         tz: String::new(),

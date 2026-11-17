@@ -249,8 +249,9 @@ makes one."
   "Non-nil in a buffer that draws its own title row (the Work space's tiles): an area shows no tab row over it.  A
 string is the title the area draws itself, in its row with the area's close, in place of the tabs.")
 
-(defun drgnx-area--tab-row (area)
+(defun drgnx-area--tab-row (area &optional frame)
   "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes.
+Its pads are in the pixels of FRAME (default the workbench's), the frame the row is drawn in.
 `none' (no row) in an area defined with LONE while its shown tab is the only one with content, and over a buffer with
 its own title (`drgnx-area-own-title')."
   (let* ((shown (drgnx-wb-area-tab area)) (tabs (plist-get (alist-get area drgnx-wb--areas) :tabs))
@@ -260,7 +261,7 @@ its own title (`drgnx-area-own-title')."
     (if (or (and w (buffer-local-value 'drgnx-area-own-title (window-buffer w)))
             (and (plist-get (alist-get area drgnx-wb--areas) :lone) (drgnx-area--lone-p area)))
         (let ((own (and w (buffer-local-value 'drgnx-area-own-title (window-buffer w)))))
-          (if (stringp own) (drgnx-area--row-with-close own area) 'none))
+          (if (stringp own) (drgnx-area--row-with-close own area frame) 'none))
       (drgnx-area--row-with-close
        (concat
         ;; under the grid the area is a docked tile: its grip drags it (`drgnx-grid-drag')
@@ -274,8 +275,8 @@ its own title (`drgnx-area-own-title')."
                                    'face face 'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
                                    'local-map drgnx-area--tab-map 'help-echo "Show this tab")))
                    (seq-filter (lambda (tab) (drgnx-area--tab-listed-p area (car tab) shown)) tabs) " ")
-        (drgnx-area--actions actions area))
-       area))))
+        (drgnx-area--actions actions area frame))
+       area frame))))
 
 (defun drgnx-area--close (area)
   "AREA's close on its tab row: the kit's close button (face, click, help), drawn as the Lucide x at 16 px
@@ -284,19 +285,20 @@ its own title (`drgnx-area-own-title')."
         (icon (drgnx-look-icon 'x 'drgnx-ui-close 16)))
     (if-let* ((img (get-text-property 0 'display icon))) (propertize b 'display img) b)))
 
-(defun drgnx-area--row-with-close (title area)
-  "TITLE, then AREA's close at the right edge, 8 px in (`.ptabs' padding), on the bar."
+(defun drgnx-area--row-with-close (title area &optional frame)
+  "TITLE, then AREA's close at the right edge, 8 px in (`.ptabs' padding), on the bar.  The pads are FRAME's pixels."
   (let ((close (drgnx-area--close area)))
-    (drgnx-wb-bar (concat title (propertize " " 'display `(space :align-to (- right (,(drgnx-area--close-px close)))))
+    (drgnx-wb-bar (concat title (propertize " " 'display `(space :align-to (- right (,(drgnx-area--close-px close frame)))))
                           ;; the pad is the button's too: a click at the row's edge closes
-                          close (apply #'propertize " " 'display `(space :width (,(drgnx-area--pad 8)))
+                          close (apply #'propertize " " 'display `(space :width (,(drgnx-area--pad 8 frame)))
                                        (cl-loop for (k v) on (text-properties-at 0 close) by #'cddr
                                                 unless (eq k 'display) append (list k v))))
                   t)))
 
-(defun drgnx-area--pad (px)
-  "PX logical pixels on a graphical frame, else one column."
-  (if (display-graphic-p) (drgnx-px px) (frame-char-width)))
+(defun drgnx-area--pad (px &optional frame)
+  "PX logical pixels in FRAME's pixels (default the workbench's frame) on a graphical frame, else one column."
+  (let ((frame (or frame (drgnx-wb-frame))))
+    (if (display-graphic-p frame) (drgnx-px px frame) (frame-char-width frame))))
 
 (defun drgnx-area--bar-px (string)
   "STRING's width in pixels as the bar draws it: under `drgnx-wb-bar' (the UI font), not the buffer's default."
@@ -304,17 +306,17 @@ its own title (`drgnx-area-own-title')."
     (add-face-text-property 0 (length s) 'drgnx-wb-bar t s)
     (string-pixel-width s)))
 
-(defun drgnx-area--close-px (close)
-  "The pixels CLOSE and the row's right pad take."
-  (+ (drgnx-area--bar-px close) (drgnx-area--pad 8)))
+(defun drgnx-area--close-px (close &optional frame)
+  "The pixels CLOSE and the row's right pad take, the pad in FRAME's."
+  (+ (drgnx-area--bar-px close) (drgnx-area--pad 8 frame)))
 
-(defun drgnx-area--actions (actions area)
+(defun drgnx-area--actions (actions area &optional frame)
   "ACTIONS (a string, or nil) right-aligned before AREA's close: a space to the right edge less their pixel width and
 the close's, then the pieces."
   (if (or (null actions) (string-empty-p actions)) ""
     (let ((close (drgnx-area--close area)))
-      (concat (propertize " " 'display `(space :align-to (- right (,(+ (drgnx-area--bar-px actions) (drgnx-area--close-px close)
-                                                                       (drgnx-area--pad 4))))))
+      (concat (propertize " " 'display `(space :align-to (- right (,(+ (drgnx-area--bar-px actions) (drgnx-area--close-px close frame)
+                                                                       (drgnx-area--pad 4 frame))))))
               actions))))
 
 ;;;; Show, hide
@@ -642,6 +644,12 @@ given) instead of selecting the placeholder: it makes one, which the rules show 
                                    (apply #'provided-mode-derived-p (buffer-local-value 'major-mode b)
                                           drgnx-area--output-modes))))
               (buffer-list)))
+
+(defun drgnx-wb-view-output ()
+  "Show the panel's Output tab (Messages, Warnings, …) and move focus to it, as VS Code's View: Output."
+  (interactive)
+  (select-window (drgnx-wb-area-show 'panel 'output))
+  (drgnx-wb-area-redraw 'panel))
 
 (defun drgnx-wb-output-select-channel ()
   "Show one of the Output tab's channels (Messages, Warnings, Backtrace, …) in the panel, chosen by name."

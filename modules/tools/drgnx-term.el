@@ -34,6 +34,7 @@
 (require 'url-util)
 (require 'project)                      ; a new terminal's workspace folder
 (declare-function drgnx-explorer-roots "drgnx-explorer" ())
+(declare-function drgnx-session-workspace-folder "drgnx-session" (dir))
 (require 'drgnx-color)
 (require 'drgnx-memo)
 (require 'drgnx-pixels)
@@ -1654,18 +1655,9 @@ that host (`drgnx-term-remote-command'); a COMMAND runs in a local folder only."
     (_ (drgnx-term--workspace-folder dir))))
 
 (defun drgnx-term--workspace-folder (dir)
-  "The workspace folder that holds DIR: the innermost of the Explorer's folders, else DIR's project, else DIR.  A
-remote DIR is DIR (no project lookup on a host)."
-  (if (file-remote-p dir) dir
-    (let* ((d (file-name-as-directory (expand-file-name dir)))
-           (roots (and (fboundp 'drgnx-explorer-roots)
-                       (mapcar (lambda (r) (file-name-as-directory (expand-file-name r)))
-                               (seq-remove #'file-remote-p (drgnx-explorer-roots)))))
-           (in (seq-filter (lambda (r) (string-prefix-p r d)) roots)))
-      (or (car (sort in (lambda (a b) (> (length a) (length b)))))
-          (when-let* ((p (let ((default-directory d)) (project-current))))
-            (file-name-as-directory (expand-file-name (project-root p))))
-          dir))))
+  "The workspace folder that holds DIR (`drgnx-session-workspace-folder')."
+  (require 'drgnx-session)
+  (drgnx-session-workspace-folder dir))
 
 (defun drgnx-term--confirm-close ()
   "`kill-buffer-query-functions' of a terminal buffer (`drgnx-term-confirm-close-surface'): a command you run asks

@@ -757,7 +757,7 @@ arrow) as buttons."
         ;; the bar's buttons: Fork, the pause icon (stop after this step), Send as the primary arrow
         (let ((send (string-search (drgnx-face-glyph 'arrow-up) row))
               (pause (string-search (drgnx-face-glyph 'pause) row)))
-          (should (memq 'drgnx-ui-button-primary (ensure-list (get-text-property send 'face row))))
+          (should (memq 'drgnx-kit-button-primary (ensure-list (get-text-property send 'face row))))
           (should (eq 'drgnx-agent-panel-send (lookup-key (get-text-property send 'keymap row) [mouse-1])))
           (should (eq 'drgnx-agent-panel-pause (lookup-key (get-text-property pause 'keymap row) [mouse-1]))))
         (should (eq 'drgnx-agent-panel-fork

@@ -98,6 +98,64 @@ impl RowKind {
     }
 }
 
+/// A button's style: the `style` axis of the `button` component.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ButtonStyle {
+    Primary,
+    #[default]
+    Secondary,
+    Quiet,
+    Danger,
+}
+
+impl ButtonStyle {
+    fn name(self) -> &'static str {
+        match self {
+            ButtonStyle::Primary => "primary",
+            ButtonStyle::Secondary => "secondary",
+            ButtonStyle::Quiet => "quiet",
+            ButtonStyle::Danger => "danger",
+        }
+    }
+}
+
+/// A component's size: the `size` axis (geometry, never a face).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Size {
+    #[default]
+    Md,
+    Sm,
+}
+
+impl Size {
+    fn name(self) -> &'static str {
+        match self {
+            Size::Md => "md",
+            Size::Sm => "sm",
+        }
+    }
+}
+
+/// A key hint's variant: `cap` is a key in its box, `menu` the keys as text (a menu's shortcut column).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyHintVariant {
+    #[default]
+    Cap,
+    Menu,
+}
+
+impl KeyHintVariant {
+    fn name(self) -> &'static str {
+        match self {
+            KeyHintVariant::Cap => "cap",
+            KeyHintVariant::Menu => "menu",
+        }
+    }
+}
+
 /// A component with its props, as JSON `{"c": "row", …}`.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "c", rename_all = "kebab-case")]
@@ -120,6 +178,82 @@ pub enum Comp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
     },
+    /// A button: LABEL in a box of STYLE and SIZE, its key hint (KEY) after the label.
+    Button {
+        label: String,
+        #[serde(default)]
+        style: ButtonStyle,
+        #[serde(default)]
+        size: Size,
+        #[serde(default)]
+        state: State,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<Action>,
+    },
+    /// A key hint: KEYS in their box (or as text, `menu`).
+    KeyHint {
+        keys: String,
+        #[serde(default)]
+        variant: KeyHintVariant,
+        #[serde(default)]
+        state: State,
+    },
+    /// An agent's mark: its HANDLE (one or two letters) on the colour of its SLOT (1–12, `drgnx-agent-identity`).
+    AgentMark { slot: u8, handle: String },
+    /// Progress: a bar WIDTH logical px wide or a ring, VALUE from 0 to 1.
+    Progress {
+        #[serde(default)]
+        kind: ProgressKind,
+        value: f64,
+        #[serde(default)]
+        width: u16,
+    },
+}
+
+/// A progress's kind: the `progress` component's `kind` axis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProgressKind {
+    #[default]
+    Bar,
+    Ring,
+}
+
+impl ProgressKind {
+    fn name(self) -> &'static str {
+        match self {
+            ProgressKind::Bar => "bar",
+            ProgressKind::Ring => "ring",
+        }
+    }
+}
+
+/// A progress bar's height, logical px (`drgnx-ui-kit-progress-bar-px`).
+pub const BAR_PX: u16 = 4;
+/// Logical px of a progress bar's width per terminal cell (`drgnx-ui-kit-progress-cell-px`).
+pub const BAR_CELL_PX: u16 = 8;
+
+/// The agents' colours by slot, 1 first (`drgnx-agent-N`).
+const AGENT_FACES: [FaceId; 12] = [
+    FaceId::Agent1,
+    FaceId::Agent2,
+    FaceId::Agent3,
+    FaceId::Agent4,
+    FaceId::Agent5,
+    FaceId::Agent6,
+    FaceId::Agent7,
+    FaceId::Agent8,
+    FaceId::Agent9,
+    FaceId::Agent10,
+    FaceId::Agent11,
+    FaceId::Agent12,
+];
+
+/// X rounded half up (`drgnx-ui-kit--round`).
+fn round_half_up(x: f64) -> u32 {
+    (x + 0.5 + 1e-9).floor() as u32
 }
 
 /// LOGICAL px at SCALE in device px, rounded half up (`drgnx-px`).
@@ -163,6 +297,19 @@ fn pad(b: &mut RowBuilder, env: &KitEnv, width_px: u32, chars: usize, face: Opti
     }
 }
 
+/// ACTION's props over `[from, to)`: `drgnx-action` = `[kind, args…]` and `mouse-face` (the hover face).
+fn put_action(b: &mut RowBuilder, from: u32, to: u32, a: &Action) {
+    let mut v = vec![Value::String(a.kind.clone())];
+    v.extend(a.args.iter().cloned());
+    b.prop(from, to, "drgnx-action", Value::Array(v));
+    b.prop(
+        from,
+        to,
+        "mouse-face",
+        Value::String(FaceId::Hover.name().to_owned()),
+    );
+}
+
 /// C's inline expansion onto B (the row being built), at ENV.
 pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
     match c {
@@ -197,8 +344,15 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 (Some(open), Some((closed, opened))) => Some(if *open { opened } else { closed }),
                 _ => None,
             };
-            for name in twisty_name.into_iter().chain(icon.as_deref()) {
+            let names = twisty_name
+                .map(|n| (n, true))
+                .into_iter()
+                .chain(icon.as_deref().map(|n| (n, false)));
+            for (name, is_twisty) in names {
+                let at = b.pos();
                 let mark = glyph(env, name);
+                // the twisty in the subtle role (the mockups' chevrons), above the row's own and state colours
+                let subtle = FaceId::TextSubtle.name();
                 match env
                     .icons
                     .filter(|_| !env.tty)
@@ -206,7 +360,17 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 {
                     Some(id) => {
                         b.image(id, mark);
+                        if is_twisty {
+                            b.face(at, at + 1, subtle);
+                        }
                         pad(b, env, px(g.gap, env.scale), 0, face);
+                    }
+                    None if !mark.is_empty() && is_twisty => {
+                        b.push(mark, Some(subtle));
+                        if let Some(f) = face {
+                            b.face(at, b.pos(), f);
+                        }
+                        b.push(" ", face);
                     }
                     None if !mark.is_empty() => {
                         b.push(&format!("{mark} "), face);
@@ -229,17 +393,178 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             }
             if let Some(a) = action {
                 let to = b.pos();
-                let mut v = vec![Value::String(a.kind.clone())];
-                v.extend(a.args.iter().cloned());
-                b.prop(from, to, "drgnx-action", Value::Array(v));
-                b.prop(
-                    from,
-                    to,
-                    "mouse-face",
-                    Value::String(FaceId::Hover.name().to_owned()),
-                );
+                put_action(b, from, to, a);
             }
         }
+        Comp::Button {
+            label,
+            style,
+            size,
+            state,
+            key,
+            action,
+        } => {
+            let variant = [style.name(), size.name(), env.density.name()];
+            let g: Geom = kit_gen::geom(CompId::Button, &variant);
+            let face = comp_face(kit_gen::face(CompId::Button, &variant));
+            let hit = if action.is_some() && !env.tty {
+                px(g.hit, env.scale)
+            } else {
+                0
+            };
+            let from = b.pos();
+            if hit > 0 {
+                b.pad(hit, None);
+            }
+            let start = b.pos();
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+            b.push(label, face);
+            let mut key_run = None;
+            if let Some(keys) = key {
+                pad(b, env, px(g.gap, env.scale), 1, face);
+                let at = b.pos();
+                let hint = Comp::KeyHint {
+                    keys: keys.clone(),
+                    variant: KeyHintVariant::Cap,
+                    state: State::Rest,
+                };
+                expand(b, env, &hint);
+                key_run = Some((at, b.pos()));
+            }
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+            let end = b.pos();
+            if hit > 0 {
+                b.pad(hit, None);
+            }
+            // the button's own fill under its key hint's box
+            if let (Some((a, z)), Some(f)) = (key_run, face) {
+                b.face(a, z, f);
+            }
+            // a button has colours of its own: its state is above them (a disabled label is dim, a pressed one filled)
+            if let Some(f) = state_face(*state) {
+                b.face_over(start, end, f.name());
+            }
+            if !env.tty && g.height > 0 {
+                b.height(1, px(g.height, env.scale));
+            }
+            if let Some(a) = action {
+                let to = b.pos();
+                put_action(b, from, to, a);
+            }
+        }
+        Comp::KeyHint {
+            keys,
+            variant,
+            state,
+        } => {
+            let v = [variant.name(), env.density.name()];
+            let from = b.pos();
+            let g: Geom = kit_gen::geom(CompId::KeyHint, &v);
+            let face = comp_face(kit_gen::face(CompId::KeyHint, &v));
+            if env.tty {
+                match variant {
+                    KeyHintVariant::Cap => b.push(&format!("[{keys}]"), face),
+                    KeyHintVariant::Menu => b.push(keys, face),
+                };
+            } else {
+                pad(b, env, px(g.pad.0, env.scale), 0, face);
+                b.push(keys, face);
+                pad(b, env, px(g.pad.1, env.scale), 0, face);
+            }
+            // a key hint has a ring of its own: its state is above it
+            if let Some(f) = state_face(*state) {
+                let to = b.pos();
+                b.face_over(from, to, f.name());
+            }
+        }
+        Comp::AgentMark { slot, handle } => agent_mark(b, env, *slot, handle),
+        Comp::Progress { kind, value, width } => progress(b, env, *kind, *value, *width),
+    }
+}
+
+/// SLOT's agent mark onto B (`drgnx-ui-kit--agent-mark`): the handle between the pads on the agent's colour (its face
+/// under the kit face's inverse video); on a terminal `[H]` in the colour. Its label is its `help-echo`.
+fn agent_mark(b: &mut RowBuilder, env: &KitEnv, slot: u8, handle: &str) {
+    let agent = AGENT_FACES[usize::from(slot.clamp(1, 12)) - 1].name();
+    let label = format!(
+        "{} {handle}",
+        kit_gen::label(CompId::AgentMark, &[]).unwrap_or_default()
+    );
+    let from = b.pos();
+    if env.tty {
+        b.push(&format!("[{handle}]"), Some(agent));
+    } else {
+        let g = kit_gen::geom(CompId::AgentMark, &[]);
+        let kit = FaceId::KitAgentMark.name();
+        b.pad(px(g.pad.0, env.scale), Some(kit));
+        b.push(handle, Some(kit));
+        b.pad(px(g.pad.1, env.scale), Some(kit));
+        let to = b.pos();
+        b.face(from, to, agent);
+    }
+    let to = b.pos();
+    b.prop(from, to, "help-echo", Value::String(label));
+}
+
+/// Progress onto B (`drgnx-ui-kit--progress`): a bar is the fill (VALUE of the width, rounded half up) then the track,
+/// each a space [`BAR_PX`] high in its face, which the editor draws as the bar's images (`drgnx-ui-kit-bar-display`);
+/// on a terminal its cells (one per [`BAR_CELL_PX`]): the filled ones and a partial block, then the empty ones. A ring is one of
+/// the glyphs `progress-0`..`progress-4`. Its label, "N percent", is its `help-echo`.
+fn progress(b: &mut RowBuilder, env: &KitEnv, kind: ProgressKind, value: f64, width: u16) {
+    let v = value.clamp(0.0, 1.0);
+    let face = comp_face(kit_gen::face(CompId::Progress, &[kind.name()])).unwrap_or("default");
+    let fill_face = FaceId::KitProgressFill.name();
+    let from = b.pos();
+    match kind {
+        ProgressKind::Ring => {
+            let name = format!("progress-{}", round_half_up(4.0 * v));
+            b.push(glyph(env, &name), Some(fill_face));
+        }
+        ProgressKind::Bar if env.tty => {
+            // eighths of a cell: the filled cells, then a partial block where the env draws one (an ASCII terminal
+            // does not: there the fill rounds to whole cells), then the empty ones
+            let cells = round_half_up(f64::from(width) / f64::from(BAR_CELL_PX)).max(1);
+            let units = round_half_up(f64::from(cells) * 8.0 * v);
+            let part = if units % 8 > 0 {
+                glyph(env, &format!("bar-{}", units % 8))
+            } else {
+                ""
+            };
+            let full = if units % 8 > 0 && part.is_empty() {
+                round_half_up(f64::from(cells) * v)
+            } else {
+                units / 8
+            };
+            let empty = cells - full - u32::from(!part.is_empty());
+            let fill = format!("{}{part}", glyph(env, "bar-full").repeat(full as usize));
+            b.push(glyph(env, "bar-left"), None);
+            if !fill.is_empty() {
+                b.push(&fill, Some(fill_face));
+            }
+            if empty > 0 {
+                b.push(&glyph(env, "bar-empty").repeat(empty as usize), Some(face));
+            }
+            b.push(glyph(env, "bar-right"), None);
+        }
+        ProgressKind::Bar => {
+            let total = px(width, env.scale);
+            let fill = round_half_up(f64::from(total) * v);
+            let h = px(BAR_PX, env.scale);
+            for (w, f) in [(fill, fill_face), (total - fill, face)] {
+                if w > 0 {
+                    b.space(w, h, f);
+                }
+            }
+        }
+    }
+    let to = b.pos();
+    if to > from {
+        let label = format!(
+            "{} {}",
+            round_half_up(100.0 * v),
+            kit_gen::label(CompId::Progress, &[kind.name()]).unwrap_or_default()
+        );
+        b.prop(from, to, "help-echo", Value::String(label));
     }
 }
 
@@ -364,6 +689,16 @@ mod tests {
         let plain = &expand_rows(&env(None), "k", &c)[0];
         assert!(plain.images.is_empty());
         assert_eq!(plain.text, " ⌄ src ");
+        // the twisty (image or glyph) in the subtle role, the icon in the row's colours (the mockups' chevrons)
+        let subtle = |r: &Row| {
+            r.runs
+                .iter()
+                .filter(|x| x.2 == FaceId::TextSubtle.name())
+                .map(|x| (x.0, x.1))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(subtle(r), vec![(1, 2)]);
+        assert_eq!(subtle(plain), vec![(1, 2)]);
     }
 
     #[test]

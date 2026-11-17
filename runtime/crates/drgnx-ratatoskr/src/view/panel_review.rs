@@ -171,7 +171,7 @@ fn diff_header(
         FaceId::TextMuted.name(),
     );
     b.push(" ", None);
-    let button = Some(FaceId::UiButton.name());
+    let button = Some(FaceId::KitButtonSecondary.name());
     let actions_w = text_width(i, button, " Reject ")
         + text_width(i, None, " ")
         + text_width(i, button, " Accept ");
@@ -206,7 +206,7 @@ fn diff_header(
             .max(1),
     );
     let r = b.pos();
-    b.push(" Reject ", Some(FaceId::UiButton.name()));
+    b.push(" Reject ", Some(FaceId::KitButtonSecondary.name()));
     let r_end = b.pos();
     b.prop(
         r,
@@ -217,7 +217,7 @@ fn diff_header(
     b.prop(r, r_end, "help-echo", json!("D: take the change back"));
     b.push(" ", None);
     let a = b.pos();
-    b.push(" Accept ", Some(FaceId::UiButton.name()));
+    b.push(" Accept ", Some(FaceId::KitButtonSecondary.name()));
     let a_end = b.pos();
     b.prop(
         a,
@@ -325,17 +325,22 @@ fn perm_card(i: &In, images: &mut Vec<(ImageId, String)>, p: &Permission) -> Vec
     for (k, (label, face, action, help)) in [
         (
             " Allow ",
-            FaceId::UiButtonPrimary.name(),
+            FaceId::KitButtonPrimary.name(),
             "allow",
             "RET: allow it once",
         ),
         (
             " Always ",
-            FaceId::UiButton.name(),
+            FaceId::KitButtonSecondary.name(),
             "always",
             "A: allow it from now on",
         ),
-        (" Deny ", FaceId::UiButton.name(), "deny", "D: deny it"),
+        (
+            " Deny ",
+            FaceId::KitButtonSecondary.name(),
+            "deny",
+            "D: deny it",
+        ),
     ]
     .into_iter()
     .enumerate()

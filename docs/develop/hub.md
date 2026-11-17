@@ -595,8 +595,8 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 12, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 12. A newer file (above 12) makes the hub read-only; a
+missing file is made at schema 14, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 14. A newer file (above 14) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
@@ -873,6 +873,14 @@ in the same transaction as the change they record:
   second for each scope whose spend moved (bursts coalesce, the last value wins; ancestors count). The burn is a
   per-hour rate over the last hour from an in-memory ring (empty before ten minutes of spend; lost on restart). A
   cost an agent reports is a number or `{"amount", "currency"}`: `budget::cost_amount` reads both, everywhere.
+  `budget/raise` (`budget::raise`) reads the card's `data.scope` and `data.sessions` (as `reached_limit` wrote them),
+  settles the card with choice `raise` and `data.raised` in one write (a second raise is refused), then
+  `Budgets::raise` merges the new limits over the scope's other units and keeps a joint scope joint. What still holds
+  a session is `Budgets::holder_of_session`: the nearest scope on its chain whose own limit its spend has reached. A
+  free session of the card is sent the wheel's no-change give ("Continue.", key `wheel:resumed`) through
+  `Agents::resume_paused`, which does nothing to a session the user's wheel holds (a pause cancels the turn, so a
+  queue delivery alone would leave it idle); a job's card then resumes the job through `fallback::resume`, unless a
+  scope above its run still holds it. `fallback::resume` skips every session a holder still holds.
 - **Retention:** the hub's housekeeping runs the daily prune (`coord/prune`, `norn::write::prune`): by age once a
   day, and on every call the row cap.
 
@@ -1189,7 +1197,7 @@ as the peer `agent:<session>` on the user's branch). Both user only; `history/hu
 
 ## The store
 
-The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 14) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
 card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
@@ -1351,6 +1359,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
 | `budget/get` | user | `{scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
+| `budget/raise` | user | `{card: natnum, limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], resume?: boolean}` | `{held?: [BudgetHeld], resumed?: [string], view: BudgetView}` | yes |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
 | `budget/tree` | user | `{after?: string, depth?: natnum, root?: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{next?: string, nodes?: [BudgetNode]}` | no |
 | `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
@@ -1433,7 +1442,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
-| `forecast/get` | user | `{job: Id}` | `Forecast` | no |
+| `forecast/get` | user | `{job: Id, remaining?: boolean}` | `Forecast` | no |
 | `forecast/plan` | user | `{plans: [string]}` | `{forecast: Forecast, running?: [RunningPlan]}` | no |
 | `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
@@ -1648,7 +1657,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
-| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tail?: [natnum, natnum], tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, faces?: [{avg?: number, face: string, file?: string, index?: natnum, pad?: number, px?: number, role: string, wght?: number}], glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
@@ -1662,9 +1671,12 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
 | `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
 | `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
+| `work/schedule/set` | user | `{group?: "plan" \| "machine", view: string, window?: {from: number, to: number}}` | `boolean` | no |
+| `work/schedule/subscribe` | user | `{group?: "plan" \| "machine", view: string, window: {from: number, to: number}}` | `{hub: natnum}` | no |
 | `work/target/set` | user | `{item: string, target_at?: number}` | `boolean` | yes |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
-| `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
+| `work/trail/set` | user | `{filter?: "all" \| "edits" \| "waits", follow?: boolean, view: string, window?: {from: number, to: number}}` | `boolean` | no |
+| `work/trail/subscribe` | user | `{filter?: "all" \| "edits" \| "waits", follow?: boolean, lanes?: [{label: string, session: string}], session?: string, view: string, window?: {from: number, to: number}}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -2384,15 +2396,34 @@ The Work space's trail (one session's steps, its conclusions among them) and Tim
 rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display class like the map's ("Rows" below).
 
 - **Methods** (user connections). `work/trail/subscribe {view, session}` opens a trail view of the connection (again,
-  if it is open); `{view, lanes: [{session, label}]}` (up to 256) a Timeline view instead; one of the two. Its rows go
-  to each class the editor sent a `view/env` for (the env's `view` is this view's id) as `view-patch`, the first per
-  class a reset, before the answer `{hub}`. `work/trail/close {view}` ends one; a connection's views end with it.
+  if it is open); `{view, lanes: [{session, label}], window?, follow?, filter?}` (up to 256 lanes: a plan's, a task's or
+  a machine's sessions, as the editor reads them from the map's model) a Timeline view instead; one of the two. Its
+  rows go to each class the editor sent a `view/env` for (the env's `view` is this view's id) as `view-patch`, the
+  first per class a reset, before the answer `{hub}`. `work/trail/set {view, window?, follow?, filter?}` zooms, pans or
+  filters a Timeline without subscribing again (a window given without `follow` stops following; false when the view
+  is not a Timeline). `work/trail/close {view}` ends one (a Schedule or Board too); a connection's views end with it.
+- **Windows.** `window {from, to}` (seconds since the epoch, `from` before `to`, a year at most) is the time a Timeline
+  shows; without one it shows its lanes' last 500 steps each over the time they cover, as before. With one, each lane
+  is one ranged read (`norn::read::steps::window`: the steps that overlap it, an open one from its start, on the index
+  `step_session_start`, the detail's kind joined). `follow` keeps now in view: when the now-line moves, the window
+  moves to end a tenth of its length after now. `filter` is `all`, `edits` (edit segments keep their colour, the rest
+  are `drgnx-work-dim`) or `waits` (`Y M P !`).
 - **Rows.** A trail: `step:ID` per step (the session's last 500, oldest first: its kind's icon, its title, the number of
   each conclusion resting on it, and its time and duration 14 columns from the right edge), the two lines of each
   conclusion's card (`conc:N:0`, `conc:N:1`) after the step it was stamped on, and those on no step shown at the end.
-  A Timeline: `axis` (the range's times), then `lane:SESSION` per lane (its label fitted to 130 px, each step a segment
-  at its time on a track from 140 px), or `none` without lanes. Times are in the env's `tz` (`+HHMM`, as `%z` prints it;
-  anything else is UTC).
+  A Timeline: `axis` (the window's start, "now" and the time where the now-line falls, the window's end), then
+  `lane:SESSION` per lane (its label fitted to 130 px, its steps binned on a track from 140 px to the width less
+  160 px: one column a pixel, a cell on a terminal; `vegvisir::trail::bins`): a column takes the kind with the most
+  time in it (a tie to the earlier kind of the table below) and that kind's longest step there, and neighbouring
+  columns of one step and kind are one segment, so a lane never has more segments than columns. Each segment carries
+  its kind's letter as `drgnx-work-kind` (a terminal draws the letters), its step as `drgnx-work-step` and
+  `drgnx-work-id`; the kinds: `R` read, `S` search, `W` web, `E` edit, `T` tool, `·` think, `J` job, `Y` waiting on
+  you, `M` waiting for a machine, `P` paused, `!` stalled. The now-line is a `│` (`drgnx-work-now`, faced
+  `drgnx-focus-line`, as is the axis's "now") on each row where now falls in the window. Without lanes, `none`.
+  Times are in the env's `tz` (`+HHMM`, as `%z` prints it; anything else is UTC).
+- **The clock.** A Timeline or Schedule draws its axis again each second from what it last read (the diff sends the
+  axis row alone) and its now-line at most once every 5 s, only when it moved (`vegvisir::trail::NowLine`; a move a
+  track does not show changes no row, and nothing goes out); a followed Timeline reads again when its window moves.
 - **Updates.** Every view is read again (the timeline and the conclusions store, as `timeline/get` and
   `work/conclusions` answer) after each write and each closed step, coalesced, one view at a time; each class gets
   only what changed: a new step is an insert of its row, a conclusion replaces the rows of the steps it rests on and
@@ -2411,15 +2442,32 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   `work/map/set` that moves a selection sends the connection's Timelines their model again from what was last read
   (`Trails::map_moved`), no rows. Step nodes carry what opening one needs: `label seq class tool detail-kind path line
   query url` and, in a Timeline, `session`. The rows' node spans are their `drgnx-work-id` props.
+- **The Schedule** (`work::schedule`, pure part `vegvisir::schedule`). `work/schedule/subscribe {view, window, group}`
+  opens a Schedule view: the List of the connection's map view (a shown one first; its filter, folds and order), each
+  row with a bar over `window`; `group` `plan` (the List's spec › plan › task, the default) or `machine` (a heading per
+  machine of the map, `machine:NAME` with its slots, its tasks under it, then `machine:` "Not placed yet" with the
+  tasks no machine holds: a task has a machine only once it started). `work/schedule/set {view, window?, group?}`
+  zooms, pans or regroups it (false when the view is not a Schedule). Rows alone, no model (the List's is the map's):
+  `axis`, then `sched:ITEM` per row (its label indented by depth and fitted to 130 px, its bar's parts as runs with a
+  `drgnx-work-part` of `done`, `p50`, `p90`, `forecast`, `late`, `baseline` or `target`, the now-line, and the state's
+  words right of the track), or `none`. A bar: a task's span is its steps' roll-up (`Rollup.first`/`last`); a task of
+  a running job (`JOB#N`) has its job's forecast of what remains (`forecast/get {remaining}`: start, p50 and p90
+  finish, wall-clock) and its baseline's finish (the run's start, its tasks' first step, plus the baseline's offset); a
+  plan spans its tasks and takes its running job's own wall time (its draws, never a sum of its tasks') and baseline; a
+  spec spans its plans and takes their latest finish. States (the timeline spec's §4): on track, behind (past p50),
+  late (past p90: "past p90 by 0h35"), waiting (its agent waits on you, a machine or a job), slipped (a spec or plan
+  whose p50 is over a quarter of its baseline's wall time past the baseline: "was 14:20"), done ("took 1h10"),
+  forecast (not started, placed at its forecast start); and on a spec or plan with a target, in its place: on target
+  (p90 before it), at risk (p50 before, p90 after), misses target (p50 after; "overdue" once it passed), and when done
+  "met target" or "missed by …". Until the kit's `range-bar`, the parts are today's map faces and stops.
 - **The Board** (`work::trail::board`). `work/board/subscribe {view, map, plans?}` opens a Board view the same way:
   the tasks of `plans` (`plans/get` each, their steps the progress), else every task (`tasks/find`, up to four pages),
   each card naming the agent of the connection's map view `map` that works on it (the agent whose task id is the
   card's: two tasks of one title never show each other's agent). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
   heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
-  `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: on a GUI two `spaces` 4 px high from
-  4 px in, the steps done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the column less 16 px,
-  in device px at the env's `scale`, rounded half up as `drgnx-px` does; on a terminal the card's text width of `▰`
-  and `▱` in those faces), or `none`. Its model is its own, not the map's: a `card` node per task
+  `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: the kit's `progress` bar from 4 px in,
+  the column less 16 px wide, the steps done its value; on a terminal the card's text width in the kit's cells), or
+  `none`. Its model is its own, not the map's: a `card` node per task
   (fields `label status column plan agent agent-label`) whose links are the `board` form's (`navs.board`: up and down
   in its column, left and right to the nearest column with cards, at the same height or its last card), lists
   `cards` (column by column) and `team` (the cards an agent works on).
@@ -2476,13 +2524,18 @@ it builds for Android too).
   falls; the standard faces (`default`, `bold`, `error`, …) are left as words.
 - **The kit.** A view builds a kit component (`etc/ui/components.eld`) with `drgnx_rows::kit`: a `Comp` (JSON
   `{"c": "row", "kind": "tree", "depth": 2, "twisty": true, "text": …, "state": "selected", "action": {"kind", "args"}}`)
-  and a `KitEnv` (`view::kit_env(&env)`: the env's scale, whether it is a terminal, its `glyphs` and `density`) go through
+  and a `KitEnv` (`ViewEnv::kit()`: the env's scale, whether it is a terminal, its `glyphs` and `density`) go through
   `kit::expand(&mut builder, &kit_env, &comp)` (inline, onto the row being built) or `kit::expand_rows(&kit_env, key,
   &comp)` (whole rows, keys `KEY/0`, `KEY/1`…). Pads are `RowBuilder::pad` spaces of `floor(logical × scale + 0.5 +
   1e-9)` device px per part; on a terminal, characters, and glyphs in the env's form (else Unicode, `kit::GLYPHS`);
-  the runs are the component's kit face and the state's under it; an `Action` puts `drgnx-action` = `[kind, args…]`
+  the runs are the component's kit face and the state's under it (above it for a component with colours of its own,
+  a button, chip or card: `RowBuilder::face_over`); an `Action` puts `drgnx-action` = `[kind, args…]`
   and `mouse-face` over the component, which the editor maps to the kind's one keymap (`docs/develop/core.md`,
-  "Actions and focus-visible"). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
+  "Actions and focus-visible"). Besides rows the kit has `{"c": "agent-mark", "slot": 1-12, "handle": "Q"}` (the
+  handle on its agent's colour) and `{"c": "progress", "kind": "bar"|"ring", "value": 0-1, "width": LOGICAL-PX}` (a bar
+  of `kit::BAR_PX`-high spaces, the fill then the track, which the editor draws as images, or a ring glyph), each
+  with its spoken label as `help-echo`
+  (`docs/design/components/chips-and-keys.md`). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
   (`tests/kit_conformance.rs` and `drgnx-ui-kit/conformance` over `test/fixtures/kit`) keeps the two equal.
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
@@ -2512,10 +2565,13 @@ All of it is in memory only.
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
   width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, glyphs: [[name, glyph]],
-  density?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again. `width_px` is
-  the room a row has: the window's body, less what the view's buffer draws at the right edge after each row (the
-  Explorer's and the Buffers panel's tail, the git mark and the ⋯, placed from that edge: `drgnx-view-env-right-reserve`,
-  `drgnx-wb-tail-reserve`), so a row fitted to it never pushes its tail past the edge. `glyphs` are
+  density?, tail?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again.
+  `width_px` is the window's body. `tail: [mark, control]` is where the view's buffer draws a row's tail after it (the
+  Explorer's and the Buffers panel's: `drgnx-view-env-tail`, `drgnx-wb-tail-px`), px from the right edge: the start
+  of its git mark and of its control. A row ends its text short of what its tail always draws: the mark's place on a
+  row with a git mark, the control's on a row whose control is always shown (a buffer's unsaved ●, every control on
+  a terminal), nothing on a row whose control shows on hover only; such a row whose text reaches the control's place
+  gets `drgnx-row-tail-short`, and its tail leaves the control out (Glitnir paints it over the text on hover). `glyphs` are
   the kit's glyphs as the class's frame draws them (ASCII on a terminal that is not UTF-8); `density` is the user's
   (`compact`, `comfortable` when absent, `roomy`; `drgnx-look-density`), which the kit's sizes follow (a tree level's
   indent), and a change of it is a new epoch. `headless: true` marks a view that Lisp only
@@ -3188,7 +3244,7 @@ The Outline section's rows: the definitions of the file in the editor, built by 
   edit history tracks asks through it (`drgnx-history-ask`: its changes go first), another by its file. The last
   `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
 
-### The minimap's labels (`minimap/watch`)
+### The minimap's labels and folds (`minimap/watch`)
 
 `minimap/watch {file, on}` says the editor shows FILE (absolute, its true name) in a minimap, or no longer. While a
 connection watches it, the hub sends it the file's definitions as the minimap's `labels` layer (`view/minimap.rs`):
@@ -3199,6 +3255,12 @@ Outline's 1 MiB; a larger file gets an empty layer). It is sent before the answe
 hub's clock) after the edits to it pause (`outline::touched` calls `minimap::touched`); a later ask or `on: false`
 drops a pending send. Versions come from one counter for the hub, so a later layer is always newer. A connection's
 watches end with it. MARK sections are not the hub's: Nidhogg's line model finds them.
+
+With the labels goes the file's `folds` layer (`items: [[first line, last line, kind]]`, lines from 1, kind a name from
+`hrafn::chunk::folds::KINDS`): the language pack's fold query over the same text (`hrafn::chunk::folds::of_file`; a
+fetched pack's in its parse worker; [packs.md](packs.md), "Fold queries"). A file with no grammar has no `folds`
+layer. Nidhogg takes it as the line model's `hub` fold source for a buffer that has no tree-sitter parser of its own;
+one with a parser folds by the same query in the editor.
 
 ### The agent panel's rows
 
@@ -5054,6 +5116,16 @@ by weight, so one run's tokens, time and cost stay together. Time is a list sche
 whenever one of the slots is free it takes the ready task with the lowest `n`, as the runner does, and a task starts
 once its parents have finished. So wall time shows merge bias: three parallel tasks together end later than the p50 of
 any of them. Each range comes from the plan's own draws, because p90s do not add up.
+
+**What remains** (`sim::simulate_fixed`, `forecast/get {remaining}`). Each task of a running job is a `sim::Fixed`,
+with now as the origin: `Done` (its steps' first start and last end, cost by unit and tokens, from `steps::rollup` of
+`JOB#N`) is the same in every draw and stays out of the totals; `Running` (a step and not finished) draws only from its
+class's picks at least `elapsed` long and holds a slot for what is left of the drawn run; `Open` starts from now on the
+free slots. A running task no pick is as long as draws the whole class as a whole run more, its finish widened with
+the small-class floor, and the hub warns "T{n} is past every run like it". Every task still draws one number, so
+all-`Open` is `simulate`'s forecast exactly. The hub adds now to every start and finish (clock times), keeps done
+tasks unwidened and uncalibrated, runs the draws through `block_in_place` off the async worker, and keeps an answer
+for 5 s per (job, newest step id). `forecast/plan` answers a running plan with it.
 
 The stream is SplitMix64, and `seed_of` is FNV-1a over the inputs: both are written here so that the numbers do not move
 with a library or a compiler. Quantiles are nearest-rank (`quantile`).

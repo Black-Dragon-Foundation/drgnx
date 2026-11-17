@@ -21,24 +21,44 @@ use runstav::methods::tasks::{FindParams, TaskList};
 use runstav::methods::timeline::{Step as WireStep, TimelineParams};
 use runstav::methods::view::ViewEnv;
 use runstav::methods::work::{
-    BoardSubscribe, Conclusion as WireConclusion, ConclusionsParams, FlowSubscribe, TrailClose,
-    TrailLane, TrailSubscribe, TrailSubscribed,
+    BoardSubscribe, Conclusion as WireConclusion, ConclusionsParams, FlowSubscribe, ScheduleGroup,
+    ScheduleSet, ScheduleSubscribe, TrailClose, TrailFilter as WireFilter, TrailLane, TrailSet,
+    TrailSubscribe, TrailSubscribed, Window as WireWindow,
 };
 use runstav::registry::Class;
 use runstav::wire::Error;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
-use vegvisir::trail::{self, Zone};
+use vegvisir::schedule::{self, SchedRow};
+use vegvisir::trail::{self, NowLine, TrailFilter, Window, Zone};
 
 /// The steps a trail or a lane holds: the session's last ones.
 const STEPS: u32 = 500;
+
+/// A Timeline view: its lanes, its window (none: the time their last steps cover), whether it follows now, and what
+/// it keeps in colour.
+#[derive(Clone, Debug)]
+struct Timeline {
+    lanes: Vec<TrailLane>,
+    window: Option<Window>,
+    follow: bool,
+    filter: TrailFilter,
+}
+
+/// A Schedule view: its window and grouping.
+#[derive(Clone, Debug)]
+struct Schedule {
+    window: Window,
+    group: ScheduleGroup,
+}
 
 /// What one view shows.
 #[derive(Clone, Debug)]
 enum Sub {
     Trail(String),
-    Timeline(Vec<TrailLane>),
+    Timeline(Timeline),
+    Schedule(Schedule),
     /// A Board: map view, plans.
     Board(String, Vec<String>),
     /// A Flow view: map view, job (none: the newest running job), and which part of the Flow it is.
@@ -50,10 +70,48 @@ enum Data {
     /// A window of the session's steps (all when they fit), its conclusions, how many steps it has, and the fixed clock
     /// of a test hub's scene (none: the wall clock, which an open step's elapsed time follows).
     Trail(Vec<trail::Step>, Vec<trail::Conclusion>, usize, Option<f64>),
-    Timeline(Vec<trail::Lane>),
+    Timeline(Arc<Vec<trail::Lane>>, Shown),
+    /// The Schedule's rows with their bars' facts, the machines, the grouping.
+    Schedule(Arc<SchedData>, ScheduleGroup, Shown),
     Board(Vec<board::Card>),
     /// The lens's facts, and the part of the Flow the view is.
     Flow(Box<flow::Flow>, flow::Part),
+}
+
+/// The Schedule's rows and their bars' facts, and the machines (label, slots used, slots).
+type SchedData = (Vec<crate::work::schedule::Fact>, Vec<(String, u32, u32)>);
+
+/// What a Timeline or the Schedule is drawn over: the window, the filter, the now-line (drawn at most every 5 s,
+/// [`NowLine`]) and the axis's clock (each second).
+#[derive(Clone, Copy, Debug)]
+struct Shown {
+    win: Window,
+    filter: TrailFilter,
+    now_line: Option<f64>,
+    axis_now: f64,
+}
+
+/// The columns the now-line's move is judged on: finer than any track, so a move a track shows is never held back
+/// (one it does not show changes no row, and the diff sends nothing).
+const NOW_COLS: u32 = 4096;
+
+/// What part of its window a followed Timeline keeps after now.
+const FOLLOW_AHEAD: f64 = 0.1;
+
+/// The wire's window as the rows take it.
+fn window_of(w: WireWindow) -> Window {
+    Window {
+        from: w.from,
+        to: w.to,
+    }
+}
+
+fn filter_of(f: Option<WireFilter>) -> TrailFilter {
+    match f.unwrap_or_default() {
+        WireFilter::All => TrailFilter::All,
+        WireFilter::Edits => TrailFilter::Edits,
+        WireFilter::Waits => TrailFilter::Waits,
+    }
 }
 
 /// A session's steps and conclusions (a test hub's scene seeds them).
@@ -73,6 +131,8 @@ pub struct Trails {
     scene: Mutex<BTreeMap<String, SceneTrail>>,
     /// One refresh at a time, so a view's patches go out in the order its data was read.
     busy: tokio::sync::Mutex<()>,
+    /// Each Timeline's and Schedule's now-line: when it was last drawn.
+    lines: Mutex<BTreeMap<(u64, String), NowLine>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -90,6 +150,109 @@ impl Trails {
     pub fn gone(&self, conn: u64) {
         lock(&self.views).retain(|k, _| k.0 != conn);
         lock(&self.data).retain(|k, _| k.0 != conn);
+        lock(&self.lines).retain(|k, _| k.0 != conn);
+    }
+
+    /// KEY's now-line at NOW over WINDOW: when it is drawn (now when it is due, else when it was last), and the window
+    /// a FOLLOWed view moves to when it is due (now kept in view, [`FOLLOW_AHEAD`] of it after now), recorded in the
+    /// view.
+    fn clock(
+        &self,
+        key: &(u64, String),
+        window: Option<Window>,
+        follow: bool,
+        now: f64,
+    ) -> (Option<Window>, f64) {
+        let col = window.and_then(|w| trail::now_col(&w, NOW_COLS, now));
+        let (due, at) = {
+            let mut lines = lock(&self.lines);
+            let line = lines.entry(key.clone()).or_default();
+            let due = line.due(now, col);
+            (due, line.drawn.map_or(now, |d| d.0))
+        };
+        let win = match window {
+            Some(w) if follow && due => {
+                let span = w.to - w.from;
+                let moved = Window {
+                    from: now - (1.0 - FOLLOW_AHEAD) * span,
+                    to: now + FOLLOW_AHEAD * span,
+                };
+                if let Some(Sub::Timeline(t)) = lock(&self.views).get_mut(key) {
+                    t.window = Some(moved);
+                }
+                // the line is judged on the window it moved to from now on
+                lock(&self.lines).insert(
+                    key.clone(),
+                    NowLine {
+                        drawn: Some((now, trail::now_col(&moved, NOW_COLS, now))),
+                    },
+                );
+                Some(moved)
+            }
+            w => w,
+        };
+        (win, at)
+    }
+
+    /// Whether KEY's now-line would be drawn again at NOW over WINDOW (nothing recorded).
+    fn due(&self, key: &(u64, String), window: Option<Window>, now: f64) -> bool {
+        let col = window.and_then(|w| trail::now_col(&w, NOW_COLS, now));
+        let mut line = lock(&self.lines).get(key).copied().unwrap_or_default();
+        line.due(now, col)
+    }
+
+    /// A second passed: a Timeline or Schedule view KEY draws its axis again (its now-line when due) from what it last
+    /// read; a followed Timeline whose window moves reads again.  False when KEY is neither.
+    async fn tick(&self, f: &Front, key: &(u64, String)) -> bool {
+        let now = crate::clock::wall_secs();
+        let follow = match lock(&self.views).get(key) {
+            Some(Sub::Timeline(t)) => t.follow && self.due(key, t.window, now),
+            Some(Sub::Schedule(_)) => false,
+            _ => return false,
+        };
+        if follow {
+            self.refresh(f, key).await;
+            return true;
+        }
+        let _one = self.busy.lock().await;
+        let Some(data) = lock(&self.data).get(key).cloned() else {
+            return true;
+        };
+        let data = match &*data {
+            Data::Timeline(lanes, sh) => {
+                let (_, at) = self.clock(key, Some(sh.win), false, now);
+                Data::Timeline(
+                    lanes.clone(),
+                    Shown {
+                        now_line: Some(at),
+                        axis_now: now,
+                        ..*sh
+                    },
+                )
+            }
+            Data::Schedule(d, g, sh) => {
+                let (_, at) = self.clock(key, Some(sh.win), false, now);
+                Data::Schedule(
+                    d.clone(),
+                    *g,
+                    Shown {
+                        now_line: Some(at),
+                        axis_now: now,
+                        ..*sh
+                    },
+                )
+            }
+            _ => return true,
+        };
+        let data = Arc::new(data);
+        lock(&self.data).insert(key.clone(), data.clone());
+        for class in f.core.views.classes(key.0, &key.1) {
+            let k3 = (key.0, key.1.clone(), class);
+            f.core
+                .views
+                .publish_built(f, &k3, |env, fonts| rows(&data, env, fonts));
+        }
+        true
     }
 
     /// The selection of a map view of connection CONN moved: its Timelines' models again, for the lanes it lights
@@ -104,7 +267,7 @@ impl Trails {
             let near = f.core.map.near(conn);
             let mine: Vec<((u64, String), Arc<Data>)> = lock(&trails.data)
                 .iter()
-                .filter(|(k, d)| k.0 == conn && matches!(***d, Data::Timeline(_)))
+                .filter(|(k, d)| k.0 == conn && matches!(***d, Data::Timeline(..)))
                 .map(|(k, d)| (k.clone(), d.clone()))
                 .collect();
             for (key, data) in mine {
@@ -167,16 +330,46 @@ impl Trails {
                     Data::Trail(steps, conclusions(f, &sid).await, total, None)
                 }
             }
-            Sub::Timeline(lanes) => {
-                let mut out = Vec::with_capacity(lanes.len());
-                for l in lanes {
-                    out.push(trail::Lane {
-                        id: l.session.clone(),
-                        label: l.label.clone(),
-                        steps: steps(f, &l.session).await,
-                    });
-                }
-                Data::Timeline(out)
+            Sub::Timeline(t) => {
+                let now = crate::clock::wall_secs();
+                let (win, at) = self.clock(key, t.window, t.follow, now);
+                let lanes = match win {
+                    Some(w) => window_lanes(f, &t.lanes, w).await,
+                    None => {
+                        let mut out = Vec::with_capacity(t.lanes.len());
+                        for l in &t.lanes {
+                            out.push(trail::Lane {
+                                id: l.session.clone(),
+                                label: l.label.clone(),
+                                steps: steps(f, &l.session).await,
+                            });
+                        }
+                        out
+                    }
+                };
+                let win = win.unwrap_or_else(|| {
+                    let (from, to) = trail::range(&lanes);
+                    Window { from, to }
+                });
+                let shown = Shown {
+                    win,
+                    filter: t.filter,
+                    now_line: Some(at),
+                    axis_now: now,
+                };
+                Data::Timeline(Arc::new(lanes), shown)
+            }
+            Sub::Schedule(s) => {
+                let now = crate::clock::wall_secs();
+                let (_, at) = self.clock(key, Some(s.window), false, now);
+                let facts = crate::work::schedule::facts(f, key.0, at).await;
+                let shown = Shown {
+                    win: s.window,
+                    filter: TrailFilter::All,
+                    now_line: Some(at),
+                    axis_now: now,
+                };
+                Data::Schedule(Arc::new(facts), s.group, shown)
             }
             Sub::Board(map, plans) => Data::Board(board_cards(f, key.0, &map, &plans).await),
             Sub::Flow(map, job, part) => {
@@ -186,13 +379,13 @@ impl Trails {
         let data = Arc::new(data);
         lock(&self.data).insert(key.clone(), data.clone());
         let near = match *data {
-            Data::Timeline(_) => f.core.map.near(key.0),
-            Data::Trail(..) | Data::Board(_) | Data::Flow(..) => Vec::new(),
+            Data::Timeline(..) => f.core.map.near(key.0),
+            Data::Trail(..) | Data::Board(_) | Data::Flow(..) | Data::Schedule(..) => Vec::new(),
         };
-        // a tile of the Flow is rows alone, as the map's detail is
+        // a tile of the Flow is rows alone, as the map's detail is; so is the Schedule (the List's model is the map's)
         if !matches!(
             *data,
-            Data::Flow(_, flow::Part::Detail(_) | flow::Part::Rules(_))
+            Data::Flow(_, flow::Part::Detail(_) | flow::Part::Rules(_)) | Data::Schedule(..)
         ) {
             f.core
                 .views
@@ -211,7 +404,8 @@ impl Trails {
 fn doc_of(data: &Data, near: &[String]) -> crate::view::model::Doc {
     match data {
         Data::Trail(steps, concs, total, _) => model::trail_doc(steps, concs, *total),
-        Data::Timeline(lanes) => model::timeline_doc(lanes, near),
+        Data::Timeline(lanes, _) => model::timeline_doc(lanes, near),
+        Data::Schedule(..) => crate::view::model::Doc::default(),
         Data::Board(cards) => board::board_doc(cards),
         Data::Flow(flow, _) => flow::flow_doc(flow),
     }
@@ -235,7 +429,41 @@ fn rows(
             zone,
             Some(clock.unwrap_or_else(crate::clock::wall_secs)),
         ),
-        Data::Timeline(lanes) => only(trail::timeline_rows(lanes, &renv, fonts, zone)),
+        Data::Timeline(lanes, sh) => only(trail::timeline_rows(
+            lanes,
+            &renv,
+            fonts,
+            zone,
+            &sh.win,
+            trail::track_cols(&renv),
+            sh.filter,
+            sh.now_line,
+            sh.axis_now,
+        )),
+        Data::Schedule(d, group, sh) => {
+            let now = sh.now_line.unwrap_or(sh.axis_now);
+            let rows: Vec<SchedRow> =
+                d.0.iter()
+                    .map(|(r, f)| SchedRow {
+                        bar: f.as_ref().map(|f| schedule::bar(f, now)),
+                        ..r.clone()
+                    })
+                    .collect();
+            let rows = match group {
+                ScheduleGroup::Plan => rows,
+                ScheduleGroup::Machine => schedule::by_machine(&rows, &d.1),
+            };
+            only(schedule::schedule_rows(
+                &rows,
+                &renv,
+                fonts,
+                zone,
+                &sh.win,
+                trail::track_cols(&renv),
+                sh.now_line,
+                sh.axis_now,
+            ))
+        }
         Data::Board(cards) => only(board::board_rows(cards, env)),
         Data::Flow(flow, flow::Part::Lens) => flow::flow_rows(flow, env, fonts),
         Data::Flow(flow, flow::Part::Detail(task)) => flow::detail_tile(flow, task, env, fonts),
@@ -611,9 +839,15 @@ fn conclusion_of(c: &WireConclusion) -> trail::Conclusion {
 pub async fn subscribe(f: &Front, c: &Caller, p: TrailSubscribe) -> Result<TrailSubscribed, Error> {
     let sub = match p.session {
         Some(s) => Sub::Trail(s),
-        None => Sub::Timeline(p.lanes),
+        None => Sub::Timeline(Timeline {
+            lanes: p.lanes,
+            window: p.window.map(window_of),
+            follow: p.follow.unwrap_or(false),
+            filter: filter_of(p.filter),
+        }),
     };
     let key = (c.conn_id, p.view);
+    lock(&f.core.trails.lines).remove(&key);
     lock(&f.core.trails.views).insert(key.clone(), sub);
     f.core.views.model_restart(key.0, &key.1);
     f.core.trails.refresh(f, &key).await;
@@ -664,11 +898,132 @@ pub async fn flow_subscribe(
     })
 }
 
+/// `work/trail/set`: a Timeline view of CALLER's connection takes a new window (which stops following unless `follow`
+/// says otherwise), follow or filter, and draws again; false when it is not a Timeline.
+pub async fn set(f: &Front, c: &Caller, p: TrailSet) -> Result<bool, Error> {
+    let key = (c.conn_id, p.view);
+    {
+        let mut views = lock(&f.core.trails.views);
+        let Some(Sub::Timeline(t)) = views.get_mut(&key) else {
+            return Ok(false);
+        };
+        if let Some(w) = p.window {
+            t.window = Some(window_of(w));
+            t.follow = false;
+        }
+        if let Some(on) = p.follow {
+            t.follow = on;
+        }
+        if p.filter.is_some() {
+            t.filter = filter_of(p.filter);
+        }
+    }
+    // a new window: the now-line is drawn on it at once
+    lock(&f.core.trails.lines).remove(&key);
+    f.core.trails.refresh(f, &key).await;
+    Ok(true)
+}
+
+/// `work/schedule/subscribe`: VIEW of CALLER's connection shows the Schedule over `window`; its rows go to each class
+/// its editor sent a `view/env` for, the first patch of each a reset, before the answer.
+pub async fn schedule_subscribe(
+    f: &Front,
+    c: &Caller,
+    p: ScheduleSubscribe,
+) -> Result<TrailSubscribed, Error> {
+    let key = (c.conn_id, p.view);
+    lock(&f.core.trails.lines).remove(&key);
+    lock(&f.core.trails.views).insert(
+        key.clone(),
+        Sub::Schedule(Schedule {
+            window: window_of(p.window),
+            group: p.group,
+        }),
+    );
+    f.core.trails.refresh(f, &key).await;
+    Ok(TrailSubscribed {
+        hub: f.core.views.hub(),
+    })
+}
+
+/// `work/schedule/set`: a Schedule view of CALLER's connection takes a new window or grouping and draws again; false
+/// when it is not a Schedule.
+pub async fn schedule_set(f: &Front, c: &Caller, p: ScheduleSet) -> Result<bool, Error> {
+    let key = (c.conn_id, p.view);
+    {
+        let mut views = lock(&f.core.trails.views);
+        let Some(Sub::Schedule(s)) = views.get_mut(&key) else {
+            return Ok(false);
+        };
+        if let Some(w) = p.window {
+            s.window = window_of(w);
+        }
+        if let Some(g) = p.group {
+            s.group = g;
+        }
+    }
+    lock(&f.core.trails.lines).remove(&key);
+    f.core.trails.refresh(f, &key).await;
+    Ok(true)
+}
+
 /// `work/trail/close`: VIEW of CALLER's connection ends.
 pub fn close(f: &Front, c: &Caller, p: TrailClose) -> Result<bool, Error> {
     let key = (c.conn_id, p.view);
     lock(&f.core.trails.data).remove(&key);
+    lock(&f.core.trails.lines).remove(&key);
     Ok(lock(&f.core.trails.views).remove(&key).is_some())
+}
+
+/// LANES' steps in WIN: one ranged read per lane (`norn::read::steps::window`), all in one read of the store.
+async fn window_lanes(f: &Front, lanes: &[TrailLane], win: Window) -> Vec<trail::Lane> {
+    let ids: Vec<String> = lanes.iter().map(|l| l.session.clone()).collect();
+    let read = f
+        .writer
+        .db
+        .read(move |c| {
+            read_lanes(&ids, |sid| {
+                norn::read::steps::window(c, &format!("session:{sid}"), win.from, win.to)
+            })
+        })
+        .await
+        .unwrap_or_default();
+    lanes
+        .iter()
+        .zip(read.into_iter().chain(std::iter::repeat_with(Vec::new)))
+        .map(|(l, steps)| trail::Lane {
+            id: l.session.clone(),
+            label: l.label.clone(),
+            steps,
+        })
+        .collect()
+}
+
+/// The steps of each of the sessions IDS, by READ (one call a lane), as the Timeline draws them.
+fn read_lanes<E>(
+    ids: &[String],
+    mut read: impl FnMut(&str) -> Result<Vec<norn::read::steps::WindowStep>, E>,
+) -> Result<Vec<Vec<trail::Step>>, E> {
+    let mut out = Vec::with_capacity(ids.len());
+    for sid in ids {
+        out.push(read(sid)?.into_iter().map(window_step).collect());
+    }
+    Ok(out)
+}
+
+fn window_step(s: norn::read::steps::WindowStep) -> trail::Step {
+    trail::Step {
+        id: s.id,
+        seq: u64::try_from(s.seq).unwrap_or(0),
+        class: s.class.as_str().to_owned(),
+        tool: s.tool,
+        detail: trail::Detail {
+            kind: s.kind,
+            ..trail::Detail::default()
+        },
+        start: s.start,
+        end: s.end,
+    }
 }
 
 /// The trails' background: every view read again after each write (coalesced) and each closed step.
@@ -680,17 +1035,62 @@ pub async fn run(front: Arc<Front>) {
         let ticking = lock(&front.core.trails.data).values().any(|d| {
             matches!(&**d, Data::Trail(steps, _, _, None) if steps.iter().any(|s| s.end.is_none()))
         });
-        if ticking {
+        // a Timeline or Schedule moves its clock each second
+        let ticking = ticking
+            || lock(&front.core.trails.views)
+                .values()
+                .any(|s| matches!(s, Sub::Timeline(_) | Sub::Schedule(_)));
+        let timed = if ticking {
             tokio::select! {
-                () = signals.trail.notified() => {}
-                () = crate::clock::sleep(std::time::Duration::from_secs(1)) => {}
+                () = signals.trail.notified() => false,
+                () = crate::clock::sleep(std::time::Duration::from_secs(1)) => true,
             }
         } else {
             signals.trail.notified().await;
-        }
+            false
+        };
         let keys: Vec<(u64, String)> = lock(&front.core.trails.views).keys().cloned().collect();
         for k in keys {
+            // between writes, a Timeline or Schedule draws its clock from what it read
+            if timed && front.core.trails.tick(&front, &k).await {
+                continue;
+            }
             front.core.trails.refresh(&front, &k).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    use norn::read::steps::WindowStep;
+    use norn::write::steps::StepClass;
+
+    /// A Timeline over a window reads each lane once (one ranged query a lane), whatever its steps, and each step's
+    /// detail kind reaches its segment.
+    #[test]
+    fn a_timeline_reads_one_window_per_lane() {
+        let ids: Vec<String> = (0..30).map(|i| format!("s{i}")).collect();
+        let mut asked: Vec<String> = Vec::new();
+        let lanes = read_lanes::<()>(&ids, |sid| {
+            asked.push(sid.to_owned());
+            Ok((0..3)
+                .map(|i| WindowStep {
+                    id: i,
+                    seq: i + 1,
+                    class: StepClass::Tool,
+                    start: i as f64,
+                    end: Some(i as f64 + 0.5),
+                    tool: None,
+                    kind: Some("edit".into()),
+                })
+                .collect())
+        })
+        .unwrap();
+        assert_eq!(asked, ids);
+        assert_eq!(lanes.len(), 30);
+        assert_eq!(lanes[0][1].detail.kind.as_deref(), Some("edit"));
+        assert_eq!(lanes[0][1].class, "tool");
+        assert_eq!(trail::SegKind::of(&lanes[0][1]), trail::SegKind::Edit);
     }
 }

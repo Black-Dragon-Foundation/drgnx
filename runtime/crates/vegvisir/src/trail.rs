@@ -434,16 +434,205 @@ pub struct Lane {
     pub steps: Vec<Step>,
 }
 
-/// The face of a step's segment, by its kind.
-fn seg_face(kind: &str) -> &'static str {
-    match kind {
-        "read" | "search" | "web" => FaceId::WorkSegRead.name(),
-        "edit" => FaceId::WorkSegEdit.name(),
-        "thought" => FaceId::WorkSegThink.name(),
-        "job" => FaceId::WorkSegJob.name(),
-        "waiting" => FaceId::WorkSegWait.name(),
-        _ => FaceId::WorkSegTool.name(),
+/// The span of time a Timeline or the Schedule shows, in seconds since the epoch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Window {
+    pub from: f64,
+    pub to: f64,
+}
+
+impl Window {
+    /// Its length in seconds (1 at least).
+    pub fn span(&self) -> f64 {
+        (self.to - self.from).max(1.0)
     }
+
+    /// The column of a track COLS wide that time T falls in, as a fraction (clamped to the track).
+    pub fn at(&self, t: f64, cols: u32) -> f64 {
+        ((t - self.from) / self.span() * f64::from(cols)).clamp(0.0, f64::from(cols))
+    }
+
+    /// Whether T is inside it.
+    pub fn holds(&self, t: f64) -> bool {
+        t >= self.from && t <= self.to
+    }
+}
+
+/// What a Timeline's lanes keep in colour: every step, the edits, or the waits; the rest is greyed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TrailFilter {
+    #[default]
+    All,
+    Edits,
+    Waits,
+}
+
+/// A segment's kind (the work-space spec's Activity table), in the table's order: a bin's tie goes to the earlier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SegKind {
+    Read,
+    Search,
+    Web,
+    Edit,
+    Tool,
+    Think,
+    Job,
+    /// Waiting on the user.
+    WaitYou,
+    /// Waiting for a machine's slot.
+    WaitMachine,
+    Paused,
+    Stalled,
+}
+
+/// Every kind, in the table's order.
+const SEG_KINDS: [SegKind; 11] = [
+    SegKind::Read,
+    SegKind::Search,
+    SegKind::Web,
+    SegKind::Edit,
+    SegKind::Tool,
+    SegKind::Think,
+    SegKind::Job,
+    SegKind::WaitYou,
+    SegKind::WaitMachine,
+    SegKind::Paused,
+    SegKind::Stalled,
+];
+
+impl SegKind {
+    /// The step's kind, from its class and what the hub recorded.
+    pub fn of(s: &Step) -> SegKind {
+        match s.class.as_str() {
+            "think" => SegKind::Think,
+            "job-wait" => SegKind::Job,
+            "user-wait" => SegKind::WaitYou,
+            "machine-queue" => SegKind::WaitMachine,
+            "paused" => SegKind::Paused,
+            "stalled" => SegKind::Stalled,
+            _ => match s.detail.kind.as_deref() {
+                Some("read") => SegKind::Read,
+                Some("search") => SegKind::Search,
+                Some("fetch") => SegKind::Web,
+                Some("edit") => SegKind::Edit,
+                _ => SegKind::Tool,
+            },
+        }
+    }
+
+    /// Its letter (a terminal draws it; a GUI row carries it as `drgnx-work-kind`).
+    pub fn letter(self) -> char {
+        match self {
+            SegKind::Read => 'R',
+            SegKind::Search => 'S',
+            SegKind::Web => 'W',
+            SegKind::Edit => 'E',
+            SegKind::Tool => 'T',
+            SegKind::Think => '·',
+            SegKind::Job => 'J',
+            SegKind::WaitYou => 'Y',
+            SegKind::WaitMachine => 'M',
+            SegKind::Paused => 'P',
+            SegKind::Stalled => '!',
+        }
+    }
+
+    /// A wait: on the user, a machine, a pause or a stall.
+    pub fn waits(self) -> bool {
+        matches!(
+            self,
+            SegKind::WaitYou | SegKind::WaitMachine | SegKind::Paused | SegKind::Stalled
+        )
+    }
+
+    /// Whether FILTER keeps it in colour.
+    pub fn kept(self, filter: TrailFilter) -> bool {
+        match filter {
+            TrailFilter::All => true,
+            TrailFilter::Edits => self == SegKind::Edit,
+            TrailFilter::Waits => self.waits(),
+        }
+    }
+
+    /// Its face (today's map faces, until the kit's segment tokens).
+    fn face(self) -> &'static str {
+        match self {
+            SegKind::Read | SegKind::Search | SegKind::Web => FaceId::WorkSegRead.name(),
+            SegKind::Edit => FaceId::WorkSegEdit.name(),
+            SegKind::Think => FaceId::WorkSegThink.name(),
+            SegKind::Job => FaceId::WorkSegJob.name(),
+            SegKind::WaitYou | SegKind::WaitMachine | SegKind::Paused | SegKind::Stalled => {
+                FaceId::WorkSegWait.name()
+            }
+            SegKind::Tool => FaceId::WorkSegTool.name(),
+        }
+    }
+}
+
+/// One drawn segment of a lane: columns `[c0, c1)` of the track, its kind, and the step it opens (the one with the
+/// most time in its first column of that kind).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bin {
+    pub c0: u32,
+    pub c1: u32,
+    pub kind: SegKind,
+    pub seq: u64,
+}
+
+/// STEPS on a track of COLS columns over WIN, an open step running to NOW: each column takes the kind with the most
+/// time in it (a tie to the earlier kind of the table) and that kind's longest step there; neighbouring columns of
+/// one step and kind are one segment.  So a lane has at most one segment per column, however many steps it has.
+pub fn bins(steps: &[Step], win: &Window, cols: u32, now: f64) -> Vec<Bin> {
+    let n = cols as usize;
+    if n == 0 {
+        return Vec::new();
+    }
+    // per column, per kind: the time, and the step with the most of it
+    let mut time = vec![[0.0f64; 11]; n];
+    let mut best = vec![[(0.0f64, 0u64); 11]; n];
+    let w = win.span() / f64::from(cols);
+    for s in steps {
+        let a = s.start.max(win.from);
+        let b = s.end.unwrap_or(now).max(s.start).min(win.to);
+        if a > win.to || b < win.from || s.start > win.to {
+            continue;
+        }
+        let k = SegKind::of(s) as usize;
+        let c0 = ((a - win.from) / w).floor().max(0.0) as usize;
+        let c1 = (((b - win.from) / w).ceil() as usize).clamp(c0 + 1, n);
+        for c in c0.min(n - 1)..c1 {
+            let lo = win.from + c as f64 * w;
+            // a step of no length still marks its column
+            let t = (b.min(lo + w) - a.max(lo)).max(1e-9);
+            time[c][k] += t;
+            if t > best[c][k].0 {
+                best[c][k] = (t, s.seq);
+            }
+        }
+    }
+    let mut out: Vec<Bin> = Vec::new();
+    for c in 0..n {
+        let mut top: Option<usize> = None;
+        for k in 0..11 {
+            if time[c][k] > 0.0 && top.is_none_or(|t| time[c][k] > time[c][t]) {
+                top = Some(k);
+            }
+        }
+        let Some(k) = top else { continue };
+        let (kind, seq) = (SEG_KINDS[k], best[c][k].1);
+        match out.last_mut() {
+            Some(last) if last.c1 == c as u32 && last.kind == kind && last.seq == seq => {
+                last.c1 += 1;
+            }
+            _ => out.push(Bin {
+                c0: c as u32,
+                c1: c as u32 + 1,
+                kind,
+                seq,
+            }),
+        }
+    }
+    out
 }
 
 /// The time every lane covers: the earliest start and the latest end of any step (`(0, 1)` with none).
@@ -459,29 +648,85 @@ pub fn range(lanes: &[Lane]) -> (f64, f64) {
     r.unwrap_or((0.0, 1.0))
 }
 
-/// The Timeline's rows: the axis (the range's times), then a lane per agent: its label fitted to 130 px, then each
-/// step a segment at its time, 2 px at least, on a track from 140 px to the width less 160 px. A lane's row changes
-/// only with its own steps or the range.
-pub fn timeline_rows(lanes: &[Lane], env: &Env, m: &dyn Measure, zone: Zone) -> Vec<Row> {
+/// Where a Timeline's or the Schedule's track starts, px.
+pub const TRACK_X: u32 = 140;
+/// The px a row keeps right of its track (the Schedule's right text).
+pub const TRACK_RIGHT: u32 = 160;
+
+/// A column's width: a pixel in a GUI, a cell on a terminal.
+pub fn col_px(env: &Env) -> u32 {
+    if env.tty { env.cell.0.max(1) } else { 1 }
+}
+
+/// The columns of ENV's track: one per pixel (per cell on a terminal), from [`TRACK_X`] to the width less
+/// [`TRACK_RIGHT`].
+pub fn track_cols(env: &Env) -> u32 {
+    env.width_px.saturating_sub(TRACK_X + TRACK_RIGHT).max(100) / col_px(env)
+}
+
+/// The now-line's column on a track of COLS over WIN, when NOW is inside it.
+pub fn now_col(win: &Window, cols: u32, now: f64) -> Option<u32> {
+    win.holds(now)
+        .then(|| (win.at(now, cols).floor() as u32).min(cols.saturating_sub(1)))
+}
+
+/// The axis row: the window's start, the now-line's "now" with the time (once a second, AXIS_NOW) where it falls, and
+/// the window's end right of the track.
+pub(crate) fn axis_row(env: &Env, zone: Zone, win: &Window, cols: u32, axis_now: f64) -> Row {
+    let cw = col_px(env);
+    let mut b = RowBuilder::new("axis");
+    b.stop(TRACK_X);
+    b.push(&zone.time(win.from), Some(FaceId::WorkLabel.name()));
+    // the label's text takes about 70 px: "now" only where it does not run into the ends
+    if let Some(c) = now_col(win, cols, axis_now)
+        && c * cw > 80
+        && c * cw + 120 < cols * cw
+    {
+        b.stop(TRACK_X + c * cw);
+        b.push(
+            &format!("now {}", zone.time(axis_now)),
+            Some(FaceId::FocusLine.name()),
+        );
+    }
+    b.stop(TRACK_X + cols * cw + 4);
+    b.push(&zone.time(win.to), Some(FaceId::WorkLabel.name()));
+    b.finish()
+}
+
+/// The now-line on B at column C (or after what B holds, when that ends later), when NOW is in the window.
+pub(crate) fn now_mark(b: &mut RowBuilder, x: u32) {
+    b.stop(x);
+    let at = b.pos();
+    b.push("│", Some(FaceId::FocusLine.name()));
+    b.prop(at, at + 1, "drgnx-work-now", Value::Bool(true));
+}
+
+/// The Timeline's rows over WIN: the axis, then a lane per agent: its label fitted to 130 px, then its steps binned on
+/// a track of COLS columns from [`TRACK_X`] ([`bins`]), coloured by kind, those FILTER does not keep greyed, and the
+/// now-line at NOW_LINE (none: not drawn).  AXIS_NOW is the axis's clock.  A lane's row changes only with its own
+/// steps in the window, the window or the now-line.
+#[allow(clippy::too_many_arguments)]
+pub fn timeline_rows(
+    lanes: &[Lane],
+    env: &Env,
+    m: &dyn Measure,
+    zone: Zone,
+    win: &Window,
+    cols: u32,
+    filter: TrailFilter,
+    now_line: Option<f64>,
+    axis_now: f64,
+) -> Vec<Row> {
     if lanes.is_empty() {
         let mut b = RowBuilder::new("none");
         b.push("No agents yet.", None);
         return vec![b.finish()];
     }
-    let (t0, t1) = range(lanes);
-    let width = env.width_px.saturating_sub(160).max(100);
-    let k = f64::from(width) / (t1 - t0).max(1.0);
-    let mut axis = RowBuilder::new("axis");
-    let to = if t1 > t0 {
-        format!(" to {}", zone.time(t1))
-    } else {
-        String::new()
-    };
-    axis.push(
-        &format!("{}{}{to}", " ".repeat(20), zone.time(t0)),
-        Some(FaceId::WorkLabel.name()),
-    );
-    let mut out = vec![axis.finish()];
+    let cw = col_px(env);
+    let mut out = vec![axis_row(env, zone, win, cols, axis_now)];
+    // an open step runs to the now-line (to the window's end when none is drawn)
+    let open_to = now_line.unwrap_or(win.to);
+    let now = now_line.and_then(|n| now_col(win, cols, n));
     for lane in lanes {
         let mut b = RowBuilder::new(format!("lane:{}", lane.id));
         let label = drgnx_rows::fit::fit_in(
@@ -498,32 +743,76 @@ pub fn timeline_rows(lanes: &[Lane], env: &Env, m: &dyn Measure, zone: Zone) -> 
             "drgnx-work-id",
             Value::from(format!("lane:{}", lane.id)),
         );
-        let mut steps: Vec<&Step> = lane.steps.iter().collect();
-        steps.sort_by_key(|s| (s.seq, s.id));
-        for s in steps {
-            let x = ((s.start - t0) * k).round() as u32;
-            let w = (((s.end.unwrap_or(t1) - s.start) * k).round() as u32).max(2);
-            b.stop(140 + x);
+        let mut last = 0;
+        for bin in bins(&lane.steps, win, cols, open_to) {
+            b.stop(TRACK_X + bin.c0 * cw);
             let at = b.pos();
-            // the segment: one char, displayed as the space up to its end
-            b.stop(140 + x + w);
-            b.face(at, at + 1, seg_face(kind(s)))
+            if env.tty {
+                // a terminal: the letter in each cell
+                let s: String =
+                    std::iter::repeat_n(bin.kind.letter(), (bin.c1 - bin.c0) as usize).collect();
+                b.push(&s, None);
+            } else {
+                // the segment: one char, displayed as the space up to its end
+                b.stop(TRACK_X + bin.c1 * cw);
+            }
+            let to = b.pos();
+            let face = if bin.kind.kept(filter) {
+                bin.kind.face()
+            } else {
+                FaceId::WorkDim.name()
+            };
+            b.face(at, to, face)
                 .prop(
                     at,
-                    at + 1,
-                    "drgnx-work-step",
-                    Value::from(vec![Value::from(lane.id.clone()), Value::from(s.seq)]),
+                    to,
+                    "drgnx-work-kind",
+                    Value::from(bin.kind.letter().to_string()),
                 )
                 .prop(
                     at,
-                    at + 1,
+                    to,
+                    "drgnx-work-step",
+                    Value::from(vec![Value::from(lane.id.clone()), Value::from(bin.seq)]),
+                )
+                .prop(
+                    at,
+                    to,
                     "drgnx-work-id",
-                    Value::from(format!("step:{}:{}", lane.id, s.seq)),
+                    Value::from(format!("step:{}:{}", lane.id, bin.seq)),
                 );
+            last = bin.c1;
+        }
+        if let Some(c) = now {
+            now_mark(&mut b, TRACK_X + c.max(last) * cw);
         }
         out.push(b.finish());
     }
     out
+}
+
+/// When the now-line is drawn again: at most once every [`NOW_EVERY`] seconds, and only when it moved a column.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NowLine {
+    /// When it was last drawn, and at which column (none: off the track).
+    pub drawn: Option<(f64, Option<u32>)>,
+}
+
+/// The seconds between two draws of the now-line.
+pub const NOW_EVERY: f64 = 5.0;
+
+impl NowLine {
+    /// At NOW, the line would sit at column COL: whether to draw again (and it is recorded as drawn).
+    pub fn due(&mut self, now: f64, col: Option<u32>) -> bool {
+        let due = match self.drawn {
+            None => true,
+            Some((at, was)) => now - at >= NOW_EVERY && was != col,
+        };
+        if due {
+            self.drawn = Some((now, col));
+        }
+        due
+    }
 }
 
 /// [`trail_rows`] and the images they name (the Lucide icons of the steps and the conclusions).

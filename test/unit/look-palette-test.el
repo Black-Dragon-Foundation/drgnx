@@ -67,7 +67,7 @@ Vim; a chord is one cap a key, a function key its number."
   (let ((caps (cl-letf (((symbol-function 'display-graphic-p) #'always)) (drgnx-palette-keycaps "C-S-p"))))
     (should (equal "Ctrl Shift P" (string-join (split-string (substring-no-properties caps)) " ")))
     (should (equal '(space :width (4)) (get-text-property 0 'display caps)))   ; room inside the cap
-    (should (eq 'drgnx-keycap (get-text-property 0 'face caps))))
+    (should (eq 'drgnx-kit-key-hint-cap (get-text-property 0 'face caps))))
   ;; a terminal draws no ring: the names alone, one space between
   (should (equal "Ctrl Shift P" (substring-no-properties (drgnx-palette-keycaps "C-S-p")))))
 
@@ -168,14 +168,14 @@ name; a terminal, or a frame with no SVG, gets the text keycap."
     (let ((cap (drgnx-palette-row-keycap "Ctrl")))
       (should (equal "Ctrl" (substring-no-properties cap)))
       (should (eq 'image (car (get-text-property 0 'display cap))))
-      (should-not (memq 'drgnx-keycap (drgnx-look-palette-test--faces (get-text-property 0 'face cap)))))
+      (should-not (memq 'drgnx-kit-key-hint-cap (drgnx-look-palette-test--faces (get-text-property 0 'face cap)))))
     (let ((ann (drgnx-palette--annotation "Tests" nil "C-; f")))
       (should (cl-some (lambda (i) (equal "Ctrl" (plist-get (cdr-safe (get-text-property i 'display ann)) :name)))
                        (number-sequence 0 (1- (length ann)))))
       (dotimes (i (length ann))
-        (should-not (memq 'drgnx-keycap (drgnx-look-palette-test--faces (get-text-property i 'face ann)))))))
+        (should-not (memq 'drgnx-kit-key-hint-cap (drgnx-look-palette-test--faces (get-text-property i 'face ann)))))))
   (should (equal "Ctrl" (substring-no-properties (drgnx-palette-row-keycap "Ctrl"))))
-  (should (eq 'drgnx-keycap (get-text-property 0 'face (drgnx-palette-row-keycap "Ctrl")))))
+  (should (eq 'drgnx-kit-key-hint-cap (get-text-property 0 'face (drgnx-palette-row-keycap "Ctrl")))))
 
 (ert-deftest drgnx-look-palette/a-hairline-under-the-input-row ()
   "palette.html `.in': a 1 px hairline in the border colour runs the box's width under the input row: an overline on
