@@ -514,4 +514,11 @@
  drgnx-kit-key-hint-menu
  drgnx-kit-agent-mark
  drgnx-kit-progress
- drgnx-kit-progress-fill)
+ drgnx-kit-progress-fill
+ drgnx-kit-progress-meter-fill
+ drgnx-kit-progress-meter-near
+ drgnx-kit-progress-meter-reached
+ drgnx-kit-progress-meter-tick
+ drgnx-kit-progress-meter-tick-near
+ drgnx-kit-progress-meter-span
+ drgnx-kit-progress-meter-outline)

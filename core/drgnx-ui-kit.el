@@ -706,24 +706,10 @@ the five glyphs `progress-0'..`progress-4', in the fill's face.  Its label, \"N 
       (let ((g (drgnx-ui-kit--glyph (intern (format "progress-%d" (drgnx-ui-kit--round (* 4 v)))) tty)))
         (push g parts) (push (list 0 (length g) 'drgnx-kit-progress-fill) runs) (setq pos (length g))))
      (tty
-      ;; eighths of a cell: the filled cells, then a partial block when the env draws one (an ASCII terminal does not:
-      ;; there the fill rounds to whole cells), then the empty ones
-      (let* ((cells (max 1 (drgnx-ui-kit--round (/ width (float drgnx-ui-kit-progress-cell-px)))))
-             (units (drgnx-ui-kit--round (* cells 8 v)))
-             (part-glyph (and (> (% units 8) 0) (drgnx-ui-kit--glyph (intern (format "bar-%d" (% units 8))) tty)))
-             (full (if (equal part-glyph "") (drgnx-ui-kit--round (* cells v)) (/ units 8)))
-             (part (if (or (null part-glyph) (equal part-glyph "")) "" part-glyph))
-             (fill (concat (apply #'concat (make-list full (drgnx-ui-kit--glyph 'bar-full tty))) part))
-             (empty (apply #'concat (make-list (- cells full (if (equal part "") 0 1)) (drgnx-ui-kit--glyph 'bar-empty tty))))
-             (left (drgnx-ui-kit--glyph 'bar-left tty)) (right (drgnx-ui-kit--glyph 'bar-right tty)))
-        (push left parts) (setq pos (length left))
-        (unless (equal fill "")
-          (push fill parts) (push (list pos (+ pos (length fill)) 'drgnx-kit-progress-fill) runs)
-          (setq pos (+ pos (length fill))))
-        (unless (equal empty "")
-          (push empty parts) (push (list pos (+ pos (length empty)) face) runs)
-          (setq pos (+ pos (length empty))))
-        (push right parts) (setq pos (+ pos (length right)))))
+      (let ((cells (max 1 (drgnx-ui-kit--round (/ width (float drgnx-ui-kit-progress-cell-px))))))
+        (pcase-let ((`(,text ,rs ,_ ,n) (drgnx-ui-kit--assemble
+                                         (drgnx-ui-kit--tty-bar cells v 'drgnx-kit-progress-fill face tty))))
+          (push text parts) (setq runs (append (reverse rs) runs)) (setq pos n))))
      (t
       (let* ((total (drgnx-px width nil scale))
              (fill (drgnx-ui-kit--round (* total v)))
@@ -749,6 +735,146 @@ the colour of SLOT (1-12, `drgnx-agent-identity')."
   "Progress for WHERE on FRAME: KIND `bar' (WIDTH logical px) or `ring', VALUE from 0 to 1."
   (drgnx-ui-kit-string 'progress (list :c "progress" :kind (symbol-name kind) :value value :width width) where frame))
 
+;;;; Meters: progress of kind `meter', a value against a limit (the hub's `Comp::Meter')
+
+(defconst drgnx-ui-kit-meter-row-px 46 "A `row' meter's width, logical px (the hub's `kit::METER_ROW_PX').")
+(defconst drgnx-ui-kit-meter-heights '((row . 4) (card . 3) (wide . 6))
+  "A meter's bar height by size, logical px (the hub's `kit::METER_HEIGHTS').")
+(defconst drgnx-ui-kit-meter-tick-px 2
+  "A forecast tick's slot, logical px: its line is 1 px in the middle, all of it in high contrast.")
+(defconst drgnx-ui-kit-meter-gap-px 6 "The gap between a meter's bar and its text, logical px.")
+(defconst drgnx-ui-kit--meter-unit-words
+  '((usd . "dollars") (usd-est . "dollars") (tokens . "tokens") (count . "items") (share . "percent of the week"))
+  "A meter's unit as spoken (the hub's `MeterUnit::word').")
+(defconst drgnx-ui-kit--meter-states
+  '((ok . "ok") (nearing . "nearing") (reached . "at limit") (over . "over") (forecast-over . "forecast over")
+    (none . "no limit") (inherited . "inherited") (unpriced . "unpriced"))
+  "A meter's state as spoken (the hub's `MeterState::spoken').")
+
+(defun drgnx-ui-kit--meter-number (x)
+  "X as spoken: a whole number, else up to two decimals (the hub's `spoken_number')."
+  (let ((s (string-trim-right (string-trim-right (format "%.2f" x) "0+") "\\.")))
+    (if (equal s "-0") "0" s)))
+
+(defun drgnx-ui-kit--assemble (items)
+  "ITEMS ((:text S FACE) | (:space W H FACE) | (:pad W FACE)...), in order, as (TEXT RUNS SPACES LENGTH): a space and
+a pad are one character each (a pad's height 0, the line's), FACE nil for none; a text's run joins the one before it
+in the same face.  As the hub's `RowBuilder'."
+  (let ((parts nil) (runs nil) (spaces nil) (pos 0))
+    (dolist (it items)
+      (pcase it
+        (`(:text ,str ,face)
+         (unless (equal str "")
+           (push str parts)
+           ;; a run of the face just before joins it, as the builder's `push' joins them
+           (when face
+             (if (and runs (eq (nth 2 (car runs)) face) (= (nth 1 (car runs)) pos))
+                 (setcar runs (list (nth 0 (car runs)) (+ pos (length str)) face))
+               (push (list pos (+ pos (length str)) face) runs)))
+           (setq pos (+ pos (length str)))))
+        (`(,(or :space :pad) ,w . ,rest)
+         (let ((h (if (eq (car it) :space) (car rest) 0)) (face (if (eq (car it) :space) (cadr rest) (car rest))))
+           (push " " parts) (push (list pos w h) spaces) (when face (push (list pos (1+ pos) face) runs))
+           (setq pos (1+ pos))))))
+    (list (apply #'concat (nreverse parts)) (nreverse runs) (nreverse spaces) pos)))
+
+(defun drgnx-ui-kit--tty-bar (cells v fill track tty)
+  "A terminal bar as `drgnx-ui-kit--assemble' items: CELLS cells, V of them filled in eighths, the filled cells and a
+partial block where TTY draws one (an ASCII terminal does not: there the fill rounds to whole cells) in FILL, then the
+empty ones in TRACK; ASCII's edges around them (the hub's `tty_bar')."
+  (let* ((units (drgnx-ui-kit--round (* cells 8 v)))
+         (part (if (> (% units 8) 0) (drgnx-ui-kit--glyph (intern (format "bar-%d" (% units 8))) tty) ""))
+         (full (if (and (> (% units 8) 0) (equal part "")) (drgnx-ui-kit--round (* cells v)) (/ units 8)))
+         (empty (- cells full (if (equal part "") 0 1))))
+    (list (list :text (drgnx-ui-kit--glyph 'bar-left tty) nil)
+          (list :text (concat (apply #'concat (make-list full (drgnx-ui-kit--glyph 'bar-full tty))) part) fill)
+          (list :text (apply #'concat (make-list (max 0 empty) (drgnx-ui-kit--glyph 'bar-empty tty))) track)
+          (list :text (drgnx-ui-kit--glyph 'bar-right tty) nil))))
+
+(defun drgnx-ui-kit--meter (props scale tty)
+  "The meter of PROPS (:spent, :limit or nil, :unit, :forecast [P50 P90] or nil, :state, :size, :width, :text, as the
+hub's `Comp::Meter') at SCALE or on a terminal (TTY).  With a limit and a state that has a bar: the fill, SPENT of
+LIMIT in the state's colour, over the track (an inherited limit's an outline), the forecast's p50 a tick and on a
+`wide' meter a span to p90, each part a space the editor draws as an image (`drgnx-ui-kit-bar-display'), on a terminal
+the cells of a progress bar; then TEXT and the state's word in the caption's face, the word in its colour.  Its label
+the amounts, the unit, the state, \"estimate\" and the forecast, as its `help-echo'.  As `drgnx-ui-kit--expand'."
+  (let* ((spent (float (plist-get props :spent)))
+         (limit (and (plist-get props :limit) (float (plist-get props :limit))))
+         (unit (intern (or (plist-get props :unit) "usd")))
+         (fc (plist-get props :forecast))
+         (p50 (and fc (float (elt fc 0)))) (p90 (and fc (float (elt fc 1))))
+         (state (intern (or (plist-get props :state) "ok")))
+         (size (intern (or (plist-get props :size) "row")))
+         (text (or (plist-get props :text) ""))
+         (fill-face (pcase state ('nearing 'drgnx-kit-progress-meter-near)
+                           ((or 'reached 'over) 'drgnx-kit-progress-meter-reached) (_ 'drgnx-kit-progress-meter-fill)))
+         (bar-limit (and limit (> limit 0) (not (memq state '(none unpriced))) limit))
+         (items nil))
+    (when bar-limit
+      (let* ((v (max 0.0 (min 1.0 (/ spent bar-limit))))
+             (track (if (eq state 'inherited) 'drgnx-kit-progress-meter-outline 'drgnx-kit-progress))
+             (logical (if (eq size 'row) drgnx-ui-kit-meter-row-px (or (plist-get props :width) 0))))
+        (if tty
+            (setq items (append (drgnx-ui-kit--tty-bar
+                                 (max 1 (drgnx-ui-kit--round (/ logical (float drgnx-ui-kit-progress-cell-px))))
+                                 v fill-face 'drgnx-kit-progress tty)
+                                (list (list :text " " nil))))
+          (let* ((total (drgnx-px logical nil scale))
+                 (h (drgnx-px (alist-get size drgnx-ui-kit-meter-heights) nil scale))
+                 (fill (drgnx-ui-kit--round (* total v)))
+                 (at (lambda (x) (drgnx-ui-kit--round (* total (max 0.0 (min 1.0 (/ x bar-limit)))))))
+                 (tw (min total (drgnx-px drgnx-ui-kit-meter-tick-px nil scale)))
+                 (t0 (if fc (min (max 0 (- (funcall at p50) (/ tw 2))) (- total tw)) total))
+                 (t1 (if fc (+ t0 tw) total))
+                 (s1 (if (and fc (eq size 'wide)) (max (funcall at p90) t1) t1))
+                 (tick (if (eq state 'forecast-over) 'drgnx-kit-progress-meter-tick-near 'drgnx-kit-progress-meter-tick))
+                 (cuts (sort (delete-dups (list 0 total (min fill total) t0 t1 s1)) #'<))
+                 (bar nil))
+            ;; each stretch's top part: the tick over the fill over the span over the track; equal neighbours joined
+            (while (cdr cuts)
+              (let ((a (car cuts)) (z (cadr cuts)))
+                (when (and (> z a) (< a total))
+                  (let ((f (cond ((and (>= a t0) (< a t1)) tick) ((< a fill) fill-face)
+                                 ((and (>= a t1) (< a s1)) 'drgnx-kit-progress-meter-span) (t track))))
+                    (if (eq (cdar bar) f) (setcar (car bar) (+ (caar bar) (- z a))) (push (cons (- z a) f) bar)))))
+              (setq cuts (cdr cuts)))
+            (dolist (part (nreverse bar)) (push (list :space (car part) h (cdr part)) items))
+            (push (list :pad (drgnx-px drgnx-ui-kit-meter-gap-px nil scale) nil) items)
+            (setq items (nreverse items))))))
+    (setq items (append items (list (list :text text 'drgnx-ui-caption))))
+    (let ((word (pcase state
+                  ('nearing (and bar-limit (format "%d %%" (drgnx-ui-kit--round (/ (* 100 spent) bar-limit)))))
+                  ('reached "at limit") ('over "over") ('forecast-over "p90 over") ('none "no limit")
+                  ('unpriced "unpriced"))))
+      (when word
+        (unless (equal text "") (setq items (append items (list (list :text " · " 'drgnx-ui-caption)))))
+        (setq items (append items (list (list :text word (pcase state
+                                                           ((or 'nearing 'forecast-over) 'drgnx-kit-progress-meter-near)
+                                                           ((or 'reached 'over) 'drgnx-kit-progress-meter-reached)
+                                                           (_ 'drgnx-ui-caption))))))))
+    (pcase-let ((`(,str ,runs ,spaces ,n) (drgnx-ui-kit--assemble items)))
+      (let ((label (concat (if bar-limit
+                               (format "%s of %s %s" (drgnx-ui-kit--meter-number spent)
+                                       (drgnx-ui-kit--meter-number bar-limit) (alist-get unit drgnx-ui-kit--meter-unit-words))
+                             (format "%s %s" (drgnx-ui-kit--meter-number spent)
+                                     (alist-get unit drgnx-ui-kit--meter-unit-words)))
+                           ", " (alist-get state drgnx-ui-kit--meter-states)
+                           (if (eq unit 'usd-est) ", estimate" "")
+                           (if fc (format ", forecast %s to %s" (drgnx-ui-kit--meter-number p50)
+                                          (drgnx-ui-kit--meter-number p90))
+                             ""))))
+        (list str runs (and (> n 0) (list (list 0 n 'help-echo label))) spaces nil)))))
+
+(defun drgnx-ui-kit-meter (spent limit unit forecast state size text where &optional width frame)
+  "A meter for WHERE on FRAME (Lisp chrome; the hub's views send `{\"c\": \"meter\"}'): SPENT against LIMIT (nil:
+none) in UNIT (`usd', `usd-est', `tokens', `count', `share'), FORECAST (P50 . P90) or nil, in STATE (`ok', `nearing',
+`reached', `over', `forecast-over', `none', `inherited', `unpriced') at SIZE (`row', `card', `wide': WIDTH logical
+px), then TEXT, formatted by the caller."
+  (drgnx-ui-kit-string 'meter (list :c "meter" :spent spent :limit limit :unit (symbol-name unit)
+                                    :forecast (and forecast (vector (car forecast) (cdr forecast)))
+                                    :state (symbol-name state) :size (symbol-name size) :width (or width 0) :text text)
+                       where frame))
+
 (defun drgnx-ui-kit--expand (component props scale tty)
   "COMPONENT (a symbol) with PROPS at SCALE (TTY: on a terminal, `ascii' for ASCII glyphs) as (TEXT RUNS PROPS
 SPACES HEIGHT): RUNS ((FROM TO FACE)...), PROPS ((FROM TO NAME VALUE)...), SPACES ((POS WIDTH HEIGHT)...) in device
@@ -759,6 +885,7 @@ px, HEIGHT the row's line height in device px or nil (one text line)."
     ('key-hint (drgnx-ui-kit--key-hint props scale tty))
     ('agent-mark (drgnx-ui-kit--agent-mark props scale tty))
     ('progress (drgnx-ui-kit--progress props scale tty))
+    ('meter (drgnx-ui-kit--meter props scale tty))
     (_ (error "drgnx-ui-kit: no component %s" component))))
 
 (defun drgnx-ui-kit--wire (v)
@@ -794,57 +921,84 @@ above 0: a progress bar's) makes it that high."
 
 ;; A progress bar's parts are spaces of a height (the hub's and Lisp's alike); a stretch glyph's background fills its
 ;; whole line whatever its height, so the editor draws each part as an image instead: a rectangle in `currentColor'
-;; (the text colour of the part's face, `drgnx-kit-progress-fill' or `drgnx-kit-progress', as the icons take theme
-;; colours: no colour named, nothing redrawn on a theme change), centred on its face's font's centre line (the caption's,
-;; `:ascent center', as icons are), its outer ends rounded.
+;; (the text colour of the part's face, as the icons take theme colours: no colour named), centred on its face's font's
+;; centre line (the caption's, `:ascent center', as icons are), its outer ends rounded.  A meter's parts take their
+;; shape from their face: a forecast tick is a line in the middle of its slot (the rest shows the face's background,
+;; the track's colour), an inherited limit's track an outline; high contrast (a shape, not a colour: read when the row
+;; is drawn, and a theme change draws hub rows again, `drgnx-view-patch-repaint') outlines the span and fills the tick's
+;; slot.
 
-(defconst drgnx-ui-kit--bar-faces '("drgnx-kit-progress-fill" "drgnx-kit-progress")
-  "The faces of a progress bar's parts, by name.")
+(declare-function drgnx-look-variant "drgnx-theme-gen")
+
+(defconst drgnx-ui-kit--bar-faces
+  '(("drgnx-kit-progress-fill" . fill) ("drgnx-kit-progress" . fill) ("drgnx-kit-progress-meter-fill" . fill)
+    ("drgnx-kit-progress-meter-near" . fill) ("drgnx-kit-progress-meter-reached" . fill)
+    ("drgnx-kit-progress-meter-tick" . tick) ("drgnx-kit-progress-meter-tick-near" . tick)
+    ("drgnx-kit-progress-meter-span" . span) ("drgnx-kit-progress-meter-outline" . outline))
+  "The faces of a progress bar's or a meter's parts, by name, with the shape each draws.")
 
 (defvar drgnx-ui-kit--bar-images (make-hash-table :test #'equal)
-  "(WIDTH HEIGHT RADIUS START END) → a progress bar part's image.  Emptied at 256 entries (the widths a session's bars
-take; a part is remade at its next draw).")
+  "(WIDTH HEIGHT RADIUS START END SHAPE LINE) → a bar part's image.  Emptied at 256 entries (the widths a session's
+bars take; a part is remade at its next draw).")
 
-(defun drgnx-ui-kit-bar-image (width height radius start end)
-  "A part of a progress bar: WIDTH x HEIGHT device px in `currentColor', its START and END corners rounded by RADIUS
-device px where non-nil, centred on its face's font's centre line."
-  (let ((key (list width height radius start end)))
+(defun drgnx-ui-kit--svg-rect (x w h y)
+  "An SVG rectangle at X, Y, W x H, in `currentColor'."
+  (format "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\" fill=\"currentColor\"/>" x y w h))
+
+(defun drgnx-ui-kit-bar-image (width height radius start end &optional shape line)
+  "A part of a progress bar: WIDTH x HEIGHT device px in `currentColor', centred on its face's font's centre line.
+SHAPE `fill' (nil) is the whole rectangle, its START and END corners rounded by RADIUS device px where non-nil;
+`outline' its edges LINE device px wide, the sides only at START and END; `box' all four edges; `tick' a LINE-wide
+line in its middle; `tick-full' all of it."
+  (let ((key (list width height radius start end shape line)))
     (or (gethash key drgnx-ui-kit--bar-images)
         (progn
           (when (>= (hash-table-count drgnx-ui-kit--bar-images) 256) (clrhash drgnx-ui-kit--bar-images))
           (puthash key
                    (create-image
-                    (concat (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\">" width height)
-                            (format "<rect width=\"%d\" height=\"%d\" rx=\"%d\" fill=\"currentColor\"/>" width height radius)
-                            ;; a joined end is square: a plain half over the rounded one
-                            (unless start (format "<rect width=\"%s\" height=\"%d\" fill=\"currentColor\"/>" (/ width 2.0) height))
-                            (unless end (format "<rect x=\"%s\" width=\"%s\" height=\"%d\" fill=\"currentColor\"/>"
-                                                (/ width 2.0) (/ width 2.0) height))
-                            "</svg>")
+                    (concat
+                     (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\">" width height)
+                     (pcase shape
+                       ((or 'outline 'box)
+                        (concat (drgnx-ui-kit--svg-rect 0 width line 0) (drgnx-ui-kit--svg-rect 0 width line (- height line))
+                                (when (or start (eq shape 'box)) (drgnx-ui-kit--svg-rect 0 line height 0))
+                                (when (or end (eq shape 'box)) (drgnx-ui-kit--svg-rect (- width line) line height 0))))
+                       ('tick (drgnx-ui-kit--svg-rect (/ (- width line) 2) line height 0))
+                       ('tick-full (drgnx-ui-kit--svg-rect 0 width height 0))
+                       (_ (concat
+                           (format "<rect width=\"%d\" height=\"%d\" rx=\"%d\" fill=\"currentColor\"/>" width height radius)
+                           ;; a joined end is square: a plain half over the rounded one
+                           (unless start (drgnx-ui-kit--svg-rect 0 (/ width 2.0) height 0))
+                           (unless end (drgnx-ui-kit--svg-rect (/ width 2.0) (/ width 2.0) height 0)))))
+                     "</svg>")
                     'svg t :ascent 'center :scale 1)
                    drgnx-ui-kit--bar-images)))))
 
 (defun drgnx-ui-kit-bar-display (spaces runs scale)
   "((POS . DISPLAY)...): the image each progress bar part among SPACES ((POS WIDTH HEIGHT)...) is drawn as, at SCALE;
-a part is a space of a height under a run (FROM TO FACE, FACE a symbol or its name) of `drgnx-ui-kit--bar-faces'.  A
-part next to another is not rounded on that side.  nil where SVG cannot be drawn (the parts stay spaces).  Called per
-hub row: loops, no closures."
+a part is a space of a height under a run (FROM TO FACE, FACE a symbol or its name) of `drgnx-ui-kit--bar-faces',
+which gives its shape.  A part next to another is not rounded on that side.  nil where SVG cannot be drawn (the parts
+stay spaces).  Called per hub row: loops, no closures."
   (let (parts)
     (dolist (sp spaces)
       (when (> (or (nth 2 sp) 0) 0)
-        (let ((pos (nth 0 sp)) (hit nil))
+        (let ((pos (nth 0 sp)) (shape nil))
           (dolist (r runs)
-            (when (and (not hit) (<= (nth 0 r) pos) (< pos (nth 1 r))
-                       (member (if (symbolp (nth 2 r)) (symbol-name (nth 2 r)) (nth 2 r)) drgnx-ui-kit--bar-faces))
-              (setq hit t)))
-          (when hit (push sp parts)))))
+            (when (and (not shape) (<= (nth 0 r) pos) (< pos (nth 1 r)))
+              (setq shape (cdr (assoc (if (symbolp (nth 2 r)) (symbol-name (nth 2 r)) (nth 2 r)) drgnx-ui-kit--bar-faces)))))
+          (when shape (push (cons shape sp) parts)))))
     (when (and parts (image-type-available-p 'svg))
-      (let ((at (mapcar #'car parts)) (r (drgnx-px drgnx-ui-kit-progress-radius-px nil scale)) out)
-        (dolist (sp parts out)
-          (push (cons (car sp)
-                      (drgnx-ui-kit-bar-image (nth 1 sp) (nth 2 sp) (min r (/ (nth 2 sp) 2))
-                                              (not (memql (1- (car sp)) at)) (not (memql (1+ (car sp)) at))))
-                out))))))
+      (let ((at (mapcar #'cadr parts)) (r (drgnx-px drgnx-ui-kit-progress-radius-px nil scale))
+            (line (drgnx-px-line 1 nil scale))
+            (hc (and (fboundp 'drgnx-look-variant) (eq (drgnx-look-variant) 'hc)))
+            out)
+        (dolist (part parts out)
+          (let* ((sp (cdr part)) (pos (car sp)) (w (nth 1 sp)) (h (nth 2 sp))
+                 (shape (pcase (car part)
+                          ('tick (if hc 'tick-full 'tick)) ('span (if hc 'box 'fill)) (s s))))
+            (push (cons pos (drgnx-ui-kit-bar-image w h (min r (/ h 2)) (not (memql (1- pos) at))
+                                                    (not (memql (1+ pos) at)) shape line))
+                  out)))))))
 
 (defun drgnx-ui-kit-string (component props where frame)
   "COMPONENT with PROPS (as `drgnx-ui-kit-expand') as a propertized string for WHERE (`text', `header-line',

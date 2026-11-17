@@ -94,24 +94,20 @@ the baseline (`:ascent 100') is drawn at the line's end in the fill's face, its 
                     (error "No baseline marker drawn at %s" at)))))
       (save-excursion (goto-char at) (delete-char 1)))))
 
-(defun drgnx-kit-sheet--check-bar (what props variant scale snap beg s edges)
-  "The progress bar of PROPS drawn at BEG (WHAT the cell, for the failures), at SCALE: down the column halfway into its
-fill, the fill (`progress-fill') is the bar's height (`drgnx-ui-kit-progress-bar-px' at SCALE) and its middle on the
-caption's centre line (within a device px: the baseline less half the caption font's ascent less its descent, the
-line icons and the bar are centred on, whatever pads the line box); along its middle row the fill is VALUE of the
-width's device px rounded half up (within one, its rounded start), and the track (`progress-track') follows it."
-  (let* ((fill (drgnx-kit-sheet--rgb (drgnx-look-token 'progress-fill variant)))
-         (track (drgnx-kit-sheet--rgb (drgnx-look-token 'progress-track variant)))
-         (want (floor (+ (* (drgnx-px (plist-get props :width) nil scale) (plist-get props :value)) 0.5 1e-9)))
-         (x0 (drgnx-kit-sheet--x beg s edges))
+(defun drgnx-kit-sheet--check-fill (what fill track want total height snap beg s edges)
+  "The bar drawn at BEG (WHAT the cell, for the failures), TOTAL device px wide: down the column halfway into its
+fill, the fill (FILL, an (A R G B)) is HEIGHT device px high and its middle on the caption's centre line (within a
+device px: the baseline less half the caption font's ascent less its descent, the line icons and the bar are centred
+on, whatever pads the line box); along its middle row the fill is WANT device px (within one per rounded end), and
+the track (TRACK, unless nil or the fill is the whole bar) follows it.  Returns the bar's middle device row."
+  (let* ((x0 (drgnx-kit-sheet--x beg s edges))
          (xm (+ x0 (/ want 2)))
          (top (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point beg)))))))
          (h (round (* s (save-excursion (goto-char beg) (line-pixel-height)))))
          (rows (cl-loop for y from top below (+ top h) when (equal fill (drgnx-uitest-pixel snap xm y)) collect y)))
     (should (equal (list what 'bar-drawn t) (list what 'bar-drawn (and rows t))))
     ;; the bar's height, and its middle on the caption's centre line
-    (should (equal (list what 'bar-height (drgnx-px drgnx-ui-kit-progress-bar-px nil scale))
-                   (list what 'bar-height (length rows))))
+    (should (equal (list what 'bar-height height) (list what 'bar-height (length rows))))
     (let* ((font (font-info (face-font 'drgnx-ui-caption)))
            (base (drgnx-kit-sheet--baseline beg s edges))
            ;; `font-info': [OPENED-NAME FULL-NAME SIZE HEIGHT BASELINE-OFFSET RELATIVE-COMPOSE DEFAULT-ASCENT MAX-WIDTH
@@ -124,17 +120,79 @@ width's device px rounded half up (within one, its rounded start), and the track
     ;; the fill's width: its pixels along the middle row (the rounded start may lose one to its edge's blend), the
     ;; track's right after them
     (let* ((y (nth (/ (length rows) 2) rows))
-           (xs (cl-loop for x from x0 below (+ x0 (drgnx-px (plist-get props :width) nil scale) 4)
-                        when (equal fill (drgnx-uitest-pixel snap x y)) collect x)))
-      (should (equal (list what 'bar-fill want t) (list what 'bar-fill want (<= (abs (- want (length xs))) 1))))
-      (should (equal (list what 'bar-track track) (list what 'bar-track (drgnx-uitest-pixel snap (1+ (car (last xs))) y)))))))
+           (xs (cl-loop for x from x0 below (+ x0 total 4) when (equal fill (drgnx-uitest-pixel snap x y)) collect x)))
+      ;; within one device px a rounded end, two for a fill that is the whole bar (both ends rounded)
+      (should (equal (list what 'bar-fill want t)
+                     (list what 'bar-fill want (<= (abs (- want (length xs))) (if (>= want total) 2 1)))))
+      (when (and track (< want total))
+        (should (equal (list what 'bar-track track)
+                       (list what 'bar-track (drgnx-uitest-pixel snap (1+ (car (last xs))) y)))))
+      y)))
+
+(defun drgnx-kit-sheet--check-bar (what props variant scale snap beg s edges)
+  "The progress bar of PROPS drawn at BEG at SCALE (`drgnx-kit-sheet--check-fill'): the fill (`progress-fill')
+`drgnx-ui-kit-progress-bar-px' high, VALUE of the width's device px rounded half up, then the track (`progress-track')."
+  (let ((total (drgnx-px (plist-get props :width) nil scale)))
+    (drgnx-kit-sheet--check-fill what (drgnx-kit-sheet--rgb (drgnx-look-token 'progress-fill variant))
+                                 (drgnx-kit-sheet--rgb (drgnx-look-token 'progress-track variant))
+                                 (floor (+ (* total (plist-get props :value)) 0.5 1e-9)) total
+                                 (drgnx-px drgnx-ui-kit-progress-bar-px nil scale) snap beg s edges)))
+
+(defun drgnx-kit-sheet--check-meter (what props variant scale snap beg s edges)
+  "The meter of PROPS drawn at BEG at SCALE.  With no bar (no limit, unpriced): no pixel of the fill's colour along
+the line's middle.  Else (`drgnx-kit-sheet--check-fill') the fill in its state's colour, its size's height, SPENT of
+LIMIT of the bar's device px, then the track (an inherited limit's: an outline, unchecked); the forecast's p50 a tick
+in its colour in the middle of its slot (all of the slot in high contrast); a `wide' meter's span to p90 filled in
+`meter-span', in high contrast an outline: its top edge `meter-span', its middle not."
+  (let* ((state (intern (plist-get props :state))) (size (intern (plist-get props :size)))
+         (limit (plist-get props :limit)) (spent (float (plist-get props :spent)))
+         (total (drgnx-px (if (eq size 'row) drgnx-ui-kit-meter-row-px (plist-get props :width)) nil scale))
+         (fill (drgnx-kit-sheet--rgb (drgnx-look-token (pcase state ('nearing 'meter-near)
+                                                              ((or 'reached 'over) 'meter-reached) (_ 'meter-fill))
+                                                       variant)))
+         (x0 (drgnx-kit-sheet--x beg s edges)))
+    (if (or (null limit) (memq state '(none unpriced)))
+        (let ((y (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point beg)))
+                                (/ (save-excursion (goto-char beg) (line-pixel-height)) 2.0))))))
+          (should (equal (list what 'no-bar nil)
+                         (list what 'no-bar (cl-loop for x from x0 below (+ x0 total)
+                                                     thereis (equal fill (drgnx-uitest-pixel snap x y)))))))
+      (cl-flet ((at (x) (floor (+ (* total (max 0.0 (min 1.0 (/ x (float limit))))) 0.5 1e-9)))
+                (rgb (token) (drgnx-kit-sheet--rgb (drgnx-look-token token variant))))
+        (let* ((h (drgnx-px (alist-get size drgnx-ui-kit-meter-heights) nil scale))
+               (y (drgnx-kit-sheet--check-fill what fill (unless (eq state 'inherited) (rgb 'progress-track))
+                                               (at spent) total h snap beg s edges))
+               (fc (plist-get props :forecast)) (hc (eq variant 'hc)))
+          (when fc
+            (let* ((tw (min total (drgnx-px drgnx-ui-kit-meter-tick-px nil scale)))
+                   (line (drgnx-px-line 1 nil scale))
+                   (t0 (min (max 0 (- (at (aref fc 0)) (/ tw 2))) (- total tw)))
+                   (tick (rgb (if (eq state 'forecast-over) 'meter-near 'meter-tick))))
+              (should (equal (list what 'tick tick)
+                             (list what 'tick (drgnx-uitest-pixel snap (+ x0 t0 (if hc 0 (/ (- tw line) 2))) y))))
+              (when hc
+                (should (equal (list what 'tick-full tick)
+                               (list what 'tick-full (drgnx-uitest-pixel snap (+ x0 t0 tw -1) y)))))
+              (when (eq size 'wide)
+                (let* ((s0 (+ t0 tw)) (s1 (max (at (aref fc 1)) s0)) (span (rgb 'meter-span))
+                       (xm (+ x0 (/ (+ s0 s1) 2))))
+                  (when (> (- s1 s0) 4)
+                    (if hc
+                        (progn
+                          (should-not (equal (list what 'span-hollow span)
+                                             (list what 'span-hollow (drgnx-uitest-pixel snap xm y))))
+                          ;; its top edge: the bar's first row
+                          (should (equal (list what 'span-edge span)
+                                         (list what 'span-edge (drgnx-uitest-pixel snap xm (- y (/ h 2)))))))
+                      (should (equal (list what 'span span)
+                                     (list what 'span (drgnx-uitest-pixel snap xm y)))))))))))))))
 
 (defun drgnx-kit-sheet--check-cells (id variant scale)
   "Check every cell of the catalogue in the selected window, drawn for component ID at SCALE in theme VARIANT.
 Returns the number of cells checked."
   (let* ((frame (selected-frame)) (s (drgnx-uitest-device-scale frame))
          (cells (drgnx-kit-catalogue-cells)) (snap nil) (n 0))
-    (pcase-dolist (`(,_ ,variants ,state ,beg ,end) cells)
+    (pcase-dolist (`(,id ,variants ,state ,beg ,end) cells)
       ;; the cell's whole line on screen (a tall row at the window's foot is only partly there)
       (unless (and snap (drgnx-kit-sheet--whole-p beg) (drgnx-kit-sheet--whole-p end))
         (set-window-start nil (save-excursion (goto-char beg) (forward-line -1) (point)))
@@ -143,7 +201,8 @@ Returns the number of cells checked."
       (let* ((edges (window-inside-pixel-edges))
              (what (list id variants state variant scale))
              (e (let ((drgnx-ui-kit--icons (drgnx-ui-kit-icon-function nil)))
-                  (drgnx-ui-kit-expand id (drgnx-kit-sheet--props id variants state) scale nil)))
+                  (let ((props (drgnx-kit-sheet--props id variants state)))
+                    (drgnx-ui-kit-expand (intern (plist-get props :c)) props scale nil))))
              (spaces (append (plist-get e :spaces) nil))
              (y (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point beg))) (/ (save-excursion (goto-char beg) (line-pixel-height)) 2.0))))))
         ;; (a) each pad its device px; the cell is its pads and its text
@@ -152,8 +211,9 @@ Returns the number of cells checked."
             (should (equal (list what 'pad (aref sp 0) (aref sp 1))
                            (list what 'pad (aref sp 0) (- (drgnx-kit-sheet--x (1+ at) s edges)
                                                           (drgnx-kit-sheet--x at s edges)))))))
-        ;; the start and end pads, and between them the text (its icons and their gaps drawn as they are)
-        (when spaces
+        ;; the start and end pads, and between them the text (its icons and their gaps drawn as they are); a meter
+        ;; ends in its text, not a pad
+        (when (and spaces (not (equal variants '(meter))))
           (let ((pads (+ (aref (car spaces) 1) (aref (car (last spaces)) 1)))
                 (text (round (* s (string-pixel-width (buffer-substring (1+ beg) (1- end)))))))
             (should (equal (list what 'width (+ pads text))
@@ -185,6 +245,9 @@ Returns the number of cells checked."
         ;; fill's colour, then the track's colour
         (when (and (eq id 'progress) (equal variants '(bar)))
           (drgnx-kit-sheet--check-bar what (drgnx-kit-sheet--props id variants state) variant scale snap beg s edges))
+        ;; (b3) a meter: its bar, tick and span, or no bar
+        (when (and (eq id 'progress) (equal variants '(meter)))
+          (drgnx-kit-sheet--check-meter what (drgnx-kit-sheet--props id variants state) variant scale snap beg s edges))
         ;; (c) high contrast: no shadow, so the column right of the cell is the surface
         (when (eq variant 'hc)
           (let ((x (+ (drgnx-kit-sheet--x end s edges) (round (* s 4)))))
@@ -256,6 +319,13 @@ and density."
   "Progress's sheet: a bar (its fill VALUE of its width, then the track) and a ring, in every theme and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'progress))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/meter ()
+  "The meter's sheet: each state at each size (row, card, wide), its fill SPENT of LIMIT in the state's colour, its
+height, on the caption's centre line, its forecast tick and span (an outline in high contrast), no bar without a limit,
+in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'meter))
 
 (drgnx-look-gui-deftest drgnx-kit-sheet/board-card-bar ()
   "The Work board's card bar as the hub sends it (`work::trail::board': the kit's progress bar with the card's bottom

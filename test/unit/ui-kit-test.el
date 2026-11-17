@@ -603,6 +603,77 @@
                    (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :value 0.35 :width 80) 1.0 'ascii) :text)))
     (should (equal "2" (plist-get (drgnx-ui-kit-expand 'progress '(:c "progress" :kind "ring" :value 0.5) 1.0 'ascii) :text)))))
 
+(defun ui-kit-test--meter (state &rest props)
+  "The expansion of a card meter, 120 px, in STATE at scale 1, PROPS over its defaults ($31 of $40, \"$31 / $40\")."
+  (drgnx-ui-kit-expand 'meter (append props (list :c "meter" :spent 31 :limit 40 :unit "usd" :state state
+                                                  :size "card" :width 120 :text "$31 / $40"))
+                       1.0 nil))
+
+(ert-deftest drgnx-ui-kit/meter-every-state-has-its-word ()
+  ;; the text, then the state's word in its colour; the label speaks the amounts, the unit and the state
+  (dolist (c '(("ok" nil nil) ("nearing" "78 %" drgnx-kit-progress-meter-near)
+               ("reached" "at limit" drgnx-kit-progress-meter-reached) ("over" "over" drgnx-kit-progress-meter-reached)
+               ("forecast-over" "p90 over" drgnx-kit-progress-meter-near) ("none" "no limit" drgnx-ui-caption)
+               ("inherited" nil nil) ("unpriced" "unpriced" drgnx-ui-caption)))
+    (let* ((e (ui-kit-test--meter (car c)))
+           (text (plist-get e :text)))
+      (if (nth 1 c)
+          (progn
+            (should (string-suffix-p (concat "$31 / $40 · " (nth 1 c)) text))
+            ;; the word's own run, unless it is the caption's (then it joins the text's)
+            (unless (eq (nth 2 c) 'drgnx-ui-caption)
+              (should (equal (vector (- (length text) (length (nth 1 c))) (length text) (symbol-name (nth 2 c)))
+                             (aref (plist-get e :runs) (1- (length (plist-get e :runs))))))))
+        (should (string-suffix-p "$31 / $40" text)))
+      (should (string-match-p (format "\\`\\(31 of 40\\|31\\) dollars, %s\\'"
+                                      (alist-get (intern (car c)) drgnx-ui-kit--meter-states))
+                              (aref (aref (plist-get e :props) 0) 3)))))
+  (should (equal "10.5 of 40 dollars, ok, estimate, forecast 20.25 to 31"
+                 (aref (aref (plist-get (ui-kit-test--meter "ok" :spent 10.5 :unit "usd-est" :forecast [20.25 31]) :props)
+                             0)
+                       3))))
+
+(ert-deftest drgnx-ui-kit/meter-none-draws-no-bar ()
+  ;; no limit, or no price: the text and the word alone, no part of a bar
+  (dolist (state '("none" "unpriced"))
+    (let ((e (ui-kit-test--meter state :limit nil :text "$12")))
+      (should (equal (format "$12 · %s" (if (equal state "none") "no limit" "unpriced")) (plist-get e :text)))
+      (should (equal [] (plist-get e :spaces)))))
+  ;; with a limit: the fill (31 of 40 of 120 px: 93), then the track, 3 px high
+  (should (equal [[0 93 3] [1 27 3] [2 6 0]] (plist-get (ui-kit-test--meter "ok") :spaces))))
+
+(ert-deftest drgnx-ui-kit/meter-hc-span-is-an-outline ()
+  ;; a wide meter's forecast: the tick's slot, then the span to p90; high contrast outlines the span (its four edges,
+  ;; no fill) and fills the tick's slot, where other themes fill the span and draw the tick as a line in the middle
+  (skip-unless (image-type-available-p 'svg))
+  (let* ((e (ui-kit-test--meter "ok" :size "wide" :width 200 :forecast [35 38]))
+         (runs (append (plist-get e :runs) nil)) (spaces (append (plist-get e :spaces) nil))
+         (face-at (lambda (pos) (seq-some (lambda (r) (and (<= (aref r 0) pos) (< pos (aref r 1)) (aref r 2))) runs))))
+    ;; 200 px: the fill 155, the tick's slot from 174 (p50 at 175), the span to 190 (p90), the track
+    (should (equal '(("drgnx-kit-progress-meter-fill" 155) ("drgnx-kit-progress" 19)
+                     ("drgnx-kit-progress-meter-tick" 2) ("drgnx-kit-progress-meter-span" 14) ("drgnx-kit-progress" 10))
+                   (cl-loop for sp in spaces when (> (aref sp 2) 0)
+                            collect (list (funcall face-at (aref sp 0)) (aref sp 1)))))
+    (let ((spaces (mapcar (lambda (v) (append v nil)) spaces))
+          (runs (mapcar (lambda (v) (append v nil)) runs)))
+      (cl-flet ((svg (hc pos)
+                  (cl-letf (((symbol-function 'drgnx-look-variant) (lambda (&rest _) (if hc 'hc 'dark))))
+                    (plist-get (cdr (cdr (assq pos (drgnx-ui-kit-bar-display spaces runs 1.0)))) :data))))
+        (let ((tick (nth 0 (seq-find (lambda (sp) (equal (funcall face-at (car sp)) "drgnx-kit-progress-meter-tick"))
+                                     spaces)))
+              (span (nth 0 (seq-find (lambda (sp) (equal (funcall face-at (car sp)) "drgnx-kit-progress-meter-span"))
+                                     spaces))))
+          ;; dark: the span one filled rectangle, the tick a 1 px line in its 2 px slot
+          (should (string-search "rx=" (svg nil span)))
+          (should (string-search "<rect x=\"0\" y=\"0\" width=\"1\" height=\"6\"" (svg nil tick)))
+          ;; high contrast: the span's four 1 px edges and no fill, the tick's whole slot
+          (let ((d (svg t span)))
+            (should-not (string-search "rx=" d))
+            (should (= 4 (cl-count-if (lambda (_) t) (split-string d "<rect" t) :start 1)))
+            (should (string-search "<rect x=\"0\" y=\"0\" width=\"14\" height=\"1\"" d))
+            (should (string-search "<rect x=\"13\" y=\"0\" width=\"1\" height=\"6\"" d)))
+          (should (string-search "<rect x=\"0\" y=\"0\" width=\"2\" height=\"6\"" (svg t tick))))))))
+
 (ert-deftest drgnx-ui-kit/bar-parts-are-images ()
   ;; a progress bar's parts (spaces of a height in the bar's faces) are drawn as images in `currentColor', the fill's
   ;; start and the track's end rounded, the joint square; a space of a height in another face stays a space
@@ -618,9 +689,9 @@
     (should (string-search "fill=\"currentColor\"" (plist-get (cdr fill) :data)))
     (should (string-search "rx=\"2\"" (plist-get (cdr fill) :data)))
     ;; the fill's end and the track's start are joined: square there
-    (should (string-search "<rect x=\"36.0\"" (plist-get (cdr fill) :data)))
-    (should-not (string-search "<rect width=\"36.0\"" (plist-get (cdr fill) :data)))
-    (should (string-search "<rect width=\"24.0\"" (plist-get (cdr track) :data)))))
+    (should (string-search "<rect x=\"36.0\" y=\"0\" width=\"36.0\"" (plist-get (cdr fill) :data)))
+    (should-not (string-search "<rect x=\"0\" y=\"0\" width=\"36.0\"" (plist-get (cdr fill) :data)))
+    (should (string-search "<rect x=\"0\" y=\"0\" width=\"24.0\"" (plist-get (cdr track) :data)))))
 
 (ert-deftest drgnx-ui-kit/agent-mark-is-its-agents-colour ()
   ;; the handle on its agent's colour: the kit face (inverse video) over the agent's face, pads either side; "[H]" in

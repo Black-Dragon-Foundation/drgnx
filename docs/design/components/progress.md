@@ -12,7 +12,7 @@ The kit's `progress` component: one definition in `etc/ui/components.eld`, expan
 
 ## Variants
 
-- `kind`: `bar`, `ring` (default `bar`)
+- `kind`: `bar`, `ring`, `meter` (default `bar`)
 
 ## Geometry
 
@@ -24,6 +24,9 @@ The kit's `progress` component: one definition in `etc/ui/components.eld`, expan
 | ring | compact | 0 | 0 / 0 | 0 | no | 0 | 0 | - |
 | ring | comfortable | 0 | 0 / 0 | 0 | no | 0 | 0 | - |
 | ring | roomy | 0 | 0 / 0 | 0 | no | 0 | 0 | - |
+| meter | compact | 0 | 0 / 0 | 0 | no | - | 0 | - |
+| meter | comfortable | 0 | 0 / 0 | 0 | no | - | 0 | - |
+| meter | roomy | 0 | 0 / 0 | 0 | no | - | 0 | - |
 
 ## On a terminal
 
@@ -39,6 +42,13 @@ The kit's `progress` component: one definition in `etc/ui/components.eld`, expan
 |---|---|---|---|---|
 | own | `drgnx-kit-progress` | - | progress-track | - |
 | fill | `drgnx-kit-progress-fill` | - | progress-fill | - |
+| meter-fill | `drgnx-kit-progress-meter-fill` | - | meter-fill | - |
+| meter-near | `drgnx-kit-progress-meter-near` | - | meter-near | - |
+| meter-reached | `drgnx-kit-progress-meter-reached` | - | meter-reached | - |
+| meter-tick | `drgnx-kit-progress-meter-tick` | progress-track | meter-tick | - |
+| meter-tick-near | `drgnx-kit-progress-meter-tick-near` | progress-track | meter-near | - |
+| meter-span | `drgnx-kit-progress-meter-span` | - | meter-span | - |
+| meter-outline | `drgnx-kit-progress-meter-outline` | - | meter-tick | - |
 
 ## States
 
