@@ -68,10 +68,25 @@ pub fn stop(slice: &str) -> Result<(), String> {
     run::systemctl_ok(&["stop", "--no-block", slice]).map(|_| ())
 }
 
+/// A job slice's memory properties from its grant (design §3 #3): `MemoryHigh` throttles at RESERVE plus a fifth (at
+/// most the cap), `MemoryMax` kills at CAP; MiB each.
+pub fn job_props(reserve_mib: u64, cap_mib: u64) -> [(&'static str, String); 2] {
+    let high = (reserve_mib * 6 / 5).min(cap_mib);
+    [
+        ("MemoryHigh", format!("{high}M")),
+        ("MemoryMax", format!("{cap_mib}M")),
+    ]
+}
+
 /// A job's SLICE once the job ended: stopped, and the properties [`set`] gave it dropped (`revert` removes the
 /// runtime drop-ins, which would otherwise pile up until the next boot, one per job).
 pub fn forget(slice: &str) -> Result<(), String> {
     stop(slice)?;
+    revert(slice)
+}
+
+/// Drops the properties [`set`] gave SLICE (its runtime drop-ins).
+pub fn revert(slice: &str) -> Result<(), String> {
     run::systemctl_ok(&["revert", slice]).map(|_| ())
 }
 

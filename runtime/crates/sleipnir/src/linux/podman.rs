@@ -113,6 +113,8 @@ pub struct RunnerMounts {
     /// The slot's target dir.
     pub target: PathBuf,
     pub caches: Vec<CacheMount>,
+    /// `CARGO_BUILD_JOBS` from the job's grant (`forseti::admit::cargo_jobs`); 0: not set.
+    pub cargo_jobs: u32,
 }
 
 /// A cache the job's suite declares: a folder under the runner's `cache/<project>/<trust>/`, at its path inside.
@@ -498,6 +500,10 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
             a.push(format!("{}:{TARGET}:rw,Z", mount_source(&m.target)?).into());
             a.push("-e".into());
             a.push(format!("CARGO_TARGET_DIR={TARGET}").into());
+            if m.cargo_jobs > 0 {
+                a.push("-e".into());
+                a.push(format!("CARGO_BUILD_JOBS={}", m.cargo_jobs).into());
+            }
             for c in &m.caches {
                 let inside = &c.inside;
                 if !inside.starts_with('/')

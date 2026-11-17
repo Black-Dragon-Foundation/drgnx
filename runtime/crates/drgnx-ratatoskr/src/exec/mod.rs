@@ -2000,6 +2000,19 @@ impl Inner {
             .memory_max
             .as_deref()
             .unwrap_or(self.hooks.memory.as_str());
+        // cargo builds as many units at once as the job's grant allows (design §3 #4), unless the job says otherwise
+        if status.is_none()
+            && !inner.env.iter().any(|(k, _)| k == "CARGO_BUILD_JOBS")
+            && let Some(cores) = self.queue.local_cores(id)
+        {
+            let grant = forseti::Grant {
+                cores,
+                mem_cap_mib: mem_mib(memory),
+                reserve_mib: 0,
+            };
+            let n = forseti::admit::cargo_jobs(&grant).to_string();
+            inner.env.push(("CARGO_BUILD_JOBS".into(), n.into()));
+        }
         let wrap = if keyed.is_some() {
             unit::wrap_to_hub
         } else {

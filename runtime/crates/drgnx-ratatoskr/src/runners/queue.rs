@@ -1668,6 +1668,11 @@ impl Queue {
         }
     }
 
+    /// The cores job ID was granted here, while it runs here.
+    pub fn local_cores(&self, id: &str) -> Option<u32> {
+        self.lock().local_running.get(id).map(|rj| rj.cores)
+    }
+
     /// Count what each job here uses from now on, as READ says (design §0.3 R2, C1): the hub gives its jobs' slices.
     pub fn read_local_use(&self, read: LocalUse) {
         *self.local_use.lock().unwrap() = Some(read);

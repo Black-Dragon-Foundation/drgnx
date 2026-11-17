@@ -12,6 +12,16 @@ pub const START_GAP_S: u64 = 10;
 /// A job whose history peaks under this is small: two small jobs in a row start with no gap.
 pub const SMALL_PEAK_MIB: u64 = 1024;
 
+/// The memory one cargo compile unit is given ([`cargo_jobs`]).
+pub const CARGO_UNIT_MIB: u64 = 2560;
+
+/// `CARGO_BUILD_JOBS` for a job of GRANT (design §3 #4): one unit per [`CARGO_UNIT_MIB`] of its cap, never more than
+/// its cores, at least one.
+pub fn cargo_jobs(grant: &Grant) -> u32 {
+    let by_mem = u32::try_from(grant.mem_cap_mib / CARGO_UNIT_MIB).unwrap_or(u32::MAX);
+    by_mem.min(grant.cores).max(1)
+}
+
 /// Whether EXP's history says the job peaks under [`SMALL_PEAK_MIB`].
 pub fn small(exp: &Expected) -> bool {
     exp.mem_p95_mib.is_some_and(|p| p < SMALL_PEAK_MIB)
