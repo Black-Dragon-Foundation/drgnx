@@ -8,6 +8,7 @@
 use crate::coord::fail;
 use crate::dispatch::Caller;
 use crate::front::Front;
+use norn::deny::{DenyList, RootVerdict, Verdict};
 use norn::store::CoordDb;
 use runstav::methods::records::{
     ByPath, Conflict, ImportParams, ImportReport, ImportedFile, Keep, RecordKind, RecordsConflict,
@@ -176,8 +177,138 @@ fn discover(root: &Path, only: Option<RecordKind>) -> Vec<Found> {
             out.push(found(p, kind));
         }
     }
+    // what the Lisp scan's walk met: plans, specs and ledgers anywhere under the root (see [`walk_scan`])
+    let mut met = Vec::new();
+    walk_scan(root, root, 7, false, &mut met);
+    met.sort_by(|a, b| a.0.cmp(&b.0));
+    for (p, kind) in met {
+        if !out.iter().any(|f| f.path == p) {
+            out.push(found(p, kind));
+        }
+    }
+    // a spec a plan names outside a `specs/` folder is read while a plan names it (and goes with its last plan)
+    let plans: Vec<PathBuf> = out
+        .iter()
+        .filter(|f| f.kind == RecordKind::Plans)
+        .map(|f| f.path.clone())
+        .collect();
+    for plan in plans {
+        if let Some(spec) = plan_spec_of(&plan)
+            && spec.extension().is_some_and(|e| e == "md")
+            && !out.iter().any(|f| f.path == spec)
+        {
+            out.push(found(spec, RecordKind::Specs));
+        }
+    }
     out.retain(|f| only.is_none_or(|o| o == f.kind));
     out
+}
+
+/// The folders the scan never enters (dot folders are entered: ledgers live in `.superpowers`).
+const SKIP: &[&str] = &[
+    ".git",
+    "node_modules",
+    "eln-cache",
+    "elpa",
+    "target",
+    "dist",
+    "build",
+];
+
+/// `### Task N:` headings of a plan: `### Task 14:`, `### Task 14b.` (a task between 14 and 15), `### Task A1 (now): ...`.
+fn task_heading() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r"(?m)^### Task ([0-9]+[a-z]?|[A-Z][0-9]*)(?:[:.]| |$) *(.*)$")
+            .expect("a fixed pattern")
+    })
+}
+
+/// Whether TEXT has a task heading outside its code fences (a heading in an example is no task).
+fn has_tasks(text: &str) -> bool {
+    let mut fenced = false;
+    let mut open = String::new();
+    for l in text.lines() {
+        if l.trim_start().starts_with("```") {
+            fenced = !fenced;
+            open.push('\n');
+        } else if fenced {
+            open.push('\n');
+        } else {
+            open.push_str(l);
+            open.push('\n');
+        }
+    }
+    task_heading().is_match(&open)
+}
+
+/// The kind of record FILE is under ROOT, by its path under ROOT alone: `*.ledger.md` and
+/// `.superpowers/sdd/*/progress.md` are ledgers, a markdown under a `plans/` folder with task headings a plan, one under
+/// a `specs/` folder a spec (`drgnx-work--classify`).
+fn classify(file: &Path, root: &Path) -> Option<RecordKind> {
+    let rel = file.strip_prefix(root).ok()?;
+    let parts: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let name = parts.last()?;
+    if name.ends_with(".ledger.md") {
+        return Some(RecordKind::Ledgers);
+    }
+    if name == "progress.md"
+        && parts.iter().any(|p| p == "sdd")
+        && parts.iter().any(|p| p == ".superpowers")
+    {
+        return Some(RecordKind::Ledgers);
+    }
+    if !name.ends_with(".md") {
+        return None;
+    }
+    if parts.iter().any(|p| p == "plans") {
+        let text = std::fs::read_to_string(file).ok()?;
+        return has_tasks(&text).then_some(RecordKind::Plans);
+    }
+    parts
+        .iter()
+        .any(|p| p == "specs")
+        .then_some(RecordKind::Specs)
+}
+
+/// Every plan, spec and ledger under DIR (a folder of ROOT), at most DEPTH folders down, links not followed.  Inside a
+/// linked git worktree (its `.git` a file) only its ledgers count: its plans and specs are copies
+/// (`drgnx-work--walk`).  `.claude/tmp` is not entered.
+fn walk_scan(
+    root: &Path,
+    dir: &Path,
+    depth: u32,
+    ledgers_only: bool,
+    out: &mut Vec<(PathBuf, RecordKind)>,
+) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        let Ok(meta) = std::fs::symlink_metadata(&p) else {
+            continue;
+        };
+        let name = e.file_name().to_string_lossy().into_owned();
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            let in_claude = dir.file_name().is_some_and(|n| n == ".claude");
+            if depth > 0 && !SKIP.contains(&name.as_str()) && !(name == "tmp" && in_claude) {
+                let linked = std::fs::symlink_metadata(p.join(".git")).is_ok_and(|m| m.is_file());
+                walk_scan(root, &p, depth - 1, ledgers_only || linked, out);
+            }
+        } else if meta.is_file()
+            && let Some(kind) = classify(&p, root)
+            && (!ledgers_only || kind == RecordKind::Ledgers)
+        {
+            out.push((p, kind));
+        }
+    }
 }
 
 fn civil(days: i64) -> (i64, u32, u32) {
@@ -407,7 +538,7 @@ fn apply_acts(
 }
 
 /// Read, parse and diff one file; apply the diff unless DRY.  Answers the report row.
-async fn import_one(db: &CoordDb, f: &Found, dry: bool) -> Result<ImportedFile, Error> {
+async fn import_one(db: &CoordDb, f: &Found, dry: bool, back: bool) -> Result<ImportedFile, Error> {
     let text =
         std::fs::read_to_string(&f.path).map_err(|e| err(format!("{}: {e}", f.path.display())))?;
     let doc: AnyDoc = import::parse(f.parse, view::strip_header(&text))
@@ -417,6 +548,34 @@ async fn import_one(db: &CoordDb, f: &Found, dry: bool) -> Result<ImportedFile, 
     let root = ops.first().map(|o| o.id.clone());
     let (ops, data) = (Arc::new(ops), Arc::new(data));
     let source = f.path.to_string_lossy().into_owned();
+    // a file that was forgotten and is back (no adoption mark left): what it had comes back with it
+    if back && !dry {
+        let ids: Vec<String> = ops.iter().map(|o| o.id.clone()).collect();
+        let retired = db
+            .read(move |c| {
+                let mut out = Vec::new();
+                for id in &ids {
+                    if let Some(e) = entity::by_id(c, id)?
+                        && e.retired_tx.is_some()
+                    {
+                        out.push(e.n);
+                    }
+                }
+                Ok(out)
+            })
+            .await
+            .map_err(fail)?;
+        if !retired.is_empty() {
+            db.write(meta(), move |tx| {
+                for n in retired {
+                    entity::unretire(tx, n)?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(fail)?;
+        }
+    }
     // read first: a write with nothing to do would still add a `tx` row
     let (r_ops, r_data) = (ops.clone(), data.clone());
     let (entities, n_ops) = db
@@ -600,6 +759,82 @@ async fn kv_put(db: &CoordDb, pairs: Vec<(String, Option<String>)>) -> Result<()
 
 fn adopted_key(path: &Path) -> String {
     format!("records-adopted:{}", path.to_string_lossy())
+}
+
+/// The records of ROOT that went: a file the import adopted before, under ROOT, that is not there now (deleted), or is a
+/// plan, spec or ledger no longer found (a spec no plan names any more) has its entities retired, and is adopted again
+/// if it comes back (`a-rescan-forgets-what-left`).  The board and the other named files are never forgotten here.
+async fn forget_gone(db: &CoordDb, root: &Path, found: &[Found]) -> Result<(), Error> {
+    let keys: Vec<String> = db
+        .read(|c| {
+            let mut q = c.prepare("select key from kv where key like 'records-adopted:%'")?;
+            Ok(q.query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .map_err(fail)?;
+    for key in keys {
+        let Some(p) = key.strip_prefix("records-adopted:") else {
+            continue;
+        };
+        let path = PathBuf::from(p);
+        if !path.starts_with(root) || found.iter().any(|f| f.path == path) {
+            continue;
+        }
+        let kind = kind_in(&pieces(db, &path).await?);
+        let leaves = !path.exists()
+            || matches!(
+                kind,
+                Some(RecordKind::Specs | RecordKind::Plans | RecordKind::Ledgers)
+            );
+        if !leaves {
+            continue;
+        }
+        let source = import::source_key(&path);
+        let file = path.to_string_lossy().into_owned();
+        let marks = [
+            key.clone(),
+            format!("records-base:{p}"),
+            format!("records-view:{p}"),
+        ];
+        db.write(meta(), move |tx| {
+            let live: Vec<i64> = {
+                let mut q = tx
+                    .sql()
+                    .prepare("select n from entity where source = ?1 and retired_tx is null")?;
+                q.query_map([&source], |r| r.get(0))?
+                    .collect::<Result<_, _>>()?
+            };
+            for n in live {
+                entity::retire(tx, n)?;
+            }
+            // the links the file made (a ledger's commits, a board's items) and the rulings it gave go with it
+            link::retire_by_source(tx, &file)?;
+            let rulings: Vec<i64> = {
+                let mut q = tx.sql().prepare(
+                    "select n from entity where kind = 'ruling' and retired_tx is null and json_extract(data, '$.ledger') = ?1",
+                )?;
+                q.query_map([&file], |r| r.get(0))?.collect::<Result<_, _>>()?
+            };
+            for n in rulings {
+                entity::retire(tx, n)?;
+            }
+            for k in &marks {
+                tx.sql().execute("delete from kv where key = ?1", [k])?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(fail)?;
+        // the plan beside a ledger that went is read again
+        if let Some((plan, ledger)) = plan_and_ledger(&path)
+            && ledger == path
+            && !path.exists()
+        {
+            clear_ledger_marks(db, &plan).await?;
+        }
+    }
+    Ok(())
 }
 
 /// The notice listing the file at PATH went out: the hub may rewrite it.
@@ -805,6 +1040,8 @@ impl Views {
     ) -> Result<(Flush, u64, Vec<String>), Error> {
         let r = self.sync_inner(db, path).await?;
         ledger_marks(db, path).await?;
+        board_plan_links(db, path).await?;
+        plan_spec_links(db, path).await?;
         // the comment threads on the file's records find their paragraphs again; a failure leaves them where they were
         if let Err(e) = crate::work::comments::reanchor(db, path).await {
             tracing::warn!(path = %path.display(), "comments not re-anchored: {e}");
@@ -952,19 +1189,113 @@ impl Views {
     }
 }
 
-/// The plan file and its ledger when PATH is either (`X.md` and `X.ledger.md`).
+/// The first line of a `.superpowers/sdd/<plan>/progress.md` ledger names its plan: `# SDD ledger — plan: NAME`.
+const SDD_FIRST: &str = "# SDD ledger — plan: ";
+
+/// Whether PATH is `.../.superpowers/sdd/<name>/progress.md`.
+fn is_sdd_progress(path: &Path) -> bool {
+    if path.file_name().and_then(|n| n.to_str()) != Some("progress.md") {
+        return false;
+    }
+    let parts: Vec<_> = path.components().map(|c| c.as_os_str()).collect();
+    parts
+        .windows(2)
+        .any(|w| w[0] == ".superpowers" && w[1] == "sdd")
+}
+
+/// The plan file the sdd ledger LEDGER names on its first line: absolute, or relative to the ledger's folder or one of
+/// its ancestors (the repository, or the nearest folder holding `docs/`: the first that exists), never to the scanning
+/// process's folder.  None when it names none that exists.
+fn sdd_plan_named_by(ledger: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(ledger).ok()?;
+    let name = text.lines().next()?.strip_prefix(SDD_FIRST)?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let named = Path::new(name);
+    if named.is_absolute() {
+        return named.is_file().then(|| named.to_path_buf());
+    }
+    ledger
+        .parent()?
+        .ancestors()
+        .map(|a| a.join(named))
+        .find(|c| c.is_file())
+}
+
+/// The sdd ledger that names the plan PLAN: `.superpowers/sdd/*/progress.md` of the plan's folder or an ancestor.
+fn sdd_ledger_of(plan: &Path) -> Option<PathBuf> {
+    for a in plan.parent()?.ancestors() {
+        let Ok(dirs) = std::fs::read_dir(a.join(".superpowers/sdd")) else {
+            continue;
+        };
+        let mut found: Vec<PathBuf> = dirs
+            .flatten()
+            .map(|d| d.path().join("progress.md"))
+            .filter(|p| p.is_file() && sdd_plan_named_by(p).as_deref() == Some(plan))
+            .collect();
+        found.sort();
+        if let Some(l) = found.into_iter().next() {
+            return Some(l);
+        }
+    }
+    None
+}
+
+/// The tasks of plan PATH lose the `ledger` marks (and `range_stale`, `stale`) a ledger that is not there any more gave them.
+async fn clear_ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
+    let marked: Vec<i64> = pieces(db, path)
+        .await?
+        .into_iter()
+        .filter(|p| {
+            p.role == "task"
+                && ["ledger", "range_stale", "stale"]
+                    .iter()
+                    .any(|k| !p.data.get(*k).is_none_or(Value::is_null))
+        })
+        .map(|p| p.n)
+        .collect();
+    if marked.is_empty() {
+        return Ok(());
+    }
+    db.write(meta(), move |tx| {
+        for n in marked {
+            entity::update(
+                tx,
+                n,
+                None,
+                Changes {
+                    data_patch: Some(json!({"ledger": null, "range_stale": null, "stale": null})),
+                    ..Default::default()
+                },
+            )?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(fail)
+}
+
+/// The plan file and its ledger when PATH is either (`X.md` and `X.ledger.md`, or a plan and the
+/// `.superpowers/sdd/*/progress.md` that names it, or such a ledger).
 fn plan_and_ledger(path: &Path) -> Option<(PathBuf, PathBuf)> {
+    if is_sdd_progress(path) {
+        return Some((sdd_plan_named_by(path)?, path.to_path_buf()));
+    }
     let name = path.file_name()?.to_str()?;
-    let stem = name.strip_suffix(".ledger.md").or_else(|| {
+    let beside = name.strip_suffix(".ledger.md").or_else(|| {
         let s = name.strip_suffix(".md")?;
         path.with_file_name(format!("{s}.ledger.md"))
             .is_file()
             .then_some(s)
-    })?;
-    Some((
-        path.with_file_name(format!("{stem}.md")),
-        path.with_file_name(format!("{stem}.ledger.md")),
-    ))
+    });
+    match beside {
+        Some(stem) => Some((
+            path.with_file_name(format!("{stem}.md")),
+            path.with_file_name(format!("{stem}.ledger.md")),
+        )),
+        None => Some((path.to_path_buf(), sdd_ledger_of(path)?)),
+    }
 }
 
 /// What the plan's ledger says of each of its tasks, kept on the task as `data.ledger` (`done`, `commits` as written,
@@ -973,7 +1304,8 @@ fn plan_and_ledger(path: &Path) -> Option<(PathBuf, PathBuf)> {
 /// the sync writes back into the plan's text, and a ledger must not tick a plan's boxes.  The map reads both.
 async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
     let Some((plan, ledger)) = plan_and_ledger(path) else {
-        return Ok(());
+        // a plan with no ledger now: what a ledger that went said of its tasks goes with it
+        return clear_ledger_marks(db, path).await;
     };
     let marks = std::fs::read_to_string(&ledger)
         .map(|t| saga::ledger::done_marks(&t))
@@ -1026,6 +1358,7 @@ async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
     // a ledger in a linked git worktree gives its plan that branch, and whether it is merged (git changes on its own:
     // this is asked every time)
     ledger_branch(db, &plan, &ledger, &marks, &tasks).await?;
+    ledger_rulings(db, &plan, &ledger, &tasks).await?;
     // git is asked again only when the ledger or the plan's task numbers changed since the last time
     let stamp = {
         let text = std::fs::read_to_string(&ledger).unwrap_or_default();
@@ -1038,11 +1371,545 @@ async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
     let key = format!("ledger-commits:{file}");
     let k = key.clone();
     let seen = db.read(move |c| Ok(kv_get(c, &k))).await.map_err(fail)?;
-    if seen.as_deref() == Some(stamp.as_str()) {
+    if seen.as_deref() != Some(stamp.as_str()) {
+        ledger_commit_links(db, &plan, &ledger, &marks, &tasks, key, stamp).await?;
+    }
+    // the commits no branch reaches any more are gone and their tasks stale, whatever changed (git changes on its own)
+    let tasks: Vec<Piece> = pieces(db, &plan)
+        .await?
+        .into_iter()
+        .filter(|p| p.role == "task")
+        .collect();
+    commits_reachable(db, &tasks).await
+}
+
+/// The ledger's commits as links, and the other ledgers' again; the stamp is kept once git was asked.
+async fn ledger_commit_links(
+    db: &CoordDb,
+    plan: &Path,
+    ledger: &Path,
+    marks: &[saga::ledger::DoneMark],
+    tasks: &[Piece],
+    key: String,
+    stamp: String,
+) -> Result<(), Error> {
+    ledger_commits(db, plan, ledger, marks, tasks).await?;
+    // a link has one source: when this ledger stopped naming a commit another ledger of the plan still names, that
+    // ledger's link is made again (a commit two ledgers name stays when either goes)
+    for other in other_ledgers(plan, ledger) {
+        let text = std::fs::read_to_string(&other).unwrap_or_default();
+        ledger_commits(db, plan, &other, &saga::ledger::done_marks(&text), tasks).await?;
+    }
+    kv_put(db, vec![(key, Some(stamp))]).await
+}
+
+/// The ledgers of PLAN other than LEDGER: the one beside it and the sdd one that names it.
+fn other_ledgers(plan: &Path, ledger: &Path) -> Vec<PathBuf> {
+    let name = plan.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let beside = name
+        .strip_suffix(".md")
+        .map(|s| plan.with_file_name(format!("{s}.ledger.md")));
+    [beside.filter(|p| p.is_file()), sdd_ledger_of(plan)]
+        .into_iter()
+        .flatten()
+        .filter(|p| p != ledger)
+        .collect()
+}
+
+/// The spec a plan's `**Spec:** \`path\`` line names: the file `path` is, seen from the plan's folder or one of its
+/// ancestors (the root, a repository, the folder holding `docs/`): the first that exists (`drgnx-work--resolve`).
+fn plan_spec_of(plan: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(plan).ok()?;
+    let line = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("**Spec:**"))?;
+    let rest = line.split_once('`')?.1;
+    let name = rest.split_once('`')?.0;
+    let named = Path::new(name);
+    if named.is_absolute() {
+        return named.is_file().then(|| named.to_path_buf());
+    }
+    plan.parent()?
+        .ancestors()
+        .map(|a| a.join(named))
+        .find(|c| c.is_file())
+}
+
+/// A plan is `derives`-linked to its spec (plan head to spec head, source: the plan's file); a spec that is gone, or no
+/// longer named, takes its link with it.  Nothing is written while the link is what the plan says.
+async fn plan_spec_links(db: &CoordDb, path: &Path) -> Result<(), Error> {
+    if !path.to_string_lossy().contains("/plans/")
+        || plan_and_ledger(path).is_some_and(|(_, l)| l == path)
+    {
         return Ok(());
     }
-    ledger_commits(db, &plan, &ledger, &marks, &tasks).await?;
-    kv_put(db, vec![(key, Some(stamp))]).await
+    let head = |ps: Vec<Piece>| ps.into_iter().find(|p| p.role == "head").map(|p| p.n);
+    let Some(plan_n) = head(pieces(db, path).await?) else {
+        return Ok(());
+    };
+    let spec_n = match plan_spec_of(path) {
+        Some(spec) => head(pieces(db, &spec).await?),
+        None => None,
+    };
+    let file = path.to_string_lossy().into_owned();
+    let f2 = file.clone();
+    let have: Vec<i64> = db
+        .read(move |c| {
+            let mut q = c.prepare(
+                "select dst from link where src = ?1 and kind = 'derives' and source = ?2 and tx_to = ?3",
+            )?;
+            Ok(q.query_map((plan_n, &f2, urdr::graph::schema::SENTINEL), |r| r.get(0))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .map_err(fail)?;
+    if have == spec_n.into_iter().collect::<Vec<_>>() {
+        return Ok(());
+    }
+    db.write(meta(), move |tx| {
+        for dst in &have {
+            if Some(*dst) != spec_n {
+                link::retire(tx, plan_n, "derives", *dst)?;
+            }
+        }
+        if let Some(spec) = spec_n {
+            link::add(
+                tx,
+                plan_n,
+                "derives",
+                spec,
+                None,
+                Origin::Parsed,
+                Some(&file),
+            )?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(fail)
+}
+
+/// The board (`*.org`) items whose `:PLAN_FILE:` names a plan the import holds are `parent_of`-linked from that plan's head
+/// (the item as a child of its plan): the name is absolute, or relative to the nearest `:PROJECT_ROOT:` of the item or
+/// a heading above it (none: no link).  A link whose property went (or whose plan is gone) is retired; nothing is written
+/// while the links are what the board says (`drgnx-work--parse-board`).  A plan imported after its board is linked at the
+/// board's next sync.
+async fn board_plan_links(db: &CoordDb, path: &Path) -> Result<(), Error> {
+    if path.extension().and_then(|e| e.to_str()) != Some("org") {
+        return Ok(());
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(());
+    };
+    let doc = saga::org::parse(&text);
+    let mut roots: Vec<(usize, Option<String>)> = Vec::new();
+    let mut wants: Vec<(PathBuf, usize)> = Vec::new();
+    for (i, item) in doc.items.iter().enumerate() {
+        while roots.last().is_some_and(|(l, _)| *l >= item.level) {
+            roots.pop();
+        }
+        let prop = |k: &str| {
+            item.properties
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(k))
+                .map(|(_, v)| v.clone())
+        };
+        roots.push((item.level, prop("PROJECT_ROOT")));
+        let Some(name) = prop("PLAN_FILE") else {
+            continue;
+        };
+        let named = Path::new(&name);
+        let plan = if named.is_absolute() {
+            named.to_path_buf()
+        } else if let Some(root) = roots.iter().rev().find_map(|(_, r)| r.clone()) {
+            PathBuf::from(root).join(named)
+        } else {
+            continue;
+        };
+        wants.push((plan, i));
+    }
+    let items: Vec<Piece> = pieces(db, path)
+        .await?
+        .into_iter()
+        .filter(|p| p.role == "item")
+        .collect();
+    let mut want: Vec<(i64, i64)> = Vec::new();
+    for (plan, i) in wants {
+        let (Some(item), Some(head)) = (
+            items.get(i),
+            pieces(db, &plan)
+                .await?
+                .into_iter()
+                .find(|p| p.role == "head"),
+        ) else {
+            continue;
+        };
+        want.push((head.n, item.n));
+    }
+    want.sort_unstable();
+    want.dedup();
+    let file = path.to_string_lossy().into_owned();
+    let f2 = file.clone();
+    let have: Vec<(i64, i64)> = db
+        .read(move |c| {
+            let mut q = c.prepare(
+                "select src, dst from link where kind = 'parent_of' and source = ?1 and tx_to = ?2 order by src, dst",
+            )?;
+            let rows = q
+                .query_map((&f2, urdr::graph::schema::SENTINEL), |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .map_err(fail)?;
+    if have == want {
+        return Ok(());
+    }
+    db.write(meta(), move |tx| {
+        for (src, dst) in &want {
+            if !have.contains(&(*src, *dst)) {
+                link::add(
+                    tx,
+                    *src,
+                    "parent_of",
+                    *dst,
+                    None,
+                    Origin::Inferred,
+                    Some(&file),
+                )?;
+            }
+        }
+        for (src, dst) in &have {
+            if !want.contains(&(*src, *dst)) {
+                link::retire(tx, *src, "parent_of", *dst)?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(fail)
+}
+
+/// The commits that implement TASKS and that no branch, tag or HEAD reaches any more (rebased, squashed, amended, pruned)
+/// are `gone` (`data.gone`), and a task is `stale` (`data.stale`) while one of its commits is gone or its ledger names a
+/// range git has not (`data.range_stale`).  Two git calls per repository, asked every time (`drgnx-work--check-commits`).
+async fn commits_reachable(db: &CoordDb, tasks: &[Piece]) -> Result<(), Error> {
+    let ns: Vec<i64> = tasks.iter().map(|t| t.n).collect();
+    if ns.is_empty() {
+        return Ok(());
+    }
+    let ns2 = ns.clone();
+    // (commit n, its task n, sha, repo, gone now)
+    let rows: Vec<(i64, i64, String, String, bool)> = db
+        .read(move |c| {
+            let mut q = c.prepare(
+                "select c.n, l.dst, coalesce(json_extract(c.data, '$.sha'), ''), coalesce(json_extract(c.data, '$.repo'), ''), \
+                 coalesce(json_extract(c.data, '$.gone'), 0) from link l join entity c on c.n = l.src \
+                 where l.kind = 'implements' and l.tx_to = ?1 and c.kind = 'commit' and c.retired_tx is null",
+            )?;
+            let all = q
+                .query_map([urdr::graph::schema::SENTINEL], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, i64>(4)? != 0))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(all.into_iter().filter(|r| ns2.contains(&r.1)).collect())
+        })
+        .await
+        .map_err(fail)?;
+    let probe = rows.clone();
+    let gone: Vec<(i64, bool)> = crate::clock::blocking(move || {
+        let mut out = Vec::new();
+        let mut repos: Vec<String> = probe.iter().map(|r| r.3.clone()).collect();
+        repos.sort();
+        repos.dedup();
+        for repo in repos {
+            let dir = PathBuf::from(&repo);
+            if repo.is_empty() || !dir.is_dir() {
+                continue;
+            }
+            let shas: Vec<&str> = probe
+                .iter()
+                .filter(|r| r.3 == repo)
+                .map(|r| r.2.as_str())
+                .collect();
+            let missing: Vec<String> = git_batch_missing(&dir, &shas);
+            let present: Vec<&str> = shas
+                .iter()
+                .copied()
+                .filter(|s| !missing.iter().any(|m| m == s))
+                .collect();
+            let mut args = vec!["rev-list"];
+            args.extend(present.iter().copied());
+            args.extend(["--not", "--all"]);
+            let unreachable: Vec<String> = if present.is_empty() {
+                Vec::new()
+            } else {
+                git_out(&dir, &args)
+                    .map(|t| t.lines().map(str::to_owned).collect())
+                    .unwrap_or_default()
+            };
+            for r in probe.iter().filter(|r| r.3 == repo) {
+                let g = missing.contains(&r.2) || unreachable.contains(&r.2);
+                out.push((r.0, g));
+            }
+        }
+        out
+    })
+    .await
+    .map_err(|e| err(format!("git: {e}")))?;
+    let by_commit = gone;
+    let flags: Vec<(i64, bool)> = rows.iter().map(|r| (r.0, r.4)).collect();
+    let commit_moves = by_commit.iter().any(|(c, g)| {
+        flags
+            .iter()
+            .find(|(n, _)| n == c)
+            .is_some_and(|(_, was)| was != g)
+    });
+    let task_moves = tasks.iter().any(|t| {
+        let range = t.data["range_stale"] == json!(true);
+        let any_gone = rows.iter().filter(|r| r.1 == t.n).any(|r| {
+            by_commit
+                .iter()
+                .find(|(c, _)| *c == r.0)
+                .is_some_and(|(_, g)| *g)
+        });
+        (range || any_gone) != (t.data["stale"] == json!(true))
+    });
+    if !commit_moves && !task_moves {
+        return Ok(());
+    }
+    db.write(meta(), move |tx| {
+        for (cn, g) in &by_commit {
+            let cur = entity::by_n(tx.sql(), *cn)?;
+            let had = cur.as_ref().is_some_and(|c| c.data["gone"] == json!(true));
+            if had != *g {
+                entity::update(
+                    tx,
+                    *cn,
+                    None,
+                    Changes {
+                        data_patch: Some(json!({"gone": g.then_some(true)})),
+                        ..Default::default()
+                    },
+                )?;
+            }
+        }
+        for t in &ns {
+            let cur = entity::by_n(tx.sql(), *t)?;
+            let range = cur
+                .as_ref()
+                .is_some_and(|c| c.data["range_stale"] == json!(true));
+            let any_gone = rows.iter().filter(|r| r.1 == *t).any(|r| {
+                by_commit
+                    .iter()
+                    .find(|(c, _)| *c == r.0)
+                    .is_some_and(|(_, g)| *g)
+            });
+            let stale = range || any_gone;
+            let had = cur.as_ref().is_some_and(|c| c.data["stale"] == json!(true));
+            if had != stale {
+                entity::update(
+                    tx,
+                    *t,
+                    None,
+                    Changes {
+                        data_patch: Some(json!({"stale": stale.then_some(true)})),
+                        ..Default::default()
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(fail)
+}
+
+/// The shas of SHAS that REPO does not have (`git cat-file --batch-check`).
+fn git_batch_missing(repo: &Path, shas: &[&str]) -> Vec<String> {
+    use std::io::Write;
+    let Ok(mut child) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["cat-file", "--batch-check"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return Vec::new();
+    };
+    if let Some(mut si) = child.stdin.take() {
+        let _ = si.write_all(shas.join("\n").as_bytes());
+        let _ = si.write_all(b"\n");
+    }
+    let Ok(out) = child.wait_with_output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let mut w = l.split_whitespace();
+            let (sha, what) = (w.next()?, w.next()?);
+            (what == "missing").then(|| sha.to_owned())
+        })
+        .collect()
+}
+
+/// A ledger's `Ruling:` lines (bare, or after `Task N...: `) as `ruling` entities, one for each line (id
+/// `ruling:LEDGER#LINE`), each `parent_of` the task it names when the plan has it, else of the plan's head; a ruling
+/// whose line went (or changed) is retired (`drgnx-work--parse-ledger`).  Read from the ledger every time: cheap.
+async fn ledger_rulings(
+    db: &CoordDb,
+    plan: &Path,
+    ledger: &Path,
+    tasks: &[Piece],
+) -> Result<(), Error> {
+    let file = ledger.to_string_lossy().into_owned();
+    let text = std::fs::read_to_string(ledger).unwrap_or_default();
+    let re =
+        regex::Regex::new(r"^(?:Task ([0-9]+)[^:]*: )?Ruling: (.*)$").expect("a fixed pattern");
+    let wanted: Vec<(usize, Option<String>, String)> = text
+        .lines()
+        .enumerate()
+        .filter_map(|(i, l)| {
+            let c = re.captures(l)?;
+            Some((
+                i + 1,
+                c.get(1).map(|m| m.as_str().to_owned()),
+                c[2].trim().to_owned(),
+            ))
+        })
+        .collect();
+    let head = pieces(db, plan)
+        .await?
+        .into_iter()
+        .find(|p| p.role == "head")
+        .map(|p| p.n);
+    let by_number: Vec<(String, i64)> = tasks
+        .iter()
+        .filter_map(|t| Some((t.data["number"].as_str()?.to_owned(), t.n)))
+        .collect();
+    // what each wanted line comes to: its id, its title, its data (the parent's entity number is in it)
+    let comes: Vec<(String, String, Value)> = wanted
+        .iter()
+        .filter_map(|(line, number, title)| {
+            let parent = number
+                .as_ref()
+                .and_then(|n| by_number.iter().find(|(k, _)| k == n).map(|(_, n)| *n))
+                .or(head)?;
+            Some((
+                format!("ruling:{file}#{line}"),
+                title.clone(),
+                json!({"ledger": file, "line": line, "parent": parent}),
+            ))
+        })
+        .collect();
+    // nothing to write when the live rulings of this ledger are what its lines come to
+    let f2 = file.clone();
+    let have: Vec<(String, String, Value)> = db
+        .read(move |c| {
+            let mut q = c.prepare(
+                "select id, coalesce(title, ''), data from entity where kind = 'ruling' and retired_tx is null \
+                 and json_extract(data, '$.ledger') = ?1 order by id",
+            )?;
+            let rows = q
+                .query_map([&f2], |r| {
+                    let data: String = r.get(2)?;
+                    Ok((r.get(0)?, r.get(1)?, serde_json::from_str(&data).unwrap_or(Value::Null)))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .map_err(fail)?;
+    let mut sorted = comes.clone();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    if sorted == have {
+        return Ok(());
+    }
+    db.write(meta(), move |tx| {
+        let mut keep: Vec<String> = Vec::new();
+        for (line, number, title) in &wanted {
+            let id = format!("ruling:{file}#{line}");
+            keep.push(id.clone());
+            let parent = number
+                .as_ref()
+                .and_then(|n| by_number.iter().find(|(k, _)| k == n).map(|(_, n)| *n))
+                .or(head);
+            let Some(parent) = parent else { continue };
+            let data = json!({"ledger": file, "line": line, "parent": parent});
+            let r = match entity::by_id(tx.sql(), &id)? {
+                Some(r) => {
+                    entity::unretire(tx, r.n)?;
+                    if r.title.as_deref() != Some(title.as_str()) || r.data != data {
+                        entity::update(
+                            tx,
+                            r.n,
+                            None,
+                            Changes {
+                                title: Some(Some(title.clone())),
+                                data_patch: Some(data),
+                                ..Default::default()
+                            },
+                        )?;
+                    }
+                    r.n
+                }
+                None => {
+                    entity::create(
+                        tx,
+                        EntityNew {
+                            id,
+                            kind: "ruling".into(),
+                            project: None,
+                            title: Some(title.clone()),
+                            status: None,
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data,
+                            origin: Origin::Parsed,
+                            source: Some(file.clone()),
+                        },
+                    )?
+                    .n
+                }
+            };
+            link::add(
+                tx,
+                parent,
+                "parent_of",
+                r,
+                None,
+                Origin::Inferred,
+                Some(&file),
+            )?;
+        }
+        // a ruling of this ledger no line makes now
+        let gone: Vec<i64> = {
+            let mut q = tx.sql().prepare(
+                "select n, id from entity where kind = 'ruling' and retired_tx is null \
+                 and json_extract(data, '$.ledger') = ?1",
+            )?;
+            q.query_map([&file], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|(_, id)| !keep.contains(id))
+            .map(|(n, _)| n)
+            .collect()
+        };
+        for n in gone {
+            entity::retire(tx, n)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(fail)
 }
 
 /// A ledger that lies in a linked git worktree gives its plan the worktree's branch: a `branch:COMMON:NAME` entity the plan
@@ -1288,7 +2155,9 @@ async fn ledger_commits(
                 } else {
                     resolve_commits(&repos, &named)
                 };
-                (n, r)
+                // a range or commit the ledger names that git does not have: the task is stale, never wrong
+                let lost = !named.is_empty() && r.is_none();
+                (n, r, lost)
             })
             .collect::<Vec<_>>()
     })
@@ -1296,7 +2165,20 @@ async fn ledger_commits(
     .map_err(|e| err(format!("git: {e}")))?;
     db.write(meta(), move |tx| {
         let mut keep: Vec<(i64, i64)> = Vec::new();
-        for (task, found) in resolved {
+        for (task, found, lost) in resolved {
+            let had = entity::by_n(tx.sql(), task)?
+                .is_some_and(|t| t.data["range_stale"] == json!(true));
+            if had != lost {
+                entity::update(
+                    tx,
+                    task,
+                    None,
+                    Changes {
+                        data_patch: Some(json!({"range_stale": lost.then_some(true)})),
+                        ..Default::default()
+                    },
+                )?;
+            }
             let Some((repo, commits)) = found else {
                 continue;
             };
@@ -1636,6 +2518,17 @@ async fn backup_store(db: &CoordDb, dir: &Path) -> Result<(), Error> {
 /// The adoption of ROOT's record files: on the first one the files and the graph store are backed up and the notice
 /// goes out (EMIT) before anything is rewritten; files the graph does not have yet are imported (their text as the
 /// records), the others merged ([`Views::sync`]).  A dry run reads and counts.
+/// What an import tells and asks: who hears its events, and the deny-list that keeps the user's notes out.
+#[derive(Clone, Copy)]
+pub struct Ears<'a> {
+    pub emit: &'a (dyn Fn(ViewEvent) + Send + Sync),
+    pub deny: &'a DenyList,
+}
+
+/// Why a root inside `~/org` is refused.
+pub const PERSONAL_NOTES_REFUSAL: &str =
+    "the work tracker never reads a project inside ~/org (personal notes)";
+
 pub async fn import_core(
     db: &CoordDb,
     views: &Views,
@@ -1643,9 +2536,22 @@ pub async fn import_core(
     root: &Path,
     only: Option<RecordKind>,
     dry: bool,
-    emit: &(dyn Fn(ViewEvent) + Send + Sync),
+    ears: Ears<'_>,
 ) -> Result<ImportReport, Error> {
-    let found = discover(root, only);
+    let Ears { emit, deny } = ears;
+    // the user's personal notes (`~/org`) are never read: the hard tier, whatever the user opted in; the one
+    // exception is exactly `~/org/board.org`, which the product reads (`only: board` names it, nothing else of the root)
+    let board_only =
+        only == Some(RecordKind::Board) && deny.check(&root.join("board.org")) == Verdict::Board;
+    if !board_only && let RootVerdict::Denied { .. } = deny.check_root(root) {
+        return Err(err(PERSONAL_NOTES_REFUSAL));
+    }
+    // a file the hard tier denies (a spec a plan names inside `~/org`, even through a link) is never read
+    let mut found = discover(root, only);
+    found.retain(|f| {
+        let v = deny.check(&f.path);
+        v == Verdict::Allowed || (board_only && f.kind == RecordKind::Board && v == Verdict::Board)
+    });
     let mut fresh = Vec::new();
     for f in &found {
         if !noticed(db, &f.path).await? {
@@ -1666,7 +2572,8 @@ pub async fn import_core(
     for f in &found {
         let has = !pieces(db, &f.path).await?.is_empty();
         if dry || !has {
-            files.push(import_one(db, f, dry).await?);
+            let back = !noticed(db, &f.path).await?;
+            files.push(import_one(db, f, dry, back).await?);
         } else {
             files.push(ImportedFile {
                 path: f.path.to_string_lossy().into_owned(),
@@ -1711,6 +2618,9 @@ pub async fn import_core(
         for e in Views::events_of(&f.path, f.kind, &fl, flagged) {
             emit(e);
         }
+    }
+    if only.is_none() {
+        forget_gone(db, root, &found).await?;
     }
     Ok(ImportReport {
         dry_run: false,
@@ -1794,6 +2704,14 @@ fn hub_dir(f: &Front) -> Result<PathBuf, Error> {
 
 pub async fn import(f: &Front, _: &Caller, p: ImportParams) -> Result<ImportReport, Error> {
     let hub = hub_dir(f)?;
+    let dirs = f
+        .dirs
+        .get()
+        .ok_or_else(|| err("the graph store is not open"))?;
+    let (home, config) = (dirs.home.clone(), dirs.config.clone());
+    let deny = crate::clock::blocking(move || DenyList::load(&home, &config))
+        .await
+        .map_err(|e| err(format!("deny-list: {e}")))?;
     let emit = |e: ViewEvent| {
         let (name, body) = e.parts();
         f.broadcast(name, body);
@@ -1805,7 +2723,10 @@ pub async fn import(f: &Front, _: &Caller, p: ImportParams) -> Result<ImportRepo
         Path::new(p.root.as_str()),
         p.only,
         p.dry_run.unwrap_or(false),
-        &emit,
+        Ears {
+            emit: &emit,
+            deny: &deny,
+        },
     )
     .await
 }
@@ -1980,6 +2901,7 @@ mod tests {
         hub: PathBuf,
         db: CoordDb,
         views: Views,
+        deny: DenyList,
     }
 
     fn fix() -> Fix {
@@ -1996,6 +2918,7 @@ mod tests {
             root,
             db,
             views: Views::default(),
+            deny: DenyList::load(&dir.path().join("home"), &dir.path().join("config")),
             _dir: dir,
         }
     }
@@ -2019,7 +2942,10 @@ mod tests {
                 &self.root,
                 only,
                 dry,
-                &emit,
+                Ears {
+                    emit: &emit,
+                    deny: &self.deny,
+                },
             )
             .await
             .unwrap();
@@ -2310,6 +3236,226 @@ mod tests {
         .unwrap()
     }
 
+    /// The scan's other ledger: `.superpowers/sdd/<plan>/progress.md`, named for its plan by its first line (a path
+    /// relative to the repository, here the project root).  Found by the import, it marks its plan's tasks as a
+    /// `X.ledger.md` beside the plan does (the Lisp scan's `drgnx-work--classify` and `drgnx-work--ledger-plan`).
+    #[tokio::test]
+    async fn an_sdd_progress_ledger_is_named_for_its_plan_by_its_first_line() {
+        let f = fix();
+        let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [x] b\n";
+        let pp = f.root.join("docs/plans/drgnx/pair.md");
+        std::fs::write(&pp, plan).unwrap();
+        let dir = f.root.join(".superpowers/sdd/pair");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("progress.md"),
+            "# SDD ledger — plan: docs/plans/drgnx/pair.md\nTask 1: complete (commit abc1234, tests ok)\n",
+        )
+        .unwrap();
+        // a progress.md outside .superpowers/sdd is no ledger
+        std::fs::create_dir_all(f.root.join("notes")).unwrap();
+        std::fs::write(
+            f.root.join("notes/progress.md"),
+            "# SDD ledger — plan: docs/plans/drgnx/pair.md\nTask 2: complete (commit 1234567)\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let one: Value = serde_json::from_str(&ledger_of(&f, "1").await).unwrap();
+        assert_eq!(one["done"], true, "{one}");
+        assert_eq!(one["commits"], json!(["abc1234"]));
+        assert!(
+            one["file"]
+                .as_str()
+                .unwrap()
+                .ends_with(".superpowers/sdd/pair/progress.md"),
+            "{one}"
+        );
+        assert_eq!(ledger_of(&f, "2").await, "none");
+        // the plan's text is untouched
+        assert_eq!(std::fs::read_to_string(&pp).unwrap(), plan);
+    }
+
+    /// `(title, parent's role and number)` of the live rulings, by title.
+    async fn rulings(f: &Fix) -> Vec<(String, String, String)> {
+        f.db.read(|c| {
+            let mut q = c.prepare(
+                "select r.title, coalesce(p.kind, ''), coalesce(json_extract(p.data, '$.number'), json_extract(p.data, '$.role'), '') \
+                 from entity r left join link l on l.dst = r.n and l.kind = 'parent_of' and l.tx_to = ?1 \
+                 left join entity p on p.n = l.src where r.kind = 'ruling' and r.retired_tx is null order by r.title",
+            )?;
+            let rows = q
+                .query_map([urdr::graph::schema::SENTINEL], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// `Ruling:` lines of a ledger (bare, or after `Task N...: `) are rulings under their task, else under the plan;
+    /// one that goes from the ledger is retired (`drgnx-work--parse-ledger`).
+    #[tokio::test]
+    async fn a_ledgers_ruling_lines_are_rulings_under_their_task_or_plan() {
+        let f = fix();
+        let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n";
+        let (pp, lp) = (
+            f.root.join("docs/plans/drgnx/pair.md"),
+            f.root.join("docs/plans/drgnx/pair.ledger.md"),
+        );
+        std::fs::write(&pp, plan).unwrap();
+        std::fs::write(
+            &lp,
+            "# SDD ledger — plan: pair.md\nRuling: the tables stay\nTask 2 (b): Ruling: no cache\nTask 9: Ruling: no such task\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let got = rulings(&f).await;
+        let titles: Vec<&str> = got.iter().map(|r| r.0.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["no cache", "no such task", "the tables stay"],
+            "{got:?}"
+        );
+        // a ruling under a task the plan has is under that task; any other is under the plan's head
+        assert_eq!(got[0].1, "task", "{got:?}");
+        assert_eq!(got[0].2, "2", "{got:?}");
+        assert_eq!(got[1].1, got[2].1, "{got:?}");
+        assert_ne!(got[1].1, "task", "{got:?}");
+        // the line goes: its ruling is retired, the others stay, a second import changes nothing
+        std::fs::write(
+            &lp,
+            "# SDD ledger — plan: pair.md\nRuling: the tables stay\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let got = rulings(&f).await;
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].0, "the tables stay");
+    }
+
+    /// The plans' board items: a board TODO whose `:PLAN_FILE:` names a plan the import holds is `parent_of`-linked from
+    /// that plan (a relative name is read from the nearest `:PROJECT_ROOT:` above it); drop the property and the link
+    /// is retired (`drgnx-work--parse-board`).
+    #[tokio::test]
+    async fn a_board_todo_with_a_plan_file_is_linked_from_its_plan() {
+        let f = fix();
+        let pp = f.root.join("docs/plans/drgnx/pair.md");
+        std::fs::write(&pp, "# Pair\n\n### Task 1: one\n\n- [ ] a\n").unwrap();
+        let board = |plan_line: &str| {
+            format!(
+                "* Proj\n:PROPERTIES:\n:PROJECT_ROOT: {}\n:END:\n** TODO build it\n:PROPERTIES:\n{plan_line}:END:\n** TODO unrelated\n** TODO absolute\n:PROPERTIES:\n:PLAN_FILE: {}\n:END:\n",
+                f.root.display(),
+                pp.display()
+            )
+        };
+        let bp = f.root.join("board.org");
+        std::fs::write(&bp, board(":PLAN_FILE: docs/plans/drgnx/pair.md\n")).unwrap();
+        f.import(Some(RecordKind::Plans), false).await;
+        f.import(Some(RecordKind::Board), false).await;
+        let linked = |f: &Fix| {
+            let q = "select e.title from link l join entity p on p.n = l.src join entity e on e.n = l.dst \
+                     where l.kind = 'parent_of' and l.tx_to = ?1 and p.title = 'Pair' and e.kind = 'task' \
+                     and json_extract(e.data, '$.records.role') = 'item' order by e.title";
+            let db = f.db.clone();
+            async move {
+                db.read(move |c| {
+                    let mut st = c.prepare(q)?;
+                    let r = st
+                        .query_map([urdr::graph::schema::SENTINEL], |r| r.get::<_, String>(0))?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(r)
+                })
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(linked(&f).await, ["absolute", "build it"]);
+        // a second import writes nothing, and the property going retires its link
+        let again = f.import(Some(RecordKind::Board), false).await;
+        assert!(again.files.iter().all(|x| x.ops == 0), "{again:?}");
+        std::fs::write(&bp, board("")).unwrap();
+        f.import(Some(RecordKind::Board), false).await;
+        assert_eq!(linked(&f).await, ["absolute"]);
+    }
+
+    /// The files the import finds in a tree that holds what the Lisp scan's walk met: plans and specs outside `docs/`, a
+    /// markdown with no task headings, files under each skipped folder, a link, a folder past the depth, and a linked
+    /// worktree (only its ledgers count).  The expected list is what `drgnx-work--walk` and `drgnx-work--classify`
+    /// returned on this same tree.
+    #[test]
+    fn discover_finds_what_the_lisp_walk_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("proj");
+        let w = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let plan = "# P\n\n### Task 1: a\n\n- [ ] x\n";
+        let ledger = "# SDD ledger — plan: x.md\n";
+        w("a/plans/x.md", plan);
+        w("a/plans/no-tasks.md", "# Only prose\n");
+        w(
+            "a/plans/fenced.md",
+            "# F\n\n```\n### Task 1: in a fence\n```\n",
+        );
+        w("a/plans/x.ledger.md", ledger);
+        w("b/specs/s.md", "# S\n");
+        w("b/notes/n.md", plan);
+        w("c/d/e/plans/deep.md", plan);
+        // a file 7 folders down is read, one 8 down is not (the walk's depth is 7)
+        w("l1/l2/l3/l4/l5/l6/plans/seven.md", plan);
+        w("l1/l2/l3/l4/l5/l6/l7/plans/eight.md", plan);
+        for skipped in [
+            ".git",
+            "node_modules",
+            "eln-cache",
+            "elpa",
+            "target",
+            "dist",
+            "build",
+        ] {
+            w(&format!("{skipped}/plans/hidden.md"), plan);
+        }
+        w(".claude/tmp/plans/tmp.md", plan);
+        w(".claude/plans/kept.md", plan);
+        w(".superpowers/sdd/x/progress.md", ledger);
+        w("notes/progress.md", ledger);
+        // a linked worktree (its .git is a file): only its ledgers count
+        w("wt/.git", "gitdir: /elsewhere\n");
+        w("wt/plans/copy.md", plan);
+        w("wt/docs/plans/copy2.md", plan);
+        w("wt/docs/plans/copy.ledger.md", ledger);
+        // a link is not followed
+        std::fs::create_dir_all(dir.path().join("outside/plans")).unwrap();
+        std::fs::write(dir.path().join("outside/plans/o.md"), plan).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("outside"), root.join("linked")).unwrap();
+        let mut got: Vec<String> = discover(&root, None)
+            .into_iter()
+            .map(|f| {
+                format!(
+                    "{} {}",
+                    f.path.strip_prefix(&root).unwrap().display(),
+                    f.parse
+                )
+            })
+            .collect();
+        got.sort();
+        let want = [
+            ".claude/plans/kept.md plan",
+            ".superpowers/sdd/x/progress.md ledger",
+            "a/plans/x.ledger.md ledger",
+            "a/plans/x.md plan",
+            "b/specs/s.md spec",
+            "c/d/e/plans/deep.md plan",
+            "l1/l2/l3/l4/l5/l6/plans/seven.md plan",
+            "wt/docs/plans/copy.ledger.md ledger",
+        ];
+        assert_eq!(got, want, "{got:#?}");
+    }
+
     #[tokio::test]
     async fn a_ledger_marks_its_plans_tasks_without_ticking_the_plan() {
         let f = fix();
@@ -2428,6 +3574,569 @@ mod tests {
         assert!(implements_of(&f).await.is_empty());
     }
 
+    fn gitc(repo: &Path, args: &[&str]) -> String {
+        let o = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t.invalid"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "git {args:?}: {o:?}");
+        String::from_utf8_lossy(&o.stdout).trim().to_owned()
+    }
+
+    /// `(plan title, spec title)` of every live `derives` link.
+    async fn derives_of(f: &Fix) -> Vec<(String, String)> {
+        f.db.read(|c| {
+            let mut st = c.prepare(
+                "select p.title, s.title from link l join entity p on p.n = l.src join entity s on s.n = l.dst \
+                 where l.kind = 'derives' and l.tx_to = ?1 and p.retired_tx is null and s.retired_tx is null \
+                 order by 1, 2",
+            )?;
+            Ok(st
+                .query_map([urdr::graph::schema::SENTINEL], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// A spec two plans name is derived by both; a plan with no spec derives nothing and stays a root
+    /// (`plans-without-a-spec-and-specs-of-two-plans`).
+    #[tokio::test]
+    async fn a_spec_of_two_plans_and_a_plan_without_one() {
+        let f = fix();
+        let w = |rel: &str, text: &str| {
+            let p = f.root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        w("docs/specs/drgnx/s.md", "# The spec\n");
+        w(
+            "docs/plans/drgnx/one.md",
+            "# One\n\n**Spec:** `docs/specs/drgnx/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
+        );
+        w(
+            "docs/plans/drgnx/two.md",
+            "# Two\n\n**Spec:** `docs/specs/drgnx/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
+        );
+        w(
+            "docs/plans/drgnx/lone.md",
+            "# Lone\n\n### Task 1: a\n\n- [ ] x\n",
+        );
+        f.import(None, false).await;
+        let got = derives_of(&f).await;
+        assert!(got.contains(&("One".into(), "The spec".into())), "{got:?}");
+        assert!(got.contains(&("Two".into(), "The spec".into())), "{got:?}");
+        assert!(!got.iter().any(|(p, _)| p == "Lone"), "{got:?}");
+    }
+
+    /// A task whose steps are all ticked is done, one with an open step is not (`steps-of-a-completed-task-count-as-done`).
+    #[tokio::test]
+    async fn a_task_with_every_step_ticked_is_done() {
+        let f = fix();
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/steps.md"),
+            "# Steps\n\n### Task 1: all\n\n- [x] a\n- [x] b\n\n### Task 2: some\n\n- [x] a\n- [ ] b\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let status = |n: &'static str| {
+            let db = f.db.clone();
+            async move {
+                db.read(move |c| {
+                    Ok(c.query_row(
+                        "select coalesce(status, '') from entity where kind = 'task' and retired_tx is null \
+                         and json_extract(data, '$.number') = ?1 and json_extract(data, '$.records.file') like '%/steps.md'",
+                        [n],
+                        |r| r.get::<_, String>(0),
+                    )?)
+                })
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(status("1").await, "done");
+        assert_ne!(status("2").await, "done");
+    }
+
+    /// A repository with two commits, a plan of two tasks, and a ledger marking task 1 with the second commit; the
+    /// commits' shas and the ledger's path.
+    async fn two_commit_fix(f: &Fix, ledger_name: &str) -> (String, String, PathBuf) {
+        let repo = f.root.clone();
+        gitc(&repo, &["init", "-q"]);
+        std::fs::write(repo.join("a"), "1").unwrap();
+        gitc(&repo, &["add", "-A"]);
+        gitc(&repo, &["commit", "-q", "-m", "first"]);
+        let first = gitc(&repo, &["rev-parse", "HEAD"]);
+        std::fs::write(repo.join("a"), "2").unwrap();
+        gitc(&repo, &["commit", "-q", "-am", "second"]);
+        let second = gitc(&repo, &["rev-parse", "HEAD"]);
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/pair.md"),
+            "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n",
+        )
+        .unwrap();
+        let lp = f.root.join("docs/plans/drgnx").join(ledger_name);
+        std::fs::write(
+            &lp,
+            format!(
+                "# SDD ledger — plan: pair.md\nTask 1: complete (commits {}..{}, tests ok)\n",
+                &first[..9],
+                &second[..9]
+            ),
+        )
+        .unwrap();
+        (first, second, lp)
+    }
+
+    /// A link the hub recorded (origin recorded: a job's commit, a user's) is never retired by a ledger that stops
+    /// naming a commit: only the links the ledger made are its to retire (`a-ledger-never-downgrades-a-recorded-link`).
+    #[tokio::test]
+    async fn a_ledger_never_retires_a_recorded_link() {
+        let f = fix();
+        let (_first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
+        f.import(None, false).await;
+        // the commit is recorded as well: a link of origin recorded, with the hub as its source
+        let id = format!("commit:{second}");
+        f.db.write(meta(), move |tx| {
+            let c = entity::by_id(tx.sql(), &id)?.unwrap().n;
+            let t: i64 = tx.sql().query_row(
+                "select dst from link where src = ?1 and kind = 'implements' and tx_to = ?2",
+                (c, urdr::graph::schema::SENTINEL),
+                |r| r.get(0),
+            )?;
+            link::add(tx, c, "implements", t, None, Origin::Recorded, Some("job"))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        std::fs::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
+        f.sync(&lp).await;
+        let got = implements_of(&f).await;
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].2, "recorded", "{got:?}");
+    }
+
+    /// A commit two ledgers name keeps its link from the one that still does when the other stops
+    /// (`a-commit-two-ledgers-name-stays-when-either-goes`).
+    #[tokio::test]
+    async fn a_commit_two_ledgers_name_stays_when_either_goes() {
+        let f = fix();
+        let (_first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
+        let sdd = f.root.join(".superpowers/sdd/pair");
+        std::fs::create_dir_all(&sdd).unwrap();
+        let text = std::fs::read_to_string(&lp).unwrap();
+        let named = text.replacen(
+            "plan: pair.md",
+            &format!(
+                "plan: {}",
+                f.root.join("docs/plans/drgnx/pair.md").display()
+            ),
+            1,
+        );
+        std::fs::write(sdd.join("progress.md"), named).unwrap();
+        f.import(None, false).await;
+        let got = implements_of(&f).await;
+        assert_eq!(got.len(), 1, "one link (a link has one source): {got:?}");
+        std::fs::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
+        f.sync(&lp).await;
+        let got = implements_of(&f).await;
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(
+            got[0].3.ends_with(".superpowers/sdd/pair/progress.md"),
+            "{got:?}"
+        );
+        assert_eq!(got[0].0, format!("commit:{second}"));
+    }
+
+    /// Live entities (not retired) whose source is FILE's.
+    async fn live_of(f: &Fix, file: &Path) -> i64 {
+        let key = saga::import::source_key(file);
+        f.db.read(move |c| {
+            Ok(c.query_row(
+                "select count(*) from entity where source = ?1 and retired_tx is null",
+                [&key],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// A file that left (deleted, or no longer a record) is forgotten: its entities are retired
+    /// (`a-rescan-reads-only-what-changed-and-forgets-what-left`).
+    #[tokio::test]
+    async fn a_file_that_left_is_forgotten() {
+        let f = fix();
+        let p = f.root.join("docs/plans/drgnx/gone.md");
+        std::fs::write(&p, "# Gone\n\n### Task 1: a\n\n- [ ] x\n").unwrap();
+        f.import(None, false).await;
+        assert!(live_of(&f, &p).await > 0);
+        std::fs::remove_file(&p).unwrap();
+        f.import(None, false).await;
+        assert_eq!(live_of(&f, &p).await, 0);
+    }
+
+    /// A file written again within the clock tick of its last read (the same size and time) is read again: the
+    /// hash of its text decides (`a-file-changed-while-it-is-read-is-read-again`).
+    #[tokio::test]
+    async fn a_file_changed_inside_one_tick_is_read_again() {
+        let f = fix();
+        let p = f.root.join("docs/plans/drgnx/tick.md");
+        std::fs::write(&p, "# Tick\n\n### Task 1: a\n\n- [ ] x\n").unwrap();
+        f.import(None, false).await;
+        let before = std::fs::metadata(&p).unwrap().modified().unwrap();
+        std::fs::write(&p, "# Tick\n\n### Task 1: b\n\n- [ ] x\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(before)
+            .unwrap();
+        f.views.sync_all(&f.db).await.unwrap();
+        let title: String =
+            f.db.read(|c| {
+                Ok(c.query_row(
+                    "select title from entity where kind = 'task' and retired_tx is null \
+                     and json_extract(data, '$.records.file') like '%/tick.md'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert!(title.contains('b'), "{title}");
+    }
+
+    /// `(task number, stale)` of the live tasks of `pair.md`.
+    async fn stale_of(f: &Fix) -> Vec<(String, String)> {
+        f.db.read(|c| {
+            let mut q = c.prepare(
+                "select json_extract(data, '$.number'), cast(coalesce(json_extract(data, '$.stale'), 'no') as text) from entity \
+                 where kind = 'task' and retired_tx is null and json_extract(data, '$.records.file') like '%/pair.md' \
+                 order by 1",
+            )?;
+            Ok(q.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// A range git does not have marks its task stale, never wrong; commits no branch reaches any more (a rebase,
+    /// an amend) are gone and their tasks stale until reachable again
+    /// (`a-range-git-no-longer-has-is-stale-never-wrong`, `rewritten-commits-turn-stale-on-the-next-scan`).
+    #[tokio::test]
+    async fn a_range_git_lost_and_rewritten_commits_make_a_task_stale() {
+        let f = fix();
+        let (first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
+        let _ = (&first, &second);
+        f.import(None, false).await;
+        assert_eq!(
+            stale_of(&f).await,
+            [("1".into(), "no".into()), ("2".into(), "no".into())]
+        );
+        // the commits are rewritten away: unreachable from every ref
+        gitc(&f.root, &["reset", "-q", "--hard", &first]);
+        f.sync(&lp).await;
+        assert_eq!(
+            stale_of(&f).await,
+            [("1".into(), "1".into()), ("2".into(), "no".into())]
+        );
+        // reachable again: the task is current
+        gitc(&f.root, &["reset", "-q", "--hard", &second]);
+        f.sync(&lp).await;
+        assert_eq!(
+            stale_of(&f).await,
+            [("1".into(), "no".into()), ("2".into(), "no".into())]
+        );
+        // a range git never had: stale at once
+        std::fs::write(
+            &lp,
+            "# SDD ledger — plan: pair.md\nTask 2: complete (commits 1111111..2222222)\n",
+        )
+        .unwrap();
+        f.sync(&lp).await;
+        assert_eq!(
+            stale_of(&f).await,
+            [("1".into(), "no".into()), ("2".into(), "1".into())]
+        );
+    }
+
+    /// A ledger that goes (its worktree removed) takes its own links with it and keeps what was recorded; its plan is
+    /// read again from what is left (`a-removed-worktree-re-reads-its-plan-and-keeps-recorded-commits`).
+    #[tokio::test]
+    async fn a_ledger_that_goes_keeps_what_was_recorded() {
+        let f = fix();
+        let (_first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
+        f.import(None, false).await;
+        let id = format!("commit:{second}");
+        f.db.write(meta(), move |tx| {
+            let c = entity::by_id(tx.sql(), &id)?.unwrap().n;
+            let t: i64 = tx.sql().query_row(
+                "select dst from link where src = ?1 and kind = 'implements' and tx_to = ?2",
+                (c, urdr::graph::schema::SENTINEL),
+                |r| r.get(0),
+            )?;
+            link::add(tx, c, "implements", t, None, Origin::Recorded, Some("job"))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        std::fs::remove_file(&lp).unwrap();
+        // the plan alone is read again (a hub change event, not an import): the marks of the ledger that went are gone
+        f.sync(&f.root.join("docs/plans/drgnx/pair.md")).await;
+        assert_eq!(ledger_of(&f, "1").await, "none");
+        f.import(None, false).await;
+        f.views.sync_all(&f.db).await.unwrap();
+        let got = implements_of(&f).await;
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].2, "recorded", "{got:?}");
+        // and the plan no longer says its tasks are marked
+        assert_eq!(ledger_of(&f, "1").await, "none");
+    }
+
+    /// A plan whose spec is deleted is a root again; a spec outside `specs/` is read while a plan names it and goes
+    /// with its last plan; a spec of a sub-repository (named from the plan's own root) is found
+    /// (`a-plan-whose-spec-is-deleted-becomes-a-root`, `a-spec-outside-specs-is-read-again-and-goes-with-its-last-plan`,
+    /// `a-single-commit-and-a-spec-in-a-sub-repository`).
+    #[tokio::test]
+    async fn a_spec_outside_specs_follows_its_plans() {
+        let f = fix();
+        let w = |rel: &str, text: &str| {
+            let p = f.root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        w("sub/docs/design/s.md", "# Loose spec\n");
+        w(
+            "sub/docs/plans/x.md",
+            "# Sub plan\n\n**Spec:** `docs/design/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
+        );
+        f.import(None, false).await;
+        assert_eq!(
+            derives_of(&f).await,
+            [("Sub plan".to_owned(), "Loose spec".to_owned())]
+        );
+        // the spec is deleted: the plan is a root
+        std::fs::remove_file(f.root.join("sub/docs/design/s.md")).unwrap();
+        f.import(None, false).await;
+        assert!(derives_of(&f).await.is_empty());
+        // back again, then the plan goes: the spec goes with its last plan
+        w("sub/docs/design/s.md", "# Loose spec\n");
+        f.import(None, false).await;
+        assert_eq!(derives_of(&f).await.len(), 1);
+        std::fs::remove_file(f.root.join("sub/docs/plans/x.md")).unwrap();
+        f.import(None, false).await;
+        assert_eq!(live_of(&f, &f.root.join("sub/docs/design/s.md")).await, 0);
+    }
+
+    /// A project inside `~/org` is refused whatever was opted in: the user's personal notes are never read, and nothing
+    /// of them reaches the graph (`a-root-inside-org-is-refused`).
+    #[tokio::test]
+    async fn a_root_inside_the_users_org_is_refused_and_nothing_is_read() {
+        let f = fix();
+        let home = f._dir.path().join("home");
+        let proj = home.join("org/proj");
+        std::fs::create_dir_all(proj.join("docs/plans")).unwrap();
+        std::fs::write(
+            proj.join("docs/plans/p.md"),
+            "# P\n\n### Task 1: a\n\n- [ ] x\n",
+        )
+        .unwrap();
+        let deny = DenyList::load(&home, &f._dir.path().join("config"));
+        let heard = |_e: ViewEvent| {};
+        let got = import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &proj,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
+        )
+        .await;
+        assert_eq!(got.unwrap_err().message, PERSONAL_NOTES_REFUSAL);
+        assert_eq!(f.count(RECS).await, 0);
+        // a project outside it is read
+        let ok = import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &f.root,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
+        )
+        .await;
+        assert!(ok.is_ok());
+    }
+
+    /// A spec a plan names inside the user's `~/org` (by its path, or through a link) is not read: the hard tier
+    /// denies the file whatever names it (`a-spec-into-org-is-not-sent`, `a-spec-symlink-into-org-is-not-sent`).
+    #[tokio::test]
+    async fn a_spec_a_plan_names_inside_org_is_never_read() {
+        let f = fix();
+        let home = f._dir.path().join("home");
+        std::fs::create_dir_all(home.join("org")).unwrap();
+        let secret = home.join("org/secret.md");
+        std::fs::write(&secret, "# Secret spec\n").unwrap();
+        std::fs::create_dir_all(f.root.join("docs/specs")).unwrap();
+        std::os::unix::fs::symlink(&secret, f.root.join("docs/specs/link.md")).unwrap();
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/named.md"),
+            format!(
+                "# Names it\n\n**Spec:** `{}`\n\n### Task 1: a\n\n- [ ] x\n",
+                secret.display()
+            ),
+        )
+        .unwrap();
+        let deny = DenyList::load(&home, &f._dir.path().join("config"));
+        let heard = |_e: ViewEvent| {};
+        import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &f.root,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
+        )
+        .await
+        .unwrap();
+        let titles: Vec<String> =
+            f.db.read(|c| {
+                let mut q = c.prepare("select title from entity where retired_tx is null")?;
+                Ok(q.query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<_, _>>()?)
+            })
+            .await
+            .unwrap();
+        assert!(titles.iter().all(|t| !t.contains("Secret")), "{titles:?}");
+        assert!(titles.iter().any(|t| t == "Names it"), "{titles:?}");
+    }
+
+    /// The one file of `~/org` the product reads is `board.org` (named by `only: board`): its items are imported,
+    /// nothing else of `~/org` is, and a full import of `~/org` stays refused.
+    #[tokio::test]
+    async fn the_board_in_the_users_org_is_read_and_nothing_else_of_it() {
+        let f = fix();
+        let home = f._dir.path().join("home");
+        let org = home.join("org");
+        std::fs::create_dir_all(org.join("docs/plans")).unwrap();
+        std::fs::write(
+            org.join("docs/plans/p.md"),
+            "# P\n\n### Task 1: a\n\n- [ ] x\n",
+        )
+        .unwrap();
+        std::fs::write(org.join("notes.org"), "* private\n").unwrap();
+        std::fs::write(org.join("board.org"), "* TODO a board item\n").unwrap();
+        let deny = DenyList::load(&home, &f._dir.path().join("config"));
+        let heard = |_e: ViewEvent| {};
+        let full = import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &org,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
+        )
+        .await;
+        assert_eq!(full.unwrap_err().message, PERSONAL_NOTES_REFUSAL);
+        let got = import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &org,
+            Some(RecordKind::Board),
+            false,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.files.len(), 1, "{got:?}");
+        assert!(got.files[0].path.ends_with("org/board.org"));
+        assert!(live_of(&f, &org.join("board.org")).await > 0);
+        assert_eq!(live_of(&f, &org.join("docs/plans/p.md")).await, 0);
+        assert_eq!(live_of(&f, &org.join("notes.org")).await, 0);
+    }
+
+    /// `### Task 14b:` is a task of its own, not Task 14; `### Task A1 (now): …` is one; a heading inside a code fence
+    /// is none, and nor are the steps in it
+    /// (`task-headings-14b-and-a1-are-tasks-and-fenced-ones-are-not`).
+    #[tokio::test]
+    async fn task_headings_14b_and_a1_are_tasks_and_fenced_ones_are_not() {
+        let f = fix();
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/heads.md"),
+            "# Plan\n\n### Task 14: fourteen\n- [ ] a\n\n### Task 14b: between\n- [ ] b\n\n\
+             ### Task A1 (now): lettered\n- [ ] c\n\n```\n### Task 99: only an example\n- [ ] x\n```\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let numbers: Vec<String> = f
+            .db
+            .read(|c| {
+                let mut q = c.prepare(
+                    "select json_extract(data, '$.number') from entity where kind = 'task' and retired_tx is null \
+                     and json_extract(data, '$.records.file') like '%/heads.md' order by 1",
+                )?;
+                Ok(q.query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<_, _>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(numbers, ["14", "14b", "A1"]);
+        let steps: i64 =
+            f.db.read(|c| {
+                Ok(c.query_row(
+                    "select count(*) from entity where kind = 'step' and retired_tx is null \
+                     and json_extract(data, '$.records.file') like '%/heads.md'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(steps, 3);
+    }
+
+    /// A root that is itself named `plans` or `specs` classifies by the paths under it alone
+    /// (`a-root-inside-a-specs-or-plans-directory-classifies-by-its-own-paths`).
+    #[test]
+    fn a_root_named_plans_classifies_by_its_own_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("plans");
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/n.md"), "# Notes\n\n### Task 1: a\n").unwrap();
+        std::fs::create_dir_all(root.join("sub/plans")).unwrap();
+        std::fs::write(root.join("sub/plans/p.md"), "# P\n\n### Task 1: a\n").unwrap();
+        let got: Vec<String> = discover(&root, None)
+            .into_iter()
+            .map(|f| f.path.strip_prefix(&root).unwrap().display().to_string())
+            .collect();
+        // the root's own name counts for nothing: only sub/plans/p.md is under a plans/ folder
+        assert_eq!(got, ["sub/plans/p.md"], "{got:?}");
+    }
+
     /// The head of the plan `pair.md`'s `data.git`, as text (or "none").
     async fn git_of(f: &Fix) -> String {
         f.db.read(|c| {
@@ -2479,7 +4188,10 @@ mod tests {
             &wt,
             Some(RecordKind::Plans),
             false,
-            &heard,
+            Ears {
+                emit: &heard,
+                deny: &f.deny,
+            },
         )
         .await
         .unwrap();
@@ -2490,7 +4202,10 @@ mod tests {
             &wt,
             Some(RecordKind::Ledgers),
             false,
-            &heard,
+            Ears {
+                emit: &heard,
+                deny: &f.deny,
+            },
         )
         .await
         .unwrap();

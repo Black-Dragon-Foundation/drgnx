@@ -262,7 +262,7 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     "test/unit/ui-compositor-test.el" "test/unit/update-test.el" "test/unit/user-lisp-test.el"
     "test/unit/wait-fixture-test.el" "test/unit/wb-git-edge-test.el" "test/unit/wb-git-test.el"
     "test/unit/wb-guard-test.el" "test/unit/wb-monitors-test.el" "test/unit/work-record-test.el"
-    "test/unit/work-scan-test.el" "test/unit/work-test.el")
+    "test/unit/work-test.el")
   "The files test/pattern-pending.eld may list: its rows of 2026-11-05, and the register equals it.  The register only
 shrinks: a file that gains a pattern line, or is deleted, leaves both the register and this list; a new `cond' file
 carries a pattern from the start.")

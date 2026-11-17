@@ -535,8 +535,9 @@ fn every_old_select_runs_on_the_views() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
     // The extraction found the readers it must (a sanity bound: 18 once the Lisp writers' own reads, the cockpit's
-    // files and then the coordination readers were deleted, and the fragment over two views).
-    assert!(checked.len() >= 18, "{}: {checked:#?}", checked.len());
+    // files and then the coordination readers were deleted, and the fragment over two views; 16 once the Lisp scan,
+    // whose two reads these were, went to the importer).
+    assert!(checked.len() >= 16, "{}: {checked:#?}", checked.len());
     assert!(
         checked
             .iter()

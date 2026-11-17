@@ -9,8 +9,8 @@ commits of the work drgnx starts. Commit messages are never changed.
 
 ## What it reads
 
-`drgnx work scan [DIR…]` (no DIR: the roots in `projects.eld` and `drgnx-work-roots`) walks each root seven levels
-down (not into `.git`, `node_modules`, `eln-cache`, `elpa`, `target`, `dist`, `build`, `.claude/tmp`):
+`drgnx work scan [DIR…]` (no DIR: the roots in `projects.eld` and `drgnx-work-roots`) has the hub's records importer
+(`records/import`) walk each root seven levels down (not into `.git`, `node_modules`, `eln-cache`, `elpa`, `target`, `dist`, `build`, `.claude/tmp`):
 
 - **specs:** Markdown under a `specs/` directory inside the root (directories above the root do not count); the title is the first `# ` heading.
 - **plans:** Markdown under a `plans/` directory inside the root, with `### Task N:` headings (N is a number, a number and a letter as `14b` for a task added between 14 and 15, or a letter and
@@ -27,6 +27,19 @@ down (not into `.git`, `node_modules`, `eln-cache`, `elpa`, `target`, `dist`, `b
   read again from what is left — keep a copy (`docs/plans/<plan>.ledger.md`) to keep that history.
 - **the board:** TODOs with a `:PLAN_FILE:` property (onboarding's import) appear under their plan; a relative path
   is resolved against the `:PROJECT_ROOT:` of the project heading the TODO is under (none there: not shown).
+
+The importer is the only reader (the editor has no scan of its own any more). Beyond `docs/specs`, `docs/plans` and
+`docs/decisions` it reads what the old scan read: Markdown under a `specs/` or `plans/` directory at any depth of the
+root (a root that is itself named `plans` or `specs` counts by the paths under it alone), a spec a plan names outside
+`specs/` (also one in a sub-repository, resolved from the plan's folder up), and a spec or plan inside a linked git
+worktree only as a ledger. It finds `.superpowers/sdd/*/progress.md` ledgers anywhere under a root (a `progress.md`
+elsewhere is no ledger) and names the plan each one feeds by its first line; each `Ruling:` line is a ruling entity under
+its task (the plan's head when the task is not in the plan), retired when its line goes; and a board TODO whose
+`:PLAN_FILE:` names an imported plan is a child of that plan (a plan imported after its board is linked at the board's
+next sync; only a board under an imported root is read). A file that left the root is forgotten (its records retired,
+and back again when the file is); a ledger that goes keeps the links recorded for its commits. A project inside `~/org`
+is refused (`drgnx work scan` prints `refused: ROOT (why)`), and a spec a plan names inside `~/org`, even through a
+link, is never read: the user's personal notes stay off-limits.
 
 A plan is *merged* when all its tasks are done and its branch is in `main`/`master` (or gone). Only files that
 changed since the last scan are read again (a rescan of 30 files takes well under a second). Every scan also
