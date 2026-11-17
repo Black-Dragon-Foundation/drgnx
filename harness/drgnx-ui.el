@@ -830,7 +830,10 @@ its log (UI-SCALE-1: an image without gdctl's python3-gobject started every sess
     ;; the virtual backend: no GPU, one output per monitor; no XWayland (no X display in the shared /tmp)
     ("kwin" (let ((size (split-string (plist-get sess :size) "x")))
               (append
-               (list "dbus-run-session" "--" "kwin_wayland" "--virtual" "--width" (car size) "--height" (cadr size)
+               ;; KWin offers its fake input (the harness's pointer and keyboard, `drgnx-uitest--kwin-fake-input') only
+               ;; to clients it trusts; the test session's KWin trusts every client
+               (list "dbus-run-session" "--" "env" "KWIN_WAYLAND_NO_PERMISSION_CHECKS=1"
+                     "kwin_wayland" "--virtual" "--width" (car size) "--height" (cadr size)
                      "--output-count" (number-to-string (or (plist-get sess :monitors) 1)))
                ;; the scales are set by RUN/kwin-session.sh (kscreen-doctor)
                (list "--socket" "wayland-1" "--no-lockscreen" "--no-global-shortcuts"

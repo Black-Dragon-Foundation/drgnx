@@ -126,9 +126,10 @@ paths no WM serves."
            (run (plist-get s :run))
            (xdg (plist-get s :xdg_runtime_dir))
            (env (drgnx-ui-session-env s)))
-      ;; its own bus; KWin lives as long as the session's Emacs
+      ;; its own bus; KWin lives as long as the session's Emacs and offers every client its fake input
       (should (equal (drgnx-ui-compositor-argv s)
-                     (list "dbus-run-session" "--" "kwin_wayland" "--virtual" "--width" "1280" "--height" "800"
+                     (list "dbus-run-session" "--" "env" "KWIN_WAYLAND_NO_PERMISSION_CHECKS=1"
+                           "kwin_wayland" "--virtual" "--width" "1280" "--height" "800"
                            "--output-count" "2" "--socket" "wayland-1" "--no-lockscreen" "--no-global-shortcuts"
                            "--exit-with-session"
                            (concat (drgnx-ui-emacs-bin) " --init-directory " (expand-file-name "init" run)))))
