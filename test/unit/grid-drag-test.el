@@ -17,10 +17,12 @@
   (let ((e (drgnx-grid--edges window))) (cons (/ (+ (nth 0 e) (nth 2 e)) 2) (/ (+ (nth 1 e) (nth 3 e)) 2))))
 
 (defmacro drgnx-grid-drag-test--events (events &rest body)
-  "BODY with `read-event' answering EVENTS in turn (then a quit)."
+  "BODY with `read-event' and `read-key' (a tab press reads its release with it) answering EVENTS in turn (then a
+quit)."
   (declare (indent 1))
-  `(let ((queue ,events))
-     (cl-letf (((symbol-function 'read-event) (lambda (&rest _) (if queue (pop queue) (signal 'quit nil)))))
+  `(let* ((queue ,events)
+          (next (lambda (&rest _) (if queue (pop queue) (signal 'quit nil)))))
+     (cl-letf (((symbol-function 'read-event) next) ((symbol-function 'read-key) next))
        ,@body)))
 
 (ert-deftest drgnx-grid-drag/zones-pick-the-target ()
