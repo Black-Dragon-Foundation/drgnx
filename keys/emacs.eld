@@ -677,6 +677,7 @@
               (layout-save :none "the palette")
               (layout-pick :none "the palette")
               (layout-restore-previous "C-x w u")
+              (tile-switcher "C-x w w")
               (shell-toggle-rail :none "the palette")
               (shell-toggle-title :none "the palette")
               (shell-toggle-right :none "the palette")
