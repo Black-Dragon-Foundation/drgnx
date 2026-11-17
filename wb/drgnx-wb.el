@@ -312,6 +312,22 @@ The same object until `drgnx-wb--row-faces-clear'."
 is the inset), invisible on a terminal."
   (propertize " " 'display '(when (display-graphic-p) space :align-to right) 'invisible t 'face face))
 
+(defun drgnx-wb--tail-places ()
+  "(END AT-DOTS AT-MARK): where a row's tail ends, its ⋯ starts and its mark starts, in columns from the text area's
+right edge on the selected frame (`drgnx-wb-row-tail')."
+  (pcase-let* ((`(,dots ,mark-px ,gap ,pad ,cell) (drgnx-wb--tail-geometry))
+               (cell (float cell))
+               (end (max 2.0 (/ pad cell)))
+               (at-dots (max 3.0 (+ end (/ dots cell)))))
+    (list end at-dots (max 4.0 (+ at-dots (/ (+ gap mark-px) cell))))))
+
+(defun drgnx-wb-tail-reserve (window)
+  "The pixels (a terminal's: columns) a row keeps free at WINDOW's right edge for its tail, mark and ⋯
+\(`drgnx-wb-row-tail'), which are placed from that edge: a row's text that ran into them would push them past it.  The
+`drgnx-view-env-right-reserve' of the views whose rows get tails (the Explorer's, the Buffers panel's)."
+  (with-selected-frame (window-frame window)
+    (ceiling (* (nth 2 (drgnx-wb--tail-places)) (frame-char-width)))))
+
 (defun drgnx-wb-row-tail (mark face row &optional control)
   "The string at a row's right edge: MARK (a string or nil) in FACE and the code face, then the control: on a
 graphical frame hidden until the row is hovered (window-dark.html), drawn in the row's colour; on a terminal shown.
@@ -326,11 +342,7 @@ A terminal's last two columns stay free (the last shows the truncation `$'), so 
 the ⋯ starts 3 in and the mark 4: the same on every frame, whichever painted it.  A graphical frame then stretches
 the tail on to the text area's right edge (`drgnx-wb--row-end'), so the fill, the hover and the ring end at the
 card's inset."
-  (pcase-let* ((`(,dots ,mark-px ,gap ,pad ,cell) (drgnx-wb--tail-geometry))
-               (cell (float cell))
-               (end (max 2.0 (/ pad cell)))
-               (at-dots (max 3.0 (+ end (/ dots cell))))
-               (at-mark (max 4.0 (+ at-dots (/ (+ gap mark-px) cell))))
+  (pcase-let* ((`(,end ,at-dots ,at-mark) (drgnx-wb--tail-places))
                (c (or control drgnx-wb--control))
                (c (if (get-text-property 0 'face c) c
                     (let ((hidden (drgnx-look-hover-control c nil)))

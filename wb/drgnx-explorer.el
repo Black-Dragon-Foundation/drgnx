@@ -30,6 +30,7 @@
 (require 'drgnx-git)
 (require 'drgnx-timer)
 (require 'drgnx-file-stream)
+(defvar drgnx-view-env-right-reserve)
 (require 'drgnx-quick-open)                ; Find's rows from the hub (`search/files')
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
@@ -1124,6 +1125,8 @@ Explorer buffer's: the twin's kill leaves them."
     (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)
     (drgnx-explorer--wait-for-hub)
     (require 'drgnx-view-env)
+    ;; each row's tail is drawn from the window's right edge: the hub fits the rows short of it
+    (setq-local drgnx-view-env-right-reserve #'drgnx-wb-tail-reserve)
     (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--rows-subscribe)
     (drgnx-explorer--rows-subscribe)))
 

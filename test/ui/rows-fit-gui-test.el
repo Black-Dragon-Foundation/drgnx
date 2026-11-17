@@ -571,3 +571,64 @@ hub for the window further on, and its rows then hold entries past the first win
         (when (frame-live-p frame) (delete-frame frame))
         (when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (kill-buffer b))
         (delete-directory dir t)))))
+
+(defun drgnx-rows-fit-ui-test--row-end-x (window eol)
+  "The x in WINDOW where the text of the row ending at EOL ends: its last character's right edge (its tail, an overlay
+string at EOL, not counted)."
+  (with-selected-window window
+    (let ((p (1- eol)))
+      (+ (car (posn-x-y (posn-at-point p window)))
+         (aref (aref (font-get-glyphs (font-at p window) p eol) 0) 4)))))
+
+(ert-deftest drgnx-ui-rows-fit/an-explorer-row-leaves-its-tail-room ()
+  "Pattern C (a handshake on the hub's rows): the Explorer in a window exactly as wide as a file's row plus 2 px.  The
+row's tail (the git mark and the ⋯, `drgnx-wb-row-tail') is drawn from the window's right edge, so the hub fits the
+name short of it: no row is drawn wider than the body (a row that filled it pushed its tail 4 px past the edge)."
+  (skip-unless (display-graphic-p))
+  (skip-unless (fboundp 'nidhogg-view--call))
+  (require 'drgnx-explorer)
+  (drgnx-rows-demo-with
+    (let* ((dir (file-name-as-directory (make-temp-file "explorer-tail" t)))
+           (name "drgnx-gateway-tail.el")
+           (drgnx-explorer--roots (list dir)) (drgnx-explorer--hub-view nil) (drgnx-explorer-git nil)
+           (drgnx-explorer--expanded (make-hash-table :test #'equal)) (drgnx-explorer--window-asker nil))
+      (write-region "" nil (expand-file-name name dir) nil 'silent)
+      (unwind-protect
+          (let* ((b (drgnx-explorer--buffer))
+                 (w (progn (delete-other-windows) (prog1 (selected-window) (split-window-right))))
+                 (row (lambda () (with-current-buffer b
+                                   (save-excursion (goto-char (point-min))
+                                                   (and (search-forward name nil t) (pos-eol))))))
+                 (settle (lambda (what)
+                           (drgnx-view-env-update drgnx-explorer-hub-view-name)
+                           (drgnx-test-wait (lambda () (drgnx-test-wait-presented) (funcall row)) :secs 20 :what what))))
+            (set-window-buffer w b)
+            (funcall settle "the Explorer's row")
+            ;; the window's body: the row's text as drawn now, plus 2 px
+            (let ((target (+ 2 (drgnx-rows-fit-ui-test--row-end-x w (funcall row))))
+                  (window-resize-pixelwise t))
+              ;; again until it is: a resize can land a few px off (the frame's own rounding)
+              (dotimes (_ 4)
+                (unless (= target (window-body-width w t))
+                  (window-resize w (- target (window-body-width w t)) t t t)
+                  (redisplay t)))
+              (should (equal (list :body target) (list :body (window-body-width w t))))
+              (funcall settle "the Explorer's rows at the narrow width")
+              ;; a refit (the editor's measure of a row close to the edge) goes out after the first patch
+              (ignore-errors (drgnx-test-wait (lambda () (drgnx-test-wait-presented)
+                                                (with-current-buffer b (string-match-p "…" (buffer-string))))
+                                              :secs 5 :what "the row cut"))
+              (drgnx-test-wait-presented)
+              (with-current-buffer b
+                (save-excursion
+                  (goto-char (point-min))
+                  (while (not (eobp))
+                    (when (stringp (ignore-errors (drgnx-view-key-at (point))))
+                      (let ((px (car (window-text-pixel-size w (point) (pos-eol)))))
+                        (should (equal (list (buffer-substring-no-properties (point) (pos-eol)) :px px :body target)
+                                       (list (buffer-substring-no-properties (point) (pos-eol)) :px (min px target)
+                                             :body target)))))
+                    (forward-line 1))))))
+        (delete-other-windows)
+        (when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (kill-buffer b))
+        (delete-directory dir t)))))

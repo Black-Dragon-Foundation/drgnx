@@ -2511,7 +2511,10 @@ All of it is in memory only.
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
   width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, glyphs: [[name, glyph]],
-  density?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again. `glyphs` are
+  density?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again. `width_px` is
+  the room a row has: the window's body, less what the view's buffer draws at the right edge after each row (the
+  Explorer's and the Buffers panel's tail, the git mark and the ⋯, placed from that edge: `drgnx-view-env-right-reserve`,
+  `drgnx-wb-tail-reserve`), so a row fitted to it never pushes its tail past the edge. `glyphs` are
   the kit's glyphs as the class's frame draws them (ASCII on a terminal that is not UTF-8); `density` is the user's
   (`compact`, `comfortable` when absent, `roomy`; `drgnx-look-density`), which the kit's sizes follow (a tree level's
   indent), and a change of it is a new epoch. `headless: true` marks a view that Lisp only

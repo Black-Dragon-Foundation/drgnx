@@ -243,13 +243,23 @@ class no window shows goes.  When no window shows the buffer's class, the buffer
   "WINDOW's right fringe, in pixels."
   (or (cadr (window-fringes window)) 0))
 
-(defun drgnx-view-env--width (window facts)
+(defvar-local drgnx-view-env-right-reserve nil
+  "In a hub-fed view's buffer, a function of a window: the pixels (a terminal's: columns) its rows keep free at the
+window's right edge, where the buffer draws something of its own after each row (the Explorer's tail,
+`drgnx-wb-tail-reserve').  Nil: none.")
+
+(defun drgnx-view-env--width (window facts &optional buffer)
   "The pixels WINDOW (with FACTS) gives a row: its body, less a column when a GUI window has no right fringe (Emacs
-keeps that column for its truncation glyph, and a row as wide as the body would end in a `$')."
-  (let ((px (window-body-width window t)))
-    (if (and (equal (plist-get facts :display) "gui") (zerop (drgnx-view-env--right-fringe window)))
-        (- px (or (car (plist-get facts :cell)) 0))
-      px)))
+keeps that column for its truncation glyph, and a row as wide as the body would end in a `$'), less what the buffer
+keeps at the right edge (`drgnx-view-env-right-reserve' of BUFFER, the view's own, which its twins in other display
+classes share; default WINDOW's)."
+  (let ((px (window-body-width window t))
+        (reserve (buffer-local-value 'drgnx-view-env-right-reserve
+                                     (if (buffer-live-p buffer) buffer (window-buffer window)))))
+    (max 0 (- (if (and (equal (plist-get facts :display) "gui") (zerop (drgnx-view-env--right-fringe window)))
+                  (- px (or (car (plist-get facts :cell)) 0))
+                px)
+              (if reserve (funcall reserve window) 0)))))
 
 (defun drgnx-view-env--envs (view &optional wins)
   "VIEW's env per display class it shows in now: a list of (CLASS . PARAMS), PARAMS without the epoch.  WIDTH_PX is
@@ -258,7 +268,7 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
   (let ((classes nil))
     (dolist (wf (or wins (drgnx-view-env--window-classes view)))
       (let* ((w (car wf)) (facts (cdr wf)) (class (drgnx-view-env--class facts))
-             (width (drgnx-view-env--width w facts)) (have (assoc class classes)))
+             (width (drgnx-view-env--width w facts (car (gethash view drgnx-view-env--views)))) (have (assoc class classes)))
         (if have
             (setf (plist-get (cdr have) :width_px) (min width (plist-get (cdr have) :width_px)))
           (push (cons class (list :view view :class class :display (plist-get facts :display)
