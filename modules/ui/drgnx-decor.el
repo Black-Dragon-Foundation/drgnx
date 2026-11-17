@@ -1,4 +1,4 @@
-;;; drgnx-decor.el --- Decorations: chips, badges, buttons, card rows, agent cursors -*- lexical-binding: t -*-
+;;; drgnx-decor.el --- Decorations: chips, badges, buttons, card rows -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -18,7 +18,7 @@
 (require 'drgnx-type-faces)
 (require 'drgnx-pixels)                  ; `drgnx-px'
 
-(defgroup drgnx-decor nil "Chips, badges, buttons, cards and agent cursors." :group 'drgnx-face)
+(defgroup drgnx-decor nil "Chips, badges, buttons and cards." :group 'drgnx-face)
 
 ;;;; Faces
 
@@ -237,166 +237,5 @@ from the window's left edge, so the card starts at column 0), and an unboxed new
                  (propertize " " 'display `(space :align-to ,(1+ width)) 'face face)
                  "\n")))
      lines "")))
-
-;;;; Agent cursors
-
-(cl-defstruct (drgnx-decor--cursor (:constructor drgnx-decor--cursor-make))
-  overlay color name pending label-until)
-
-(defvar drgnx-decor--cursors (make-hash-table :test #'equal)
-  "(BUFFER . AGENT) to its `drgnx-decor--cursor'.")
-
-(defconst drgnx-decor-cursor-batch 0.05 "Seconds in which an agent's cursor moves are collected into one.")
-(defconst drgnx-decor-cursor-label-time 2 "Seconds a cursor's name tag shows after a move.")
-
-(defun drgnx-decor--face-box (face)
-  "The `:box' FACE (a face, a list of faces, or a plist) specifies, or nil."
-  (cond ((null face) nil)
-        ((keywordp (car-safe face)) (plist-get face :box))
-        ((consp face) (cl-some #'drgnx-decor--face-box face))
-        ((facep face) (let ((box (face-attribute face :box nil t))) (and box (not (eq box 'unspecified)) box)))))
-
-(defun drgnx-decor--box-at (pos)
-  "The box of the text at POS, from its `face' property and the overlays other than agent cursors; nil if unboxed."
-  (and (<= (point-min) pos) (< pos (point-max))
-       (or (drgnx-decor--face-box (get-text-property pos 'face))
-           (cl-some (lambda (ov)
-                      (and (not (overlay-get ov 'drgnx-decor-cursor)) (drgnx-decor--face-box (overlay-get ov 'face))))
-                    (sort (overlays-at pos) (lambda (a b) (> (or (overlay-get a 'priority) 0)
-                                                             (or (overlay-get b 'priority) 0))))))))
-
-(defun drgnx-decor--cursor-face (pos color name label)
-  "The face of an agent cursor at POS in the current buffer, in COLOR; NAME is its tag when LABEL.
-Where the glyph and both neighbours are unboxed: the bar (a 2 px left edge).  Otherwise the underlying box,
-restated, with only the background and the tag changed (a boxed cursor face would take its neighbour's edge)."
-  (let* ((glitnir (drgnx-decor--glitnir-p))
-         (under (or (drgnx-decor--box-at pos) (drgnx-decor--box-at (1- pos)) (drgnx-decor--box-at (1+ pos))))
-         (tag (and glitnir label (list :label name))))
-    (cond (under
-           (list :background color
-                 :box (if (and tag (keywordp (car-safe under))) (append under tag) under)))
-          (glitnir (list :background color
-                         :box (append (list :line-width '(-2 . -1) :color color :open '(top right bottom)) tag)))
-          ((display-graphic-p) (list :background color))
-          ;; a terminal has no 2 px edge: the character under the bar in the colour's inverse
-          (t (list :foreground color :inverse-video t)))))
-
-(defun drgnx-decor--cursor-apply (cur)
-  "Put CUR's overlay's face in line with its position and name tag."
-  (let ((ov (drgnx-decor--cursor-overlay cur)))
-    (with-current-buffer (overlay-buffer ov)
-      (let ((pos (overlay-start ov)) (color (drgnx-decor--cursor-color cur)) (name (drgnx-decor--cursor-name cur)))
-        (overlay-put ov 'face (drgnx-decor--cursor-face
-                               pos color name (and (drgnx-decor--cursor-label-until cur) t)))
-        (overlay-put ov 'mouse-face (drgnx-decor--cursor-face pos color name t))))))
-
-(defun drgnx-decor--cursor-key (buffer agent) (cons buffer agent))
-
-(defun drgnx-decor--sweep ()
-  "Prune cursors of dead buffers; drop the name tags that are due and arm the timer for the next one."
-  (let ((now (drgnx-timer-now)) next)
-    (maphash
-     (lambda (key cur)
-       (if (not (buffer-live-p (car key)))
-           (progn (remhash key drgnx-decor--cursors) (ignore-errors (delete-overlay (drgnx-decor--cursor-overlay cur))))
-         (let ((until (drgnx-decor--cursor-label-until cur)))
-           (when (and until (not (eq until 'always)))
-             (if (<= until (+ now 1e-6))
-                 (progn (setf (drgnx-decor--cursor-label-until cur) nil) (drgnx-decor--cursor-apply cur))
-               (setq next (min until (or next until))))))))
-     drgnx-decor--cursors)
-    (when next (drgnx-timer-start 'decor-cursor-label (- next now) #'drgnx-decor--sweep))))
-
-(defun drgnx-decor--flush ()
-  "Apply every agent's last pending position (one overlay move each) and show their name tags."
-  (let (moved)
-    (maphash
-     (lambda (key cur)
-       (let ((pos (drgnx-decor--cursor-pending cur)))
-         (when (and pos (buffer-live-p (car key)))
-           (with-current-buffer (car key)
-             (let ((pos (max (point-min) (min pos (max (point-min) (1- (point-max)))))))
-               (move-overlay (drgnx-decor--cursor-overlay cur) pos (min (point-max) (1+ pos)))))
-           (setf (drgnx-decor--cursor-pending cur) nil
-                 (drgnx-decor--cursor-label-until cur) (+ (drgnx-timer-now) drgnx-decor-cursor-label-time))
-           (drgnx-decor--cursor-apply cur)
-           (setq moved t))))
-     drgnx-decor--cursors)
-    (when moved (drgnx-timer-start 'decor-cursor-label drgnx-decor-cursor-label-time #'drgnx-decor--sweep))))
-
-(defun drgnx-decor-cursor-put (buffer agent pos color name)
-  "Show AGENT's cursor in BUFFER at POS, in COLOR (a theme colour), tagged NAME: one overlay at (POS, POS+1).
-An existing cursor of AGENT in BUFFER is replaced.  The tag shows for 2 s."
-  (drgnx-decor-cursor-remove buffer agent)
-  (with-current-buffer buffer
-    (let* ((pos (max (point-min) (min pos (point-max))))
-           (ov (make-overlay pos (min (point-max) (1+ pos)) buffer))
-           (cur (drgnx-decor--cursor-make :overlay ov :color color :name name
-                                          :label-until (+ (drgnx-timer-now) drgnx-decor-cursor-label-time))))
-      (overlay-put ov 'drgnx-decor-cursor agent)
-      (overlay-put ov 'priority 100)
-      (puthash (drgnx-decor--cursor-key buffer agent) cur drgnx-decor--cursors)
-      (drgnx-decor--cursor-apply cur)
-      (drgnx-timer-start 'decor-cursor-label drgnx-decor-cursor-label-time #'drgnx-decor--sweep)
-      ov)))
-
-(defun drgnx-decor-cursor-move (buffer agent pos)
-  "Move AGENT's cursor in BUFFER to POS.  Moves are batched: one 50 ms timer for all agents applies the last."
-  (when-let* ((cur (gethash (drgnx-decor--cursor-key buffer agent) drgnx-decor--cursors)))
-    (setf (drgnx-decor--cursor-pending cur) pos)
-    (drgnx-timer-soon 'decor-cursor-flush drgnx-decor-cursor-batch #'drgnx-decor--flush)))
-
-(defvar drgnx-decor--label-mode 'activity
-  "How name tags show on cursors moved now: `activity' (2 s after a move) or `never'; `drgnx-decor-cursor-keep-label'
-holds one tag on.")
-
-;; A frame the editor client applies at once does not wait for the 50 ms batch.
-
-(defun drgnx-decor-cursor-move-now (buffer agent pos)
-  "Move AGENT's cursor in BUFFER to POS now: the same overlay moves, no batch timer.  Its name tag follows the tag mode
-\(`drgnx-decor-cursor-label-mode')."
-  (when-let* ((cur (gethash (drgnx-decor--cursor-key buffer agent) drgnx-decor--cursors)))
-    (with-current-buffer buffer
-      (let ((pos (max (point-min) (min pos (max (point-min) (1- (point-max)))))))
-        (move-overlay (drgnx-decor--cursor-overlay cur) pos (min (point-max) (1+ pos)))))
-    (setf (drgnx-decor--cursor-pending cur) nil)
-    (unless (eq (drgnx-decor--cursor-label-until cur) 'always)
-      (setf (drgnx-decor--cursor-label-until cur)
-            (and (not (eq drgnx-decor--label-mode 'never)) (+ (drgnx-timer-now) drgnx-decor-cursor-label-time))))
-    (drgnx-decor--cursor-apply cur)
-    (when (numberp (drgnx-decor--cursor-label-until cur))
-      (drgnx-timer-start 'decor-cursor-label drgnx-decor-cursor-label-time #'drgnx-decor--sweep))))
-
-(defun drgnx-decor-cursor-label-mode (mode)
-  "Set the tag mode for cursors moved now: `activity' or `never'."
-  (setq drgnx-decor--label-mode mode))
-
-(defun drgnx-decor-cursor-keep-label (buffer agent keep)
-  "KEEP non-nil: AGENT's name tag in BUFFER stays on; nil: it follows the tag mode again."
-  (when-let* ((cur (gethash (drgnx-decor--cursor-key buffer agent) drgnx-decor--cursors)))
-    (setf (drgnx-decor--cursor-label-until cur)
-          (cond (keep 'always) ((eq drgnx-decor--label-mode 'never) nil)
-                (t (+ (drgnx-timer-now) drgnx-decor-cursor-label-time))))
-    (drgnx-decor--cursor-apply cur)))
-
-(defun drgnx-decor-cursor-overlay (buffer agent)
-  "AGENT's cursor overlay in BUFFER, or nil."
-  (when-let* ((cur (gethash (drgnx-decor--cursor-key buffer agent) drgnx-decor--cursors)))
-    (drgnx-decor--cursor-overlay cur)))
-
-(defun drgnx-decor-cursor-label-state (buffer agent)
-  "AGENT's tag in BUFFER: `always', the time it is due off, or nil (not shown)."
-  (when-let* ((cur (gethash (drgnx-decor--cursor-key buffer agent) drgnx-decor--cursors)))
-    (drgnx-decor--cursor-label-until cur)))
-
-(defun drgnx-decor-cursor-remove (buffer agent)
-  "Remove AGENT's cursor from BUFFER."
-  (let ((key (drgnx-decor--cursor-key buffer agent)))
-    (when-let* ((cur (gethash key drgnx-decor--cursors)))
-      (delete-overlay (drgnx-decor--cursor-overlay cur))
-      (remhash key drgnx-decor--cursors)
-      (when (zerop (hash-table-count drgnx-decor--cursors))
-        (drgnx-timer-cancel 'decor-cursor-flush)
-        (drgnx-timer-cancel 'decor-cursor-label)))))
 
 (provide 'drgnx-decor)

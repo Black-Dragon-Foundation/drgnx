@@ -71,7 +71,8 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #6b6e7a"></span> | `button-edge` | `#6b6e7a` | `subtle` at 75 % over `panel` | component | - |
 | <span class="swatch" style="background: #6b6e7a"></span> | `key-hint-edge` | `#6b6e7a` | `subtle` at 75 % over `panel` | component | - |
 | <span class="swatch" style="background: #ff9566"></span> | `card-needs-you-edge` | `#ff9566` | the colour of `attention` | component | - |
-| <span class="swatch" style="background: #212228"></span> | `progress-track` | `#212228` | the colour of `border-subtle` | component | - |
+| <span class="swatch" style="background: #212228"></span> | `progress-track` | `#212228` | the colour of `border-subtle` | component | `drgnx-kit-progress` |
+| <span class="swatch" style="background: #7aa5ff"></span> | `progress-fill` | `#7aa5ff` | the colour of `accent` | component | `drgnx-kit-progress-ring`, `drgnx-kit-progress-fill` |
 
 ## Light
 
@@ -140,7 +141,8 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #898c97"></span> | `button-edge` | `#898c97` | `subtle` at 75 % over `panel` | component | - |
 | <span class="swatch" style="background: #898c97"></span> | `key-hint-edge` | `#898c97` | `subtle` at 75 % over `panel` | component | - |
 | <span class="swatch" style="background: #b8461a"></span> | `card-needs-you-edge` | `#b8461a` | the colour of `attention` | component | - |
-| <span class="swatch" style="background: #e9eaee"></span> | `progress-track` | `#e9eaee` | the colour of `border-subtle` | component | - |
+| <span class="swatch" style="background: #e9eaee"></span> | `progress-track` | `#e9eaee` | the colour of `border-subtle` | component | `drgnx-kit-progress` |
+| <span class="swatch" style="background: #2c5fd4"></span> | `progress-fill` | `#2c5fd4` | the colour of `accent` | component | `drgnx-kit-progress-ring`, `drgnx-kit-progress-fill` |
 
 ## High contrast
 
@@ -210,4 +212,5 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #c9ccd3"></span> | `button-edge` | `#c9ccd3` | the colour of `border-strong` | component | - |
 | <span class="swatch" style="background: #c9ccd3"></span> | `key-hint-edge` | `#c9ccd3` | the colour of `border-strong` | component | - |
 | <span class="swatch" style="background: #ffb38a"></span> | `card-needs-you-edge` | `#ffb38a` | the colour of `attention` | component | - |
-| <span class="swatch" style="background: #8c909a"></span> | `progress-track` | `#8c909a` | the colour of `border` | component | - |
+| <span class="swatch" style="background: #8c909a"></span> | `progress-track` | `#8c909a` | the colour of `border` | component | `drgnx-kit-progress` |
+| <span class="swatch" style="background: #a8c6ff"></span> | `progress-fill` | `#a8c6ff` | the colour of `accent` | component | `drgnx-kit-progress-ring`, `drgnx-kit-progress-fill` |

@@ -52,9 +52,9 @@ no method and the buffer simply has no frame. The rows that need the hub's metho
 
 The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws from the frame alone.
 
-- **Bars:** an `editing` agent with a line gets one decor cursor at `(line_end, col)`. It is put once (with the
-  colour string resolved from the identity face) and moved afterwards with `drgnx-decor-cursor-move-now`, which moves
-  the same overlay at once instead of waiting for decor's 50 ms flush. `drgnx-agent-identity-cleared-hook` (run by
+- **Bars:** an `editing` agent with a line gets one agent cursor (`modules/ui/drgnx-agent-cursors.el`) at `(line_end, col)`. It is put once (with the
+  colour string resolved from the identity face) and moved afterwards with `drgnx-agent-cursor-move-now`, which moves
+  the same overlay at once instead of waiting for the cursors' 50 ms flush. `drgnx-agent-identity-cleared-hook` (run by
   `drgnx-agent-identity-clear`, so at every theme load) puts every bar again with the new colour and clears the tints.
 - **Rings:** `reading` and `pending` agents with a line range. One overlay per visible row of each range, taken from a
   buffer-local pool and moved, rebuilt on `window-scroll-functions`, window size changes and each frame. Reading is a
@@ -62,8 +62,8 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   underline in the colour. No `:box`: see the verdict above.
 - **Projected** agents (another worktree) and file-only reads (no `:line`): no bar, no ring. A projected agent has one
   `after-string` tag overlay at the end of its mapped line.
-- **Tags:** `drgnx-agents-tags` and `drgnx-decor-cursor-keep-label`: `always` keeps every tag on, `never` turns decor's
-  tags off, `activity` leaves decor's 2 s after a move; a shared identity face or `drgnx-agents-editor-followed` keeps
+- **Tags:** `drgnx-agents-tags` and `drgnx-agent-cursor-keep-label`: `always` keeps every tag on, `never` turns the cursors'
+  tags off, `activity` leaves their 2 s after a move; a shared identity face or `drgnx-agents-editor-followed` keeps
   a tag on. Without Glitnir the tag text is the bar's `help-echo`.
 - **Positions, not lines (offload step E):** the hub puts the buffer positions of its lines on the frame
   (`editor::marks::place`, hub.md "Editor marks"): `:pos` (the bar), `:line_pos` and `:end_pos` (the ring's first and

@@ -14,8 +14,8 @@
 (declare-function drgnx-agents-editor-sync-windows "drgnx-agents-editor")
 (declare-function drgnx-agents-editor-draw--scrolled "drgnx-agents-editor-draw")
 (declare-function drgnx-agent-identity-clear "drgnx-agent-identity")
-(declare-function drgnx-decor-cursor-overlay "drgnx-decor")
-(declare-function drgnx-decor-cursor-label-state "drgnx-decor")
+(declare-function drgnx-agent-cursor-overlay "drgnx-agent-cursors")
+(declare-function drgnx-agent-cursor-label-state "drgnx-agent-cursors")
 (defvar drgnx-agents-tags)
 (defvar drgnx-agents-editor-draw--tag-overlays)
 
@@ -66,7 +66,7 @@
   (drgnx-test-editor-line-start buf line))
 
 (defun drgnx-agents-editor-draw-test--bars (buf)
-  (with-current-buffer buf (seq-filter (lambda (o) (overlay-get o 'drgnx-decor-cursor)) (overlays-in (point-min) (point-max)))))
+  (with-current-buffer buf (seq-filter (lambda (o) (overlay-get o 'drgnx-agent-cursor)) (overlays-in (point-min) (point-max)))))
 
 (defun drgnx-agents-editor-draw-test--rings (buf)
   (with-current-buffer buf (seq-filter (lambda (o) (overlay-get o 'drgnx-agents-editor-ring)) (overlays-in (point-min) (point-max)))))
@@ -169,19 +169,19 @@
     (drgnx-agents-editor-draw-test--frame
      buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 3) (drgnx-agents-editor-draw-test--agent 7 "editing" 5)
                (drgnx-agents-editor-draw-test--agent 2 "editing" 7)))
-    (should (eq 'always (drgnx-decor-cursor-label-state buf 1)))
-    (should (eq 'always (drgnx-decor-cursor-label-state buf 7)))
-    (should-not (eq 'always (drgnx-decor-cursor-label-state buf 2)))))
+    (should (eq 'always (drgnx-agent-cursor-label-state buf 1)))
+    (should (eq 'always (drgnx-agent-cursor-label-state buf 7)))
+    (should-not (eq 'always (drgnx-agent-cursor-label-state buf 2)))))
 
 (ert-deftest drgnx-agents-editor/flat-gui-names-in-help-echo ()
   (drgnx-agents-editor-draw-test--with 30
-    (cl-letf (((symbol-function 'drgnx-decor--glitnir-p) (lambda () nil)))
+    (cl-letf (((symbol-function 'drgnx-agent-cursors--glitnir-p) (lambda () nil)))
       (drgnx-agents-editor-draw-test--frame buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 3)))
       (should (string-match-p "Agent1 · editing" (overlay-get (car (drgnx-agents-editor-draw-test--bars buf)) 'help-echo))))))
 
 (ert-deftest drgnx-agents-editor/terminal-bar-is-inverse-video ()
   (drgnx-agents-editor-draw-test--with 30
-    (cl-letf (((symbol-function 'drgnx-decor--glitnir-p) (lambda () nil))
+    (cl-letf (((symbol-function 'drgnx-agent-cursors--glitnir-p) (lambda () nil))
               ((symbol-function 'display-graphic-p) (lambda (&rest _) nil)))
       (drgnx-agents-editor-draw-test--frame buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 3)))
       (should (plist-get (overlay-get (car (drgnx-agents-editor-draw-test--bars buf)) 'face) :inverse-video)))))
@@ -194,10 +194,10 @@
           (drgnx-agents-editor-draw--tags-apply)
           (drgnx-agents-editor-draw-test--frame buf agents)
           (drgnx-agents-editor-draw-test--frame buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 5)))
-          (let ((state (drgnx-decor-cursor-label-state buf 1)))
+          (let ((state (drgnx-agent-cursor-label-state buf 1)))
             (pcase (cdr case)
               ('timed (should (numberp state)) (drgnx-test-advance 2.5)
-                      (should-not (drgnx-decor-cursor-label-state buf 1)))
+                      (should-not (drgnx-agent-cursor-label-state buf 1)))
               ('always (should (eq 'always state)))
               ('nil (should-not state)))))))))
 

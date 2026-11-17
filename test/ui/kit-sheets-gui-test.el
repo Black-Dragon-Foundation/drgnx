@@ -55,6 +55,21 @@ foot shows only in part)."
 (defvar drgnx-kit-sheet--edges nil
   "Non-nil while a sheet also checks that hovered and selected cells have no edge (`drgnx-kit-sheet/state-table').")
 
+(defun drgnx-kit-sheet--check-bar (what props variant scale snap beg s edges)
+  "The progress bar of PROPS drawn at BEG (WHAT the cell, for the failures): its fill, found down the column 1 device
+px into it, is VALUE of its width's device px at SCALE, rounded half up, in `progress-fill', and the track follows."
+  (let* ((fill (drgnx-kit-sheet--rgb (drgnx-look-token 'progress-fill variant)))
+         (track (drgnx-kit-sheet--rgb (drgnx-look-token 'progress-track variant)))
+         (want (floor (+ (* (drgnx-px (plist-get props :width) nil scale) (plist-get props :value)) 0.5 1e-9)))
+         (x0 (drgnx-kit-sheet--x beg s edges))
+         (top (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point beg)))))))
+         (h (round (* s (save-excursion (goto-char beg) (line-pixel-height)))))
+         (y (cl-loop for y from top below (+ top h) when (equal fill (drgnx-uitest-pixel snap (1+ x0) y)) return y)))
+    (should (equal (list what 'bar-drawn t) (list what 'bar-drawn (and y t))))
+    (let ((n (cl-loop for x from x0 while (equal fill (drgnx-uitest-pixel snap x y)) count t)))
+      (should (equal (list what 'bar-fill want) (list what 'bar-fill n)))
+      (should (equal (list what 'bar-track track) (list what 'bar-track (drgnx-uitest-pixel snap (+ x0 n) y)))))))
+
 (defun drgnx-kit-sheet--check-cells (id variant scale)
   "Check every cell of the catalogue in the selected window, drawn for component ID at SCALE in theme VARIANT.
 Returns the number of cells checked."
@@ -79,24 +94,34 @@ Returns the number of cells checked."
                            (list what 'pad (aref sp 0) (- (drgnx-kit-sheet--x (1+ at) s edges)
                                                           (drgnx-kit-sheet--x at s edges)))))))
         ;; the start and end pads, and between them the text (its icons and their gaps drawn as they are)
-        (let ((pads (+ (aref (car spaces) 1) (aref (car (last spaces)) 1)))
-              (text (round (* s (string-pixel-width (buffer-substring (1+ beg) (1- end)))))))
-          (should (equal (list what 'width (+ pads text))
-                         (list what 'width (- (drgnx-kit-sheet--x end s edges) (drgnx-kit-sheet--x beg s edges))))))
+        (when spaces
+          (let ((pads (+ (aref (car spaces) 1) (aref (car (last spaces)) 1)))
+                (text (round (* s (string-pixel-width (buffer-substring (1+ beg) (1- end)))))))
+            (should (equal (list what 'width (+ pads text))
+                           (list what 'width (- (drgnx-kit-sheet--x end s edges) (drgnx-kit-sheet--x beg s edges)))))))
         ;; (a') a row is its geometry's height (`:height (density tree-row)'), in device px
-        (when-let* ((h (plist-get (drgnx-ui-kit-geometry id variants) :height)) (h (drgnx-px h nil scale)))
+        (when-let* ((h (plist-get (drgnx-ui-kit-geometry id variants) :height)) ((> h 0)) (h (drgnx-px h nil scale)))
           (should (equal (list what 'height h)
                          (list what 'height (round (* s (save-excursion (goto-char beg) (line-pixel-height))))))))
-        ;; (b) the fill inside the start pad, halfway in (clear of a focus ring and of a rounded corner)
-        (let* ((token (or (plist-get (drgnx-ui-kit-state state) :fill) 'editor))
-               (x (+ (drgnx-kit-sheet--x beg s edges) (/ (aref (car spaces) 1) 2))))
-          (let* ((want (drgnx-kit-sheet--rgb (drgnx-look-token token variant)))
-                 (got (drgnx-uitest-pixel snap x y))
-                 ;; on a mismatch, what is drawn there
-                 (at (unless (equal want got)
-                       (let ((p (posn-point (posn-at-x-y (- (round (/ x s)) (car edges)) (- (round (/ y s)) (cadr edges))))))
-                         (list :at p :beg beg :char (and p (char-after p)) :start (window-start))))))
-            (should (equal (list what 'fill token want nil) (list what 'fill token got at)))))
+        ;; (b) the fill inside the start pad, halfway in (clear of a focus ring and of a rounded corner): the state's,
+        ;; an agent mark's its agent's colour (a bar's is checked on its own row, below)
+        (when (and spaces (not (eq id 'progress)))
+          (let* ((token (or (plist-get (drgnx-ui-kit-state state) :fill)
+                            (and (eq id 'agent-mark)
+                                 (intern (format "a%d" (plist-get (drgnx-kit-sheet--props id variants state) :slot))))
+                            'editor))
+                 (x (+ (drgnx-kit-sheet--x beg s edges) (/ (aref (car spaces) 1) 2))))
+            (let* ((want (drgnx-kit-sheet--rgb (drgnx-look-token token variant)))
+                   (got (drgnx-uitest-pixel snap x y))
+                   ;; on a mismatch, what is drawn there
+                   (at (unless (equal want got)
+                         (let ((p (posn-point (posn-at-x-y (- (round (/ x s)) (car edges)) (- (round (/ y s)) (cadr edges))))))
+                           (list :at p :beg beg :char (and p (char-after p)) :start (window-start))))))
+              (should (equal (list what 'fill token want nil) (list what 'fill token got at))))))
+        ;; (b'') a progress bar: on the bar's own device row, its fill is VALUE of its width (rounded half up) in the
+        ;; fill's colour, then the track's colour
+        (when (and (eq id 'progress) (equal variants '(bar)))
+          (drgnx-kit-sheet--check-bar what (drgnx-kit-sheet--props id variants state) variant scale snap beg s edges))
         ;; (c) high contrast: no shadow, so the column right of the cell is the surface
         (when (eq variant 'hc)
           (let ((x (+ (drgnx-kit-sheet--x end s edges) (round (* s 4)))))
@@ -148,6 +173,16 @@ picture goes to the evidence folder.  The caller skips a session with no graphic
   "The row's sheet: 3 kinds x 7 states, each pad exact and each state's fill its token, in every theme and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'row))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/agent-mark ()
+  "The agent mark's sheet: its handle between exact pads on its agent's colour, in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'agent-mark))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/progress ()
+  "Progress's sheet: a bar (its fill VALUE of its width, then the track) and a ring, in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'progress))
 
 (drgnx-look-gui-deftest drgnx-kit-sheet/state-table ()
   "The state table's rows in every theme and density: each state's fill, and no edge round a hovered or selected row."

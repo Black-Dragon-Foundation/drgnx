@@ -6,8 +6,8 @@
 ;; The drawing half of module tools/agents-in-editor.  It draws from the cached frame only (see
 ;; drgnx-agents-editor.el); nothing here asks the hub or scans for anything in redisplay.
 ;;
-;; - An agent that is editing gets one bar (decor's cursor) at (line_end, col): put once, then moved with
-;;   `drgnx-decor-cursor-move-now', so frames bypass decor's 50 ms flush and the overlay is reused.  Its colour is
+;; - An agent that is editing gets one bar (an agent cursor) at (line_end, col): put once, then moved with
+;;   `drgnx-agent-cursor-move-now', so frames bypass the cursors' 50 ms flush and the overlay is reused.  Its colour is
 ;;   resolved from the identity face when the cursor is put and again whenever the identity cache clears (a theme).
 ;; - An agent that reads a range, or is about to edit one, gets one set of ring rows: one overlay per visible row of
 ;;   the range, a background tint (reading) or a dashed underline (pending, "hollow"); rebuilt on scroll and resize.
@@ -25,18 +25,18 @@
 (require 'drgnx-color)
 (require 'drgnx-agent-identity)
 (require 'drgnx-margins)
-(unless (featurep 'drgnx-decor)
-  (load (expand-file-name "../ui/drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-agent-cursors)
+  (load (expand-file-name "../ui/drgnx-agent-cursors" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
 (declare-function drgnx-agents-editor-frame "drgnx-agents-editor")
 (declare-function drgnx-agents-editor-watched-buffers "drgnx-agents-editor")
-(declare-function drgnx-decor-cursor-put "drgnx-decor")
-(declare-function drgnx-decor-cursor-move-now "drgnx-decor")
-(declare-function drgnx-decor-cursor-remove "drgnx-decor")
-(declare-function drgnx-decor-cursor-overlay "drgnx-decor")
-(declare-function drgnx-decor-cursor-keep-label "drgnx-decor")
-(declare-function drgnx-decor-cursor-label-mode "drgnx-decor")
-(declare-function drgnx-decor--glitnir-p "drgnx-decor")
+(declare-function drgnx-agent-cursor-put "drgnx-agent-cursors")
+(declare-function drgnx-agent-cursor-move-now "drgnx-agent-cursors")
+(declare-function drgnx-agent-cursor-remove "drgnx-agent-cursors")
+(declare-function drgnx-agent-cursor-overlay "drgnx-agent-cursors")
+(declare-function drgnx-agent-cursor-keep-label "drgnx-agent-cursors")
+(declare-function drgnx-agent-cursor-label-mode "drgnx-agent-cursors")
+(declare-function drgnx-agent-cursors--glitnir-p "drgnx-agent-cursors")
 (defvar drgnx-agents-editor-apply-functions)
 (defvar drgnx-agents-tags)
 (defvar drgnx-hunks-skip-line-function)
@@ -44,7 +44,7 @@
 
 (defun drgnx-agents-editor-draw--tags-apply ()
   "A new tag setting applies to the frames drawn from now on."
-  (drgnx-decor-cursor-label-mode (if (eq drgnx-agents-tags 'never) 'never 'activity)))
+  (drgnx-agent-cursor-label-mode (if (eq drgnx-agents-tags 'never) 'never 'activity)))
 
 (drgnx-defsetting drgnx-agents-tags 'activity
   "When an agent's name tag shows beside its cursor: `activity' (for 2 s after it moves), `always' or `never'.
@@ -56,7 +56,7 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
 (defvar drgnx-agents-editor-followed nil
   "The session id of the agent the user follows, or nil: its tag stays on.")
 
-(defvar-local drgnx-agents-editor-draw--bars nil "Ordinals with a bar (a decor cursor) in this buffer.")
+(defvar-local drgnx-agents-editor-draw--bars nil "Ordinals with a bar (an agent cursor) in this buffer.")
 (defvar-local drgnx-agents-editor-draw--rings nil
   "This buffer's rings: ((ORDINAL KIND START END)...), KIND `reading' or `pending', START and END the positions the
 range's first and last lines start at (the hub counts them: `:line_pos', `:end_pos').")
@@ -116,22 +116,22 @@ range's first and last lines start at (the hub counts them: `:line_pos', `:end_p
 
 (defun drgnx-agents-editor-draw--bar (buffer agent frame pos force)
   (let* ((ord (plist-get agent :ordinal)) (tag (drgnx-agents-editor-draw--tag agent frame)))
-    (if (and (not force) (drgnx-decor-cursor-overlay buffer ord))
-        (drgnx-decor-cursor-move-now buffer ord pos)
-      (drgnx-decor-cursor-put buffer ord pos (drgnx-agents-editor-draw--colour ord) tag))
-    (unless (drgnx-decor--glitnir-p)
-      (when-let* ((ov (drgnx-decor-cursor-overlay buffer ord))) (overlay-put ov 'help-echo tag)))
+    (if (and (not force) (drgnx-agent-cursor-overlay buffer ord))
+        (drgnx-agent-cursor-move-now buffer ord pos)
+      (drgnx-agent-cursor-put buffer ord pos (drgnx-agents-editor-draw--colour ord) tag))
+    (unless (drgnx-agent-cursors--glitnir-p)
+      (when-let* ((ov (drgnx-agent-cursor-overlay buffer ord))) (overlay-put ov 'help-echo tag)))
     (add-hook 'kill-buffer-hook #'drgnx-agents-editor-draw--killed nil t)
     (cl-pushnew ord drgnx-agents-editor-draw--bars)))
 
 (defun drgnx-agents-editor-draw--killed ()
-  "The buffer is going: its bars go with it (decor's timers do not wait for a sweep)."
+  "The buffer is going: its bars go with it (the cursors' timers do not wait for a sweep)."
   (drgnx-agents-editor-draw--drop-bars nil))
 
 (defun drgnx-agents-editor-draw--drop-bars (keep)
   "Remove the bars of the ordinals not in KEEP."
   (dolist (ord (cl-set-difference drgnx-agents-editor-draw--bars keep))
-    (drgnx-decor-cursor-remove (current-buffer) ord))
+    (drgnx-agent-cursor-remove (current-buffer) ord))
   (setq drgnx-agents-editor-draw--bars (cl-intersection drgnx-agents-editor-draw--bars keep)))
 
 ;;;; Tags of projected agents
@@ -338,7 +338,7 @@ column, before the change marks)."
         (drgnx-agents-editor-draw--drop-tags tags)
         (dolist (a agents)
           (when-let* ((ord (plist-get a :ordinal)) ((memq ord bars)))
-            (drgnx-decor-cursor-keep-label buffer ord (drgnx-agents-editor-draw--tags-on-p a agents))))
+            (drgnx-agent-cursor-keep-label buffer ord (drgnx-agents-editor-draw--tags-on-p a agents))))
         (setq drgnx-agents-editor-draw--rings (nreverse rings))
         (let ((had drgnx-agents-editor-draw--strips))
           (setq drgnx-agents-editor-draw--strips (drgnx-agents-editor-draw--gutter-strips frame))

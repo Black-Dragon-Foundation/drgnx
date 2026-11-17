@@ -1018,11 +1018,19 @@ pub enum FaceId {
     ToplineStrong,
     /// `drgnx-kit-row`
     KitRow,
+    /// `drgnx-kit-agent-mark`
+    KitAgentMark,
+    /// `drgnx-kit-progress`
+    KitProgress,
+    /// `drgnx-kit-progress-ring`
+    KitProgressRing,
+    /// `drgnx-kit-progress-fill`
+    KitProgressFill,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 505] = [
+    pub const ALL: [FaceId; 509] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1528,6 +1536,10 @@ impl FaceId {
         FaceId::ToplineHover,
         FaceId::ToplineStrong,
         FaceId::KitRow,
+        FaceId::KitAgentMark,
+        FaceId::KitProgress,
+        FaceId::KitProgressRing,
+        FaceId::KitProgressFill,
     ];
 
     /// The face's Emacs name.
@@ -2038,6 +2050,10 @@ impl FaceId {
             FaceId::ToplineHover => "drgnx-topline-hover",
             FaceId::ToplineStrong => "drgnx-topline-strong",
             FaceId::KitRow => "drgnx-kit-row",
+            FaceId::KitAgentMark => "drgnx-kit-agent-mark",
+            FaceId::KitProgress => "drgnx-kit-progress",
+            FaceId::KitProgressRing => "drgnx-kit-progress-ring",
+            FaceId::KitProgressFill => "drgnx-kit-progress-fill",
         }
     }
 
@@ -2549,6 +2565,10 @@ impl FaceId {
             "drgnx-topline-hover" => FaceId::ToplineHover,
             "drgnx-topline-strong" => FaceId::ToplineStrong,
             "drgnx-kit-row" => FaceId::KitRow,
+            "drgnx-kit-agent-mark" => FaceId::KitAgentMark,
+            "drgnx-kit-progress" => FaceId::KitProgress,
+            "drgnx-kit-progress-ring" => FaceId::KitProgressRing,
+            "drgnx-kit-progress-fill" => FaceId::KitProgressFill,
             _ => return None,
         })
     }

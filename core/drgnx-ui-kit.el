@@ -71,7 +71,10 @@ that is not UTF-8: an icon's glyph says less than its picture.  The icon names t
      ;; the find bar's previous and next match buttons and its Symbol toggle
      (match-previous "↑" . "^") (match-next "↓" . "v") (rename-symbol "⟨⟩" . "<>")
      ;; the Search view's: a chip that opens a menu, Changed Lines Only, Save This Search and a saved search
-     (dropdown "▾" . "v") (changed-lines "±" . "+-") (save-search "☆" . "*"))
+     (dropdown "▾" . "v") (changed-lines "±" . "+-") (save-search "☆" . "*")
+     ;; the kit's progress: a bar's edges and its filled cells on a terminal, and the ring's five steps
+     (bar-left "▕" . "[") (bar-full "█" . "#") (bar-right "▏" . "]")
+     (progress-0 "○" . "0") (progress-1 "◔" . "1") (progress-2 "◑" . "2") (progress-3 "◕" . "3") (progress-4 "●" . "4"))
    drgnx-ui--icon-glyphs)
   "The standard glyph table: the default of `drgnx-face-glyphs', and where a name the option lacks is found.")
 
@@ -340,7 +343,8 @@ Each inherits its binding's standard faces, so any theme styles it; drgnx's them
 colours (`drgnx-ui-kit-theme-specs')."
   `(progn
      ,@(mapcar (lambda (f)
-                 `(defface ,(car f) '((t :inherit ,(plist-get (nth 2 f) :inherit)))
+                 `(defface ,(car f) '((t :inherit ,(plist-get (nth 2 f) :inherit)
+                                         ,@(and (plist-get (nth 2 f) :inverse) '(:inverse-video t))))
                     ,(format "The kit's `%s' component (etc/ui/components.eld)." (nth 1 f))
                     :group 'drgnx))
                (drgnx-ui-kit-face-bindings (drgnx-ui-kit--read)))))
@@ -350,14 +354,16 @@ colours (`drgnx-ui-kit-theme-specs')."
 (defun drgnx-ui-kit-theme-specs (tok &optional table)
   "((FACE . ATTRIBUTES)...) of the kit faces of TABLE (default the components file) for one of drgnx's themes: the
 bindings' tokens as colours through TOK (a token name → a colour), the edge as a 1 px box inside the face.  A
-binding with no colours (the row's: a font only) keeps its `:inherit' (a theme's spec replaces the `defface''s)."
+binding with no colours (the row's: a font only) keeps its `:inherit' (a theme's spec replaces the `defface''s); an
+`:inverse' binding keeps its inverse video."
   (mapcar (lambda (f)
             (let ((b (nth 2 f)))
               `(,(car f)
                 ,@(and (not (or (plist-get b :bg) (plist-get b :fg) (plist-get b :edge))) `(:inherit ,(plist-get b :inherit)))
                 ,@(and (plist-get b :bg) `(:background ,(funcall tok (plist-get b :bg))))
                 ,@(and (plist-get b :fg) `(:foreground ,(funcall tok (plist-get b :fg))))
-                ,@(and (plist-get b :edge) `(:box (:line-width (-1 . -1) :color ,(funcall tok (plist-get b :edge))))))))
+                ,@(and (plist-get b :edge) `(:box (:line-width (-1 . -1) :color ,(funcall tok (plist-get b :edge)))))
+                ,@(and (plist-get b :inverse) '(:inverse-video t)))))
           (drgnx-ui-kit-face-bindings table)))
 
 (defun drgnx-ui-kit-replaced-faces (&optional table)
@@ -382,12 +388,12 @@ skipped.  Returns the faces it set."
           (push old done))))))
 
 (defun drgnx-ui-kit-glyph-names (&optional table)
-  "The glyph names the components of TABLE (default the components file) draw (:tty :glyph and :twisty), in order, each
+  "The glyph names the components of TABLE (default the components file) draw (:tty :glyph, :twisty and :glyphs), in order, each
 once: the glyphs a view's env sends (`ViewEnv.glyphs') and the hub's table falls back on (`kit_gen::GLYPHS')."
   (let (names)
     (dolist (c (alist-get 'components (or table (drgnx-ui-kit-components))))
       (let ((tty (plist-get (cdr c) :tty)))
-        (dolist (v (list (plist-get tty :glyph) (plist-get tty :twisty)))
+        (dolist (v (list (plist-get tty :glyph) (plist-get tty :twisty) (plist-get tty :glyphs)))
           (dolist (g (drgnx-ui-kit--glyphs-in v))
             (unless (memq g names) (push g names))))))
     (nreverse names)))
@@ -528,12 +534,96 @@ draws SVG icons (`drgnx-look-icons').")
           (let ((h (and (not tty) (drgnx-ui-kit--value (plist-get g :height) chosen))))
             (and h (> h 0) (drgnx-px h nil scale))))))
 
+(defun drgnx-ui-kit--round (x)
+  "X rounded half up, as the hub rounds (`drgnx-px')."
+  (floor (+ x 0.5 1e-9)))
+
+(defun drgnx-ui-kit--agent-mark (props scale tty)
+  "The `agent-mark' component of PROPS (:slot 1-12, :handle one or two letters) at SCALE or on a terminal (TTY): the
+handle between the geometry's pads on the agent's colour (its face `drgnx-agent-N' under the kit face's inverse
+video); on a terminal [H] in the colour.  Its label, \"agent HANDLE\", is its `help-echo'.  As `drgnx-ui-kit--expand'."
+  (let* ((g (plist-get (drgnx-ui-kit-component 'agent-mark) :geometry))
+         (slot (max 1 (min 12 (or (plist-get props :slot) 1))))
+         (agent (intern (format "drgnx-agent-%d" slot)))
+         (handle (or (plist-get props :handle) ""))
+         (label (format "%s %s" (drgnx-ui-kit-component-label 'agent-mark) handle)))
+    (if tty
+        (let ((s (format "[%s]" handle)))
+          (list s (list (list 0 (length s) agent)) (list (list 0 (length s) 'help-echo label)) nil nil))
+      (let* ((pad (plist-get g :pad)) (n (+ 2 (length handle))))
+        (list (concat " " handle " ")
+              (list (list 0 n 'drgnx-kit-agent-mark) (list 0 n agent))
+              (list (list 0 n 'help-echo label))
+              (list (list 0 (drgnx-px (car pad) nil scale) 0) (list (1+ (length handle)) (drgnx-px (cdr pad) nil scale) 0))
+              nil)))))
+
+(defconst drgnx-ui-kit-progress-bar-px 4 "A progress bar's height, logical px (the hub's `kit::BAR_PX').")
+(defconst drgnx-ui-kit-progress-cell-px 8
+  "Logical px of a progress bar's width per terminal cell (the hub's `kit::BAR_CELL_PX').")
+
+(defun drgnx-ui-kit--progress (props scale tty)
+  "The `progress' component of PROPS (:kind \"bar\" or \"ring\", :value 0-1, :width logical px) at SCALE or on a
+terminal (TTY, `ascii' for ASCII glyphs).  A bar is the fill (`drgnx-kit-progress-fill', VALUE of the width rounded
+half up) then the track (`drgnx-kit-progress'), each a space `drgnx-ui-kit-progress-bar-px' high; on a terminal its
+cells (one per `drgnx-ui-kit-progress-cell-px') between its edges, the filled ones `bar-full'.  A ring is one of the
+five glyphs `progress-0'..`progress-4'.  Its label, \"N percent\", is its `help-echo'.  As `drgnx-ui-kit--expand'."
+  (let* ((kind (if (equal (plist-get props :kind) "ring") 'ring 'bar))
+         (v (max 0.0 (min 1.0 (float (or (plist-get props :value) 0)))))
+         (width (or (plist-get props :width) 0))
+         (label (format "%d %s" (drgnx-ui-kit--round (* 100 v)) (drgnx-ui-kit-component-label 'progress)))
+         (face (drgnx-ui-kit--face 'progress (list (cons 'kind kind))))
+         (parts nil) (runs nil) (spaces nil) (pos 0))
+    (cond
+     ((eq kind 'ring)
+      (let ((g (drgnx-ui-kit--glyph (intern (format "progress-%d" (drgnx-ui-kit--round (* 4 v)))) tty)))
+        (push g parts) (push (list 0 (length g) face) runs) (setq pos (length g))))
+     (tty
+      (let* ((cells (max 1 (drgnx-ui-kit--round (/ width (float drgnx-ui-kit-progress-cell-px)))))
+             (full (drgnx-ui-kit--round (* cells v)))
+             (fill (apply #'concat (make-list full (drgnx-ui-kit--glyph 'bar-full tty))))
+             (left (drgnx-ui-kit--glyph 'bar-left tty)))
+        (push left parts) (setq pos (length left))
+        (when (> full 0)
+          (push fill parts) (push (list pos (+ pos (length fill)) 'drgnx-kit-progress-fill) runs)
+          (setq pos (+ pos (length fill))))
+        (when (> cells full)
+          (push (make-string (- cells full) ?\s) parts) (push (list pos (+ pos (- cells full)) face) runs)
+          (setq pos (+ pos (- cells full))))
+        (let ((right (drgnx-ui-kit--glyph 'bar-right tty)))
+          (push right parts) (setq pos (+ pos (length right))))))
+     (t
+      (let* ((total (drgnx-px width nil scale))
+             (fill (drgnx-ui-kit--round (* total v)))
+             (h (drgnx-px drgnx-ui-kit-progress-bar-px nil scale)))
+        (dolist (part (list (cons fill 'drgnx-kit-progress-fill) (cons (- total fill) face)))
+          (when (> (car part) 0)
+            (push " " parts) (push (list pos (1+ pos) (cdr part)) runs) (push (list pos (car part) h) spaces)
+            (setq pos (1+ pos)))))))
+    (list (apply #'concat (nreverse parts)) (nreverse runs) (and (> pos 0) (list (list 0 pos 'help-echo label)))
+          (nreverse spaces) nil)))
+
+(defun drgnx-ui-kit-component-label (id &optional variants)
+  "The word a screen reader speaks for component ID at VARIANTS (its `:label'), or nil."
+  (drgnx-ui-kit--value (plist-get (drgnx-ui-kit-component id) :label)
+                       (drgnx-ui-kit--chosen (drgnx-ui-kit-component id) variants)))
+
+(defun drgnx-ui-kit-agent-mark (slot handle where &optional frame)
+  "An agent's mark for WHERE (`text' or a line, as `drgnx-ui-kit-string') on FRAME: HANDLE (one or two letters) on
+the colour of SLOT (1-12, `drgnx-agent-identity')."
+  (drgnx-ui-kit-string 'agent-mark (list :c "agent-mark" :slot slot :handle handle) where frame))
+
+(defun drgnx-ui-kit-progress (kind value width where &optional frame)
+  "Progress for WHERE on FRAME: KIND `bar' (WIDTH logical px) or `ring', VALUE from 0 to 1."
+  (drgnx-ui-kit-string 'progress (list :c "progress" :kind (symbol-name kind) :value value :width width) where frame))
+
 (defun drgnx-ui-kit--expand (component props scale tty)
   "COMPONENT (a symbol) with PROPS at SCALE (TTY: on a terminal, `ascii' for ASCII glyphs) as (TEXT RUNS PROPS
 SPACES HEIGHT): RUNS ((FROM TO FACE)...), PROPS ((FROM TO NAME VALUE)...), SPACES ((POS WIDTH HEIGHT)...) in device
 px, HEIGHT the row's line height in device px or nil (one text line)."
   (pcase component
     ('row (drgnx-ui-kit--row props scale tty))
+    ('agent-mark (drgnx-ui-kit--agent-mark props scale tty))
+    ('progress (drgnx-ui-kit--progress props scale tty))
     (_ (error "drgnx-ui-kit: no component %s" component))))
 
 (defun drgnx-ui-kit--wire (v)
@@ -556,13 +646,16 @@ compares with the hub's."
   "Device px → the `display' spec of a pad that wide on a mode, header or tab line, made once.  Bounded by the widths
 the kit's pads take at the scales seen (a handful per component and scale).")
 
-(defun drgnx-ui-kit--pad (width where frame)
+(defun drgnx-ui-kit--pad (width where frame &optional height)
   "The `display' of a pad WIDTH device px wide on WHERE in FRAME: in buffer text (`text') a width in FRAME's canonical
-characters, so one buffer is right on frames of two scales; on a line its px, the spec cached."
-  (if (eq where 'text)
-      `(space :width ,(/ (float width) (frame-char-width frame)))
-    (or (gethash width drgnx-ui-kit--pads)
-        (puthash width `(space :width (,width)) drgnx-ui-kit--pads))))
+characters, so one buffer is right on frames of two scales; on a line its px, the spec cached.  A HEIGHT (device px,
+above 0: a progress bar's) makes it that high."
+  (cond ((and height (> height 0))
+         `(space :width ,(if (eq where 'text) (/ (float width) (frame-char-width frame)) (list width)) :height (,height)))
+        ((eq where 'text)
+         `(space :width ,(/ (float width) (frame-char-width frame))))
+        (t (or (gethash width drgnx-ui-kit--pads)
+               (puthash width `(space :width (,width)) drgnx-ui-kit--pads)))))
 
 (defun drgnx-ui-kit-string (component props where frame)
   "COMPONENT with PROPS (as `drgnx-ui-kit-expand') as a propertized string for WHERE (`text', `header-line',
@@ -579,7 +672,8 @@ on an action (PROPS :action) runs `kit-activate' (the kind's map, `drgnx-ui-kit-
       (when (eq (nth 2 p) 'drgnx-action)
         (put-text-property (nth 0 p) (nth 1 p) (if (eq where 'text) 'keymap 'local-map)
                            (drgnx-ui-kit-action-map (car (nth 3 p))) s)))
-    (dolist (sp (nth 3 e)) (put-text-property (car sp) (1+ (car sp)) 'display (drgnx-ui-kit--pad (nth 1 sp) where frame) s))
+    (dolist (sp (nth 3 e))
+      (put-text-property (car sp) (1+ (car sp)) 'display (drgnx-ui-kit--pad (nth 1 sp) where frame (nth 2 sp)) s))
     s))
 
 ;;;; Actions: what a click or RET on a component does
