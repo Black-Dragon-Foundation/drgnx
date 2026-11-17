@@ -161,6 +161,27 @@ pub struct Forecast {
     /// The date of the oldest shipped price row in use.
     pub prices_as_of: String,
     pub made_at: f64,
+    /// What the forecast said when the job was proposed, kept for an approved job to be compared against; none for a
+    /// proposal and for a forecast made before they were kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<Baseline>,
+}
+
+/// When a job's tasks were forecast to start and end, offsets from the run's start (as a task's own `start`, `finish`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct Baseline {
+    pub made_at: f64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub tasks: Vec<BaselineTask>,
+    /// The plan's own finish (its wall time).
+    pub finish: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BaselineTask {
+    pub n: u64,
+    pub start: Range,
+    pub finish: Range,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
