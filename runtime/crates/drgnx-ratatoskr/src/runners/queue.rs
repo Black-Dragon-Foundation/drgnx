@@ -506,7 +506,7 @@ enum Db {
 struct St {
     jobs: BTreeMap<String, QJob>,
     local_running: BTreeMap<String, RunningJob>,
-    last_local_start: Option<u64>,
+    last_local_start: forseti::LastStart,
     drr: Drr,
     attempts: attempts::Core,
     runners: BTreeMap<String, Remote>,
@@ -556,6 +556,16 @@ impl St {
             .get(key)
             .map(|m| m.values().flatten().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// What SPEC's history expects on MACHINE: its runs there, else its runs elsewhere (`forseti::expected`); unknown
+    /// without any. Admission sizes the grant and the start gap from it.
+    fn expected_on(&self, spec: &JobSpec, machine: &str) -> Expected {
+        let (here, other): (Vec<HistRow>, Vec<HistRow>) = self
+            .history_of(&forseti::history_key(spec))
+            .into_iter()
+            .partition(|r| r.machine == machine);
+        forseti::expected(&here, &other, 1.0, None)
     }
 }
 
@@ -2287,9 +2297,10 @@ impl Queue {
                     }
                     let e = expect(c);
                     let running: Vec<RunningJob> = st.local_running.values().cloned().collect();
+                    let exp = st.expected_on(&job.spec, LOCAL);
                     match self
                         .local
-                        .admit(job, eff, &running, st.last_local_start, now)
+                        .admit(job, eff, &exp, &running, st.last_local_start, now)
                     {
                         Ok(g) => break Placed::Here(g, e),
                         Err(r) => {
@@ -2345,7 +2356,10 @@ impl Queue {
                 let mut rj = running(&id, eff, now, g.reserve_mib, g.cores);
                 rj.expected.minutes = e / 60.0;
                 st.local_running.insert(id.clone(), rj);
-                st.last_local_start = Some(now);
+                st.last_local_start = forseti::LastStart {
+                    at: Some(now),
+                    small: forseti::admit::small(&st.expected_on(&job.spec, LOCAL)),
+                };
                 self.put_job(&j, eff);
                 starts.push(id);
             }
@@ -2436,7 +2450,8 @@ impl Queue {
                     .map(|f| f.input_key.clone())
                     .unwrap_or_default(),
                 grant_hint: None,
-                expected: None,
+                // the runner sizes the grant and its start gap from the job's history there
+                expected: Some(st.expected_on(&job.spec, name)).filter(Expected::known),
             });
         }
         self.put_job(&j, eff);
@@ -3618,6 +3633,7 @@ fn runner_state(name: &str, now: u64, running: Vec<RunningJob>) -> forseti::Mach
         disk_total_gb: 0,
         on_ac: true,
         last_start: None,
+        last_start_small: false,
         running,
         features: vec![],
         reachable: true,
@@ -3957,6 +3973,26 @@ mod tests {
         let st = again.lock();
         assert_eq!(st.learned, live);
         assert_eq!(st.history_of(&forseti::history_key(&spec)).len(), 2);
+    }
+
+    // [D] pure (design §0.3 R6): admission reads the job's history. A runner's offer carries what the job's runs there
+    // expect (else its runs elsewhere); a job with no runs anywhere is offered with nothing known.
+    #[test]
+    fn an_offer_carries_the_jobs_history_on_that_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        let spec = blank_spec("x1");
+        let ran = |peak: u64| json!({"verdict": "Pass", "wall_s": 60.0, "cpu_s": 60.0, "mem_peak_mib": peak});
+        let mut st = q.lock();
+        assert_eq!(st.expected_on(&spec, "r1").mem_p95_mib, None);
+        q.record_run(&mut st, &spec, "r1", &ran(600), 10);
+        q.record_run(&mut st, &spec, "r1", &ran(600), 20);
+        q.record_run(&mut st, &spec, "r2", &ran(3000), 30);
+        assert_eq!(st.expected_on(&spec, "r1").mem_p95_mib, Some(600));
+        assert_eq!(st.expected_on(&spec, "r2").mem_p95_mib, Some(3000));
+        assert!(st.expected_on(&spec, "r3").known(), "runs elsewhere count");
+        assert!(forseti::admit::small(&st.expected_on(&spec, "r1")));
+        assert!(!forseti::admit::small(&st.expected_on(&spec, "r2")));
     }
 
     use super::super::transport::{Channel, Channels, LinkError, Login, Transport};

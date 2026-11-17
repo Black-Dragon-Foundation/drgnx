@@ -74,6 +74,7 @@ pub(crate) fn machine(profile: Profile) -> MachineState {
         disk_total_gb: 1000,
         on_ac: true,
         last_start: None,
+        last_start_small: false,
         running: vec![],
         features: vec![],
         reachable: true,

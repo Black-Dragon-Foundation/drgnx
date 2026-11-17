@@ -7,8 +7,15 @@ use crate::model::{
 };
 use crate::reserve::count_others;
 
-/// The least time between two starts on one machine.
+/// The least time between two starts on one machine by default ([`Limits::start_gap_s`]).
 pub const START_GAP_S: u64 = 10;
+/// A job whose history peaks under this is small: two small jobs in a row start with no gap.
+pub const SMALL_PEAK_MIB: u64 = 1024;
+
+/// Whether EXP's history says the job peaks under [`SMALL_PEAK_MIB`].
+pub fn small(exp: &Expected) -> bool {
+    exp.mem_p95_mib.is_some_and(|p| p < SMALL_PEAK_MIB)
+}
 
 /// What a machine can still give: memory (may be negative) and CPU (cores).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -91,12 +98,16 @@ pub fn admit(
     if limits.no_jobs_on_battery && !m.on_ac {
         return Err(WaitReason::OnBattery);
     }
+    // the gap lets the last start's memory show before this one is judged; two small jobs in a row need none
+    let gap = if small(exp) && m.last_start_small {
+        0
+    } else {
+        limits.start_gap_s
+    };
     if let Some(last) = m.last_start {
         let since = m.now.saturating_sub(last);
-        if since < START_GAP_S {
-            return Err(WaitReason::Gap {
-                secs: START_GAP_S - since,
-            });
+        if since < gap {
+            return Err(WaitReason::Gap { secs: gap - since });
         }
     }
     let need_mib = job.spec.mem_mib.min;

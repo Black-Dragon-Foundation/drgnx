@@ -87,7 +87,11 @@ carves its share at start.
   it back:
   1. with `fixed_slots(n)`: the count alone (`Threads` at `n` running), and nothing else;
   2. power: `OnBattery` when the limits say no jobs on battery;
-  3. 10 s since the last start (`Gap`);
+  3. `Limits::start_gap_s` (10 s) since the last start (`Gap`), except between two small jobs: none when the job's
+     history peaks under `SMALL_PEAK_MIB` (1 GiB) and so did the last started job's (`MachineState::last_start_small`,
+     from the scheduler's `LastStart`). A job without history keeps the gap. The hub feeds each job's history into
+     admission: its own machine's admission and the `expected` of a runner's offer both come from the job's runs there
+     (else elsewhere);
   4. memory: `budget ≥ mem_min` (`NoRoom`);
   5. CPU: `budget ≥` the job's expected CPU (its `cores.min` with no history), plus `(overcommit − 1) × cores_usable`
      while the running jobs use less than half their grants on average (`Threads`);

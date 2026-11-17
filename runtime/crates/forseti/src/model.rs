@@ -290,6 +290,14 @@ pub struct RunningJob {
     pub long_build: bool,
 }
 
+/// A machine's last start: when, and whether its job was small ([`crate::admit::small`]: two small jobs in a row need
+/// no gap between their starts). The scheduler keeps it; [`MachineState`] carries it into admission.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastStart {
+    pub at: Option<u64>,
+    pub small: bool,
+}
+
 /// One machine as its probe read it at `now`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MachineState {
@@ -304,6 +312,9 @@ pub struct MachineState {
     pub disk_total_gb: u64,
     pub on_ac: bool,
     pub last_start: Option<u64>,
+    /// The job started at `last_start` was small ([`crate::admit::small`]): a small job after it needs no gap.
+    #[serde(default)]
+    pub last_start_small: bool,
     pub running: Vec<RunningJob>,
     pub features: Vec<String>,
     pub reachable: bool,
@@ -449,6 +460,13 @@ pub struct Limits {
     pub no_jobs_on_battery: bool,
     /// Admission by count only (a hub with no Linux probe): at most this many jobs.
     pub fixed_slots: Option<u32>,
+    /// The least time between two starts, unless both are small ([`crate::admit::small`]).
+    #[serde(default = "default_start_gap_s")]
+    pub start_gap_s: u64,
+}
+
+fn default_start_gap_s() -> u64 {
+    crate::admit::START_GAP_S
 }
 
 impl Limits {
@@ -478,6 +496,7 @@ impl Limits {
                 overcommit: 1.5,
                 no_jobs_on_battery: false,
                 fixed_slots: None,
+                start_gap_s: crate::admit::START_GAP_S,
             },
             Profile::Workstation => Limits {
                 floor_mib: 1536,
@@ -495,6 +514,7 @@ impl Limits {
                 overcommit: 1.0,
                 no_jobs_on_battery: true,
                 fixed_slots: None,
+                start_gap_s: crate::admit::START_GAP_S,
             },
         }
     }
@@ -544,6 +564,7 @@ impl Limits {
             overcommit: 1.0,
             no_jobs_on_battery: false,
             fixed_slots: Some(n),
+            start_gap_s: crate::admit::START_GAP_S,
         }
     }
 }
