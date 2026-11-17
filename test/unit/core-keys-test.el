@@ -1447,7 +1447,7 @@ The commands of modules that need no installed package are in it, the later stag
   (let ((ids '(tile-move-left tile-move-right tile-move-up tile-move-down tile-swap-left tile-swap-right tile-swap-up
                               tile-swap-down tile-stack-left tile-stack-right tile-stack-up tile-stack-down tile-unstack
                               tile-resize tile-resize-left tile-resize-right tile-resize-up tile-resize-down
-                              focus-left focus-right focus-up focus-down)))
+                              focus-left focus-right focus-up focus-down layout-restore-previous)))
     (pcase-dolist (`(,name . ,layers) drgnx-keys-presets)
       (let* ((r (drgnx-keys-test--resolve layers))
              (keys (seq-filter (lambda (b) (memq (plist-get b :id) ids)) (plist-get r :bindings))))
@@ -1566,7 +1566,8 @@ The commands of modules that need no installed package are in it, the later stag
                               tile-move-left tile-move-right tile-move-up tile-move-down
                               tile-swap-left tile-swap-right tile-swap-up tile-swap-down
                               tile-stack-left tile-stack-right tile-stack-up tile-stack-down
-                              tile-unstack tile-resize tile-resize-left tile-resize-right tile-resize-up tile-resize-down))
+                              tile-unstack tile-resize tile-resize-left tile-resize-right tile-resize-up tile-resize-down
+                              layout-restore-previous))  ; the grid's Restore Previous Layout (C-k C-z)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

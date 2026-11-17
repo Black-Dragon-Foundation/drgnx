@@ -3409,9 +3409,9 @@ Tests: `test/unit/grid-tree-live-test.el`, `test/ui/grid-full-size-gui-test.el`.
 While a temporary window shows, `drgnx-grid-tree` answers the tree from before the first of them (frame parameter
 `drgnx-grid--good`, the last good tree): temporary windows are never saved. **A grid a package collapsed** — two or
 more tiles gone in one change, past the grid's own hides (a package's `delete-other-windows` with
-`ignore-window-parameters`, or `set-window-configuration`) — is pushed as it was on the frame's layout undo stack
-(`drgnx-grid-push`, frame parameter `drgnx-grid-stack`, newest first, at most 20; `drgnx-grid--watch-foreign` on the
-store's `windows-changed`). Close Pane (`Esc`, `q`) on a tool tile hides it.
+`ignore-window-parameters`, or `set-window-configuration`) — is pushed as it was on the layout undo stack
+(`drgnx-grid-push 'foreign FRAME TREE`; `drgnx-grid--watch-foreign` on the store's `windows-changed`, which already
+coalesces a burst of window changes into one event, so the watch needs no timer of its own). Close Pane (`Esc`, `q`) on a tool tile hides it.
 Tests: `test/unit/grid-rules-test.el` (`drgnx-grid-rules/`).
 
 **Moving tiles** (`wb/drgnx-grid-ops.el`, loaded with the grid). A tile is its whole atom (`drgnx-grid--tile-root`),
@@ -3447,6 +3447,26 @@ named by its main window (`drgnx-grid-tile-main`).
   (`drgnx-grid-stack`'s rule), so it says "Nothing moved" too.
 Tests: `test/unit/grid-moves-test.el`, `test/unit/grid-drag-test.el`, `test/ui/grid-drag-gui-test.el` (pointer events
 from `drgnx-uitest-drag-events` on a frame of its own); I11 in `test/live/drgnx-invariants-test.el`.
+
+**The layout snapshot and the undo stack** (`wb/drgnx-grid-frames.el`, loaded with the grid). `(drgnx-grid-snapshot
+&optional WHY)` is every workbench frame's place in the layout as data that reads back: `(:at TIME :why WHY :frames
+(FRAME-SNAP…))`, each FRAME-SNAP `(:id N :role main|aux :monitor KEY :geometry (L T W H) :shell PLIST :tree TREE :full
+ID)` — the main frame first; KEY is `drgnx-monitors--identity`'s; TREE is `drgnx-grid-tree`'s, the tree it goes back to
+while a tile shows full size, whose id is :full; :id is the frame's own number (`drgnx-grid-frame-id`, in a weak
+table, not a frame parameter; a frame a restore makes again gets its old number). Terminal frames take no part (batch frames do, being all the initial terminal's).
+`(drgnx-grid-restore SNAP)` makes again an aux frame SNAP has that is gone (`drgnx-frames--new`), applies each TREE
+(`drgnx-grid-apply-tree`), puts each graphical frame at its geometry, shows its full-size tile again, and deletes the
+aux frames SNAP lacks, their editors' buffers going first in the main frame's last-used editor's tabs (nothing killed,
+saved or asked); a SNAP that `drgnx-grid-valid-snapshot-p` refuses changes nothing and gives one notice.
+`(drgnx-grid-push WHY &optional FRAME TREE)` pushes a snapshot onto `drgnx-grid--stack` (newest first, at most
+`drgnx-grid-stack-max`, 20; WHY one of `drgnx-grid-push-whys`); with FRAME and TREE, that frame's part is TREE (the
+tree before a collapse); a snapshot equal to the newest (time and why aside) is not pushed again. The moves push
+`move` before they change anything; Restore Previous Layout (`layout-restore-previous`, `drgnx-grid-restore-previous`)
+pops and restores, or says "No earlier layout".
+A frame already as SNAP has it (tree, full size, geometry) is left alone, and only the frames a restore changed get
+their chrome again.
+Tests: `test/unit/grid-snapshot-test.el` (`drgnx-grid-snapshot/`: the stack, one frame; batch cannot make a second
+frame) and `test/ui/grid-snapshot-gui-test.el` (`drgnx-ui-grid-snapshot/`: aux frames made, closed and restored).
 
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 

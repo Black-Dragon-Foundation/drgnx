@@ -57,7 +57,7 @@
         (should (eq (selected-window) moved))
         (should (= (nth 2 (window-pixel-edges moved)) (nth 0 (window-pixel-edges one))))
         (should (= (window-pixel-top moved) (window-pixel-top one)))
-        (should (eq (plist-get (car (frame-parameter nil 'drgnx-grid-stack)) :why) 'move))))))
+        (should (eq (plist-get (car drgnx-grid--stack) :why) 'move))))))
 
 (ert-deftest drgnx-grid-moves/stack-merges-the-tab-rows ()
   (drgnx-grid-test--with
