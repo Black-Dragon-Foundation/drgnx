@@ -528,12 +528,80 @@ draws SVG icons (`drgnx-look-icons').")
           (let ((h (and (not tty) (drgnx-ui-kit--value (plist-get g :height) chosen))))
             (and h (> h 0) (drgnx-px h nil scale))))))
 
+(defun drgnx-ui-kit--prop-symbol (value default)
+  "VALUE (a name, or the symbol itself) as a symbol, DEFAULT when nil."
+  (cond ((null value) default) ((symbolp value) value) (t (intern value))))
+
+(defun drgnx-ui-kit--chip (props scale tty)
+  "The `chip' component of PROPS (:label :tone :fill :icon :action; a tone is a name, or (:agent N) for an agent's
+slot) at SCALE, or on a terminal: (TEXT RUNS PROPS SPACES HEIGHT), see `drgnx-ui-kit--expand'."
+  (let* ((entry (drgnx-ui-kit-component 'chip))
+         (tone-prop (plist-get props :tone))
+         (agent (and (consp tone-prop) (cadr tone-prop)))
+         (tone (if agent 'agent (drgnx-ui-kit--prop-symbol tone-prop 'neutral)))
+         (fill (drgnx-ui-kit--prop-symbol (plist-get props :fill) 'soft))
+         ;; an agent's chip is the neutral one with the agent's colour on its text
+         (chosen (drgnx-ui-kit--chosen entry (list (if agent 'neutral tone) fill)))
+         (g (plist-get entry :geometry)) (tg (plist-get entry :tty))
+         (face (drgnx-ui-kit--face 'chip chosen))
+         (pad (plist-get g :pad)) (action (plist-get props :action))
+         (pos 0) (runs nil) (spaces nil) (parts nil) (images nil))
+    (cl-flet ((pad-part (px-width chars)
+                (if tty
+                    (when (> chars 0)
+                      (push (make-string chars ?\s) parts)
+                      (setq runs (drgnx-ui-kit--run runs pos (+ pos chars) face) pos (+ pos chars)))
+                  (when (> px-width 0)
+                    (push (list pos px-width 0) spaces) (push " " parts)
+                    (setq runs (drgnx-ui-kit--run runs pos (1+ pos) face) pos (1+ pos))))))
+      (pad-part (drgnx-px (car pad) nil scale) (or (plist-get tg :pad) 0))
+      (when-let* ((icon (plist-get props :icon)))
+        (let* ((name (intern icon))
+               (img (and drgnx-ui-kit--icons (not tty) (funcall drgnx-ui-kit--icons name drgnx-ui-kit-icon-px)))
+               (mark (drgnx-ui-kit--glyph name tty)))
+          (cond (img
+                 (push (list pos (1+ pos) 'display img) images) (push " " parts) (setq pos (1+ pos))
+                 (let ((gap (drgnx-px (or (drgnx-ui-kit--value (plist-get g :gap) chosen) 0) nil scale)))
+                   (when (> gap 0)
+                     (push (list pos gap 0) spaces) (push " " parts)
+                     (setq runs (drgnx-ui-kit--run runs pos (1+ pos) face) pos (1+ pos)))))
+                ((and mark (not (string-empty-p mark)))
+                 (let ((str (concat mark " ")))
+                   (push str parts)
+                   (setq runs (drgnx-ui-kit--run runs pos (+ pos (length str)) face) pos (+ pos (length str))))))))
+      (let ((label (or (plist-get props :label) "")) (from pos))
+        (push label parts)
+        (setq runs (drgnx-ui-kit--run runs pos (+ pos (length label)) face) pos (+ pos (length label)))
+        (pad-part (drgnx-px (cdr pad) nil scale) (or (plist-get tg :pad) 0))
+        (setq runs (nreverse runs))
+        (when (and agent (<= 1 agent 12))
+          (setq runs (nconc runs (list (list from (+ from (length label)) (intern (format "drgnx-agent-%d" agent)))))))))
+    (list (mapconcat #'identity (nreverse parts) "") runs
+          (append (nreverse images)
+                  (and action (list (list 0 pos 'drgnx-action (cons (plist-get action :kind) (plist-get action :args)))
+                                    (list 0 pos 'mouse-face 'drgnx-hover))))
+          (nreverse spaces) nil)))
+
+(defun drgnx-ui-kit--status-dot (props _scale tty)
+  "The `status-dot' component of PROPS (:status :word) on a terminal (TTY) or not: (TEXT RUNS PROPS SPACES HEIGHT)."
+  (let* ((entry (drgnx-ui-kit-component 'status-dot))
+         (status (drgnx-ui-kit--prop-symbol (plist-get props :status) 'idle))
+         (chosen (drgnx-ui-kit--chosen entry (list status)))
+         (face (drgnx-ui-kit--face 'status-dot chosen))
+         (mark (drgnx-ui-kit--glyph (drgnx-ui-kit--value (plist-get (plist-get entry :tty) :glyph) chosen) tty))
+         (word (and (or tty (eq (plist-get props :word) t))
+                    (drgnx-ui-kit--value (plist-get entry :label) chosen)))
+         (text (if word (concat mark " " word) mark)))
+    (list text (and face (list (list 0 (length text) face))) nil nil nil)))
+
 (defun drgnx-ui-kit--expand (component props scale tty)
   "COMPONENT (a symbol) with PROPS at SCALE (TTY: on a terminal, `ascii' for ASCII glyphs) as (TEXT RUNS PROPS
 SPACES HEIGHT): RUNS ((FROM TO FACE)...), PROPS ((FROM TO NAME VALUE)...), SPACES ((POS WIDTH HEIGHT)...) in device
 px, HEIGHT the row's line height in device px or nil (one text line)."
   (pcase component
     ('row (drgnx-ui-kit--row props scale tty))
+    ('chip (drgnx-ui-kit--chip props scale tty))
+    ('status-dot (drgnx-ui-kit--status-dot props scale tty))
     (_ (error "drgnx-ui-kit: no component %s" component))))
 
 (defun drgnx-ui-kit--wire (v)

@@ -23,6 +23,22 @@
     {"name": "selected-inactive", "comp": {"c": "row", "kind": "tree", "depth": 1, "twisty": false, "text": "a", "state": "selected-inactive"}},
     {"name": "focus-visible", "comp": {"c": "row", "kind": "tree", "depth": 1, "twisty": false, "text": "a", "state": "focus-visible"}},
     {"name": "disabled", "comp": {"c": "row", "kind": "tree", "depth": 1, "twisty": false, "text": "a", "state": "disabled"}},
-    {"name": "action", "comp": {"c": "row", "kind": "list", "text": "open", "state": "selected", "action": {"kind": "kit-test", "args": [1, "a"]}}}
+    {"name": "action", "comp": {"c": "row", "kind": "list", "text": "open", "state": "selected", "action": {"kind": "kit-test", "args": [1, "a"]}}},
+    {"name": "chip-neutral", "comp": {"c": "chip", "label": "3 files"}},
+    {"name": "chip-ok-soft", "comp": {"c": "chip", "label": "done", "tone": "ok", "fill": "soft"}},
+    {"name": "chip-error-solid", "comp": {"c": "chip", "label": "failed", "tone": "error", "fill": "solid"}},
+    {"name": "chip-accent-icon", "comp": {"c": "chip", "label": "new", "tone": "accent", "icon": "dot"}},
+    {"name": "chip-agent-3", "comp": {"c": "chip", "label": "fix-explorer", "tone": {"agent": 3}}},
+    {"name": "chip-warn-action", "comp": {"c": "chip", "label": "waiting", "tone": "warn", "action": {"kind": "open", "args": ["x"]}}},
+    {"name": "dot-done", "comp": {"c": "status-dot", "status": "done"}},
+    {"name": "dot-done-word", "comp": {"c": "status-dot", "status": "done", "word": true}},
+    {"name": "dot-running", "comp": {"c": "status-dot", "status": "running"}},
+    {"name": "dot-running-word", "comp": {"c": "status-dot", "status": "running", "word": true}},
+    {"name": "dot-needs-you", "comp": {"c": "status-dot", "status": "needs-you"}},
+    {"name": "dot-needs-you-word", "comp": {"c": "status-dot", "status": "needs-you", "word": true}},
+    {"name": "dot-idle", "comp": {"c": "status-dot", "status": "idle"}},
+    {"name": "dot-idle-word", "comp": {"c": "status-dot", "status": "idle", "word": true}},
+    {"name": "dot-error", "comp": {"c": "status-dot", "status": "error"}},
+    {"name": "dot-error-word", "comp": {"c": "status-dot", "status": "error", "word": true}}
   ]
 }

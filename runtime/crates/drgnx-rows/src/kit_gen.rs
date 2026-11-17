@@ -11,6 +11,10 @@ use crate::faces::FaceId;
 pub enum CompId {
     /// `row`
     Row,
+    /// `chip`
+    Chip,
+    /// `status-dot`
+    StatusDot,
 }
 
 /// A state of the state table (on the wire, its name: `"selected-inactive"`).
@@ -73,9 +77,14 @@ pub struct Geom {
 
 /// The glyphs the components name: `(name, Unicode, ASCII)`, from the standard table (`drgnx-ui--default-glyphs`);
 /// the env's glyphs (`KitEnv::glyphs`) take precedence.
-pub const GLYPHS: [(&str, &str, &str); 2] = [
+pub const GLYPHS: [(&str, &str, &str); 7] = [
     ("chevron-right", "›", ">"),
     ("chevron-down", "⌄", "v"),
+    ("ok", "✓", "+"),
+    ("busy", "◎", "@"),
+    ("dot", "●", "*"),
+    ("circle", "○", "o"),
+    ("fail", "✕", "X"),
 ];
 
 const DENSITIES: [&str; 3] = ["compact", "comfortable", "roomy"];
@@ -114,12 +123,119 @@ const ROW_GEOM: [[Geom; 3]; 3] = [
 const ROW_LABEL: [Option<&str>; 3] = [None, None, None];
 const ROW_FACE: [FaceId; 3] = [FaceId::KitRow, FaceId::KitRow, FaceId::KitRow];
 
+const CHIP_AXES: &[&[&str]] = &[&["neutral", "accent", "warn", "ok", "error", "agent"], &["soft", "solid"]];
+const CHIP_DEFAULTS: &[usize] = &[0, 0];
+const CHIP_GEOM: [[Geom; 3]; 12] = [
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 20, pad: (7, 7), gap: 5, boxed: true, radius: 4, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const CHIP_LABEL: [Option<&str>; 12] = [None, None, None, None, None, None, None, None, None, None, None, None];
+const CHIP_FACE: [FaceId; 12] = [FaceId::KitChipNeutralSoft, FaceId::KitChipNeutralSolid, FaceId::KitChipAccentSoft, FaceId::KitChipAccentSolid, FaceId::KitChipWarnSoft, FaceId::KitChipWarnSolid, FaceId::KitChipOkSoft, FaceId::KitChipOkSolid, FaceId::KitChipErrorSoft, FaceId::KitChipErrorSolid, FaceId::Default, FaceId::Default];
+
+const STATUS_DOT_AXES: &[&[&str]] = &[&["done", "running", "needs-you", "idle", "error"]];
+const STATUS_DOT_DEFAULTS: &[usize] = &[3];
+const STATUS_DOT_GEOM: [[Geom; 3]; 5] = [
+    [
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("ok"), twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("ok"), twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("ok"), twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("busy"), twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("busy"), twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("busy"), twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("dot"), twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("dot"), twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("dot"), twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("circle"), twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("circle"), twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("circle"), twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("fail"), twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("fail"), twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 4, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: Some("fail"), twisty: None },
+    ],
+];
+const STATUS_DOT_LABEL: [Option<&str>; 5] = [Some("done"), Some("running"), Some("needs you"), Some("not started"), Some("error")];
+const STATUS_DOT_FACE: [FaceId; 5] = [FaceId::KitStatusDotDone, FaceId::KitStatusDotRunning, FaceId::KitStatusDotNeedsYou, FaceId::KitStatusDotIdle, FaceId::KitStatusDotError];
+
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {
     match id {
         CompId::Row => {
             let (i, d) = index(ROW_AXES, ROW_DEFAULTS, variant);
             ROW_GEOM[i][d]
+        }
+        CompId::Chip => {
+            let (i, d) = index(CHIP_AXES, CHIP_DEFAULTS, variant);
+            CHIP_GEOM[i][d]
+        }
+        CompId::StatusDot => {
+            let (i, d) = index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant);
+            STATUS_DOT_GEOM[i][d]
         }
     }
 }
@@ -128,6 +244,8 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
 pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
     match id {
         CompId::Row => ROW_LABEL[index(ROW_AXES, ROW_DEFAULTS, variant).0],
+        CompId::Chip => CHIP_LABEL[index(CHIP_AXES, CHIP_DEFAULTS, variant).0],
+        CompId::StatusDot => STATUS_DOT_LABEL[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
     }
 }
 
@@ -135,5 +253,7 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
 pub fn face(id: CompId, variant: &[&str]) -> FaceId {
     match id {
         CompId::Row => ROW_FACE[index(ROW_AXES, ROW_DEFAULTS, variant).0],
+        CompId::Chip => CHIP_FACE[index(CHIP_AXES, CHIP_DEFAULTS, variant).0],
+        CompId::StatusDot => STATUS_DOT_FACE[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
     }
 }

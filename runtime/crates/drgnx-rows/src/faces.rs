@@ -1018,11 +1018,41 @@ pub enum FaceId {
     ToplineStrong,
     /// `drgnx-kit-row`
     KitRow,
+    /// `drgnx-kit-chip-neutral-soft`
+    KitChipNeutralSoft,
+    /// `drgnx-kit-chip-accent-soft`
+    KitChipAccentSoft,
+    /// `drgnx-kit-chip-warn-soft`
+    KitChipWarnSoft,
+    /// `drgnx-kit-chip-ok-soft`
+    KitChipOkSoft,
+    /// `drgnx-kit-chip-error-soft`
+    KitChipErrorSoft,
+    /// `drgnx-kit-chip-neutral-solid`
+    KitChipNeutralSolid,
+    /// `drgnx-kit-chip-accent-solid`
+    KitChipAccentSolid,
+    /// `drgnx-kit-chip-warn-solid`
+    KitChipWarnSolid,
+    /// `drgnx-kit-chip-ok-solid`
+    KitChipOkSolid,
+    /// `drgnx-kit-chip-error-solid`
+    KitChipErrorSolid,
+    /// `drgnx-kit-status-dot-done`
+    KitStatusDotDone,
+    /// `drgnx-kit-status-dot-running`
+    KitStatusDotRunning,
+    /// `drgnx-kit-status-dot-needs-you`
+    KitStatusDotNeedsYou,
+    /// `drgnx-kit-status-dot-idle`
+    KitStatusDotIdle,
+    /// `drgnx-kit-status-dot-error`
+    KitStatusDotError,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 505] = [
+    pub const ALL: [FaceId; 520] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1528,6 +1558,21 @@ impl FaceId {
         FaceId::ToplineHover,
         FaceId::ToplineStrong,
         FaceId::KitRow,
+        FaceId::KitChipNeutralSoft,
+        FaceId::KitChipAccentSoft,
+        FaceId::KitChipWarnSoft,
+        FaceId::KitChipOkSoft,
+        FaceId::KitChipErrorSoft,
+        FaceId::KitChipNeutralSolid,
+        FaceId::KitChipAccentSolid,
+        FaceId::KitChipWarnSolid,
+        FaceId::KitChipOkSolid,
+        FaceId::KitChipErrorSolid,
+        FaceId::KitStatusDotDone,
+        FaceId::KitStatusDotRunning,
+        FaceId::KitStatusDotNeedsYou,
+        FaceId::KitStatusDotIdle,
+        FaceId::KitStatusDotError,
     ];
 
     /// The face's Emacs name.
@@ -2038,6 +2083,21 @@ impl FaceId {
             FaceId::ToplineHover => "drgnx-topline-hover",
             FaceId::ToplineStrong => "drgnx-topline-strong",
             FaceId::KitRow => "drgnx-kit-row",
+            FaceId::KitChipNeutralSoft => "drgnx-kit-chip-neutral-soft",
+            FaceId::KitChipAccentSoft => "drgnx-kit-chip-accent-soft",
+            FaceId::KitChipWarnSoft => "drgnx-kit-chip-warn-soft",
+            FaceId::KitChipOkSoft => "drgnx-kit-chip-ok-soft",
+            FaceId::KitChipErrorSoft => "drgnx-kit-chip-error-soft",
+            FaceId::KitChipNeutralSolid => "drgnx-kit-chip-neutral-solid",
+            FaceId::KitChipAccentSolid => "drgnx-kit-chip-accent-solid",
+            FaceId::KitChipWarnSolid => "drgnx-kit-chip-warn-solid",
+            FaceId::KitChipOkSolid => "drgnx-kit-chip-ok-solid",
+            FaceId::KitChipErrorSolid => "drgnx-kit-chip-error-solid",
+            FaceId::KitStatusDotDone => "drgnx-kit-status-dot-done",
+            FaceId::KitStatusDotRunning => "drgnx-kit-status-dot-running",
+            FaceId::KitStatusDotNeedsYou => "drgnx-kit-status-dot-needs-you",
+            FaceId::KitStatusDotIdle => "drgnx-kit-status-dot-idle",
+            FaceId::KitStatusDotError => "drgnx-kit-status-dot-error",
         }
     }
 
@@ -2549,6 +2609,21 @@ impl FaceId {
             "drgnx-topline-hover" => FaceId::ToplineHover,
             "drgnx-topline-strong" => FaceId::ToplineStrong,
             "drgnx-kit-row" => FaceId::KitRow,
+            "drgnx-kit-chip-neutral-soft" => FaceId::KitChipNeutralSoft,
+            "drgnx-kit-chip-accent-soft" => FaceId::KitChipAccentSoft,
+            "drgnx-kit-chip-warn-soft" => FaceId::KitChipWarnSoft,
+            "drgnx-kit-chip-ok-soft" => FaceId::KitChipOkSoft,
+            "drgnx-kit-chip-error-soft" => FaceId::KitChipErrorSoft,
+            "drgnx-kit-chip-neutral-solid" => FaceId::KitChipNeutralSolid,
+            "drgnx-kit-chip-accent-solid" => FaceId::KitChipAccentSolid,
+            "drgnx-kit-chip-warn-solid" => FaceId::KitChipWarnSolid,
+            "drgnx-kit-chip-ok-solid" => FaceId::KitChipOkSolid,
+            "drgnx-kit-chip-error-solid" => FaceId::KitChipErrorSolid,
+            "drgnx-kit-status-dot-done" => FaceId::KitStatusDotDone,
+            "drgnx-kit-status-dot-running" => FaceId::KitStatusDotRunning,
+            "drgnx-kit-status-dot-needs-you" => FaceId::KitStatusDotNeedsYou,
+            "drgnx-kit-status-dot-idle" => FaceId::KitStatusDotIdle,
+            "drgnx-kit-status-dot-error" => FaceId::KitStatusDotError,
             _ => return None,
         })
     }
