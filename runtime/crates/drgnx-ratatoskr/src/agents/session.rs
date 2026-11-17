@@ -5266,6 +5266,25 @@ impl Session {
         Ok(())
     }
 
+    /// A budget's pause lifts ([`super::Agents::resume_paused`]): "Continue." goes first, labelled "resumed by you"
+    /// ([`wheel::give_text`] of no change), and the next turn starts.  Not paused, held by the user or exited: false.
+    pub(crate) fn resume_paused(self: &Arc<Self>) -> bool {
+        if self.status() == SessionStatus::Exited {
+            return false;
+        }
+        let stepped = {
+            let mut st = lock(&self.state);
+            if !st.core.paused() || st.wheel != Wheel::Free {
+                return false;
+            }
+            st.turn_step(TurnEvent::QueueEdited(QueueEdit::Resume(wheel::give_text(
+                "",
+            ))))
+        };
+        self.perform(stepped);
+        true
+    }
+
     /// The user takes the wheel ([`super::wheel`]): the turn running stops after its tool call, no turn starts until
     /// the give, and once no turn runs the wheel is held.  A second take changes nothing.
     pub(crate) fn wheel_take(self: &Arc<Self>) -> Result<(), Error> {

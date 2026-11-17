@@ -1,0 +1,27 @@
+{"scenario": "budget/raise-a-direct-session", "requires": ["v1", "test-hooks"], "doc": "Spec G5: a session of no job reaches its own usd-est limit (0.005; the mock reports 0.01 after its first turn) and is paused with a budget card of no job. budget/raise on that card with a higher limit and resume sets the worker's limit, settles the card as a raise and sends the session the continue: its next prompt is \"Continue.\" (resumed by you), and its turn's spend lands under the new limit."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/w.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "budget/set", "params": {"scope": {"worker": "$sid"}, "limits": [{"amount": 0.005, "unit": "usd-est"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"remaining": [{"amount": 0.005, "unit": "usd-est"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "first"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "budget-limit", "data": {"card": "$capture:card", "data": {"scope": {"worker": "$sid"}, "sessions": ["$sid"]}}}, "within_ms": 15000}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 4, "result": {"session": {"paused": true}}}, "within_ms": 10000, "every_ms": 200}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "budget/raise", "params": {"card": "$card", "limits": [{"amount": 0.05, "unit": "usd-est"}], "resume": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"view": {"scope": {"worker": "$sid"}, "limits": [{"amount": 0.05, "unit": "usd-est"}]}, "resumed": ["$sid"], "held": []}}}
+{"do": "sql_expect", "sql": "select state, choice from card where id = $card", "rows": [["settled", "raise"]]}
+{"do": "file", "path": "$ROOT/w.log", "contains": "\"text\":\"Continue.\"", "within_ms": 15000}
+{"do": "poll", "conn": "c", "json": {"id": 6, "method": "budget/get", "params": {"scope": {"worker": "$sid"}}}, "expect": {"id": 6, "result": {"spent": {"$contains": [{"amount": 0.02, "unit": "usd-est"}]}}}, "within_ms": 15000, "every_ms": 200}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"session": {"paused": "$absent"}}}}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "budget/raise", "params": {"card": "$card", "limits": [{"amount": 1.0, "unit": "usd-est"}], "resume": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "error": {"message": "$string"}}}

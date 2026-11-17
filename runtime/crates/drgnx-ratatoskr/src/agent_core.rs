@@ -175,6 +175,7 @@ pub async fn serve(
         Params::BudgetGet(p) => answer(budget::get(f, c, p).await),
         Params::BudgetTreePage(p) => answer(budget::tree(f, c, p).await),
         Params::BudgetSet(p) => answer(budget::set(f, c, p).await),
+        Params::BudgetRaise(p) => answer(budget::raise(f, c, p).await),
         Params::PaceGet(p) => answer(budget::pace(f, c, p).await),
         Params::ForecastGet(p) => answer(forecast::get(f, c, p).await),
         Params::ForecastSession(p) => answer(forecast::session(f, p).await),
