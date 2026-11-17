@@ -1496,6 +1496,29 @@ fn outline_block(s: &Scene, id: &ItemId, cols: usize, env: &Env) -> Vec<Line> {
     lines
 }
 
+/// A budget as plain text: "$31/$40", or "$12 · no limit" when no limit counts here; a unit that is no money follows
+/// the numbers ("30/50 limit-share").
+fn meter_text(m: &crate::model::ItemBudget) -> String {
+    let money = matches!(m.unit.as_str(), "usd" | "usd-est");
+    let sym = if money { "$" } else { "" };
+    let n = |v: f64| {
+        if v.fract() == 0.0 {
+            format!("{v:.0}")
+        } else {
+            format!("{v:.2}")
+        }
+    };
+    let unit = if money {
+        String::new()
+    } else {
+        format!(" {}", m.unit)
+    };
+    match m.limit {
+        Some(l) => format!("{sym}{}/{sym}{}{unit}", n(m.spent.0), n(l.0)),
+        None => format!("{sym}{}{unit} · no limit", n(m.spent.0)),
+    }
+}
+
 /// The rows of List mode: one per entry, keyed `list:N`, a fold mark and the label indented by depth (canonical
 /// characters, never pixels), a task's state glyph and word, then its agent, machine and chips. Each carries its
 /// item's id, which the editor's keys and clicks read. The kit draws these rows later; this is the plain form.
@@ -1530,6 +1553,8 @@ pub fn list_rows(entries: &[crate::list::ListEntry], selected: Option<&ItemId>) 
                     ListChip::Branch(x) => b.push(&format!("  ⑂ {x}"), None),
                     ListChip::Files(f, l) => b.push(&format!("  {f} files {l} lines"), None),
                     ListChip::Progress(d, t) => b.push(&format!("  {d}/{t}"), None),
+                    // the kit's meter replaces this plain form (Task 20a)
+                    ListChip::Meter(m) => b.push(&format!("  {}", meter_text(m)), None),
                 };
             }
             if let Some(a) = &e.agent {
