@@ -1220,11 +1220,6 @@ fn the_links_of_the_scanners_entities_move_to_the_importers_before_they_retire()
     }
 }
 
-fn count_links(c: &Connection, sql: &str) -> i64 {
-    c.query_row(sql, [urdr::graph::schema::SENTINEL], |r| r.get(0))
-        .unwrap()
-}
-
 /// Against a COPY of a real work.db (`DRGNX_WORKDB_COPY`, never the live one): one empty scan runs the migration, and
 /// the live links by kind, plans, tasks and steps are printed before and after.  Nothing is lost when no kind of link
 /// gets fewer.
