@@ -6,6 +6,7 @@
 ;; Counts can only fall: the task that rewrites a site deletes its entry.  A branch merged later adds its sites.
 (
  (:file "wb/drgnx-switcher.el" :in drgnx-switcher--fill-card :what erase-buffer :kind document :why "a pooled card is two lines (a letter and a title), drawn whole when the user opens Switch Tile or moves its highlight")
+ (:file "wb/drgnx-grid.el" :in drgnx-grid-tile-placeholder :what erase-buffer :kind document :why "a tile placeholder is one line (what waits there and its keys), written when its kind's module goes off or on, and only when the line changes")
  (:file "modules/ui/drgnx-kit-catalogue.el" :in drgnx-kit-catalogue-open :what erase-buffer :kind document :why "the component catalogue is drawn whole when the user opens it (Design: Component Catalogue)")
  (:file "modules/ui/drgnx-inbox.el" :in drgnx-inbox--render :what erase-buffer :kind document :why "the inbox is a few rows, drawn whole when the notice model changes (a drop-down or a tab, not a streaming view)")
  (:file "modules/tools/drgnx-agents-session.el" :in drgnx-agents-session-job-log :what erase-buffer :kind document :why "the job log is shown on the user's action")

@@ -545,6 +545,8 @@
               (window-move-to-previous-monitor :none "the palette")
               (focus-outline "C-M-o")
               (outline-open "RET")
+              (tile-placeholder-open "RET")
+              (tile-placeholder-close "x")
               (decor-activate "RET")
               (wb-save-layout :none "in the palette (also on exit)")
               (wb-restore-layout :none "in the palette (also at start)")

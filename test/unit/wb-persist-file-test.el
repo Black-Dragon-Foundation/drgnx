@@ -34,10 +34,10 @@ into `msgs' (a list, newest first)."
   (directory-files dir t "\\.bak-"))
 
 (ert-deftest drgnx-persist-file/the-format-is-unchanged ()
-  "Store Task 15 relies on it: `(:version 2 :frames (STATE…))', printed whole, readable by a plain `read'."
+  "Store Task 15 relies on it: `(:version 3 :frames (STATE…))', printed whole, readable by a plain `read'."
   (drgnx-persist-file-test--with dir
     (should (equal (drgnx-persist-save drgnx-persist-file (list (selected-frame))) drgnx-persist-file))
-    (let ((want '(:version 2 :frames ((:role main :main (leaf))))))
+    (let ((want '(:version 3 :frames ((:role main :main (leaf))))))
       (should (equal (with-temp-buffer (insert-file-contents drgnx-persist-file) (read (current-buffer))) want))
       (should (equal (drgnx-persist-file-test--bytes drgnx-persist-file) (concat (prin1-to-string want) "\n")))
       (should (equal (drgnx-persist--read drgnx-persist-file) want)))))
@@ -71,7 +71,7 @@ into `msgs' (a list, newest first)."
 
 (ert-deftest drgnx-persist-file/a-newer-file-is-never-overwritten ()
   (drgnx-persist-file-test--with dir
-    (let ((text "(:version 3 :frames nil :future (a b c))\n"))
+    (let ((text "(:version 4 :frames nil :future (a b c))\n"))
       (drgnx-persist-file-test--put drgnx-persist-file text)
       (should-not (drgnx-persist-save drgnx-persist-file (list (selected-frame))))
       (should (equal (drgnx-persist-file-test--bytes drgnx-persist-file) text))
@@ -86,9 +86,9 @@ into `msgs' (a list, newest first)."
 
 (ert-deftest drgnx-persist-file/a-newer-file-is-not-restored-either ()
   (drgnx-persist-file-test--with dir
-    (drgnx-persist-file-test--put drgnx-persist-file "(:version 3 :frames ((:role main)))\n")
+    (drgnx-persist-file-test--put drgnx-persist-file "(:version 4 :frames ((:role main)))\n")
     (should-not (drgnx-persist-restore drgnx-persist-file))
-    (should (cl-some (lambda (m) (string-match-p "format 3" m)) msgs))))
+    (should (cl-some (lambda (m) (string-match-p "format 4" m)) msgs))))
 
 (ert-deftest drgnx-persist-file/an-unreadable-file-is-backed-up-at-the-next-save ()
   (drgnx-persist-file-test--with dir
@@ -105,7 +105,7 @@ into `msgs' (a list, newest first)."
       (let ((baks (drgnx-persist-file-test--backups dir)))
         (should (= 1 (length baks)))
         (should (equal (drgnx-persist-file-test--bytes (car baks)) bad)))
-      (should (equal (plist-get (drgnx-persist--read drgnx-persist-file) :version) 2)))))
+      (should (equal (plist-get (drgnx-persist--read drgnx-persist-file) :version) 3)))))
 
 (ert-deftest drgnx-persist-file/crafted-depth-or-objects-are-refused-at-read ()
   (drgnx-persist-file-test--with dir
