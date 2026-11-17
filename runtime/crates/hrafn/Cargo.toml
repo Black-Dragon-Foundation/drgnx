@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+autotests = false  # tests/main.rs is the one binary of the files that need no process of their own; the rest are [[test]]s below
 
 [features]
 # The host-side doors (git CLI, the gix door of touched trees, file watcher) behind the `Git`, `TreeGit` and `Watch` traits.
@@ -39,3 +40,26 @@ drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # stand-in scripts wri
 skuld = { path = "../skuld", version = "0.1.0" }  # every order of the settle core
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
+
+# --- integration tests: one binary (`it`) plus the files that need a process of their own (reason on each) ---
+
+# every tests/*.rs not named below, as modules of one binary: `cargo test -p hrafn --test it <file>::`
+[[test]]
+name = "it"
+path = "tests/main.rs"
+
+# empties PATH for the whole process
+[[test]]
+name = "door_no_git"
+
+# the grammar registry is process-wide (installs an empty one, hooks on_missing)
+[[test]]
+name = "chunk_missing"
+
+# the grammar registry is process-wide (installs an empty one)
+[[test]]
+name = "lang_stamp"
+
+# installs the process-wide set of fetched packs and the on_missing hook
+[[test]]
+name = "fetched_pack"

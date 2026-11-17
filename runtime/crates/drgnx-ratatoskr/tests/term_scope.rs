@@ -4,7 +4,7 @@
 //! it needs systemd as PID 1 and a user manager, which the fake runner has (test/runners/README.md):
 //!
 //! ```text
-//! cargo test -p drgnx-ratatoskr --features fleet --test term_scope --no-run   # and build drgnx-term beside it
+//! cargo test -p drgnx-ratatoskr --features fleet --test fleet --no-run   # and build drgnx-term beside it
 //! fleet.sh up --runners 1
 //! fleet.sh host <the test binary> worker_survives_hub_restart_under_kill_mode_mixed
 //! ```
@@ -113,7 +113,11 @@ async fn worker_survives_hub_restart_under_kill_mode_mixed() {
         .arg(format!("--setenv={}", env("PATH")))
         .arg("--")
         .arg(&me)
-        .args(["--ignored", "--exact", "a_hub_that_opens_one_terminal"])
+        .args([
+            "--ignored",
+            "--exact",
+            "term_scope::a_hub_that_opens_one_terminal",
+        ])
         .output()
         .expect("systemd-run runs");
     assert!(

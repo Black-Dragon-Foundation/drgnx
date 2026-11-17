@@ -43,7 +43,7 @@
                                         "drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks")
                  :inputs ("runtime/**" "core/**" "modules/**"))
   (rust-rules    :dir "runtime"
-                 :run ("sh" "-c" "cargo test -p skuld --test real_time_in_tests && cargo test -p drgnx-ratatoskr --features test-hooks --test hub_reads_its_clock")
+                 :run ("sh" "-c" "cargo test -p skuld --test real_time_in_tests && cargo test -p drgnx-ratatoskr --features test-hooks --test it hub_reads_its_clock::")
                  :inputs ("runtime/**"))
   (domr          :dir "runtime"
                  :run ("sh" "-c" "cargo build -p domr -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks && target/debug/domr --hub-bin target/debug/ratatoskr --scenarios ../test/conformance --only '%g'")

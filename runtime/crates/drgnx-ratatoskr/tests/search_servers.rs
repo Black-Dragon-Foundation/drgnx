@@ -5,8 +5,6 @@
 //! PATH) is a value the test builds; no clock, no process. `hub_never_calls_start` is a handshake (C): the hub's own
 //! runner records the commands it was asked to run (test-hooks: it runs none) and the test acts when the hub answers.
 
-mod support;
-
 use drgnx_ratatoskr::search::servers::{self, Host, Refused, Run};
 use runstav::methods::search::ServerKind;
 use std::cell::RefCell;
@@ -279,8 +277,8 @@ fn failed_command_and_stop() {
 #[cfg(feature = "test-hooks")]
 #[test]
 fn hub_never_calls_start() {
+    use crate::support::{Client, Hub, Root};
     use serde_json::json;
-    use support::{Client, Hub, Root};
     let root = Root::new();
     let mut hub = Hub::start(&root, 1);
     let socket = root.socket();

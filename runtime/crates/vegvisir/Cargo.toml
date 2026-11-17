@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+autotests = false  # tests/main.rs is the one binary of the files that need no process of their own; the rest are [[test]]s below
 
 [features]
 # `fixture::thirty()`, the 30-agent fixture read from test/fixtures/work-space/thirty.json: tests and the hub's own
@@ -25,3 +26,13 @@ vegvisir = { path = ".", version = "0.1.0", features = ["fixture"] }
 serde_json.workspace = true
 skuld = { path = "../skuld", version = "0.1.0" }
 proptest.workspace = true
+
+
+# every tests/*.rs not named below, as modules of one binary: `cargo test -p vegvisir --test it <file>::`
+[[test]]
+name = "it"
+path = "tests/main.rs"
+
+# timing rows measure latency: no other test's load beside them
+[[test]]
+name = "timing"
