@@ -1887,3 +1887,120 @@ fn a_cost_object_is_the_sessions_spend() {
         assert_eq!(spend.as_deref(), Some("$0.01"), "{cost}");
     }
 }
+
+fn week_pace(
+    provider: &str,
+    used: f64,
+    rate: f64,
+    rate_7d: Option<f64>,
+    resets_at: Option<f64>,
+) -> runstav::methods::timeline::Pace {
+    runstav::methods::timeline::Pace {
+        provider: provider.into(),
+        window: "week".into(),
+        used_share: used,
+        rate_per_hour: rate,
+        exhausted_at: None,
+        resets_at,
+        estimate: true,
+        rate_7d_per_hour: rate_7d,
+        history: Vec::new(),
+    }
+}
+
+/// [D] Without a scene the strip has a chip for each weekly meter: its share and its seven-day rate, with "runs out"
+/// when that rate uses the week up before it resets; a five-hour meter has none.
+#[test]
+fn the_strip_shows_week_pace_without_a_scene() {
+    let now = 1_000_000.0;
+    let hour = 3600.0;
+    let mut five = week_pace("claude", 0.8, 0.1, None, None);
+    five.window = "5h".into();
+    let paces = [
+        five,
+        week_pace("claude", 0.41, 0.0, Some(0.032), Some(now + 100.0 * hour)),
+        week_pace("codex", 0.1, 0.001, None, Some(now + 100.0 * hour)),
+    ];
+    let chips = strip_chips_of(&paces, None, now);
+    assert_eq!(
+        chips,
+        vec![
+            "Claude wk 41 % · +3.2 %/h · runs out".to_owned(),
+            "Codex wk 10 % · +0.1 %/h".to_owned()
+        ]
+    );
+    // the same pace with the reset sooner than the week runs out: no warning
+    let soon = [week_pace(
+        "claude",
+        0.41,
+        0.0,
+        Some(0.032),
+        Some(now + 10.0 * hour),
+    )];
+    assert_eq!(
+        strip_chips_of(&soon, None, now),
+        vec!["Claude wk 41 % · +3.2 %/h".to_owned()]
+    );
+}
+
+/// [D] The selected plan's binding budget follows the weekly chips: dollars as `$31/$40`, a share of the week as
+/// `11 %/15 % wk`, the state as a word when nearing or reached.
+#[test]
+fn the_strip_shows_the_selected_plans_budget() {
+    use runstav::methods::{matrix::Unit, timeline::BudgetState};
+    let usd = PlanBudget {
+        unit: Unit::Usd,
+        spent: 31.0,
+        limit: Some(40.0),
+        state: BudgetState::Ok,
+    };
+    assert_eq!(
+        strip_chips_of(&[], Some(&usd), 0.0),
+        vec!["plan $31/$40".to_owned()]
+    );
+    let share = PlanBudget {
+        unit: Unit::LimitShare,
+        spent: 0.11,
+        limit: Some(0.15),
+        state: BudgetState::Nearing,
+    };
+    assert_eq!(
+        strip_chips_of(&[], Some(&share), 0.0),
+        vec!["plan 11 %/15 % wk · nearing".to_owned()]
+    );
+    let reached = PlanBudget {
+        unit: Unit::UsdEst,
+        spent: 4.0,
+        limit: Some(4.0),
+        state: BudgetState::Reached,
+    };
+    assert_eq!(
+        strip_chips_of(&[], Some(&reached), 0.0),
+        vec!["plan $4.00/$4.00 · reached".to_owned()]
+    );
+    // after the week chips, in that order
+    let both = strip_chips_of(
+        &[week_pace("claude", 0.5, 0.0, None, None)],
+        Some(&usd),
+        0.0,
+    );
+    assert_eq!(both.len(), 2);
+    assert!(both[0].starts_with("Claude wk") && both[1].starts_with("plan"));
+}
+
+/// [D] A plan with no limit anywhere shows what it spent, alone.
+#[test]
+fn a_plan_with_no_limit_shows_spend_alone() {
+    use runstav::methods::{matrix::Unit, timeline::BudgetState};
+    let b = PlanBudget {
+        unit: Unit::Usd,
+        spent: 12.0,
+        limit: None,
+        state: BudgetState::None,
+    };
+    assert_eq!(
+        strip_chips_of(&[], Some(&b), 0.0),
+        vec!["plan $12".to_owned()]
+    );
+    assert!(strip_chips_of(&[], None, 0.0).is_empty());
+}
