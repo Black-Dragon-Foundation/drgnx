@@ -29,6 +29,11 @@ pub fn after_turn(sid: &str, turn: u64, prompt_len: usize) -> Vec<(&'static str,
             json!({"sessionId": sid, "status": "allowed_warning", "rateLimitType": "five_hour",
                 "utilization": 0.8, "resetsAt": 4_102_444_800u64}),
         ),
+        (
+            "_claude/rateLimit",
+            json!({"sessionId": sid, "status": "allowed", "rateLimitType": "seven_day",
+                "utilization": 0.3, "resetsAt": 4_102_444_800u64}),
+        ),
     ]
 }
 

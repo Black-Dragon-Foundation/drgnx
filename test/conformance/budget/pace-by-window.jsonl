@@ -1,0 +1,18 @@
+{"scenario": "budget/pace-by-window", "requires": ["v1", "test-hooks"], "doc": "A mock Claude reports two windows after its first turn (five_hour 0.8, seven_day 0.3). pace/get answers one meter per window with its window name (5h, week); history comes only when asked: with history:true each meter carries its readings. Before there was one meter per provider, so the two windows overwrote each other and the weekly rate could not be told from the five-hour one."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "one"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "pace/get", "params": {}}, "expect": {"id": 3, "result": {"meters": [{"provider": "claude", "window": "5h", "used_share": 0.8}, {"provider": "claude", "window": "week", "used_share": 0.3}]}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "pace/get", "params": {"provider": "claude", "history": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"meters": [{"window": "5h", "history": [["$number", "$number"]]}, {"window": "week", "history": [["$number", "$number"]]}]}}}

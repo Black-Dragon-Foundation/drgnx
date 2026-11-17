@@ -142,8 +142,8 @@ pub fn share_per_usd_of(history: &[(f64, f64)], usd_est: f64) -> Option<f64> {
 }
 
 /// [`share_per_usd_of`] over PROVIDER's kept readings and the `usd-est` its steps booked since the first of them.
-pub async fn share_per_usd(front: &Front, provider: &str, now: f64) -> Option<f64> {
-    let history = front.core.budgets.history(provider, now);
+pub async fn share_per_usd(front: &Front, provider: &str, window: &str, now: f64) -> Option<f64> {
+    let history = front.core.budgets.history(provider, window, now);
     let first = history.first()?.0;
     let provider = provider.to_owned();
     let usd_est = front
@@ -562,16 +562,17 @@ async fn build(
     let mut pace = Vec::new();
     let mut warnings = Vec::new();
     for name in meters {
+        // the provider's window that binds first: the fullest
         let Some(meter) = front
             .core
             .budgets
             .pace(Some(name), made_at)
             .into_iter()
-            .next()
+            .max_by(|a, b| a.used_share.total_cmp(&b.used_share))
         else {
             continue;
         };
-        let added = match share_per_usd(front, name, made_at).await {
+        let added = match share_per_usd(front, name, &meter.window, made_at).await {
             Some(ratio) => {
                 let own = |i: usize, o: &Obs| {
                     if on_subscription[i] == Some(name) {
@@ -1452,6 +1453,9 @@ mod tests {
             exhausted_at: None,
             resets_at,
             estimate: true,
+            window: "week".into(),
+            rate_7d_per_hour: None,
+            history: Vec::new(),
         }
     }
 
@@ -1478,8 +1482,12 @@ mod tests {
         .await;
         let scope: runstav::methods::timeline::BudgetScope =
             serde_json::from_value(serde_json::json!({"worker": "w1"})).unwrap();
-        f.core.budgets.reading(&scope, "claude", 0.10, None, 1000.0);
-        f.core.budgets.reading(&scope, "claude", 0.20, None, 1900.0);
+        f.core
+            .budgets
+            .reading(&scope, "claude", "5h", 0.10, None, 1000.0);
+        f.core
+            .budgets
+            .reading(&scope, "claude", "5h", 0.20, None, 1900.0);
         f.writer
             .write(&crate::runner::service(), "test/steps", |tx| {
                 // (provider, start, cost, unit)
@@ -1528,10 +1536,10 @@ mod tests {
             .await
             .unwrap();
         // the meter rose 0.10 while 4 + 6 estimated dollars were booked
-        let got = share_per_usd(&f, "claude", 2000.0).await.unwrap();
+        let got = share_per_usd(&f, "claude", "5h", 2000.0).await.unwrap();
         assert!((got - 0.01).abs() < 1e-12, "{got}");
         assert_eq!(
-            share_per_usd(&f, "codex", 2000.0).await,
+            share_per_usd(&f, "codex", "5h", 2000.0).await,
             None,
             "no meter readings"
         );

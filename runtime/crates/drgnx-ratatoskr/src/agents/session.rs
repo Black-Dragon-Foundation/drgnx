@@ -4416,12 +4416,17 @@ impl Session {
                     resp,
                 }) => panel::request(self.clone(), method, params, resp),
                 Event::Ext { method, params } => {
-                    if let Some((provider, share, resets)) =
+                    for (provider, window, share, resets) in
                         crate::budget::meter_of(&method, &params)
                     {
-                        let hits =
-                            self.budgets
-                                .reading(&self.scope(), provider, share, resets, now());
+                        let hits = self.budgets.reading(
+                            &self.scope(),
+                            provider,
+                            &window,
+                            share,
+                            resets,
+                            now(),
+                        );
                         self.budgets.notify(hits);
                     }
                 }
