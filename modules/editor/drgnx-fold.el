@@ -182,7 +182,9 @@ starting on POS's line, else the innermost holding POS)."
 
 (defun drgnx-fold--summary (ov)
   "The display string of fold overlay OV: its name, then `⋯ N lines' (`drgnx-fold-summary')."
-  (let* ((n (- (line-number-at-pos (overlay-end ov)) (line-number-at-pos (overlay-start ov))))
+  (let* ((s (overlay-start ov)) (e (overlay-end ov))
+         ;; the newlines from S to E, counted over the range alone (`line-number-at-pos' counts from the buffer's start)
+         (n (let ((c (count-lines s e))) (if (save-excursion (goto-char e) (bolp)) c (1- c))))
          (name (overlay-get ov 'drgnx-fold-name))
          (count (pcase drgnx-fold-summary
                   ('nil "⋯")
