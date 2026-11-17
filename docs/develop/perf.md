@@ -1138,6 +1138,10 @@ at most 4 ms at the 95th percentile (`budget-event-patch`). Run:
 The budget tree's hub row is the same bench's second test, `budget_tree`: 500 scopes, the first page of 200 nodes built
 (`tree_scopes` and `node`) within 20 ms (`budget-tree-open`, `:first-page`).
 
+The joint plan forecast's rows are the ignored test `forecast_plan_perf` in `drgnx-ratatoskr` (`forecast.rs`): 12 plans of 20 tasks drawn
+together, the first call within 300 ms (`forecast-plan-miss`) and the cached repeats within 5 ms at the 95th percentile
+(`forecast-plan-hit`): `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --lib -- --ignored --nocapture forecast_plan_perf`.
+
 Inline values' hub row is the bench `runtime/crates/drgnx-ratatoskr/benches/debug_inline.rs`: `debug-inline`, a stop's
 values for a 2,000-line Python file stopped in a 200-line function with 42 variables, the parse cached (at most 8 ms at
 the 95th percentile; the first parse is printed too). It is `#[ignore]`d and measures and prints:

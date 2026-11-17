@@ -912,6 +912,7 @@ impl Front {
             | Params::BudgetSet(_)
             | Params::PaceGet(_)
             | Params::ForecastGet(_)
+            | Params::ForecastPlan(_)
             | Params::ForecastSession(_)
             | Params::ForecastAccuracy(_)
             | Params::SayStart(_)

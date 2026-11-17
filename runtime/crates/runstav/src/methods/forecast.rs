@@ -2,6 +2,7 @@
 //! hub.md, "Forecasts").  Tokens, time and cost are ranges (a middle and a high end), cost by unit and never summed
 //! across units, and each task says what it was forecast from.
 
+use super::graph::ParsedId;
 use super::matrix::Unit;
 use super::method;
 use crate::registry::Method;
@@ -184,6 +185,29 @@ pub struct BaselineTask {
     pub finish: Range,
 }
 
+/// `forecast/plan`: the plans (entity ids) to forecast together.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ForecastPlanParams {
+    pub plans: Bounded<Vec<ParsedId>, 32>,
+}
+
+/// A plan with a running job: its own forecast, not part of the joint draw.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct RunningPlan {
+    pub plan: String,
+    pub job: String,
+    pub remaining: Forecast,
+}
+
+/// The joint forecast of the plans not running (its `tasks` are numbered `plan index * 1000 + n`), and the plans that
+/// are.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct PlanForecast {
+    pub forecast: Forecast,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub running: Vec<RunningPlan>,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ForecastParams {
     pub job: Id,
@@ -232,6 +256,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "forecast/get", ForecastGet(ForecastParams) -> Forecast,
             classes: [User], writes: false,
             doc: "a job's forecast: tokens, time and cost per task and for the plan, from the history of similar tasks, with the effect on the week's pace",
+        ),
+        method!(
+            "forecast/plan", ForecastPlan(ForecastPlanParams) -> PlanForecast,
+            classes: [User], writes: false,
+            doc: "one forecast over the plans given (up to 32), drawn together on the runner's slots (not a sum of each plan's p90); a plan with a running job is in `running`, with its own forecast, and not in the draw; nothing is recorded",
         ),
         method!(
             "forecast/session", ForecastSession(SessionForecastParams) -> Forecast,

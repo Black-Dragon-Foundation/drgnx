@@ -176,6 +176,7 @@ pub async fn serve(
         Params::BudgetSet(p) => answer(budget::set(f, c, p).await),
         Params::PaceGet(p) => answer(budget::pace(f, c, p).await),
         Params::ForecastGet(p) => answer(forecast::get(f, c, p).await),
+        Params::ForecastPlan(p) => answer(forecast::plan(f, p).await),
         Params::ForecastSession(p) => answer(forecast::session(f, p).await),
         Params::ForecastAccuracy(p) => answer(forecast::accuracy(f, p).await),
         Params::SayStart(p) => answer(say::start(f, c, p).await),

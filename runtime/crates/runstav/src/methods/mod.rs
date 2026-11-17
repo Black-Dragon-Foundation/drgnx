@@ -265,6 +265,7 @@ params! {
     BudgetSet(timeline::BudgetSetParams),
     PaceGet(timeline::PaceParams),
     ForecastGet(forecast::ForecastParams),
+    ForecastPlan(forecast::ForecastPlanParams),
     ForecastSession(forecast::SessionForecastParams),
     ForecastAccuracy(forecast::AccuracyParams),
     SayStart(say::SayStart),
