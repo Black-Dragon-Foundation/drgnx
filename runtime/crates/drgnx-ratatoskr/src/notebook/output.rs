@@ -258,6 +258,10 @@ impl Router {
             // `status` carries no output; the run's state is the reply's
             return None;
         }
+        if t == "kernel_info_reply" {
+            // the answer to the hub's own readiness ping (asked again until a status comes), late: not the kernel's news
+            return None;
+        }
         let parent = m.parent.get("msg_id").and_then(Value::as_str).unwrap_or("");
         if parent.is_empty() || !self.runs.contains_key(parent) {
             return self.log_message(m);
