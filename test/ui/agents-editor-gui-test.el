@@ -52,6 +52,12 @@
   (mapc #'disable-theme custom-enabled-themes)
   (load-theme theme t))
 
+(defun agents-editor-gui--themes-off ()
+  "Give the themes back: none enabled, and the agent faces the look derives from the theme follow it back (a theme left
+enabled, or faces derived from it, is global state the next file sees)."
+  (mapc #'disable-theme custom-enabled-themes)
+  (when (fboundp 'drgnx-look-derive) (drgnx-look-derive)))
+
 (defun agents-editor-gui--rgb (face)
   (let ((c (or (face-foreground face nil t) (face-background face nil t))))
     (mapcar (lambda (v) (round (/ v 257.0))) (color-values c))))
@@ -90,12 +96,21 @@ Agent = range mod 5, state cycles changed, pending, conflict, read."
                                      (_ 'agents-editor-gui-bar))
                              ,(nth agent agents-editor-gui--faces)))))
 
+(defvar-local agents-editor-gui--rows-memo nil "((BODY-PIXELS . TEXT-SCALE) . ROWS): the row count, which only a resize or a text scale changes.")
+
 (defun agents-editor-gui--rows (win start)
   "Rows WIN shows from START: its pixel height over the line height at START (the frame's own line count is
-the default font's, not a scaled buffer's)."
+the default font's, not a scaled buffer's).  Asked once per window size and text scale: `line-pixel-height' measures
+the window's display and takes 10-30 ms when a redisplay is owed (as after every `set-window-start'), which is not
+what a rebuild costs."
   (with-current-buffer (window-buffer win)
-    (save-excursion (goto-char start)
-                    (1+ (ceiling (window-body-height win t) (max 1 (line-pixel-height)))))))
+    (let ((key (cons (window-body-height win t) (bound-and-true-p text-scale-mode-amount))))
+      (if (equal (car agents-editor-gui--rows-memo) key)
+          (cdr agents-editor-gui--rows-memo)
+        (let ((rows (save-excursion (goto-char start)
+                                    (1+ (ceiling (car key) (max 1 (line-pixel-height)))))))
+          (setq agents-editor-gui--rows-memo (cons key rows))
+          rows)))))
 
 (defvar agents-editor-gui--priority nil "An overlay priority for the gutter overlays, or nil.")
 (defvar agents-editor-gui--ring-form 'box "`box' (the card box) or `tint' (a background only), for the cost comparison.")
@@ -279,7 +294,7 @@ bar is 2 ms); then the cost of the redisplay the overlays add; then a picture in
           (agents-editor-gui--png (format "s1-rows-%s" variant))
           (should (> agents-editor-gui--active 0)))
         (agents-editor-gui--clear)
-        (mapc #'disable-theme custom-enabled-themes)
+        (agents-editor-gui--themes-off)
         (kill-buffer "*s1-rows*")))))
 
 (defun agents-editor-gui--scroll (win start)
@@ -317,7 +332,7 @@ window, where margins work the same way: the marked row has the agent's colour i
           (agents-editor-gui--png (format "s1-margin-%s" variant))
           (should (>= on 3))
           (should (= off 0))))
-      (mapc #'disable-theme custom-enabled-themes)
+      (agents-editor-gui--themes-off)
       (kill-buffer "*s1-margin*"))))
 
 (provide 'agents-editor-gui-test)
@@ -416,7 +431,7 @@ in the dark, the light and the high-contrast theme: pictures, the gutter and tin
                                          variant tinted plain)
                 (should (< tinted (/ plain 4)))))))
       (drgnx-agents-editor-draw-clear buf)
-      (mapc #'disable-theme custom-enabled-themes)
+      (agents-editor-gui--themes-off)
       (kill-buffer buf))))
 
 ;;;; The agent panel scene (the look's agent-panel.html), in each theme and at the session's scale
@@ -476,9 +491,7 @@ waits for the gate, by eye."
         (drgnx-view-env-teardown)
         (drgnx-view-patch-teardown)
         (set-window-parameter win 'drgnx-view-sja-pinned nil)
-        (mapc #'disable-theme custom-enabled-themes)
-        ;; the agent faces the derive set follow the theme back
-        (when (fboundp 'drgnx-look-derive) (drgnx-look-derive))))))
+        (agents-editor-gui--themes-off)))))
 
 (provide 'agents-editor-gui-test)
 ;;; agents-editor-gui-test.el ends here
