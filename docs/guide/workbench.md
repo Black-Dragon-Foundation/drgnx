@@ -361,7 +361,11 @@ still shows it): onto another group's middle it joins that group's tabs, onto an
 a group's only tab moves the whole group. A drop on the tile itself, on no tile or
 where there is no room changes nothing and says "Nothing moved"; panes stack only onto a tile that is no dock (move
 the docked one off its dock first). The dividers between tiles still drag to resize. `drgnx-grid-drag` set to nil
-draws no grip and turns dragging off. The other group commands: Close All Editors in Group (`C-k w`; the
+draws no grip and turns dragging off. **Restore Previous Layout** (`C-k C-z` · `C-x w u` · `SPC l u`) puts back the
+layout before the last change to it — a move, a stack, a drop, or a package that collapsed the tiles behind the
+workbench's back — across every window: a window it had that you closed opens again, one it lacked closes, its files
+becoming tabs of the main window's editor (nothing is closed or saved). Again goes one more back, up to 20; with none
+left the echo area says "No earlier layout". The other group commands: Close All Editors in Group (`C-k w`; the
 palette in the Emacs and Vim profiles; its tabs go, the files stay open; the group closes, or, the last one, shows
 `*scratch*`), Focus Group 1–3 (`C-1`–`C-3` · `C-x o` · `SPC 1`–`SPC 3`; one past the last makes a group to the right),
 Move Editor into Next Group (`C-M-<right>` · palette · `SPC w m`; a group left without tabs closes, as in VS Code),

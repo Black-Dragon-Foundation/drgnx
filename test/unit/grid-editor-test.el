@@ -110,7 +110,7 @@
     (dolist (w (list one two))
       (dolist (p '(drgnx-tile-id no-delete-other-windows delete-window))
         (should-not (window-parameter w p))))
-    (dolist (p '(drgnx-grid-next-id drgnx-grid--good drgnx-grid-memory drgnx-grid-stack drgnx-grid-full))
+    (dolist (p '(drgnx-grid-next-id drgnx-grid--good drgnx-grid-memory drgnx-grid-full))
       (should-not (frame-parameter nil p)))
     (select-window one)
     (delete-other-windows)
