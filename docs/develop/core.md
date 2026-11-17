@@ -566,6 +566,10 @@ as a prompt.
 
 A frame cannot gain or lose its minibuffer, so turning the echo box on or off (`drgnx-look-echo-row`) replaces each
 graphical frame with one like it: the same windows, buffers, points, window and frame parameters, size and selection.
+The windows go in by `window-state-put` while the new frame may not have the old one's size yet, so they are shared
+out by their normal sizes, which the swap first sets from the saved pixel sizes (`drgnx-look-echo--normal-sizes`):
+Emacs's own can be stale after pixel-wise resizes (a folded dock section was saved with a negative one), and the put
+then fails ("Cannot resize window").
 `drgnx-frame-replaced-functions` runs with OLD and NEW after NEW is up and before OLD is deleted. Whoever keeps a frame
 or a window in a variable moves it there (`drgnx-frame-replaced-window` finds a window's counterpart in NEW) or lets
 it go, from its module's setup through `drgnx-module-hook`, so the teardown removes it. The main window stays main
