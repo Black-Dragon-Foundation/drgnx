@@ -873,6 +873,14 @@ in the same transaction as the change they record:
   second for each scope whose spend moved (bursts coalesce, the last value wins; ancestors count). The burn is a
   per-hour rate over the last hour from an in-memory ring (empty before ten minutes of spend; lost on restart). A
   cost an agent reports is a number or `{"amount", "currency"}`: `budget::cost_amount` reads both, everywhere.
+  `budget/raise` (`budget::raise`) reads the card's `data.scope` and `data.sessions` (as `reached_limit` wrote them),
+  settles the card with choice `raise` and `data.raised` in one write (a second raise is refused), then
+  `Budgets::raise` merges the new limits over the scope's other units and keeps a joint scope joint. What still holds
+  a session is `Budgets::holder_of_session`: the nearest scope on its chain whose own limit its spend has reached. A
+  free session of the card is sent the wheel's no-change give ("Continue.", key `wheel:resumed`) through
+  `Agents::resume_paused`, which does nothing to a session the user's wheel holds (a pause cancels the turn, so a
+  queue delivery alone would leave it idle); a job's card then resumes the job through `fallback::resume`, unless a
+  scope above its run still holds it. `fallback::resume` skips every session a holder still holds.
 - **Retention:** the hub's housekeeping runs the daily prune (`coord/prune`, `norn::write::prune`): by age once a
   day, and on every call the row cap.
 
@@ -1351,6 +1359,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
 | `budget/get` | user | `{scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
+| `budget/raise` | user | `{card: natnum, limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], resume?: boolean}` | `{held?: [BudgetHeld], resumed?: [string], view: BudgetView}` | yes |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
 | `budget/tree` | user | `{after?: string, depth?: natnum, root?: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{next?: string, nodes?: [BudgetNode]}` | no |
 | `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |

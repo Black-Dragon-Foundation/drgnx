@@ -998,6 +998,15 @@ send a message to go on) and one `budget` card says which scope and unit, the li
 spec every run below pauses, each with its own card on its job. Raising the limit
 with `budget/set` reports again if it is still reached.
 
+Every budget card can be raised from the card itself: `budget/raise {card, limits, resume}`. The new limits go on the
+scope that reached its limit, never on the run around it (a worker's own $5 limit inside a job raises the worker's), and
+the scope's other units stay as they were (raising `usd` keeps its `limit-share`). The card is settled as a raise. With
+`resume`, what the card paused goes on: each paused session is sent "Continue." (shown as "resumed by you"), and a
+job's card also resumes its job. A worker's own limit pauses its whole job (the job's spend is booked under the
+worker), so its card is the job's. A session that another reached limit still holds stays paused, and the answer
+names it with the scope that holds it (`held`), next to what went on (`resumed`). `job/resume` likewise leaves a session
+over its own limit paused.
+
 Subscription windows (Claude's `_claude/rateLimit`, Codex's rate-limit window) are read from the agent, never from
 your login. `pace/get` gives, per meter, the share used, the rate per hour (linear over the last 24 hours of readings)
 and when the window would run out at that rate, unless it resets first. Its numbers are estimates. The meter's
