@@ -50,6 +50,28 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should-not (file-exists-p (file-name-directory (plist-get s :socket))))
       (should-not (file-exists-p (drgnx-ui-socket-dir "" deep))))))   ; the per-root dir, once empty
 
+(ert-deftest drgnx-ui/a-session-starts-while-another-removes-the-shared-dir ()
+  ;; sessions start and stop from several processes at once: one that stops removes the per-root socket dir once it is
+  ;; empty, which can fall between another one's look at that dir and the making of its own in it (2026-11-17, kwin:
+  ;; "Creating directory: No such file or directory", exit 255).  The start makes the dir again.
+  (drgnx-ui-test--with-state
+    (let* ((shared (drgnx-ui-socket-dir "" root))
+           (real (symbol-function 'make-directory))
+           (removed nil))
+      (drgnx-ui--make-private-dir shared)
+      (cl-letf (((symbol-function 'make-directory)
+                 (lambda (dir &optional parents)
+                   (when (and (not removed) (equal (file-name-directory (directory-file-name dir))
+                                                   (file-name-as-directory shared)))
+                     (setq removed t)
+                     (delete-directory shared))          ; the other session's stop, at that moment
+                   (funcall real dir parents))))
+        (let ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000b" nil nil root)))
+          (should removed)
+          (should (file-directory-p (file-name-directory (plist-get s :socket))))
+          (should (= (file-modes shared) #o700))
+          (delete-directory (file-name-directory (plist-get s :socket)) t))))))
+
 (ert-deftest drgnx-ui/socket-dirs-differ-between-state-roots ()
   (drgnx-ui-test--with-state
     (let* ((a (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil nil (expand-file-name "a" root)))

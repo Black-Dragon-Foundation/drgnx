@@ -594,14 +594,19 @@ without its \"drgnx-ui-\" (the socket inside it has the whole NAME)."
                       (expand-file-name (substring (md5 root) 0 8)
                                         (expand-file-name "drgnx-ui" runtime)))))
 
-(defun drgnx-ui--make-private-dir (dir)
-  "Create DIR and missing parents, each mode 0700 (server-start refuses anything else)."
+(defun drgnx-ui--make-private-dir (dir &optional tries)
+  "Create DIR and missing parents, each mode 0700 (server-start refuses anything else).
+TRIES counts the times a parent went away under us (internal)."
   (unless (file-directory-p dir)
     (drgnx-ui--make-private-dir (directory-file-name (file-name-directory (directory-file-name dir))))
     ;; another Emacs may make a shared parent between the check and here (sessions start from several processes);
-    ;; a file of that name that is no directory is still an error (and keeps its mode)
+    ;; a file of that name that is no directory is still an error (and keeps its mode).  Another one's stop may also
+    ;; remove the shared per-root dir once it is empty (drgnx-ui-stop) between the parent's making and DIR's: make
+    ;; the parents again, a few times at most
     (condition-case err (make-directory dir)
-      (file-already-exists (unless (file-directory-p dir) (signal (car err) (cdr err)))))
+      (file-already-exists (unless (file-directory-p dir) (signal (car err) (cdr err))))
+      (file-missing (if (>= (or tries 0) 3) (signal (car err) (cdr err))
+                      (drgnx-ui--make-private-dir dir (1+ (or tries 0))))))
     (set-file-modes dir #o700)))
 
 (defun drgnx-ui--owner ()
