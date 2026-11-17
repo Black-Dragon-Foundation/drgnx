@@ -45,7 +45,10 @@ reordered or rerun to pass.
 The GUI tier's report gives a FAIL line per failed row with its condition cut to 2,000 characters, saying how many were
 left out (`drgnx-ui--fail-line`): a condition can hold a whole screen, and a log over 5 MB does not come back from the
 desktop. Each file's session prints `ui file FILE: started` as it starts and its result line as it ends, not at the
-end of the tier, so a run killed meanwhile (the slot guard) still names the file that hung.
+end of the tier, so a run killed meanwhile (the slot guard) still names the file that hung. A session killed at its
+timeout first writes into its `session.log` (copied to the evidence folder) where it hung: each process of its group
+(PID, name, state, kernel wait, syscall), then its Emacs's Lisp backtrace after a SIGUSR2 (`debug-on-event`), or, when
+its server does not answer (a loop in C), its C backtrace from gdb where the image has it (the wm image).
 ERT's own report prints each string in a failure's condition cut to 2,000 characters (`drgnx-run-ert--cut-strings`;
 the results keep it whole), and in a graphical session it goes to `*Messages*` only (`inhibit-message` around its
 listener): a condition can be megabytes, and the echo area resizing to it never returned.
