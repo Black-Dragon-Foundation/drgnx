@@ -914,6 +914,59 @@ Packages and archives ("melpa") whose updates you review before they install.
 | `:agents` | `never` |
 | `:schema` | `(list-of (or symbol string))` |
 
+## drgnx-fold-max
+
+The most fold ranges a buffer keeps (the smallest go first past it), as VS Code's editor.foldingMaximumRegions.
+
+| Key | Value |
+| --- | --- |
+| Default | `20000` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-fold--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-fold-source
+
+Where fold ranges come from: `auto', the best source the buffer has (Markdown headings, notebook cells, else
+indentation; Org folds its own headings); `indent', indentation always; `off', no folding but manual folds.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const auto) (const indent) (const off))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-fold--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | `(enum auto indent off)` |
+
+## drgnx-fold-summary
+
+What a folded line shows after it: `full', the hidden lines' count and what is inside; `lines', the count only;
+nil, an ellipsis.
+
+| Key | Value |
+| --- | --- |
+| Default | `full` |
+| Type | `(choice (const full) (const lines) (const :tag "Ellipsis" nil))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-fold--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
 ## drgnx-keys-bind
 
 Command id -> keys, entries (ID KEY… [:map MAP]) that win over every layer.  Keyboard Shortcuts writes them.
@@ -1389,6 +1442,149 @@ Whether the one-time notice that drgnx now has its own themes was shown.  drgnx 
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | `boolean` |
+
+## drgnx-marks-kinds
+
+The kinds of marks the scroll bar and the next-mark keys show (`drgnx-ruler-kinds'): changes, errors, warnings,
+notes, search hits, breakpoints, bookmarks, symbol uses, agent edits, pinned regions, and any other producer's.
+
+| Key | Value |
+| --- | --- |
+| Default | `(change error warning info hit breakpoint bookmark symbol agent pin other)` |
+| Type | `(set (const change) (const error) (const warning) (const info) (const hit) (const breakpoint) (const bookmark) (const symbol) (const agent) (const pin) (const other))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-ruler--kinds-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-marks-symbol-uses
+
+Non-nil: the scroll bar marks the uses of the symbol at point, after 400 ms idle.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-marks--symbol-setting` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap
+
+Non-nil: an editor's scroll bar widens into the minimap while the pointer rests on it (150 ms), over the text's
+right edge, and shrinks back 600 ms after the pointer leaves.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-hide-short
+
+Non-nil: the scroll bar hides while the window shows all of its content (it comes back once the content runs
+past the window; the text keeps its width either way).
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-ruler--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-labels
+
+The names drawn over the minimap: t, each definition (from the hub's outline, for files up to 8 MiB) and each
+MARK section; `marks-only', the MARK sections alone; nil, none.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `(choice (const :tag "Definitions and MARK sections" t) (const :tag "MARK sections only" marks-only) (const :tag "None" nil))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-mark-regexp
+
+The comment lines drawn as MARK sections on the minimap, a regular expression in Rust's regex syntax (not
+Emacs's): it is matched against each line; the section's name is the group named `name', else the first group, else
+the whole match.  Nil: no MARK sections.
+
+| Key | Value |
+| --- | --- |
+| Default | `"^\\s*(?:;;;;+\|(?://+\|#+\|;+\|--\|/\\*+)\\s*(?:MARK:\\s*-?\|pragma\\s+mark\\s+-?\|region\\b\|%%))\\s*(?P<name>\\S.*?)\\s*(?:\\*/)?$"` |
+| Type | `(choice (const :tag "None" nil) string)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-ruler
+
+Non-nil: every scrollable window has the scroll bar, a strip at its right edge with the thumb and the file's
+marks.  Nil: only windows whose buffer has marks (a debugger's breakpoints) show the strip.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-ruler--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-width
+
+The minimap's width in logical pixels, 80 to 200.
+
+| Key | Value |
+| --- | --- |
+| Default | `120` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
 
 ## drgnx-modules-disabled
 
