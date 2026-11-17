@@ -19,6 +19,8 @@
 (mapc #'require (drgnx-test-modules--requires (expand-file-name "modules/core/drgnx-basics.el" drgnx-ui-vscode-keys--repo)))
 (mapc #'require (drgnx-test-modules--requires (expand-file-name "modules/core/drgnx-workbench.el" drgnx-ui-vscode-keys--repo)))
 (mapc #'require (drgnx-test-modules--requires (expand-file-name "modules/editor/drgnx-editing.el" drgnx-ui-vscode-keys--repo)))
+(mapc #'require (drgnx-test-modules--requires (expand-file-name "modules/tools/drgnx-terminal.el" drgnx-ui-vscode-keys--repo)))
+(load (expand-file-name "modules/tools/drgnx-term" drgnx-ui-vscode-keys--repo) nil t)   ; Start in the workspace folder
 
 (defconst drgnx-ui-vscode-keys--instant 0.2
   "Seconds a Copy or Cut may take from the key to the copy.  The Editing Prefix Delay made it 0.3 plus the key; at
@@ -132,6 +134,39 @@ once is a key event's dispatch, a few milliseconds.")
           (with-current-buffer b (set-buffer-modified-p nil))
           (kill-buffer b)
           (delete-frame frame))
+      (drgnx-keys--restore))))
+
+(ert-deftest drgnx-ui-vscode-keys/ctrl-backtick-opens-the-terminal-in-the-workspace-root ()
+  "The audit's T1: Ctrl+` from a file in a sub-folder starts the terminal in the Explorer's folder (the workspace
+root), as VS Code does, not in the file's folder.  No hub in this row: the terminal is the eshell fallback
+\(`drgnx-terminal-new'), which starts where the terminal would."
+  (drgnx-uitest-bare-frame)
+  (drgnx-test-with-modules '(core/basics core/workbench tools/terminal)
+    (drgnx-keys-use '((vscode app editing window)))
+    (unwind-protect
+        (let* ((root (file-name-as-directory (make-temp-file "vscode-keys-term" t)))
+               (sub (file-name-as-directory (expand-file-name "core/deep" root)))
+               (file (expand-file-name "a.el" sub))
+               (drgnx-explorer--roots (list root))
+               (frame (make-frame '((name . "vscode-keys-term"))))
+               (eshells nil))
+          (select-frame frame)
+          (delete-other-windows)
+          (make-directory sub t)
+          (write-region "x\n" nil file nil 'silent)
+          (should (eq (key-binding (kbd "C-`")) 'drgnx-terminal-toggle))
+          (switch-to-buffer (find-file-noselect file))
+          (should (equal default-directory sub))
+          (drgnx-ui-vscode-keys--type "C-`")
+          (dolist (b (buffer-list))
+            (with-current-buffer b (when (derived-mode-p 'eshell-mode) (push b eshells))))
+          (should (= 1 (length eshells)))
+          (should (equal (file-name-as-directory (buffer-local-value 'default-directory (car eshells))) root))
+          (dolist (b eshells) (let ((kill-buffer-query-functions nil)) (kill-buffer b)))
+          (when (boundp 'eshell-hist-unload-hook) (set 'eshell-hist-unload-hook nil))   ; the hook eshell's first load adds
+          (kill-buffer (find-buffer-visiting file))
+          (delete-frame frame)
+          (delete-directory root t))
       (drgnx-keys--restore))))
 
 (provide 'vscode-keys-gui-test)
