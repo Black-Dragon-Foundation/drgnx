@@ -24,6 +24,7 @@
 (declare-function drgnx-wb-fit-sections "drgnx-wb")
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe headless))
+(defvar drgnx-view-env-right-reserve)
 (defvar drgnx-hub--events)
 
 (defface drgnx-buffers-close '((t :inherit shadow)) "The × of each row." :group 'drgnx)
@@ -302,6 +303,8 @@ follow the rows."
         (add-hook 'window-scroll-functions #'drgnx-buffers--scrolled nil t)
         (drgnx-buffers--wait-for-hub)
         (require 'drgnx-view-env)
+        ;; each row's tail is drawn from the window's right edge: the hub fits the rows short of it
+        (setq-local drgnx-view-env-right-reserve #'drgnx-wb-tail-reserve)
         (drgnx-view-env-register drgnx-buffers-hub-view (current-buffer) #'drgnx-buffers--resend)
         (drgnx-buffers--resend)
         (current-buffer))))
