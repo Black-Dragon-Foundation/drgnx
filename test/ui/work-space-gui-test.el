@@ -586,9 +586,21 @@ on the row it was on, the selection stays, and nothing moves (no capture, no mot
   (let ((drgnx-work-gui--mode 'list))
     (drgnx-work-gui--with-map
       (with-current-buffer buf
-        (goto-char (point-min)) (forward-line 6)
+        ;; the sixth row that has a key (the list has lines that are no row), with point on it: a redisplay
+        ;; scrolls the window to show point, so a start away from point is not a settled state.  The list's rows
+        ;; come with the hub's patches (the map's wait is for the graph's cards): wait for six.
+        (drgnx-test-wait (lambda ()
+                           (drgnx-view-draw-now drgnx-view)
+                           (goto-char (point-min))
+                           (let ((rows 0))
+                             (while (and (< rows 6) (not (eobp)))
+                               (when (drgnx-view-key-at (point)) (setq rows (1+ rows)))
+                               (when (< rows 6) (forward-line 1)))
+                             (= rows 6)))
+                         :secs 30 :what "six rows of the list")
         (set-window-start win (point)))
       (redisplay t)
+      (should (drgnx-view-key-at (window-start win)))
       (let ((start (drgnx-view-key-at (window-start win)))
             (selected (buffer-local-value 'drgnx-work-map--selection buf))
             (agents (drgnx-work-thirty-agent-items buf)))
