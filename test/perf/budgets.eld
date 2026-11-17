@@ -260,6 +260,12 @@
  ;; drawn within 300 ms of the last write (the hub settles 30-100 ms, then relists the one folder); the design's bar, not
  ;; the measure x 1.25 (2026-11-11, pinned, release hub: 52.2-52.5 ms), since a wall-clock settle on a loaded host varies
  (explorer-watch (:settle_ms) 300)
+ ;; explorer-first-open (audit E4: the first click on a file took 602 ms in the audit's session, later ones about 100):
+ ;; the first file's open from the click's command to its redisplay, collections out, in a git tree of the audit's size
+ ;; and shape (10,979 files, 40 .el with their .elc at the root).  Measured 2026-11-17, release hub, on the base: first
+ ;; 94 ms (25-99 ms over six runs in a 40-file tree), later 19-23 ms; the spread is the host's.  602 ms is NOT
+ ;; reproduced here; the bar 150 ms is above every measured first open and guards a regression to a cold cost.
+ (explorer-first-open (:first_ms) 150) (explorer-first-open (:later_ms) 40)
  ;; trail-long and search-window: a key that pages into the hub's next window (plan sja-complete W1, S1; 2026-11-11,
  ;; pinned, release hub): trail-long page p50 18.4, max 19.0 ms; search-window page p50 24.6, max 29 ms with no
  ;; collection in it; x 1.25.  The design bars (perf.md: key p95 16, page p95 50) hold above them.
