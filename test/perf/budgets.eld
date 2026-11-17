@@ -348,4 +348,6 @@
  ;; the budget page's first page of the tree: 500 scopes, the first 200 nodes built within 20 ms (the hub's half of the
  ;; page's 100 ms row; the bench `budget_event' as well)
  (budget-tree-open (:first-page) 20)
+ ;; forecast/plan over 12 plans of 20 tasks: the first call (a joint draw) and the repeats (cached), the hub's `forecast_plan_perf'
+ (forecast-plan-miss (:ms) 300) (forecast-plan-hit (:ms) 5)
 )

@@ -780,6 +780,11 @@ Every proposal, whether from Say it, `job/propose` or Start as Job, shows a fore
 tokens, active and wall time, and cost, each as a range ("about 12–41 USD (estimate), 40M–130M tokens, 2 h 10–4 h").
 `forecast/get` gives the same numbers per task.
 
+`forecast/plan` forecasts plans that have no job yet (up to 32 plan ids, say every plan of a spec) as one draw on the
+runner's slots: the total is not the sum of each plan's p90, which over-counts. A plan that has a running job is not in
+the draw; it comes back in `running` with its own forecast. Nothing is recorded, and an answer is kept for a minute per
+set of plan versions (editing a plan misses).
+
 - **A range, not a promise.** The first number is the middle (p50): half the similar runs took less. The second is the
   high end (p90): about one run in ten goes past it. Agent runs of one task can differ many times over, so a narrow
   range is never promised.

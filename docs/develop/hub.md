@@ -1434,6 +1434,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
 | `forecast/get` | user | `{job: Id}` | `Forecast` | no |
+| `forecast/plan` | user | `{plans: [string]}` | `{forecast: Forecast, running?: [RunningPlan]}` | no |
 | `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |

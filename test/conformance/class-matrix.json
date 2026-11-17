@@ -132,6 +132,7 @@
   "extensions/search": ["user", "agent"],
   "forecast/accuracy": ["user"],
   "forecast/get": ["user"],
+  "forecast/plan": ["user"],
   "forecast/session": ["user"],
   "gateway/editor-token": ["user"],
   "gateway/keys": ["user"],
