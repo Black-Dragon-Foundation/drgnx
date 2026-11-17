@@ -376,18 +376,18 @@ asks the hub nothing and its keys say the same."
 (ert-deftest drgnx-work-map-rows/a-card-is-classed-through-its-box ()
   ;; a chip keeps its own face under a class (its box would hide under the overlay), but a card's rows are boxed
   ;; and must show the selection and the dimming: the map names its card faces as faces a class goes through
-  (let ((card '(drgnx-work-title drgnx-kit-card-plain-top drgnx-work-card)))
+  (let ((card '(drgnx-work-title drgnx-card-top drgnx-work-card)))
     (should (drgnx-view-nav--boxed-p card))
     (let ((drgnx-view-nav-through-faces drgnx-work-map--through-faces))
       (should-not (drgnx-view-nav--boxed-p card))
-      (should-not (drgnx-view-nav--boxed-p 'drgnx-kit-card-plain-single))
+      (should-not (drgnx-view-nav--boxed-p 'drgnx-card-single))
       (should (drgnx-view-nav--boxed-p 'drgnx-chip)))))   ; a strip chip is still a chip
 
 (ert-deftest drgnx-work-map-rows/the-selected-card-is-the-hubs-and-the-class-only-dims ()
   ;; the hub draws the selected card in its ring faces and the editor goes through both sets of card faces; the
   ;; class `selected' has no face of its own on the map (a tint over the ring would hide it), `dim' has the dim face
-  (dolist (face '(drgnx-kit-card-plain-top drgnx-kit-card-plain-single drgnx-kit-card-selected-top
-                                           drgnx-kit-card-selected-mid drgnx-kit-card-selected-bottom drgnx-kit-card-selected-single))
+  (dolist (face '(drgnx-card-top drgnx-card-single drgnx-card-sel-top
+                                 drgnx-card-sel-mid drgnx-card-sel-bottom drgnx-card-sel-single))
     (should (memq face drgnx-work-map--through-faces)))
   (should (equal '(("selected") ("chain") ("dim")) drgnx-work-map--nav-faces)))
 

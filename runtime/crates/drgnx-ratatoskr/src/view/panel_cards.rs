@@ -52,13 +52,13 @@ fn card(env: &ViewEnv, kind: &str, lines: Vec<Line>) -> Vec<Row> {
         .enumerate()
         .map(|(i, (text, face, props))| {
             let shape = if n == 1 {
-                FaceId::KitCardPlainSingle.name()
+                FaceId::CardSingle.name()
             } else if i == 0 {
-                FaceId::KitCardPlainTop.name()
+                FaceId::CardTop.name()
             } else if i + 1 == n {
-                FaceId::KitCardPlainBottom.name()
+                FaceId::CardBottom.name()
             } else {
-                FaceId::KitCardPlainMid.name()
+                FaceId::CardMid.name()
             };
             let mut b = RowBuilder::new(format!("p:{kind}:{i}"));
             b.push(" ", None);

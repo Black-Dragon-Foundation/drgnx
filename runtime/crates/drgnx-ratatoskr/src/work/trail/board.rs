@@ -215,9 +215,9 @@ pub(crate) fn board_rows(cards: &[Card], env: &ViewEnv) -> Vec<Row> {
                 b.stop(left);
                 let at = b.pos();
                 let face = if line == 0 {
-                    FaceId::KitCardPlainTop.name()
+                    FaceId::CardTop.name()
                 } else {
-                    FaceId::KitCardPlainMid.name()
+                    FaceId::CardMid.name()
                 };
                 b.push(&fit(&card_line(card, line), chars), Some(face));
                 let end = b.pos();
@@ -261,12 +261,8 @@ fn bar(b: &mut RowBuilder, card: &Card, left: u32, w: u32, chars: usize, env: &V
         },
     );
     let end = b.pos();
-    b.face(at, end, FaceId::KitCardPlainBottom.name()).prop(
-        at,
-        end,
-        "drgnx-work-id",
-        json!(card.id),
-    );
+    b.face(at, end, FaceId::CardBottom.name())
+        .prop(at, end, "drgnx-work-id", json!(card.id));
 }
 
 #[cfg(test)]

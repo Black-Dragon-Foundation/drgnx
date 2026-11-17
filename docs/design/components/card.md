@@ -68,10 +68,10 @@ None: the row's own text is what a screen reader speaks.
 
 | Binding | Face | Fill | Text | Edge |
 |---|---|---|---|---|
-| plain single | `drgnx-kit-card-plain-single` | panel | - | border |
-| plain top | `drgnx-kit-card-plain-top` | panel | - | border |
-| plain mid | `drgnx-kit-card-plain-mid` | panel | - | border |
-| plain bottom | `drgnx-kit-card-plain-bottom` | panel | - | border |
+| plain single | `drgnx-kit-card-plain-single` | panel | - | border-strong |
+| plain top | `drgnx-kit-card-plain-top` | panel | - | border-strong |
+| plain mid | `drgnx-kit-card-plain-mid` | panel | - | border-strong |
+| plain bottom | `drgnx-kit-card-plain-bottom` | panel | - | border-strong |
 | needs-you single | `drgnx-kit-card-needs-you-single` | panel | - | card-needs-you-edge |
 | needs-you top | `drgnx-kit-card-needs-you-top` | panel | - | card-needs-you-edge |
 | needs-you mid | `drgnx-kit-card-needs-you-mid` | panel | - | card-needs-you-edge |

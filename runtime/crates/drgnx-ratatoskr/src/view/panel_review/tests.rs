@@ -99,13 +99,13 @@ fn a_hunk_is_a_header_over_numbered_lines_in_card_faces() {
     let shape = |r: &Row| {
         r.runs
             .iter()
-            .find(|(_, _, f)| f.starts_with("drgnx-kit-card-"))
+            .find(|(_, _, f)| f.starts_with("drgnx-card-"))
             .map(|(_, _, f)| f.clone())
             .unwrap_or_default()
     };
-    assert_eq!(shape(&rows[1]), FaceId::KitCardPlainTop.name());
-    assert_eq!(shape(&rows[3]), FaceId::KitCardPlainMid.name());
-    assert_eq!(shape(&rows[4]), FaceId::KitCardPlainBottom.name());
+    assert_eq!(shape(&rows[1]), FaceId::CardTop.name());
+    assert_eq!(shape(&rows[3]), FaceId::CardMid.name());
+    assert_eq!(shape(&rows[4]), FaceId::CardBottom.name());
     assert!(
         rows[1]
             .runs

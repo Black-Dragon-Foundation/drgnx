@@ -224,9 +224,9 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
 ;;;; The rows path: keys answer from the map's model in Sjá
 
 (defconst drgnx-work-map--through-faces
-  '(drgnx-kit-card-plain-top drgnx-kit-card-plain-mid drgnx-kit-card-plain-bottom drgnx-kit-card-plain-single
-                             drgnx-kit-card-selected-top drgnx-kit-card-selected-mid drgnx-kit-card-selected-bottom
-                             drgnx-kit-card-selected-single)
+  '(drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single
+                   drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom
+                   drgnx-card-sel-single)
   "The faces of a card's rows, plain and selected: a class (the dimming) goes through their box, as for text.")
 
 (defconst drgnx-work-map--nav-faces '(("selected") ("chain") ("dim"))
@@ -449,8 +449,8 @@ argument): without moving focus."
 
 (defun drgnx-work-map--card-face (n i)
   "The decoration face of line I of a card of N lines."
-  (cond ((= n 1) (if (facep 'drgnx-kit-card-plain-single) 'drgnx-kit-card-plain-single 'drgnx-work-chip))
-        ((= i 0) 'drgnx-kit-card-plain-top) ((= i (1- n)) 'drgnx-kit-card-plain-bottom) (t 'drgnx-kit-card-plain-mid)))
+  (cond ((= n 1) (if (facep 'drgnx-card-single) 'drgnx-card-single 'drgnx-work-chip))
+        ((= i 0) 'drgnx-card-top) ((= i (1- n)) 'drgnx-card-bottom) (t 'drgnx-card-mid)))
 
 ;;;; The outline form
 

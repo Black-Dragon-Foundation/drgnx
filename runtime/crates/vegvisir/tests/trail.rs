@@ -506,12 +506,9 @@ fn trail_rows_are_ui_text_with_lucide_icons_and_a_finding_card() {
     assert!(svg_of(s).contains("stroke=\"#a2a5b2\""), "{}", svg_of(s));
     let top = rows.iter().find(|r| r.key == "conc:1:0").expect("the card");
     let bottom = rows.iter().find(|r| r.key == "conc:1:1").expect("the card");
+    assert!(faces(top).contains(&FaceId::CardSelTop.name()), "{top:?}");
     assert!(
-        faces(top).contains(&FaceId::KitCardSelectedTop.name()),
-        "{top:?}"
-    );
-    assert!(
-        faces(bottom).contains(&FaceId::KitCardSelectedBottom.name()),
+        faces(bottom).contains(&FaceId::CardSelBottom.name()),
         "{bottom:?}"
     );
     assert_eq!(top.images.len(), 1, "{top:?}");
@@ -537,7 +534,7 @@ fn a_conclusion_card_runs_to_the_right_edge() {
         assert!(
             r.runs
                 .iter()
-                .any(|(s, e, f)| *s == 0 && *e > pos && f.starts_with("drgnx-kit-card-selected-")),
+                .any(|(s, e, f)| *s == 0 && *e > pos && f.starts_with("drgnx-card-sel-")),
             "{r:?}"
         );
     }

@@ -20,14 +20,11 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--stateless '(card)
-  "The components with no states (a card's ring is its kind's): their cells are the rest state alone.")
+(defconst drgnx-kit-catalogue--stateless '(agent-mark progress card)
+  "The components that show no state (nothing to hover or select): drawn at rest only.")
 
 (defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress section-header card)
   "The components the hub expands: their cells are drawn as hub rows.")
-
-(defconst drgnx-kit-catalogue--stateless '(agent-mark progress)
-  "The components that show no state (nothing to hover or select): drawn at rest only.")
 
 (defun drgnx-kit-catalogue--props (id variants state)
   "The props of a cell of component ID with VARIANTS ((AXIS . VALUE)...) in STATE: as a hub `Comp' plist."

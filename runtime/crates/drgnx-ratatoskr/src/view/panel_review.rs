@@ -108,13 +108,13 @@ fn id_of(id: &Option<RpcId>) -> String {
 
 fn shape(n: usize, i: usize) -> &'static str {
     if n == 1 {
-        FaceId::KitCardPlainSingle.name()
+        FaceId::CardSingle.name()
     } else if i == 0 {
-        FaceId::KitCardPlainTop.name()
+        FaceId::CardTop.name()
     } else if i + 1 == n {
-        FaceId::KitCardPlainBottom.name()
+        FaceId::CardBottom.name()
     } else {
-        FaceId::KitCardPlainMid.name()
+        FaceId::CardMid.name()
     }
 }
 
@@ -317,7 +317,7 @@ fn perm_card(i: &In, images: &mut Vec<(ImageId, String)>, p: &Permission) -> Vec
     b.stop(env.width_px.saturating_sub(px(env, 12.0)));
     let end = b.pos();
     b.face(0, end, FaceId::AgentPanelPermHead.name());
-    b.face(0, end, FaceId::KitCardPlainSingle.name());
+    b.face(0, end, FaceId::CardSingle.name());
     b.prop(0, end, "drgnx-agent-panel-card", card.clone());
     let head = b.finish();
     let mut b = RowBuilder::new(format!("c:perm:{id}:1"));
@@ -377,7 +377,7 @@ fn queue_row(env: &ViewEnv, n: usize, note: &str) -> Row {
     );
     b.stop(env.width_px.saturating_sub(px(env, 12.0)));
     let end = b.pos();
-    b.face(0, end, FaceId::KitCardPlainSingle.name());
+    b.face(0, end, FaceId::CardSingle.name());
     b.prop(0, end, "drgnx-agent-panel-queued", json!(n));
     b.finish()
 }

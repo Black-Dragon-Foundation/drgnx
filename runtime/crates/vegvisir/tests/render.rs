@@ -701,17 +701,11 @@ fn the_selected_card_has_its_own_ring_faces() {
             .map(|(_, _, f)| f.clone())
             .collect()
     };
-    assert!(faces("row:5:0:0:0", "Opus").contains(&FaceId::KitCardSelectedTop.name().to_owned()));
-    assert!(
-        faces("row:5:0:0:2", "testing").contains(&FaceId::KitCardSelectedMid.name().to_owned())
-    );
-    assert!(
-        faces("row:5:0:0:4", "with").contains(&FaceId::KitCardSelectedBottom.name().to_owned())
-    );
-    assert!(faces("row:5:0:0:0", "Sonnet").contains(&FaceId::KitCardPlainTop.name().to_owned()));
-    assert!(
-        faces("row:3:0:0:0", "deferred").contains(&FaceId::KitCardPlainSingle.name().to_owned())
-    );
+    assert!(faces("row:5:0:0:0", "Opus").contains(&FaceId::CardSelTop.name().to_owned()));
+    assert!(faces("row:5:0:0:2", "testing").contains(&FaceId::CardSelMid.name().to_owned()));
+    assert!(faces("row:5:0:0:4", "with").contains(&FaceId::CardSelBottom.name().to_owned()));
+    assert!(faces("row:5:0:0:0", "Sonnet").contains(&FaceId::CardTop.name().to_owned()));
+    assert!(faces("row:3:0:0:0", "deferred").contains(&FaceId::CardSingle.name().to_owned()));
 }
 
 /// [D] The strip carries the forecast and cost chips before the machines' (work-space-dark.html: "wk 41 % ▲ Thu",
