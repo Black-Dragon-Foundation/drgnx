@@ -98,6 +98,64 @@ impl RowKind {
     }
 }
 
+/// A button's style: the `style` axis of the `button` component.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ButtonStyle {
+    Primary,
+    #[default]
+    Secondary,
+    Quiet,
+    Danger,
+}
+
+impl ButtonStyle {
+    fn name(self) -> &'static str {
+        match self {
+            ButtonStyle::Primary => "primary",
+            ButtonStyle::Secondary => "secondary",
+            ButtonStyle::Quiet => "quiet",
+            ButtonStyle::Danger => "danger",
+        }
+    }
+}
+
+/// A component's size: the `size` axis (geometry, never a face).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Size {
+    #[default]
+    Md,
+    Sm,
+}
+
+impl Size {
+    fn name(self) -> &'static str {
+        match self {
+            Size::Md => "md",
+            Size::Sm => "sm",
+        }
+    }
+}
+
+/// A key hint's variant: `cap` is a key in its box, `menu` the keys as text (a menu's shortcut column).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyHintVariant {
+    #[default]
+    Cap,
+    Menu,
+}
+
+impl KeyHintVariant {
+    fn name(self) -> &'static str {
+        match self {
+            KeyHintVariant::Cap => "cap",
+            KeyHintVariant::Menu => "menu",
+        }
+    }
+}
+
 /// A component with its props, as JSON `{"c": "row", …}`.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "c", rename_all = "kebab-case")]
@@ -119,6 +177,28 @@ pub enum Comp {
         icon: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
+    },
+    /// A button: LABEL in a box of STYLE and SIZE, its key hint (KEY) after the label.
+    Button {
+        label: String,
+        #[serde(default)]
+        style: ButtonStyle,
+        #[serde(default)]
+        size: Size,
+        #[serde(default)]
+        state: State,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<Action>,
+    },
+    /// A key hint: KEYS in their box (or as text, `menu`).
+    KeyHint {
+        keys: String,
+        #[serde(default)]
+        variant: KeyHintVariant,
+        #[serde(default)]
+        state: State,
     },
 }
 
@@ -161,6 +241,19 @@ fn pad(b: &mut RowBuilder, env: &KitEnv, width_px: u32, chars: usize, face: Opti
     } else if width_px > 0 {
         b.pad(width_px, face);
     }
+}
+
+/// ACTION's props over `[from, to)`: `drgnx-action` = `[kind, args…]` and `mouse-face` (the hover face).
+fn put_action(b: &mut RowBuilder, from: u32, to: u32, a: &Action) {
+    let mut v = vec![Value::String(a.kind.clone())];
+    v.extend(a.args.iter().cloned());
+    b.prop(from, to, "drgnx-action", Value::Array(v));
+    b.prop(
+        from,
+        to,
+        "mouse-face",
+        Value::String(FaceId::Hover.name().to_owned()),
+    );
 }
 
 /// C's inline expansion onto B (the row being built), at ENV.
@@ -246,15 +339,88 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             }
             if let Some(a) = action {
                 let to = b.pos();
-                let mut v = vec![Value::String(a.kind.clone())];
-                v.extend(a.args.iter().cloned());
-                b.prop(from, to, "drgnx-action", Value::Array(v));
-                b.prop(
-                    from,
-                    to,
-                    "mouse-face",
-                    Value::String(FaceId::Hover.name().to_owned()),
-                );
+                put_action(b, from, to, a);
+            }
+        }
+        Comp::Button {
+            label,
+            style,
+            size,
+            state,
+            key,
+            action,
+        } => {
+            let variant = [style.name(), size.name(), env.density.name()];
+            let g: Geom = kit_gen::geom(CompId::Button, &variant);
+            let face = comp_face(kit_gen::face(CompId::Button, &variant));
+            let hit = if action.is_some() && !env.tty {
+                px(g.hit, env.scale)
+            } else {
+                0
+            };
+            let from = b.pos();
+            if hit > 0 {
+                b.pad(hit, None);
+            }
+            let start = b.pos();
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+            b.push(label, face);
+            let mut key_run = None;
+            if let Some(keys) = key {
+                pad(b, env, px(g.gap, env.scale), 1, face);
+                let at = b.pos();
+                let hint = Comp::KeyHint {
+                    keys: keys.clone(),
+                    variant: KeyHintVariant::Cap,
+                    state: State::Rest,
+                };
+                expand(b, env, &hint);
+                key_run = Some((at, b.pos()));
+            }
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+            let end = b.pos();
+            if hit > 0 {
+                b.pad(hit, None);
+            }
+            // the button's own fill under its key hint's box
+            if let (Some((a, z)), Some(f)) = (key_run, face) {
+                b.face(a, z, f);
+            }
+            // a button has colours of its own: its state is above them (a disabled label is dim, a pressed one filled)
+            if let Some(f) = state_face(*state) {
+                b.face_over(start, end, f.name());
+            }
+            if !env.tty && g.height > 0 {
+                b.height(1, px(g.height, env.scale));
+            }
+            if let Some(a) = action {
+                let to = b.pos();
+                put_action(b, from, to, a);
+            }
+        }
+        Comp::KeyHint {
+            keys,
+            variant,
+            state,
+        } => {
+            let v = [variant.name(), env.density.name()];
+            let from = b.pos();
+            let g: Geom = kit_gen::geom(CompId::KeyHint, &v);
+            let face = comp_face(kit_gen::face(CompId::KeyHint, &v));
+            if env.tty {
+                match variant {
+                    KeyHintVariant::Cap => b.push(&format!("[{keys}]"), face),
+                    KeyHintVariant::Menu => b.push(keys, face),
+                };
+            } else {
+                pad(b, env, px(g.pad.0, env.scale), 0, face);
+                b.push(keys, face);
+                pad(b, env, px(g.pad.1, env.scale), 0, face);
+            }
+            // a key hint has a ring of its own: its state is above it
+            if let Some(f) = state_face(*state) {
+                let to = b.pos();
+                b.face_over(from, to, f.name());
             }
         }
     }

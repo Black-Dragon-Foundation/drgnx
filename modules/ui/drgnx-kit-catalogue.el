@@ -20,7 +20,7 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--hub '(row)
+(defconst drgnx-kit-catalogue--hub '(row button key-hint)
   "The components the hub expands: their cells are drawn as hub rows.")
 
 (defun drgnx-kit-catalogue--props (id variants state)
@@ -32,13 +32,17 @@
                   :icon (pcase kind ('tree "folder") ('list "file"))   ; the icon slot (a map row has none)
                   :text (format "%s · %s" kind state)
                   :state (symbol-name state))))
+    ('button (list :c "button" :label "Button" :style (symbol-name (alist-get 'style variants))
+                   :size (symbol-name (alist-get 'size variants)) :state (symbol-name state)))
+    ('key-hint (list :c "key-hint" :keys "C-k" :variant (symbol-name (alist-get 'variant variants))
+                     :state (symbol-name state)))
     (_ (list :c (symbol-name id) :text (format "%s · %s" id state) :state (symbol-name state)))))
 
-(defun drgnx-kit-catalogue--hub-row (props scale tty state)
+(defun drgnx-kit-catalogue--hub-row (id props scale tty state)
   "PROPS expanded at SCALE (TTY on a terminal) and dressed as the inserter dresses a hub row, in STATE (a patch
 state); the cell's text, its line's height in device px (the expansion's :height) as `drgnx-kit-line-height'."
   (let* ((e (let ((drgnx-ui-kit--icons (and (not tty) (drgnx-ui-kit-icon-function nil))))
-              (drgnx-ui-kit-expand 'row props scale tty)))
+              (drgnx-ui-kit-expand id props scale tty)))
          (props (mapcar (lambda (p) (let ((l (append p nil))) (if (vectorp (nth 3 l)) (append (butlast l) (list (append (nth 3 l) nil))) l)))
                         (plist-get e :props)))
          ;; an icon (a `display' image of the Lisp expansion) goes as the hub sends it: an image of the row, its spec
@@ -61,7 +65,7 @@ state); the cell's text, its line's height in device px (the expansion's :height
   "One cell's text: component ID with VARIANTS in STATE."
   (let* ((props (drgnx-kit-catalogue--props id variants state))
          (s (if (memq id drgnx-kit-catalogue--hub)
-                (drgnx-kit-catalogue--hub-row props scale tty patch)
+                (drgnx-kit-catalogue--hub-row id props scale tty patch)
               (drgnx-ui-kit-string id props 'text nil))))
     (put-text-property 0 (length s) 'drgnx-kit-cell (list id (mapcar #'cdr variants) state) s)
     s))

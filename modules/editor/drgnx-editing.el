@@ -190,12 +190,14 @@ Without a selection they stay Emacs' prefixes.")
   (let ((keys (this-command-keys-vector)))
     (and (> (length keys) 0) (eq (lookup-key drgnx-editing-region-map keys) this-command))))
 
-(defcustom drgnx-editing-prefix-delay 0.3
-  "Seconds C-c or C-x wait with a selection for a key that makes it Emacs' prefix; nil: act at once.
-In the VS Code profile C-c copies and C-x cuts the selection.  Typed as the start of `C-x b', `C-x C-s' or a
-mode's `C-c C-c', they would cut or copy the text first.  So they wait this long for the next key: one that
-arrives in time drops the selection and goes on as the prefix; none, and they copy or cut.  Like CUA mode's
-prefix delay.  Keys that are no prefix (Cmd+C on a Mac) act at once."
+(defcustom drgnx-editing-prefix-delay nil
+  "Seconds C-c or C-x wait with a selection for a key that makes it Emacs' prefix; nil (the default): act at once.
+In the VS Code profile C-c copies and C-x cuts the selection, at once, as VS Code's do.  Typed as the start of
+`C-x b', `C-x C-s' or a mode's `C-c C-c' with a selection, they would copy or cut first: Escape drops the selection
+first, and F1 or M-x reaches every command.  Set a number (0.3 was the old default) to have them wait that long for
+a next key instead: one that arrives in time drops the selection and goes on as the prefix, none, and they copy or
+cut, like CUA mode's prefix delay (the price is that wait on every copy and cut).  Keys that are no prefix (Cmd+C
+on a Mac) always act at once."
   :type '(choice (const :tag "Act at once" nil) (number :tag "Seconds"))
   :group 'drgnx)
 

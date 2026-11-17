@@ -768,7 +768,7 @@ fn detail_rows_say_the_edges() {
         text.iter().any(|t| t.contains('\t') && t.contains(&pl)),
         "{pl} in {text:?}"
     );
-    let rows = detail::rows(&lines, 1.0, 340, &Cols);
+    let rows = detail::rows(&lines, &kit_env(1.0), 340, &Cols);
     // the head's subtitle wraps into rows of its own
     assert!(rows.len() >= lines.len());
     assert_eq!(rows[0].key, "head/0");
@@ -1297,6 +1297,55 @@ fn the_map_scenes_agents_run_for_their_fixture_minutes() {
     );
 }
 
+/// The kit's env of a graphical display at SCALE (no glyphs of its own, no icons).
+fn kit_env(scale: f32) -> drgnx_rows::kit::KitEnv<'static> {
+    drgnx_rows::kit::KitEnv {
+        scale,
+        tty: false,
+        glyphs: &[],
+        density: drgnx_rows::kit::Density::Comfortable,
+        icons: None,
+    }
+}
+
+/// [D] The Detail's actions row is kit buttons: each button's runs carry the kit face `drgnx-kit-button-secondary` (its
+/// key hint `drgnx-kit-key-hint-cap` inside it) and padding that is the kit's (pad spaces, no literal blanks round
+/// the label), in device px at the scale.
+#[test]
+fn detail_actions_are_kit_buttons() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let agent = ItemId("agent:a1".into());
+    let lines = detail::lines(core.model(), Some(&agent), 0);
+    for scale in [1.0f32, 1.25] {
+        let rows = detail::rows(&lines, &kit_env(scale), 340, &Cols);
+        let open = rows
+            .iter()
+            .find(|r| r.key.starts_with("actions/") && r.text.contains("Open"))
+            .expect("the Open action");
+        let faces: Vec<&str> = open.runs.iter().map(|x| x.2.as_str()).collect();
+        assert!(
+            faces.contains(&FaceId::KitButtonSecondary.name()),
+            "{open:?}"
+        );
+        assert!(faces.contains(&FaceId::KitKeyHintCap.name()), "{open:?}");
+        // the md button's 12 px each side, in device px, and its 26 px height
+        let pad = (12.0 * scale + 0.5).floor() as u32;
+        assert_eq!(open.spaces[0].1, pad, "{open:?}");
+        assert_eq!(
+            open.height.map(|h| h.unit),
+            Some((26.0 * scale + 0.5).floor() as u32)
+        );
+        // the pads are the kit's spaces: button start, gap, the key hint's two and the button end
+        assert!(
+            open.spaces.len() >= 5 && open.spaces.len() % 5 == 0,
+            "{open:?}"
+        );
+    }
+}
+
 /// [D] The Detail tile is the mockup's (work-space-dark.html `.det`): the head in the heading face, the sections' keys
 /// ("you", "spec", "plan", "task") muted in a column and their values in the accent, the actions as buttons with their
 /// keys, and every row in the card's UI font.
@@ -1308,7 +1357,12 @@ fn detail_rows_are_the_mockups_tile() {
     }
     let m = core.model();
     let agent = ItemId("agent:a1".into());
-    let rows = detail::rows(&detail::lines(m, Some(&agent), 0), 1.0, 340, &Cols);
+    let rows = detail::rows(
+        &detail::lines(m, Some(&agent), 0),
+        &kit_env(1.0),
+        340,
+        &Cols,
+    );
     fn faces_of(r: &Row) -> Vec<&str> {
         r.runs.iter().map(|x| x.2.as_str()).collect()
     }
@@ -1360,8 +1414,14 @@ fn detail_rows_are_the_mockups_tile() {
         .iter()
         .find(|r| r.text.contains("Open"))
         .expect("the Open action");
-    assert!(faces_of(open).contains(&FaceId::Button.name()), "{open:?}");
-    assert!(faces_of(open).contains(&FaceId::Keycap.name()), "{open:?}");
+    assert!(
+        faces_of(open).contains(&FaceId::KitButtonSecondary.name()),
+        "{open:?}"
+    );
+    assert!(
+        faces_of(open).contains(&FaceId::KitKeyHintCap.name()),
+        "{open:?}"
+    );
     for r in &rows {
         assert!(faces_of(r).contains(&FaceId::WorkPane.name()), "{r:?}");
     }
@@ -1394,7 +1454,7 @@ fn the_detail_subtitle_wraps_by_word_in_the_tile() {
     let agent = ItemId("agent:a1".into());
     let lines = detail::lines(core.model(), Some(&agent), 0);
     for width in [340u32, 260] {
-        let rows = detail::rows(&lines, 1.0, width, &Cols);
+        let rows = detail::rows(&lines, &kit_env(1.0), width, &Cols);
         // the subtitle is the rows keyed head/1, head/1.1, ...: each fits (8 px a column, 8 px of padding each side)
         let sub: Vec<&drgnx_rows::Row> = rows
             .iter()
@@ -1410,7 +1470,7 @@ fn the_detail_subtitle_wraps_by_word_in_the_tile() {
         assert!(all.join(" ").contains("API prices"), "{all:?}");
     }
     // everything fits in the width, so nothing is dropped
-    let roomy = detail::rows(&lines, 1.0, 900, &Cols);
+    let roomy = detail::rows(&lines, &kit_env(1.0), 900, &Cols);
     assert!(
         roomy[1].text.contains("API prices"),
         "one row: {:?}",

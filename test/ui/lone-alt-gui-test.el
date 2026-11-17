@@ -35,5 +35,18 @@ compact menu: a lone Alt opens it, Alt+letter opens that menu)."
           (should (equal (drgnx-ui-lone-alt--typed '(("Alt_L" . t) ("Alt_L" . nil))) nil)))
       (set 'nidhogg-lone-modifier-events old))))
 
+(ert-deftest drgnx-ui-lone-alt/sway-keys-start-with-the-frame-focused ()
+  "On sway the seat has no keyboard until one is made, and Nidhogg's shell binds its `wl_keyboard' only while the
+seat has one: with no keyboard the frame has no keyboard focus, and the first keys of a lone wtype run race the focus and
+are lost (a lone Alt gave no event).  So the typing of `drgnx-uitest-keyboard-type' runs with a keyboard already there
+and the focus observed.  The bad side is forced here each time: the frame starts with no focus; the body of
+`drgnx-uitest--with-sway-keyboard' sees it focused; afterwards the focus and the extra keyboard are gone."
+  :tags '(:compositor)
+  (skip-unless (and (getenv "SWAYSOCK") (executable-find "wtype")))
+  (should-not (frame-focus-state))
+  (should (drgnx-uitest--with-sway-keyboard (frame-focus-state)))
+  (should-not (frame-focus-state))
+  (should-not (process-live-p (get-process "drgnx-uitest-wtype-holder"))))
+
 (provide 'lone-alt-gui-test)
 ;;; lone-alt-gui-test.el ends here
