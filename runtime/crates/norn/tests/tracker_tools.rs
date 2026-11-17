@@ -1087,8 +1087,8 @@ mod tools {
     #[test]
     fn default_session_lists_23() {
         // the 23, the four job tools (Task 15), `report_submit` and the two plan tools (Task 21), `extensions_suggest`,
-        // `huddle_reply`, `procedure_get`
-        assert_eq!(tools_for(ToolSets::default()).len(), 33);
+        // `huddle_reply`, `comment_reply`, `procedure_get`
+        assert_eq!(tools_for(ToolSets::default()).len(), 34);
         assert_eq!(tools().len(), 23);
     }
 
@@ -1115,7 +1115,7 @@ mod tools {
                 ..ToolSets::default()
             })
             .len(),
-            39
+            40
         );
     }
 
@@ -1126,12 +1126,13 @@ mod tools {
             tracker: false,
             debug: true,
         });
-        assert_eq!(off.len(), 34);
+        assert_eq!(off.len(), 35);
         for name in [
             "settings_get",
             "settings_change",
             "extensions_suggest",
             "huddle_reply",
+            "comment_reply",
             "procedure_get",
             "debug_read",
             "debug_probe",

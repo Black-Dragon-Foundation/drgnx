@@ -1,0 +1,28 @@
+{"scenario": "comments/add-steer-reply", "requires": ["v1", "test-hooks"], "doc": "Paragraph comments (flow Task 9): agent A writes a spec record; the user's comment on its second paragraph is steered to A (the record's writer, from the history), which answers with comment_reply. Agent B, which the comment was not sent to, is refused. comments/list shows the thread at its paragraph with A's reply."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/docs/specs && cd $ROOT/work && git init -q && printf '# S\\n\\nDraft.\\n' > docs/specs/s.md && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "records/import", "params": {"root": "$ROOT/work", "only": "specs"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"files": {"$contains": [{"kind": "specs", "entity": "$capture:spec"}]}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:a"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:b"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$a", "text": "fs:write docs/specs/s.md # S\\n\\nDraft.\\n\\nComments reach the writing agent as a steer.\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 5, "method": "history/provenance", "params": {"worktree": "$ROOT/work", "path": "docs/specs/s.md", "line": 5}}, "expect": {"id": 5, "result": {"session": "$a"}}, "within_ms": 30000, "every_ms": 200}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "comments/add", "params": {"record": "$spec", "anchor": {"quote": "reach the writing agent"}, "text": "Say it never cancels."}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"comment": "$capture:cm", "sent_to": "$a", "anchor": {"heading": ["S"], "quote": "Comments reach the writing agent as a steer.", "state": "here"}}}}
+{"do": "poll", "conn": "c", "json": {"id": 7, "method": "agents/get", "params": {"id": "$a"}}, "expect": {"id": 7, "result": {"session": {"status": "idle"}, "entries": {"$contains": [{"type": "user", "text": "$string"}]}}}, "within_ms": 30000, "every_ms": 100}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in `seq 100`; do grep -q 'Comment on' $STATE/hub/transcripts/$a.jsonl && grep -q 'reply with comment_reply, id $cm' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; exit 1"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/send", "params": {"id": "$b", "text": "call:comment_reply {\"comment\": \"$cm\", \"text\": \"Not mine.\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in `seq 300`; do grep -q 'was not sent to you' $STATE/hub/transcripts/$b.jsonl && exit 0; sleep 0.1; done; exit 1"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "agents/send", "params": {"id": "$a", "text": "call:comment_reply {\"comment\": \"$cm\", \"text\": \"Done.\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 10, "method": "comments/list", "params": {"record": "$spec"}}, "expect": {"id": 10, "result": {"threads": [{"root": {"id": "$cm", "author": "user", "text": "Say it never cancels."}, "sent_to": "$a", "anchor": {"state": "here"}, "replies": [{"author": "$a", "text": "Done."}]}]}}, "within_ms": 30000, "every_ms": 200}
+{"do": "send", "conn": "c", "json": {"id": 11, "method": "comments/resolve", "params": {"comment": "$cm"}}}
+{"do": "expect", "conn": "c", "json": {"id": 11, "result": true}}

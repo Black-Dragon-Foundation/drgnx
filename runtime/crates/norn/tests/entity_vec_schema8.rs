@@ -32,6 +32,10 @@ const SHIPPED: &str = concat!(
     alter table step drop column head;
     alter table step drop column history_op;
     alter table step drop column undone_by;
+    drop index step_session_start;
+    alter table step drop column machine;
+    alter table step drop column slots_used;
+    alter table step drop column slots_total;
     update kv set value = '8' where key = 'schema';"
 );
 

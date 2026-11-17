@@ -2156,6 +2156,7 @@ mod price_tests {
             warnings: Vec::new(),
             prices_as_of: "2026-11-01".into(),
             made_at: 0.0,
+            baseline: None,
         }
     }
 
@@ -2307,6 +2308,10 @@ mod price_tests {
             cost_unit: None,
             basis: "no history: prior".into(),
             n: 0,
+            start_p50: 0.0,
+            start_p90: 0.0,
+            finish_p50: 1.0,
+            finish_p90: 2.0,
         }
     }
 

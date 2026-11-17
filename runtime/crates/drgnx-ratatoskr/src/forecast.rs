@@ -495,6 +495,10 @@ async fn build(
             cost_unit: cost_kept.first().map(|c| unit_name(c.unit).to_owned()),
             basis: out_tasks[i].basis.label.clone(),
             n: i64::from(class.n),
+            start_p50: t.start.p50,
+            start_p90: t.start.p90,
+            finish_p50: t.finish.p50,
+            finish_p90: t.finish.p90,
         });
     }
     let min_n = classes.iter().map(|c| c.n).min().unwrap_or(0);
@@ -528,6 +532,10 @@ async fn build(
         cost_unit: cost_kept.first().map(|c| unit_name(c.unit).to_owned()),
         basis: format!("{} tasks", wants.len()),
         n: i64::from(min_n),
+        start_p50: 0.0,
+        start_p90: 0.0,
+        finish_p50: wall.p50,
+        finish_p90: wall.p90,
     });
     let wake = (totals.cold_wakes.p90 > 0.0).then(|| wire::WakeLine {
         cold_wakes: wire_range(totals.cold_wakes),
@@ -599,6 +607,7 @@ async fn build(
         warnings,
         prices_as_of: prices_as_of(&cur.loaded.values.agents_model_prices),
         made_at,
+        baseline: None,
     };
     Ok((forecast, made))
 }
@@ -756,7 +765,51 @@ pub async fn get(
             "Job {id} has no tasks to forecast"
         )));
     }
-    for_tasks(front, &id, wants).await
+    let mut forecast = for_tasks(front, &id, wants).await?;
+    if l.job.status.as_deref() != Some("proposed") {
+        forecast.baseline = baseline_of(front, &id).await?;
+    }
+    Ok(forecast)
+}
+
+/// What the proposal of JOB said when each task would start and end, read back from `forecast_made`; none when none
+/// was kept.  Approval and resume never write it again: the baseline is the proposal's.
+async fn baseline_of(front: &Front, job: &str) -> Result<Option<wire::Baseline>, Error> {
+    let key = job.to_owned();
+    let rows = front
+        .writer
+        .db
+        .read(move |c| sample::baseline(c, &key))
+        .await
+        .map_err(|e| crate::runner::invalid(format!("the baseline does not read: {e}")))?;
+    let Some(plan) = rows.iter().find(|r| r.task == job) else {
+        return Ok(None);
+    };
+    let tasks = rows
+        .iter()
+        .filter_map(|r| {
+            let n = r.task.strip_prefix(job)?.strip_prefix('#')?.parse().ok()?;
+            Some(wire::BaselineTask {
+                n,
+                start: wire::Range {
+                    p50: r.start_p50,
+                    p90: r.start_p90,
+                },
+                finish: wire::Range {
+                    p50: r.finish_p50,
+                    p90: r.finish_p90,
+                },
+            })
+        })
+        .collect();
+    Ok(Some(wire::Baseline {
+        made_at: plan.made_at,
+        tasks,
+        finish: wire::Range {
+            p50: plan.finish_p50,
+            p90: plan.finish_p90,
+        },
+    }))
 }
 
 /// What `session:<sid>` says of the session: its profile, its project, and the role its work has (a worker's is that of
@@ -1402,6 +1455,10 @@ mod tests {
                 cost_unit: None,
                 basis: "1 tasks".into(),
                 n: 0,
+                start_p50: 0.0,
+                start_p90: 0.0,
+                finish_p50: 2.0,
+                finish_p90: 3.0,
             }],
         )?;
         sample::put(
