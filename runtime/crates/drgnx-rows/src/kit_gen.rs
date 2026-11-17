@@ -15,6 +15,10 @@ pub enum CompId {
     Button,
     /// `key-hint`
     KeyHint,
+    /// `agent-mark`
+    AgentMark,
+    /// `progress`
+    Progress,
     /// `chip`
     Chip,
     /// `status-dot`
@@ -81,9 +85,25 @@ pub struct Geom {
 
 /// The glyphs the components name: `(name, Unicode, ASCII)`, from the standard table (`drgnx-ui--default-glyphs`);
 /// the env's glyphs (`KitEnv::glyphs`) take precedence.
-pub const GLYPHS: [(&str, &str, &str); 7] = [
+pub const GLYPHS: [(&str, &str, &str); 23] = [
     ("chevron-right", "›", ">"),
     ("chevron-down", "⌄", "v"),
+    ("bar-left", "", "["),
+    ("bar-full", "█", "#"),
+    ("bar-1", "▏", ""),
+    ("bar-2", "▎", ""),
+    ("bar-3", "▍", ""),
+    ("bar-4", "▌", ""),
+    ("bar-5", "▋", ""),
+    ("bar-6", "▊", ""),
+    ("bar-7", "▉", ""),
+    ("bar-empty", "░", "-"),
+    ("bar-right", "", "]"),
+    ("progress-0", "○", "0"),
+    ("progress-1", "◔", "1"),
+    ("progress-2", "◑", "2"),
+    ("progress-3", "◕", "3"),
+    ("progress-4", "●", "4"),
     ("ok", "✓", "+"),
     ("busy", "◎", "@"),
     ("dot", "●", "*"),
@@ -190,6 +210,40 @@ const KEY_HINT_GEOM: [[Geom; 3]; 2] = [
 ];
 const KEY_HINT_LABEL: [Option<&str>; 2] = [Some("key"), Some("key")];
 const KEY_HINT_FACE: [FaceId; 2] = [FaceId::KitKeyHintCap, FaceId::KitKeyHintMenu];
+
+const AGENT_MARK_AXES: &[&[&str]] = &[];
+const AGENT_MARK_DEFAULTS: &[usize] = &[];
+const AGENT_MARK_GEOM: [[Geom; 3]; 1] = [
+    [
+        Geom { height: 0, pad: (5, 5), gap: 0, boxed: false, radius: 4, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (5, 5), gap: 0, boxed: false, radius: 4, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (5, 5), gap: 0, boxed: false, radius: 4, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const AGENT_MARK_LABEL: [Option<&str>; 1] = [Some("agent")];
+const AGENT_MARK_FACE: [FaceId; 1] = [FaceId::KitAgentMark];
+
+const PROGRESS_AXES: &[&[&str]] = &[&["bar", "ring", "meter"]];
+const PROGRESS_DEFAULTS: &[usize] = &[0];
+const PROGRESS_GEOM: [[Geom; 3]; 3] = [
+    [
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const PROGRESS_LABEL: [Option<&str>; 3] = [Some("percent"), Some("percent"), Some("percent")];
+const PROGRESS_FACE: [FaceId; 3] = [FaceId::KitProgress, FaceId::KitProgress, FaceId::KitProgress];
 
 const CHIP_AXES: &[&[&str]] = &[&["neutral", "accent", "warn", "ok", "error", "agent"], &["soft", "solid"]];
 const CHIP_DEFAULTS: &[usize] = &[0, 0];
@@ -305,6 +359,14 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant);
             KEY_HINT_GEOM[i][d]
         }
+        CompId::AgentMark => {
+            let (i, d) = index(AGENT_MARK_AXES, AGENT_MARK_DEFAULTS, variant);
+            AGENT_MARK_GEOM[i][d]
+        }
+        CompId::Progress => {
+            let (i, d) = index(PROGRESS_AXES, PROGRESS_DEFAULTS, variant);
+            PROGRESS_GEOM[i][d]
+        }
         CompId::Chip => {
             let (i, d) = index(CHIP_AXES, CHIP_DEFAULTS, variant);
             CHIP_GEOM[i][d]
@@ -322,6 +384,8 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::Row => ROW_LABEL[index(ROW_AXES, ROW_DEFAULTS, variant).0],
         CompId::Button => BUTTON_LABEL[index(BUTTON_AXES, BUTTON_DEFAULTS, variant).0],
         CompId::KeyHint => KEY_HINT_LABEL[index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant).0],
+        CompId::AgentMark => AGENT_MARK_LABEL[index(AGENT_MARK_AXES, AGENT_MARK_DEFAULTS, variant).0],
+        CompId::Progress => PROGRESS_LABEL[index(PROGRESS_AXES, PROGRESS_DEFAULTS, variant).0],
         CompId::Chip => CHIP_LABEL[index(CHIP_AXES, CHIP_DEFAULTS, variant).0],
         CompId::StatusDot => STATUS_DOT_LABEL[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
     }
@@ -333,6 +397,8 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::Row => ROW_FACE[index(ROW_AXES, ROW_DEFAULTS, variant).0],
         CompId::Button => BUTTON_FACE[index(BUTTON_AXES, BUTTON_DEFAULTS, variant).0],
         CompId::KeyHint => KEY_HINT_FACE[index(KEY_HINT_AXES, KEY_HINT_DEFAULTS, variant).0],
+        CompId::AgentMark => AGENT_MARK_FACE[index(AGENT_MARK_AXES, AGENT_MARK_DEFAULTS, variant).0],
+        CompId::Progress => PROGRESS_FACE[index(PROGRESS_AXES, PROGRESS_DEFAULTS, variant).0],
         CompId::Chip => CHIP_FACE[index(CHIP_AXES, CHIP_DEFAULTS, variant).0],
         CompId::StatusDot => STATUS_DOT_FACE[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
     }

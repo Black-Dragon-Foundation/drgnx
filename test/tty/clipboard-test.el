@@ -80,23 +80,47 @@
   (dotimes (_ 5) (drgnx-tty-session-send sess "\e[1;2C"))
   (drgnx-tty-session-wait sess '(with-current-buffer "*sel*" (and (use-region-p) (= (- (region-end) (region-beginning)) 5)))))
 
-(ert-deftest drgnx-tty-clip/c-x-alone-cuts-after-the-delay ()
+(ert-deftest drgnx-tty-clip/c-x-cuts-at-once-by-default ()
+  ;; The VS Code profile's Cut with a selection is instant (audit K4): `drgnx-editing-prefix-delay' is nil.
   (drgnx-tty-session-with (s :keys "vscode")
     (drgnx-tty-clip-test--ready s)
+    (should-not (drgnx-tty-session-eval s 'drgnx-editing-prefix-delay))
     (drgnx-tty-clip-test--select-five s)
     (drgnx-tty-session-send s "\C-x")
     (drgnx-tty-session-wait s '(equal (car kill-ring) "hello"))
     (should (equal (drgnx-tty-session-eval s '(with-current-buffer "*sel*" (buffer-string))) " drgnx"))))
 
-(ert-deftest drgnx-tty-clip/c-x-then-a-key-is-the-prefix-and-the-text-stays ()
-  ;; C-x h (mark the whole buffer) typed at once: nothing is cut.
+(ert-deftest drgnx-tty-clip/c-x-alone-cuts-after-the-delay-when-it-is-set ()
+  ;; With the setting a number (0.3 was the old default), a lone C-x waits that long for a next key, then cuts.
   (drgnx-tty-session-with (s :keys "vscode")
     (drgnx-tty-clip-test--ready s)
+    (drgnx-tty-session-eval s '(progn (setq drgnx-editing-prefix-delay 0.3) t))
+    (drgnx-tty-clip-test--select-five s)
+    (drgnx-tty-session-send s "\C-x")
+    (drgnx-tty-session-wait s '(equal (car kill-ring) "hello"))
+    (should (equal (drgnx-tty-session-eval s '(with-current-buffer "*sel*" (buffer-string))) " drgnx"))))
+
+(ert-deftest drgnx-tty-clip/c-x-then-a-key-is-the-prefix-when-the-delay-is-set ()
+  ;; With the delay set, C-x h (mark the whole buffer) typed at once is the prefix: nothing is cut.
+  (drgnx-tty-session-with (s :keys "vscode")
+    (drgnx-tty-clip-test--ready s)
+    (drgnx-tty-session-eval s '(progn (setq drgnx-editing-prefix-delay 0.3) t))
     (drgnx-tty-clip-test--select-five s)
     (drgnx-tty-session-send s "\C-xh")
     (drgnx-tty-session-wait s '(with-current-buffer "*sel*" (and (use-region-p) (= (- (region-end) (region-beginning)) 11))))
     (drgnx-tty-session-key-barrier s)               ; both keys were read and run: no cut came of them
     (should (equal (drgnx-tty-session-eval s '(with-current-buffer "*sel*" (buffer-string))) "hello drgnx"))
+    (should-not (drgnx-tty-session-eval s '(car kill-ring)))))
+
+(ert-deftest drgnx-tty-clip/c-x-with-no-selection-is-the-prefix-whatever-the-delay ()
+  ;; No selection: C-x h is Emacs' own, in the default profile too (the region map only acts on a selection).
+  (drgnx-tty-session-with (s :keys "vscode")
+    (drgnx-tty-clip-test--ready s)
+    (drgnx-tty-session-eval s '(progn (switch-to-buffer (get-buffer-create "*sel*"))
+                                      (insert "hello drgnx") (goto-char (point-min)) t))
+    (drgnx-tty-session-send s "\C-xh")
+    (drgnx-tty-session-wait s '(with-current-buffer "*sel*" (and (use-region-p) (= (- (region-end) (region-beginning)) 11))))
+    (drgnx-tty-session-key-barrier s)
     (should-not (drgnx-tty-session-eval s '(car kill-ring)))))
 
 (ert-deftest drgnx-tty-clip/bracketed-paste-arrives-as-text ()

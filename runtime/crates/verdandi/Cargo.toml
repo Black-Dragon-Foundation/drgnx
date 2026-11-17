@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+autotests = false  # tests/main.rs is the one binary of the files that need no process of their own; the rest are [[test]]s below
 
 [dependencies]
 loro.workspace = true
@@ -16,3 +17,13 @@ serde_json.workspace = true
 sha2.workspace = true
 # the 3-way check's private folder
 tempfile.workspace = true
+
+
+# every tests/*.rs not named below, as modules of one binary: `cargo test -p verdandi --test it <file>::`
+[[test]]
+name = "it"
+path = "tests/main.rs"
+
+# timing rows measure latency: no other test's load beside them
+[[test]]
+name = "timing"

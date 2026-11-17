@@ -183,13 +183,12 @@ in every theme."
 ;; subtle text in a strong hairline (radius 4)
 (ert-deftest drgnx-themes/buttons-and-keycaps ()
   "Design §3.5 (`.btn', `.btn.pri', `kbd'): `drgnx-control' is the text colour on the quiet selection, ringed 1 px in
-the border colour; `drgnx-control-primary' is on-accent text on the accent's fill; `drgnx-keycap' is subtle text
-ringed in the strong border, with no fill of its own."
+the border colour; `drgnx-control-primary' is on-accent text on the accent's fill.  (A key hint is the kit's:
+`drgnx-themes/the-kit-s-buttons-and-key-hints'.)"
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
       (pcase-dolist (`(,face ,fg ,bg ,ring) '((drgnx-control fg sel-quiet border)
-                                              (drgnx-control-primary on-accent accent-fill accent-fill)
-                                              (drgnx-keycap subtle nil border-strong)))
+                                              (drgnx-control-primary on-accent accent-fill accent-fill)))
         (let ((box (plist-get (drgnx-faces--clause-plist face 'gui) :box)))
           (should (equal (list face (drgnx-look-token fg variant) (and bg (drgnx-look-token bg variant))
                                (drgnx-look-token ring variant) '(1 . 1))
@@ -309,6 +308,20 @@ Flymake's faces and Flymake 1.4's (ELPA, what drgnx installs: `flymake-error-inl
                          (list face (drgnx-face-color face :foreground 'gui)
                                (drgnx-face-color face :background 'gui)))))))))
 
+;; The kit's buttons and key hints (etc/ui/components.eld): their bindings' tokens; the old faces they replace are no
+;; longer styled by the themes
+(ert-deftest drgnx-themes/the-kit-s-buttons-and-key-hints ()
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (pcase-dolist (`(,face ,fg ,bg ,ring) '((drgnx-kit-button-primary on-accent accent-fill nil)
+                                              (drgnx-kit-button-secondary nil sel-quiet button-edge)
+                                              (drgnx-kit-key-hint-cap nil nil key-hint-edge)))
+        (let ((box (plist-get (drgnx-faces--clause-plist face 'gui) :box)))
+          (should (equal (list face (and fg (drgnx-look-token fg variant)) (and bg (drgnx-look-token bg variant))
+                               (and ring (drgnx-look-token ring variant)))
+                         (list face (and fg (drgnx-face-color face :foreground 'gui)) (and bg (drgnx-face-color face :background 'gui))
+                               (and ring (plist-get box :color))))))))))
+
 ;; Look step 7: sh-script's here-documents were bold yellow (the audit's "yellow-heavy" G7)
 (ert-deftest drgnx-themes/shell-scripts-in-the-code-colours ()
   "A here-document is in the string colour, not bold; a command substitution in the function colour."
@@ -329,7 +342,7 @@ enabled: this Emacs may refuse the key."
     (dolist (fit '(t nil))
       (let ((drgnx-theme--box-fit fit))
         (dolist (variant '(dark light hc))
-          (let* ((spec (cadr (assq 'drgnx-keycap (drgnx-theme--specs variant))))
+          (let* ((spec (cadr (assq 'drgnx-kit-key-hint-cap (drgnx-theme--specs variant))))
                  (box (plist-get (cdar spec) :box)))
             (should (eq fit (eq 'text (plist-get box :fit))))))))))
 
@@ -357,26 +370,8 @@ its row taller) and nothing asks for the key."
                 (unless (eq variant 'hc)
                   (should (equal '(6 . 3) (plist-get (funcall box chip) :line-width)))
                   (should (eq 'flat-button (plist-get (funcall box chip) :style))))))
-            (dolist (b '(drgnx-work-flow-button drgnx-work-flow-button-primary drgnx-work-flow-key-primary
-                                                drgnx-work-flow-button-key))
-              (should (assq b specs))
-              (should (eq fit (eq 'text (plist-get (funcall box b) :fit)))))))))))
-
-;; the buttons 24 px tall over 12 px text (`.detail .acts .btn'), the keys 2 px clear of theirs (`kbd', `.k'), where
-;; boxes take a pad (Nidhogg's `:fit (text . PAD)'); else as tall as their text
-(ert-deftest drgnx-themes/the-flow-s-buttons-are-padded-where-boxes-take-a-pad ()
-  "Where boxes take `:fit (text . PAD)', a button is padded 4 px above and below its text and its key 2 px; where they
-fit but take no pad, both are `:fit text'."
-  (cl-letf (((symbol-function 'featurep) (let ((real (symbol-function 'featurep)))
-                                           (lambda (f &optional sub) (or (eq f 'glitnir) (funcall real f sub))))))
-    (dolist (pad '(t nil))
-      (let ((drgnx-theme--box-fit t) (drgnx-theme--box-fit-pad pad))
-        (let* ((specs (drgnx-theme--specs 'dark))
-               (fit (lambda (face) (plist-get (plist-get (cdar (cadr (assq face specs))) :box) :fit))))
-          (dolist (b '(drgnx-work-flow-button drgnx-work-flow-button-primary))
-            (should (equal (funcall fit b) (if pad '(text . 4) 'text))))
-          (dolist (k '(drgnx-work-flow-button-key drgnx-work-flow-key-primary))
-            (should (equal (funcall fit k) (if pad '(text . 2) 'text)))))))))
+            ;; the buttons are the kit's now (`drgnx-themes/the-kit-s-buttons-and-key-hints')
+            ))))))
 
 ;;; themes-test.el ends here
 

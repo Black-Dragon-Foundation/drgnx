@@ -230,4 +230,56 @@ changes after it), the uses of the symbol at point."
         (setq buffer-file-name nil)
         (delete-file file)))))
 
+(defmacro marks-test--with-bookmarks (&rest body)
+  "BODY in a buffer visiting FILE (100 lines) in a temporary folder DIR, bookmark.el's list empty, its file in DIR."
+  (declare (indent 0))
+  `(let* ((dir (file-name-as-directory (make-temp-file "marks-bookmarks" t)))
+          (file (concat dir "a.el"))
+          (bookmark-default-file (concat dir "bookmarks"))
+          (bookmark-alist nil) (bookmark-save-flag nil) (bookmark-bookmarks-timestamp nil)
+          (bookmark-watch-bookmark-file nil))
+     (with-temp-file file (dotimes (i 100) (insert (format "line %d foo\n" (1+ i)))))
+     (let ((buf (find-file-noselect file)))
+       (unwind-protect (with-current-buffer buf (goto-char (point-min)) ,@body)
+         (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
+         (delete-directory dir t)))))
+
+(ert-deftest drgnx-marks/bookmarks-are-bookmark-el-records ()
+  "Toggle Bookmark sets a bookmark.el record on the line, with the handler `drgnx-bookmark', and clears it; Name
+Bookmark names it; bookmark.el's file keeps it, and its own jump (`C-x r b') and Go to Bookmark, this file's
+bookmarks first and by line, reach it."
+  (marks-test--with-bookmarks
+    (forward-line 49)
+    (drgnx-marks-bookmark-toggle)                       ; line 50
+    (goto-char (marks-test--pos 10))
+    (drgnx-marks-bookmark-toggle)
+    (should (equal (mapcar #'car bookmark-alist) '("a.el:10" "a.el:50")))
+    (should (eq (bookmark-prop-get "a.el:10" 'handler) 'drgnx-bookmark))
+    (should (= (bookmark-get-position "a.el:10") (marks-test--pos 10)))
+    (end-of-line)
+    (drgnx-marks-bookmark-name "setup")
+    (should (equal (mapcar #'car bookmark-alist) '("setup" "a.el:50")))
+    (drgnx-marks-bookmark-toggle)
+    (should (equal (mapcar #'car bookmark-alist) '("a.el:50")))
+    (drgnx-marks-bookmark-name "setup")                 ; no bookmark on the line: one is set, named
+    (should (equal (mapcar #'car bookmark-alist) '("setup" "a.el:50")))
+    ;; another file's bookmark, first in bookmark.el's list
+    (push `("elsewhere" (filename . ,(concat dir "b.el")) (position . 1)) bookmark-alist)
+    ;; written to bookmark.el's file and read back
+    (bookmark-save)
+    (setq bookmark-alist nil)
+    (bookmark-load bookmark-default-file t t)
+    (should (equal (mapcar #'car bookmark-alist) '("elsewhere" "setup" "a.el:50")))
+    (should (eq (bookmark-prop-get "setup" 'handler) 'drgnx-bookmark))
+    (goto-char (point-min))
+    (bookmark-jump "setup")
+    (should (equal (buffer-file-name) file))
+    (should (= (line-number-at-pos) 10))
+    (let (offered)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt table &rest _) (setq offered (all-completions "" table)) "a.el:50")))
+        (call-interactively #'drgnx-marks-bookmark-go))
+      (should (equal offered '("setup" "a.el:50" "elsewhere")))
+      (should (= (line-number-at-pos) 50)))))
+
 ;;; marks-test.el ends here

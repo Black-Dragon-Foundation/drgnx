@@ -229,42 +229,37 @@ pub(crate) fn board_rows(cards: &[Card], env: &ViewEnv) -> Vec<Row> {
     rows
 }
 
-/// CARD's progress bar in its column at LEFT, W px wide: on a GUI two spaces 4 px high from 4 px in, the steps done
-/// and the rest, together W less 16 px (sizes in device px: the env's scale's); on a terminal CHARS of `▰` and `▱`.
+/// CARD's progress bar in its column at LEFT, W px wide: the kit's progress bar (`drgnx_rows::kit`, `Comp::Progress`)
+/// of the steps done, from 4 px in and W less 16 px wide (on a GUI; the kit's width is logical px, the span's at the
+/// env's scale), on a terminal CHARS cells; with no steps all track.
 fn bar(b: &mut RowBuilder, card: &Card, left: u32, w: u32, chars: usize, env: &ViewEnv) {
-    let part = |n: u32| match card.progress {
-        Some((done, all)) if all > 0 => {
-            ((n as f32 * done.min(all) as f32 / all as f32).round() as u32).min(n)
-        }
-        _ => 0,
+    let value = match card.progress {
+        Some((done, all)) if all > 0 => f64::from(done.min(all)) / f64::from(all),
+        _ => 0.0,
     };
-    let at;
-    match env.display {
+    // half up, as `drgnx-px` rounds
+    let px = |v: f32| (f64::from(v) * f64::from(env.scale) + 0.5 + 1e-9).floor() as u32;
+    let width = match env.display {
         Display::Gui => {
-            // half up, as `drgnx-px` rounds
-            let px = |v: f32| (f64::from(v) * f64::from(env.scale) + 0.5 + 1e-9).floor() as u32;
-            let span = w.saturating_sub(px(16.0));
-            let fill = part(span);
             b.stop(left + px(4.0));
-            at = b.pos();
-            b.space(fill, px(4.0), FaceId::WorkBar.name()).space(
-                span - fill,
-                px(4.0),
-                FaceId::WorkBarRest.name(),
-            );
+            let span = w.saturating_sub(px(16.0));
+            (f64::from(span) / f64::from(env.scale)).round() as u16
         }
         Display::Tty => {
-            let n = chars as u32;
-            let fill = part(n);
             b.stop(left);
-            at = b.pos();
-            b.push(&"▰".repeat(fill as usize), Some(FaceId::WorkBar.name()))
-                .push(
-                    &"▱".repeat((n - fill) as usize),
-                    Some(FaceId::WorkBarRest.name()),
-                );
+            (chars as u16).saturating_mul(drgnx_rows::kit::BAR_CELL_PX)
         }
-    }
+    };
+    let at = b.pos();
+    drgnx_rows::kit::expand(
+        b,
+        &crate::view::kit_env(env),
+        &drgnx_rows::kit::Comp::Progress {
+            kind: drgnx_rows::kit::ProgressKind::Bar,
+            value,
+            width,
+        },
+    );
     let end = b.pos();
     b.face(at, end, FaceId::CardBottom.name())
         .prop(at, end, "drgnx-work-id", json!(card.id));
@@ -387,9 +382,10 @@ mod tests {
         }
     }
 
-    /// [D] A card's third row is its progress bar: on a GUI two spaces 4 px high (device px: the scale's), the steps
-    /// done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the card's width less its padding,
-    /// starting 4 px in; with no steps all rest.  On a terminal the bar is text, `▰` done and `▱` the rest.
+    /// [D] A card's third row is its progress bar, the kit's (`Comp::Progress`): on a GUI from 4 px in, the steps done
+    /// (`drgnx-kit-progress-fill`) then the rest (`drgnx-kit-progress`), spaces 4 px high (device px: the scale's)
+    /// together the card's width less its padding; with no steps all track.  On a terminal the kit's cells, `█` and a
+    /// partial block done, `░` the rest.
     #[test]
     fn board_cards_end_in_a_progress_bar() {
         let mut a = card("task:a", "running", None);
@@ -404,24 +400,23 @@ mod tests {
             let span = 200 - px(16.0); // a sixth of 1212 - 12
             assert_eq!(
                 bar.stops,
-                vec![(0, px(4.0)), (3, 200 + px(4.0))],
+                vec![(0, px(4.0)), (2, 200 + px(4.0))],
                 "scale {scale}"
             );
             let fill = (span as f32 / 4.0).round() as u32;
             assert_eq!(
                 bar.spaces,
                 vec![
-                    (1, 0, px(4.0)),
-                    (2, span, px(4.0)),
-                    (4, fill, px(4.0)),
-                    (5, span - fill, px(4.0))
+                    (1, span, px(4.0)),
+                    (3, fill, px(4.0)),
+                    (4, span - fill, px(4.0))
                 ],
                 "scale {scale}: task:b (queued, no steps) then task:a"
             );
             let faces: Vec<&str> = bar.runs.iter().map(|r| r.2.as_str()).collect();
             assert!(
-                faces.contains(&FaceId::WorkBar.name())
-                    && faces.contains(&FaceId::WorkBarRest.name())
+                faces.contains(&FaceId::KitProgressFill.name())
+                    && faces.contains(&FaceId::KitProgress.name())
             );
             assert!(
                 bar.props.iter().any(|p| p.3 == json!("task:a")),
@@ -431,10 +426,10 @@ mod tests {
         let tty = board_rows(&cards, &env(Display::Tty, 1.0));
         let bar = &tty[3];
         assert!(bar.spaces.is_empty());
-        // the card's text width, 22 columns (182 px of 8), a quarter done
-        let want = format!("{}{}", "▰".repeat(6), "▱".repeat(16));
+        // the card's text width, 22 columns (182 px of 8), a quarter done: 5 cells and a half
+        let want = format!("{}▌{}", "█".repeat(5), "░".repeat(16));
         assert!(bar.text.contains(&want), "{}", bar.text);
-        assert!(bar.text.contains(&"▱".repeat(22)), "{}", bar.text);
+        assert!(bar.text.contains(&"░".repeat(22)), "{}", bar.text);
     }
 
     /// [D] A card shows the agent whose task id is the card's: of two tasks with one title, only the one the agent works

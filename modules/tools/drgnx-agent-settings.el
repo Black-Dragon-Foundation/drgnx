@@ -15,6 +15,7 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'drgnx-ui-kit)
 (require 'seq)
 (require 'subr-x)
 (require 'button)
@@ -112,12 +113,14 @@
 
 (defun drgnx-agent-settings--button (label command &optional help)
   "Insert a button LABEL that runs COMMAND with point on the button's line."
-  (insert-text-button label 'action (lambda (b) (goto-char (button-start b)) (call-interactively command))
-                      'follow-link t 'help-echo help))
+  (insert (drgnx-ui-kit-text-button label (lambda ()
+                                            (when-let* ((b (button-at (point)))) (goto-char (button-start b)))
+                                            (call-interactively command))
+                                    help 'secondary 'sm)))
 
 (defun drgnx-agent-settings--action-button (label action &optional help)
   "Insert a button LABEL that calls ACTION."
-  (insert-text-button label 'action (lambda (_) (funcall action)) 'follow-link t 'help-echo help))
+  (insert (drgnx-ui-kit-text-button label action help 'quiet 'sm)))
 
 (defun drgnx-agent-settings--visit (file &optional line)
   "Show FILE (at LINE)."

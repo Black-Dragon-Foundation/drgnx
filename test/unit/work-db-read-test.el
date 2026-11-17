@@ -107,7 +107,7 @@
                                    drgnx-work-set-file drgnx-work-drop-file drgnx-work-forget-orphan-commits))
     (should-not (fboundp f)))
   ;; no editor path writes the tracker through the writer handle
-  (dolist (file '("core/drgnx-work.el" "core/drgnx-work-scan.el"))
+  (dolist (file '("core/drgnx-work.el"))
     (with-temp-buffer
       (insert-file-contents (expand-file-name file drgnx-dir))
       (should-not (re-search-forward "(sqlite-execute (drgnx-work-db)" nil t)))))

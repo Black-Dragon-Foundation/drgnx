@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/grid-fixture" drgnx-dir) nil t)
 (require 'drgnx)
 (require 'drgnx-wb)
 (require 'drgnx-area)
@@ -19,7 +20,8 @@
 
 (defmacro drgnx-layouts-persist-test--with (&rest body)
   "BODY with a state file and config dir in a temp dir, an Explorer and a Search section, one editor
-window, and the persist hooks as the layouts module wires them.  Prompts signal an error."
+window, the grid on (as the workbench module turns it on), and the persist hooks as the layouts module wires them.
+Prompts signal an error."
   (declare (indent 0))
   `(drgnx-test-with-state
      (let* ((dir (file-name-as-directory (make-temp-file "drgnx-layouts-persist" t)))
@@ -35,7 +37,7 @@ window, and the persist hooks as the layouts module wires them.  Prompts signal 
             (size (cons (frame-width) (frame-height))))
        (drgnx-layouts--define-config)
        (set-frame-size nil 200 60)
-       (delete-other-windows)
+       (drgnx-grid-test--reset)
        (dolist (p drgnx-layouts-persist-test--params) (set-frame-parameter nil p nil))
        (drgnx-wb-define-section 'files :slot 0 :title "EXPLORER"
                                 :buffer (lambda () (get-buffer-create "*drgnx-lp-explorer*")))
@@ -44,6 +46,7 @@ window, and the persist hooks as the layouts module wires them.  Prompts signal 
        (drgnx-layouts--wire-persist)
        (drgnx-rules-mode 1)
        (drgnx-chrome-mode 1)
+       (drgnx-grid-mode 1)
        (switch-to-buffer (get-buffer-create "*drgnx-lp-code*"))
        (set-window-parameter nil 'drgnx-tabs nil)
        (unwind-protect
@@ -53,12 +56,14 @@ window, and the persist hooks as the layouts module wires them.  Prompts signal 
                      ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "prompted"))))
              ,@body)
          (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize)
+         (drgnx-persist--refit-done)
+         (drgnx-grid-mode -1)
          (drgnx-chrome-mode -1)
          (drgnx-rules-mode -1)
          (drgnx-wb-hide-sidebar)
          (drgnx-wb-area-hide 'panel)
          (drgnx-wb-area-hide 'right)
-         (delete-other-windows)
+         (drgnx-grid-test--reset)
          (set-window-margins nil 0 0)
          (dolist (p drgnx-layouts-persist-test--params) (set-frame-parameter nil p nil))
          (set-frame-size nil (car size) (cdr size))

@@ -290,6 +290,157 @@ pub enum Comp {
         #[serde(default)]
         word: bool,
     },
+    /// An agent's mark: its HANDLE (one or two letters) on the colour of its SLOT (1–12, `drgnx-agent-identity`).
+    AgentMark { slot: u8, handle: String },
+    /// Progress: a bar WIDTH logical px wide or a ring, VALUE from 0 to 1.
+    Progress {
+        #[serde(default)]
+        kind: ProgressKind,
+        value: f64,
+        #[serde(default)]
+        width: u16,
+    },
+    /// A meter (`progress` of kind `meter`): SPENT against LIMIT (none: no bar) in UNIT, the FORECAST's p50 and p90
+    /// totals, in STATE, at SIZE (`card` and `wide` WIDTH logical px wide), then TEXT, which the hub formats (the kit
+    /// never converts a unit), and the state's word.
+    Meter {
+        spent: f64,
+        #[serde(default)]
+        limit: Option<f64>,
+        #[serde(default)]
+        unit: MeterUnit,
+        #[serde(default)]
+        forecast: Option<(f64, f64)>,
+        #[serde(default)]
+        state: MeterState,
+        #[serde(default)]
+        size: MeterSize,
+        #[serde(default)]
+        width: u16,
+        #[serde(default)]
+        text: String,
+    },
+}
+
+/// What a meter counts: dollars (`usd-est`: priced at API rates, an estimate), tokens, a count or a share of the week.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MeterUnit {
+    #[default]
+    Usd,
+    UsdEst,
+    Tokens,
+    Count,
+    Share,
+}
+
+impl MeterUnit {
+    /// Its spoken word (`drgnx-ui-kit--meter-unit-words`).
+    fn word(self) -> &'static str {
+        match self {
+            MeterUnit::Usd | MeterUnit::UsdEst => "dollars",
+            MeterUnit::Tokens => "tokens",
+            MeterUnit::Count => "items",
+            MeterUnit::Share => "percent of the week",
+        }
+    }
+}
+
+/// A meter's state, which the hub decides (spec: under 80 % ok, from 80 % nearing, at the limit reached, …).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MeterState {
+    #[default]
+    Ok,
+    Nearing,
+    Reached,
+    Over,
+    ForecastOver,
+    None,
+    Inherited,
+    Unpriced,
+}
+
+impl MeterState {
+    /// Its spoken word (`drgnx-ui-kit--meter-states`).
+    fn spoken(self) -> &'static str {
+        match self {
+            MeterState::Ok => "ok",
+            MeterState::Nearing => "nearing",
+            MeterState::Reached => "at limit",
+            MeterState::Over => "over",
+            MeterState::ForecastOver => "forecast over",
+            MeterState::None => "no limit",
+            MeterState::Inherited => "inherited",
+            MeterState::Unpriced => "unpriced",
+        }
+    }
+}
+
+/// A meter's size: `row` 46 x 4 px, `card` its width x 3, `wide` its width x 6 with the forecast's span.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MeterSize {
+    #[default]
+    Row,
+    Card,
+    Wide,
+}
+
+/// A `row` meter's width, logical px (`drgnx-ui-kit-meter-row-px`).
+pub const METER_ROW_PX: u16 = 46;
+/// A meter's bar height by size (`row`, `card`, `wide`), logical px (`drgnx-ui-kit-meter-heights`).
+pub const METER_HEIGHTS: [u16; 3] = [4, 3, 6];
+/// A forecast tick's slot, logical px: its line is 1 px in the middle (all of it in high contrast).
+pub const METER_TICK_PX: u16 = 2;
+/// The gap between a meter's bar and its text, logical px.
+pub const METER_GAP_PX: u16 = 6;
+
+/// A progress's kind: the `progress` component's `kind` axis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProgressKind {
+    #[default]
+    Bar,
+    Ring,
+    /// A meter: drawn from `Comp::Meter`; a `Comp::Progress` of this kind is a bar.
+    Meter,
+}
+
+impl ProgressKind {
+    fn name(self) -> &'static str {
+        match self {
+            ProgressKind::Bar => "bar",
+            ProgressKind::Ring => "ring",
+            ProgressKind::Meter => "meter",
+        }
+    }
+}
+
+/// A progress bar's height, logical px (`drgnx-ui-kit-progress-bar-px`).
+pub const BAR_PX: u16 = 4;
+/// Logical px of a progress bar's width per terminal cell (`drgnx-ui-kit-progress-cell-px`).
+pub const BAR_CELL_PX: u16 = 8;
+
+/// The agents' colours by slot, 1 first (`drgnx-agent-N`).
+const AGENT_FACES: [FaceId; 12] = [
+    FaceId::Agent1,
+    FaceId::Agent2,
+    FaceId::Agent3,
+    FaceId::Agent4,
+    FaceId::Agent5,
+    FaceId::Agent6,
+    FaceId::Agent7,
+    FaceId::Agent8,
+    FaceId::Agent9,
+    FaceId::Agent10,
+    FaceId::Agent11,
+    FaceId::Agent12,
+];
+
+/// X rounded half up (`drgnx-ui-kit--round`).
+fn round_half_up(x: f64) -> u32 {
+    (x + 0.5 + 1e-9).floor() as u32
 }
 
 /// LOGICAL px at SCALE in device px, rounded half up (`drgnx-px`).
@@ -344,6 +495,189 @@ fn put_action(b: &mut RowBuilder, from: u32, to: u32, a: &Action) {
         "mouse-face",
         Value::String(FaceId::Hover.name().to_owned()),
     );
+}
+
+/// A terminal bar onto B (`drgnx-ui-kit--tty-bar`): CELLS cells, V of them filled in eighths: the filled cells and a
+/// partial block where the env draws one (an ASCII terminal does not: there the fill rounds to whole cells) in FILL,
+/// then the empty ones in TRACK; ASCII's edges around them.
+fn tty_bar(b: &mut RowBuilder, env: &KitEnv, cells: u32, v: f64, fill: &str, track: &str) {
+    let units = round_half_up(f64::from(cells) * 8.0 * v);
+    let part = if !units.is_multiple_of(8) {
+        glyph(env, &format!("bar-{}", units % 8))
+    } else {
+        ""
+    };
+    let full = if !units.is_multiple_of(8) && part.is_empty() {
+        round_half_up(f64::from(cells) * v)
+    } else {
+        units / 8
+    };
+    let empty = cells - full - u32::from(!part.is_empty());
+    let filled = format!("{}{part}", glyph(env, "bar-full").repeat(full as usize));
+    b.push(glyph(env, "bar-left"), None);
+    if !filled.is_empty() {
+        b.push(&filled, Some(fill));
+    }
+    if empty > 0 {
+        b.push(&glyph(env, "bar-empty").repeat(empty as usize), Some(track));
+    }
+    b.push(glyph(env, "bar-right"), None);
+}
+
+/// X as spoken: a whole number, else up to two decimals (`drgnx-ui-kit--meter-number`).
+fn spoken_number(x: f64) -> String {
+    let s = format!("{x:.2}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".into() } else { s.into() }
+}
+
+/// A meter onto B (`drgnx-ui-kit--meter`): with a limit (and a state that has a bar) its bar, the fill SPENT of LIMIT
+/// in the state's colour over the track, the forecast's p50 a tick and on a `wide` meter a span to p90 (each part a
+/// space the editor draws as an image, `drgnx-ui-kit-bar-display`; on a terminal the cells of a progress bar); then
+/// TEXT and the state's word in the caption's face, the word in its colour; its label the amounts, the unit, the
+/// state, "estimate" and the forecast, as its `help-echo`.
+#[allow(clippy::too_many_arguments)]
+fn meter(
+    b: &mut RowBuilder,
+    env: &KitEnv,
+    spent: f64,
+    limit: Option<f64>,
+    unit: MeterUnit,
+    forecast: Option<(f64, f64)>,
+    state: MeterState,
+    size: MeterSize,
+    width: u16,
+    text: &str,
+) {
+    let caption = FaceId::UiCaption.name();
+    let fill_face = match state {
+        MeterState::Nearing => FaceId::KitProgressMeterNear,
+        MeterState::Reached | MeterState::Over => FaceId::KitProgressMeterReached,
+        _ => FaceId::KitProgressMeterFill,
+    }
+    .name();
+    let bar_limit =
+        limit.filter(|l| *l > 0.0 && !matches!(state, MeterState::None | MeterState::Unpriced));
+    let from = b.pos();
+    if let Some(l) = bar_limit {
+        let v = (spent / l).clamp(0.0, 1.0);
+        let track = if state == MeterState::Inherited {
+            FaceId::KitProgressMeterOutline.name()
+        } else {
+            FaceId::KitProgress.name()
+        };
+        let logical = match size {
+            MeterSize::Row => METER_ROW_PX,
+            MeterSize::Card | MeterSize::Wide => width,
+        };
+        if env.tty {
+            let cells = round_half_up(f64::from(logical) / f64::from(BAR_CELL_PX)).max(1);
+            tty_bar(b, env, cells, v, fill_face, FaceId::KitProgress.name());
+            b.push(" ", None);
+        } else {
+            let total = px(logical, env.scale);
+            let h = px(METER_HEIGHTS[size as usize], env.scale);
+            let fill = round_half_up(f64::from(total) * v);
+            let at = |x: f64| round_half_up(f64::from(total) * (x / l).clamp(0.0, 1.0));
+            // the tick's slot [t0, t1) and the span [t1, s1), clamped into the bar
+            let (t0, t1, s1) = match forecast {
+                Some((p50, p90)) => {
+                    let tw = px(METER_TICK_PX, env.scale).min(total);
+                    let t0 = at(p50).saturating_sub(tw / 2).min(total - tw);
+                    let s1 = if size == MeterSize::Wide {
+                        at(p90).max(t0 + tw)
+                    } else {
+                        t0 + tw
+                    };
+                    (t0, t0 + tw, s1)
+                }
+                None => (total, total, total),
+            };
+            let tick = if state == MeterState::ForecastOver {
+                FaceId::KitProgressMeterTickNear
+            } else {
+                FaceId::KitProgressMeterTick
+            }
+            .name();
+            let span = FaceId::KitProgressMeterSpan.name();
+            let mut cuts = vec![0, total, fill.min(total), t0, t1, s1];
+            cuts.sort_unstable();
+            cuts.dedup();
+            // each stretch's top part: the tick over the fill over the span over the track; equal neighbours joined
+            let mut parts: Vec<(u32, &str)> = Vec::new();
+            for w in cuts.windows(2) {
+                let (a, z) = (w[0], w[1]);
+                if z <= a || a >= total {
+                    continue;
+                }
+                let f = if a >= t0 && a < t1 {
+                    tick
+                } else if a < fill {
+                    fill_face
+                } else if a >= t1 && a < s1 {
+                    span
+                } else {
+                    track
+                };
+                match parts.last_mut() {
+                    Some((n, g)) if *g == f => *n += z - a,
+                    _ => parts.push((z - a, f)),
+                }
+            }
+            for (n, f) in parts {
+                b.space(n, h, f);
+            }
+            b.pad(px(METER_GAP_PX, env.scale), None);
+        }
+    }
+    if !text.is_empty() {
+        b.push(text, Some(caption));
+    }
+    let word = match state {
+        MeterState::Nearing => bar_limit.map(|l| format!("{} %", round_half_up(100.0 * spent / l))),
+        MeterState::Reached => Some("at limit".into()),
+        MeterState::Over => Some("over".into()),
+        MeterState::ForecastOver => Some("p90 over".into()),
+        MeterState::None => Some("no limit".into()),
+        MeterState::Unpriced => Some("unpriced".into()),
+        MeterState::Ok | MeterState::Inherited => None,
+    };
+    if let Some(w) = word {
+        if !text.is_empty() {
+            b.push(" · ", Some(caption));
+        }
+        let wf = match state {
+            MeterState::Nearing | MeterState::ForecastOver => FaceId::KitProgressMeterNear.name(),
+            MeterState::Reached | MeterState::Over => FaceId::KitProgressMeterReached.name(),
+            _ => caption,
+        };
+        b.push(&w, Some(wf));
+    }
+    let to = b.pos();
+    if to > from {
+        let mut label = match bar_limit {
+            Some(l) => format!(
+                "{} of {} {}",
+                spoken_number(spent),
+                spoken_number(l),
+                unit.word()
+            ),
+            None => format!("{} {}", spoken_number(spent), unit.word()),
+        };
+        label.push_str(", ");
+        label.push_str(state.spoken());
+        if unit == MeterUnit::UsdEst {
+            label.push_str(", estimate");
+        }
+        if let Some((p50, p90)) = forecast {
+            label.push_str(&format!(
+                ", forecast {} to {}",
+                spoken_number(p50),
+                spoken_number(p90)
+            ));
+        }
+        b.prop(from, to, "help-echo", Value::String(label));
+    }
 }
 
 /// C's inline expansion onto B (the row being built), at ENV.
@@ -553,7 +887,9 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
             // the agent's colour over its label, after the chip's own run (the Lisp expansion's order)
             if let Some(a) = match tone {
-                Tone::Agent(n) => agent_face(*n),
+                Tone::Agent(n) => usize::from(*n)
+                    .checked_sub(1)
+                    .and_then(|i| AGENT_FACES.get(i)),
                 _ => None,
             } {
                 b.face(text_from, text_to, a.name());
@@ -587,27 +923,85 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 b.push(&format!(" {w}"), face);
             }
         }
+        Comp::AgentMark { slot, handle } => agent_mark(b, env, *slot, handle),
+        Comp::Progress { kind, value, width } => progress(b, env, *kind, *value, *width),
+        Comp::Meter {
+            spent,
+            limit,
+            unit,
+            forecast,
+            state,
+            size,
+            width,
+            text,
+        } => meter(
+            b, env, *spent, *limit, *unit, *forecast, *state, *size, *width, text,
+        ),
     }
 }
 
-/// The face of agent SLOT (1 to 12), none outside it.
-fn agent_face(slot: u8) -> Option<FaceId> {
-    [
-        FaceId::Agent1,
-        FaceId::Agent2,
-        FaceId::Agent3,
-        FaceId::Agent4,
-        FaceId::Agent5,
-        FaceId::Agent6,
-        FaceId::Agent7,
-        FaceId::Agent8,
-        FaceId::Agent9,
-        FaceId::Agent10,
-        FaceId::Agent11,
-        FaceId::Agent12,
-    ]
-    .get(usize::from(slot).checked_sub(1)?)
-    .copied()
+/// SLOT's agent mark onto B (`drgnx-ui-kit--agent-mark`): the handle between the pads on the agent's colour (its face
+/// under the kit face's inverse video); on a terminal `[H]` in the colour. Its label is its `help-echo`.
+fn agent_mark(b: &mut RowBuilder, env: &KitEnv, slot: u8, handle: &str) {
+    let agent = AGENT_FACES[usize::from(slot.clamp(1, 12)) - 1].name();
+    let label = format!(
+        "{} {handle}",
+        kit_gen::label(CompId::AgentMark, &[]).unwrap_or_default()
+    );
+    let from = b.pos();
+    if env.tty {
+        b.push(&format!("[{handle}]"), Some(agent));
+    } else {
+        let g = kit_gen::geom(CompId::AgentMark, &[]);
+        let kit = FaceId::KitAgentMark.name();
+        b.pad(px(g.pad.0, env.scale), Some(kit));
+        b.push(handle, Some(kit));
+        b.pad(px(g.pad.1, env.scale), Some(kit));
+        let to = b.pos();
+        b.face(from, to, agent);
+    }
+    let to = b.pos();
+    b.prop(from, to, "help-echo", Value::String(label));
+}
+
+/// Progress onto B (`drgnx-ui-kit--progress`): a bar is the fill (VALUE of the width, rounded half up) then the track,
+/// each a space [`BAR_PX`] high in its face, which the editor draws as the bar's images (`drgnx-ui-kit-bar-display`);
+/// on a terminal its cells (one per [`BAR_CELL_PX`]): the filled ones and a partial block, then the empty ones. A ring is one of
+/// the glyphs `progress-0`..`progress-4`. Its label, "N percent", is its `help-echo`.
+fn progress(b: &mut RowBuilder, env: &KitEnv, kind: ProgressKind, value: f64, width: u16) {
+    let v = value.clamp(0.0, 1.0);
+    let face = comp_face(kit_gen::face(CompId::Progress, &[kind.name()])).unwrap_or("default");
+    let fill_face = FaceId::KitProgressFill.name();
+    let from = b.pos();
+    match kind {
+        ProgressKind::Ring => {
+            let name = format!("progress-{}", round_half_up(4.0 * v));
+            b.push(glyph(env, &name), Some(fill_face));
+        }
+        ProgressKind::Bar | ProgressKind::Meter if env.tty => {
+            let cells = round_half_up(f64::from(width) / f64::from(BAR_CELL_PX)).max(1);
+            tty_bar(b, env, cells, v, fill_face, face);
+        }
+        ProgressKind::Bar | ProgressKind::Meter => {
+            let total = px(width, env.scale);
+            let fill = round_half_up(f64::from(total) * v);
+            let h = px(BAR_PX, env.scale);
+            for (w, f) in [(fill, fill_face), (total - fill, face)] {
+                if w > 0 {
+                    b.space(w, h, f);
+                }
+            }
+        }
+    }
+    let to = b.pos();
+    if to > from {
+        let label = format!(
+            "{} {}",
+            round_half_up(100.0 * v),
+            kit_gen::label(CompId::Progress, &[kind.name()]).unwrap_or_default()
+        );
+        b.prop(from, to, "help-echo", Value::String(label));
+    }
 }
 
 /// C as whole rows, keys `KEY/0`, `KEY/1`…: a block component's rows (cards, toasts…, in later tasks), an inline one's
@@ -859,5 +1253,79 @@ mod tests {
             Density::Compact
         );
         assert_eq!(Density::default(), Density::Comfortable);
+    }
+
+    fn meter_at(scale: f32, spent: f64, limit: Option<f64>, state: MeterState, text: &str) -> Row {
+        let env = KitEnv {
+            scale,
+            tty: false,
+            glyphs: &[],
+            density: Density::Comfortable,
+            icons: None,
+        };
+        let c = Comp::Meter {
+            spent,
+            limit,
+            unit: MeterUnit::Usd,
+            forecast: None,
+            state,
+            size: MeterSize::Card,
+            width: 120,
+            text: text.into(),
+        };
+        expand_rows(&env, "m", &c).remove(0)
+    }
+
+    /// The fill is SPENT over LIMIT of the bar's device px, rounded half up, then the track; a spend past the limit
+    /// fills it; no limit, no bar.
+    #[test]
+    fn meter_fill_follows_spent_over_limit() {
+        for scale in [1.0, 1.25, 2.0] {
+            let total = px(120, scale);
+            let h = px(3, scale);
+            for (spent, limit) in [
+                (31.0, 40.0),
+                (10.0, 40.0),
+                (1.0, 3.0),
+                (50.0, 40.0),
+                (0.0, 7.0),
+            ] {
+                let r = meter_at(scale, spent, Some(limit), MeterState::Ok, "x");
+                let fill = round_half_up(f64::from(total) * (spent / limit).min(1.0));
+                let bar: Vec<(u32, u32)> = r
+                    .spaces
+                    .iter()
+                    .filter(|s| s.2 > 0)
+                    .map(|s| (s.1, s.2))
+                    .collect();
+                let want: Vec<(u32, u32)> = [(fill, h), (total - fill, h)]
+                    .into_iter()
+                    .filter(|p| p.0 > 0)
+                    .collect();
+                assert_eq!(bar, want, "{spent} of {limit} at {scale}");
+            }
+        }
+        assert!(
+            meter_at(1.0, 12.0, None, MeterState::None, "$12")
+                .spaces
+                .is_empty()
+        );
+    }
+
+    /// The text is the hub's, as it came: the kit adds only its separator and the state's word.
+    #[test]
+    fn meter_text_is_never_converted() {
+        let r = meter_at(
+            1.0,
+            36.0,
+            Some(40.0),
+            MeterState::Nearing,
+            "≈$36 / $40 est.",
+        );
+        assert!(r.text.ends_with("≈$36 / $40 est. · 90 %"), "{}", r.text);
+        let r = meter_at(1.0, 12.0, None, MeterState::None, "$12");
+        assert_eq!(r.text, "$12 · no limit");
+        let r = meter_at(1.0, 31.0, Some(40.0), MeterState::Ok, "31 % wk");
+        assert!(r.text.ends_with(" 31 % wk"), "{}", r.text);
     }
 }

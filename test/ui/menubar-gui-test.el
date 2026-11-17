@@ -19,7 +19,7 @@
 (require 'drgnx)
 (require 'drgnx-state)
 (load (expand-file-name "themes/drgnx-theme-gen" drgnx-ui-menubar--repo) nil t)
-(dolist (m '("ui/drgnx-face" "ui/drgnx-statusbar" "ui/drgnx-menubar" "ui/drgnx-topline"))
+(dolist (m '("ui/drgnx-look-density" "ui/drgnx-face" "ui/drgnx-statusbar" "ui/drgnx-menubar" "ui/drgnx-topline"))
   (load (expand-file-name (concat "modules/" m) drgnx-ui-menubar--repo) nil t))
 (declare-function nhwl-menu--live-frames "nhwl-menu")
 (defvar nhwl-menu--frames)
@@ -97,6 +97,15 @@ the button's left edge, below the title row."
       (setq nhwl-menu--frames nil)
       (kill-buffer buf))))
 
+(defun drgnx-ui-menubar--menu-look-on ()
+  "ui/face's part for Nidhogg's menus (drgnx-menu-look.el), set up as the test's own module."
+  (let ((drgnx-modules--current 'test/menu-look) (drgnx-modules--setup-load load-file-name))
+    (drgnx-menu-look-setup)))
+
+(defun drgnx-ui-menubar--menu-look-off ()
+  "Tear down what `drgnx-ui-menubar--menu-look-on' set up."
+  (should-not (drgnx-modules--unwind 'test/menu-look)))
+
 (defun drgnx-ui-menubar--measure (id)
   "Open menu ID, measure its card while it is open (as `drgnx-ui-menubar--open-and-look'), close it by Esc: a plist of
 the menu text's face family, its first row's height and its frame's ring, in the menu frame's pixels."
@@ -122,7 +131,7 @@ the menu text's face family, its first row's height and its frame's ring, in the
 
 (drgnx-look-gui-deftest drgnx-ui-menubar/the-menus-follow-the-look ()
   "The menu cards (the menu button's list, the context menus) are the look's: the UI sans at the UI size, rows at least
-28 logical pixels high, the modal card's ring; not the stock fixed-pitch 13 px with rows one text line high."
+the density's tree row high; not the stock fixed-pitch 13 px with rows one text line high."
   (skip-unless (and (display-graphic-p) (fboundp 'nhwl-menu--live-frames)))
   (drgnx-uitest-bare-frame)
   (let ((buf (get-buffer-create "*menubar-look*")) (main (selected-frame))
@@ -132,17 +141,119 @@ the menu text's face family, its first row's height and its frame's ring, in the
         (progn
           (drgnx-command-define 'file-new :title "New File" :category "File" :command #'drgnx-ui-menubar--new)
           (drgnx-menubar-setup)
-          (when (fboundp 'drgnx-menu-look-setup) (drgnx-menu-look-setup))
+          (drgnx-ui-menubar--menu-look-on)
           (drgnx-topline-setup)
           (drgnx-test-wait-presented)
           (let ((m (drgnx-ui-menubar--measure 'file)))
             (should m)
             (should (equal (plist-get m :family) (face-attribute 'drgnx-ui-text :family main t)))
-            (should (>= (plist-get m :row) (1- (drgnx-px 28 main))))
-            ))
-      (advice-remove 'nhwl-menu--buffer (intern "drgnx-ui/face--menu-look-rows"))   ; the module's undo is not here
-      (advice-remove 'nhwl-menu--locate (intern "drgnx-ui/face--menu-look-locate"))
+            (should (>= (plist-get m :row) (1- (drgnx-px 26 main))))))
+      (drgnx-ui-menubar--menu-look-off)
       (drgnx-topline--off)
+      (drgnx-menubar-off)
+      (mapc (lambda (f) (delete-frame f t)) (nhwl-menu--live-frames))
+      (setq nhwl-menu--frames nil)
+      (kill-buffer buf))))
+
+;;; The kit feeds the menu (drgnx-ui-kit-menu-values, modules/ui/drgnx-menu-look.el)
+
+(defun drgnx-ui-menubar--kit-look (id)
+  "Open menu ID, select its first row with Down and look at it, close it by Esc: a plist of the frame's width, its rows'
+heights, where each key hint ends and its family, and the selected row's background, in the menu frame's pixels."
+  (let ((seen nil) (keys (list 'down 'escape)) (idle 0))
+    (cl-letf (((symbol-function 'read-event)
+               (lambda (&rest _)
+                 (cond (keys (when (and (null seen) (eq (car keys) 'escape))   ; Down was read: a row is selected
+                               (redisplay t)
+                               (let* ((f (car (last (nhwl-menu--live-frames)))) (win (frame-root-window f)))
+                                 (setq seen
+                                       (with-current-buffer (window-buffer win)
+                                         (let ((rows nil) (ends nil) (family nil))
+                                           (save-excursion
+                                             (goto-char (point-min))
+                                             (while (not (eobp))
+                                               (push (cdr (window-text-pixel-size win (point) (pos-eol))) rows)
+                                               (let ((key (text-property-any (pos-bol) (pos-eol) 'face 'nhwl-menu-key)))
+                                                 (when key
+                                                   (push (car (window-text-pixel-size
+                                                               win (pos-bol) (next-single-property-change key 'face nil (pos-eol))))
+                                                         ends)
+                                                   (setq family (face-attribute 'nhwl-menu-key :family f t))))
+                                               (forward-line 1)))
+                                           (list :width (frame-pixel-width f) :rows (nreverse rows) :ends ends
+                                                 :family family :body (window-body-width win t)
+                                                 :selected (face-background 'nhwl-menu-selected f t)))))))
+                             (pop keys))
+                       ((< (cl-incf idle) 50) nil)
+                       (t (error "The %s menu read on past its keys" id))))))
+      (drgnx-menubar-open id))
+    seen))
+
+(drgnx-look-gui-deftest drgnx-menu/kit-feeds-the-menu ()
+  "The ☰ menu at comfortable density is the kit's: at least 220 logical pixels wide, its item rows 26 high, the selected
+row in the state table's selection (the `sel' token, `drgnx-selected'), the separator a 9 px row, the key hints in the code font, right-aligned to
+one column 12 px from the right edge."
+  (skip-unless (and (display-graphic-p) (fboundp 'nhwl-menu--live-frames) (boundp 'nhwl-menu-row-padding)))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*menubar-kit*")) (main (selected-frame))
+        (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (progn
+          (drgnx-command-define 'file-new :title "New File" :category "File" :command #'drgnx-ui-menubar--new)
+          (drgnx-command-define 'open-file :title "Open File…" :category "File" :command #'drgnx-ui-menubar--new)
+          (setf (drgnx-cmd-bound (drgnx-commands-get 'file-new)) '(("C-n" . nil)))
+          (setf (drgnx-cmd-bound (drgnx-commands-get 'open-file)) '(("C-x C-f" . nil)))
+          (drgnx-menubar-setup)
+          (drgnx-ui-menubar--menu-look-on)
+          (drgnx-topline-setup)
+          (drgnx-test-wait-presented)
+          (let ((m (drgnx-ui-menubar--kit-look 'file)))
+            (should m)
+            (should (>= (plist-get m :width) (drgnx-px 220 main)))
+            (should (member (drgnx-px 26 main) (plist-get m :rows)))
+            (should (member (drgnx-px 9 main) (plist-get m :rows)))   ; the groups' separator: a thin rule's row
+            (should (equal (plist-get m :selected) (face-background 'drgnx-selected main t)))
+            (should (equal (plist-get m :family) (face-attribute 'drgnx-code-small :family main t)))
+            ;; one right edge for every key hint, 12 px in from the frame's
+            (should (= 2 (length (plist-get m :ends))))
+            (should (= 1 (length (delete-dups (copy-sequence (plist-get m :ends))))))
+            (should (<= (abs (- (car (plist-get m :ends)) (- (plist-get m :body) (drgnx-px 12 main)))) 1))))
+      (drgnx-ui-menubar--menu-look-off)
+      (drgnx-topline--off)
+      (drgnx-menubar-off)
+      (mapc (lambda (f) (delete-frame f t)) (nhwl-menu--live-frames))
+      (setq nhwl-menu--frames nil)
+      (kill-buffer buf))))
+
+(defvar drgnx-scrollbar-mode)
+(declare-function drgnx-scrollbar-mode "drgnx-ruler" (&optional arg))
+(declare-function drgnx-ruler-available-p "drgnx-ruler" ())
+
+(drgnx-look-gui-deftest drgnx-menu/the-scroll-bar-leaves-the-menus-alone ()
+  "With the scroll bar on every surface, a menu's window keeps its whole frame: the scroll bar's strip (a wider right
+fringe) would narrow it after Nidhogg sized the frame to the rows, and truncate every row."
+  (skip-unless (and (display-graphic-p) (fboundp 'nhwl-menu--live-frames) (boundp 'nhwl-menu-row-padding)
+                    (require 'drgnx-ruler nil t) (drgnx-ruler-available-p)))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*menubar-ruler*"))
+        (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (progn
+          (drgnx-command-define 'file-new :title "New File" :category "File" :command #'drgnx-ui-menubar--new)
+          (drgnx-menubar-setup)
+          (drgnx-ui-menubar--menu-look-on)
+          (drgnx-scrollbar-mode 1)
+          (drgnx-test-wait-presented)
+          (let ((m (drgnx-ui-menubar--kit-look 'file)))
+            (should m)
+            (should (= (plist-get m :body) (plist-get m :width)))))
+      (drgnx-scrollbar-mode -1)
+      ;; the strip is gone, but Glitnir drops what it derived from it (`glitnir--ruler', `glitnir--ruler-key') only
+      ;; when the frame next publishes
+      (drgnx-test-wait-presented)
+      (drgnx-ui-menubar--menu-look-off)
       (drgnx-menubar-off)
       (mapc (lambda (f) (delete-frame f t)) (nhwl-menu--live-frames))
       (setq nhwl-menu--frames nil)

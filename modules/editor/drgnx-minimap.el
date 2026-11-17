@@ -14,9 +14,12 @@
 ;; rests on it, drawn by Nidhogg over the text's right edge from the buffer text's line model (`glitnir-minimap',
 ;; Hlidskjalf), so a scroll, an edit or a pointer move costs no Lisp.  Lisp gives each editor window its spec when
 ;; its strip is placed (`drgnx-ruler-place-functions'), the model the MARK expression, and the hub the file whose
-;; definitions label the map (`minimap/watch'; the labels go from the hub to Sjá, not through Lisp).
+;; definitions label the map (`minimap/watch'; the labels go from the hub to Sjá, not through Lisp).  A tree-sitter
+;; buffer's bars are coloured by class: its pack's highlights query (else its own font-lock rules' queries) runs in C
+;; at each parse (`nidhogg-treesit-highlight-query'), the classes' colours are the standard faces'.
 
 ;;; Code:
+(require 'seq)
 (require 'drgnx-modules)
 (require 'drgnx-ruler)
 (require 'drgnx-marks)
@@ -29,6 +32,15 @@
 (declare-function drgnx-notify "drgnx-notice")
 (declare-function nidhogg-lines-enable "nidhogg-lines" (&optional buffer wait))
 (declare-function nidhogg-lines-set-section-regexp "nidhogg-lines" (buffer regexp))
+(declare-function nidhogg-treesit-refold "treesit.c" (parser))
+(declare-function treesit-parser-list "treesit.c" (&optional buffer language tag))
+(declare-function treesit-parser-language "treesit.c" (parser))
+(declare-function treesit-query-compile "treesit.c" (language query &optional eager))
+(declare-function treesit-query-language "treesit.c" (query))
+(declare-function drgnx-packs-language-dir "drgnx-packs" (language))
+(defvar nidhogg-treesit-highlight-query)
+(defvar treesit-primary-parser)
+(defvar treesit-font-lock-settings)
 
 (defun drgnx-minimap--setting-changed (&rest _)
   "A minimap setting changed: every window's spec again, now."
@@ -65,6 +77,53 @@ the whole match.  Nil: no MARK sections."
 (defface drgnx-minimap-label '((t :inherit drgnx-ui-text :weight semi-bold))
   "The font of the minimap's labels (its colour comes from the label's kind)." :group 'drgnx-minimap)
 
+;;;; Colours: the line model's display classes
+
+(defconst drgnx-minimap--class-faces
+  '((keyword font-lock-keyword-face) (function font-lock-function-name-face) (type font-lock-type-face)
+    (string font-lock-string-face) (comment font-lock-comment-face) (constant font-lock-constant-face)
+    (added diff-indicator-added) (removed diff-indicator-removed) (heading outline-1) (link link)
+    (special font-lock-escape-face))
+  "Each display class (`glitnir-minimap-classes') and the face whose foreground colours its bars, (CLASS FACE); a
+class not listed (variable, property, operator, punctuation), or whose face is not defined, draws as text.")
+
+(defvar drgnx-minimap--queries (make-hash-table :test 'eq)
+  "Each tree-sitter language's compiled `queries/highlights.scm' of its pack, or `none'.")
+
+(defun drgnx-minimap--query (language)
+  "The highlight query the minimap colours a LANGUAGE buffer by: its pack's `queries/highlights.scm' (compiled once a
+language), else the compiled queries of the buffer's own tree-sitter font-lock rules for LANGUAGE that are on (their
+captures are face names, which Nidhogg maps to classes as well); nil when there is neither."
+  (let ((q (gethash language drgnx-minimap--queries)))
+    (unless q
+      (setq q (or (when-let* ((dir (and (require 'drgnx-packs nil t) (drgnx-packs-language-dir language)))
+                              (file (expand-file-name "queries/highlights.scm" dir))
+                              ((file-readable-p file)))
+                    (ignore-errors
+                      (treesit-query-compile language (with-temp-buffer (insert-file-contents file) (buffer-string))
+                                             t)))
+                  'none))
+      (puthash language q drgnx-minimap--queries))
+    (if (not (eq q 'none))
+        q
+      (and (fboundp 'treesit-query-language)
+           (seq-keep (lambda (setting)
+                       (let ((c (car setting)))
+                         (and (nth 1 setting) (ignore-errors (eq (treesit-query-language c) language)) c)))
+                     (bound-and-true-p treesit-font-lock-settings))))))
+
+(defun drgnx-minimap--highlight ()
+  "Give the current buffer's tree-sitter parser (its primary one, else its first) the highlight query that colours
+its minimap (`nidhogg-treesit-highlight-query'), running it over the whole text when it changed; nothing without a
+parser or a Nidhogg that runs it."
+  (when-let* (((fboundp 'nidhogg-treesit-refold)) ((boundp 'nidhogg-treesit-highlight-query))
+              ((fboundp 'treesit-parser-list))
+              (parser (or (bound-and-true-p treesit-primary-parser) (car (treesit-parser-list))))
+              (q (drgnx-minimap--query (treesit-parser-language parser))))
+    (unless (equal q nidhogg-treesit-highlight-query)
+      (setq-local nidhogg-treesit-highlight-query q)
+      (nidhogg-treesit-refold parser))))
+
 (defvar-local drgnx-minimap--regexp :none "The MARK expression last given the buffer's line model.")
 (defvar-local drgnx-minimap--watched nil "The file name the hub was last told this buffer shows in a minimap.")
 
@@ -89,7 +148,9 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
      (list :width (max 80 (min 200 drgnx-minimap-width)) :scale 2 :nesting t
            :fill (cons (face-background 'drgnx-surface-panel nil 'default) 1.0)
            :text (cons 'default 0.35)
-           :band (cons 'default 0.09))
+           :band (cons 'default 0.09)
+           :classes (seq-keep (lambda (c) (and (facep (cadr c)) (cons (car c) (cadr c))))
+                              drgnx-minimap--class-faces))
      (and drgnx-minimap-labels
           (list :labels (if (eq drgnx-minimap-labels 'marks-only) 'marks-only t)
                 :label 'default :sub 'drgnx-text-muted :accent 'drgnx-accent :mark 'warning
@@ -118,6 +179,7 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
       (let ((buffer (window-buffer window)))
         (with-current-buffer buffer
           (nidhogg-lines-enable)
+          (drgnx-minimap--highlight)
           (let ((re (and drgnx-minimap-labels drgnx-minimap-mark-regexp)))
             (unless (equal re drgnx-minimap--regexp)
               (setq drgnx-minimap--regexp re)
@@ -138,7 +200,10 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
     (dolist (w (window-list f 'nomini))
       (when (window-parameter w 'glitnir-minimap) (set-window-parameter w 'glitnir-minimap nil))))
   (dolist (b (buffer-list))
-    (when (buffer-local-value 'drgnx-minimap--watched b) (drgnx-minimap--watch b nil))))
+    (when (buffer-local-value 'drgnx-minimap--watched b) (drgnx-minimap--watch b nil))
+    (when (local-variable-p 'nidhogg-treesit-highlight-query b)
+      (with-current-buffer b (kill-local-variable 'nidhogg-treesit-highlight-query))))
+  (clrhash drgnx-minimap--queries))
 
 (defconst drgnx-minimap--commands
   '((mark-next "Next Mark" drgnx-marks-next "Go to the next mark of any kind on the scroll bar")
@@ -147,6 +212,9 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
     (change-previous "Previous Change" drgnx-marks-previous-change "Go to the previous change against the last commit")
     (bookmark-next "Next Bookmark" drgnx-marks-next-bookmark "Go to the next bookmark in this file")
     (bookmark-previous "Previous Bookmark" drgnx-marks-previous-bookmark "Go to the previous bookmark in this file")
+    (bookmark-toggle "Toggle Bookmark" drgnx-marks-bookmark-toggle "Set a bookmark on this line, or clear it")
+    (bookmark-name "Name Bookmark…" drgnx-marks-bookmark-name "Name the bookmark on this line")
+    (bookmark-go "Go to Bookmark…" drgnx-marks-bookmark-go "Go to a bookmark, this file's first")
     (agent-edit-next "Next Agent Edit" drgnx-marks-next-agent-edit "Go to the next place an agent edited in this file")
     (agent-edit-previous "Previous Agent Edit" drgnx-marks-previous-agent-edit
                          "Go to the previous place an agent edited in this file"))

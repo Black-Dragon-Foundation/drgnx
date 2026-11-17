@@ -52,6 +52,79 @@
       (should-not (drgnx-work-task-collect st))                       ; nothing new: nothing twice
       (should (equal (drgnx-work-rec--titles "task:/p.md#1") '("four" "three" "two" "one"))))))
 
+;;;; What the recording sends the hub (the hub's calls recorded, not applied)
+
+(defvar drgnx-work-rec--calls nil "The hub calls made, oldest last: (METHOD . PARAMS).")
+
+(defvar drgnx-work-rec--answer (list :changed 0 :retired 0 :refused []) "What the recording stub answers.")
+
+(defmacro drgnx-work-rec--recording (&rest body)
+  "BODY with the hub's calls recorded in `drgnx-work-rec--calls' and answered by `drgnx-work-rec--answer'."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'drgnx-hub-ensure) (lambda () t))
+             ((symbol-function 'drgnx-hub-call-sync)
+              (lambda (method params &optional _timeout)
+                (setq drgnx-work-rec--calls (append drgnx-work-rec--calls (list (cons method params))))
+                drgnx-work-rec--answer))
+             ((symbol-function 'drgnx-hub-call)
+              (lambda (method params callback &rest _)
+                (setq drgnx-work-rec--calls (append drgnx-work-rec--calls (list (cons method params))))
+                (funcall callback drgnx-work-rec--answer nil)
+                1)))
+     ,@body))
+
+(ert-deftest drgnx-work/record-calls-graph-record ()
+  (drgnx-work-rec--with repo
+    (let ((drgnx-work-rec--calls nil)
+          (c2 (progn (drgnx-work-rec--commit repo "task one") (drgnx-work-rec--commit repo "task one, more"))))
+      (drgnx-work-rec--recording
+        ;; the daemon path: asynchronous
+        (drgnx-work-record "task:/p.md#1" repo c2)
+        ;; a batch command: it waits, and answers the ids
+        (let ((drgnx-work--sync t))
+          (cl-letf (((symbol-function 'drgnx-hub-call-sync)
+                     (lambda (method params &optional _)
+                       (push (cons method params) drgnx-work-rec--calls) (list :ids ["commit:abc"]))))
+            (should (equal (drgnx-work-record "task:/p.md#2" repo c2) "commit:abc")))))
+      (should (= (length drgnx-work-rec--calls) 2))
+      (dolist (c drgnx-work-rec--calls)
+        (should (equal (car c) "graph/record"))
+        (should (string-prefix-p "task:/p.md#" (plist-get (cdr c) :task)))
+        (should (equal (plist-get (aref (plist-get (cdr c) :commits) 0) :subject) "task one, more"))))))
+
+(ert-deftest drgnx-work/collect-jobs-sends-its-key ()
+  (drgnx-work-rec--with repo
+    (require 'drgnx-exec)
+    (let* ((c0 (drgnx-work-rec--git repo "rev-parse" "HEAD"))
+           (drgnx-work-rec--calls nil))
+      (drgnx-work-rec--commit repo "task one")
+      (drgnx-work-rec--commit repo "task one, more")
+      ;; the hub keeps no start commit: the tracker read it when it first saw each job (j9 saw the repository at c0)
+      (let ((jobs (list (list :id "j9" :task "task:/p.md#1" :status 'done :cwd repo :started "1970-01-01T00:00:00+0000")
+                        ;; j8 was first seen after it ended: its commits are those since its start time (none here)
+                        (list :id "j8" :task "task:/p.md#2" :status 'done :cwd repo :started "2100-01-01T00:00:00+0000")))
+            (drgnx-work--job-starts (make-hash-table :test #'equal)))
+        (puthash "j9" (list :head c0 :repo (drgnx-work--main-repo repo)) drgnx-work--job-starts)
+        (cl-letf (((symbol-function 'drgnx-exec-list) (lambda () jobs)))
+          (drgnx-work-rec--recording (drgnx-work-collect-jobs)))
+        ;; j9 made commits: graph/record with its key; j8 made none: the key alone, through put-parsed
+        (let ((record (seq-find (lambda (c) (equal (car c) "graph/record")) drgnx-work-rec--calls))
+              (empty (seq-find (lambda (c) (equal (car c) "graph/put-parsed")) drgnx-work-rec--calls)))
+          (should (equal (plist-get (cdr record) :collected) "job j9"))
+          (should (= (length (plist-get (cdr record) :commits)) 2))
+          (should (equal (plist-get (cdr empty) :collected) ["job j8"])))))))
+
+(ert-deftest drgnx-work/task-collect-never-waits ()
+  (drgnx-work-rec--with repo
+    (let ((st (drgnx-work-task-begin "task:/p.md#1" repo)) (inhibit-interaction t) (drgnx-work-rec--calls nil)
+          (date (format-time-string "%FT%TZ" (time-add nil 60) t)))
+      (let ((process-environment (append (list (concat "GIT_COMMITTER_DATE=" date) (concat "GIT_AUTHOR_DATE=" date)) process-environment)))
+        (drgnx-work-rec--commit repo "a turn's work"))
+      (drgnx-work-rec--recording
+        (cl-letf (((symbol-function 'drgnx-hub-call-sync) (lambda (&rest _) (ert-fail "the turn-end path waited for the hub"))))
+          (should (= (length (drgnx-work-task-collect st 0)) 1))))
+      (should (equal (mapcar #'car drgnx-work-rec--calls) '("graph/record"))))))
+
 (load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-dir) nil t)   ; its Ratatoskr helpers
 (require 'drgnx-agents-mirror)
 
@@ -120,16 +193,38 @@
       (drgnx-work-record-commit "task:/p.md#6" repo sha)
       (should (string-match-p "drgnx task: task:/p.md#6" (drgnx-work-rec--git repo "notes" "--ref=drgnx" "show" sha))))))
 
-(ert-deftest drgnx-work/the-cli-scans-and-shows-each-plan-with-its-counts ()
+(ert-deftest drgnx-work/the-cli-shows-each-plan-with-its-counts ()
   (drgnx-work-rec--with repo
-    (make-directory (concat repo "docs/plans") t)
-    (write-region "# Plan P\n\n### Task 1: one\n\n- [x] a\n- [ ] b\n" nil (concat repo "docs/plans/p.md") nil (quote silent))
-    (let ((drgnx-projects-board-file (concat repo "none.org")))
-      (should (string-match-p "1 plans" (with-output-to-string (should (eql (drgnx-work-cli-run (list "scan" repo)) 0)))))
-      (let ((out (with-output-to-string (should (eql (drgnx-work-cli-run (list "status")) 0)))))
-        (should (string-match-p "tasks 0/1 +steps 1/2 .*Plan P" out)))
-      (let ((rows (json-parse-string (with-output-to-string (drgnx-work-cli-run (list "status" "--json"))) :object-type (quote plist))))
-        (should (equal (plist-get (aref rows 0) :steps) [1 2]))))))
+    (drgnx-work-fixture-put-node "plan:/p.md" :kind 'plan :title "Plan P" :path "/p.md" :line 1 :status "open" :source "/p.md")
+    (drgnx-work-fixture-put-node "task:/p.md#1" :kind 'task :title "one" :parent "plan:/p.md" :ord 1 :source "/p.md" :status "open")
+    (drgnx-work-fixture-put-node "step:/p.md#1.1" :kind 'step :title "a" :parent "task:/p.md#1" :ord 1 :source "/p.md" :status "done")
+    (drgnx-work-fixture-put-node "step:/p.md#1.2" :kind 'step :title "b" :parent "task:/p.md#1" :ord 2 :source "/p.md" :status "open")
+    (let ((out (with-output-to-string (should (eql (drgnx-work-cli-run (list "status")) 0)))))
+      (should (string-match-p "tasks 0/1 +steps 1/2 .*Plan P" out)))
+    (let ((rows (json-parse-string (with-output-to-string (drgnx-work-cli-run (list "status" "--json"))) :object-type (quote plist))))
+      (should (equal (plist-get (aref rows 0) :steps) [1 2])))))
+
+(ert-deftest drgnx-work/a-refresh-has-the-hub-read-each-root-and-the-board-and-shows-what-it-refused ()
+  ;; the editor reads nothing itself: `drgnx work scan' (a refresh) asks the hub's importer for each root, then for the
+  ;; board — the one file of ~/org the product reads — and prints the roots the hub refused
+  (drgnx-work-rec--with repo
+    (let* ((board-dir (concat repo "home-org/")) (calls nil)
+           (drgnx-projects-board-file (concat board-dir "board.org")))
+      (make-directory board-dir t)
+      (write-region "* TODO a board item\n" nil (concat board-dir "board.org") nil 'silent)
+      (cl-letf (((symbol-function 'drgnx-hub-ensure) (lambda () t))
+                ((symbol-function 'drgnx-hub-call-sync)
+                 (lambda (method params &optional _)
+                   (push (cons method params) calls)
+                   (if (equal (plist-get params :root) (directory-file-name repo))
+                       (signal 'error (list "the work tracker never reads a project inside ~/org (personal notes)"))
+                     (list :dry_run :false :files (vector (list :path "board.org" :kind "org" :entities 1 :ops 1)))))))
+        (let ((out (with-output-to-string (should (eql (drgnx-work-cli-run (list "scan" repo)) 0)))))
+          (should (string-match-p "refused: .* (.*personal notes" out)))
+        (setq calls (nreverse calls))
+        (should (equal (mapcar #'car calls) '("records/import" "records/import")))
+        (should (equal (plist-get (cdr (car calls)) :root) (directory-file-name repo)))
+        (should (equal (cdr (cadr calls)) (list :root (directory-file-name board-dir) :only "board")))))))
 
 ;;;; Final review fixes
 

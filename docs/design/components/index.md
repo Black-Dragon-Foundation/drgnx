@@ -7,7 +7,7 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | Component | What it is |
 |---|---|
 | [Cards](cards.md) | the islands the window is made of, on the gap |
-| [Chips, keycaps and buttons](chips-and-keys.md) | the small things inside rows and bars |
+| [Chips, keycaps and buttons](chips-and-keys.md) | the small things inside rows and bars, agent marks and progress among them |
 | [Title row](title-row.md) | the top of the window: project, search, needs-you |
 | [Status bar](status-bar.md) | the one quiet bar at the bottom |
 | [Explorer](explorer.md) | the file tree, and the list pattern every list follows |
@@ -21,6 +21,8 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Row (kit)](row.md) | a list, tree or map row, as the kit expands it (generated from `etc/ui/components.eld`) |
 | [Button (kit)](button.md) | a label in a rounded box, four styles and two sizes, with its key hint |
 | [Key hint (kit)](key-hint.md) | the keys of an action in the code font, in a small box |
+| [Agent mark (kit)](agent-mark.md) | the agent mark's numbers (generated from `etc/ui/components.eld`) |
+| [Progress (kit)](progress.md) | progress's numbers (generated from `etc/ui/components.eld`) |
 
 ## How to read a page
 

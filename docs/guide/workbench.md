@@ -385,17 +385,30 @@ window moves), **Shift** and a letter to swap your tile with that one (inside on
 across windows too, and press RET. Esc closes it; any other key closes it and then does what it does. Letters count once
 the cards are up (a blink, 120 ms, or one frame with reduced motion): one typed sooner goes to the tile you are in.
 
+**Esc Esc** opens it too, in every profile: press Esc where it cancels something (leaves Vim's insert state, quits, clears
+a Work view's search, or closes nothing), then Esc again within 0.3 s (`drgnx-esc-double-tap`; nil turns this off). A
+single Esc still does what it did, at once. Where Esc is only Emacs's Meta prefix (the Emacs profile, and the VS Code
+profile in a terminal window) any two quick Escs open it, `Esc x` is still `M-x` and a slow Esc Esc Esc is still quit.
+A third quick Esc closes the switcher and quits. In a terminal tile Esc always goes to the program (Claude Code's
+rewind, vim in a shell): use **`C-<escape>`** there (every profile; in a terminal window that cannot send it, `F6` then
+Esc). In a terminal window, Alt+Esc counts as Esc Esc; in a graphical one GNOME keeps Alt+Esc for switching windows.
+A fast `Esc Esc :` opens the switcher and the `:` closes it again and runs: type `M-:` for eval-expression.
+
 ### The layout survives a restart
 
 When Emacs exits, the workbench of every window is saved to `$XDG_STATE_HOME/drgnx/workbench.eld`
 (`~/.local/state/…`) — with a daemon, when you close its last client (`C-x C-c`), every window of that client — and
 the other windows are opened again at start (your window manager places them; the one saved as the main window goes
-into the frame you start in, the others follow in order): the left dock (and the sidebar view it shows, Explorer or
-Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in
-([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and shown files, and the
-Explorer's folders (the status bar across the frame's foot is not part of the saved tree: it never comes back as an
-editor group). The left dock and the groups keep their saved pixel widths when the window manager gives the new window
-its size only after the restore, in one step or several (a client's window at scale 2 does), until your first command. The main window and a window that rebuilds itself come back where and how big they were (only where a monitor still is; never bigger than its screen), and maximized or
+into the frame you start in, the others follow in order): each window's grid of tiles — the side bar (and the view
+it shows, Explorer or Search), the panel and its tab, the right side, every tool tile where you moved it with its
+stack, the editor tiles with their tabs and shown files, each tile at its size — the sizes you chose for the docks,
+where hidden tiles go back to, the layout you were in ([layouts.md](layouts.md#after-a-restart)) and the Explorer's
+folders (the status bar across the frame's foot is not a tile: it never comes back as one). The tiles keep their
+saved sizes when the window manager gives the new window its size only after the restore, in one step or several (a
+client's window at scale 2 does), until your first command. A tile whose kind is not there yet (its module is off)
+waits in its place: one line names it, `RET` chooses what the tile shows and `x` closes it; when the module is on
+again, the tile fills in place. The same happens to a tile in the live layout when you turn its module off. A file
+saved by a drgnx from before the grid is read once as a grid (its docks, panel and editor groups at their sizes). The main window and a window that rebuilds itself come back where and how big they were (only where a monitor still is; never bigger than its screen), and maximized or
 full screen only if they were: one nearly as big as the screen, which GNOME maximizes when it appears, is given its own
 size back.
 A job window saved before M12f comes back as the Work space: no frame of its own, and the
@@ -418,8 +431,8 @@ keys or the save.
 Each group's shown file opens at once and its other tabs open while you are idle, all within the first pause (typing
 stops them until your next pause, which carries on with the rest); nothing asks anything at start (no
 remote files are touched, only safe local variables, no large-file question). Files that no longer exist are skipped,
-sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves none), and a state in another
-format is ignored. The file is written whole and atomically (a crash or a full disk leaves the last saved layout), and
+sizes are clamped to the frame, a saved grid that is not valid (junk, too deep, too many tiles) is ignored with one
+notice and nothing in the file sets a window parameter, and a state in another format is ignored. The file is written whole and atomically (a crash or a full disk leaves the last saved layout), and
 read with limits (4 MiB, no deep nesting, plain data only). A file written by a **newer drgnx** is never overwritten:
 the save says "workbench.eld was written by a newer drgnx: not saved" and stops, and the restore ignores it. A file
 that cannot be read (a typing mistake, a crafted file) is not restored, one message says so, and the next save keeps a

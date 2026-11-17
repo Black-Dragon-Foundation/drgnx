@@ -118,6 +118,8 @@
     - [Row (kit)](design/components/row.md)
     - [Button (kit)](design/components/button.md)
     - [Key hint (kit)](design/components/key-hint.md)
+    - [Agent mark (kit)](design/components/agent-mark.md)
+    - [Progress (kit)](design/components/progress.md)
     - [Chip (kit)](design/components/chip.md)
     - [Status dot (kit)](design/components/status-dot.md)
 - [The app icon](design/app-icon.md)

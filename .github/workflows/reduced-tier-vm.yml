@@ -71,8 +71,8 @@ jobs:
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
       - name: the launch rows in the Fedora 45 VM, on the reduced tier
         run: |
-          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test launch_sandboxed --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "launch_sandboxed" and (.target.kind | index("test"))) | .executable')
-          [ -n "$bin" ] && [ "$(printf '%s\n' "$bin" | wc -l)" = 1 ] || { echo "expected one launch_sandboxed test binary, got: ${bin:-none}" >&2; exit 1; }
+          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test sandbox --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "sandbox" and (.target.kind | index("test"))) | .executable')
+          [ -n "$bin" ] && [ "$(printf '%s\n' "$bin" | wc -l)" = 1 ] || { echo "expected one sandbox test binary, got: ${bin:-none}" >&2; exit 1; }
           t=$PWD/runtime/target/debug
           bash .github/ci/browser-vm.sh up "$RUNNER_TEMP/vm"
           bash .github/ci/browser-vm.sh put "$RUNNER_TEMP/vm" /usr/bin/bwrap "$t/ratatoskr" "$t/gleipnir-probe" "$t/ratatoskr-mock" \
@@ -82,7 +82,7 @@ jobs:
           # stops at about 40 % of the 4 GB of RAM whatever its size= says ("Disk quota exceeded", not "No space"), so
           # /tmp is the disk's /var/tmp
           bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "sudo dnf -y install git >/dev/null && sudo mount --bind /var/tmp /tmp && df -h /tmp"
-          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1 --nocapture" 2>&1 | tee "$RUNNER_TEMP/launch.log"
+          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1 --nocapture launch_sandboxed::" 2>&1 | tee "$RUNNER_TEMP/launch.log"
           test "${PIPESTATUS[0]}" = 0
           # the rows say when the kernel's ABI is below 9 and they ran on the full tier: that is not what this job is for
           if grep -q "this row runs on the full tier" "$RUNNER_TEMP/launch.log"; then

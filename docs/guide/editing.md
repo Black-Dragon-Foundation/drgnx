@@ -105,6 +105,12 @@ again, **Toggle Fold** does whichever applies. Fold on a line already folded fol
   Fold…** and **Remove Manual Fold** act on the one at the cursor. A fold you made wins over the file's own blocks on
   its first line.
 - Searching (`C-s`, the Find widget's isearch) opens a fold it passes through.
+- A file's folds are remembered: what is folded, and the folds you made, named or not, folded or open, come back when
+  you open the file again. Each is found again by the text of its first line, up to 50 lines from where it was, so
+  lines added or removed above it do not lose it; one whose first line changed or went is dropped. The hub keeps them
+  per project and file, sent when you save, when you close the file and 30 s after a fold change once you stop
+  typing. With no hub running, the folds stay in the open file and go to the hub when it comes back.
+  `drgnx-fold-remember` (on) turns this off.
 
 Where blocks come from (`drgnx-fold-source`): in code with a tree-sitter mode, the syntax tree, by the language pack's
 fold query — functions, classes, comments, imports, tests and blocks as the language has them, kept current as you type
@@ -155,8 +161,8 @@ cannot draw (a typo) stays code, said once, until its text changes. Module `lang
 **Copy**, **Cut** and **Paste** work on the selection. In the VS Code profile they are `C-c`, `C-x` and `C-v`
 (`s-c`, `s-x`, `s-v` on a Mac): `C-c` and `C-x` act only while text is selected, so without a selection they stay
 Emacs's prefixes (`C-x C-s`, `C-c C-c` in a mode). Paste replaces the selection, in one undo step. The Emacs profile
-keeps `M-w`, `C-w` and `C-y`; the Vim profile `y`, `d` and `p`. A prefix key typed with a selection (`C-x C-s`, `C-x b`) still works: they wait 0.3 seconds
-(`drgnx-editing-prefix-delay`) for the next key before they cut. Details are in [keys.md](keys.md#copy-cut-and-paste). In a terminal window the copy also reaches the terminal's
+keeps `M-w`, `C-w` and `C-y`; the Vim profile `y`, `d` and `p`. Copy and Cut are instant: with a selection `C-c` copies and `C-x` cuts at once; drop the selection first (`Escape`) to type
+an Emacs prefix such as `C-x C-s` (or set `drgnx-editing-prefix-delay` to a number of seconds to have them wait for a next key). Details are in [keys.md](keys.md#copy-cut-and-paste). In a terminal window the copy also reaches the terminal's
 clipboard ([terminal.md](terminal.md#clipboard)). Module `editor/editing`.
 
 ## The system clipboard

@@ -14,14 +14,16 @@
 ;;   GEOM, all logical px: :height :pad (START . END) :gap :box :radius :line-height :hit (action-carrying padding each
 ;;   side) :indent.  A value may be (:by AXIS (VALUE X)...) where variants differ, or (density KEY): the size
 ;;   `drgnx-look-density-value' gives KEY at the user's density.
-;;   TTY: :glyph GLYPH-NAME (of `drgnx-face-glyphs'), :twisty (CLOSED OPEN) glyph names, :pad CHARS, :indent CHARS a
-;;   level (tree rows); :indent may be a (:by AXIS ...) case.
+;;   TTY: :glyph GLYPH-NAME (of `drgnx-face-glyphs'), :twisty (CLOSED OPEN) glyph names, :glyphs (NAME...) the other
+;;   glyphs the component draws, :pad CHARS, :indent CHARS a level (tree rows); :indent may be a (:by AXIS ...) case.
 ;;   LABEL: the word a screen reader speaks, a string or (:by AXIS (VALUE "word")...).
-;;   BINDINGS: (((VARIANT-VALUE...) :bg TOKEN :fg TOKEN :edge TOKEN :inherit (STANDARD-FACE...) :font (FACE...))...);
+;;   BINDINGS: (((VARIANT-VALUE...) :bg TOKEN :fg TOKEN :edge TOKEN :inherit (STANDARD-FACE...) :font (FACE...)
+;;   :inverse BOOL)...); :font names the inherited faces that carry no colours (the UI or code font): a drgnx theme's
+;;   spec keeps only those; the binding of () is the component's own face `drgnx-kit-ID', another one
+;;   `drgnx-kit-ID-VALUE...', made only where its colours differ from the component's own.  A binding may name a part
+;;   instead of variant values (the progress bar's `fill').  :inverse swaps the colours of the faces drawn with it (an
+;;   agent mark: its agent's colour as the fill).
 ;;   :hc-ring t: in the high-contrast theme the face has no tint, a 1 px ring in its :fg colour instead.
-;;   :font names the inherited faces that carry no colours (the UI or code font): a drgnx theme's spec keeps only those; the binding
-;;   of () is the component's own face `drgnx-kit-ID', another one `drgnx-kit-ID-VALUE...', made only where its
-;;   colours differ from the component's own.
 ((state-table
   (rest)
   (hover :fill hover :face drgnx-hover :tty none)
@@ -64,6 +66,46 @@
             :replaces ((drgnx-keycap . drgnx-kit-key-hint-cap) (drgnx-work-flow-button-key . drgnx-kit-key-hint-cap)
                        (drgnx-work-flow-key-primary . drgnx-kit-key-hint-cap))
             :helpers nil :lint t)
+  ;; an agent's mark: its handle (one or two letters) on its colour (the colour's face `drgnx-agent-N' drawn
+  ;; inverse), about 18 px square (the caption's line, 5 px each side of a letter), radius 4 where Glitnir rounds; a
+  ;; terminal draws [H] in the colour.  Inline: no line height of its own
+  (agent-mark :variants nil :defaults nil
+              :geometry (:height 0 :pad (5 . 5) :gap 0 :box nil :radius 4 :hit 0)
+              :tty (:pad 0) :label "agent"
+              :bind ((() :inherit (drgnx-ui-caption) :inverse t))
+              :replaces nil :helpers nil :lint t)
+  ;; progress: a bar (4 px tall, `drgnx-ui-kit-progress-bar-px', on the caption's centre line: the fill, rounded at
+  ;; its start, then the track, rounded at its end; each an SVG in `currentColor', so its face's text colour, as the
+  ;; icons are) or a ring (one of five glyphs); its word is "N percent".  A terminal draws the bar as a cell per 8 px
+  ;; of its width (`drgnx-ui-kit-progress-cell-px'): the filled cells `bar-full' and a partial block (`bar-1'..`bar-7',
+  ;; eighths) in the fill's colour, the rest `bar-empty' in the track's; ASCII adds edges (`bar-left', `bar-right').
+  ;; A meter (kind `meter', the hub's `{"c": "meter"}') is a bar against a limit, its text and state word beside it
+  ;; (docs/design/components/chips-and-keys.md, "Meters"): the fill in its state's colour (`meter-fill', `meter-near',
+  ;; `meter-reached'), the forecast's p50 a tick (`meter-tick', `meter-tick-near' when p90 is over; its slot's other
+  ;; half the track's colour, from the binding's background), on a `wide' meter a span to p90 (`meter-span'), an
+  ;; inherited limit's track an outline (`meter-outline'); high contrast outlines the span and widens the tick
+  (progress :variants ((kind bar ring meter)) :defaults (kind bar)
+            :geometry (:height 0 :pad (0 . 0) :gap 0 :box nil
+                               :radius (:by kind (bar 2) (ring 0)) :hit 0)
+            :tty (:pad 0 :glyphs (bar-left bar-full bar-1 bar-2 bar-3 bar-4 bar-5 bar-6 bar-7 bar-empty bar-right
+                                           progress-0 progress-1 progress-2 progress-3 progress-4))
+            :label "percent"
+            ;; text colours only (the bar's images and glyphs are drawn in them; the ring is in the fill's face); under
+            ;; a theme that knows nothing of drgnx: the track the shadow's colour, the fill a link's
+            :bind ((() :fg progress-track :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption))
+                   ((fill) :fg progress-fill :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption))
+                   ((meter-fill) :fg meter-fill :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption))
+                   ((meter-near) :fg meter-near :inherit (drgnx-ui-caption warning error)
+                    :font (drgnx-ui-caption))
+                   ((meter-reached) :fg meter-reached :inherit (drgnx-ui-caption error) :font (drgnx-ui-caption))
+                   ((meter-tick) :fg meter-tick :bg progress-track
+                    :inherit (drgnx-ui-caption shadow secondary-selection) :font (drgnx-ui-caption))
+                   ((meter-tick-near) :fg meter-near :bg progress-track
+                    :inherit (drgnx-ui-caption warning error secondary-selection)
+                    :font (drgnx-ui-caption))
+                   ((meter-span) :fg meter-span :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption))
+                   ((meter-outline) :fg meter-tick :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption)))
+            :replaces nil :helpers nil :lint t)
   ;; a chip: a short label in a tinted rounded box, optionally led by an icon; `agent' takes its colour from the agent slot
   ;; (drgnx-agent-N); high contrast has no tint, a 1 px ring in the tone's colour
   (chip :variants ((tone neutral accent warn ok error agent) (fill soft solid)) :defaults (tone neutral fill soft)

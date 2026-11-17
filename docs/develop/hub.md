@@ -1441,6 +1441,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `extensions/recommended` | user | `{ids: [string], version: natnum}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
+| `folds/load` | user | `{path: string, worktree: string}` | `{anchors: [Anchor]}` | no |
+| `folds/save` | user | `{anchors?: [{end: natnum, fold_kind?: string, hash: string, kind: "fold" \| "pin", name?: string, open?: boolean, start: natnum}], path: string, worktree: string}` | `boolean` | yes |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
 | `forecast/get` | user | `{job: Id, remaining?: boolean}` | `Forecast` | no |
 | `forecast/plan` | user | `{plans: [string]}` | `{forecast: Forecast, running?: [RunningPlan]}` | no |
@@ -2465,10 +2467,9 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   each card naming the agent of the connection's map view `map` that works on it (the agent whose task id is the
   card's: two tasks of one title never show each other's agent). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
   heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
-  `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: on a GUI two `spaces` 4 px high from
-  4 px in, the steps done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the column less 16 px,
-  in device px at the env's `scale`, rounded half up as `drgnx-px` does; on a terminal the card's text width of `▰`
-  and `▱` in those faces), or `none`. Its model is its own, not the map's: a `card` node per task
+  `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: the kit's `progress` bar from 4 px in,
+  the column less 16 px wide, the steps done its value; on a terminal the card's text width in the kit's cells), or
+  `none`. Its model is its own, not the map's: a `card` node per task
   (fields `label status column plan agent agent-label`) whose links are the `board` form's (`navs.board`: up and down
   in its column, left and right to the nearest column with cards, at the same height or its last card), lists
   `cards` (column by column) and `team` (the cards an agent works on).
@@ -2532,7 +2533,12 @@ it builds for Android too).
   the runs are the component's kit face and the state's under it (above it for a component with colours of its own,
   a button, chip or card: `RowBuilder::face_over`); an `Action` puts `drgnx-action` = `[kind, args…]`
   and `mouse-face` over the component, which the editor maps to the kind's one keymap (`docs/develop/core.md`,
-  "Actions and focus-visible"). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
+  "Actions and focus-visible"). Besides rows the kit has `{"c": "agent-mark", "slot": 1-12, "handle": "Q"}` (the
+  handle on its agent's colour) and `{"c": "progress", "kind": "bar"|"ring", "value": 0-1, "width": LOGICAL-PX}` (a bar
+  of `kit::BAR_PX`-high spaces, the fill then the track, which the editor draws as images, or a ring glyph) and
+  `{"c": "meter", "spent", "limit", "unit", "forecast": [P50, P90], "state", "size", "width", "text"}` (a budget against
+  its limit; the hub formats `text`, the kit never converts a unit), each with its spoken label as `help-echo`
+  (`docs/design/components/chips-and-keys.md`). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
   (`tests/kit_conformance.rs` and `drgnx-ui-kit/conformance` over `test/fixtures/kit`) keeps the two equal.
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
@@ -3258,6 +3264,19 @@ With the labels goes the file's `folds` layer (`items: [[first line, last line, 
 fetched pack's in its parse worker; [packs.md](packs.md), "Fold queries"). A file with no grammar has no `folds`
 layer. Nidhogg takes it as the line model's `hub` fold source for a buffer that has no tree-sitter parser of its own;
 one with a parser folds by the same query in the editor.
+
+### Folds remembered (`folds/save`, `folds/load`)
+
+A file's folds and pinned regions are Urdr entities of kind `anchor` (`editor/anchors.rs`), one for each, keyed by the
+file's worktree (absolute) and its path in it: `data` holds `{worktree, path, i, kind: "fold" | "pin", start, end,
+hash, name?, fold_kind?, open?}`, lines from 1, `hash` what the editor finds the first line again by, `fold_kind` the
+fold table's kind or `manual`, `open` a manual fold not folded, `i` the order. `folds/save {worktree, path, anchors}`
+replaces the file's set in one transaction (the old entities retired, the new created; an empty set forgets the file)
+and answers whether it wrote: a set equal to the kept one is read first and writes nothing, so the editor's save on
+every kill costs no transaction. `folds/load {worktree, path}` answers `{anchors}` in their order. Limits: 20,000
+anchors a file, paths of 4 KiB, names, hashes and kinds of 256 bytes. The editor sends the set when the file is saved
+or killed and 30 s idle after a fold change, asks for it in `find-file-hook`, and finds each again within 50 lines by
+its hash (module `editor/fold`, `drgnx-fold-remember`; [the guide](../guide/editing.md), "Folding").
 
 ### The agent panel's rows
 

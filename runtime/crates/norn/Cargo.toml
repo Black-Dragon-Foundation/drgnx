@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+autotests = false  # tests/main.rs is the one binary of every tests/*.rs
 
 [features]
 # The migration's hub seams (`DRGNX_TEST_MIGRATE7_FAIL`, `DRGNX_TEST_MIGRATE7_PAUSE`) and the project's git
@@ -45,3 +46,9 @@ tokio = { workspace = true, features = ["test-util"] }
 proptest.workspace = true
 insta.workspace = true
 skuld = { path = "../skuld", version = "0.1.0" }  # every order of a proposal's approval and its withdrawal
+
+
+# every tests/*.rs not named below, as modules of one binary: `cargo test -p norn --test it <file>::`
+[[test]]
+name = "it"
+path = "tests/main.rs"

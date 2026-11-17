@@ -1030,6 +1030,26 @@ pub enum FaceId {
     KitKeyHintCap,
     /// `drgnx-kit-key-hint-menu`
     KitKeyHintMenu,
+    /// `drgnx-kit-agent-mark`
+    KitAgentMark,
+    /// `drgnx-kit-progress`
+    KitProgress,
+    /// `drgnx-kit-progress-fill`
+    KitProgressFill,
+    /// `drgnx-kit-progress-meter-fill`
+    KitProgressMeterFill,
+    /// `drgnx-kit-progress-meter-near`
+    KitProgressMeterNear,
+    /// `drgnx-kit-progress-meter-reached`
+    KitProgressMeterReached,
+    /// `drgnx-kit-progress-meter-tick`
+    KitProgressMeterTick,
+    /// `drgnx-kit-progress-meter-tick-near`
+    KitProgressMeterTickNear,
+    /// `drgnx-kit-progress-meter-span`
+    KitProgressMeterSpan,
+    /// `drgnx-kit-progress-meter-outline`
+    KitProgressMeterOutline,
     /// `drgnx-kit-chip-neutral-soft`
     KitChipNeutralSoft,
     /// `drgnx-kit-chip-accent-soft`
@@ -1064,7 +1084,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 526] = [
+    pub const ALL: [FaceId; 536] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1576,6 +1596,16 @@ impl FaceId {
         FaceId::KitButtonDanger,
         FaceId::KitKeyHintCap,
         FaceId::KitKeyHintMenu,
+        FaceId::KitAgentMark,
+        FaceId::KitProgress,
+        FaceId::KitProgressFill,
+        FaceId::KitProgressMeterFill,
+        FaceId::KitProgressMeterNear,
+        FaceId::KitProgressMeterReached,
+        FaceId::KitProgressMeterTick,
+        FaceId::KitProgressMeterTickNear,
+        FaceId::KitProgressMeterSpan,
+        FaceId::KitProgressMeterOutline,
         FaceId::KitChipNeutralSoft,
         FaceId::KitChipAccentSoft,
         FaceId::KitChipWarnSoft,
@@ -2107,6 +2137,16 @@ impl FaceId {
             FaceId::KitButtonDanger => "drgnx-kit-button-danger",
             FaceId::KitKeyHintCap => "drgnx-kit-key-hint-cap",
             FaceId::KitKeyHintMenu => "drgnx-kit-key-hint-menu",
+            FaceId::KitAgentMark => "drgnx-kit-agent-mark",
+            FaceId::KitProgress => "drgnx-kit-progress",
+            FaceId::KitProgressFill => "drgnx-kit-progress-fill",
+            FaceId::KitProgressMeterFill => "drgnx-kit-progress-meter-fill",
+            FaceId::KitProgressMeterNear => "drgnx-kit-progress-meter-near",
+            FaceId::KitProgressMeterReached => "drgnx-kit-progress-meter-reached",
+            FaceId::KitProgressMeterTick => "drgnx-kit-progress-meter-tick",
+            FaceId::KitProgressMeterTickNear => "drgnx-kit-progress-meter-tick-near",
+            FaceId::KitProgressMeterSpan => "drgnx-kit-progress-meter-span",
+            FaceId::KitProgressMeterOutline => "drgnx-kit-progress-meter-outline",
             FaceId::KitChipNeutralSoft => "drgnx-kit-chip-neutral-soft",
             FaceId::KitChipAccentSoft => "drgnx-kit-chip-accent-soft",
             FaceId::KitChipWarnSoft => "drgnx-kit-chip-warn-soft",
@@ -2639,6 +2679,16 @@ impl FaceId {
             "drgnx-kit-button-danger" => FaceId::KitButtonDanger,
             "drgnx-kit-key-hint-cap" => FaceId::KitKeyHintCap,
             "drgnx-kit-key-hint-menu" => FaceId::KitKeyHintMenu,
+            "drgnx-kit-agent-mark" => FaceId::KitAgentMark,
+            "drgnx-kit-progress" => FaceId::KitProgress,
+            "drgnx-kit-progress-fill" => FaceId::KitProgressFill,
+            "drgnx-kit-progress-meter-fill" => FaceId::KitProgressMeterFill,
+            "drgnx-kit-progress-meter-near" => FaceId::KitProgressMeterNear,
+            "drgnx-kit-progress-meter-reached" => FaceId::KitProgressMeterReached,
+            "drgnx-kit-progress-meter-tick" => FaceId::KitProgressMeterTick,
+            "drgnx-kit-progress-meter-tick-near" => FaceId::KitProgressMeterTickNear,
+            "drgnx-kit-progress-meter-span" => FaceId::KitProgressMeterSpan,
+            "drgnx-kit-progress-meter-outline" => FaceId::KitProgressMeterOutline,
             "drgnx-kit-chip-neutral-soft" => FaceId::KitChipNeutralSoft,
             "drgnx-kit-chip-accent-soft" => FaceId::KitChipAccentSoft,
             "drgnx-kit-chip-warn-soft" => FaceId::KitChipWarnSoft,

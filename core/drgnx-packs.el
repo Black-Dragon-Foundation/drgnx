@@ -492,6 +492,22 @@ manifests, installed or not: formatting needs no grammar."
     (`("migrate") (princ (format "packs migrated: %s\n" (or (mapconcat #'identity (drgnx-packs-migrate) " ") "nothing to do"))) 0)
     (_ (drgnx-packs--error "usage: drgnx packs list | install NAME… | remove NAME… | sync [--add NAME…] [--remove NAME…] | migrate | check DIR | pin REPO COMMIT"))))
 
+;;; A tree-sitter language's pack
+
+(defun drgnx-packs-language-dir (language)
+  "The folder of the language pack whose main grammar is LANGUAGE (a symbol): a built-in pack's, else an installed
+one's (`drgnx-packs-active'); nil when no pack has it.  Its `queries/' hold the language's fold and highlight
+queries."
+  (let ((main (lambda (m) (plist-get (seq-find (lambda (g) (plist-get g :required)) (plist-get m :grammars)) :name))))
+    (or (when-let* ((p (seq-find (lambda (p) (eq (funcall main (cdr p)) language))
+                                 (ignore-errors (drgnx-packs-builtins)))))
+          (expand-file-name (car p) (drgnx-packs-builtin-dir)))
+        (seq-some (lambda (p)
+                    (let ((file (plist-get (cdr p) :manifest)))
+                      (and file (eq (funcall main (ignore-errors (drgnx-packs-read-manifest file))) language)
+                           (file-name-directory file))))
+                  (plist-get (ignore-errors (drgnx-packs-active)) :packs)))))
+
 (declare-function drgnx-hub-client-binary "drgnx-hub-client" ())
 (declare-function drgnx-pkg--generation-dir "drgnx-pkg" (n))
 

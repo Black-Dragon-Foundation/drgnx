@@ -610,6 +610,87 @@ compared, and a round's own list starts wherever the flood is)."
   (drgnx-perf-w--clean)
   t)
 
+;;;; explorer-first-open: the first click on a file in the Explorer against the later ones (audit E4)
+
+(defvar drgnx-perf-w--fo-files nil "The files the Explorer's rows offer, in the order they are opened.")
+(defvar drgnx-perf-w--fo-i 0 "How many files this workload has opened.")
+(defvar drgnx-perf-w--fo-times nil "Milliseconds of each open without the garbage collections in it, newest first.")
+(defvar drgnx-perf-w--fo-gc nil "Milliseconds of garbage collection inside each open, newest first.")
+
+(defun drgnx-perf-w--fo-lisp (i)
+  "File I of the workload: a Lisp file of a few hundred lines (the kind a first click in drgnx's own tree opens)."
+  (concat ";;; f" (number-to-string i) ".el --- fixture -*- lexical-binding: t -*-\n\n;;; Code:\n"
+          (mapconcat (lambda (j) (format "(defun f%d-%d (x)\n  \"Doc %d.\"\n  (let ((y (* x %d)))\n    (list y \"s\" 'sym)))\n" i j j j))
+                     (number-sequence 0 120) "")
+          "\n(provide 'f" (number-to-string i) ")\n"))
+
+(defun drgnx-perf-w-explorer-first-open-setup ()
+  "A git project the size and shape of the audit's (its ~/code/drgnx: 10,979 files, 308 `.elc'): 40 Lisp files and
+their `.elc' at the root, where the Explorer draws them, and 10,900 other files in 109 folders of 100, one commit; the
+Explorer on it (the hub's rows, drawn)."
+  (let ((root (expand-file-name "proj" (drgnx-perf-w--tmpdir))))
+    (make-directory root t)
+    (setq drgnx-perf-w--fo-files
+          (cl-loop for i below 40
+                   collect (let ((f (expand-file-name (format "f%02d.el" i) root)))
+                             (write-region (drgnx-perf-w--fo-lisp i) nil f nil 'silent)
+                             f))
+          drgnx-perf-w--fo-i 0 drgnx-perf-w--fo-times nil drgnx-perf-w--fo-gc nil drgnx-perf-w--stats nil)
+    (dotimes (d 109)                    ; the bulk of the audit's tree: collapsed folders, in the repository
+      (let ((dir (expand-file-name (format "dir%03d" d) root)))
+        (make-directory dir t)
+        (dotimes (i 100) (write-region (format "file %d %d\n" d i) nil (expand-file-name (format "n%03d.md" i) dir) nil 'silent))))
+    (dotimes (i 40)                     ; the build output the audit's tree had beside every source file
+      (write-region "" nil (expand-file-name (format "f%02d.elc" i) root) nil 'silent))
+    (let ((default-directory root))
+      (dolist (args '(("init" "-q") ("add" ".")
+                      ("-c" "user.name=t" "-c" "user.email=t@t" "commit" "-q" "--no-gpg-sign" "-m" "t")))
+        (unless (zerop (apply #'call-process "git" nil nil nil args))
+          (error "Premise: git %S failed" args))))
+    (drgnx-perf-w--explorer-open root)
+    (unless (drgnx-perf--wait 10 (lambda () (drgnx-perf-w--drawn-p (car (last drgnx-perf-w--fo-files)))))
+      (error "Premise: the hub's Explorer rows were not drawn in 10 s (rows path %s)" (drgnx-explorer--rows-p)))
+    t))
+
+(defun drgnx-perf-w--fo-fire ()
+  "Open the next file as a click on its row does (`drgnx-explorer-preview': the Explorer keeps the focus), then draw:
+the milliseconds from the fire to the redisplay done, the collection's own time (when one fell in the open: the
+workload's collections are the GC policy's, not the open's work) taken out and kept apart."
+  (let* ((path (nth (mod drgnx-perf-w--fo-i (length drgnx-perf-w--fo-files)) drgnx-perf-w--fo-files))
+         (t0 (float-time)) (gc0 gc-elapsed))
+    (with-current-buffer drgnx-explorer-buffer-name
+      (goto-char (drgnx-explorer--row-start path))
+      (drgnx-explorer-preview))
+    (redisplay t)
+    (let* ((gc (drgnx-perf--round (* 1000 (- gc-elapsed gc0)))) (ms (drgnx-perf--round (- (drgnx-perf-w--ms t0) gc))))
+      (push ms drgnx-perf-w--fo-times)
+      (push gc drgnx-perf-w--fo-gc)
+      (cl-incf drgnx-perf-w--fo-i)
+      (drgnx-perf-w--stat :fo_ms ms))))
+
+(defun drgnx-perf-w-explorer-first-open-each ()
+  "Arm the next open: it runs after the first key."
+  (drgnx-perf-w--arm #'drgnx-perf-w--fo-fire)
+  t)
+
+(defun drgnx-perf-w-explorer-first-open-done () (and (plist-get drgnx-perf-w--stats :fo_ms) t))
+
+(defun drgnx-perf-w-explorer-first-open-digest () (format "%d" drgnx-perf-w--fo-i))
+
+(defun drgnx-perf-w-explorer-first-open-measure ()
+  "`:first_ms' (the first file's open, collections out) and `:later_ms' (the median of the others), `:first_gc_ms'."
+  (let* ((times (reverse drgnx-perf-w--fo-times))
+         (later (sort (copy-sequence (cdr times)) #'<)))
+    (list :first_ms (car times) :later_ms (and later (nth (/ (length later) 2) later)) :first_gc_ms (car (last drgnx-perf-w--fo-gc)) :opens (length times))))
+
+(defun drgnx-perf-w-explorer-first-open-teardown ()
+  (drgnx-perf-w--disarm)
+  (dolist (f drgnx-perf-w--fo-files) (when-let* ((b (find-buffer-visiting f))) (kill-buffer b)))
+  (setq drgnx-perf-w--fo-files nil)
+  (drgnx-perf-w--explorer-close)
+  (drgnx-perf-w--clean)
+  t)
+
 (defun drgnx-perf-w-explorer-git-setup ()
   "A git project of 25k files (200 x 100) with 50 changed, the Explorer on it with git decorations."
   (let ((root (drgnx-perf-w-gen-repo (expand-file-name "repo" (drgnx-perf-w--tmpdir)) 200 100 t)))

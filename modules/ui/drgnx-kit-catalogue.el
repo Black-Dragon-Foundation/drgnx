@@ -20,11 +20,29 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--hub '(row button key-hint chip status-dot)
+(defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress chip status-dot)
   "The components the hub expands: their cells are drawn as hub rows.")
 
+(defconst drgnx-kit-catalogue--stateless '(agent-mark progress)
+  "The components that show no state (nothing to hover or select): drawn at rest only.")
+
+(defconst drgnx-kit-catalogue--meters
+  (cl-loop for size in '(row card wide)
+           append (cl-loop for (state spent limit forecast text unit)
+                           in '((ok 10 40 [20 30] "$10 / $40" "usd") (nearing 36 40 [39 44] "$36 / $40" "usd")
+                                (reached 40 40 nil "$40 / $40" "usd") (over 43 40 nil "$43 / $40" "usd")
+                                (forecast-over 20 40 [34 52] "$20 / $40" "usd") (none 12 nil nil "$12" "usd")
+                                (inherited 4 9 nil "$4 · of plan's $9 left" "usd")
+                                (unpriced 12000 nil nil "12k tokens" "tokens"))
+                           collect (cons (intern (format "%s-%s" size state))
+                                         (list :c "meter" :spent spent :limit limit :unit unit :forecast forecast
+                                               :state (symbol-name state) :size (symbol-name size)
+                                               :width (pcase size ('card 160) ('wide 240) (_ 0)) :text text))))
+  "The meter's cells, each state at each size: (SIZE-STATE . PROPS), the hub's `Comp::Meter' plist.")
+
 (defun drgnx-kit-catalogue--props (id variants state)
-  "The props of a cell of component ID with VARIANTS ((AXIS . VALUE)...) in STATE: as a hub `Comp' plist."
+  "The props of a cell of component ID with VARIANTS ((AXIS . VALUE)...) in STATE (a meter's: SIZE-STATE): as a hub
+`Comp' plist."
   (pcase id
     ('row (let ((kind (alist-get 'kind variants)))
             (list :c "row" :kind (symbol-name kind) :depth (if (eq kind 'tree) 1 0)
@@ -36,17 +54,22 @@
                    :size (symbol-name (alist-get 'size variants)) :state (symbol-name state)))
     ('key-hint (list :c "key-hint" :keys "C-k" :variant (symbol-name (alist-get 'variant variants))
                      :state (symbol-name state)))
+    ('agent-mark (list :c "agent-mark" :slot 2 :handle "Co"))
+    ('progress (if (eq (alist-get 'kind variants) 'meter)
+                   (alist-get state drgnx-kit-catalogue--meters)
+                 (list :c "progress" :kind (symbol-name (alist-get 'kind variants)) :value 0.6 :width 120)))
     ('chip (let ((tone (alist-get 'tone variants)))
              (list :c "chip" :label (format "%s" tone) :tone (if (eq tone 'agent) (list :agent 3) (symbol-name tone))
                    :fill (symbol-name (alist-get 'fill variants)) :state (symbol-name state))))
     ('status-dot (list :c "status-dot" :status (symbol-name (alist-get 'status variants)) :word t))
     (_ (list :c (symbol-name id) :text (format "%s · %s" id state) :state (symbol-name state)))))
 
-(defun drgnx-kit-catalogue--hub-row (id props scale tty state)
-  "PROPS expanded at SCALE (TTY on a terminal) and dressed as the inserter dresses a hub row, in STATE (a patch
-state); the cell's text, its line's height in device px (the expansion's :height) as `drgnx-kit-line-height'."
+(defun drgnx-kit-catalogue--hub-row (_id props scale tty state)
+  "PROPS (its component the one its :c names) expanded at SCALE (TTY on a terminal) and dressed as the inserter
+dresses a hub row, in STATE (a patch state); the cell's text, its line's height in device px (the expansion's
+:height) as `drgnx-kit-line-height'."
   (let* ((e (let ((drgnx-ui-kit--icons (and (not tty) (drgnx-ui-kit-icon-function nil))))
-              (drgnx-ui-kit-expand id props scale tty)))
+              (drgnx-ui-kit-expand (intern (plist-get props :c)) props scale tty)))
          (props (mapcar (lambda (p) (let ((l (append p nil))) (if (vectorp (nth 3 l)) (append (butlast l) (list (append (nth 3 l) nil))) l)))
                         (plist-get e :props)))
          ;; an icon (a `display' image of the Lisp expansion) goes as the hub sends it: an image of the row, its spec
@@ -72,7 +95,12 @@ state); the cell's text, its line's height in device px (the expansion's :height
                 (drgnx-kit-catalogue--hub-row id props scale tty patch)
               (drgnx-ui-kit-string id props 'text nil))))
     (put-text-property 0 (length s) 'drgnx-kit-cell (list id (mapcar #'cdr variants) state) s)
-    s))
+    ;; progress beside its caption, as it is used: the bar and the ring on the caption's centre line (a meter has its
+    ;; text)
+    (if (and (eq id 'progress) (not tty) (not (eq (alist-get 'kind variants) 'meter)))
+        (concat s (propertize " " 'display `(space :width (,(drgnx-px 12 nil scale))))
+                (propertize (get-text-property 0 'help-echo s) 'face 'drgnx-ui-caption))
+      s)))
 
 (defun drgnx-kit-catalogue--combos (entry)
   "Every combination of ENTRY's variant axes, as ((AXIS . VALUE)...), the last axis fastest; (nil) for none."
@@ -80,25 +108,39 @@ state); the cell's text, its line's height in device px (the expansion's :height
     (dolist (axis (reverse (plist-get entry :variants)) out)
       (setq out (cl-loop for v in (cdr axis) append (mapcar (lambda (rest) (cons (cons (car axis) v) rest)) out))))))
 
+(defun drgnx-kit-catalogue--shown-p (component id variants)
+  "Non-nil when the catalogue of COMPONENT (nil: every one) shows ID's cells of VARIANTS: `meter' is progress's kind
+`meter' alone, `progress' its other kinds."
+  (let ((meter (and (eq id 'progress) (eq (alist-get 'kind variants) 'meter))))
+    (pcase component
+      ('nil t)
+      ('meter meter)
+      (_ (and (eq component id) (not meter))))))
+
 (defun drgnx-kit-catalogue-insert (&optional component scale)
-  "Insert the catalogue of COMPONENT (default every one) at point, at SCALE (default the frame's)."
+  "Insert the catalogue of COMPONENT (default every one; `meter': progress's meters) at point, at SCALE (default the
+frame's)."
   (let* ((frame (selected-frame)) (gui (display-graphic-p frame))
          (scale (or scale (if gui (drgnx-pixels-scale frame) 1.0)))
          (tty (cond (gui nil) ((drgnx-ui-ascii-frame-p frame) 'ascii) (t t)))
          (patch (drgnx-view-patch--make :view "kit-catalogue" :class "kit" :epoch 1)))
     (dolist (c (alist-get 'components (drgnx-ui-kit-components)))
-      (when (or (null component) (eq component (car c)))
+      (when (or (null component) (eq component (car c)) (and (eq component 'meter) (eq (car c) 'progress)))
         (insert (propertize (format "%s\n" (car c)) 'face 'drgnx-ui-heading) "\n")
         (dolist (variants (drgnx-kit-catalogue--combos (cdr c)))
-          (when variants
-            (insert (propertize (mapconcat (lambda (v) (format "%s %s" (car v) (cdr v))) variants ", ")
-                                'face 'drgnx-text-muted)
-                    "\n"))
-          (dolist (state drgnx-ui-kit-states)
-            (let ((s (drgnx-kit-catalogue--cell (car c) variants state scale tty patch)))
-              ;; a hub row's newline carries its height, as the inserter's render puts it
-              (insert s (propertize "\n" 'line-height (get-text-property 0 'drgnx-kit-line-height s)))))
-          (insert "\n"))))))
+          (when (drgnx-kit-catalogue--shown-p component (car c) variants)
+            (when variants
+              (insert (propertize (mapconcat (lambda (v) (format "%s %s" (car v) (cdr v))) variants ", ")
+                                  'face 'drgnx-text-muted)
+                      "\n"))
+            (dolist (state (cond ((and (eq (car c) 'progress) (eq (alist-get 'kind variants) 'meter))
+                                  (mapcar #'car drgnx-kit-catalogue--meters))
+                                 ((memq (car c) drgnx-kit-catalogue--stateless) '(rest))
+                                 (t drgnx-ui-kit-states)))
+              (let ((s (drgnx-kit-catalogue--cell (car c) variants state scale tty patch)))
+                ;; a hub row's newline carries its height, as the inserter's render puts it
+                (insert s (propertize "\n" 'line-height (get-text-property 0 'drgnx-kit-line-height s)))))
+            (insert "\n")))))))
 
 (defun drgnx-kit-catalogue-open (&optional component theme density scale)
   "Open the component catalogue: COMPONENT (a symbol, default every one) in THEME (a theme to load first; default the

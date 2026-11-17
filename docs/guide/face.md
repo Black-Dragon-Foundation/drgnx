@@ -53,12 +53,15 @@ leaves them out.
 - **What is in them:** `etc/menus.eld` lists the commands of each menu in groups; titles and keys come from the
   registry and the profile. A module's command with a menu path (`:menu ("View")`) joins the end of that menu, and
   one of the Options menu joins **File ▸ Preferences**. A command whose module is off is not shown.
-- **How they look:** the menu cards (the ☰ list and the context menus) use the UI sans at the UI size, with rows 28
-  pixels high and 12 pixels of room at each end, scaled with the display and the UI scale
-  (`modules/ui/drgnx-menu-look.el`). Nidhogg's menu code (`lisp/term/nhwl-menu.el`) draws one text line per row in the
-  stock fixed-pitch face; drgnx dresses it through the menu's face and advice, and reads the row under the pointer from
-  the text instead of from the character height. The card's finish (ring, shadow, hover) comes with the shared
-  component system.
+- **How they look:** the menu cards (the ☰ list and the context menus) use the UI sans at the UI size on the overlay
+  surface, at least 220 pixels wide, with rows the density's tree row high (26 at comfortable) and 12 pixels of room at
+  each end, separators a thin rule in the border colour, rounded at 8 pixels with the popups' shadow (none in high contrast); the selected row is the state table's
+  selection, and the key hints are in the code font, subtle, right-aligned to one column. Nidhogg's menu code
+  (`lisp/term/nhwl-menu.el`) takes these as its options (group `nhwl-menu`), which the kit fills
+  (`drgnx-ui-kit-menu-values`, `modules/ui/drgnx-menu-look.el`) and fills again when the density or the theme changes;
+  Nidhogg scales them with the display when a menu opens. The keys follow the usual menu pattern: Down and Up wrap,
+  Home and End, Right or Enter opens a submenu on its first item, Esc closes one level and Tab all of them; typing a
+  few letters goes to the item they begin.
 - **Narrow windows:** the ☰ button never hides; see [the title row](#the-top-line).
 
 | Setting | Default | What it does |

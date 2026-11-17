@@ -12,6 +12,10 @@
 ;; summary (`⋯ N lines'); isearch opens a fold it passes through.  The hidden ranges go back to the model, which leaves
 ;; their lines out of the scroll bar and the minimap.  Org folds through Org's own `org-fold'.  Nothing here runs on a
 ;; scroll or a keystroke; a fold command reads the table once.
+;;
+;; A file's folds are remembered (`drgnx-fold-remember'): the hub keeps them as Urdr records (`folds/save' on save,
+;; on kill and after 30 s idle past a change; `folds/load' when the file opens), each found again by the hash of its
+;; first line within 50 lines.  Manual folds come back at once, the table's folds at its first fill.
 
 ;;; Code:
 (require 'cl-lib)
@@ -20,6 +24,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-setting)
 (require 'drgnx-faces)
+(require 'drgnx-timer)
 
 (declare-function drgnx-notify "drgnx-notice")
 (declare-function nidhogg-lines-enable "nidhogg-lines" (&optional buffer wait))
@@ -28,15 +33,12 @@
 (declare-function nidhogg-lines-set-folds "nidhogg-lines" (buffer source folds &optional max))
 (declare-function nidhogg-lines-set-fold-sources "nidhogg-lines" (buffer indent heading-regexp))
 (declare-function nidhogg-lines-set-hidden "nidhogg-lines" (buffer ranges))
+(declare-function drgnx-packs-language-dir "drgnx-packs" (language))
 (declare-function nidhogg-treesit-refold "treesit.c" (parser))
 (declare-function treesit-parser-list "treesit.c" (&optional buffer language tag))
 (declare-function treesit-parser-language "treesit.c" (parser))
 (declare-function treesit-parser-root-node "treesit.c" (parser))
 (declare-function treesit-query-compile "treesit.c" (language query &optional eager))
-(declare-function drgnx-packs-builtins "drgnx-packs")
-(declare-function drgnx-packs-builtin-dir "drgnx-packs")
-(declare-function drgnx-packs-active "drgnx-packs")
-(declare-function drgnx-packs-read-manifest "drgnx-packs" (file))
 (defvar nidhogg-treesit-fold-query)
 (defvar treesit-primary-parser)
 (declare-function org-back-to-heading "org" (&optional invisible-ok))
@@ -46,6 +48,8 @@
 (declare-function org-content "org" (&optional arg))
 (declare-function org-overview "org")
 (declare-function org-cycle "org-cycle" (&optional arg))
+(declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
+(defvar drgnx-hub-connected-functions)
 (declare-function drgnx-notebook--rescan "drgnx-notebook")
 (defvar drgnx-notebook--cells)
 (defvar evil-fold-list)
@@ -93,6 +97,12 @@ nil, an ellipsis."
   "The most fold ranges a buffer keeps (the smallest go first past it), as VS Code's editor.foldingMaximumRegions."
   :type 'natnum :group 'drgnx-fold :scope 'global :apply #'drgnx-fold--setting-changed)
 
+(drgnx-defsetting drgnx-fold-remember t
+  "Whether a file's folds are kept: sent to the hub when it is saved or killed and an idle 30 s after a fold changes,
+and folded again when it opens (each found again by its kind and first line within 50 lines; one not found is
+dropped)."
+  :type 'boolean :group 'drgnx-fold :scope 'global)
+
 (defface drgnx-fold-summary '((t :inherit drgnx-chip-quiet))
   "The summary after a folded line (`⋯ 38 lines')." :group 'drgnx-fold)
 
@@ -138,26 +148,12 @@ class; any other a block).  The other captures fold nothing (Nidhogg folds only 
              (t "@fold"))))
    tags t t))
 
-(defun drgnx-fold--pack-dir (language)
-  "The folder of the language pack whose main grammar is LANGUAGE (a symbol): a built-in pack's, else an installed
-one's (`drgnx-packs-active'); nil when no pack has it."
-  (when (require 'drgnx-packs nil t)
-    (let ((main (lambda (m) (plist-get (seq-find (lambda (g) (plist-get g :required)) (plist-get m :grammars)) :name))))
-      (or (when-let* ((p (seq-find (lambda (p) (eq (funcall main (cdr p)) language))
-                                   (ignore-errors (drgnx-packs-builtins)))))
-            (expand-file-name (car p) (drgnx-packs-builtin-dir)))
-          (seq-some (lambda (p)
-                      (let ((file (plist-get (cdr p) :manifest)))
-                        (and file (eq (funcall main (ignore-errors (drgnx-packs-read-manifest file))) language)
-                             (file-name-directory file))))
-                    (plist-get (drgnx-packs-active) :packs))))))
-
 (defun drgnx-fold--query (language)
   "LANGUAGE's compiled fold query: its pack's `queries/folds.scm', else its `queries/tags.scm' as one
 (`drgnx-fold--tags-query'); nil when it has neither, or it does not compile.  Compiled once a language."
   (let ((q (gethash language drgnx-fold--queries)))
     (unless q
-      (setq q (or (when-let* ((dir (drgnx-fold--pack-dir language)))
+      (setq q (or (when-let* ((dir (and (require 'drgnx-packs nil t) (drgnx-packs-language-dir language))))
                     (let ((folds (expand-file-name "queries/folds.scm" dir))
                           (tags (expand-file-name "queries/tags.scm" dir)))
                       (when-let* ((src (cond ((file-readable-p folds)
@@ -295,7 +291,8 @@ starting on POS's line, else the innermost holding POS)."
 (defun drgnx-fold--isearch-open (ov)
   "`isearch-open-invisible': isearch ended in OV, which unfolds."
   (delete-overlay ov)
-  (drgnx-fold--report))
+  (drgnx-fold--report)
+  (drgnx-fold--changed))
 
 (defun drgnx-fold--report ()
   "Tell the line model which ranges are hidden (the scroll bar and the minimap leave their lines out)."
@@ -324,9 +321,11 @@ starting on POS's line, else the innermost holding POS)."
   (delete-overlay ov))
 
 (defun drgnx-fold--after (fn)
-  "Run FN, then tell the model what is hidden and keep point out of a hidden part."
+  "Run FN, then tell the model what is hidden, keep point out of a hidden part, and have the folds sent an idle 30 s
+later (`drgnx-fold-remember')."
   (prog1 (funcall fn)
     (drgnx-fold--report)
+    (drgnx-fold--changed)
     (when-let* ((ov (seq-find (lambda (o) (< (overlay-start o) (point) (overlay-end o))) (drgnx-fold--overlays (point) (1+ (point))))))
       (goto-char (overlay-start ov)))))
 
@@ -549,6 +548,189 @@ nil or empty for none."
   (interactive)
   (drgnx-fold--org-or (user-error "In Org, use the heading motions") (drgnx-fold--step -1)))
 
+;;;; Remembered folds (`drgnx-fold-remember')
+
+(defconst drgnx-fold--reach 50
+  "How many lines from where it was a remembered fold's first line is looked for.")
+
+(defvar-local drgnx-fold--sent nil
+  "The buffer's folds as last sent to the hub or loaded from it (`drgnx-fold--anchors'): the same set is not sent.")
+
+(defvar-local drgnx-fold--pending nil
+  "Remembered folds of the fold table waiting for its first fill (`drgnx-fold--restore-table').")
+
+(defvar drgnx-fold--unsent nil
+  "Folds no hub took (none served, or it went away): ((WORKTREE . PATH) . ANCHORS) each, one a file, sent when a hub
+comes up (`drgnx-fold--resend').  At most one entry for each file whose folds changed while no hub served.")
+
+(defun drgnx-fold--file-key ()
+  "The current buffer's file as the hub keeps its folds: (WORKTREE . PATH), PATH relative to WORKTREE, the file's git
+worktree, else its folder.  Nil for a buffer with no local file."
+  (when-let* ((file (and buffer-file-name (not (file-remote-p buffer-file-name)) (expand-file-name buffer-file-name))))
+    (let ((root (expand-file-name (or (locate-dominating-file file ".git") (file-name-directory file)))))
+      (cons (directory-file-name root) (file-relative-name file root)))))
+
+(defun drgnx-fold--hash (pos)
+  "What a remembered fold finds its first line by: 16 hex digits of the SHA-1 of POS's line, trimmed."
+  (save-excursion
+    (goto-char pos)
+    (substring (secure-hash 'sha1 (string-trim (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+               0 16)))
+
+(defun drgnx-fold--anchor (beg end fold-kind &optional name open)
+  "The record of a fold from BEG to END of FOLD-KIND (a string, or nil): its lines from 1, the hash of its first."
+  (append (list :kind "fold" :start (line-number-at-pos beg t) :end (line-number-at-pos end t) :hash (drgnx-fold--hash beg))
+          (and name (list :name name))
+          (and fold-kind (list :fold_kind fold-kind))
+          (and open (list :open t))))
+
+(defun drgnx-fold--anchors ()
+  "The current buffer's folds to remember, by their first line: each manual fold (kind `manual', `:open' when it is
+not folded) and each other folded range, with its kind in the fold table."
+  (save-restriction
+    (widen)
+    (let (out)
+      (dolist (m drgnx-fold--manual)
+        (push (drgnx-fold--anchor (nth 0 m) (nth 1 m) "manual" (nth 2 m)
+                                  (not (drgnx-fold--overlay-of (list (nth 0 m) (nth 1 m)))))
+              out))
+      (dolist (o (drgnx-fold--overlays))
+        (let ((beg (save-excursion (goto-char (overlay-start o)) (line-beginning-position))) (end (overlay-end o)))
+          (unless (seq-find (lambda (m) (and (= (nth 0 m) beg) (= (nth 1 m) end))) drgnx-fold--manual)
+            (let ((r (seq-find (lambda (r) (and (= (nth 0 r) beg) (= (nth 1 r) end))) (nidhogg-lines-folds nil beg (1+ beg)))))
+              (push (drgnx-fold--anchor beg end (and r (< (nth 2 r) (length drgnx-fold-kinds))
+                                                     (symbol-name (aref drgnx-fold-kinds (nth 2 r)))))
+                    out)))))
+      (sort out (lambda (a b) (< (plist-get a :start) (plist-get b :start)))))))
+
+(defun drgnx-fold--keep (key anchors)
+  "Keep ANCHORS, KEY's folds no hub took, for the next hub; a newer set kept already stays."
+  (unless (assoc key drgnx-fold--unsent) (push (cons key anchors) drgnx-fold--unsent)))
+
+(defun drgnx-fold--send (key anchors)
+  "Send ANCHORS, the folds of KEY's file (`drgnx-fold--file-key'), to the hub; kept for the next one when it fails."
+  (setq drgnx-fold--unsent (cl-remove key drgnx-fold--unsent :key #'car :test #'equal))
+  (condition-case nil
+      (drgnx-hub-call "folds/save" (list :worktree (car key) :path (cdr key) :anchors (vconcat anchors))
+                      (lambda (_result error) (when error (drgnx-fold--keep key anchors))))
+    (error (drgnx-fold--keep key anchors))))
+
+(defun drgnx-fold--save ()
+  "Send the current buffer's folds to the hub when they changed since they were last sent or loaded
+(`after-save-hook', the idle debounce of a fold change).  A buffer that never folded sends nothing."
+  (when (and drgnx-fold-remember buffer-file-name (or drgnx-fold--sent drgnx-fold--sources drgnx-fold--pending))
+    (drgnx-timer-cancel (cons 'drgnx-fold-save (current-buffer)))
+    (when-let* ((key (drgnx-fold--file-key)))
+      (let ((anchors (append drgnx-fold--pending (drgnx-fold--anchors))))
+        (unless (equal anchors drgnx-fold--sent)
+          (setq drgnx-fold--sent anchors)
+          (drgnx-fold--send key anchors))))))
+
+(defun drgnx-fold--killed ()
+  "`kill-buffer-hook': the buffer's folds go to the hub, and its wait for the fold table ends."
+  (drgnx-fold--save)
+  (drgnx-timer-cancel (cons 'drgnx-fold-restore (current-buffer))))
+
+(defun drgnx-fold--save-idle (buffer)
+  "The idle debounce of a fold change ended: BUFFER's folds to the hub."
+  (when (buffer-live-p buffer) (with-current-buffer buffer (drgnx-fold--save))))
+
+(defun drgnx-fold--changed ()
+  "A fold changed: the buffer's folds go to the hub after 30 s of idleness (`drgnx-fold-remember')."
+  (when (and drgnx-fold-remember buffer-file-name)
+    (drgnx-timer-debounce (cons 'drgnx-fold-save (current-buffer)) 30 #'drgnx-fold--save-idle
+                          :idle t :args (list (current-buffer)) :owner 'editor/fold)))
+
+(defun drgnx-fold--resend ()
+  "`drgnx-hub-connected-functions': the folds no hub took go to the one that came up."
+  (let ((unsent (reverse drgnx-fold--unsent)))
+    (setq drgnx-fold--unsent nil)
+    (pcase-dolist (`(,key . ,anchors) unsent) (drgnx-fold--send key anchors))))
+
+(defun drgnx-fold--find (anchor fn)
+  "FN's first non-nil value at the start of a line whose hash is ANCHOR's, within `drgnx-fold--reach' lines of its
+first line, the nearest first; nil when none."
+  (let* ((start (plist-get anchor :start)) (hash (plist-get anchor :hash))
+         (n (max 1 (- start drgnx-fold--reach))) (hits nil))
+    (save-excursion
+      (goto-char (point-min))
+      (when (zerop (forward-line (1- n)))
+        (while (progn (when (equal (drgnx-fold--hash (point)) hash) (push (cons (abs (- n start)) (point)) hits))
+                      (and (< n (+ start drgnx-fold--reach)) (zerop (forward-line 1))))
+          (cl-incf n))))
+    (seq-some (lambda (h) (funcall fn (cdr h))) (sort (nreverse hits) #'car-less-than-car))))
+
+(defun drgnx-fold--restore-manual (anchor)
+  "Make ANCHOR's manual fold again where its first line is now, folded unless it was open."
+  (drgnx-fold--find
+   anchor
+   (lambda (b)
+     (let ((e (save-excursion (goto-char b) (forward-line (- (plist-get anchor :end) (plist-get anchor :start)))
+                              (line-end-position))))
+       (when (and (< (drgnx-fold--start b) e)
+                  (not (seq-find (lambda (m) (and (= (nth 0 m) b) (= (nth 1 m) e))) drgnx-fold--manual)))
+         (push (list (copy-marker b) (copy-marker e t) (plist-get anchor :name)) drgnx-fold--manual)
+         (unless (plist-get anchor :open) (drgnx-fold--hide (list b e)))
+         t)))))
+
+(defun drgnx-fold--range-on (pos anchor)
+  "The fold table's range not folded yet that starts on POS's line with ANCHOR's kind (any, when it has none), the
+nearest to ANCHOR's length; nil when none."
+  (let* ((eol (save-excursion (goto-char pos) (line-end-position)))
+         (kind (and (plist-get anchor :fold_kind) (drgnx-fold--kind (intern (plist-get anchor :fold_kind)))))
+         (lines (1+ (- (plist-get anchor :end) (plist-get anchor :start))))
+         (rs (seq-filter (lambda (r) (and (<= pos (nth 0 r) eol) (or (null kind) (= (nth 2 r) kind))
+                                          (not (drgnx-fold--overlay-of r))))
+                         (nidhogg-lines-folds nil pos (1+ eol)))))
+    (car (sort rs (lambda (a b) (< (abs (- (count-lines (nth 0 a) (nth 1 a)) lines))
+                                   (abs (- (count-lines (nth 0 b) (nth 1 b)) lines))))))))
+
+(defun drgnx-fold--restore-table (buffer)
+  "Fold BUFFER's remembered ranges of its fold table once the table has ranges (its first fill); a range not found
+is dropped.  Non-nil when done, as the poll of `drgnx-fold--loaded' wants."
+  (or (not (buffer-live-p buffer))
+      (with-current-buffer buffer
+        (when (and (drgnx-fold--ensure) (nidhogg-lines-folds nil))
+          (let ((anchors drgnx-fold--pending))
+            (setq drgnx-fold--pending nil)
+            (save-restriction
+              (widen)
+              (dolist (a anchors)
+                (drgnx-fold--find a (lambda (pos) (when-let* ((r (drgnx-fold--range-on pos a))) (drgnx-fold--hide r))))))
+            (drgnx-fold--report))
+          t))))
+
+(defun drgnx-fold--restore-gave-up (buffer)
+  "BUFFER's fold table did not fill in time: its remembered ranges are dropped."
+  (when (buffer-live-p buffer) (with-current-buffer buffer (setq drgnx-fold--pending nil))))
+
+(defun drgnx-fold--loaded (buffer anchors)
+  "The hub's remembered ANCHORS of BUFFER's file: manual folds made at once, the fold table's folded at its first fill."
+  (when (and anchors (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (when (drgnx-fold--ensure)
+        (setq drgnx-fold--sent anchors
+              drgnx-fold--pending (seq-remove (lambda (a) (equal (plist-get a :fold_kind) "manual")) anchors))
+        (save-restriction
+          (widen)
+          (dolist (a anchors) (when (equal (plist-get a :fold_kind) "manual") (drgnx-fold--restore-manual a))))
+        (drgnx-fold--send-manual)
+        (drgnx-fold--report)
+        (when (and drgnx-fold--pending (not (drgnx-fold--restore-table buffer)))
+          (drgnx-timer-poll (cons 'drgnx-fold-restore buffer) 0.25 #'drgnx-fold--restore-table
+                            :deadline 30 :on-timeout #'drgnx-fold--restore-gave-up :args (list buffer)
+                            :owner 'editor/fold))))))
+
+(defun drgnx-fold--load ()
+  "`find-file-hook': ask the hub for the file's remembered folds.  Nothing waits: with no hub, nothing comes back."
+  (when-let* (((and drgnx-fold-remember (fboundp 'nidhogg-lines-enable) (not (drgnx-fold--org-p))))
+              (key (drgnx-fold--file-key))
+              (buffer (current-buffer)))
+    (condition-case nil
+        (drgnx-hub-call "folds/load" (list :worktree (car key) :path (cdr key))
+                        (lambda (result error) (unless error (drgnx-fold--loaded buffer (plist-get result :anchors)))))
+      (error nil))))
+
 ;;;; Mode, evil, hideshow
 
 (defvar drgnx-fold-mode-map (make-sparse-keymap)
@@ -603,21 +785,27 @@ nil or empty for none."
   "The module's commands: (ID TITLE FUNCTION DOC) each.")
 
 (defun drgnx-fold--teardown ()
-  "The module off: its mode, notes and evil provider gone, every fold unfolded."
+  "The module off: its mode, notes, remembering and evil provider gone, every fold unfolded."
   (drgnx-fold-mode -1)
   (when (boundp 'evil-fold-list)
     (setq evil-fold-list (drgnx-fold--without-provider evil-fold-list)))
   (remove-hook 'hs-minor-mode-hook #'drgnx-fold--hideshow-note)
+  (remove-hook 'find-file-hook #'drgnx-fold--load)
+  (remove-hook 'after-save-hook #'drgnx-fold--save)
+  (remove-hook 'kill-buffer-hook #'drgnx-fold--killed)
+  (remove-hook 'drgnx-hub-connected-functions #'drgnx-fold--resend)
   (dolist (b (buffer-list))
     (with-current-buffer b
       (mapc #'delete-overlay (drgnx-fold--overlays))
       (drgnx-fold--report)
       (when (local-variable-p 'nidhogg-treesit-fold-query) (kill-local-variable 'nidhogg-treesit-fold-query))
-      (setq drgnx-fold--sources nil drgnx-fold--manual nil drgnx-fold--level nil drgnx-fold--bounds nil)))
+      (setq drgnx-fold--sources nil drgnx-fold--manual nil drgnx-fold--level nil drgnx-fold--bounds nil
+            drgnx-fold--sent nil drgnx-fold--pending nil)))
+  (setq drgnx-fold--unsent nil)
   (clrhash drgnx-fold--queries))
 
 (drgnx-module-define 'editor/fold
-                     :doc "Folding as in VS Code on the line model: by indentation, headings and cells; fold all, by level, by kind, all but here; manual and named folds."
+                     :doc "Folding as in VS Code on the line model: by indentation, headings and cells; fold all, by level, by kind, all but here; manual and named folds; each file's folds remembered."
                      :stage 'startup
                      :teardown #'drgnx-fold--teardown
                      :setup (lambda ()
@@ -626,6 +814,10 @@ nil or empty for none."
                                                       :doc doc))
                               (drgnx-fold-mode 1)
                               (add-hook 'hs-minor-mode-hook #'drgnx-fold--hideshow-note)
+                              (add-hook 'find-file-hook #'drgnx-fold--load)
+                              (add-hook 'after-save-hook #'drgnx-fold--save)
+                              (add-hook 'kill-buffer-hook #'drgnx-fold--killed)
+                              (add-hook 'drgnx-hub-connected-functions #'drgnx-fold--resend)
                               (with-eval-after-load 'evil (drgnx-fold--evil-provider))))
 
 (provide 'drgnx-fold)

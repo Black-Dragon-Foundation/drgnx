@@ -212,7 +212,7 @@ scrollback, list, close, exit), `runstav`'s `term_protocol_uses_no_ids_as_object
 fake runner:
 
 ```
-cargo test -p drgnx-ratatoskr --features fleet --test term_scope --no-run && cargo build -p drgnx-term
+cargo test -p drgnx-ratatoskr --features fleet --test fleet --no-run && cargo build -p drgnx-term
 test/runners/fleet.sh up --runners 1
 test/runners/fleet.sh host <the term_scope binary> worker_survives_hub_restart_under_kill_mode_mixed
 ```

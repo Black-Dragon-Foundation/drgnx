@@ -1603,7 +1603,8 @@ lists at each publish.
 - **Where.** `drgnx-scrollbar-mode` (global; module `editor/minimap`, setting `drgnx-minimap-ruler`) gives every
   window `drgnx-scrollbar-window-p` names the strip: editor groups, the docked panes (`drgnx-role` `dock`, `panel`,
   `right`), popup lanes and child frames' windows. Never the minibuffer, chrome (the status bar and other roles), a
-  package's side window, or a window with the parameter `drgnx-minimap-exclude`.
+  package's side window, or a window with the parameter `drgnx-minimap-exclude` or on a frame with it (Nidhogg's
+  menus, `drgnx-menu-look.el`: sized to their rows, a strip would narrow them).
 - **Hidden while it fits.** With `drgnx-minimap-hide-short` the spec carries `:hide-short`, and C draws nothing while
   the window's first row starts the text and a row reaches its end (a window fitted to its lines, the agent panel's
   header, has no row for the final newline's empty line). The fringe keeps the strip's width, so nothing reflows
@@ -1639,6 +1640,10 @@ lists at each publish.
   the marks as last asked. Commands (module `editor/minimap`): `mark-next`/`-previous`, `change-next`/`-previous`,
   `bookmark-next`/`-previous`, `agent-edit-next`/`-previous`; `code-next-problem`/`-previous` (module `lang`) go
   through `drgnx-marks-next-problem`, which falls back to Flymake's own when the buffer has no problem marks.
+- **Bookmarks.** `bookmark-toggle`, `bookmark-name` and `bookmark-go` (`drgnx-marks-bookmark-*`) keep bookmark.el's
+  records: a line's bookmark is `bookmark-make-record-default` at the line's start with the handler `drgnx-bookmark`
+  (bookmark.el's default handler), stored with `bookmark-store`, so bookmark.el's file, `C-x r b` and its list keep
+  working; Go lists this file's bookmarks first, by line. The watch on `bookmark-alist` marks them.
 - **The hub's layers.** What the hub knows of a file that the line model does not (labels, fold ranges for buffers no
   parser folds, heat, a huge file's density buckets) goes to Nidhogg's Sjá as a `view-model` line whose data holds
   `minimap` (`view::minimap::line` in Ratatoskr: file, layer `labels`, `folds`, `heat:SOURCE` or `density`, version,
@@ -3244,7 +3249,9 @@ the adapter's `:version` argv, the program's own version flag with no IPC (`sway
 `drgnx-platform-doctor-timeout`. `x11` has no `:tool`: it moves frames by position, and xrandr only counts monitors.
 
 Tests use `test/fixtures/wm/fake-wm.sh`, linked as `swaymsg`, `i3-msg`, `hyprctl` and `niri` into a temp bin: it logs
-its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail.
+its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail. A failing sway or
+i3 row prints its marks: when each call to the fake tool started and ended (with its status), and when a call's time
+limit or a placement's deadline fired, in seconds from the row's start, so a red names the stage that was late.
 
 ## Pane kinds (`wb/drgnx-panes.el`)
 
@@ -3377,8 +3384,9 @@ AREA)`, the side bar one holding the kind `side-bar` with `(:view VIEW)`; an ato
 
 - an invalid TREE changes nothing and gives one `drgnx-notify` warning;
 - the live tiles whose ids TREE holds stay, the same window objects; the others are deleted and TREE's missing tiles are
-  split off the kept ones (only splits, so the kept windows never move to another parent). When the kept tiles are
-  arranged otherwise than TREE has them, only the first stays and the rest is built around it;
+  split off the kept ones (only splits, so the kept windows never move to another parent), each new window taking an
+  equal part of the room it shares with those still to come (nine editors fit an 80-column frame). When the kept tiles
+  are arranged otherwise than TREE has them, only the first stays and the rest is built around it;
 - sizes are TREE's `:px` at FRAME's scale when a container's children add up to its size, else their `:share`s, set
   pixelwise by moving each child's trailing edge (`adjust-window-trailing-edge`), preserved sizes lifted for the call;
 - a docked area or the side bar fills its new window through its own show, which `drgnx-grid-split-dock` hands the
@@ -3450,8 +3458,10 @@ named by its main window (`drgnx-grid-tile-main`).
   map `drgnx-grid-grip-map` on the tab line and the header line) starts it: on a tool tile's row (`drgnx-grid--tab-row`),
   a docked area's (`drgnx-area--tab-row`, its header line) and an editor's (`drgnx-chrome--grip`, the row's leading
   room). A press on a tab (`drgnx-grid-tab-press`: a tool tile's, from `drgnx-grid--tab-press`, or an editor's, from
-  `drgnx-chrome--tab-press` with its buffer) is a click when released on the row, else a drag of that kind or buffer
-  (`drgnx-grid--drag-source` unstacks it into a tile of its own first when it is one of several tabs). The loop reads events under `track-mouse`; each movement
+  `drgnx-chrome--tab-press` with its buffer) is a click when released on the row (the release is read with `read-key`:
+  on a terminal it is xterm-mouse's bytes, decoded only through `input-decode-map`), else a drag of that kind or buffer
+  (`drgnx-grid--drag-source` unstacks it into a tile of its own first when it is one of several tabs). The loop reads events under `track-mouse`, with `read-key` too (a
+  terminal's motion and release are xterm-mouse's bytes); each movement
   finds the tile and zone (`drgnx-grid-drop-target`, `drgnx-grid-zone`) and replaces only that tile's row line
   (`drgnx-grid--row-param`: the tab line, or a docked area's header line) with "⤓ drop: …" (face `drgnx-grid-drop`);
   the release calls `drgnx-grid--drop` → `drgnx-grid-move`; Esc or `C-g` cancels; the row comes back in an
@@ -3513,11 +3523,37 @@ ITEMS FROM DIRECTION` is the nearest centre in that half-plane, across frames; `
 largest of graphical frames. Cards are pooled child frames (`drgnx-switcher--pool`, made on first use, hidden on close,
 deleted by the teardown), centred on the tile; the rest get an overlay letter (`before-string`, inverse video, the
 overlay's `window` the tile's). Keys go through a transient map whose default binding is `drgnx-switcher-key`, left by every close (its exit
-function is kept in the state) (`drgnx-switcher-handle EVENT` returns `closed`, `picked`, `swapped`, `moved` or `replayed`); a replayed key is put on
+function is kept in the state) (`drgnx-switcher-handle EVENT` returns `closed`, `quit`, `picked`, `swapped`, `moved` or `replayed`); a replayed key is put on
 `unread-command-events`. The gate: `:ready` is set by the layer timer `(switcher . ready)` after
 `drgnx-switcher-pop-in` (0.12 s; `drgnx-switcher-one-frame` under reduced motion), owner `ui/tiles`; a letter before it
 is replayed. Shift and a letter swap with `drgnx-grid-swap`, inside one frame only.
 Tests: `test/unit/switcher-test.el` (`drgnx-switcher/`), `test/ui/switcher-gui-test.el`, `test/tty/switcher-tty-test.el`.
+
+**The Esc double tap** (`wb/drgnx-esc.el`, `drgnx-esc-mode`, turned on by `ui/tiles`) has three parts and never reads
+an event itself:
+- `drgnx-esc--note` on `post-command-hook` records the command and `drgnx-timer-now` of every Esc (`last-command-event`
+  `escape` or ESC), whoever ran it. Close Pane's and quick help's maps sit in front of the detector, so their runs are
+  seen only there; a second Esc such a map ran as a cancel opens the switcher from the hook. Close Pane counts only
+  when it closed nothing (`drgnx-close--closed`).
+- `drgnx-esc--map` at the front of `emulation-mode-map-alists` (placed by `drgnx-modal-order-alists` right after the
+  modules' `drgnx-modal-front-alists`: after Close Pane's and quick help's, before the modal engine's) binds `<escape>` to `drgnx-esc`: within `drgnx-esc-double-tap` of a
+  cancel (`drgnx-esc-cancel-commands`) it opens the switcher, else it runs what `<escape>` means without the map
+  (`key-binding` with `drgnx-esc--on` nil), or gives an unbound Esc back as ESC. In a buffer of
+  `drgnx-esc-process-modes` it runs the major mode's own binding every time (so a terminal tile gets its Esc ahead of
+  evil's).
+- A filter on `input-decode-map`'s `<escape>` (graphical terminals) or ESC (text terminals, wrapping the sequences map
+  that was there) decides at once in a process buffer, the minibuffer, under evil (its own `evil-esc` delay makes a
+  lone `<escape>`), outside the reading of a key sequence that ends in that Esc (a `define-key` or `lookup-key` through
+  ESC gets the map as it was) and where `<escape>` is bound; in a text terminal bytes already waiting go on through the sequences map with ESC → `drgnx-esc-double`
+  added (escape sequences decode; Alt+Esc is the double). Else it waits the window with `sit-for`: a second Esc
+  decodes as the event `drgnx-esc-double` (bound in the front map), another key leaves ESC and that key, none leaves
+  the ESC.
+The switcher opened by a double tap gets `drgnx-switcher-quit-until`: an Esc before it closes the switcher and runs
+`keyboard-escape-quit` (`drgnx-switcher-handle` returns `quit`). `C-<escape>` is Switch Tile in every profile and a
+reserved terminal key (`drgnx-term-reserved-keys`); Esc itself always goes to a terminal's program
+(`drgnx-term-program-events`), whatever the profile binds it to. The fallback layer's F6 prefix reads an Esc alone as
+`escape`, so F6 Esc is `C-<escape>` on a legacy terminal. Tests: `test/unit/esc-test.el` (`drgnx-esc/`),
+`test/tty/esc-tty-test.el`, `test/ui/esc-gui-test.el`.
 
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 
@@ -3604,6 +3640,34 @@ data and their API. Only their windows are made and deleted by the grid while it
 `window-swap-states` cannot swap atoms (on two parts it swaps those two windows only, on two atom roots it signals),
 so moving an atom goes through its state (`window-state-get` on the root). Test: `test/unit/grid-atoms-test.el`.
 
+### Placeholders and the saved grid (`wb/drgnx-grid.el`, `wb/drgnx-persist.el`)
+
+- A tool tile whose kind has no `:placeholder` function and no buffer to show, or whose kind is not defined, shows the
+  **tile placeholder** ` *drgnx tile: KIND*` (`drgnx-grid-tile-placeholder`, mode `drgnx-grid-placeholder-mode`): one
+  line naming the kind (its title, or the bare symbol when undefined) with `RET` (`tile-placeholder-open`: the kind's
+  content when defined, else `drgnx-grid-pick-kind`) and `x` (`tile-placeholder-close`: `drgnx-grid-hide`).
+- The pane backends have three optional operations (`drgnx-pane--call-optional`): `:keeps` (a module's teardown leaves
+  a kind where the backend keeps it: the grid's `drgnx-grid--tile-of`, so a tile is never hidden by a module going
+  off), `:undefined` (`drgnx-grid--kind-undefined`: the kind's tiles show its placeholder in place, the tree and sizes
+  unchanged) and `:defined` (`drgnx-grid--kind-defined`: tiles showing the kind's placeholder show its content).
+- **Format 3** of `workbench.eld` (`drgnx-persist-version`): each window is
+  `(:role :monitor :shell :tree TREE :memory MEMORY :roots :extra)`, plus `:geometry` and `:fullscreen` for a
+  graphical one. TREE is `drgnx-grid--frame-snapshot-tree` (the tree behind a full-size tile), its editor nodes' tabs
+  as files (with the tabs still waiting to be visited) and `:shown` the last file shown when a page is in front.
+  MEMORY is `(:docks DRGNX-GRID-MEMORY :sizes ((KEY . PX)…) :view VIEW)`: the `:sizes` intents of `left`, `panel` (the
+  home `bottom`) and `right`, and the sidebar view.
+- The restore (`drgnx-persist--restore-frame`) checks TREE with `drgnx-grid-valid-tree-p` (one notice and no change
+  when it fails), visits each editor node's shown file, clears the live tiles' ids (so every tile is made from TREE)
+  and applies it (`drgnx-grid-apply-tree`); then each editor tile gets its tabs (the others visited at idle), and
+  MEMORY comes back: the sizes and view as intent `restore` (a missing size clears it, each clamped to the frame), the
+  grid memory only when it is plain data. Until the first command, a change of the frame's size applies TREE again
+  while the frame's tiles are still TREE's (`drgnx-persist--refit`).
+- A format-2 file is migrated on read (`drgnx-persist--from-v2`): `drgnx-persist--grid-from-v2` builds the side bar
+  (`:left`), the editor groups (`:groups`, side by side, or stacked when the saved window state's first split was
+  vertical) over the panel (`:panel`), and the right side (`:right`), at their saved pixels clamped as before; their
+  `:px` become MEMORY's `:sizes`. Other versions are ignored. Tests: `test/unit/grid-persist-test.el`,
+  `wb-persist-test.el`, `wb-persist-edge-test.el`.
+
 ## The UI kit (`drgnx-ui-kit.el`)
 
 What every surface that draws a mark or a button shares. It is in core and requires only the registry and the
@@ -3661,13 +3725,22 @@ characters and `:tty :indent` per level, and a glyph takes its terminal form; th
 (none where it has none) and the state's face under it, over the component; an action puts `drgnx-action` and
 `mouse-face` (`drgnx-hover`) over the component and its `:hit` padding. The conformance fixture
 (`test/fixtures/kit/cases.json`, `expected.json`) holds each component at scales 1, 1.25, 1.75 and 2 and on a
-terminal (UTF-8 and ASCII); the hub's test writes `expected.json` (`DRGNX_KIT_BLESS=1 cargo test -p drgnx-rows --test
-kit_conformance`, read it before committing) and `drgnx-ui-kit/conformance` checks Lisp against it.
+terminal (UTF-8 and ASCII); the hub's test writes `expected.json` (`DRGNX_KIT_BLESS=1 cargo test -p drgnx-rows --test it
+kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` checks Lisp against it.
 
 - `(drgnx-ui-kit-expand COMPONENT PROPS SCALE TTY)`: COMPONENT a symbol (`row`), PROPS the hub's `Comp` JSON as a
   plist (`(:c "row" :kind "tree" :depth 2 :twisty t :text "src" :state "selected")`; `:twisty` t open, `:false`
   closed, absent none), TTY nil, t or `ascii`. Returns the hub's row shape: `(:text S :runs [[FROM TO FACE]...] :props
   [[FROM TO NAME VALUE]...] :spaces [[POS W H]...])`.
+- `(drgnx-ui-kit-agent-mark SLOT HANDLE WHERE &optional FRAME)`: an agent's handle on the colour of SLOT (1-12), as a
+  string for WHERE; `(drgnx-ui-kit-progress KIND VALUE WIDTH WHERE &optional FRAME)`: a `bar` WIDTH logical px wide
+  (spaces `drgnx-ui-kit-progress-bar-px` high, the fill then the track, drawn as images by
+  `drgnx-ui-kit-bar-display`, which the inserter calls too) or a `ring`, VALUE 0 to 1. Each carries its
+  spoken label ("agent H", "N percent") as `help-echo`; `docs/design/components/chips-and-keys.md`.
+- `(drgnx-ui-kit-meter SPENT LIMIT UNIT FORECAST STATE SIZE TEXT WHERE &optional WIDTH FRAME)`: a meter (progress of
+  kind `meter`), SPENT against LIMIT (nil: no bar) with FORECAST (P50 . P90), in STATE at SIZE (`row`, `card`,
+  `wide`), then TEXT as the caller formats it and the state's word; its parts are bar images of the same path
+  (`drgnx-ui-kit--bar-faces` gives each face its shape: fill, tick, span, outline).
 - `(drgnx-ui-kit-string COMPONENT PROPS WHERE FRAME)`: the same as a propertized string for WHERE, `text`,
   `header-line`, `mode-line` or `tab-line`, at FRAME's scale (or as its terminal draws it). In `text` a pad is
   `(space :width N)` with N = px / `frame-char-width`, canonical characters, so one buffer is right on frames of two

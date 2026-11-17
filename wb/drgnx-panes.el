@@ -223,7 +223,14 @@ kind has no size of its own: nil, nothing noted."
   "Alist BACKEND → plist of the functions that carry out each pane operation.  The dispatch point:
 the grid registers `grid' here.  :define takes (KIND SPEC OLD-SPEC), :show (KIND BUFFER SELECT), :hide (KIND),
 :window (KIND FRAME), :focus (KIND), :resize (KIND PX HORIZONTAL), :move (KIND TARGET ZONE), :stack (KIND
-ONTO).  The `areas' backend has no :move and no :stack: moving panes needs the grid.")
+ONTO).  The `areas' backend has no :move and no :stack: moving panes needs the grid.  Optional, called when present:
+:defined (KIND) after KIND is defined, :undefined (KIND) after it is removed, and :keeps (KIND FRAME), non-nil when
+a module turned off leaves KIND where it shows on FRAME (the grid's tiles keep their place, with a placeholder).")
+
+(defun drgnx-pane--call-optional (op &rest args)
+  "Run operation OP of the current `drgnx-pane-backend' with ARGS when it has one, else nil."
+  (when-let* ((fn (plist-get (alist-get drgnx-pane-backend drgnx-pane--backends) op)))
+    (apply fn args)))
 
 (defun drgnx-pane--call (op &rest args)
   "Run operation OP (:define, :show, …) of the current `drgnx-pane-backend' with ARGS."
@@ -250,7 +257,8 @@ place rule (an editor rule another kind shares stays).  Where KIND shows, the do
     t))
 
 (defun drgnx-pane--teardown-kind (kind prev)
-  "The undo of KIND's definition, while it is still the module's: hide KIND, put PREV back or remove KIND.
+  "The undo of KIND's definition, while it is still the module's: hide KIND (where the backend `:keeps' it, a grid
+tile, it stays and shows a placeholder), put PREV back or remove KIND.
 PREV is nil (KIND was not defined before) or (SPEC OWNER), the definition this one replaced.  An area's front
 tab is intent and survives: it is read first and noted `:by teardown' after the tab is gone, so the module
 turned on again finds it in front.  The hide is `:by teardown', which keeps a size you chose.  A left kind is
@@ -260,14 +268,15 @@ not hidden: that would close the whole dock; its section just goes."
       (dolist (frame (frame-list))
         (when (drgnx-state-workbench-frame-p frame)
           (when (eq (drgnx-state-intent frame :front area) kind) (push (cons frame area) fronts))
-          (when (drgnx-pane-window kind frame)
+          (when (and (drgnx-pane-window kind frame) (not (drgnx-pane--call-optional :keeps kind frame)))
             (with-selected-frame frame (drgnx-pane-hide kind :by 'teardown))))))
     (if prev
         (let ((old (car prev)))
           (drgnx-pane--call :define kind old (drgnx-pane-kind kind))
           (setf (alist-get kind drgnx-pane--kinds) old
                 (alist-get kind drgnx-state--kind-owners) (cadr prev)))
-      (drgnx-pane-undefine-kind kind))
+      (drgnx-pane-undefine-kind kind)
+      (drgnx-pane--call-optional :undefined kind))
     (pcase-dolist (`(,frame . ,area) fronts)
       (when (frame-live-p frame) (drgnx-state-note-intent frame :front area kind :by 'teardown)))))
 
@@ -331,6 +340,7 @@ still the one defined here.  Defining a new KIND that is in front in an area tha
                                     (lambda () (eq (drgnx-pane-kind kind) spec))
                                     (lambda (prev) (drgnx-pane--teardown-kind kind prev)))))))
       (unless old (drgnx-pane--show-again kind))
+      (drgnx-pane--call-optional :defined kind)
       (when fill
         (with-eval-after-load 'drgnx-layouts (drgnx-layouts-define-pane kind fill)))
       kind)))

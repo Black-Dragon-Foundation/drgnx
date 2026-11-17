@@ -4,7 +4,7 @@
 
 #![cfg(feature = "test-hooks")]
 
-mod support;
+use crate::support;
 
 use serde_json::json;
 use std::sync::{Arc, atomic::AtomicU64};

@@ -62,17 +62,20 @@
       (should (equal "task:t1" (plist-get (cdr (car sets)) :selected))))))
 
 (ert-deftest drgnx-work-selection/result-goes-to-the-last-editor-frame ()
-  (let ((f1 'frame-1) (f2 'frame-2) (f3 'frame-3))
-    (cl-letf (((symbol-function 'frame-list) (lambda () (list f1 f2 f3)))
-              ((symbol-function 'frame-live-p) (lambda (_) t))
-              ((symbol-function 'frame-visible-p) (lambda (_) t))
-              ;; f3 was used last but has no editor tile; f2's tile was used after f1's
-              ((symbol-function 'drgnx-grid-tiles)
-               (lambda (frame &optional _filter)
-                 (pcase frame ('frame-1 '(w1)) ('frame-2 '(w2a w2b)) (_ nil))))
-              ((symbol-function 'window-use-time)
-               (lambda (w) (pcase w ('w1 10) ('w2a 30) ('w2b 20) (_ 99)))))
-      (should (eq f2 (drgnx-work--result-frame))))))
+  ;; the grid is on (its tiles are stubbed below); with it off there are no tiles: the selected frame
+  (dlet ((drgnx-grid-mode t))
+    (let ((f1 'frame-1) (f2 'frame-2) (f3 'frame-3))
+      (cl-letf (((symbol-function 'frame-list) (lambda () (list f1 f2 f3)))
+                ((symbol-function 'frame-live-p) (lambda (_) t))
+                ((symbol-function 'frame-visible-p) (lambda (_) t))
+                ;; f3 was used last but has no editor tile; f2's tile was used after f1's
+                ((symbol-function 'drgnx-grid-tiles)
+                 (lambda (frame &optional _filter)
+                   (pcase frame ('frame-1 '(w1)) ('frame-2 '(w2a w2b)) (_ nil))))
+                ((symbol-function 'window-use-time)
+                 (lambda (w) (pcase w ('w1 10) ('w2a 30) ('w2b 20) (_ 99)))))
+        (should (eq f2 (drgnx-work--result-frame)))))
+    (should-not (dlet ((drgnx-grid-mode nil)) (drgnx-work--result-frame)))))
 
 (ert-deftest drgnx-work-selection/nothing-moves-between-monitors ()
   "Opening an item shows it in the result frame with that frame selected only for the call: no frame is made, moved

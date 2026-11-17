@@ -4,7 +4,7 @@
 (require 'cl-lib)
 (require 'drgnx-records)
 (require 'drgnx-agents)                 ; the session struct the transcript round trips build
-(require 'drgnx-work-scan)
+(require 'drgnx-work-db)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 
 (defconst records-test--dir (file-name-directory (or load-file-name buffer-file-name)))
@@ -87,35 +87,20 @@
        (drgnx-work-db-close-all)
        (delete-directory root t))))
 
-(ert-deftest drgnx-records/nodes-a-scan-makes-round-trip ()
-  :tags '(:cond)                        ; runs git
+(ert-deftest drgnx-records/nodes-the-importer-makes-round-trip ()
+  ;; the data the hub's importer keeps on a node (a commit's sha and date, a plan's branch, a task's stale mark)
   (records-test--with-root
-    (let ((code (concat root "code/")) (shas nil))
-      (make-directory code t)
-      (cl-flet ((git (&rest args)
-                  (with-temp-buffer
-                    (let ((default-directory code))
-                      (apply #'call-process "git" nil t nil "-c" "user.name=t" "-c" "user.email=t@t.invalid" args)
-                      (string-trim (buffer-string))))))
-        (git "init" "-q" "-b" "main")
-        (dolist (msg '("base" "task one" "task one, more"))
-          (write-region msg nil (concat code "f") nil 'silent)
-          (git "add" "-A")
-          (git "commit" "-q" "-m" msg)
-          (push (git "rev-parse" "--short" "HEAD") shas)))
-      (make-directory (concat code ".superpowers/sdd/p") t)
-      (make-directory (concat root "docs/plans") t)
-      (write-region "# Plan P\n\n### Task 1: First\n- [x] one\n" nil (concat root "docs/plans/p.md") nil 'silent)
-      (write-region (format "# SDD ledger — plan: %sdocs/plans/p.md\nTask 1: complete (commits %s..%s, tests: ok)\n" root
-                            (nth 2 shas) (nth 0 shas))
-                    nil (concat code ".superpowers/sdd/p/progress.md") nil 'silent)
-      (drgnx-work-fixture-with-hub (drgnx-work-scan (list root)))
-      (let ((nodes (apply #'append (mapcar #'drgnx-work-nodes '(spec plan task step commit branch ruling todo)))))
-        (should (cl-some (lambda (node) (plist-get node :sha)) nodes))   ; commits: data to carry
-        (dolist (node nodes)
-          (let ((data (cl-loop for (k v) on node by #'cddr
-                               unless (memq k '(:id :kind :title :path :line :status :parent :ord :source)) append (list k v))))
-            (should (records-test--round 'drgnx-records-node-data data))))))))
+    (drgnx-work-fixture-put-node "plan:/p.md" :kind 'plan :title "Plan P" :path "/p.md" :line 1 :status "open" :source "/p.md"
+                                 :branch "feat" :merged t :repo "/r/")
+    (drgnx-work-fixture-put-node "task:/p.md#1" :kind 'task :title "First" :parent "plan:/p.md" :ord 1 :source "/p.md" :stale t)
+    (drgnx-work-fixture-put-node "commit:abc" :kind 'commit :title "task one, more" :path "/r/" :source "commit"
+                                 :sha "abc" :date 1767225603 :repo "/r/" :seq -1)
+    (let ((nodes (apply #'append (mapcar #'drgnx-work-nodes '(plan task commit)))))
+      (should (cl-some (lambda (node) (plist-get node :sha)) nodes))   ; commits: data to carry
+      (dolist (node nodes)
+        (let ((data (cl-loop for (k v) on node by #'cddr
+                             unless (memq k '(:id :kind :title :path :line :status :parent :ord :source)) append (list k v))))
+          (should (records-test--round 'drgnx-records-node-data data)))))))
 
 ;;;; The rules
 

@@ -69,6 +69,12 @@ html.ayu {
   --drgnx-key-hint-edge: #6b6e7a;
   --drgnx-card-needs-you-edge: #ff9566;
   --drgnx-progress-track: #212228;
+  --drgnx-progress-fill: #7aa5ff;
+  --drgnx-meter-fill: #7aa5ff;
+  --drgnx-meter-near: #e9bc5c;
+  --drgnx-meter-reached: #f47a72;
+  --drgnx-meter-tick: #a2a5b2;
+  --drgnx-meter-span: #46484f;
 }
 /* light */
 :root[data-theme="light"],
@@ -138,6 +144,12 @@ html.rust {
   --drgnx-key-hint-edge: #898c97;
   --drgnx-card-needs-you-edge: #b8461a;
   --drgnx-progress-track: #e9eaee;
+  --drgnx-progress-fill: #2c5fd4;
+  --drgnx-meter-fill: #2c5fd4;
+  --drgnx-meter-near: #8a5d00;
+  --drgnx-meter-reached: #c22f28;
+  --drgnx-meter-tick: #545866;
+  --drgnx-meter-span: #c3c5c9;
 }
 /* hc */
 :root[data-theme="hc"] {
@@ -206,6 +218,12 @@ html.rust {
   --drgnx-key-hint-edge: #c9ccd3;
   --drgnx-card-needs-you-edge: #ffb38a;
   --drgnx-progress-track: #8c909a;
+  --drgnx-progress-fill: #a8c6ff;
+  --drgnx-meter-fill: #a8c6ff;
+  --drgnx-meter-near: #ffd36b;
+  --drgnx-meter-reached: #ff9a92;
+  --drgnx-meter-tick: #ffffff;
+  --drgnx-meter-span: #d6d8de;
 }
 /* a reader whose system asks for more contrast, unless the page chose */
 @media (prefers-contrast: more) {
@@ -276,5 +294,11 @@ html.rust {
     --drgnx-key-hint-edge: #c9ccd3;
     --drgnx-card-needs-you-edge: #ffb38a;
     --drgnx-progress-track: #8c909a;
+    --drgnx-progress-fill: #a8c6ff;
+    --drgnx-meter-fill: #a8c6ff;
+    --drgnx-meter-near: #ffd36b;
+    --drgnx-meter-reached: #ff9a92;
+    --drgnx-meter-tick: #ffffff;
+    --drgnx-meter-span: #d6d8de;
   }
 }

@@ -10,6 +10,8 @@
 (declare-function drgnx-signal-mode "drgnx-signal")
 (declare-function drgnx-grid-mode "drgnx-grid")
 (declare-function drgnx-grid-full-size-toggle "drgnx-grid" (&optional window))
+(declare-function drgnx-grid-placeholder-open "drgnx-grid")
+(declare-function drgnx-grid-placeholder-close "drgnx-grid")
 (declare-function drgnx-grid-unstack-tile "drgnx-grid-ops" ())
 (declare-function drgnx-grid-resize-mode "drgnx-grid-ops" ())
 (declare-function drgnx-grid-restore-previous "drgnx-grid-frames" ())
@@ -72,6 +74,7 @@
 (declare-function drgnx-wb-toggle-panel "drgnx-area")
 (declare-function drgnx-wb-focus-panel "drgnx-area")
 (declare-function drgnx-wb-output-select-channel "drgnx-area")
+(declare-function drgnx-wb-view-output "drgnx-area")
 (declare-function drgnx-wb-toggle-right-dock "drgnx-area")
 (declare-function drgnx-wb-show-unrouted "drgnx-rules")
 (declare-function drgnx-wb-place "drgnx-rules")
@@ -128,6 +131,15 @@ another buffer (BUFFER-NAME) is left as it was."
                        (drgnx-command-define 'tile-full-size :category "View" :title "Full-Size Tile" :scope 'window
                                              :command #'drgnx-grid-full-size-toggle
                                              :doc "Show this tile alone, at the grid's full size; again to put every tile back as it was")
+                       ;; a tile waiting for its kind (its module off, its content gone): `drgnx-grid-tile-placeholder'
+                       (drgnx-command-define 'tile-placeholder-open :category "View" :title "Open Tile Content"
+                                             :command #'drgnx-grid-placeholder-open :map 'drgnx-grid-placeholder-mode-map
+                                             :when (lambda () (derived-mode-p 'drgnx-grid-placeholder-mode))
+                                             :doc "In a tile waiting for its content: show it, or choose what the tile shows")
+                       (drgnx-command-define 'tile-placeholder-close :category "View" :title "Close Waiting Tile"
+                                             :command #'drgnx-grid-placeholder-close :map 'drgnx-grid-placeholder-mode-map
+                                             :when (lambda () (derived-mode-p 'drgnx-grid-placeholder-mode))
+                                             :doc "In a tile waiting for its content: hide the tile")
                        ;; Emacs's and Vim's "this window only" keys (C-x 1, C-w o, C-w _, C-w |) toggle full size:
                        ;; the other tiles come back, where `delete-other-windows' would lose the layout
                        (dolist (cmd '(delete-other-windows evil-window-delete-others evil-window-set-height
@@ -189,6 +201,9 @@ another buffer (BUFFER-NAME) is left as it was."
                                              :command #'drgnx-wb-toggle-panel :menu '("View") :doc "Show or hide the bottom panel (Terminal, Problems, Output, Results, Help)")
                        (drgnx-command-define 'focus-panel :category "View" :title "Focus Panel" :scope 'window
                                              :command #'drgnx-wb-focus-panel :doc "Show the bottom panel and move focus to it")
+                       (drgnx-command-define 'view-output :category "View" :title "Output" :scope 'window
+                                             :command #'drgnx-wb-view-output :menu '("View")
+                                             :doc "Show the panel's Output tab and focus it")
                        (drgnx-command-define 'output-select-channel :category "View" :title "Output: Select Channel…" :scope 'window
                                              :command #'drgnx-wb-output-select-channel
                                              :doc "Show one of the Output tab's channels (Messages, Warnings, Backtrace) in the panel")

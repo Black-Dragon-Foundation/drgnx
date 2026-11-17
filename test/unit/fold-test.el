@@ -287,10 +287,4 @@ definitions as classes, any other definition as a block; a reference folds nothi
                  "(f) @fold.function (m) @fold.function (c) @fold.class (i) @fold.class
 (k) @fold (r) @reference.call (n) @name")))
 
-(ert-deftest drgnx-fold/a-language-finds-its-pack ()
-  "A tree-sitter language finds the pack whose main grammar it is (C#'s grammar is `c-sharp', its pack `csharp')."
-  (should (equal (file-name-nondirectory (directory-file-name (drgnx-fold--pack-dir 'c-sharp))) "csharp"))
-  (should (equal (file-name-nondirectory (directory-file-name (drgnx-fold--pack-dir 'python))) "python"))
-  (should-not (drgnx-fold--pack-dir 'no-such-language)))
-
 ;;; fold-test.el ends here

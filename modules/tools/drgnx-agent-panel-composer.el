@@ -130,14 +130,14 @@ whichever frame is selected when the panel updates."
   (let* ((snap drgnx-agent-panel--snap) (model (plist-get snap :model)) (mode (plist-get snap :mode))
          (pair (drgnx-agent-panel-composer--pair-chip))
          (buttons (concat (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'git-fork) " Fork ")
-                                                             #'drgnx-agent-panel-fork 'drgnx-ui-button
+                                                             #'drgnx-agent-panel-fork 'drgnx-kit-button-secondary
                                                              "Start a second agent from the chat's last step")
                           " "
                           (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'pause) " ") #'drgnx-agent-panel-pause
-                                                             'drgnx-ui-button "p: stop the agent after its current step")
+                                                             'drgnx-kit-button-secondary "p: stop the agent after its current step")
                           " "
                           (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'arrow-up) " ")
-                                                             #'drgnx-agent-panel-send 'drgnx-ui-button-primary
+                                                             #'drgnx-agent-panel-send 'drgnx-kit-button-primary
                                                              "RET: send to the agent; while it works it is queued"))))
     (concat (if (stringp model)
                 (concat (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'sparkle) " " model " ")

@@ -1,7 +1,7 @@
 //! The server core against the real binary, each hub in its own temporary root with a clean environment (`support`):
 //! nothing reaches `~` or the user's runtime dir.
 
-mod support;
+use crate::support;
 
 use runstav::paths;
 use std::os::unix::fs::PermissionsExt;

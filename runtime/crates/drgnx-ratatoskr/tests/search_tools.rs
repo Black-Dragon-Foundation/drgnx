@@ -5,7 +5,7 @@
 //! session's socket is there when `mcp/session` has answered, and a worktree's view is read until it is seeded
 //! (`skuld::wait_until`, whose deadline only bounds a failure).
 
-mod support;
+use crate::support;
 
 use rmcp::model::{
     CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation, ProtocolVersion,
