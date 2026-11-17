@@ -269,6 +269,8 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-s` | Save As… | `Alt+Shift+S` | `F6 s` |
 | `C-S-t` | Reopen Closed Tab | `Alt+Shift+T` | `F6 t` |
 | `C-S-n` | New Window | `Alt+Shift+N` | `F6 n` |
+| `C-S-w` | Close Window | `Alt+Shift+W` | `F6 w` |
+| `C-S-u` | View: Output | `Alt+Shift+U` | `F6 u` |
 | `` C-` `` | Toggle Terminal | — | `` F6 ` `` |
 | `C-1` | Focus First Editor Group | — | `F6 1` |
 | `C-2` | Focus Second Editor Group | — | `F6 2` |
@@ -280,7 +282,6 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-b` | Focus Buffers | `Alt+Shift+B` | `F6 b` |
 | `C-{` | Fold | — | `F6 {` |
 | `C-}` | Unfold | — | `F6 }` |
-| `C-S-a` | Select All | `Alt+Shift+A` | `F6 a` |
 | `C-S-z` | Redo | `Alt+Shift+Z` | `F6 z` |
 | `C-/` | Toggle Comment | — | `F6 /` |
 | `C-S-k` | Delete Line | `Alt+Shift+K` | `F6 k` |

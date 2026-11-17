@@ -99,6 +99,9 @@ string-pixel-width uses)")
  (:what "\\`\\(?:hook\\|function-variable\\) "
   :source "\\`\\(?:core/drgnx-surfaces\\|wb/drgnx-\\(?:wb\\|explorer\\|popup\\)\\|modules/tools/drgnx-replace\\)\\.el\\'"
   :why "the workbench, surfaces and replace libraries wiring their hooks when first used in a session; each GUI test file has a session of its own, so it reaches no other file")
+ (:what "\\`hook kill-emacs-hook \\+drgnx-ui--stop-own-on-exit\\'"
+  :source "\\`harness/drgnx-ui\\.el\\'"
+  :why "the session harness wiring its stop-on-exit when it loads (a fixture that needs only `drgnx-ui-progress', the panel replay's, loads it); it stops only the sessions this process started, so with none it does nothing")
  (:what "\\`process [+-]Compiling: "
   :why "native compilation's own asynchronous jobs (comp-run-async-workers), started by a library's load and ended when they finish: Emacs's, not a test's")
 )

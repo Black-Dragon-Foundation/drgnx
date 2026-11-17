@@ -28,9 +28,12 @@
 
 (ert-deftest drgnx-ui-input/click-by-target ()
   (drgnx-test--lines-buffer)
-  (let ((xy (drgnx-uitest-target-xy "*drgnx-lines*" "line 25")))
+  ;; a line near the window's foot, from the window's own height: at scale 2 the session's 1600x900 is 450 px high,
+  ;; about 20 lines, so a fixed line 25 was below it
+  (let* ((n (- (window-body-height) 2)) (target (format "line %02d" n))
+         (xy (progn (should (>= n 10)) (drgnx-uitest-target-xy "*drgnx-lines*" target))))
     (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy))))
-    (should (equal (buffer-substring (pos-bol) (pos-eol)) "line 25"))))
+    (should (equal (buffer-substring (pos-bol) (pos-eol)) target))))
 
 (ert-deftest drgnx-ui-input/target-by-major-mode ()
   (drgnx-test--lines-buffer)
