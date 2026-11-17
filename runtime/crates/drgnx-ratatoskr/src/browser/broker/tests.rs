@@ -2,7 +2,7 @@
 //! `tests/data/fake-chromium.sh` as Chromium), and a websocket client of the tests' own on `cdp.sock`.
 
 use super::*;
-use crate::browser::host::{self, HostCfg};
+use crate::browser::host::{self, HostCfg, STOP_GRACE};
 use fastwebsockets::{FragmentCollector, Role, WebSocket};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -41,6 +41,7 @@ impl Fx {
             web_port: 3130,
             max_message: 1 << 20,
             headless_shell: false,
+            stop_grace: STOP_GRACE,
         };
         std::thread::spawn(move || host::serve(&cfg, end.into(), ready_w.into()));
         let mut line = String::new();
