@@ -297,20 +297,77 @@ pub struct Sessions {
 pub const SLOW_OPEN: Duration = Duration::from_secs(1);
 
 /// The stages of one `mcp/session`, timed in real time; logged (a warning) when it ends, by any path, after more than
-/// [`SLOW_OPEN`]: where a late answer spent its time is then in the hub's log.
+/// [`SLOW_OPEN`]: where a late answer spent its time is then in the hub's log.  One that is still running after
+/// [`SLOW_OPEN`] says so at that time, with the last stage it finished: a request that never ends leaves its place.
 struct Stages {
     start: std::time::Instant,
     last: std::time::Instant,
     done: Vec<(&'static str, u128)>,
+    /// What the late notice reads: the last stage finished, and whether the open has ended.
+    place: Arc<StagePlace>,
+}
+
+/// Where an `mcp/session` is: shared with the task that tells of one that runs late.
+#[derive(Default)]
+struct StagePlace {
+    after: Mutex<&'static str>,
+    ended: std::sync::atomic::AtomicBool,
+}
+
+impl StagePlace {
+    /// The late notice's text, or none when the open ended.
+    fn late(&self) -> Option<String> {
+        (!self.ended.load(Ordering::SeqCst)).then(|| {
+            let after = *self.after.lock().unwrap_or_else(|e| e.into_inner());
+            format!(
+                "mcp/session has run over {} ms and waits after the stage {:?} (the next one: {})",
+                SLOW_OPEN.as_millis(),
+                after,
+                next_stage(after)
+            )
+        })
+    }
+}
+
+/// The stage that follows STAGE in `open_with`.
+fn next_stage(stage: &str) -> &'static str {
+    match stage {
+        "" => "the owner's start time",
+        "owner" => "the serial lock",
+        "serial lock" => "the session's directory",
+        "directory" => "the row in runtime.db",
+        "runtime.db" => "the socket's bind",
+        "bind" => "the tool list",
+        "tools" => "the listener",
+        _ => "the end",
+    }
 }
 
 impl Stages {
-    fn new() -> Stages {
+    /// DB: runtime.db's handle, whose thread's current request a late notice names (the open's steps queue behind it).
+    fn new(db: Option<urdr::Handle>) -> Stages {
         let now = crate::clock::real_now();
+        let place = Arc::new(StagePlace::default());
+        let p = place.clone();
+        crate::clock::spawn("sessions:slow-open", async move {
+            let _ = crate::clock::real_timeout(SLOW_OPEN, std::future::pending::<()>()).await;
+            if let Some(text) = p.late() {
+                let store = match db.as_ref().and_then(urdr::Handle::running) {
+                    Some((at, age)) => format!(
+                        "; runtime.db's thread runs the request from {at} for {} ms",
+                        age.as_millis()
+                    ),
+                    None => "; runtime.db's thread is idle".to_owned(),
+                };
+                let queued = db.as_ref().map_or(0, urdr::Handle::queued);
+                tracing::warn!("{text}{store}, {queued} queued");
+            }
+        });
         Stages {
             start: now,
             last: now,
             done: Vec::new(),
+            place,
         }
     }
 
@@ -319,11 +376,13 @@ impl Stages {
         let now = crate::clock::real_now();
         self.done.push((what, (now - self.last).as_millis()));
         self.last = now;
+        *self.place.after.lock().unwrap_or_else(|e| e.into_inner()) = what;
     }
 }
 
 impl Drop for Stages {
     fn drop(&mut self) {
+        self.place.ended.store(true, Ordering::SeqCst);
         let total = self.start.elapsed();
         if total > SLOW_OPEN {
             let stages: Vec<String> = self
@@ -785,7 +844,7 @@ impl Sessions {
             .ok()
             .filter(|o| *o > 0)
             .ok_or_else(|| invalid("owner", "not a process id"))?;
-        let mut stages = Stages::new();
+        let mut stages = Stages::new(Some(store.db.clone()));
         let owner_start = owner_start(owner)
             .ok_or_else(|| invalid("owner", format!("process {owner} is not running")))?;
         stages.mark("owner");
@@ -1750,5 +1809,30 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(v, json!({"jsonrpc": "2.0", "id": 1, "result": {}}));
+    }
+}
+
+#[cfg(test)]
+mod stage_tests {
+    use super::*;
+
+    /// An `mcp/session` that runs late says where it waits: after the last stage it finished, and which one is next;
+    /// one that ended says nothing.
+    #[tokio::test]
+    async fn a_late_open_names_the_stage_it_waits_in() {
+        let mut st = Stages::new(None);
+        assert!(st.place.late().unwrap().contains("the owner's start time"));
+        st.mark("owner");
+        st.mark("serial lock");
+        st.mark("directory");
+        st.mark("runtime.db");
+        let text = st.place.late().unwrap();
+        assert!(
+            text.contains("\"runtime.db\"") && text.contains("the socket's bind"),
+            "{text}"
+        );
+        let place = st.place.clone();
+        drop(st);
+        assert!(place.late().is_none(), "an open that ended says nothing");
     }
 }

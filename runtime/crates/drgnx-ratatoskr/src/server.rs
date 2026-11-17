@@ -539,6 +539,8 @@ pub async fn run(args: ServeArgs) -> Exit {
         }
     };
     drop(listener);
+    // a nightly copy running (or checked) is interrupted, its partial file removed: the stop never waits for one
+    urdr::graph::backup::interrupt_all();
     // the hub's own sessions end with it (their rows, transcripts and queues stay for the next start)
     front.core.agents.shutdown().await;
     // the debug sessions stop (children first) and their adapters are reaped
