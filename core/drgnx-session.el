@@ -252,22 +252,35 @@ keep running, Keep Running, Close Them or Cancel (`drgnx-session-quit-keep'); el
                                         (string-join running ", ") (if (cdr running) "them" "it"))))
           (t t))))
 
-(defun drgnx-session-quit-confirm ()
-  "Ask what quitting needs: offer to save each changed file and New Untitled buffer, then confirm losing what
-stays unsaved, then — once — ask about the programs still running (terminals, shells; terminals may keep running).
-t when drgnx may quit; nil when it keeps running (the answer was no).  C-g or an error while saving leaves through
-the signal, so a caller that quits afterwards never gets there."
-  (setq drgnx-session-quit-keep nil)
-  (save-some-buffers nil t)          ; t: buffers with `buffer-offer-save' too, as `save-buffers-kill-emacs' does
+(declare-function drgnx-save-ask "drgnx-save-ask" (name))
+
+(defun drgnx-session--ask-unsaved ()
+  "The one question about unsaved changes a quit asks (`drgnx-save-ask', as VS Code's: one Save / Don't Save /
+Cancel dialog naming every changed file, Save All for several).  t when quitting may go on: nothing was changed,
+Save wrote it all, or Don't Save.  nil on Cancel, or when a file stays unsaved after Save (a New Untitled buffer
+left unnamed).  C-g or an error while saving leaves through the signal."
+  (require 'drgnx-save-ask)
   (let ((unsaved (drgnx-session--unsaved-buffers)))
-    (cond ((and unsaved (not (yes-or-no-p (format "%d buffer%s not saved; quit and lose the changes? "
-                                                  (length unsaved) (if (cdr unsaved) "s are" " is")))))
-           (message "drgnx keeps running; nothing was lost")
-           nil)
-          ((not (drgnx-session--confirm-running))
-           (message "drgnx keeps running; nothing was stopped")
-           nil)
-          (t t))))
+    (or (null unsaved)
+        (pcase (drgnx-save-ask (mapcar #'buffer-name unsaved))
+          ('discard t)
+          ('save (save-some-buffers t t)       ; every buffer, unasked (the dialog was the question)
+                 (null (drgnx-session--unsaved-buffers)))
+          (_ nil)))))
+
+(defun drgnx-session-quit-confirm ()
+  "Ask what quitting needs: one Save / Don't Save / Cancel question for every changed file and New Untitled buffer
+\(`drgnx-session--ask-unsaved'), then — once — about the programs still running (terminals, shells; terminals may
+keep running).  t when drgnx may quit; nil when it keeps running (the answer was no).  C-g or an error while
+saving leaves through the signal, so a caller that quits afterwards never gets there."
+  (setq drgnx-session-quit-keep nil)
+  (cond ((not (drgnx-session--ask-unsaved))
+         (message "drgnx keeps running; nothing was lost")
+         nil)
+        ((not (drgnx-session--confirm-running))
+         (message "drgnx keeps running; nothing was stopped")
+         nil)
+        (t t)))
 
 (defun drgnx-session-quit ()
   "Quit drgnx — the daemon too: offer to save each changed file and New Untitled buffer, then stop.  C-g, an

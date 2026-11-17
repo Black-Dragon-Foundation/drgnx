@@ -648,7 +648,10 @@ is no command and asks only where somebody can answer (`drgnx-save-ask-can-ask-p
 at once, so nothing is lost and nothing waits. `(drgnx-save-ask-discard BUFFER)` carries out Don't Save: it kills
 BUFFER without asking again and keeps its text first in `drgnx-close-discarded` (the last five, newest first, as
 `(:file FILE :text TEXT :time TIME)`), so a mis-click is not fatal. Close Tab asks it
-([workbench](../guide/workbench.md)).
+([workbench](../guide/workbench.md)). NAME may be a list of names: one question for all of them ("…the following N
+files?", Save All), which is how quitting asks (`drgnx-session-quit-confirm`: that one question, then the running
+programs; Save writes with `save-some-buffers` unasked, Don't Save just quits; a text Don't Save drops at a quit is
+not kept, the process ends) ([opening](../guide/opening.md)).
 
 ## Notices (`drgnx-notice.el`)
 
