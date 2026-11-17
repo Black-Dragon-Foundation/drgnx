@@ -117,6 +117,21 @@ is signalled) and the root frame stubbed; the variable `calls' counts the sample
       (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait-presented :secs 0.1)))))
         (should (equal (car (plist-get d :waited-for)) "a presented frame"))))))
 
+(defvar drgnx-test--deleted-frames)
+
+(ert-deftest drgnx-test-wait-presented/a-dead-frame-fails-at-once-and-says-who-deleted-it ()
+  ;; a frame deleted before or during the wait never presents: the wait fails at its first look, naming the frame
+  ;; and the callers that deleted it, instead of sampling a dead frame until the deadline
+  (let ((dead nil)
+        (drgnx-test--deleted-frames (list (cons 'root '(drgnx-look-echo-swap drgnx-timer--fire)))))
+    (drgnx-wait-test--with-frames '("a")
+      (cl-letf (((symbol-function 'drgnx-test--frame-dead-p) (lambda (f) (and dead (eq f 'root)))))
+        (setq dead t)
+        (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait-presented :secs 5)))))
+          (should (eq (plist-get d :dead-frame) 'root))
+          (should (equal (plist-get d :deleted-by) '(drgnx-look-echo-swap drgnx-timer--fire)))
+          (should (= calls 0)))))))
+
 (ert-deftest drgnx-test-wait-presented/no-paint-at-all-fails-and-says-why ()
   (drgnx-wait-test--with-frames '(error)
     (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait-presented :secs 0.1)))))

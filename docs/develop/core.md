@@ -3999,7 +3999,10 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   one still waiting owes no commit of its own, so under a compositor that answered no frame callback (KWin with no
   render device) that count settled on a picture that never went out. A paint that does not come within the primitive's 1 s is the next try; a timeout fails the test. Do
   not use it across a count of draws: the samples are paints. A row with a popup that has no parent (mini-frame detaches
-  its frame) passes FRAME, since `drgnx-uitest-root-frame` can find that popup. The session's output lists every test
+  its frame) passes FRAME, since `drgnx-uitest-root-frame` can find that popup. A frame deleted before or during the
+  wait never presents, so the wait fails at its next look with `:dead-frame` and `:deleted-by`, the functions on the
+  stack when it was deleted (the fixture notes the last 8 deletions on `delete-frame-functions`), instead of sampling
+  a dead frame until its deadline. The session's output lists every test
   that skipped by name (`  SKIP NAME`), so a green tier shows what it did not run.
 - **A frame resized.** The GUI sessions' root frame is fullscreen, and a fullscreen frame keeps its output's size: a
   `set-frame-size` there does nothing, and a row that checked the windows after it passed on the size it had. A row
