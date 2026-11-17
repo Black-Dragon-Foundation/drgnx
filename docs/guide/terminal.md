@@ -328,7 +328,9 @@ connect with `TERM=xterm-256color`.
 Inside tmux, drgnx talks to tmux, not to your terminal: tmux decides which keys, copies and focus changes get
 through, and its defaults block most of them. drgnx reads tmux's settings when a terminal window opens (`tmux show`,
 asked of the tmux the window runs in, 1 second at most), works with what tmux allows, and writes the lines you can
-add for the rest into `terminal-report.eld`. **drgnx never writes `~/.tmux.conf`.** Add the
+add for the rest into `terminal-report.eld`. A tmux that does not answer in time (a busy machine) is asked again
+5 seconds later, then less often (10, 20, 40 and 80 s); when it answers, the open window gets its keys, focus and
+copy as if it had answered at once. **drgnx never writes `~/.tmux.conf`.** Add the
 lines you want yourself, then run `tmux source ~/.tmux.conf` and open a new terminal window (settings are read when
 one opens). The lines, in this order, each only if it is missing:
 

@@ -512,21 +512,52 @@ once it has no file left."
 the focus step of one setup share one call; a window made later asks again, so a `tmux source ~/.tmux.conf'
 shows.")
 
+(defvar drgnx-tty-frames-tmux-miss-ttl 5
+  "Seconds a tmux that gave no answer within its 1 s is not asked again (`drgnx-tty-frames--tmux-options'); the
+retry after a miss waits this long, each later one twice as long as the one before.")
+
+(defconst drgnx-tty-frames-tmux-retries 5
+  "How many retries a tmux that gives no answer gets (`drgnx-tty-frames--tmux-retry'): at 5, 10, 20, 40 and 80 s
+with the default miss TTL.  After that only a setup step (a new window, a module stage) asks again.")
+
 (defun drgnx-tty-frames--tmux-options (frame &optional id)
   "tmux's options (`drgnx-tty-tmux-options') for FRAME's client, when it is inside tmux and tmux answers; else
 nil.  ID is the terminal's id when the caller has it (else `drgnx-tty-frames--identity' finds it).  Kept in
-the terminal parameter `drgnx-tty-tmux' for `drgnx-tty-frames-tmux-ttl' seconds; a tmux that gave no answer (it
-hung for its 1 s, or is too old to say) is remembered as such until the terminal goes away, so a hung server costs
-that second once, not once per window or setup step."
+the terminal parameter `drgnx-tty-tmux' for `drgnx-tty-frames-tmux-ttl' seconds.  A tmux that gave no answer
+within its 1 s (a hung server, or a loaded machine) is not asked again for `drgnx-tty-frames-tmux-miss-ttl'
+seconds, so it costs that second once per miss TTL, not once per window or setup step; a retry is due then
+\(`drgnx-tty-frames--tmux-retry'), and an answer that comes later sets the terminal up as it would have at first."
   (let* ((term (frame-terminal frame))
          (kept (terminal-parameter term 'drgnx-tty-tmux)))
-    (if (and kept (or (null (cdr kept)) (< (- (float-time) (car kept)) drgnx-tty-frames-tmux-ttl)))
+    (if (and kept (< (- (float-time) (car kept))
+                     (if (cdr kept) drgnx-tty-frames-tmux-ttl drgnx-tty-frames-tmux-miss-ttl)))
         (cdr kept)
-      (let ((options (and (eq (or id (plist-get (drgnx-tty-frames--identity frame) :id)) 'tmux)
-                          (drgnx-tty-tmux-options (drgnx-tty-env frame)))))
+      (let* ((tmux (eq (or id (plist-get (drgnx-tty-frames--identity frame) :id)) 'tmux))
+             (options (and tmux (drgnx-tty-tmux-options (drgnx-tty-env frame)))))
         (when (terminal-live-p term)
-          (set-terminal-parameter term 'drgnx-tty-tmux (cons (float-time) options)))
+          (set-terminal-parameter term 'drgnx-tty-tmux (cons (float-time) options))
+          (if options
+              (set-terminal-parameter term 'drgnx-tty-tmux-misses nil)
+            ;; inside tmux (its socket known) and no answer: try again later, less often each time
+            (when-let* ((tmux)
+                        ((not (string-empty-p (or (drgnx-tty--env-get (drgnx-tty-env frame) "TMUX") ""))))
+                        (misses (1+ (or (terminal-parameter term 'drgnx-tty-tmux-misses) 0)))
+                        ((<= misses drgnx-tty-frames-tmux-retries)))
+              (set-terminal-parameter term 'drgnx-tty-tmux-misses misses)
+              (drgnx-timer-start (cons 'tmux-retry frame) (* drgnx-tty-frames-tmux-miss-ttl (expt 2 (1- misses)))
+                                 #'drgnx-tty-frames--tmux-retry :args (list frame) :owner 'ui/terminal))))
         options))))
+
+(defun drgnx-tty-frames--tmux-retry (frame)
+  "Ask tmux again for FRAME's terminal, which gave no answer before (`drgnx-tty-frames--tmux-options'), and set the
+terminal up from the answer: modifyOtherKeys asked for when extended-keys is on (its keys were legacy), focus
+reports, the copy, the report.  A timer of its own: it types nothing and draws nothing; one 1 s ask at most."
+  (when (and (frame-live-p frame) (terminal-live-p (frame-terminal frame)))
+    (when (drgnx-tty-frames--tmux-options frame)
+      (drgnx-tty-frames--tmux-setup frame)
+      (when (fboundp 'drgnx-tty-clip-setup)
+        (drgnx-tty-frames--guard "clipboard" #'drgnx-tty-clip-setup frame))
+      (drgnx-tty-frames-refresh-report frame))))
 
 (defconst drgnx-tty-frames--focus-on "\e[?1004h" "The request for focus reports (xterm.el's).")
 (defconst drgnx-tty-frames--focus-off "\e[?1004l" "Its reset.")
@@ -593,11 +624,17 @@ as CSI 27 ; M ; K ~ (Shift, Meta, Control)."
   "Under tmux with `extended-keys' on or always, after modifyOtherKeys was asked for (level 1): ask for
 `drgnx-tty-tmux-mok-level' when that is 2 (default 1: nothing to do) so C-S- chords arrive, once per terminal and
 kept for a resume; back to 1, level 1 is asked again and level 2's resume string dropped.  The report is written
-again either way (C-g waits at level 2).  With `extended-keys-format csi-u', the terminal also decodes that form."
+again either way (C-g waits at level 2).  With `extended-keys-format csi-u', the terminal also decodes that form.
+A terminal whose tmux gave no answer at its setup (`drgnx-tty-frames--keys-setup' then left modifyOtherKeys off)
+gets it now that tmux says extended-keys is on, and its report says so."
   (let* ((term (frame-terminal frame))
          (options (drgnx-tty-frames--tmux-options frame))
          (level-1 "\e[>4;1m") (level-2 "\e[>4;2m"))
     (when (and (terminal-live-p term) (member (plist-get options :extended-keys) '("on" "always")))
+      (when (and (terminal-parameter term 'drgnx-tty-mok-decoded) (not (drgnx-tty-frames-mok-asked-p term))
+                 (not (string-empty-p (or (drgnx-tty--env-get (drgnx-tty-env frame) "TMUX") ""))))
+        (drgnx-tty-frames--ask-mok frame)
+        (unless (eql drgnx-tty-tmux-mok-level 2) (drgnx-tty-frames-refresh-report frame)))   ; level 2 writes it below
       (let ((set (terminal-parameter term 'tty-mode-set-strings)))
         (cond ((and (eql drgnx-tty-tmux-mok-level 2) (member level-1 set) (not (member level-2 set)))
                (send-string-to-terminal level-2 term)
@@ -804,7 +841,7 @@ module turned on again sets it up anew.  What Emacs asked the terminal for stays
     (set-terminal-parameter term 'tty-mode-reset-strings
                             (remove drgnx-tty-frames--focus-off (terminal-parameter term 'tty-mode-reset-strings))))
   (dolist (param '(drgnx-tty-set-up drgnx-tty-mok-decoded drgnx-tty-csi-u drgnx-tty-mok-level drgnx-tty-tmux
-                                    drgnx-tty-asked-mok drgnx-tty-asked-focus))
+                                    drgnx-tty-tmux-misses drgnx-tty-asked-mok drgnx-tty-asked-focus))
     (when (terminal-parameter term param) (set-terminal-parameter term param nil))))
 
 (defun drgnx-tty-frames--teardown ()
