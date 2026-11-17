@@ -17,6 +17,9 @@ pub enum ListChip {
     Progress(u32, u32),
     /// A task's state: a glyph and its word.
     State(TaskState),
+    /// What the item has spent against its binding limit (spec, plan and task rows that have spend): the last chip,
+    /// right before the agent.
+    Meter(crate::model::ItemBudget),
 }
 
 /// One row of the list.
@@ -34,6 +37,10 @@ pub struct ListEntry {
     pub agent: Option<ItemId>,
     pub machine: Option<String>,
     pub chips: Vec<ListChip>,
+    /// The item's spend against its binding limit (spec, plan and task rows); the same value the `Meter` chip holds.
+    pub budget: Option<crate::model::ItemBudget>,
+    /// A spec's or plan's target date.
+    pub target_at: Option<crate::model::Instant>,
     pub visibility: Visibility,
     /// The closing row: how many finished tasks Active leaves out.
     pub count: Option<u32>,
@@ -45,6 +52,14 @@ pub struct ListEntry {
 pub const NO_SPEC: &str = "spec:none";
 /// The id of the closing row.
 pub const COMPLETED_MORE: &str = "completed:more";
+
+/// The row's budget: the item's own, unless it has neither spend nor a limit to show.
+fn budget_of(it: &Item) -> Option<crate::model::ItemBudget> {
+    it.fields
+        .budget
+        .clone()
+        .filter(|b| b.limit.is_some() || b.spent.0 > 0.0)
+}
 
 fn group_of(it: &Item, v: &ViewState, now: u64, forced: bool) -> Option<Group> {
     if v.filters.show != crate::Show::Active {
@@ -164,6 +179,7 @@ pub fn entries(m: &Model, v: &ViewState, now: u64) -> Vec<ListEntry> {
             .map(|m| m.label.clone())
     };
     for b in &blocks {
+        let spec_item = b.spec.map(|s| &items[s]);
         let (item, label, entry_group, visibility) = match b.spec {
             Some(s) => {
                 let it = &items[s];
@@ -198,7 +214,13 @@ pub fn entries(m: &Model, v: &ViewState, now: u64) -> Vec<ListEntry> {
             group: entry_group,
             agent: None,
             machine: None,
-            chips: Vec::new(),
+            chips: spec_item
+                .and_then(budget_of)
+                .map(ListChip::Meter)
+                .into_iter()
+                .collect(),
+            budget: spec_item.and_then(budget_of),
+            target_at: spec_item.and_then(|i| i.fields.target_at),
             visibility,
             count: None,
             collapsed,
@@ -220,7 +242,10 @@ pub fn entries(m: &Model, v: &ViewState, now: u64) -> Vec<ListEntry> {
                     .progress
                     .map(|(a, b)| ListChip::Progress(a, b))
                     .into_iter()
+                    .chain(budget_of(pit).map(ListChip::Meter))
                     .collect(),
+                budget: budget_of(pit),
+                target_at: pit.fields.target_at,
                 visibility: vis(pit).max(Visibility::Normal),
                 count: None,
                 collapsed: v.list_collapsed.contains(*p),
@@ -252,6 +277,7 @@ pub fn entries(m: &Model, v: &ViewState, now: u64) -> Vec<ListEntry> {
                         chips.push(ListChip::Progress(d, n));
                     }
                 }
+                chips.extend(budget_of(tit).map(ListChip::Meter));
                 out.push(ListEntry {
                     item: t.clone(),
                     label: tit.label.clone(),
@@ -260,6 +286,8 @@ pub fn entries(m: &Model, v: &ViewState, now: u64) -> Vec<ListEntry> {
                     machine: agent.as_ref().and_then(machine_label),
                     agent,
                     chips,
+                    budget: budget_of(tit),
+                    target_at: None,
                     visibility: vis(tit),
                     count: None,
                     collapsed: false,
@@ -281,6 +309,8 @@ pub fn entries(m: &Model, v: &ViewState, now: u64) -> Vec<ListEntry> {
                 agent: None,
                 machine: None,
                 chips: Vec::new(),
+                budget: None,
+                target_at: None,
                 visibility: Visibility::Faded,
                 count: Some(u32::try_from(hidden_done).unwrap_or(u32::MAX)),
                 collapsed: false,
