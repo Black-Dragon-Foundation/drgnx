@@ -3331,6 +3331,38 @@ the rows themselves are `agents/session/rows.rs`, pure).
   is dropped when the view closes or the connection goes.
 - `huddle_rows` builds a huddle thread's rows (`h`, `r:N`, `o`) from its record; the thread still draws in Lisp.
 
+### Conversation blocks
+
+`agents/session/blocks.rs` folds a session's transcript into the blocks the conversation view shows, and reads the
+plan strip. It is pure (no lock, no I/O, no clock); the views that draw it come later in the frontend flow.
+
+- **Blocks.** `You` (a user message), `Markdown` (an agent message, by its entry: its Markdown blocks are the panel's
+  `b:I:N` rows), `Explored {reads, searches, secs, steps}`, `Finding {conclusion, text, sources}`, `Edit {path, plus,
+  minus, hunks}`, `Step` (any other tool call: a shell command, a fetch), `Subagent {call_id, title, blocks}`, `Notice`
+  (a notice, an error or a compaction), and, after them, `Ask`, `Live` and `Queued`.
+- **Explored.** Consecutive `read` and `search` tool calls fold into one block. Any other block, or a turn's end,
+  breaks the run; thoughts, usage and plan entries break nothing. `secs` is the run's steps' seconds (from their
+  timeline steps), summed, then rounded.
+- **Findings.** A `record_decision` or `note_add` call of the drgnx MCP server (any provider's spelling,
+  `work::conclusions::mcp_tool_of`) is a `Finding`: `decision` with "subject: reason", or `finding` with its text, and
+  the sources its call named.
+- **Edits.** A tool call of kind `edit`, or one carrying `diff` content, is an `Edit`: its path, the lines added and
+  removed over its diffs, and their hunks in the new text's lines.
+- **Subagents.** A subagent's tool calls (their `_meta.claudeCode.parentToolUseId`, kept beside the entries and passed
+  in as `Meta::parents`) nest in a `Subagent` block under their `Task` call, whose title is the block's. The steps
+  fold inside it the same way. A call with no parent id stays at the parent's level.
+- **Incremental.** `Folder::append` folds only new entries: onto the last block, or as new blocks. `Folder::update`
+  folds again from the block that holds a changed entry, because a tool call's status and diff arrive after the call.
+  Both answer a `Patch {from, len}`: the blocks before `from` are unchanged, so appending one entry to a 10,000-entry
+  transcript patches one block.
+- **Overlay.** `overlay(entries, asks, running, queued)` gives what follows the transcript, in order:
+  - each waiting permission or question as an `Ask`, its options keyed `y` (allow once), `a` (always), `n` (deny);
+  - while the turn runs, `Live`: the last entry when it is a tool call still running, or a thought;
+  - each queued message as `Queued`.
+- **The plan strip.** `plan_strip(entries)` is the latest plan entry's items as `(text, Done | Doing | Todo)`
+  (`completed`, `in_progress`, anything else). The panel keeps no row for a plan entry: its plan card
+  (`view/panel_cards.rs`, "To do · 1 of 3 done") already shows it.
+
 ### The symbol at a line (`search/symbol-at`)
 
 `search/symbol-at {root, file, line}` answers `{name?}`: of the symbols Hrafn's chunker finds in `file` (relative to
