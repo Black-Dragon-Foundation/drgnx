@@ -2,6 +2,7 @@
 //! hub.md, "Forecasts").  Tokens, time and cost are ranges (a middle and a high end), cost by unit and never summed
 //! across units, and each task says what it was forecast from.
 
+use super::graph::ParsedId;
 use super::matrix::Unit;
 use super::method;
 use crate::registry::Method;
@@ -15,6 +16,12 @@ use serde::{Deserialize, Serialize};
 pub struct Range {
     pub p50: f64,
     pub p90: f64,
+}
+
+impl Default for Range {
+    fn default() -> Self {
+        Range { p50: 0.0, p90: 0.0 }
+    }
 }
 
 /// A cost range in one unit.  `estimate` is true for `usd-est`: tokens at API prices, not a measured bill.
@@ -76,6 +83,12 @@ pub struct TaskForecast {
     /// Empty for a profile with no price: unpriced, never zero.
     #[serde(default, deserialize_with = "null_as_empty")]
     pub cost: Vec<CostRange>,
+    /// When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs
+    /// (a manager's row has none: zeros).
+    #[serde(default)]
+    pub start: Range,
+    #[serde(default)]
+    pub finish: Range,
 }
 
 /// The cold wakes in a forecast: "of which", already inside the totals (the history holds its wakes).
@@ -149,6 +162,50 @@ pub struct Forecast {
     /// The date of the oldest shipped price row in use.
     pub prices_as_of: String,
     pub made_at: f64,
+    /// What the forecast said when the job was proposed, kept for an approved job to be compared against; none for a
+    /// proposal and for a forecast made before they were kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<Baseline>,
+}
+
+/// When a job's tasks were forecast to start and end, offsets from the run's start (as a task's own `start`, `finish`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct Baseline {
+    pub made_at: f64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub tasks: Vec<BaselineTask>,
+    /// The plan's own finish (its wall time).
+    pub finish: Range,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BaselineTask {
+    pub n: u64,
+    pub start: Range,
+    pub finish: Range,
+}
+
+/// `forecast/plan`: the plans (entity ids) to forecast together.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ForecastPlanParams {
+    pub plans: Bounded<Vec<ParsedId>, 32>,
+}
+
+/// A plan with a running job: its own forecast, not part of the joint draw.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct RunningPlan {
+    pub plan: String,
+    pub job: String,
+    pub remaining: Forecast,
+}
+
+/// The joint forecast of the plans not running (its `tasks` are numbered `plan index * 1000 + n`), and the plans that
+/// are.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct PlanForecast {
+    pub forecast: Forecast,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub running: Vec<RunningPlan>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -199,6 +256,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "forecast/get", ForecastGet(ForecastParams) -> Forecast,
             classes: [User], writes: false,
             doc: "a job's forecast: tokens, time and cost per task and for the plan, from the history of similar tasks, with the effect on the week's pace",
+        ),
+        method!(
+            "forecast/plan", ForecastPlan(ForecastPlanParams) -> PlanForecast,
+            classes: [User], writes: false,
+            doc: "one forecast over the plans given (up to 32), drawn together on the runner's slots (not a sum of each plan's p90); a plan with a running job is in `running`, with its own forecast, and not in the draw; nothing is recorded",
         ),
         method!(
             "forecast/session", ForecastSession(SessionForecastParams) -> Forecast,

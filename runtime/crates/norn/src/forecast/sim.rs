@@ -34,6 +34,9 @@ pub struct TaskTotals {
     pub tokens: Range,
     pub active: Range,
     pub cost: BTreeMap<String, Range>,
+    /// When the task starts and ends, in seconds from the run's start (its own distribution over the draws).
+    pub start: Range,
+    pub finish: Range,
 }
 
 /// A plan's ranges. Each is the plan's own distribution, not a sum of its tasks' ranges: p90s do not add up.
@@ -119,6 +122,9 @@ struct Drawn<'p> {
     cost: Vec<Option<(&'p str, f64)>>,
     cold_wakes: f64,
     wall: f64,
+    /// Each task's start and finish, seconds from the run's start.
+    start: Vec<f64>,
+    finish: Vec<f64>,
 }
 
 struct Plan<'a> {
@@ -177,6 +183,8 @@ impl<'a> Plan<'a> {
             cost: vec![None; n],
             cold_wakes: 0.0,
             wall: 0.0,
+            start: vec![0.0; n],
+            finish: vec![0.0; n],
         };
         let mut secs = vec![0.0; n];
         for (i, task) in self.tasks.iter().enumerate() {
@@ -189,29 +197,38 @@ impl<'a> Plan<'a> {
             }
             drawn.cost[i] = task.priced.at(u).map(|(unit, usd)| (unit.as_str(), *usd));
         }
-        drawn.wall = self.wall_time(&secs);
+        let (wall, spans) = self.wall_time(&secs);
+        drawn.wall = wall;
+        for (i, (start, finish)) in spans.into_iter().enumerate() {
+            drawn.start[i] = start;
+            drawn.finish[i] = finish;
+        }
         drawn
     }
 
     /// When the last task ends, as the runner would run them: whenever a slot is free it takes the ready task with
     /// the lowest `n`, so a task that waits for its parents leaves its slot to one that can start.
-    fn wall_time(&self, secs: &[f64]) -> f64 {
+    ///
+    /// With the total, each task's `(start, finish)`: a task starts when a slot takes it, after its parents ended.
+    fn wall_time(&self, secs: &[f64]) -> (f64, Vec<(f64, f64)>) {
         let mut waits = self.waits.clone();
         let mut ready: BinaryHeap<_> = (0..waits.len())
             .filter(|i| waits[*i] == 0)
             .map(|i| Reverse((self.wants[i].n, i)))
             .collect();
         let mut running: Vec<(f64, usize)> = Vec::with_capacity(self.slots);
+        let mut spans = vec![(0.0, 0.0); secs.len()];
         let mut now = 0.0;
         loop {
             while running.len() < self.slots {
                 let Some(Reverse((_, i))) = ready.pop() else {
                     break;
                 };
+                spans[i] = (now, now + secs[i]);
                 running.push((now + secs[i], i));
             }
             let Some(next) = running.iter().map(|r| r.0).min_by(f64::total_cmp) else {
-                return now;
+                return (now, spans);
             };
             now = next;
             running.retain(|&(end, i)| {
@@ -236,6 +253,8 @@ struct Series {
     tokens: Vec<f64>,
     active: Vec<f64>,
     cost: BTreeMap<String, Vec<f64>>,
+    start: Vec<f64>,
+    finish: Vec<f64>,
 }
 
 impl Series {
@@ -289,6 +308,8 @@ pub fn simulate(
         for (i, series) in per_task.iter_mut().enumerate() {
             series.tokens.push(drawn.tokens[i]);
             series.active.push(drawn.active[i]);
+            series.start.push(drawn.start[i]);
+            series.finish.push(drawn.finish[i]);
             if let Some((unit, amount)) = drawn.cost[i] {
                 series.push_cost(unit, amount);
                 *cost.entry(unit).or_default() += amount;
@@ -308,6 +329,8 @@ pub fn simulate(
             .map(|mut s| TaskTotals {
                 tokens: range(std::mem::take(&mut s.tokens)),
                 active: range(std::mem::take(&mut s.active)),
+                start: range(std::mem::take(&mut s.start)),
+                finish: range(std::mem::take(&mut s.finish)),
                 cost: s.cost_ranges(),
             })
             .collect(),
@@ -811,5 +834,59 @@ mod tests {
         }
         assert!(raw < 0.4, "the raw p90 covers {raw}");
         assert!((scaled - 181.0 / 201.0).abs() < 0.005, "{scaled}");
+    }
+
+    /// A task that needs another starts after the other ends, in every draw, so at every quantile.
+    #[test]
+    fn a_task_starts_after_the_tasks_it_needs() {
+        let obs = [ob(1000, 10.0), ob(2000, 30.0), ob(500, 70.0)];
+        let wants = [task(1, &[]), task(2, &[1])];
+        let t = sim(&wants, &obs, 2);
+        assert!(t.per_task[1].start.p50 >= t.per_task[0].finish.p50);
+        assert!(t.per_task[1].start.p90 >= t.per_task[0].finish.p50);
+        assert!(t.per_task[0].start.p90 == 0.0);
+    }
+
+    #[test]
+    fn one_slot_runs_tasks_one_after_another() {
+        let obs = [ob(1000, 10.0), ob(2000, 30.0)];
+        let wants = [task(1, &[]), task(2, &[]), task(3, &[])];
+        let t = sim(&wants, &obs, 1);
+        // the lowest n goes first, and each starts when the one before it ended (its start is never earlier at any
+        // quantile than the earlier task's start)
+        assert!(t.per_task[0].start.p50 == 0.0);
+        assert!(
+            t.per_task[1].start.p50 >= t.per_task[0].finish.p50.min(t.per_task[0].start.p50 + 10.0)
+        );
+        assert!(t.per_task[2].start.p50 >= t.per_task[1].start.p50);
+        assert!(t.per_task[2].start.p90 >= t.per_task[1].finish.p50);
+    }
+
+    /// The plan's wall is the last finish of each draw: no later than the latest p90 of the tasks' finishes.
+    #[test]
+    fn the_plan_wall_is_the_last_finish() {
+        let obs = [ob(1000, 10.0), ob(2000, 30.0), ob(500, 70.0)];
+        let wants = [task(1, &[]), task(2, &[1]), task(3, &[])];
+        let t = sim(&wants, &obs, 2);
+        let latest = t.per_task.iter().map(|x| x.finish.p90).fold(0.0, f64::max);
+        assert!(t.wall.p90 <= latest + 1e-9, "{} > {latest}", t.wall.p90);
+        assert!(t.wall.p50 > 0.0);
+    }
+
+    /// With a single observation every draw is the same, so the schedule and the totals are exact: the new columns
+    /// move no existing number.
+    #[test]
+    fn existing_ranges_do_not_move() {
+        let obs = [ob(1000, 10.0)];
+        let wants = [task(1, &[]), task(2, &[1])];
+        let t = sim(&wants, &obs, 2);
+        near(t.wall.p50, 20.0);
+        near(t.wall.p90, 20.0);
+        near(t.tokens.p50, 2000.0);
+        near(t.active.p50, 20.0);
+        near(t.per_task[0].start.p50, 0.0);
+        near(t.per_task[0].finish.p50, 10.0);
+        near(t.per_task[1].start.p50, 10.0);
+        near(t.per_task[1].finish.p50, 20.0);
     }
 }

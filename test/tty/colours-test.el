@@ -149,6 +149,21 @@ foreground and background are the same colour on this terminal, in the default t
   '(:weight :slant :underline :overline :strike-through :box :inverse-video)
   "The face attributes that tell without colour.")
 
+(ert-deftest drgnx-tty-colours/selection-is-inverse-and-unfocused-underlined ()
+  ;; the kit's state table on a terminal (etc/ui/components.eld :tty): selected and focus inverse video, the inactive
+  ;; selection an underline with no fill and no bold, hover nothing, disabled dim
+  (drgnx-tty-session-with (s :daemon t :size "120x40")
+    (drgnx-tty-session-client s :env '("TERM=xterm"))
+    (should (equal (drgnx-tty-colours-test--in-client
+                    s '(list (face-attribute 'drgnx-selected :inverse-video nil t)
+                             (face-attribute 'drgnx-focus :inverse-video nil t)
+                             (and (face-attribute 'drgnx-selected-inactive :underline nil t) t)
+                             (face-attribute 'drgnx-selected-inactive :background nil t)
+                             (face-attribute 'drgnx-selected-inactive :weight nil t)
+                             (face-attribute 'drgnx-text-disabled :weight nil t)
+                             (face-attribute 'drgnx-hover :background nil t)))
+                   '(t t t unspecified normal light unspecified)))))
+
 (ert-deftest drgnx-tty-colours/states-are-told-apart-without-colour ()
   (drgnx-tty-session-with (s :daemon t :size "120x40")
     (let ((c (drgnx-tty-session-client s :env '("TERM=xterm"))))

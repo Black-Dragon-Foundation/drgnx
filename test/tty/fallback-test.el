@@ -184,7 +184,23 @@ so no stage rebinds it; the module stages are over first all the same."
       ;; and the next F6 p is the palette again
       (drgnx-tty-session-send c (concat f6 "p"))
       (drgnx-tty-keys-test--ran s 'drgnx-palette "C-S-p")
-      (drgnx-tty-keys-test--quit s c 'legacy))))
+      (drgnx-tty-keys-test--quit s c 'legacy)
+      ;; F6 Shift+Tab : Ctrl+Shift+Tab (the terminal sends Shift+Tab's ESC [ Z for both, so F6 is its way in)
+      (drgnx-tty-session-send c (concat f6 "\e[Z"))
+      (drgnx-tty-keys-test--ran s 'drgnx-chrome-recent-editor-up "C-S-<tab>"))))
+
+(ert-deftest drgnx-tty-fallback/f6-types-the-fold-level-chords ()
+  ;; VS Code's Fold Level is C-k C-1 … C-k C-7; a legacy terminal sends no C-4 (nor most of the others): C-k then F6 4
+  ;; is the chord, each of the seven arriving as the profile spells it
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28" :options '(("set" "-s" "extended-keys" "off")))
+    (let ((c (drgnx-tty-fallback-test--legacy s))
+          (f6 (drgnx-tty-session-encode "<f6>" 'legacy)))
+      (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
+      (dotimes (i 7)
+        (let ((n (number-to-string (1+ i))))
+          (drgnx-tty-session-wait-stages s)
+          (drgnx-tty-session-send c (concat "\C-k" f6 n))
+          (drgnx-tty-keys-test--ran s 'drgnx-fold-fold-level (concat "C-k C-" n)))))))
 
 (ert-deftest drgnx-tty-fallback/the-hint-waits-while-f6-waits ()
   ;; the hint's timer comes due while F6 waits for its key: the prompt stays, and the hint is said once the key is in.

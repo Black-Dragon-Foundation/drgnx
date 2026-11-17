@@ -122,6 +122,8 @@ pub(crate) async fn pass(front: &Front, told: &mut HashMap<String, u64>) {
     if sessions.is_empty() {
         return;
     }
+    // paragraph comments no agent was writing the record for: a session that came since may be its writer
+    crate::work::comments::deliver_waiting(front).await;
     let queued = front
         .writer
         .db

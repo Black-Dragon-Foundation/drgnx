@@ -741,6 +741,9 @@ impl Front {
             Params::OutlineSet(p) => crate::view::outline::set(self, &caller, p)
                 .await
                 .map(|b| json!(b)),
+            Params::MinimapWatch(p) => crate::view::minimap::watch(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
             Params::OutlineScopes(p) => crate::view::outline::scopes(self, p)
                 .await
                 .map(|r| json!(r)),
@@ -908,9 +911,11 @@ impl Front {
             | Params::BriefSet(_)
             | Params::TimelineGet(_)
             | Params::BudgetGet(_)
+            | Params::BudgetTreePage(_)
             | Params::BudgetSet(_)
             | Params::PaceGet(_)
             | Params::ForecastGet(_)
+            | Params::ForecastPlan(_)
             | Params::ForecastSession(_)
             | Params::ForecastAccuracy(_)
             | Params::SayStart(_)
@@ -927,6 +932,11 @@ impl Front {
             | Params::RecordsConflict(_)
             | Params::RecordsResolve(_)
             | Params::MachinesReport(_)
+            | Params::MachinesMove(_)
+            | Params::CommentsAdd(_)
+            | Params::CommentsReply(_)
+            | Params::CommentsList(_)
+            | Params::CommentsResolve(_)
             | Params::MachinesList(_)
             | Params::RunnersList(_)
             | Params::RunnersProbeHost(_)
@@ -972,6 +982,7 @@ impl Front {
             | Params::AgentsBufferUnwatch(_)
             | Params::WorkMapSubscribe(_)
             | Params::WorkMapSet(_)
+            | Params::WorkTargetSet(_)
             | Params::WorkMapClose(_)
             | Params::WorkTrailSubscribe(_)
             | Params::WorkTrailClose(_)
@@ -1148,6 +1159,9 @@ impl Front {
                 self.core.huddles.card_settled(&me, card).await;
             }
             self.core.plugins.card_settled(card);
+            if let Some(me) = self.tool_hub.front() {
+                crate::work::machines::card_settled(&me, card).await;
+            }
         }
         if let Err(e) = &result
             && e.code != ErrorCode::Internal

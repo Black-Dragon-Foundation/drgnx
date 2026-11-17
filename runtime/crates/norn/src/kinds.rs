@@ -19,7 +19,8 @@ pub struct LinkKind {
 /// for the user to decide: agent system part 3), `always` (an Always the user gave a session: part 3), and the
 /// orchestration records: `evidence` (one fact a gate reads), `rule_pack` (a project's gate rules), `batch` (a merge
 /// batch) and `followup` (a held line's DEFERRED row), `debug_run` (a recorded debug run: graphical debugging D1) and
-/// `debug_hypothesis` (a partner agent's hypothesis about a bug: D4).
+/// `debug_hypothesis` (a partner agent's hypothesis about a bug: D4), and `comment` (a thread on a paragraph of a spec,
+/// plan, decision or task: the frontend flow's paragraph comments).
 pub const ENTITY_KINDS: &[&str] = &[
     "task",
     "decision",
@@ -55,6 +56,7 @@ pub const ENTITY_KINDS: &[&str] = &[
     "followup",
     "debug_run",
     "debug_hypothesis",
+    "comment",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -138,6 +140,14 @@ pub const LINKS: &[LinkKind] = &[
     ),
     // schema 12: a session forked from another one's conversation
     link("forked_from", &["session"], &["session"], false),
+    // a paragraph comment on a record (its anchor in the link's data), and a reply in its thread
+    link(
+        "comments_on",
+        &["comment"],
+        &["spec", "plan", "decision", "task"],
+        false,
+    ),
+    link("replies_to", &["comment"], &["comment"], false),
 ];
 
 /// Whether KIND is one of [`ENTITY_KINDS`].
@@ -201,7 +211,8 @@ mod tests {
                 "batch",
                 "followup",
                 "debug_run",
-                "debug_hypothesis"
+                "debug_hypothesis",
+                "comment"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS
@@ -273,6 +284,13 @@ mod tests {
                 false,
             ),
             ("forked_from", vec!["session"], vec!["session"], false),
+            (
+                "comments_on",
+                vec!["comment"],
+                vec!["spec", "plan", "decision", "task"],
+                false,
+            ),
+            ("replies_to", vec!["comment"], vec!["comment"], false),
         ];
         assert_eq!(rows, expect);
         // Every named end is an entity kind, and only the two readiness links affect ready.

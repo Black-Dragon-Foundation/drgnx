@@ -65,6 +65,42 @@ pub struct Made {
     pub cost_unit: Option<String>,
     pub basis: String,
     pub n: i64,
+    /// When the task starts and ends, seconds from the run's start (the plan's row: starts at 0, ends at its wall time).
+    pub start_p50: f64,
+    pub start_p90: f64,
+    pub finish_p50: f64,
+    pub finish_p90: f64,
+}
+
+/// A task's (or the plan's) kept start and finish: what a job's approval compares the run against.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Baseline {
+    pub task: String,
+    pub made_at: f64,
+    pub start_p50: f64,
+    pub start_p90: f64,
+    pub finish_p50: f64,
+    pub finish_p90: f64,
+}
+
+/// The kept start and finish of JOB's tasks (`JOB#N`) and of the job itself (`JOB`); a forecast made before they were
+/// kept has none.
+pub fn baseline(conn: &Tx, job: &str) -> Result<Vec<Baseline>, CoordError> {
+    let mut q = conn.prepare(
+        "select task, made_at, start_p50, start_p90, finish_p50, finish_p90 from forecast_made \
+         where job = ?1 and finish_p50 is not null order by task",
+    )?;
+    let rows = q.query_map([job], |r| {
+        Ok(Baseline {
+            task: r.get(0)?,
+            made_at: r.get(1)?,
+            start_p50: r.get(2)?,
+            start_p90: r.get(3)?,
+            finish_p50: r.get(4)?,
+            finish_p90: r.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 const MANAGER: &str = "#manager";
@@ -447,6 +483,19 @@ pub fn record_made(tx: &mut WTx<'_>, rows: &[Made]) -> Result<(), CoordError> {
                 m.n,
             ),
         )?;
+        // the start and finish go in by an update: a row's parameters are at most 16
+        tx.sql().execute(
+            "update forecast_made set start_p50 = ?3, start_p90 = ?4, finish_p50 = ?5, finish_p90 = ?6 \
+             where job = ?1 and task = ?2",
+            (
+                &m.job,
+                &m.task,
+                m.start_p50,
+                m.start_p90,
+                m.finish_p50,
+                m.finish_p90,
+            ),
+        )?;
     }
     Ok(())
 }
@@ -504,6 +553,70 @@ mod tests {
     use crate::write::tasks::force_status;
     use serde_json::json;
     use urdr::graph::entity::{self, EntityNew, Origin};
+
+    /// What a forecast says of when a task starts and ends is kept with the rest of what it said, and read back for
+    /// the job's tasks and the job itself; a row made before they were kept has none.
+    #[test]
+    fn made_rows_keep_start_and_finish() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let row = |task: &str, start: f64, finish: f64| Made {
+            job: "J".into(),
+            task: task.into(),
+            made_at: 7.0,
+            role: None,
+            profile: None,
+            model: None,
+            tokens_p50: 1.0,
+            tokens_p90: 2.0,
+            secs_p50: 1.0,
+            secs_p90: 2.0,
+            cost_p50: None,
+            cost_p90: None,
+            cost_unit: None,
+            basis: "prior".into(),
+            n: 0,
+            start_p50: start,
+            start_p90: start + 1.0,
+            finish_p50: finish,
+            finish_p90: finish + 1.0,
+        };
+        record_made(
+            &mut tx,
+            &[
+                row("J#1", 0.0, 10.0),
+                row("J#2", 10.0, 25.0),
+                row("J", 0.0, 25.0),
+            ],
+        )
+        .unwrap();
+        tx.sql()
+            .execute(
+                "insert into forecast_made (job, task, made_at, tokens_p50, tokens_p90, secs_p50, secs_p90, basis, n) \
+                 values ('J', 'J#3', 1.0, 1, 2, 1, 2, 'old', 0)",
+                [],
+            )
+            .unwrap();
+        let got = baseline(tx.sql(), "J").unwrap();
+        let tasks: Vec<_> = got.iter().map(|b| b.task.as_str()).collect();
+        assert_eq!(
+            tasks,
+            ["J", "J#1", "J#2"],
+            "the row without them is not a baseline"
+        );
+        let two = got.iter().find(|b| b.task == "J#2").unwrap();
+        assert_eq!(
+            (
+                two.made_at,
+                two.start_p50,
+                two.start_p90,
+                two.finish_p50,
+                two.finish_p90
+            ),
+            (7.0, 10.0, 11.0, 25.0, 26.0)
+        );
+        assert!(baseline(tx.sql(), "K").unwrap().is_empty());
+    }
 
     fn facts(_: Option<&str>, _: &str) -> ProfileFacts {
         ProfileFacts {
@@ -588,6 +701,8 @@ mod tests {
                 snapshot: None,
                 log_version: None,
                 acp: None,
+                machine: None,
+                slots: None,
             },
         )
         .unwrap();
@@ -833,6 +948,8 @@ mod tests {
                 snapshot: None,
                 log_version: None,
                 acp: None,
+                machine: None,
+                slots: None,
             },
         )
         .unwrap();
@@ -1153,7 +1270,7 @@ mod tests {
         assert_eq!(
             cols("forecast_made"),
             "job task made_at role profile model tokens_p50 tokens_p90 secs_p50 secs_p90 cost_p50 cost_p90 \
-             cost_unit basis n"
+             cost_unit basis n start_p50 start_p90 finish_p50 finish_p90"
                 .split(' ')
                 .collect::<Vec<_>>()
         );
@@ -1209,6 +1326,10 @@ mod tests {
                 cost_unit: None,
                 basis: "prior".into(),
                 n: 0,
+                start_p50: 0.0,
+                start_p90: 0.0,
+                finish_p50: 2.0,
+                finish_p90: 3.0,
             }],
         )
         .unwrap();
@@ -1261,6 +1382,10 @@ mod tests {
             cost_unit: None,
             basis: "2 tasks".into(),
             n: 0,
+            start_p50: 0.0,
+            start_p90: 0.0,
+            finish_p50: 2.0,
+            finish_p90: 3.0,
         };
         record_made(&mut tx, std::slice::from_ref(&plan)).unwrap();
         crate::write::jobs::job_set(&mut tx, "J", Some("done"), None, 5.0).unwrap();

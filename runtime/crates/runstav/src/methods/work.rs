@@ -150,6 +150,30 @@ pub struct TaskEffect {
     pub why: String,
 }
 
+/// `machines/move`: move a job, or a session's next jobs, to another machine.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MoveParams {
+    /// `job:ID` (a job of the queue) or `session:ID` (an agent: its next jobs).
+    pub target: String,
+    /// `local` (this machine) or a runner's name.
+    pub machine: String,
+}
+
+/// `machines/move`'s answer.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MoveResult {
+    /// The move is made: a waiting job waits for the machine named, or the session's next jobs go there. False when
+    /// it was already there, or when it runs and the user is asked first (`card`).
+    pub moved: bool,
+    /// The card asking whether to restart a job that runs (Restart / Keep), by id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<String>,
+    /// What happened, in words ("its next jobs go to laptop").
+    pub said: String,
+}
+
 /// What a conclusion rests on: a file with optional lines, or a page.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -556,6 +580,27 @@ fn check_map_subscribe(p: &MapSubscribe) -> Result<(), Error> {
     check_layers(&p.collapsed)
 }
 
+/// `work/target/set`'s params: the target date of a spec or a plan (null clears it).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TargetSetParams {
+    /// `spec:ID` or `plan:ID`.
+    pub item: super::graph::ParsedId,
+    /// Seconds since the epoch; null removes the target.
+    pub target_at: Option<f64>,
+}
+
+fn check_target_set(p: &TargetSetParams) -> Result<(), Error> {
+    let item = p.item.as_str();
+    if !(item.starts_with("spec:") || item.starts_with("plan:")) {
+        return Err(invalid("item", "a spec: or plan: id"));
+    }
+    if p.target_at.is_some_and(|t| !t.is_finite()) {
+        return Err(invalid("target_at", "a finite number of seconds, or null"));
+    }
+    Ok(())
+}
+
 fn check_map_set(p: &MapSet) -> Result<(), Error> {
     check_view(&p.view)?;
     if let Some(w) = p.width_units {
@@ -728,6 +773,28 @@ pub const SLOTS_MAX: usize = 256;
 /// The longest a report may stand, in seconds.
 pub const TTL_MAX: f64 = 86_400.0;
 
+fn check_move(p: &MoveParams) -> Result<(), Error> {
+    let target = p.target.as_str();
+    let id = target
+        .strip_prefix("job:")
+        .or_else(|| target.strip_prefix("session:"));
+    if id.is_none_or(|id| id.is_empty() || id.len() > 128) {
+        return Err(invalid("target", "job:ID or session:ID"));
+    }
+    let name = p.machine.as_str();
+    if name.is_empty()
+        || name.len() > NAME_MAX
+        || name == "auto"
+        || name.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(invalid(
+            "machine",
+            "local or a runner's name, of 1 to 64 characters with no spaces",
+        ));
+    }
+    Ok(())
+}
+
 fn check_report(p: &MachineReport) -> Result<(), Error> {
     let name = p.machine.as_str();
     if name.is_empty()
@@ -778,6 +845,12 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_report,
         ),
         method!(
+            "machines/move", MachinesMove(MoveParams) -> MoveResult,
+            classes: [User], writes: true,
+            doc: "move a job (job:ID) or an agent's next jobs (session:ID) to a machine: a waiting job is placed there; a running one is never stopped here, a card asks Restart or Keep; an unknown or untrusted machine is refused with why",
+            check: check_move,
+        ),
+        method!(
             "machines/list", MachinesList(Empty) -> MachinesList,
             classes: [User], writes: false,
             doc: "the machines the hub knows: local, and those reported and not yet expired",
@@ -804,6 +877,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "change one map view (filters, collapsed layers, width, density, shown, the selection): a change the user made relayouts at once",
             check: check_map_set,
+        ),
+        method!(
+            "work/target/set", WorkTargetSet(TargetSetParams) -> bool,
+            classes: [User], writes: true,
+            doc: "set (or with null clear) the target date of a spec or a plan; true when the item exists",
+            check: check_target_set,
         ),
         method!(
             "work/map/close", WorkMapClose(MapClose) -> bool,
@@ -894,5 +973,17 @@ mod tests {
             flow(json!({"view": "v/rules", "map": "v", "rules": true, "detail": "J#5"})).is_ok()
         );
         assert!(flow(json!({"view": "v/rules", "map": "v", "rules": true, "detail": ""})).is_err());
+    }
+
+    /// A target is set on a spec or a plan only, with a finite time or null.
+    #[test]
+    fn a_task_id_is_refused_as_a_target_item() {
+        let t = |v: serde_json::Value| {
+            let (p, _) = crate::registry::decode_params::<TargetSetParams>(&v)?;
+            check_target_set(&p)
+        };
+        assert!(t(json!({"item": "plan:p1", "target_at": 1.8e9})).is_ok());
+        assert!(t(json!({"item": "spec:s1", "target_at": null})).is_ok());
+        assert!(t(json!({"item": "task:t1", "target_at": 1.8e9})).is_err());
     }
 }

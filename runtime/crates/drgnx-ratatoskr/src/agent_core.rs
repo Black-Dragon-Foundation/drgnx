@@ -23,6 +23,7 @@
 //! | `records/{import,status}` | [`crate::records`] |
 //! | `records/{proposals,decide}` | [`crate::records`] |
 //! | `machines/{report,list}` | [`crate::work::machines`] |
+//! | `comments/{add,reply,list,resolve}` | [`crate::work::comments`] |
 //! | `runners/*` | [`crate::runners::methods`] |
 //! | `plugins/*` | [`crate::plugins`] |
 //! | `work/conclusions` | [`crate::work::conclusions`] |
@@ -172,9 +173,11 @@ pub async fn serve(
         Params::BriefSet(p) => answer(brief::set(f, c, p).await),
         Params::TimelineGet(p) => answer(timeline::get(f, c, p).await),
         Params::BudgetGet(p) => answer(budget::get(f, c, p).await),
+        Params::BudgetTreePage(p) => answer(budget::tree(f, c, p).await),
         Params::BudgetSet(p) => answer(budget::set(f, c, p).await),
         Params::PaceGet(p) => answer(budget::pace(f, c, p).await),
         Params::ForecastGet(p) => answer(forecast::get(f, c, p).await),
+        Params::ForecastPlan(p) => answer(forecast::plan(f, p).await),
         Params::ForecastSession(p) => answer(forecast::session(f, p).await),
         Params::ForecastAccuracy(p) => answer(forecast::accuracy(f, p).await),
         Params::SayStart(p) => answer(say::start(f, c, p).await),
@@ -191,6 +194,11 @@ pub async fn serve(
         Params::RecordsConflict(p) => answer(records::conflict(f, c, p).await),
         Params::RecordsResolve(p) => answer(records::resolve(f, c, p).await),
         Params::MachinesReport(p) => answer(work::machines::report(f, c, p).await),
+        Params::MachinesMove(p) => answer(work::machines::move_to(f, c, p).await),
+        Params::CommentsAdd(p) => answer(work::comments::add(f, c, p).await),
+        Params::CommentsReply(p) => answer(work::comments::reply(f, c, p).await),
+        Params::CommentsList(p) => answer(work::comments::list(f, c, p).await),
+        Params::CommentsResolve(p) => answer(work::comments::resolve(f, c, p).await),
         Params::MachinesList(p) => answer(work::machines::list(f, c, p).await),
         Params::RunnersList(p) => answer(runners::methods::list(f, c, p).await),
         Params::RunnersProbeHost(p) => answer(runners::methods::probe_host(f, c, p).await),
@@ -238,6 +246,7 @@ pub async fn serve(
         Params::AgentsBufferUnwatch(p) => answer(crate::editor::unwatch(f, c, p)),
         Params::WorkMapSubscribe(p) => answer(work::map::subscribe(f, c, p).await),
         Params::WorkMapSet(p) => answer(work::map::set(f, c, p)),
+        Params::WorkTargetSet(p) => answer(work::map::target_set(f, c, p).await),
         Params::WorkMapClose(p) => answer(work::map::close(f, c, p)),
         Params::WorkTrailSubscribe(p) => answer(work::trail::subscribe(f, c, p).await),
         Params::WorkTrailClose(p) => answer(work::trail::close(f, c, p)),

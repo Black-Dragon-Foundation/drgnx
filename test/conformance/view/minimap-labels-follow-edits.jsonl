@@ -1,0 +1,25 @@
+{"scenario": "view/minimap-labels-follow-edits", "requires": ["v1", "test-hooks"], "doc": "A file the editor shows in a minimap (minimap/watch) gets its definitions as minimap labels on the model's raw path ([line, depth, kind, name]) before the answer; an edit to it (a history/batch) sends them again once the edits pause (500 ms of the hub's clock), with a newer version; after minimap/watch with on false, an edit sends nothing."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q -b main && printf '(defun alpha () 1)\\n(defun gamma () 3)\\n' > a.el && git add a.el && git -c user.email=t@example.invalid -c user.name=t commit -qm base"], "expect_code": 0}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "history/register", "params": {"path": "a.el", "worktree_root": "$ROOT/repo", "buffer_id": "b1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"tracked": true}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.el", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.el", "layer": "labels", "version": "$capture:v1", "items": [[1, 0, "function", "alpha"], [2, 0, "function", "gamma"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 19, "old_len": 0, "inserted": "(defun beta () 2)\n"}], "version": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_advance", "params": {"ms": 600}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.el", "layer": "labels", "version": "$number", "items": [[1, 0, "function", "alpha"], [2, 0, "function", "beta"], [3, 0, "function", "gamma"]]}}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.el", "on": false}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 1, "old_len": 0, "inserted": ";; x\n"}], "version": 2}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": {"ok": true}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "__test_advance", "params": {"ms": 600}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect_silent", "conn": "e", "for_ms": 1000}

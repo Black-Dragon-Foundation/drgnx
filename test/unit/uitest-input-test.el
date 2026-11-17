@@ -216,6 +216,45 @@
     (should (null drgnx-uitest--queue))
     (setq unread-command-events nil)))
 
+(ert-deftest drgnx-uitest/the-last-key-out-stops-the-tick ()
+  ;; a test that ends right after its last key is read leaves no tick for its file's leak check; a last mouse event
+  ;; keeps one tick more (its pointer position stands while its command runs)
+  (let ((drgnx-uitest--queue nil) (drgnx-uitest--timer nil) (unread-command-events nil) (drgnx-uitest--pointer nil))
+    (unwind-protect
+        (progn
+          (drgnx-uitest-enqueue (list ?a ?b))
+          (drgnx-uitest--tick)
+          (should (timerp drgnx-uitest--timer))
+          (drgnx-uitest--tick)
+          (should (equal unread-command-events '(?a ?b)))
+          (should-not drgnx-uitest--timer)
+          (should-not (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-uitest--tick)) timer-list))
+          (setq unread-command-events nil)
+          (drgnx-uitest-enqueue (list '(mouse-1 (nil nil (3 . 4)))))
+          (drgnx-uitest--tick)
+          (should (timerp drgnx-uitest--timer)))
+      (when (timerp drgnx-uitest--timer) (cancel-timer drgnx-uitest--timer))
+      (setq unread-command-events nil))))
+
+(ert-deftest drgnx-uitest/unqueue-to-empty-stops-the-tick ()
+  ;; a test that takes its pause back out of the queue leaves no tick running: the file's leak check, right after
+  ;; the test, finds no `drgnx-uitest--tick' timer (it used to wait for the next tick, 0.04 s on, to stop itself)
+  (let ((drgnx-uitest--queue nil) (drgnx-uitest--timer nil) (unread-command-events nil))
+    (unwind-protect
+        (progn
+          (drgnx-uitest-enqueue (list (cons 'drgnx-uitest-pause 3600)))
+          (should (timerp drgnx-uitest--timer))
+          (drgnx-uitest-unqueue (lambda (e) (memq (car-safe e) '(drgnx-uitest-pause drgnx-uitest-until))))
+          (should-not drgnx-uitest--queue)
+          (should-not drgnx-uitest--timer)
+          (should-not (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-uitest--tick)) timer-list))
+          ;; with entries left, the tick goes on
+          (drgnx-uitest-enqueue (list ?a (cons 'drgnx-uitest-pause 3600)))
+          (drgnx-uitest-unqueue (lambda (e) (eq (car-safe e) 'drgnx-uitest-pause)))
+          (should (equal drgnx-uitest--queue '(?a)))
+          (should (timerp drgnx-uitest--timer)))
+      (when (timerp drgnx-uitest--timer) (cancel-timer drgnx-uitest--timer)))))
+
 (ert-deftest drgnx-uitest/a-pause-is-queued-between-events ()
   (let ((drgnx-uitest--queue (list ?a)) (drgnx-uitest--timer 'dummy))
     (drgnx-uitest-api-pause 0.5)

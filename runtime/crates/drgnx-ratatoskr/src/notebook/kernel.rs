@@ -548,7 +548,8 @@ async fn wait_endpoints(
 }
 
 /// Ready: `kernel_info_reply` on shell and the first `status` on iopub (the SUB's subscription has taken hold then), asking again
-/// every PING until the kernel answers.
+/// every PING until both have come: a status published before the subscription took hold is lost, and a kernel
+/// publishes a new one for every request.
 async fn ready(
     session: &mut Session,
     session_id: &str,
@@ -570,9 +571,7 @@ async fn ready(
             },
             e = exited(exit) => return Err(format!("the kernel {e} before it was ready")),
             _ = tick.tick() => {
-                if !info {
-                    session.send(Channel::Shell, &Message::request(session_id, "kernel_info_request", json!({})))?;
-                }
+                session.send(Channel::Shell, &Message::request(session_id, "kernel_info_request", json!({})))?;
             }
         }
     }

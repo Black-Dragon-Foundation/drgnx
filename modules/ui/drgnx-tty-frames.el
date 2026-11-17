@@ -300,6 +300,10 @@ prompt in a daemon hook), no fsync (a report is made again)."
 (defconst drgnx-tty-frames-report-terminals 16
   "How many terminals terminal-report.eld keeps: the newest, by when each was last set up or refreshed.")
 
+(defvar drgnx-tty-frames--report-pending nil
+  "The reports being written now, innermost first: (KEY . NEWER) each, KEY the terminal's name; NEWER is set when
+a report of the same terminal was written while this one waited, which then writes nothing.")
+
 (defun drgnx-tty-frames-write-report (frame)
   "Add FRAME's terminal to terminal-report.eld in the state dir: (:terminals ((TTY . (:caps CAPS :unsendable
 KEYS :seen TIME)) …)), newest first, one entry per terminal device (two clients never replace each other's), the
@@ -308,30 +312,45 @@ newest `drgnx-tty-frames-report-terminals' (16) only;
 \(`drgnx-tty-fallback-install': on where they need it, off where not); the entry then has :fallback (on or not),
 :fallbacks (rows (CHORD NATIVE-P ALT PREFIX) for the doctor); the fallback's problems are `terminal' notices
 \(`drgnx-tty-fallback-notify'), not in the report.  The report's other keys
-\(:hinted) are kept.  Nothing when the terminal is gone."
+\(:hinted) are kept.  Nothing when the terminal is gone.
+Asking tmux waits for a process, and Emacs runs other work meanwhile (a client's eval, a timer), which may write a
+report too: the file is read again just before it is written, so another terminal's entry written meanwhile stays,
+and a newer report of this terminal written meanwhile is not overwritten with these older caps
+\(`drgnx-tty-frames--report-pending')."
   (when-let* ((caps (drgnx-tty-frame-caps frame)))
-    (let* ((layer (and (fboundp 'drgnx-tty-fallback-install)
-                       (drgnx-tty-frames--guard "fallback" #'drgnx-tty-fallback-install frame caps)))
-           (data (drgnx-tty-frames--read-report-data))
-           (key (terminal-name (frame-terminal frame)))
-           (keys (seq-uniq (delq nil (mapcar (lambda (b) (plist-get b :key))
-                                             (plist-get (bound-and-true-p drgnx-keys-last) :bindings)))))
-           (read (plist-get data :terminals))
-           (old (and (proper-list-p read) (seq-every-p #'consp read) read))   ; a broken report heals
-           (table (drgnx-tty-fallback-active-table))
-           (entry (append (list :caps caps :unsendable (drgnx-tty-unsendable keys (plist-get caps :keys) (plist-get caps :folded))
-                                :seen (format-time-string "%FT%T%z"))
-                          ;; inside tmux: the lines to add to ~/.tmux.conf for what it lacks (never written)
-                          (when-let* ((lines (drgnx-tty-tmux-conf-lines (drgnx-tty-frames--tmux-options frame (plist-get caps :id)))))
-                            (list :tmux-conf lines))
-                          (list :fallback (and layer t)
-                                :fallbacks (drgnx-tty-fallback-report-rows
-                                            table caps (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))))))
-      (drgnx-tty-fallback-notify key table (drgnx-tty-fallback--overrides))
-      (drgnx-tty-frames--save-report
-       (append (list :terminals (seq-take (cons (cons key entry) (assoc-delete-all key (copy-sequence old)))
-                                          drgnx-tty-frames-report-terminals))
-               (when-let* ((hinted (plist-get data :hinted))) (and (proper-list-p hinted) (list :hinted hinted))))))))
+    (let ((cell (list (terminal-name (frame-terminal frame)))))
+      (push cell drgnx-tty-frames--report-pending)
+      (unwind-protect (drgnx-tty-frames--write-entry frame caps cell)
+        (setq drgnx-tty-frames--report-pending (delq cell drgnx-tty-frames--report-pending))))))
+
+(defun drgnx-tty-frames--write-entry (frame caps cell)
+  "`drgnx-tty-frames-write-report''s work for FRAME with CAPS; CELL is its `drgnx-tty-frames--report-pending' cell."
+  (let* ((layer (and (fboundp 'drgnx-tty-fallback-install)
+                     (drgnx-tty-frames--guard "fallback" #'drgnx-tty-fallback-install frame caps)))
+         (key (car cell))
+         (keys (seq-uniq (delq nil (mapcar (lambda (b) (plist-get b :key))
+                                           (plist-get (bound-and-true-p drgnx-keys-last) :bindings)))))
+         (table (drgnx-tty-fallback-active-table))
+         (entry (append (list :caps caps :unsendable (drgnx-tty-unsendable keys (plist-get caps :keys) (plist-get caps :folded))
+                              :seen (format-time-string "%FT%T%z"))
+                        ;; inside tmux: the lines to add to ~/.tmux.conf for what it lacks (never written)
+                        (when-let* ((lines (drgnx-tty-tmux-conf-lines (drgnx-tty-frames--tmux-options frame (plist-get caps :id)))))
+                          (list :tmux-conf lines))
+                        (list :fallback (and layer t)
+                              :fallbacks (drgnx-tty-fallback-report-rows
+                                          table caps (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))))))
+    (drgnx-tty-fallback-notify key table (drgnx-tty-fallback--overrides))
+    (unless (cdr cell)                    ; a newer report of this terminal was written meanwhile
+      (let* ((data (drgnx-tty-frames--read-report-data))   ; read now: what was written meanwhile stays
+             (read (plist-get data :terminals))
+             (old (and (proper-list-p read) (seq-every-p #'consp read) read)))   ; a broken report heals
+        (drgnx-tty-frames--save-report
+         (append (list :terminals (seq-take (cons (cons key entry) (assoc-delete-all key (copy-sequence old)))
+                                            drgnx-tty-frames-report-terminals))
+                 (when-let* ((hinted (plist-get data :hinted))) (and (proper-list-p hinted) (list :hinted hinted)))))
+        ;; the reports of this terminal still waiting are older now
+        (dolist (c drgnx-tty-frames--report-pending)
+          (when (and (not (eq c cell)) (equal (car c) key)) (setcdr c t)))))))
 
 (defun drgnx-tty-frames-refresh-report (frame)
   "Write FRAME's terminal's entry in terminal-report.eld again, from what it can do now (ui/terminal-keys calls

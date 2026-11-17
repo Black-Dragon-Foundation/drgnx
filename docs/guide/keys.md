@@ -77,10 +77,13 @@ loaded, so there is never a session with Vim keys and no Vim editing:
 | Split Editor Right / Down | ``C-\`` / ``C-k C-\`` | Emacs' `C-x 3` / `C-x 2` | `SPC w v` / `SPC w s` |
 | Focus Group 1–3 / Move Editor to Next Group | `C-1`–`C-3` / `C-M-<right>` | `C-x o` / — | `SPC 1`–`SPC 3` / `SPC w m` |
 | Open Editor in New Window | `C-k o` | Emacs' `C-x 5 2` | `SPC w o` |
-| Fold / Unfold | `C-{` / `C-}` | — | `SPC z c` / `SPC z o` |
+| Fold / Unfold / Toggle Fold | `C-{` / `C-}` / `C-k C-l` | `C-c @ C-h` / `C-c @ C-s` / `C-c @ C-c` | `z c` or `SPC z c` / `z o` or `SPC z o` / `z a` |
+| Fold All / Unfold All / Fold Level | `C-k C-0` / `C-k C-j` / `C-k C-1`–`C-k C-7` | `C-c @ C-M-h` / `C-c @ C-M-s` / `C-c @ C-l` | `z M` / `z R` / `SPC z l`, `z m` / `z r` one level more / less |
+| Fold Recursively / Unfold Recursively | `C-k [` / `C-k C-]` | palette / palette | `z C` / `z O` |
+| Fold All Except Here / Create Fold from Selection | `C-k C--` / `C-k C-,` | palette / `C-c @ C-n` | `SPC z f` / `z f` (visual) |
 | Expand / Shrink Selection | `M-S-<right>` / `M-S-<left>` | — | `SPC v` / `SPC V` |
 | Zen Mode | `C-k z` | — | `SPC u z` |
-| Next Layout / Layout… | `C-k C-l` / — | — / — | `SPC l n` / `SPC l l` |
+| Next Layout / Layout… | `C-k l` / — | — / — | `SPC l n` / `SPC l l` |
 | Go to Line | Emacs' `M-g g` | `M-g g` | `SPC g l` |
 | Go to Definition / References / Rename Symbol / Hover | `F12` / `S-F12` / `F2` / `C-S-SPC` | Emacs' `M-.` / `M-?` / palette / `C-h .` | `SPC c d` or `g d` / `SPC c r` or `g r` / `SPC c R` / `SPC c h` or `K` |
 | Next / Previous Problem | `F8` / `S-F8` | palette / palette | `] d` / `[ d` |
@@ -101,6 +104,11 @@ else the command's own, else the profile's.
 
 The title row's search box opens Quick Open and shows Quick Open's key in your profile as its keycap (`Ctrl P` in the
 VS Code profile; another profile, or your own binding, shows its own); `>` typed first in Quick Open gives the palette.
+
+Where the VS Code profile's key is not VS Code's own, and why:
+
+- **Fold Recursively** is `C-k [`, not VS Code's `C-k C-[`: Emacs reads `C-[` as ESC, so `C-k C-[` would be `C-k ESC`,
+  and Esc after `C-k`, or in a terminal any key that arrives as an ESC sequence (arrows, F6, Alt+key), would fold.
 
 "—" means the profile has no key for it; every command is always in the palette. Vim's keys are leader keys in
 drgnx's leader map (`SPC …`), which the Vim engine plugs into its normal, visual and motion states and the panels. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code does there — see below.
@@ -268,6 +276,11 @@ profile:
 | `SPC w v` | Split Editor Right |
 | `SPC w w` | Pick Window |
 | `SPC z c` | Fold |
+| `SPC z F` | Unfold All Except Here |
+| `SPC z f` | Fold All Except Here |
+| `SPC z k` | Fold by Kind… |
+| `SPC z l` | Fold Level… |
+| `SPC z n` | Name Fold… |
 | `SPC z o` | Unfold |
 
 **Mixed stacks.** In "Vim editing + VS Code app keys" the `vim` layer covers editing only, but its leader keys (and

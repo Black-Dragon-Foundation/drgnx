@@ -1953,7 +1953,16 @@ async fn act(
             .and_then(|x| x.row.agent.clone())
     };
     match action {
-        "approve" => super::approve_job(front, caller, job, arg_f64(arg)).await,
+        "approve" => {
+            // the card's amount is dollars: the plan's `usd` limit
+            let limits = arg_f64(arg).map(|usd| {
+                vec![runstav::methods::matrix::Limit {
+                    amount: usd,
+                    unit: runstav::methods::matrix::Unit::Usd,
+                }]
+            });
+            super::approve_job(front, caller, job, limits).await
+        }
         "reject" if matches!(kind, "permission" | "write") => Err(invalid(
             "A permission is answered with the agent's request, not here",
         )),
@@ -2067,8 +2076,12 @@ async fn act(
             set_status(front, tid, "dropped", None).await
         }
         "resume" => {
-            let p = serde_json::from_value(json!({"id": job, "budget": arg_f64(arg)}))
-                .map_err(|e| invalid(e.to_string()))?;
+            // the card's amount is dollars: the plan's `usd` limit (the card's raise is H5's to widen)
+            let p = match arg_f64(arg) {
+                Some(usd) => json!({"id": job, "limits": [{"amount": usd, "unit": "usd"}]}),
+                None => json!({"id": job}),
+            };
+            let p = serde_json::from_value(p).map_err(|e| invalid(e.to_string()))?;
             fallback::resume(front, caller, p).await.map(|_| ())
         }
         "accept" | "pick-a" | "pick-b" => {

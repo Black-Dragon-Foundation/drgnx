@@ -404,6 +404,10 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.core.budgets.open_store(runtime.clone()).await;
     if let Some(notes) = front.core.budgets.take_notes() {
         crate::clock::spawn("budget:run", crate::budget::run(front.clone(), notes));
+        crate::clock::spawn(
+            "budget:events",
+            crate::budget::broadcast_changes(front.clone()),
+        );
     }
     front.gate.open_store(runtime.clone());
     match front.gate.listen(gateway_port).await {

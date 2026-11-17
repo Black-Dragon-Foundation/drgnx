@@ -84,6 +84,7 @@
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
 (declare-function drgnx-work-job-log "drgnx-work-detail")
+(declare-function drgnx-work-move-machine "drgnx-work-detail" (target machine))
 (declare-function drgnx-work-huddle-overlap "drgnx-work-detail")
 (declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-pane-show "drgnx-panes")
@@ -148,7 +149,7 @@ it (a notes repository with the code repositories inside it)."
 (defface drgnx-work-title '((t :inherit drgnx-ui-caption :weight semibold)) "An agent card's name line." :group 'drgnx-work-space)
 (defface drgnx-work-meta '((t :inherit drgnx-code-small)) "An agent card's line of minutes, spend and progress: the code font (it names no box: a card's box runs on)."
   :group 'drgnx-work-space)
-(defface drgnx-work-selected '((t :inherit drgnx-selected)) "The selected item." :group 'drgnx-work-space)
+(defface drgnx-work-selected '((t :inherit drgnx-row-selected)) "The selected item." :group 'drgnx-work-space)
 (defface drgnx-work-chain '((t :inherit drgnx-accent)) "Items on the selection's chain." :group 'drgnx-work-space)
 (defface drgnx-work-overlap '((t :inherit warning)) "An overlap's flag and its edge." :group 'drgnx-work-space)
 (defface drgnx-work-needs-you '((t :inherit drgnx-status-attention)) "A thing that needs you." :group 'drgnx-work-space)
@@ -204,7 +205,7 @@ it (a notes repository with the code repositories inside it)."
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
               work-collapse-layer-5 work-collapse-layer-6 work-collapse-layer-7 work-collapse-layer-8
               work-expand-layers work-cycle-filter work-mode-list work-mode-graph work-mode-toggle work-search
-              work-escape work-take-wheel work-files work-who-is-here
+              work-escape work-take-wheel work-files work-who-is-here work-move-machine
               work-diffs work-diff-quit work-diff-accept-hunk work-diff-reject-hunk)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
 
@@ -671,6 +672,9 @@ windows; the commands."
   (drgnx-command-define 'work-diff-reject-hunk :category "Work" :title "Reject the Hunk"
                         :command #'drgnx-work-diff-reject-hunk :map 'drgnx-work-diff-mode-map
                         :doc "Reject the hunk at point; the review view decides hunks")
+  (drgnx-command-define 'work-move-machine :category "Work" :title "Move to Another Machine"
+                        :command #'drgnx-work-move-machine :map 'drgnx-work-item-map
+                        :doc "Move the selected job (or an agent's next jobs) to another machine; a running job is asked about on a card, never stopped here")
   (drgnx-command-define 'work-job-log :category "Work" :title "Show the Job's Live Log"
                         :command #'drgnx-work-job-log :map 'drgnx-work-detail-mode-map
                         :doc "Show the end of the log of the job on this row of a machine's queue in the side panel")

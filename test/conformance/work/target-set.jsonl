@@ -1,0 +1,15 @@
+{"scenario": "work/target-set", "requires": ["v1", "test-hooks"], "doc": "A plan's target date (timeline and budget hub plan H3): work/target/set writes data.target_at, null clears it, a task id is refused and an id with no live entity answers false."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into entity (n, id, kind, title, data, origin, ver, created_tx, updated_tx) values (900, 'plan:p1', 'plan', 'A plan', '{}', 'recorded', 1, 1, 1)"]}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "work/target/set", "params": {"item": "plan:p1", "target_at": 1800000000}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "sql_expect", "sql": "select cast(json_extract(data, '$.target_at') as integer) from entity where id = 'plan:p1'", "rows": [[1800000000]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "work/target/set", "params": {"item": "plan:p1", "target_at": null}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "sql_expect", "sql": "select json_extract(data, '$.target_at') is null from entity where id = 'plan:p1'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "work/target/set", "params": {"item": "task:t1", "target_at": 1800000000}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "message": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "work/target/set", "params": {"item": "plan:nope", "target_at": 1800000000}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": false}}

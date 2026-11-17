@@ -150,7 +150,7 @@
         (should (string-search "## Geometry" text))
         (should (string-search "| selected-inactive |" text))))
     (let ((row (cdr (assoc "components/row.md" pages))))
-      (should (string-search "| tree | roomy | 30 | 6 / 6 | 0 | no | 6 | 0 | 14 |" row))
+      (should (string-search "| tree | roomy | 30 | 6 / 6 | 6 | no | 6 | 0 | 14 |" row))
       (should (string-search "`⌄` open" row)))
     ;; a geometry change shows
     (let* ((changed (copy-tree table)) (row (assq 'row (alist-get 'components changed))))

@@ -31,7 +31,7 @@
     f))
 
 (defun drgnx-say-view-test--job ()
-  (list :id "j1" :title "Settings review" :status "proposed" :budget 20.0
+  (list :id "j1" :title "Settings review" :status "proposed" :limits (quote ((:amount 20.0 :unit "usd")))
         :tasks (list (list :n 1 :title "Read the settings" :role "review" :profile "sonnet"
                            :status "proposed" :deps nil))))   ; the keys `job/status' really sends
 
@@ -125,6 +125,13 @@
   (let ((text (drgnx-say-view-test--text
                (drgnx-say-view-test--forecast :cost (list (list :unit "usd" :p50 1.0 :p90 2.0 :estimate :false))))))
     (should (string-match "^Budget: 20 USD$" text))))
+
+(ert-deftest drgnx-say/view-lists-a-limit-by-unit ()
+  ;; the plan's limits by unit: a share of the limit is not dollars, and the joint estimate is not listed twice
+  (should (equal (drgnx-say--limits '((:amount 0.15 :unit "limit-share"))) "15% of the limit"))
+  (should (equal (drgnx-say--limits '((:amount 20.0 :unit "usd") (:amount 20.0 :unit "usd-est"))) "20 USD"))
+  (should (equal (drgnx-say--limits '((:amount 5.0 :unit "usd") (:amount 0.25 :unit "limit-share")))
+                 "5 USD, 25% of the limit")))
 
 (ert-deftest drgnx-say/view-without-a-status-does-not-say-proposed ()
   ;; `job/status' failed: the view has no summary, and does not guess the job's status

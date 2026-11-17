@@ -126,9 +126,10 @@ paths no WM serves."
            (run (plist-get s :run))
            (xdg (plist-get s :xdg_runtime_dir))
            (env (drgnx-ui-session-env s)))
-      ;; its own bus; KWin lives as long as the session's Emacs
+      ;; its own bus; KWin lives as long as the session's Emacs and offers every client its fake input
       (should (equal (drgnx-ui-compositor-argv s)
-                     (list "dbus-run-session" "--" "kwin_wayland" "--virtual" "--width" "1280" "--height" "800"
+                     (list "dbus-run-session" "--" "env" "KWIN_WAYLAND_NO_PERMISSION_CHECKS=1"
+                           "kwin_wayland" "--virtual" "--width" "1280" "--height" "800"
                            "--output-count" "2" "--socket" "wayland-1" "--no-lockscreen" "--no-global-shortcuts"
                            "--exit-with-session"
                            (concat (drgnx-ui-emacs-bin) " --init-directory " (expand-file-name "init" run)))))
@@ -634,7 +635,7 @@ or the session, and a checkout with no cargo, or a run without CI's hub binary, 
             (should (eql 0 (car (drgnx-ui-compositor-test--bin-call
                                  dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman"
                                            "DRGNX_TEST_GUI_IMAGE=an-image" "DRGNX_TEST_GUI_MEMORY" "DRGNX_TEST_WM_IMAGE"
-                                           "DRGNX_TEST_BUILD_MEMORY")
+                                           "DRGNX_TEST_BUILD_MEMORY" "DRGNX_TEST_UDMABUF=/dev/null")
                                  "test" "--container" "--ui" "--compositor" c))))
             (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
                    (build (cdr (member "build" args)))
@@ -648,11 +649,24 @@ or the session, and a checkout with no cargo, or a run without CI's hub binary, 
               (should (equal (cadr (member "--memory-swap" build)) "3g"))
               (should (equal (cadr (member "--memory" run)) "3g"))
               (should (equal (cadr (member "--memory-swap" run)) "3g"))
-              (should (equal (last run 5) (list "bin/drgnx" "test" "--ui" "--compositor" c)))))
+              (should (equal (last run 5) (list "bin/drgnx" "test" "--ui" "--compositor" c)))
+              ;; KWin gets its render device (DRGNX_TEST_UDMABUF stands in for /dev/udmabuf), niri none
+              (should (equal (cadr (member "--device" run)) (and (equal c "kwin") "/dev/null")))))
+          ;; no udmabuf on the host: a KWin run is refused with the reason, before any container (it would answer no
+          ;; frame callback, and a presented wait could pass on a picture that never went out)
+          (when (file-exists-p log) (delete-file log))
+          (let ((r (drgnx-ui-compositor-test--bin-call
+                    dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_WM_IMAGE=wm-image"
+                              (concat "DRGNX_TEST_UDMABUF=" dir "/no-udmabuf"))
+                    "test" "--container" "--ui" "--compositor" "kwin")))
+            (should (eql (car r) 2))
+            (should (string-match-p "udmabuf" (cdr r)))
+            (should-not (file-exists-p log)))
           ;; its own prebuilt override
           (delete-file log)
           (drgnx-ui-compositor-test--bin-call
-           dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_WM_IMAGE=wm-image")
+           dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_WM_IMAGE=wm-image"
+                     "DRGNX_TEST_UDMABUF=/dev/null")
            "test" "--container" "--ui" "--compositor" "kwin")
           (let ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t)))
             (should-not (member "build" args))

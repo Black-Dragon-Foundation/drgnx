@@ -121,6 +121,9 @@ impl SendMode {
 #[serde(default)]
 pub struct Placement {
     pub machine: Machine,
+    /// The machine is the user's choice (their start, a move, or the session's preference they set): its job's row
+    /// says "pinned by you".
+    pub by_user: bool,
     pub heavy: bool,
     /// The keys it needs, by name.
     pub keys: Vec<String>,
@@ -173,6 +176,7 @@ impl Default for Placement {
     fn default() -> Placement {
         Placement {
             machine: Machine::Auto,
+            by_user: false,
             heavy: false,
             keys: vec![],
             local_only: false,
@@ -320,6 +324,20 @@ pub struct Row {
     pub attempt: Option<u32>,
     pub waiting: Option<String>,
     pub priority: u8,
+    /// Why it was placed where it runs and not elsewhere ([`why_placed`]); none while it waits.
+    pub placed_why: Option<String>,
+}
+
+/// What [`Queue::move_job`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Moved {
+    /// It waited: it now waits for the machine named, and the queue ticks again.
+    Requeued,
+    /// It is already there (running, or pinned there): nothing changed.
+    Same,
+    /// It runs on this machine: nothing stopped (only the user's Restart on the hub's card moves it,
+    /// [`Queue::restart_on`]).
+    Running(String),
 }
 
 /// A job the database kept (a hub restart).
@@ -360,6 +378,8 @@ struct QJob {
     machine: Option<String>,
     /// Why a `shared` runner may not get its overlay (`sync::overlay_for`), scanned once at submit.
     shared_why: Option<String>,
+    /// Why it was placed on `machine` ([`why_placed`]); none while it waits.
+    placed_why: Option<String>,
 }
 
 impl QJob {
@@ -381,6 +401,7 @@ impl QJob {
             attempt,
             machine,
             shared_why,
+            placed_why: None,
         }
     }
 }
@@ -507,6 +528,9 @@ struct St {
     reservation: Option<forseti::backfill::Reservation>,
     /// The runner last told it holds the head (its `head` frame), with the head's start and memory need.
     head_told: Option<(String, u64, u64)>,
+    /// The machine each session's next jobs go to, as the user moved the session (`machines/move`); kept in
+    /// `asession.machine` and restored with the rest ([`Kept`]).
+    prefs: BTreeMap<String, Machine>,
 }
 
 impl St {
@@ -623,6 +647,8 @@ pub struct Kept {
     pub rows: Vec<StoredRow>,
     /// Oldest first, as they were learned from.
     pub history: Vec<HistRow>,
+    /// The machine the user moved each recorded session's next jobs to (`asession.machine`): (session, machine).
+    pub prefs: Vec<(String, String)>,
 }
 
 /// What `rq_rows` and `rq_history` hold.
@@ -690,7 +716,25 @@ pub async fn kept(db: &urdr::Handle) -> Kept {
             })
         })
         .collect();
-    Kept { rows, history }
+    let prefs = db
+        .read(|c| {
+            let mut st =
+                c.prepare("select sid, machine from asession where machine is not null")?;
+            let rows = st
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("runners: the sessions' machines in runtime.db: {e}");
+            vec![]
+        });
+    Kept {
+        rows,
+        history,
+        prefs,
+    }
 }
 
 /// A keyed attempt's log as the hub writes it: every key sent masked, and how far into the runner's log it has read.
@@ -1555,6 +1599,9 @@ impl Queue {
         for h in k.history {
             st.learn(h);
         }
+        for (sid, machine) in k.prefs {
+            st.prefs.insert(sid, Machine::parse(Some(&machine)));
+        }
     }
 
     /// A job enters the queue at NOW, and the queue's tick is woken. With frozen inputs, its trust is theirs (design
@@ -1568,6 +1615,19 @@ impl Queue {
     /// [`submit`](Self::submit) without waking the tick: a caller that ticks at once itself (`exec`'s start, so a job
     /// admitted at once is its own to launch, never the background tick's) wakes it after that tick.
     pub fn enter(&self, mut s: Submit, now: u64) {
+        // the session's preference, the user's move: its job goes there when it names no machine and may go there
+        if s.place.machine == Machine::Auto
+            && let Some(to) = s
+                .session
+                .as_ref()
+                .and_then(|sid| self.lock().prefs.get(sid).cloned())
+        {
+            let probe = QJob::new(s.clone(), now, QState::Queued, 0);
+            if Self::refusal_on(&self.lock(), &probe, &to).is_none() {
+                s.place.machine = to;
+                s.place.by_user = true;
+            }
+        }
         if let Some(f) = &s.inputs {
             s.spec.trust = f.trust(&s.place.keys);
             self.put_input(f, now);
@@ -1772,7 +1832,147 @@ impl Queue {
                 .then(|| j.waiting.clone())
                 .flatten(),
             priority: j.s.own.number(),
+            placed_why: j.placed_why.clone(),
         })
+    }
+
+    /// Why TO can't take job Q at all (unknown, or one of the placement filters that waiting doesn't change: trust,
+    /// the OS, features, the send and accept modes, the matrix cell), in words; none when it can, now or once it is
+    /// ready again.
+    fn refusal_on(st: &St, q: &QJob, to: &Machine) -> Option<String> {
+        let name = match to {
+            Machine::Auto => return Some("name a machine".into()),
+            Machine::Local => LOCAL,
+            Machine::Runner(n) => n.as_str(),
+        };
+        if *to != Machine::Local && !st.runners.contains_key(name) {
+            return Some(format!("no runner {name} (`drgnx runner list` shows them)"));
+        }
+        if *to != Machine::Local && q.s.place.local_only {
+            return Some("it runs on this machine only".into());
+        }
+        let mut moved = q.clone();
+        moved.s.place.machine = to.clone();
+        let job = Self::forseti_job(&moved);
+        let (cands, held_off, _) = Self::candidates(st, &job, &moved, false);
+        let Some(c) = cands.iter().find(|c| c.name == name) else {
+            return Some(held_off.unwrap_or_else(|| format!("{name} can't take it")));
+        };
+        match forseti::place::filter(
+            &job,
+            c,
+            moved.s.place.send.forseti(),
+            moved.s.place.machines_cell,
+        ) {
+            Ok(())
+            | Err(
+                WaitReason::Benched
+                | WaitReason::NeedsLogin
+                | WaitReason::NeedsKeys
+                | WaitReason::AwaitingConfirm
+                | WaitReason::DesktopUnreachable { .. }
+                | WaitReason::DrainWaits,
+            ) => None,
+            Err(r) => Some(format!("{name}: {}", wait_text(&r))),
+        }
+    }
+
+    /// The user moves job ID to TO: one that waits is pinned there and the tick woken ([`Moved::Requeued`]); one that
+    /// runs is left running ([`Moved::Running`], where); one already there is left alone. A machine that can't take it
+    /// is refused with why ([`Queue::refusal_on`]).
+    pub fn move_job(&self, id: &str, to: Machine) -> Result<Moved, String> {
+        let mut st = self.lock();
+        let q = st
+            .jobs
+            .get(id)
+            .ok_or_else(|| format!("no job {id} in the queue"))?;
+        let here = match &q.state {
+            QState::Local => Some(Machine::Local),
+            QState::Remote(r) => Some(Machine::Runner(r.clone())),
+            QState::Queued => None,
+        };
+        if here.as_ref() == Some(&to) || (here.is_none() && q.s.place.machine == to) {
+            return Ok(Moved::Same);
+        }
+        if let Some(why) = Self::refusal_on(&st, q, &to) {
+            return Err(why);
+        }
+        if here.is_some() {
+            return Ok(Moved::Running(q.machine.clone().unwrap_or_default()));
+        }
+        let q = st.jobs.get_mut(id).expect("the job");
+        q.s.place.machine = to;
+        q.s.place.by_user = true;
+        q.waiting = None;
+        let j = q.clone();
+        drop(st);
+        self.put_job(&j, j.s.own);
+        self.wake_tick();
+        Ok(Moved::Requeued)
+    }
+
+    /// Why TO can't take job ID ([`Queue::refusal_on`]); a job the queue doesn't hold, saying so.
+    pub fn refusal(&self, id: &str, to: &Machine) -> Option<String> {
+        let st = self.lock();
+        match st.jobs.get(id) {
+            Some(q) => Self::refusal_on(&st, q, to),
+            None => Some(format!("no job {id} in the queue")),
+        }
+    }
+
+    /// The user's Restart of job ID, which runs on a runner, on TO: its attempt there is cancelled and the job goes
+    /// back to the queue pinned to TO (`Effect::Requeue`); what ended comes back as outcomes. A job that runs here is
+    /// the job layer's to stop and start again.
+    pub fn restart_on(&self, id: &str, to: Machine, now: u64) -> Result<Vec<Outcome>, String> {
+        let mut st = self.lock();
+        let q = st
+            .jobs
+            .get(id)
+            .ok_or_else(|| format!("no job {id} in the queue"))?;
+        if !matches!(q.state, QState::Remote(_)) {
+            return Err(format!("job {id} doesn't run on a runner"));
+        }
+        if let Some(why) = Self::refusal_on(&st, q, &to) {
+            return Err(why);
+        }
+        let q = st.jobs.get_mut(id).expect("the job");
+        q.s.place.machine = to;
+        q.s.place.by_user = true;
+        let effects = st.attempts.step(now, AEvent::Move { job: id.into() });
+        let mut out = vec![];
+        self.apply(&mut st, effects, now, &mut out);
+        drop(st);
+        self.wake_tick();
+        Ok(out)
+    }
+
+    /// The user moves session SESSION: its next jobs go to TO (those started without a machine of their own), kept in
+    /// `runtime.db` with the session's row. A machine the queue doesn't know is refused.
+    pub fn prefer(&self, session: &str, to: Machine) -> Result<(), String> {
+        let mut st = self.lock();
+        if let Machine::Runner(n) = &to
+            && !st.runners.contains_key(n)
+        {
+            return Err(format!("no runner {n} (`drgnx runner list` shows them)"));
+        }
+        let word = match &to {
+            Machine::Auto => return Err("name a machine".into()),
+            Machine::Local => LOCAL.to_owned(),
+            Machine::Runner(n) => n.clone(),
+        };
+        st.prefs.insert(session.to_owned(), to);
+        drop(st);
+        // kept with the session's recorded row, so a hub restart brings it back (`kept`); a session with no row is
+        // not restored after a restart, and neither is its preference
+        let sid = session.to_owned();
+        self.persist(Box::new(move |c| {
+            c.execute(
+                "update asession set machine = ?2 where sid = ?1",
+                (sid, word),
+            )?;
+            Ok(())
+        }));
+        Ok(())
     }
 
     fn forseti_job(j: &QJob) -> Job {
@@ -2049,6 +2249,8 @@ impl Queue {
             return;
         };
         let (mut cands, held_off, no_room) = Self::candidates(st, job, q, true);
+        let place = q.s.place.clone();
+        let all = cands.clone();
         let ctx = PlaceCtx {
             eff,
             send: q.s.place.send.forseti(),
@@ -2071,11 +2273,14 @@ impl Queue {
             forseti::head_protection(&job.id, eff, &c.name, expect(c), r, now).err()
         };
         let (mut here, mut kept): (Option<WaitReason>, Option<WaitReason>) = (None, None);
+        // the machines the pick passed over after choosing them: held for the head, or refused by admission here
+        let mut dropped: Vec<(String, String)> = Vec::new();
         let placed = loop {
             match forseti::pick_with(job, &cands, &ctx, &st.learned, &warmth) {
                 Pick::Local => {
                     let c = cands.iter().find(|c| c.local).expect("this machine");
                     if let Some(why) = held(c) {
+                        dropped.push((LOCAL.into(), wait_text(&why)));
                         kept.get_or_insert(why);
                         cands.retain(|c| !c.local);
                         continue;
@@ -2088,6 +2293,7 @@ impl Queue {
                     {
                         Ok(g) => break Placed::Here(g, e),
                         Err(r) => {
+                            dropped.push((LOCAL.into(), wait_text(&r)));
                             here.get_or_insert(r);
                             cands.retain(|c| !c.local);
                         }
@@ -2099,6 +2305,7 @@ impl Queue {
                         .find(|c| !c.local && c.name == n)
                         .expect("the runner");
                     if let Some(why) = held(c) {
+                        dropped.push((n.clone(), wait_text(&why)));
                         kept.get_or_insert(why);
                         cands.retain(|c| c.local || c.name != n);
                         continue;
@@ -2112,6 +2319,15 @@ impl Queue {
                 }
             }
         };
+        let chosen = match &placed {
+            Placed::Here(..) => Some(LOCAL),
+            Placed::There(n, ..) => Some(n.as_str()),
+            Placed::Wait(_) => None,
+        };
+        let placed_why = chosen.map(|on| {
+            let learned = &st.learned;
+            why_placed(job, &place, &all, &ctx, learned, &warmth, on, &dropped)
+        });
         // the head is placed: nothing is held for it any more
         if !matches!(placed, Placed::Wait(_))
             && st.reservation.as_ref().is_some_and(|r| r.job == job.id)
@@ -2119,6 +2335,7 @@ impl Queue {
             st.reservation = None;
         }
         let q = st.jobs.get_mut(&id).expect("the job");
+        q.placed_why = placed_why;
         match placed {
             Placed::Here(g, e) => {
                 q.state = QState::Local;
@@ -3166,6 +3383,7 @@ impl Queue {
                     let _ = std::fs::rename(dir.join("log"), &kept);
                     j.state = QState::Queued;
                     j.machine = None;
+                    j.placed_why = None;
                     j.waiting = Some(format!("requeued ({reason})"));
                     let j = j.clone();
                     self.put_job(&j, j.s.own);
@@ -3298,6 +3516,60 @@ impl Drop for Slot {
 
 /// Where a placement put a job: here with its grant, or on a runner, each with the time it is expected to take there
 /// (and on a runner whether the start is warm); or not yet, and why.
+/// Why JOB (placed as PLACE says) went to CHOSEN and not elsewhere, in words: "pinned by you" (or "pinned by its
+/// starter") when its machine was named. Otherwise CHOSEN's estimate first, then each other machine of CANDS: why it
+/// was passed over (DROPPED: held for the head or refused by admission; else its filter's refusal), or its estimate
+/// ("r1: about 4 min, warm cache; local: every job slot of the machine is in use").
+#[allow(clippy::too_many_arguments)]
+fn why_placed(
+    job: &Job,
+    place: &Placement,
+    cands: &[Candidate],
+    ctx: &PlaceCtx,
+    learned: &Learned,
+    warmth: &dyn Fn(&Candidate) -> Option<Warmth>,
+    chosen: &str,
+    dropped: &[(String, String)],
+) -> String {
+    if place.machine != Machine::Auto {
+        return if place.by_user {
+            "pinned by you"
+        } else {
+            "pinned by its starter"
+        }
+        .into();
+    }
+    let estimate = |c: &Candidate| {
+        let w = warmth(c);
+        let total = forseti::finish_with(job, c, ctx.now, learned, w).total_s;
+        let warm = if w.is_some_and(Warmth::warm) {
+            ", warm cache"
+        } else {
+            ""
+        };
+        format!("about {:.0} min{warm}", (total / 60.0).ceil().max(1.0))
+    };
+    let mut parts: Vec<String> = cands
+        .iter()
+        .filter(|c| c.name == chosen)
+        .map(|c| format!("{chosen}: {}", estimate(c)))
+        .collect();
+    for c in cands.iter().filter(|c| c.name != chosen) {
+        let why = dropped
+            .iter()
+            .find(|(n, _)| *n == c.name)
+            .map(|(_, w)| w.clone())
+            .or_else(|| {
+                forseti::place::filter(job, c, ctx.send, ctx.machines_cell_allows)
+                    .err()
+                    .map(|r| wait_text(&r))
+            })
+            .unwrap_or_else(|| estimate(c));
+        parts.push(format!("{}: {why}", c.name));
+    }
+    parts.join("; ")
+}
+
 enum Placed {
     Here(forseti::Grant, f64),
     There(String, f64, bool),
@@ -4400,6 +4672,180 @@ mod tests {
         q.submit(keyed("x2"), 100);
         assert!(q.tick(100).starts.is_empty());
         assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
+    }
+
+    /// Runners R1 and R2, linked and ready (8000 MiB free), and the local slot held: a job goes to a runner.
+    fn two_runners(q: &Arc<Queue>, now: u64) {
+        for r in ["r1", "r2"] {
+            add(q, r, 600);
+            hello(q, r, true, now);
+            ready(q, r, 8000, &[], &[], now);
+        }
+    }
+
+    // [D] pure: a placed job's row says why that machine and not the others: the pick first, then each other
+    // machine's reason (here: this machine's one slot is held)
+    #[tokio::test]
+    async fn a_placed_row_records_why_here() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        add(&q, "r1", 600);
+        hello(&q, "r1", false, 100);
+        ready(&q, "r1", 8000, &[], &[], 100);
+        q.submit(job("x1", Priority::P3, 64), 100);
+        q.tick(100);
+        let row = q.row("x1").unwrap();
+        assert_eq!(row.machine.as_deref(), Some("r1"), "{row:?}");
+        let why = row.placed_why.expect("a placed row says why");
+        assert!(why.starts_with("r1: "), "{why}");
+        assert!(
+            why.contains("local: every job slot of the machine is in use"),
+            "{why}"
+        );
+        // a job back in the queue (its runner's link lost, with no linger) says why it waits, not where it was placed
+        lost(&q, "r1", 110);
+        assert_eq!(q.row("x1").unwrap().placed_why, None);
+    }
+
+    // [D] pure: a machine the user chose is the whole reason
+    #[tokio::test]
+    async fn a_pinned_row_says_pinned_by_you() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        two_runners(&q, 100);
+        let mut s = job("x1", Priority::P1, 64);
+        s.session = None;
+        s.place.machine = Machine::Runner("r2".into());
+        s.place.by_user = true;
+        q.submit(s, 100);
+        q.tick(100);
+        let row = q.row("x1").unwrap();
+        assert_eq!(row.machine.as_deref(), Some("r2"), "{row:?}");
+        assert_eq!(row.placed_why.as_deref(), Some("pinned by you"));
+    }
+
+    // [D] pure: a queued job moved to r2 is placed there, though r1 would win the pick; its row says the user chose
+    #[tokio::test]
+    async fn move_requeues_a_queued_job_on_the_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        q.submit(job("x1", Priority::P3, 64), 100);
+        q.tick(100);
+        assert_eq!(q.row("x1").unwrap().machine, None);
+        two_runners(&q, 101);
+        assert_eq!(
+            q.move_job("x1", Machine::Runner("r2".into())),
+            Ok(Moved::Requeued)
+        );
+        q.tick(102);
+        let row = q.row("x1").unwrap();
+        assert_eq!(row.machine.as_deref(), Some("r2"), "{row:?}");
+        assert_eq!(row.placed_why.as_deref(), Some("pinned by you"));
+    }
+
+    // [D] pure: a move of a job that runs stops nothing: the answer names where it runs (the hub asks the user on a
+    // card), its attempt keeps running and its runner is sent nothing; a move to where it runs is a no-op
+    #[tokio::test]
+    async fn move_on_a_running_job_opens_a_card_and_stops_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        two_runners(&q, 100);
+        q.submit(job("x1", Priority::P3, 64), 100);
+        q.tick(100);
+        let r = current(&q, "x1");
+        started(&q, "r1", &r, 101);
+        let before = q.row("x1").unwrap();
+        assert_eq!(
+            q.move_job("x1", Machine::Runner("r2".into())),
+            Ok(Moved::Running("r1".into()))
+        );
+        assert_eq!(q.row("x1").unwrap(), before);
+        let st = q.lock();
+        let (n, a) = st.attempts.current("x1").unwrap();
+        assert_eq!((n, a.state), (1, attempts::AttemptState::Running));
+        drop(st);
+        assert_eq!(
+            q.move_job("x1", Machine::Runner("r1".into())),
+            Ok(Moved::Same)
+        );
+        let card = crate::work::machines::move_card("x1", "make x1", "r2", "r1");
+        assert_eq!(
+            card.title.as_deref(),
+            Some("Restart make x1 on r2? It stops the run on r1")
+        );
+        assert_eq!(
+            card.data.unwrap(),
+            json!({"job": "x1", "machine": "r2", "choices": ["restart", "keep"]})
+        );
+        // only the card's Restart requeues: the attempt on r1 is cancelled there, and the job goes to r2
+        q.restart_on("x1", Machine::Runner("r2".into()), 102)
+            .unwrap();
+        let st = q.lock();
+        assert_eq!(
+            st.attempts.attempt("x1", 1).map(|a| a.state),
+            Some(attempts::AttemptState::Requeued)
+        );
+        drop(st);
+        q.tick(103);
+        assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some("r2"));
+    }
+
+    // [D] pure: a session's preference pins its next jobs; another session's jobs are placed as before
+    #[tokio::test]
+    async fn move_on_a_session_sets_its_next_jobs_machine() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        two_runners(&q, 100);
+        q.prefer("s1", Machine::Runner("r2".into())).unwrap();
+        q.submit(job("x1", Priority::P3, 64), 100);
+        let mut other = job("x2", Priority::P3, 64);
+        other.session = Some("s2".into());
+        q.submit(other, 100);
+        q.tick(100);
+        assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some("r2"));
+        assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
+    }
+
+    // [D] pure (runtime.db in a folder): the machine the user moved a session to is kept with the session's recorded
+    // row and comes back after a hub restart: the session's next job goes there
+    #[tokio::test]
+    async fn a_sessions_machine_comes_back_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
+        db.write(|c| {
+            Ok(c.execute(
+                "insert into asession(sid, name, profile, at) values ('s1', 'a', 'p', 1.0)",
+                [],
+            )?)
+        })
+        .await
+        .unwrap();
+        let (q, _rx) = test_queue(dir.path(), Some(db.clone()), true);
+        two_runners(&q, 100);
+        q.prefer("s1", Machine::Runner("r2".into())).unwrap();
+        q.flush().await;
+        let (again, _rx2) = test_queue(dir.path(), None, true);
+        again.restore_kept(kept(&db).await);
+        two_runners(&again, 200);
+        again.submit(job("x1", Priority::P3, 64), 200);
+        again.tick(200);
+        let row = again.row("x1").unwrap();
+        assert_eq!(row.machine.as_deref(), Some("r2"), "{row:?}");
+    }
+
+    // [D] pure: a machine the queue doesn't know is refused, saying so; nothing changes
+    #[tokio::test]
+    async fn move_to_an_unknown_machine_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        q.submit(job("x1", Priority::P3, 64), 100);
+        let e = q
+            .move_job("x1", Machine::Runner("nope".into()))
+            .unwrap_err();
+        assert!(e.contains("no runner nope"), "{e}");
+        let e = q.prefer("s1", Machine::Runner("nope".into())).unwrap_err();
+        assert!(e.contains("no runner nope"), "{e}");
+        assert_eq!(q.lock().jobs["x1"].s.place.machine, Machine::Auto);
     }
 
     // [D] pure: the design's table, row by row

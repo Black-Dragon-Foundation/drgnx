@@ -105,20 +105,43 @@ long before counts as ended."
   "`drgnx-test--presenter-counts' at the end of the last `drgnx-test-wait-presented'.")
 
 (defun drgnx-test--presenter-counts (frame)
-  "(OWED . SENT) of FRAME's display on the native shell: the packets that need a commit of their own (published, less
-those merged into one still waiting) and the commits sent.  Nil where there is no presenter."
+  "(PUBLISHED . PRESENTED) of FRAME's display on the native shell, the presenter's own request numbers: the newest
+request (each packet, configure ack and piece of surface state takes the next one) and the newest that, with every
+older one, has gone out in a flushed commit.  Nil where there is no presenter."
   (when-let* (((fboundp 'nhwl-presenter-stats))
               (s (ignore-errors (nhwl-presenter-stats frame))))
-    (cons (- (plist-get s :packets) (plist-get s :superseded))
-          (+ (plist-get s :commits) (plist-get s :bare-commits)))))
+    (cons (plist-get s :published) (plist-get s :presented))))
 
 (defun drgnx-test--presented-p (frame)
-  "Non-nil when every packet of FRAME's display published since the last presented wait has gone out as a commit.
-A packet makes at least one commit, and a tree with child frames makes more.  With no presenter (macOS, a pgtk build)
-it is t: there `glitnir-snapshot' itself returns after a paint."
-  (let ((now (drgnx-test--presenter-counts frame)) (then drgnx-test--settled-counts))
-    (or (null now) (null then)
-        (>= (- (cdr now) (cdr then)) (- (car now) (car then))))))
+  "Non-nil when every request of FRAME's display has gone out in a commit: the presenter's :presented has reached its
+:published.  Not a count of commits since the last wait: a packet merged into one still waiting adds no commit owed,
+so that count settled while nothing went out (KWin with no render device answered no frame callback after its first).
+With no presenter (macOS, a pgtk build) it is t: there `glitnir-snapshot' itself returns after a paint."
+  (let ((now (drgnx-test--presenter-counts frame)))
+    (or (null now) (>= (cdr now) (car now)))))
+
+(defvar drgnx-test--deleted-frames nil
+  "((FRAME . CALLERS)…): the last 8 frames deleted in this Emacs, newest first, CALLERS the functions on the stack
+when it was (`drgnx-test--note-deleted'), so a wait on a dead frame can say who deleted it.")
+
+(defun drgnx-test--note-deleted (frame)
+  "On `delete-frame-functions': note FRAME and the functions that are deleting it."
+  (let ((callers (delq nil (mapcar (lambda (f) (and (symbolp (cadr f)) (cadr f))) (backtrace-frames)))))
+    ;; from the caller of `delete-frame' (a child frame dies with its parent from redisplay: no `delete-frame' call)
+    (push (cons frame (seq-take (cdr (or (memq 'delete-frame callers) (memq 'drgnx-test--note-deleted callers))) 12))
+          drgnx-test--deleted-frames)
+    (setq drgnx-test--deleted-frames (seq-take drgnx-test--deleted-frames 8))))
+
+(add-hook 'delete-frame-functions #'drgnx-test--note-deleted)
+
+(defun drgnx-test--frame-dead-p (frame)
+  "Non-nil when FRAME is a frame that was deleted."
+  (and (framep frame) (not (frame-live-p frame))))
+
+(defun drgnx-test--dead-frame-fail (frame)
+  "Fail the test: the wait's FRAME is dead, and these callers deleted it."
+  (signal 'ert-test-failed (list :waited-for "a presented frame" :dead-frame frame
+                                 :deleted-by (cdr (assq frame drgnx-test--deleted-frames)))))
 
 (cl-defun drgnx-test-wait-presented (&key frame value (frames 2) (secs 30))
   "Wait until FRAME's root frame (default the session's) shows what was changed; return the last sample.
@@ -128,10 +151,13 @@ FRAMES samples in a row are the same and no commit is owed.  A sample is the pic
 no arguments, called after the paint) for a state the picture does not show, such as a frame's size.  A size or a map
 is answered by the compositor in order with those paints, so what is still on its way shows up in a later sample.
 The deadline (SECS as in `drgnx-test-wait') only bounds a failure: a timeout fails the test.
-A test with a popup that has no parent passes FRAME: `drgnx-uitest-root-frame' can find that popup."
+A test with a popup that has no parent passes FRAME: `drgnx-uitest-root-frame' can find that popup.
+A frame deleted before or during the wait never presents: the wait fails at its next look with `:dead-frame' and
+`:deleted-by', the functions that deleted it (`drgnx-test--deleted-frames')."
   (let* ((root (or frame (drgnx-uitest-root-frame))) (last nil) (seen 0) (err (list nil)))
     (drgnx-test-wait
      (lambda ()
+       (when (drgnx-test--frame-dead-p root) (drgnx-test--dead-frame-fail root))
        (when-let* ((snap (condition-case e (drgnx-uitest-snapshot root) ; no paint in its 1 s: the next try
                            (error (setcar err e) nil))))
          (let ((v (if value (funcall value) snap)))

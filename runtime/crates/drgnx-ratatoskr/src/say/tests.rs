@@ -588,6 +588,7 @@ fn forecast(cost: &[(Unit, f64)], unpriced: &[&str], pace: Vec<PaceEffect>) -> F
         warnings: Vec::new(),
         prices_as_of: "2026-11-01".into(),
         made_at: NOW,
+        baseline: None,
     }
 }
 
@@ -602,6 +603,9 @@ fn week(provider: &str, used: f64, added: Option<Range>) -> PaceEffect {
         exhausted_at: None,
         resets_at: Some(NOW + 3.0 * 86_400.0),
         estimate: true,
+        window: "week".into(),
+        rate_7d_per_hour: None,
+        history: Vec::new(),
     };
     crate::forecast::pace_effect(&meter, added, NOW).0
 }
@@ -700,6 +704,9 @@ async fn autonomous_waits_when_any_window_would_run_out() {
             exhausted_at: None,
             resets_at,
             estimate: true,
+            window: "week".into(),
+            rate_7d_per_hour: None,
+            history: Vec::new(),
         };
         let pace = crate::forecast::pace_effect(&meter, Some(range(0.05, 0.15)), NOW).0;
         assert!(pace.runs_out_p90 && pace.window == PaceWindow::Short);
@@ -960,7 +967,7 @@ async fn a_revision_after_the_job_started_makes_no_second_job() {
     .await;
     let job = job_of(&live);
     let user = crate::runner::user();
-    let approve: runstav::methods::jobs::WithBudget =
+    let approve: runstav::methods::jobs::WithLimits =
         serde_json::from_value(json!({ "id": job })).unwrap();
     crate::runner::approve(&f, &user, approve).await.unwrap();
     feed(

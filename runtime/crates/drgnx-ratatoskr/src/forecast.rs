@@ -19,8 +19,9 @@ use norn::forecast::sim;
 use runstav::methods::forecast as wire;
 use runstav::methods::matrix::{Role, Unit};
 use runstav::wire::Error;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 /// Samples taken per read.
 const PAGE: i64 = 100;
@@ -141,8 +142,8 @@ pub fn share_per_usd_of(history: &[(f64, f64)], usd_est: f64) -> Option<f64> {
 }
 
 /// [`share_per_usd_of`] over PROVIDER's kept readings and the `usd-est` its steps booked since the first of them.
-pub async fn share_per_usd(front: &Front, provider: &str, now: f64) -> Option<f64> {
-    let history = front.core.budgets.history(provider, now);
+pub async fn share_per_usd(front: &Front, provider: &str, window: &str, now: f64) -> Option<f64> {
+    let history = front.core.budgets.history(provider, window, now);
     let first = history.first()?.0;
     let provider = provider.to_owned();
     let usd_est = front
@@ -476,6 +477,8 @@ async fn build(
             tokens: shown(tokens),
             active_secs: shown(active),
             cost,
+            start: wire_range(t.start),
+            finish: wire_range(t.finish),
         });
         made.push(Made {
             job: job_key.to_owned(),
@@ -493,6 +496,10 @@ async fn build(
             cost_unit: cost_kept.first().map(|c| unit_name(c.unit).to_owned()),
             basis: out_tasks[i].basis.label.clone(),
             n: i64::from(class.n),
+            start_p50: t.start.p50,
+            start_p90: t.start.p90,
+            finish_p50: t.finish.p50,
+            finish_p90: t.finish.p90,
         });
     }
     let min_n = classes.iter().map(|c| c.n).min().unwrap_or(0);
@@ -526,6 +533,10 @@ async fn build(
         cost_unit: cost_kept.first().map(|c| unit_name(c.unit).to_owned()),
         basis: format!("{} tasks", wants.len()),
         n: i64::from(min_n),
+        start_p50: 0.0,
+        start_p90: 0.0,
+        finish_p50: wall.p50,
+        finish_p90: wall.p90,
     });
     let wake = (totals.cold_wakes.p90 > 0.0).then(|| wire::WakeLine {
         cold_wakes: wire_range(totals.cold_wakes),
@@ -551,16 +562,17 @@ async fn build(
     let mut pace = Vec::new();
     let mut warnings = Vec::new();
     for name in meters {
+        // the provider's window that binds first: the fullest
         let Some(meter) = front
             .core
             .budgets
             .pace(Some(name), made_at)
             .into_iter()
-            .next()
+            .max_by(|a, b| a.used_share.total_cmp(&b.used_share))
         else {
             continue;
         };
-        let added = match share_per_usd(front, name, made_at).await {
+        let added = match share_per_usd(front, name, &meter.window, made_at).await {
             Some(ratio) => {
                 let own = |i: usize, o: &Obs| {
                     if on_subscription[i] == Some(name) {
@@ -597,6 +609,7 @@ async fn build(
         warnings,
         prices_as_of: prices_as_of(&cur.loaded.values.agents_model_prices),
         made_at,
+        baseline: None,
     };
     Ok((forecast, made))
 }
@@ -664,6 +677,8 @@ fn manager_line(front: &Front, rows: &[&SampleRow]) -> Option<wire::TaskForecast
         tokens,
         active_secs: active,
         cost,
+        start: wire::Range::default(),
+        finish: wire::Range::default(),
     })
 }
 
@@ -738,7 +753,12 @@ pub async fn get(
     _caller: &Caller,
     p: wire::ForecastParams,
 ) -> Result<wire::Forecast, Error> {
-    let id = p.job.as_str().to_owned();
+    job_forecast(front, p.job.as_str()).await
+}
+
+/// JOB's forecast, with the baseline of an approved one.
+async fn job_forecast(front: &Front, id: &str) -> Result<wire::Forecast, Error> {
+    let id = id.to_owned();
     let l = crate::runner::load(front, &id, false)
         .await?
         .ok_or_else(|| crate::runner::invalid(format!("No job {id}")))?;
@@ -752,7 +772,231 @@ pub async fn get(
             "Job {id} has no tasks to forecast"
         )));
     }
-    for_tasks(front, &id, wants).await
+    let mut forecast = for_tasks(front, &id, wants).await?;
+    if l.job.status.as_deref() != Some("proposed") {
+        forecast.baseline = baseline_of(front, &id).await?;
+    }
+    Ok(forecast)
+}
+
+/// What the proposal of JOB said when each task would start and end, read back from `forecast_made`; none when none
+/// was kept.  Approval and resume never write it again: the baseline is the proposal's.
+async fn baseline_of(front: &Front, job: &str) -> Result<Option<wire::Baseline>, Error> {
+    let key = job.to_owned();
+    let rows = front
+        .writer
+        .db
+        .read(move |c| sample::baseline(c, &key))
+        .await
+        .map_err(|e| crate::runner::invalid(format!("the baseline does not read: {e}")))?;
+    let Some(plan) = rows.iter().find(|r| r.task == job) else {
+        return Ok(None);
+    };
+    let tasks = rows
+        .iter()
+        .filter_map(|r| {
+            let n = r.task.strip_prefix(job)?.strip_prefix('#')?.parse().ok()?;
+            Some(wire::BaselineTask {
+                n,
+                start: wire::Range {
+                    p50: r.start_p50,
+                    p90: r.start_p90,
+                },
+                finish: wire::Range {
+                    p50: r.finish_p50,
+                    p90: r.finish_p90,
+                },
+            })
+        })
+        .collect();
+    Ok(Some(wire::Baseline {
+        made_at: plan.made_at,
+        tasks,
+        finish: wire::Range {
+            p50: plan.finish_p50,
+            p90: plan.finish_p90,
+        },
+    }))
+}
+
+/// One plan of a `forecast/plan`: its wants as the job would make them, its version (the plan's hash), and, when a job of
+/// it runs, that job and its own forecast.
+#[derive(Clone)]
+pub(crate) struct PlanIn {
+    pub id: String,
+    pub hash: String,
+    pub wants: Vec<Want>,
+    pub running: Option<(String, wire::Forecast)>,
+}
+
+/// The wants of several plans as one job's: plan I's task N becomes `I * 1000 + N` (its dependencies too), so one
+/// simulation draws them together on the runner's slots.
+pub(crate) fn joint_wants(plans: &[&PlanIn]) -> Vec<Want> {
+    plans
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| {
+            let base = (i as i64 + 1) * 1000;
+            p.wants.iter().map(move |w| Want {
+                n: base + w.n,
+                deps: w.deps.iter().map(|d| base + d).collect(),
+                ..w.clone()
+            })
+        })
+        .collect()
+}
+
+/// The answers kept for the plans' versions: a plan edit (its hash) misses, the clock does too (new history).
+#[derive(Default)]
+pub(crate) struct PlanCache {
+    kept: HashMap<String, (std::time::Instant, wire::Forecast)>,
+}
+
+const PLAN_CACHE_SECS: u64 = 60;
+const PLAN_CACHE_MAX: usize = 64;
+
+impl PlanCache {
+    fn key(plans: &[&PlanIn]) -> String {
+        let mut k: Vec<String> = plans
+            .iter()
+            .map(|p| format!("{}@{}", p.id, p.hash))
+            .collect();
+        k.sort();
+        k.join("|")
+    }
+
+    pub(crate) fn get(&self, plans: &[&PlanIn], now: std::time::Instant) -> Option<wire::Forecast> {
+        let (at, f) = self.kept.get(&Self::key(plans))?;
+        (now.duration_since(*at).as_secs() < PLAN_CACHE_SECS).then(|| f.clone())
+    }
+
+    pub(crate) fn put(&mut self, plans: &[&PlanIn], now: std::time::Instant, f: wire::Forecast) {
+        if self.kept.len() >= PLAN_CACHE_MAX {
+            self.kept.clear();
+        }
+        self.kept.insert(Self::key(plans), (now, f));
+    }
+}
+
+static PLAN_CACHE: std::sync::Mutex<Option<PlanCache>> = std::sync::Mutex::new(None);
+
+/// The forecast over PLANS together: those with a running job are not in the draw (they have their own); the rest are
+/// drawn as one job on the runner's slots.  Nothing is recorded.
+pub(crate) async fn plan_forecast(
+    front: &Front,
+    plans: Vec<PlanIn>,
+) -> Result<wire::PlanForecast, Error> {
+    let (running, open): (Vec<&PlanIn>, Vec<&PlanIn>) =
+        plans.iter().partition(|p| p.running.is_some());
+    let now = std::time::Instant::now();
+    let cached = PLAN_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .and_then(|c| c.get(&open, now));
+    let forecast = match cached {
+        Some(f) => f,
+        None => {
+            let wants = joint_wants(&open);
+            let (f, _made) = if wants.is_empty() {
+                // no plan to draw: the empty forecast of no tasks
+                build(front, "forecast/plan", Vec::new(), false).await?
+            } else {
+                for_job(front, "forecast/plan", wants).await?
+            };
+            PLAN_CACHE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_or_insert_with(PlanCache::default)
+                .put(&open, now, f.clone());
+            f
+        }
+    };
+    Ok(wire::PlanForecast {
+        forecast,
+        running: running
+            .into_iter()
+            .filter_map(|p| {
+                let (job, remaining) = p.running.clone()?;
+                Some(wire::RunningPlan {
+                    plan: p.id.clone(),
+                    job,
+                    remaining,
+                })
+            })
+            .collect(),
+    })
+}
+
+/// `forecast/plan`: the plans from the graph, a running job's forecast read as `forecast/get` does.  (A running job's
+/// forecast is the plan's as proposed until the remaining-work forecast of a running job exists.)
+pub async fn plan(front: &Front, p: wire::ForecastPlanParams) -> Result<wire::PlanForecast, Error> {
+    let mut ins = Vec::new();
+    for id in p.plans.into_inner() {
+        let (_, read) = crate::runner::effects::plan_for_job(front, id.as_str()).await?;
+        let key = id.as_str().to_owned();
+        let running = {
+            let k = key.clone();
+            front
+                .writer
+                .db
+                .read(move |c| {
+                    Ok(c.query_row(
+                        "select id from job where plan = ?1 and status in ('running', 'paused') \
+                         order by created desc limit 1",
+                        [&k],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .ok())
+                })
+                .await
+                .map_err(|e| crate::runner::invalid(format!("the plan's job does not read: {e}")))?
+        };
+        let running = match running {
+            Some(job) => {
+                let f = job_forecast(front, &job).await?;
+                Some((job, f))
+            }
+            None => None,
+        };
+        let mut data = Map::new();
+        data.insert(
+            "tasks".into(),
+            Value::Array(
+                read.tasks
+                    .iter()
+                    .map(|t| {
+                        let mut o =
+                            json!({"n": t.n, "role": t.role, "deps": t.deps, "body": t.body});
+                        if let Some(m) = &t.model {
+                            o["model"] = json!(m);
+                        }
+                        o
+                    })
+                    .collect(),
+            ),
+        );
+        let profiles: Map<String, Value> = read
+            .tasks
+            .iter()
+            .filter_map(|t| Some((format!("{key}#{}", t.n), json!(t.profile.as_ref()?))))
+            .collect();
+        if !profiles.is_empty() {
+            data.insert("profiles".into(), Value::Object(profiles));
+        }
+        if let Some(repo) = &read.repo
+            && let Ok(Some(project)) = crate::graph::project_of(Path::new(repo)).await
+        {
+            data.insert("project".into(), json!(project.id));
+        }
+        ins.push(PlanIn {
+            hash: read.hash.clone(),
+            wants: wants_from(front, &key, &data),
+            id: key,
+            running,
+        });
+    }
+    plan_forecast(front, ins).await
 }
 
 /// What `session:<sid>` says of the session: its profile, its project, and the role its work has (a worker's is that of
@@ -1209,6 +1453,9 @@ mod tests {
             exhausted_at: None,
             resets_at,
             estimate: true,
+            window: "week".into(),
+            rate_7d_per_hour: None,
+            history: Vec::new(),
         }
     }
 
@@ -1235,8 +1482,12 @@ mod tests {
         .await;
         let scope: runstav::methods::timeline::BudgetScope =
             serde_json::from_value(serde_json::json!({"worker": "w1"})).unwrap();
-        f.core.budgets.reading(&scope, "claude", 0.10, None, 1000.0);
-        f.core.budgets.reading(&scope, "claude", 0.20, None, 1900.0);
+        f.core
+            .budgets
+            .reading(&scope, "claude", "5h", 0.10, None, 1000.0);
+        f.core
+            .budgets
+            .reading(&scope, "claude", "5h", 0.20, None, 1900.0);
         f.writer
             .write(&crate::runner::service(), "test/steps", |tx| {
                 // (provider, start, cost, unit)
@@ -1265,6 +1516,8 @@ mod tests {
                             snapshot: None,
                             log_version: None,
                             acp: None,
+                            machine: None,
+                            slots: None,
                         },
                     )?;
                     close(
@@ -1283,10 +1536,10 @@ mod tests {
             .await
             .unwrap();
         // the meter rose 0.10 while 4 + 6 estimated dollars were booked
-        let got = share_per_usd(&f, "claude", 2000.0).await.unwrap();
+        let got = share_per_usd(&f, "claude", "5h", 2000.0).await.unwrap();
         assert!((got - 0.01).abs() < 1e-12, "{got}");
         assert_eq!(
-            share_per_usd(&f, "codex", 2000.0).await,
+            share_per_usd(&f, "codex", "5h", 2000.0).await,
             None,
             "no meter readings"
         );
@@ -1396,6 +1649,10 @@ mod tests {
                 cost_unit: None,
                 basis: "1 tasks".into(),
                 n: 0,
+                start_p50: 0.0,
+                start_p90: 0.0,
+                finish_p50: 2.0,
+                finish_p90: 3.0,
             }],
         )?;
         sample::put(
@@ -1471,6 +1728,152 @@ mod tests {
             cost.p90
         );
         assert_eq!(cost.p50, plan.cost_p50.unwrap());
+    }
+
+    fn want_of(n: i64, deps: &[i64]) -> Want {
+        Want {
+            n,
+            role: "implement".into(),
+            profile: "claude".into(),
+            model: None,
+            project: None,
+            brief_bytes: 1000,
+            deps: deps.to_vec(),
+        }
+    }
+
+    fn plan_in(id: &str, hash: &str, tasks: i64) -> PlanIn {
+        PlanIn {
+            id: id.into(),
+            hash: hash.into(),
+            wants: (1..=tasks)
+                .map(|n| want_of(n, if n > 1 { &[1] } else { &[] }))
+                .collect(),
+            running: None,
+        }
+    }
+
+    /// Pure (D): a store in a temp folder, a fixed seed.  Three plans of four tasks drawn together finish by a later
+    /// time than one of them, but earlier than the plans one after another: the joint p90 is below the sum of the
+    /// plans' own p90s (the slots run them side by side, and the sum of quantiles over-counts).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_spec_total_is_a_joint_draw_not_a_sum_of_p90s() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let plans = [
+            plan_in("plan:j-a", "1", 4),
+            plan_in("plan:j-b", "1", 4),
+            plan_in("plan:j-c", "1", 4),
+        ];
+        let joint = plan_forecast(&f, plans.to_vec()).await.unwrap();
+        let mut sum_wall = 0.0;
+        let mut sum_tokens = 0.0;
+        for p in &plans {
+            let one = plan_forecast(&f, vec![p.clone()]).await.unwrap();
+            sum_wall += one.forecast.wall_secs.p90;
+            sum_tokens += one.forecast.tokens.p90;
+        }
+        assert!(
+            joint.forecast.wall_secs.p90 < sum_wall,
+            "{} against {sum_wall}",
+            joint.forecast.wall_secs.p90
+        );
+        assert!(
+            joint.forecast.tokens.p90 < sum_tokens,
+            "{} against {sum_tokens}",
+            joint.forecast.tokens.p90
+        );
+        assert_eq!(joint.forecast.tasks.len(), 12);
+        assert!(joint.running.is_empty());
+    }
+
+    /// Pure (D): a plan with a running job is answered with that job's own forecast and is not in the draw: adding it
+    /// changes nothing of the joint forecast (Review Focus 5: a spec's total is never the sum of a running plan's too).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_spec_with_a_running_plan_is_not_summed() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let alone = plan_forecast(&f, vec![plan_in("plan:r-a", "1", 3)])
+            .await
+            .unwrap();
+        let own = plan_forecast(&f, vec![plan_in("plan:r-run", "1", 6)])
+            .await
+            .unwrap()
+            .forecast;
+        let mut running = plan_in("plan:r-run", "1", 6);
+        running.running = Some(("job-1".into(), own.clone()));
+        let both = plan_forecast(&f, vec![plan_in("plan:r-a", "1", 3), running])
+            .await
+            .unwrap();
+        assert_eq!(both.forecast.tokens, alone.forecast.tokens);
+        assert_eq!(both.forecast.tasks.len(), 3);
+        assert_eq!(both.running.len(), 1);
+        assert_eq!(
+            (both.running[0].plan.as_str(), both.running[0].job.as_str()),
+            ("plan:r-run", "job-1")
+        );
+        assert_eq!(both.running[0].remaining, own);
+    }
+
+    /// Pure (D): an answer is kept for the plans' versions and not served for another one: a plan edit (its hash)
+    /// misses, the same version hits, and a minute on misses too.
+    #[test]
+    fn the_cache_misses_after_a_plan_edit() {
+        let mut c = PlanCache::default();
+        let now = std::time::Instant::now();
+        let a = plan_in("plan:a", "h1", 1);
+        let fc = |t: f64| wire::Forecast {
+            tasks: Vec::new(),
+            tokens: Range { p50: t, p90: t },
+            active_secs: Range::default(),
+            wall_secs: Range::default(),
+            cost: Vec::new(),
+            unpriced: Vec::new(),
+            wake: None,
+            manager: None,
+            pace: Vec::new(),
+            warnings: Vec::new(),
+            prices_as_of: String::new(),
+            made_at: 0.0,
+            baseline: None,
+        };
+        c.put(&[&a], now, fc(1.0));
+        assert_eq!(c.get(&[&a], now).map(|f| f.tokens.p50), Some(1.0));
+        let edited = plan_in("plan:a", "h2", 1);
+        assert!(c.get(&[&edited], now).is_none(), "an edited plan is a miss");
+        let later = now + std::time::Duration::from_secs(PLAN_CACHE_SECS + 1);
+        assert!(c.get(&[&a], later).is_none(), "a minute on is a miss");
+    }
+
+    /// The perf lane's rows `forecast-plan-hit` (5 ms) and `forecast-plan-miss` (300 ms): 12 plans of 20 tasks drawn
+    /// together, the first call (a miss) and the repeats (hits).  Ignored in normal runs: release, pinned
+    /// (`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --lib -- --ignored
+    /// --nocapture forecast_plan_perf`).
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "perf lane"]
+    async fn forecast_plan_perf() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let plans: Vec<PlanIn> = (0..12)
+            .map(|i| plan_in(&format!("plan:perf-{i}"), "1", 20))
+            .collect();
+        let t = std::time::Instant::now();
+        plan_forecast(&f, plans.clone()).await.unwrap();
+        let miss = t.elapsed();
+        let mut hits = Vec::new();
+        for _ in 0..50 {
+            let t = std::time::Instant::now();
+            plan_forecast(&f, plans.clone()).await.unwrap();
+            hits.push(t.elapsed());
+        }
+        hits.sort();
+        let hit = hits[(hits.len() * 95).div_ceil(100) - 1];
+        println!("forecast-plan: miss {miss:?}, hit p95 {hit:?}");
+        assert!(
+            miss < std::time::Duration::from_millis(300),
+            "miss {miss:?}"
+        );
+        assert!(hit < std::time::Duration::from_millis(5), "hit p95 {hit:?}");
     }
 
     /// Pure (D): the runner's tick and the forecast count slots with one function.

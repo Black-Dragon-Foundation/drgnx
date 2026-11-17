@@ -10,6 +10,7 @@ use norn::deny::{DenyList, Verdict};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use verdandi::redact::redact;
+use verdandi::text::{Coding, canonical};
 use verdandi::{Change, DocId, Error, PeerId, Result};
 
 /// A batch with more inserted bytes than this is refused with `split-required`: the editor splits it.
@@ -95,13 +96,15 @@ fn author_of(origin: &str) -> Result<(String, Value, verdandi::Cause)> {
 }
 
 impl Hub {
-    /// Track REL of TREE for BUFFER_ID, unless it is a personal file (DENY), a credentials file or ignored by git.
+    /// Track REL of TREE for BUFFER_ID, unless it is a personal file (DENY), a credentials file or ignored by git; a
+    /// disk that differs from the document is recorded at NOW as an outside change (the buffer shows the disk).
     pub fn register(
         &self,
         tree: &Tree,
         rel: &str,
         buffer_id: &str,
         deny: &DenyList,
+        now: f64,
     ) -> Result<Registered> {
         let no = |why: &str| Registered {
             doc: 0,
@@ -123,6 +126,22 @@ impl Hub {
         g.h.activate(doc, branch, || {
             Ok(super::capture::base_text(tree, rel).unwrap_or_default())
         })?;
+        // the editor's buffer is the file on disk (a modified one is resynced at once): when no other buffer of the
+        // document holds unsaved typing and the disk differs from the document (a file changed since the commit, one
+        // in no commit), the disk is recorded as the watcher would have, an outside change, before anything reads it
+        let only = !g
+            .buffers
+            .values()
+            .any(|b| (b.doc, b.branch) == (doc, branch));
+        let differs = only && {
+            let held = g.h.text(doc, branch)?;
+            match super::capture::read(tree, rel) {
+                super::capture::Seen::Bytes(b) => {
+                    canonical(&b, Coding::detect(&b)).is_ok_and(|t| t != held)
+                }
+                _ => false,
+            }
+        };
         g.buffers.insert(
             buffer_id.to_owned(),
             Buffer {
@@ -133,6 +152,10 @@ impl Hub {
                 version: 0,
             },
         );
+        drop(g);
+        if differs {
+            self.on_disk_change(tree, rel, now)?;
+        }
         Ok(Registered {
             doc: doc.0,
             tracked: true,
@@ -406,20 +429,88 @@ mod tests {
             (".env", "secret"),
             ("notes.org", "personal"),
         ] {
-            let r = f.hub.register(&f.tree, path, "b1", &f.deny).unwrap();
+            let r = f.hub.register(&f.tree, path, "b1", &f.deny, 1.0).unwrap();
             assert!(!r.tracked, "{path}");
             assert_eq!(r.reason.as_deref(), Some(why), "{path}");
         }
-        let r = f.hub.register(&f.tree, "a.txt", "b2", &f.deny).unwrap();
+        let r = f
+            .hub
+            .register(&f.tree, "a.txt", "b2", &f.deny, 1.0)
+            .unwrap();
         assert!(r.tracked, "{r:?}");
         let _ = &f.home;
     }
 
     // pattern: D
     #[test]
+    fn a_file_changed_since_the_commit_is_the_disks_before_any_batch() {
+        let f = fx(&[("a.txt", "one\ntwo\n")]);
+        let disk = "zero\none\ntwo\n";
+        std::fs::write(f.tree.root.join("a.txt"), disk).unwrap();
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 5.0)
+            .unwrap();
+        // the mirror is the file as the editor shows it, so a mark's position is the disk's
+        let text = f.hub.mirror_text(&f.tree, "a.txt").unwrap().unwrap();
+        assert_eq!(text, disk);
+        let lines = crate::editor::marks::Lines::of(&text).unwrap();
+        assert_eq!(
+            lines.start(3),
+            10,
+            "line 3 (two) starts after zero and one (positions from 1)"
+        );
+        // and the line the disk added is an outside change's
+        assert_eq!(
+            f.hub.lines_by(&f.tree, "a.txt").unwrap().unwrap(),
+            vec![(
+                "external:disk".to_string(),
+                vec![crate::editor::project::LineRange { start: 1, end: 1 }]
+            )]
+        );
+        // a new file, in no commit: its text, all of it the disk's
+        std::fs::write(f.tree.root.join("new.txt"), "fresh\n").unwrap();
+        f.hub
+            .register(&f.tree, "new.txt", "b2", &f.deny, 6.0)
+            .unwrap();
+        assert_eq!(
+            f.hub.mirror_text(&f.tree, "new.txt").unwrap().as_deref(),
+            Some("fresh\n")
+        );
+    }
+
+    // pattern: D
+    #[test]
+    fn a_second_buffer_of_a_file_keeps_the_firsts_unsaved_typing() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 5.0)
+            .unwrap();
+        f.hub
+            .batch(
+                "b1",
+                &[change(3, 0, "!", "user")],
+                Some(&hash("one!\n")),
+                1,
+                5.0,
+            )
+            .unwrap();
+        // the disk still has the commit's text: the unsaved typing is the document's, not undone by the disk
+        f.hub
+            .register(&f.tree, "a.txt", "b2", &f.deny, 6.0)
+            .unwrap();
+        assert_eq!(
+            f.hub.mirror_text(&f.tree, "a.txt").unwrap().as_deref(),
+            Some("one!\n")
+        );
+    }
+
+    // pattern: D
+    #[test]
     fn batch_applies_with_user_peer() {
         let f = fx(&[("a.txt", "one\n")]);
-        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 1.0)
+            .unwrap();
         let text = "one two\n";
         let reply = f
             .hub
@@ -444,7 +535,9 @@ mod tests {
     #[test]
     fn the_buffers_version_is_its_last_batch_or_resync() {
         let f = fx(&[("a.txt", "one\n"), ("b.txt", "x\n")]);
-        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 1.0)
+            .unwrap();
         assert_eq!(f.hub.mirror_version(&f.tree, "a.txt").unwrap(), Some(0));
         f.hub
             .batch(
@@ -466,7 +559,9 @@ mod tests {
     #[test]
     fn hash_mismatch_asks_resync() {
         let f = fx(&[("a.txt", "one\n")]);
-        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 1.0)
+            .unwrap();
         let reply = f
             .hub
             .batch(
@@ -490,7 +585,9 @@ mod tests {
     #[test]
     fn batch_without_hash_is_taken() {
         let f = fx(&[("a.txt", "one\n")]);
-        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 1.0)
+            .unwrap();
         let reply = f
             .hub
             .batch(
@@ -512,7 +609,9 @@ mod tests {
     #[test]
     fn batch_without_hash_never_materializes_the_text() {
         let f = fx(&[("a.txt", "one\n")]);
-        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 1.0)
+            .unwrap();
         TEXT_READS.set(0);
         f.hub
             .batch("b1", &[change(3, 0, "!", "user")], None, 1, 5.0)
@@ -534,7 +633,9 @@ mod tests {
     #[test]
     fn origin_merge_is_attributed_to_its_peer() {
         let f = fx(&[("a.txt", "one\n")]);
-        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 1.0)
+            .unwrap();
         f.hub
             .batch(
                 "b1",
@@ -572,7 +673,9 @@ mod tests {
     #[test]
     fn an_agent_origin_carries_its_step_into_the_record() {
         let f = fx(&[("a.txt", "one\n")]);
-        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 1.0)
+            .unwrap();
         f.hub
             .batch(
                 "b1",
@@ -626,7 +729,9 @@ mod tests {
     #[test]
     fn a_key_in_a_batch_is_stored_as_stars_and_the_buffer_stays_in_step() {
         let f = fx(&[("a.txt", "one\n")]);
-        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 1.0)
+            .unwrap();
         let key = format!("sk-{}", "q".repeat(30));
         let typed = format!("one {key}\n");
         let reply = f
@@ -670,7 +775,9 @@ mod tests {
     #[test]
     fn oversized_batch_refused() {
         let f = fx(&[("a.txt", "one\n")]);
-        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .register(&f.tree, "a.txt", "b1", &f.deny, 1.0)
+            .unwrap();
         let big = "x".repeat(BATCH_MAX + 1);
         let e = f
             .hub

@@ -10,7 +10,8 @@
 //!   none when the profile says nothing), so a socket bound again serves the same tools.
 //!
 //! - `asession` (5): the agent sessions the hub holds (id, name, profile, role, cwd, task, job, ACP session id,
-//!   enforced, parent), so a restart knows what it held ([`crate::agents`]).
+//!   enforced, parent), so a restart knows what it held ([`crate::agents`]); from 11 also `machine`, where the user
+//!   moved the session's next jobs (`machines/move`, [`crate::runners::queue::Kept`]).
 //! - `op` (6): the touched-folder ledger (`kind = 'touched'`): the run folders a sandboxed agent worked in, so plain
 //!   git never runs there, across restarts ([`crate::runner::git`]).
 //!
@@ -107,6 +108,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
          create table plugin_kv(plugin text not null, key text not null, value blob not null, \
          primary key(plugin, key));",
     ),
+    (11, "alter table asession add column machine text;"),
 ];
 
 /// Open (or make) `runtime.db` in HUB_DIR on its own store thread.
@@ -179,7 +181,7 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("10"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("11"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
@@ -196,6 +198,8 @@ mod tests {
         fresh
             .prepare("select profile, tools from msession")
             .unwrap();
+        // an agent session keeps the machine its next jobs go to (11)
+        fresh.prepare("select machine from asession").unwrap();
     }
 
     // [D] pure (a file): the queue's tables have the design's columns (§7.4), exactly

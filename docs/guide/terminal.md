@@ -293,6 +293,7 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-f` | View: Search | `Alt+Shift+F` | `F6 f` |
 | `C-S-o` | Go to Symbol | — | `F6 o` |
 | `C-<tab>` | Open Previous Editor in Group | — | `F6 Tab` |
+| `C-S-<tab>` | Open Previous Editor in Group (Up) | — | `F6 Shift+Tab` |
 | `C-S-h` | Replace in Files | `Alt+Shift+H` | `F6 h` |
 | `` C-S-` `` | New Terminal | — | `F6 ~` |
 | `C-S-g` | Source Control | `Alt+Shift+G` | `F6 g` |
@@ -304,6 +305,10 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-+` | Zoom In | — | `F6 +` |
 | `C--` | Zoom Out | — | `F6 -` |
 | `C-0` | Reset Zoom | — | `F6 0` |
+| `C-4` | Fold Level… (after C-k) | — | `F6 4` |
+| `C-5` | Fold Level… (after C-k) | — | `F6 5` |
+| `C-6` | Fold Level… (after C-k) | — | `F6 6` |
+| `C-7` | Fold Level… (after C-k) | — | `F6 7` |
 | `C-!` | Replace This Match (the Replace bar) | — | `F6 !` |
 
 The Replace bar's `S-<return>` (Previous Match) and `C-M-<return>` (Replace All) have no F6 form, since F6 adds Ctrl and

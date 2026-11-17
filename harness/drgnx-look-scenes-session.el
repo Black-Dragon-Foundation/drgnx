@@ -2769,5 +2769,256 @@ chrome faces, frame metrics, windows, modules."
             (current-buffer)))))
   (drgnx-look-scene--answer))
 
+;; The scroll bar's own scenes: the surfaces the other scenes do not show, each long enough to scroll, beside a short
+;; one (the strip hides there).  Compared with minimap-folding.html's rest state.
+
+(declare-function drgnx-settings-page "drgnx-settings-page")
+(declare-function drgnx-shortcuts "drgnx-shortcuts")
+(declare-function drgnx-outline-focus "drgnx-outline")
+(declare-function drgnx-terminal-new "drgnx-terminal")
+(declare-function drgnx-term-send-string "drgnx-term" (text))
+
+(defun drgnx-look-scene--lines-buffer (name n)
+  "A buffer NAME of N numbered lines, read-only, at its top."
+  (with-current-buffer (get-buffer-create name)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (dotimes (i n) (insert (format "%4d  output line %d of %d\n" (1+ i) (1+ i) n))))
+    (goto-char (point-min))
+    (setq buffer-read-only t)
+    (current-buffer)))
+
+(defun drgnx-look-scene-scrollbars-editor ()
+  "A long file in the editor (the strip with its thumb) and the Outline of it in the sidebar."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "scrollbars-editor"
+    (drgnx-look-scene--editor)
+    (drgnx-outline-focus)
+    (drgnx-wb-focus-editor))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-scrollbars-panel ()
+  "The panel's Output tab with 400 lines (scrolls); a short buffer in the editor (fits: no strip drawn)."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "scrollbars-panel"
+    (drgnx-wb-focus-editor)
+    (switch-to-buffer (drgnx-look-scene--lines-buffer "*scrollbars short*" 5))
+    (drgnx-wb-area-show 'panel 'output (drgnx-look-scene--lines-buffer "*scrollbars output*" 400)))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-scrollbars-terminal ()
+  "A terminal in the panel whose scrollback runs past it."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "scrollbars-terminal"
+    (drgnx-terminal-new)
+    (drgnx-term-send-string "seq 1 400\n")
+    (sleep-for 1.5))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-scrollbars-settings ()
+  "The Settings page in the editor."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "scrollbars-settings"
+    (drgnx-wb-focus-editor)
+    (drgnx-settings-page))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-scrollbars-shortcuts ()
+  "The Keyboard Shortcuts page in the editor."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "scrollbars-shortcuts"
+    (drgnx-wb-focus-editor)
+    (drgnx-shortcuts))
+  (drgnx-look-scene--answer))
+
+;;;; The scroll bar on every surface (docs/guide/minimap.md)
+
+(declare-function drgnx-uitest-snapshot "drgnx-uitest" (&optional frame))
+(declare-function drgnx-uitest-region-equal-p "drgnx-uitest" (a b rect &rest keys))
+(declare-function drgnx-scrollbar-window-p "drgnx-ruler" (window))
+(defvar drgnx-ruler-span-function)
+
+(defun drgnx-look-scene--settle-frame ()
+  "Redisplay and give the compositor the frame (two redisplays around a short wait)."
+  (redisplay t)
+  (sleep-for 0.3)
+  (redisplay t))
+
+(defun drgnx-look-scene--scrollbar-windows ()
+  "The windows of the visible frames, child frames too (the palette's list), that are scrollable surfaces."
+  (let (out)
+    (dolist (f (frame-list))
+      (when (eq (frame-visible-p f) t)
+        (dolist (w (window-list f 'nomini))
+          (when (and (fboundp 'drgnx-scrollbar-window-p) (drgnx-scrollbar-window-p w)) (push w out)))))
+    (nreverse out)))
+
+(defun drgnx-look-scene--overflows-p (window)
+  "Whether WINDOW shows only part of its content: its buffer's text runs past it, or it holds a window of a view."
+  (with-current-buffer (window-buffer window)
+    (or (and drgnx-ruler-span-function (funcall drgnx-ruler-span-function) t)
+        (> (window-start window) (point-min))
+        (< (window-end window t) (point-max)))))
+
+(defun drgnx-look-scene--strip-rect (window)
+  "WINDOW's strip as frame device pixels (L T R B), from its fringe and the ruler's width."
+  (pcase-let* ((`(,_ ,_ ,right ,_) (window-pixel-edges window))
+               (`(,_ ,top ,_ ,bottom) (window-inside-pixel-edges window))
+               (own (or (window-parameter window 'drgnx-ruler-fringe) 0))
+               (x1 (- right (window-right-divider-width window) (window-scroll-bar-width window) own)))
+    (list (- x1 (plist-get (window-parameter window 'glitnir-ruler) :width)) top x1 bottom)))
+
+(defvar drgnx-palette-frame--frame)
+
+(defun drgnx-look-scene--covering (rect frame)
+  "The visible child frame of FRAME that lies over RECT (L T R B, FRAME's pixels), or nil: a strip there cannot be seen."
+  (seq-find (lambda (f)
+              (and (eq (frame-parent f) frame) (frame-visible-p f)
+                   (pcase-let ((`(,x . ,y) (frame-position f)) (`(,l ,top ,r ,b) rect))
+                     (and (< x r) (> (+ x (frame-pixel-width f)) l)
+                          (< y b) (> (+ y (frame-pixel-height f)) top)))))
+            (frame-list)))
+
+(defun drgnx-look-scene--expected-cover-p (f)
+  "Whether child frame F is one a scene opens on purpose (the floating palette); any other cover, a toast say, is an
+error, so an unexpected child frame still fails the scene."
+  (and (boundp 'drgnx-palette-frame--frame) (eq f drgnx-palette-frame--frame)))
+
+(defun drgnx-look-scene-scrollbars (file)
+  "Every scrollable surface shown has the scroll bar: each window `drgnx-scrollbar-window-p' names has its
+`glitnir-ruler' with the fringe widened, and on the root frame the strip draws something exactly when the window
+shows only part of its content (a snapshot with the strips, one without them, compared on each strip; a strip under the
+palette's child frame is not judged, one under any other child frame is an error).  What was seen goes to FILE."
+  (let (log)
+    (drgnx-look-scene--try "scrollbars"
+      (let* ((ws (drgnx-look-scene--scrollbar-windows))
+             (root (seq-filter (lambda (w) (not (frame-parent (window-frame w)))) ws))
+             (with (and (fboundp 'glitnir-snapshot) root (drgnx-uitest-snapshot)))
+             ;; the strip and an open minimap (the strip widened over the text) both go for the snapshot without:
+             ;; a minimap left on would cover the strip's rect in both and read as a strip that draws nothing
+             (specs (mapcar (lambda (w) (list w (window-parameter w 'glitnir-ruler) (window-parameter w 'glitnir-minimap)))
+                            root))
+             without)
+        (when with
+          (unwind-protect
+              (progn (dolist (s specs)
+                       (set-window-parameter (car s) 'glitnir-ruler nil)
+                       (set-window-parameter (car s) 'glitnir-minimap nil))
+                     (drgnx-look-scene--settle-frame)
+                     (setq without (drgnx-uitest-snapshot)))
+            (dolist (s specs)
+              (set-window-parameter (car s) 'glitnir-ruler (nth 1 s))
+              (set-window-parameter (car s) 'glitnir-minimap (nth 2 s)))
+            (drgnx-look-scene--settle-frame)))
+        (dolist (w ws)
+          (let* ((spec (window-parameter w 'glitnir-ruler))
+                 (over (drgnx-look-scene--overflows-p w))
+                 (cover (and spec (not (frame-parent (window-frame w)))
+                             (drgnx-look-scene--covering (drgnx-look-scene--strip-rect w) (window-frame w))))
+                 (covered (and cover (drgnx-look-scene--expected-cover-p cover)))
+                 (drawn (and spec without (not covered) (not (frame-parent (window-frame w)))
+                             (not (drgnx-uitest-region-equal-p with without (drgnx-look-scene--strip-rect w)
+                                                               :tolerance 2 :ignore-alpha t))))
+                 (fact (list :buffer (buffer-name (window-buffer w))
+                             :mode (buffer-local-value 'major-mode (window-buffer w))
+                             :strip (and spec t) :span (plist-get spec :span) :overflows over
+                             :drawn (cond (covered 'covered) (without drawn) (t 'unchecked)))))
+            (push fact log)
+            (cond ((not spec)
+                   (push (format "scrollbars: %s (%s) has no scroll bar" (buffer-name (window-buffer w))
+                                 (plist-get fact :mode))
+                         drgnx-look-scene--errors))
+                  ((and cover (not covered))
+                   (push (format "scrollbars: %s (%s): the strip is under an unexpected child frame (%s)"
+                                 (buffer-name (window-buffer w)) (plist-get fact :mode)
+                                 (buffer-name (window-buffer (frame-root-window cover))))
+                         drgnx-look-scene--errors))
+                  ((and without (not covered) (not (eq (and over t) (and drawn t))))
+                   (push (format "scrollbars: %s (%s): content %s but the strip %s"
+                                 (buffer-name (window-buffer w)) (plist-get fact :mode)
+                                 (if over "runs past the window" "fits") (if drawn "draws" "draws nothing"))
+                         drgnx-look-scene--errors)))))))
+    (let ((print-length nil) (print-level nil))
+      (with-temp-file file (pp (nreverse log) (current-buffer))))
+    (drgnx-look-scene--answer)))
+
+;;;; The minimap open (docs/guide/minimap.md; minimap-folding.html B)
+
+(declare-function nidhogg-view-minimap "nidhogg-views" (what file &optional layer))
+(declare-function drgnx-minimap--spec "drgnx-minimap" (window))
+(declare-function drgnx-minimap--file "drgnx-minimap" (buffer))
+
+(defun drgnx-look-scene--parser-rs ()
+  "minimap-folding.html's parser.rs, about 2,850 lines: five MARK sections, each a struct and an impl of eight
+functions whose bodies nest loops and branches (the minimap's shading and labels have something to show)."
+  (let ((sections '("Tokens" "Parser" "Rows" "Errors" "Tests"))
+        (verbs '("read" "decode" "split" "check" "emit" "merge" "skip" "flush")))
+    (with-temp-buffer
+      (insert "//! parser.rs: rows decoded from a table of tokens.\n\nuse std::collections::HashMap;\n\n")
+      (dolist (sec sections)
+        (insert (format "// MARK: - %s\n\npub struct %s {\n    rows: Vec<Row>,\n    seen: HashMap<u64, usize>,\n}\n\n" sec sec))
+        (insert (format "impl %s {\n" sec))
+        (dolist (v verbs)
+          (insert (format "    fn %s_%s(&self, t: &Table) -> Result<(), Error> {\n" v (downcase sec)))
+          (dotimes (i 6)
+            (insert (format "        for r in t.rows().skip(%d) {\n            if r.len() > %d {\n" i (* 3 i))
+                    (format "                let v = r.decode()?;\n                self.seen.get(&v.key()).copied().unwrap_or(%d);\n" i)
+                    "                match v.kind() {\n                    Kind::Text => self.emit(v)?,\n"
+                    "                    _ => continue,\n                }\n            }\n        }\n"))
+          (insert "        Ok(())\n    }\n\n"))
+        (insert "}\n\n"))
+      (buffer-string))))
+
+(defun drgnx-look-scene--minimap-held (spec-fn window)
+  "Around `drgnx-minimap--spec' (SPEC-FN): WINDOW's spec, with `:open t' when a minimap scene marked WINDOW (the
+pointer's dwell opens it; the GUI rows judge the dwell)."
+  (let ((spec (funcall spec-fn window)))
+    (if (window-parameter window 'drgnx-look-scene-minimap-open) (append spec '(:open t)) spec)))
+
+(defun drgnx-look-scene--minimap-open (theme)
+  "minimap-folding.html's B in THEME: a 2,850-line Rust file in the editor at its line 812, its minimap held open (the
+pointer's dwell is the GUI rows' to judge, `:open' stands for it here) once the hub's labels for the file are in."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-hover"
+    ;; the labels are the scenes' hub's, read with the Rust pack's grammar: a hub with none labels nothing
+    (unless (getenv "DRGNX_PACK_LOCK")
+      (error "No pack grammars for the hub: DRGNX_PACK_LOCK and DRGNX_PACK_GRAMMARS (test/packs/hub-grammars.sh)"))
+    (drgnx-look-scene--hub)
+    (let ((f (expand-file-name "runtime/src/parser.rs" drgnx-look-scene--project)))
+      (unless (file-exists-p f)
+        (make-directory (file-name-directory f) t)
+        (write-region (drgnx-look-scene--parser-rs) nil f nil 'silent)))
+    (drgnx-look-scene--goto "runtime/src/parser.rs" 812 4 800)
+    (let* ((w (selected-window)) (file (drgnx-minimap--file (window-buffer w))))
+      ;; `get' answers (VERSION COUNT): the file's 50 definitions (5 structs, 5 impls, 40 functions), not just an answer
+      (unless (drgnx-look-scene--until 20 "minimap labels"
+                                       (lambda () (>= (or (cadr (and file (nidhogg-view-minimap 'get file "labels"))) 0)
+                                                      50)))
+        (push (format "minimap-hover: labels for %s: %S; the hub said: %s" file
+                      (and file (nidhogg-view-minimap 'get file "labels"))
+                      (let ((b (get-buffer " *ratatoskr*")))
+                        (if b (with-current-buffer b
+                                (string-join (seq-filter (lambda (l) (string-match-p "pack\\|grammar\\|minimap\\|outline\\|WARN\\|ERROR" l))
+                                                         (split-string (buffer-string) "\n"))
+                                             " | "))
+                          "no hub buffer")))
+              drgnx-look-scene--errors))
+      ;; the spec is placed again whenever the strip is (a window change): the window is marked and every placing
+      ;; adds `:open'
+      (set-window-parameter w 'drgnx-look-scene-minimap-open t)
+      (advice-add 'drgnx-minimap--spec :around #'drgnx-look-scene--minimap-held)
+      (set-window-parameter w 'glitnir-minimap (drgnx-minimap--spec w))
+      (drgnx-look-scene--settle-frame)))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-minimap-hover ()
+  "The minimap open over a long Rust file, dark."
+  (drgnx-look-scene--minimap-open 'drgnx-dark))
+
+(defun drgnx-look-scene-minimap-hover-light ()
+  "The minimap open over a long Rust file, light."
+  (drgnx-look-scene--minimap-open 'drgnx-light))
+
 (provide 'drgnx-look-scenes-session)
 ;;; drgnx-look-scenes-session.el ends here

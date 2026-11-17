@@ -106,20 +106,135 @@ bind around their `drgnx-ui-start'.")
                 (file-missing (insert (error-message-string err)) 127))))
       (cons rc (buffer-string)))))
 
+;;;; Waits that count progress, not wall time
+
+(defconst drgnx-ui-progress-cap-factor 10
+  "A progress clock's cap (`drgnx-ui-progress'): this many times its limit, at least `drgnx-ui-progress-cap-min' s.")
+
+(defconst drgnx-ui-progress-cap-min 60
+  "The least cap of a progress clock, in seconds.")
+
+(defun drgnx-ui--run-of (pid)
+  "The run directory process PID belongs to (its DRGNX_UI_RUN), or nil where /proc cannot tell."
+  (let ((file (format "/proc/%d/environ" pid)))
+    (when (file-readable-p file)
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (ignore-errors (insert-file-contents-literally file))
+        (seq-some (lambda (kv) (and (string-prefix-p "DRGNX_UI_RUN=" kv) (substring kv 13)))
+                  (split-string (buffer-string) "\0" t))))))
+
+(defun drgnx-ui--run-pids (run)
+  "This user's processes of the session in RUN (their DRGNX_UI_RUN is RUN), never this one: the session's Emacs and
+what it started, a hub (`ratatoskr ensure' detaches it) or any other child whose command line names no part of RUN."
+  (seq-filter (lambda (pid) (and (/= pid (emacs-pid)) (equal (drgnx-ui--run-of pid) run)))
+              (mapcar #'string-to-number (directory-files "/proc" nil "\\`[0-9]+\\'"))))
+
+(defvar drgnx-ui--pids-cache nil "(RUN TIME . PIDS): the last `drgnx-ui--session-pids'.")
+
+(defun drgnx-ui--session-pids (run)
+  "`drgnx-ui--run-pids' of RUN, at most a second old: a wait looks at them every 50 ms, and a scan reads every
+process's environment."
+  (let ((c drgnx-ui--pids-cache))
+    (if (and c (equal (car c) run) (< (- (float-time) (cadr c)) 1))
+        (cddr c)
+      (cddr (setq drgnx-ui--pids-cache (cons run (cons (float-time) (drgnx-ui--run-pids run))))))))
+
+(defun drgnx-ui-session-pids-fn (sess)
+  "A function of no arguments giving SESS's processes (`drgnx-ui--session-pids' of its run), or nil when SESS has
+no run directory."
+  (let ((run (plist-get sess :run)))
+    (and run (lambda () (drgnx-ui--session-pids run)))))
+
+(defvar drgnx-ui--progress-pids nil
+  "A function giving the processes, beside its own, whose progress a `drgnx-ui--run-with-timeout' counts, or nil.")
+
+(defun drgnx-ui--schedstat (pid)
+  "The seconds PID has run plus waited to run (/proc/PID/schedstat: on a CPU, on a run queue), or nil once it is
+gone."
+  (let ((s (ignore-errors (with-temp-buffer (insert-file-contents (format "/proc/%d/schedstat" pid))
+                                            (split-string (buffer-string))))))
+    (and s (/ (+ (string-to-number (nth 0 s)) (string-to-number (nth 1 s))) 1e9))))
+
+(defun drgnx-ui--proc-stat (pid)
+  "(COMM . STATE) of PID from /proc/PID/stat (STATE one letter as a string: R, S, D …), or nil once it is gone."
+  (let ((stat (ignore-errors (with-temp-buffer (insert-file-contents (format "/proc/%d/stat" pid)) (buffer-string)))))
+    (and stat (string-match "(\\(.*\\)) \\([A-Za-z]\\)" stat)
+         (cons (match-string 1 stat) (match-string 2 stat)))))
+
+(defun drgnx-ui--proc-state (pid)
+  "PID's state letter (`drgnx-ui--proc-stat'), or nil once it is gone."
+  (cdr (drgnx-ui--proc-stat pid)))
+
+(defun drgnx-ui--proc-states (pids)
+  "PIDS as \"COMM STATE WCHAN\" each (/proc/PID/stat and wchan), comma-separated: what a stuck wait was waiting on."
+  (mapconcat (lambda (pid)
+               (let ((stat (drgnx-ui--proc-stat pid))
+                     (wchan (ignore-errors (with-temp-buffer (insert-file-contents (format "/proc/%d/wchan" pid))
+                                                             (buffer-string)))))
+                 (if stat (format "%s %s %s" (car stat) (cdr stat) (or wchan "?")) (format "%d gone" pid))))
+             pids ", "))
+
+(cl-defstruct (drgnx-ui-progress (:constructor drgnx-ui--progress-new) (:copier nil))
+  limit cap start last pids-fn samples (slept 0.0))
+
+(defun drgnx-ui--progress-sample (clock)
+  "((PID . SECONDS)…) of CLOCK's processes now (`drgnx-ui--schedstat')."
+  (delq nil (mapcar (lambda (pid) (let ((s (drgnx-ui--schedstat pid))) (and s (cons pid s))))
+                    (delete-dups (funcall (drgnx-ui-progress-pids-fn clock))))))
+
+(defun drgnx-ui-progress (limit pids-fn)
+  "A clock for a wait of LIMIT s on the processes PIDS-FN gives (a function of no arguments, asked at each look).
+The wait is over once those processes together slept LIMIT s: time in which none of them ran or waited to run
+\(their schedstat).  A process that runs, or that a loaded machine keeps waiting for a CPU or the disk (state D),
+is making progress, so starvation never ends a wait; a process blocked on something that never comes (a prompt, a
+key, a lost message) ends it at LIMIT as before.  The cap, `drgnx-ui-progress-cap-factor' times LIMIT (at least
+`drgnx-ui-progress-cap-min' s) of wall time, ends a wait whose processes never stop running or stay on the disk.
+`drgnx-ui-progress-over' says when it is over."
+  (let* ((now (float-time))
+         (clock (drgnx-ui--progress-new :limit limit :start now :last now :pids-fn pids-fn
+                                        :cap (max drgnx-ui-progress-cap-min (* drgnx-ui-progress-cap-factor limit)))))
+    (setf (drgnx-ui-progress-samples clock) (drgnx-ui--progress-sample clock))
+    clock))
+
+(defun drgnx-ui-progress-over (clock)
+  "Nil while CLOCK's wait goes on; else why it is over, as text: its processes slept its limit, or the cap passed."
+  (let* ((now (float-time))
+         (old (drgnx-ui-progress-samples clock))
+         (new (drgnx-ui--progress-sample clock))
+         (active 0.0))
+    (dolist (s new)
+      (let ((o (assq (car s) old))) (when o (setq active (+ active (- (cdr s) (cdr o)))))))
+    ;; a process in uninterruptible sleep waits on the disk (a filesystem commit on a loaded machine): progress,
+    ;; slowly, so the time is not charged; one stuck there for good ends the wait at the cap
+    (let ((idle (- now (drgnx-ui-progress-last clock) active)))
+      (when (and (> idle 0) (not (seq-some (lambda (s) (equal (drgnx-ui--proc-state (car s)) "D")) new)))
+        (cl-incf (drgnx-ui-progress-slept clock) idle)))
+    (setf (drgnx-ui-progress-last clock) now (drgnx-ui-progress-samples clock) new)
+    (cond ((>= (drgnx-ui-progress-slept clock) (drgnx-ui-progress-limit clock))
+           (format "its processes made no progress for %ss (%d watched: %s)" (drgnx-ui-progress-limit clock) (length new)
+                   (drgnx-ui--proc-states (mapcar #'car new))))
+          ((>= (- now (drgnx-ui-progress-start clock)) (drgnx-ui-progress-cap clock))
+           (format "its processes still ran at the %ss cap (%d watched)" (drgnx-ui-progress-cap clock)
+                   (length new))))))
+
 (defun drgnx-ui--run-with-timeout (timeout program &rest args)
-  "Run PROGRAM with ARGS for at most TIMEOUT seconds; return (EXIT OUTPUT).
-EXIT is the symbol `timeout' when the process had to be killed."
+  "Run PROGRAM with ARGS until it ends or TIMEOUT s run out on a progress clock (`drgnx-ui-progress') over PROGRAM's
+process and `drgnx-ui--progress-pids'' ones: a program starved of CPU is never out of time.  Return (EXIT OUTPUT).
+EXIT is the symbol `timeout' when the process had to be killed, and OUTPUT then says why (`drgnx-ui-progress-over')."
   (let* ((buf (generate-new-buffer " *drgnx-ui*"))
          (proc (make-process :name "drgnx-ui" :buffer buf :command (cons program args)
                              :connection-type 'pipe :noquery t :coding 'utf-8-unix
                              :sentinel #'ignore))
-         (deadline (+ (float-time) timeout)))
+         (more drgnx-ui--progress-pids)
+         (clock (drgnx-ui-progress timeout (lambda () (cons (process-id proc) (and more (funcall more))))))
+         over)
     (unwind-protect
         (progn
-          (while (and (process-live-p proc) (< (float-time) deadline))
+          (while (and (process-live-p proc) (not (setq over (drgnx-ui-progress-over clock))))
             (accept-process-output proc 0.05))
           (if (process-live-p proc)
-              (progn (delete-process proc) (list 'timeout ""))
+              (progn (delete-process proc) (list 'timeout (or over "")))
             (while (accept-process-output proc 0))
             (list (process-exit-status proc) (with-current-buffer buf (buffer-string)))))
       (kill-buffer buf))))
@@ -830,7 +945,10 @@ its log (UI-SCALE-1: an image without gdctl's python3-gobject started every sess
     ;; the virtual backend: no GPU, one output per monitor; no XWayland (no X display in the shared /tmp)
     ("kwin" (let ((size (split-string (plist-get sess :size) "x")))
               (append
-               (list "dbus-run-session" "--" "kwin_wayland" "--virtual" "--width" (car size) "--height" (cadr size)
+               ;; KWin offers its fake input (the harness's pointer and keyboard, `drgnx-uitest--kwin-fake-input') only
+               ;; to clients it trusts; the test session's KWin trusts every client
+               (list "dbus-run-session" "--" "env" "KWIN_WAYLAND_NO_PERMISSION_CHECKS=1"
+                     "kwin_wayland" "--virtual" "--width" (car size) "--height" (cadr size)
                      "--output-count" (number-to-string (or (plist-get sess :monitors) 1)))
                ;; the scales are set by RUN/kwin-session.sh (kscreen-doctor)
                (list "--socket" "wayland-1" "--no-lockscreen" "--no-global-shortcuts"
@@ -1263,8 +1381,9 @@ with LEGACY-OK, which reap passes to also take a legacy drgnx-ui-N."
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
     (when (file-directory-p run) (delete-directory run t))
-    (when (file-directory-p sock) (delete-directory sock t))
-    (ignore-errors (delete-directory (file-name-directory sock))))   ; the per-root dir, once empty
+    ;; the shared per-root dir above it stays: a session starting in another process may be about to make its own
+    ;; dir in it (an empty 0700 dir under the runtime dir, which goes with it)
+    (when (file-directory-p sock) (delete-directory sock t)))
   (list :stopped name))
 
 (defun drgnx-ui--yours-p (owner client)
@@ -1417,15 +1536,18 @@ says it ended; session.json is its own (:id, :name, :run, compositor); it was no
 (defun drgnx-ui-call (sess form &optional timeout)
   "Evaluate FORM (a string) in SESS through its socket; parse the JSON reply.  The form goes as
 \(drgnx-uitest-api-as ID FORM): the session answers only if its own id is ID, so no socket path reaches another
-session (HARNESS-SESS-1).  A session that does not know `drgnx-uitest-api-as' was started before that."
+session (HARNESS-SESS-1).  A session that does not know `drgnx-uitest-api-as' was started before that.
+TIMEOUT (default 20) counts the time the emacsclient and SESS's processes slept, not wall time (`drgnx-ui-progress'):
+a session a loaded machine starves still answers."
   (let* ((timeout (or timeout 20))
+         (drgnx-ui--progress-pids (drgnx-ui-session-pids-fn sess))
          (r (drgnx-ui--run-with-timeout timeout (drgnx-ui--emacsclient) "-a" "false"
                                         "-s" (plist-get sess :socket) "-e"
                                         (format "(drgnx-uitest-api-as %s %s)" (drgnx-ui-el (plist-get sess :name)) form))))
     (pcase r
-      (`(timeout ,_)
-       (drgnx-ui--fail "%s: no answer in %ss (stuck on a prompt? take a ui_screenshot) [%s]"
-                       (plist-get sess :name) timeout (truncate-string-to-width form 90 nil nil t)))
+      (`(timeout ,why)
+       (drgnx-ui--fail "%s: no answer in %ss (%s; stuck on a prompt? take a ui_screenshot) [%s]"
+                       (plist-get sess :name) timeout why (truncate-string-to-width form 90 nil nil t)))
       (`(0 ,out) (drgnx-ui-parse-reply out))
       (`(,_ ,out)
        (if (string-match-p "void.*drgnx-uitest-api-as" out)
@@ -1797,8 +1919,7 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
         (drgnx-ui--poll-pause 0.05)))
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
-    (delete-directory (drgnx-ui-socket-dir name) t)
-    (ignore-errors (delete-directory (drgnx-ui-socket-dir "")))
+    (delete-directory (drgnx-ui-socket-dir name) t)   ; the shared per-root dir stays (drgnx-ui-stop)
     (list (if (eq (car r) 'timeout) 124 (car r))
           (and (file-exists-p results) (drgnx-ui--read-json results))
           run)))
@@ -1957,15 +2078,18 @@ to know (a Lisp plist: :rc :run :report :lines).  Return 0: whether the file pas
                   "-l" "drgnx-ui" "-f" "drgnx-ui-cli" "--" "test-ui-file" file out)
    :sentinel (lambda (p _e) (unless (process-live-p p) (process-put p :done (float-time))))))
 
-(defun drgnx-ui--run-file-sessions (files jobs out-dir)
+(defun drgnx-ui--run-file-sessions (files jobs out-dir &optional on-start on-end)
   "Run each of FILES in a session of its own, JOBS at once, the results of file N in OUT-DIR/N.json.  Return the
-list of (FILE OUT EXIT SECONDS), in the order of FILES.  A tier stopped meanwhile ends the sessions' Emacsen."
+list of (FILE OUT EXIT SECONDS CHILD-OUTPUT), in the order of FILES.  ON-START is called with a file as its session
+starts, ON-END with its entry as it ends (so a run killed meanwhile has told which files ran).  A tier stopped
+meanwhile ends the sessions' Emacsen."
   (let ((pending (let ((i 0)) (mapcar (lambda (f) (list f (expand-file-name (format "%d.json" (cl-incf i)) out-dir))) files)))
         (running nil) (done nil))
     (unwind-protect
         (while (or pending running)
           (while (and pending (< (length running) jobs))
             (pcase-let ((`(,f ,out) (pop pending)))
+              (when on-start (funcall on-start f))
               (push (list (drgnx-ui--start-file-session f out) f out (float-time)) running)))
           (accept-process-output nil 0.2)
           (dolist (r running)
@@ -1975,6 +2099,7 @@ list of (FILE OUT EXIT SECONDS), in the order of FILES.  A tier stopped meanwhil
                 (push (list f out (process-exit-status p) (- (float-time) t0)
                             (when-let* ((b (process-buffer p))) (and (buffer-live-p b) (with-current-buffer b (buffer-string)))))
                       done)
+                (when on-end (funcall on-end (car done)))
                 (when-let* ((b (process-buffer p))) (when (buffer-live-p b) (kill-buffer b)))
                 (setq running (delq r running))))))
       (dolist (r running) (drgnx-run-ert--end-process (car r) 10)))
@@ -2011,19 +2136,27 @@ characters (saying how many were left out) and made printable (`drgnx-run-ert--p
 session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exit code."
   (let* ((out-dir (make-temp-file "drgnx-ui-files" t)) (t-start (float-time))
          (profile (and (equal (getenv "DRGNX_UI_PROFILE") "1") (list nil)))
-         (runs (drgnx-ui--run-file-sessions files (min (drgnx-ui--test-jobs) (length files)) out-dir))
+         (meta-of (lambda (out) (ignore-errors (car (read-from-string (with-temp-buffer (insert-file-contents (concat out ".meta"))
+                                                                                        (buffer-string)))))))
+         ;; each file's line as it starts and ends, not at the end: a run killed meanwhile (the slot guard) names the
+         ;; file that hung
+         (runs (drgnx-ui--run-file-sessions
+                files (min (drgnx-ui--test-jobs) (length files)) out-dir
+                (lambda (f) (princ (format "ui file %s: started\n" (file-name-nondirectory f))))
+                (pcase-lambda (`(,f ,out ,exit ,secs ,_))
+                  (let ((results (and (file-readable-p out) (drgnx-ui--read-json out))))
+                    (princ (format "ui file %s: %s in %.1fs\n" (file-name-nondirectory f)
+                                   (if results (format "%s/%s passed" (plist-get results :passed) (plist-get results :total))
+                                     (format "no results (exit %s)" (or (plist-get (funcall meta-of out) :rc) exit)))
+                                   secs))))))
          (total 0) (passed 0) (ok t) fails skips)
     (unwind-protect
         (dolist (r runs)
-          (pcase-let* ((`(,f ,out ,exit ,secs ,child-out) (or r (list nil nil nil 0 nil)))
+          (pcase-let* ((`(,f ,out ,exit ,_secs ,child-out) (or r (list nil nil nil 0 nil)))
                        (base (and f (file-name-nondirectory f)))
-                       (meta (and f (ignore-errors (car (read-from-string (with-temp-buffer (insert-file-contents (concat out ".meta")) (buffer-string)))))))
+                       (meta (and f (funcall meta-of out)))
                        (results (and f (file-readable-p out) (drgnx-ui--read-json out))))
             (when f
-              (princ (format "ui file %s: %s in %.1fs\n" base
-                             (if results (format "%s/%s passed" (plist-get results :passed) (plist-get results :total))
-                               (format "no results (exit %s)" (or (plist-get meta :rc) exit)))
-                             secs))
               (if results
                   (progn
                     (cl-incf total (plist-get results :total)) (cl-incf passed (plist-get results :passed))

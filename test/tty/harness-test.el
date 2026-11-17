@@ -151,16 +151,21 @@
         (should-not (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))))
         (should-not (drgnx-tty-session--pane-alive-p s))))))
 
-(defun drgnx-tty-harness-test--dead-pid ()
-  (let ((p (make-process :name "drgnx-tty-dead" :command '("true") :noquery t)))
-    (while (process-live-p p) (accept-process-output p 0.05))
-    (process-id p)))
+(defun drgnx-tty-harness-test--owner (dir)
+  "A process that passes for a runner's Emacs (`drgnx-tty-session--owner-alive-p': its name says emacs) until it is
+killed: a copy of sleep in DIR named emacs-owner."
+  (let ((bin (expand-file-name "emacs-owner" dir)))
+    (copy-file (executable-find "sleep") bin t)
+    (make-process :name "drgnx-tty-owner" :command (list bin "600") :noquery t)))
 
 (ert-deftest drgnx-tty-harness/a-dead-owner-s-session-is-swept ()
-  ;; a runner SIGKILLed mid-test leaves its tmux server, its Emacs and its run dir, in its own temp state root
+  ;; a runner SIGKILLed mid-test leaves its tmux server, its Emacs and its run dir, in its own temp state root.
+  ;; Its owner lives until the session is made and seen, then dies: a sweep of another test file running at the same
+  ;; time (DRGNX_TEST_JOBS) leaves a session of a live owner alone, and after the death either sweep removes it
   (let* ((other-root (make-temp-file "drgnx-tty-other" t))
+         (owner (drgnx-tty-harness-test--owner other-root))
          (stale (let ((process-environment (cons (concat "DRGNX_UI_STATE=" other-root) process-environment))
-                      (drgnx-tty-session--owner (drgnx-tty-harness-test--dead-pid)))
+                      (drgnx-tty-session--owner (process-id owner)))
                   (drgnx-tty-session-start :config "minimal")))
          (pattern (format "(%s/|-L %s )" (regexp-quote (plist-get stale :run)) (regexp-quote (plist-get stale :name)))))
     (unwind-protect
@@ -169,11 +174,16 @@
           (setq drgnx-tty-session--live (delq stale drgnx-tty-session--live))
           (should (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))))
           (should (file-directory-p (plist-get stale :run)))
+          (should (drgnx-tty-session--owner-alive-p (process-id owner)))
+          (delete-process owner)                          ; the runner is killed
+          (drgnx-test-wait (lambda () (not (drgnx-tty-session--owner-alive-p (process-id owner)))) :secs 10
+                           :what "the owner's end")
           (drgnx-tty-session-with (s :command "true")
             (should (plist-get s :target))
             (should-not (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))))
             (should-not (file-exists-p (plist-get stale :run)))
             (should-not (file-exists-p (file-name-directory (plist-get stale :socket))))))
+      (delete-process owner)
       (let ((process-environment (cons (concat "DRGNX_UI_STATE=" other-root) process-environment)))
         (drgnx-tty-session-stop stale))
       (delete-directory other-root t))))
@@ -248,6 +258,71 @@ it is no child of the session's Emacs (the shell that started it has exited), so
    sess `(progn (run-at-time 0 nil (lambda () (let ((end (+ (float-time) ,secs))) (while (< (float-time) end)))))
                 t)))
 
+(defun drgnx-tty-harness-test--block (sess secs)
+  "Make SESS's Emacs wait SECS s for a child without answering: it sleeps, it does not run (`call-process')."
+  (drgnx-tty-session-eval
+   sess `(progn (run-at-time 0 nil (lambda () (call-process "sleep" nil nil nil ,(number-to-string secs)))) t)))
+
+(defun drgnx-tty-harness-test--cpu ()
+  "The first CPU this process may run on (its Cpus_allowed_list)."
+  (with-temp-buffer
+    (insert-file-contents "/proc/self/status")
+    (re-search-forward "^Cpus_allowed_list:\\s-*\\([0-9]+\\)")
+    (match-string 1)))
+
+(ert-deftest drgnx-tty-harness/a-starved-program-is-not-out-of-time ()
+  "A program that needs 1 s of CPU on a core three busy loops share gets a quarter of it: it ends after about 4 s of
+wall time, past its 2 s wait, yet it never stopped making progress (it ran or waited to run).  The wait counts the
+time its processes slept, not wall time, so it gets its answer (a terminal row under a loaded machine)."
+  (let* ((cpu (drgnx-tty-harness-test--cpu))
+         (spin (cl-loop repeat 3 collect
+                        (make-process :name "kx-spin" :noquery t :connection-type 'pipe
+                                      :command (list "taskset" "-c" cpu "sh" "-c" "while :; do :; done")))))
+    (unwind-protect
+        (should (equal (drgnx-ui--run-with-timeout
+                        2 "taskset" "-c" cpu "sh" "-c"
+                        (concat "while read r q n < /proc/$$/schedstat; [ \"$r\" -lt 1000000000 ]; do :; done;"
+                                " echo done"))
+                       '(0 "done\n")))
+      (mapc #'delete-process spin))))
+
+(ert-deftest drgnx-tty-harness/a-sleeping-program-is-out-of-time-at-its-limit ()
+  "A program that sleeps is out of time once it slept its limit, not at the wait's cap."
+  (should (eq (car (drgnx-ui--run-with-timeout 1 "sleep" "30")) 'timeout))
+  (let* ((p (make-process :name "kx-sleep" :noquery t :connection-type 'pipe :command '("sleep" "30")))
+         (clock (drgnx-ui-progress 1 (lambda () (list (process-id p)))))
+         over)
+    (unwind-protect
+        (progn (while (not (setq over (drgnx-ui-progress-over clock))) (accept-process-output nil 0.05))
+               (should (string-search "made no progress for 1s" over)))
+      (delete-process p))))
+
+(ert-deftest drgnx-tty-harness/a-program-waiting-on-the-disk-is-not-out-of-time ()
+  "A process in uninterruptible sleep (state D: a filesystem commit on a loaded machine) is making progress, slowly:
+its wait goes on.  Once it sleeps the plain way again, the wait is over at its limit."
+  (let* ((p (make-process :name "kx-sleep" :noquery t :connection-type 'pipe :command '("sleep" "30")))
+         (clock (drgnx-ui-progress 1 (lambda () (list (process-id p)))))
+         (state "D") over)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-ui--proc-state) (lambda (_pid) state)))
+          (let ((until (+ (float-time) 2)))
+            (while (and (< (float-time) until) (not (setq over (drgnx-ui-progress-over clock))))
+              (accept-process-output nil 0.05)))
+          (should-not over)
+          (setq state "S")
+          (while (not (setq over (drgnx-ui-progress-over clock))) (accept-process-output nil 0.05))
+          (should (string-search "made no progress for 1s" over)))
+      (delete-process p))))
+
+(ert-deftest drgnx-tty-harness/stage-wait-outlasts-an-emacs-busy-past-its-limit ()
+  "An Emacs that runs Lisp past the stage wait's time is still making progress: the wait goes on until it answers."
+  (let ((s (drgnx-tty-session-start)))
+    (unwind-protect
+        (progn (drgnx-tty-session-wait-stages s)
+               (drgnx-tty-harness-test--hold s 5)
+               (should (drgnx-tty-session-wait-stages s 2)))
+      (drgnx-tty-session-stop s))))
+
 (ert-deftest drgnx-tty-harness/stage-wait-outlasts-a-busy-emacs ()
   "The stage wait waits for an Emacs that holds its answer longer than one look used to allow (5 s): a stage step
 can load a package that long."
@@ -259,15 +334,15 @@ can load a package that long."
       (drgnx-tty-session-stop s))))
 
 (ert-deftest drgnx-tty-harness/stage-wait-says-why-when-emacs-stays-silent ()
-  "An Emacs that does not answer before the stage wait's time is up fails it with the cause: that it stopped
-answering and what /proc says it does (here: running Lisp), not a bare timeout."
+  "An Emacs that sleeps without answering for the stage wait's time fails it with the cause: that it stopped
+answering and what /proc says it does (here: sleeping), not a bare timeout."
   (let ((s (drgnx-tty-session-start)))
     (unwind-protect
         (progn (drgnx-tty-session-wait-stages s)
-               (drgnx-tty-harness-test--hold s 30)
+               (drgnx-tty-harness-test--block s 30)
                (let ((msg (cadr (should-error (drgnx-tty-session-wait-stages s 3) :type 'drgnx-ui-error))))
                  (should (string-search "its Emacs stopped answering" msg))
-                 (should (string-match-p "/proc: pid [0-9]+, state R" msg))))
+                 (should (string-match-p "/proc: pid [0-9]+, state S" msg))))
       (drgnx-tty-session-stop s))))
 
 (ert-deftest drgnx-tty-harness/stage-wait-at-session-start-in-a-loop ()

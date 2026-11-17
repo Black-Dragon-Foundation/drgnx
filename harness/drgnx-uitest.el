@@ -130,38 +130,89 @@ out, EVENTS those that came before it."
         (if (and (= (car e) callback-id) (= (nth 1 e) 0)) (setq done t) (push e events))))
     (cons done (nreverse events))))
 
+(defun drgnx-uitest--wl-bind (name iface version requests &optional made)
+  "Connect to this Emacs's Wayland socket as NAME, bind the global IFACE (at VERSION) as object 4, send REQUESTS (a
+function of no arguments returning the bytes of the requests that follow the bind, which make MADE objects, default
+1, with ids from 5), and check with a round trip that the compositor took them: the callbacks are 3 for the registry
+and the next id after (a new id must be the next free one: one skipped is a protocol error).  The connection's
+process property `drgnx-id' is the last id used.  The connection, kept open
+\(what it made lives as long as it), or nil when the compositor offers no IFACE or refused."
+  (when-let* ((display (getenv "WAYLAND_DISPLAY"))
+              (path (if (file-name-absolute-p display) display
+                      (expand-file-name display (or (getenv "XDG_RUNTIME_DIR") ""))))
+              ((file-exists-p path))
+              (proc (ignore-errors
+                      (make-network-process :name name :family 'local :service path :coding 'binary :noquery t
+                                            :filter (lambda (p s) (process-put p 'drgnx-in (concat (process-get p 'drgnx-in) s)))))))
+    (process-put proc 'drgnx-in "")
+    (process-send-string proc (drgnx-uitest--wl-message 1 1 (drgnx-uitest--wl-u32 2)))   ; get_registry → 2
+    (let* ((globals (cdr (drgnx-uitest--wl-roundtrip proc 3)))
+           (global (seq-find (lambda (e)
+                               (and (= (car e) 2) (= (nth 1 e) 0)
+                                    (let* ((a (nth 2 e)) (n (drgnx-uitest--wl-read-u32 a 4)))
+                                      (equal (substring a 8 (+ 8 n -1)) iface))))
+                             globals)))
+      (if (not global)
+          (progn (delete-process proc) nil)
+        (process-send-string
+         proc (concat (drgnx-uitest--wl-message 2 0 (drgnx-uitest--wl-u32 (drgnx-uitest--wl-read-u32 (nth 2 global) 0))
+                                                (drgnx-uitest--wl-string iface)
+                                                (drgnx-uitest--wl-u32 version) (drgnx-uitest--wl-u32 4))   ; bind → 4
+                      (funcall requests)))
+        (let* ((id (+ 5 (or made 1)))
+               (after (drgnx-uitest--wl-roundtrip proc id)))
+          (process-put proc 'drgnx-id id)
+          (if (or (not (car after)) (seq-find (lambda (e) (and (= (car e) 1) (= (nth 1 e) 0))) (cdr after)))   ; wl_display.error
+              (progn (delete-process proc) nil)
+            proc))))))
+
 (defun drgnx-uitest--sway-vpointer ()
   "Give headless sway's seat a pointer: a virtual pointer made over this Emacs's Wayland socket, kept open.
 t when there is one (made now or before), nil when the compositor offers no such protocol or refuses."
   (or (and drgnx-uitest--vpointer (process-live-p drgnx-uitest--vpointer) t)
-      (when-let* ((display (getenv "WAYLAND_DISPLAY"))
-                  (path (if (file-name-absolute-p display) display
-                          (expand-file-name display (or (getenv "XDG_RUNTIME_DIR") ""))))
-                  ((file-exists-p path))
-                  (proc (ignore-errors
-                          (make-network-process :name "drgnx-uitest-vpointer" :family 'local :service path
-                                                :coding 'binary :noquery t
-                                                :filter (lambda (p s) (process-put p 'drgnx-in (concat (process-get p 'drgnx-in) s)))))))
-        (process-put proc 'drgnx-in "")
-        (process-send-string proc (drgnx-uitest--wl-message 1 1 (drgnx-uitest--wl-u32 2)))   ; get_registry → 2
-        (let* ((globals (cdr (drgnx-uitest--wl-roundtrip proc 3)))
-               (manager (seq-find (lambda (e)
-                                    (and (= (car e) 2) (= (nth 1 e) 0)
-                                         (let* ((a (nth 2 e)) (n (drgnx-uitest--wl-read-u32 a 4)))
-                                           (equal (substring a 8 (+ 8 n -1)) "zwlr_virtual_pointer_manager_v1"))))
-                                  globals)))
-          (if (not manager)
-              (progn (delete-process proc) nil)
-            (process-send-string
-             proc (concat (drgnx-uitest--wl-message 2 0 (drgnx-uitest--wl-u32 (drgnx-uitest--wl-read-u32 (nth 2 manager) 0))
-                                                    (drgnx-uitest--wl-string "zwlr_virtual_pointer_manager_v1")
-                                                    (drgnx-uitest--wl-u32 1) (drgnx-uitest--wl-u32 4))   ; bind → 4
-                          (drgnx-uitest--wl-message 4 0 (drgnx-uitest--wl-u32 0) (drgnx-uitest--wl-u32 5))))   ; pointer 5, default seat
-            (let ((after (drgnx-uitest--wl-roundtrip proc 6)))
-              (if (or (not (car after)) (seq-find (lambda (e) (and (= (car e) 1) (= (nth 1 e) 0))) (cdr after)))   ; wl_display.error
-                  (progn (delete-process proc) nil)
-                (setq drgnx-uitest--vpointer proc)
-                t)))))))
+      (when-let* ((proc (drgnx-uitest--wl-bind
+                         "drgnx-uitest-vpointer" "zwlr_virtual_pointer_manager_v1" 1
+                         (lambda () (drgnx-uitest--wl-message 4 0 (drgnx-uitest--wl-u32 0) (drgnx-uitest--wl-u32 5))))))   ; pointer 5, default seat
+        (setq drgnx-uitest--vpointer proc)
+        t)))
+
+;;;; A pointer and a keyboard under KWin
+;; KWin's fake input (org_kde_kwin_fake_input) moves the pointer to a layout position, presses its buttons and types
+;; evdev keys, as a device of the seat.  KWin offers it only to clients it trusts: the test container's KWin runs with
+;; KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 (`drgnx-ui-compositor-argv'), so the session's Emacs gets it over its own socket.
+;; Requests (object 4): 0 authenticate, 2 button, 9 pointer_motion_absolute (since 3), 10 keyboard_key (since 4).
+
+(defvar drgnx-uitest--fake-input nil "The connection holding KWin's fake input device, `none' where there is none.")
+
+(defun drgnx-uitest--kwin-fake-input ()
+  "KWin's fake input device on this Emacs's Wayland socket (made the first time), or nil where the compositor offers
+none (any other compositor)."
+  (unless (eq drgnx-uitest--fake-input 'none)
+    (if (and drgnx-uitest--fake-input (process-live-p drgnx-uitest--fake-input))
+        drgnx-uitest--fake-input
+      (setq drgnx-uitest--fake-input
+            (or (and (not (getenv "SWAYSOCK"))
+                     (drgnx-uitest--wl-bind "drgnx-uitest-fake-input" "org_kde_kwin_fake_input" 4
+                                            (lambda () (drgnx-uitest--wl-message 4 0 (drgnx-uitest--wl-string "drgnx-uitest")
+                                                                                 (drgnx-uitest--wl-string "test input")))
+                                            0))
+                'none))
+      (and (processp drgnx-uitest--fake-input) drgnx-uitest--fake-input))))
+
+(defun drgnx-uitest--wl-fixed (n)
+  "N (non-negative) as a Wayland fixed-point number on the wire."
+  (drgnx-uitest--wl-u32 (round (* 256 n))))
+
+(defun drgnx-uitest--kwin-send (opcode &rest args)
+  "Send fake input's request OPCODE with ARGS (on the wire) and wait for KWin to have read it: t, or nil when it
+refused (a protocol error) or did not answer."
+  (let ((proc (drgnx-uitest--kwin-fake-input)))
+    (when proc
+      (process-send-string proc (apply #'drgnx-uitest--wl-message 4 opcode args))
+      ;; a fresh id for each round trip's callback, the next after the last (`drgnx-uitest--wl-bind')
+      (let* ((id (1+ (process-get proc 'drgnx-id)))
+             (after (progn (process-put proc 'drgnx-id id) (drgnx-uitest--wl-roundtrip proc id))))
+        (and (car after) (not (seq-find (lambda (e) (and (= (car e) 1) (= (nth 1 e) 0))) (cdr after))))))))
 
 (defun drgnx-uitest--vpointer-release ()
   "End this session's virtual pointer (`drgnx-uitest--sway-vpointer'): run at a test file's end
@@ -169,21 +220,46 @@ t when there is one (made now or before), nil when the compositor offers no such
 a new one."
   (when drgnx-uitest--vpointer
     (when (process-live-p drgnx-uitest--vpointer) (delete-process drgnx-uitest--vpointer))
-    (setq drgnx-uitest--vpointer nil)))
+    (setq drgnx-uitest--vpointer nil))
+  ;; KWin's fake input device too (`drgnx-uitest--kwin-fake-input')
+  (when (processp drgnx-uitest--fake-input)
+    (when (process-live-p drgnx-uitest--fake-input) (delete-process drgnx-uitest--fake-input))
+    (setq drgnx-uitest--fake-input nil)))
 
 (add-hook 'drgnx-run-ert-file-end-hook #'drgnx-uitest--vpointer-release)
 
 (defun drgnx-uitest-pointer-set (x y)
   "Move the compositor's pointer to the layout position X, Y (logical pixels): t when it moved.
-Only sway can be told: the session's seat gets a virtual pointer first (`drgnx-uitest--sway-vpointer', or no client
-would ever see the pointer), then `swaymsg \"seat - cursor set X Y\"' moves it.  Any other session returns
-`unsupported', so a row that needs a real pointer skips there.  `failed' when sway refused or no pointer could be made."
-  (if (and (getenv "SWAYSOCK") (executable-find "swaymsg"))
-      (if (and (drgnx-uitest--sway-vpointer)
-               (zerop (call-process "swaymsg" nil nil nil (format "seat - cursor set %d %d" x y))))
-          t
-        'failed)
-    'unsupported))
+Sway: the session's seat gets a virtual pointer first (`drgnx-uitest--sway-vpointer', or no client would ever see the
+pointer), then `swaymsg \"seat - cursor set X Y\"' moves it.  KWin: its fake input's absolute motion
+\(`drgnx-uitest--kwin-fake-input').  Mutter: RemoteDesktop's relative motion, into the layout's top-left corner and
+then by X, Y.  Any other session returns `unsupported', so a row that needs this pointer skips there.  `failed'
+when the compositor refused or no pointer could be made."
+  (cond ((and (getenv "SWAYSOCK") (executable-find "swaymsg"))
+         (if (and (drgnx-uitest--sway-vpointer)
+                  (zerop (call-process "swaymsg" nil nil nil (format "seat - cursor set %d %d" x y))))
+             t
+           'failed))
+        ((drgnx-uitest--kwin-fake-input)
+         (if (drgnx-uitest--kwin-send 9 (drgnx-uitest--wl-fixed (max 0 x)) (drgnx-uitest--wl-fixed (max 0 y))) t 'failed))
+        ((drgnx-uitest-pointer-available-p)
+         ;; RemoteDesktop moves only by an offset without a screen-cast stream: into the layout's corner, then out
+         (if (ignore-errors (drgnx-uitest--pointer-by -100000 -100000) (drgnx-uitest--pointer-by (max 0 x) (max 0 y)) t)
+             t
+           'failed))
+        (t 'unsupported)))
+
+(defun drgnx-uitest-frame-origin (&optional frame)
+  "Where FRAME's (default the selected frame's) top-left corner is in the compositor's layout, (X . Y) in logical
+pixels, for `drgnx-uitest-pointer-set': Wayland never tells a client, so the pointer is put on a few layout points
+\(the display's middle, then nearer the corner) and where FRAME saw it gives the corner.  Nil when FRAME saw it at
+none of them, or the session has no such pointer."
+  (let* ((frame (or frame (selected-frame)))
+         (scale (/ (frame-scale-factor frame) (drgnx-uitest-device-scale frame)))   ; frame pixels per logical one
+         (points (list (cons (/ (display-pixel-width) 2) (/ (display-pixel-height) 2)) '(200 . 200) '(60 . 60))))
+    (cl-loop for (x . y) in points
+             for seen = (and (eq t (drgnx-uitest-pointer-set x y)) (drgnx-uitest--pointer-seen frame))
+             when seen return (cons (- x (round (/ (car seen) scale))) (- y (round (/ (cdr seen) scale)))))))
 
 (defun drgnx-uitest-posn (x y)
   "Position object for root-frame pixel X, Y."
@@ -401,14 +477,23 @@ the hub (the debug timeline's `find-file-hook' did, about one row in seven at sc
     (setq drgnx-uitest--timer (run-with-timer 0 drgnx-uitest-tick #'drgnx-uitest--tick)))
   (length drgnx-uitest--queue))
 
+(defun drgnx-uitest--stop ()
+  "Stop the tick: the queue is empty."
+  (when (timerp drgnx-uitest--timer) (cancel-timer drgnx-uitest--timer))
+  (setq drgnx-uitest--timer nil
+        drgnx-uitest--pointer nil))
+
+(defun drgnx-uitest-unqueue (pred)
+  "Take the queued entries PRED accepts out of the queue; with none left, stop the tick now, so a test's end leaves no
+timer for its file's leak check (the tick would only stop itself on its next run)."
+  (setq drgnx-uitest--queue (seq-remove pred drgnx-uitest--queue))
+  (unless drgnx-uitest--queue (drgnx-uitest--stop)))
+
 (defun drgnx-uitest--tick ()
   "Deliver the next queued event, or wait out a pause; stop the timer when empty."
   (let ((ev (car drgnx-uitest--queue)))
     (cond
-     ((null ev)
-      (when (timerp drgnx-uitest--timer) (cancel-timer drgnx-uitest--timer))
-      (setq drgnx-uitest--timer nil
-            drgnx-uitest--pointer nil))
+     ((null ev) (drgnx-uitest--stop))
      ((eq (car-safe ev) 'drgnx-uitest-pause)
       (setcar drgnx-uitest--queue (cons 'drgnx-uitest-until (+ (float-time) (cdr ev)))))
      ((eq (car-safe ev) 'drgnx-uitest-until)
@@ -424,7 +509,15 @@ the hub (the debug timeline's `find-file-hook' did, about one row in seven at sc
                                                 (drgnx-uitest-posn (nth 3 ev) (nth 4 ev))))))
       (drgnx-uitest--note-pointer ev)
       (setq unread-command-events (append unread-command-events (list ev))
-            drgnx-uitest--last-delivery (float-time))))))
+            drgnx-uitest--last-delivery (float-time))
+      ;; the last event out: stop now, so a test that ends on its last key leaves no tick for its file's leak check.
+      ;; A mouse event keeps one more tick: its pointer position stands until the command it runs has read it.
+      (unless (or drgnx-uitest--queue (drgnx-uitest--mouse-event-p ev))
+        (drgnx-uitest--stop))))))
+
+(defun drgnx-uitest--mouse-event-p (ev)
+  "Non-nil when EV is a mouse event (its pointer position is `drgnx-uitest--pointer')."
+  (and (consp ev) (symbolp (car ev)) (string-match-p "mouse" (symbol-name (car ev)))))
 
 (defun drgnx-uitest-busy-p ()
   "Non-nil while input is queued or not yet read."
@@ -845,6 +938,76 @@ runs from the session's server, so the keys are read here."
           (setq this-command cmd)
           (call-interactively cmd nil keys))))
     result))
+
+;;;; A real keyboard
+;; Keys that go through the compositor and Nidhogg's shell as a keyboard's do, on each compositor the tier runs: mutter's
+;; RemoteDesktop (keysyms), sway through wtype (a virtual keyboard: its keymap travels as a file descriptor, which an
+;; Emacs network process cannot send), KWin's fake input (evdev codes).
+
+(defconst drgnx-uitest--keys
+  '(("Alt_L" #xffe9 56 "alt") ("Shift_L" #xffe1 42 "shift") ("Control_L" #xffe3 29 "ctrl") ("Super_L" #xffeb 125 "logo")
+    ("a" ?a 30) ("b" ?b 48) ("c" ?c 46) ("d" ?d 32) ("e" ?e 18) ("f" ?f 33) ("g" ?g 34) ("h" ?h 35) ("i" ?i 23)
+    ("j" ?j 36) ("k" ?k 37) ("l" ?l 38) ("m" ?m 50) ("n" ?n 49) ("o" ?o 24) ("p" ?p 25) ("q" ?q 16) ("r" ?r 19)
+    ("s" ?s 31) ("t" ?t 20) ("u" ?u 22) ("v" ?v 47) ("w" ?w 17) ("x" ?x 45) ("y" ?y 21) ("z" ?z 44))
+  "(NAME KEYSYM EVDEV [WTYPE-MODIFIER]) of the keys `drgnx-uitest-keyboard-type' types.")
+
+
+(defun drgnx-uitest-keyboard-available-p ()
+  "Non-nil when this session can type real keys (`drgnx-uitest-keyboard-type'): mutter, sway with wtype, KWin."
+  (or (drgnx-uitest-pointer-available-p)
+      (and (getenv "SWAYSOCK") (executable-find "wtype") t)
+      (and (drgnx-uitest--kwin-fake-input) t)))
+
+(defun drgnx-uitest-keyboard-type (keys)
+  "Type KEYS, ((NAME . DOWN) …) with NAME in `drgnx-uitest--keys' (Alt_L, Shift_L, Control_L, Super_L or a lower-case
+letter), DOWN non-nil for a press, on this session's real keyboard, in order; return the events Emacs read after
+them, in order, read until none came for half a second (what was pending before is read and dropped first).
+Signals where no keyboard can be had."
+  (while (read-event nil nil 0.5))
+  (let ((rows (mapcar (lambda (k) (cons (or (assoc (car k) drgnx-uitest--keys) (error "drgnx-uitest: no key %S" (car k)))
+                                        (cdr k)))
+                      keys)))
+    (cond
+     ((drgnx-uitest-pointer-available-p)
+      ;; a RemoteDesktop session of its own, stopped after (its keyboard gone, the frame's focus as before)
+      (let* ((rd drgnx-uitest--rd) (iface (concat rd ".Session"))
+             (path (dbus-call-method :session rd "/org/gnome/Mutter/RemoteDesktop" rd "CreateSession")))
+        (dbus-call-method :session rd path iface "Start")
+        (unwind-protect
+            (progn
+              ;; the virtual keyboard's first key reaches no one
+              (dbus-call-method :session rd path iface "NotifyKeyboardKeysym" :uint32 #xffe1 t)
+              (dbus-call-method :session rd path iface "NotifyKeyboardKeysym" :uint32 #xffe1 nil)
+              (while (read-event nil nil 0.5))
+              ;; without waiting: `dbus-call-method' reads events while it waits, and a key read there is lost
+              (dolist (r rows)
+                (dbus-call-method-asynchronously :session rd path iface "NotifyKeyboardKeysym" nil
+                                                 :uint32 (nth 1 (car r)) (and (cdr r) t)))
+              (drgnx-uitest--events-read))
+          (ignore-errors (dbus-call-method :session rd path iface "Stop")))))
+     ((and (getenv "SWAYSOCK") (executable-find "wtype"))
+      ;; one wtype for the whole sequence: each run is a keyboard of its own, gone (its keys up) when it exits.  A
+      ;; modifier is its key (what a lone-modifier sees) and its state (what the keys after it carry): -M only sets
+      ;; the state, -P only presses a key its keymap gives no modifier
+      (let ((args (mapcan (lambda (r) (let ((name (car (car r))) (mod (nth 3 (car r))))
+                                        (cond ((not mod) (list (if (cdr r) "-P" "-p") name))
+                                              ((cdr r) (list "-P" name "-M" mod))
+                                              (t (list "-m" mod "-p" name)))))
+                          rows)))
+        (unless (zerop (apply #'call-process "wtype" nil nil nil args)) (error "drgnx-uitest: wtype %S failed" args))
+        (drgnx-uitest--events-read)))
+     ((drgnx-uitest--kwin-fake-input)
+      (dolist (r rows)
+        (unless (drgnx-uitest--kwin-send 10 (drgnx-uitest--wl-u32 (nth 2 (car r))) (drgnx-uitest--wl-u32 (if (cdr r) 1 0)))
+          (error "drgnx-uitest: KWin refused the key %S" (car (car r)))))
+      (drgnx-uitest--events-read))
+     (t (error "drgnx-uitest: no real keyboard in this session")))))
+
+(defun drgnx-uitest--events-read ()
+  "The events Emacs reads from now until none came for half a second, in order."
+  (let (evs ev)
+    (while (setq ev (read-event nil nil 0.5)) (push ev evs))
+    (nreverse evs)))
 
 (defun drgnx-uitest--run-watch ()
   "Leave `drgnx-uitest-run''s nested command loop once settled or past the deadline."

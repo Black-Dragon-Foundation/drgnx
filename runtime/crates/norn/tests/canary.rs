@@ -586,11 +586,15 @@ fn history_db_is_the_sixth_door() {
     let hub = Hub::open(&dir).unwrap();
     let tree = Tree::new(&fx.home, &fx.home.join(".git"), None);
 
-    let notes = hub.register(&tree, "org/notes.org", "b1", &deny).unwrap();
+    let notes = hub
+        .register(&tree, "org/notes.org", "b1", &deny, 1.0)
+        .unwrap();
     assert!(!notes.tracked, "the notes are not tracked");
     assert_eq!(notes.reason.as_deref(), Some("personal"));
     // a file the deny-list lets in is tracked, so the absence below means something
-    let plan = hub.register(&tree, "proj/plans/p.md", "b2", &deny).unwrap();
+    let plan = hub
+        .register(&tree, "proj/plans/p.md", "b2", &deny, 1.0)
+        .unwrap();
     assert!(plan.tracked, "{plan:?}");
     hub.close().unwrap();
     drop(hub);

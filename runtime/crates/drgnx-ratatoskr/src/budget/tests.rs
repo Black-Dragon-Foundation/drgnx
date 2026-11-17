@@ -96,29 +96,32 @@ fn subscription_share_is_labelled_estimate() {
         "utilization": 0.8, "resetsAt": 4_102_444_800u64});
     assert_eq!(
         meter_of("_claude/rateLimit", &claude),
-        Some(("claude", 0.8, Some(4_102_444_800.0)))
+        vec![("claude", "5h".to_owned(), 0.8, Some(4_102_444_800.0))]
     );
     let codex = json!({"primary": {"usedPercent": 42.0, "windowMinutes": 300, "resetsAt": 100},
         "secondary": {"usedPercent": 60.0, "windowMinutes": 10080, "resetsAt": 200}});
     assert_eq!(
         meter_of("_codex/rateLimits", &codex),
-        Some(("codex", 0.6, Some(200.0)))
+        vec![
+            ("codex", "5h".to_owned(), 0.42, Some(100.0)),
+            ("codex", "week".to_owned(), 0.6, Some(200.0))
+        ]
     );
     assert_eq!(
         parse_claude(&json!({"status": "rejected"})),
         Some((1.0, None))
     );
     assert_eq!(parse_claude(&json!({"status": "allowed"})), None);
-    assert_eq!(meter_of("_other/x", &claude), None);
+    assert!(meter_of("_other/x", &claude).is_empty());
     // a session's share is its limit-share spend, and the meter's pace says it is an estimate
     let b = Budgets::default();
     let w = sc(json!({"worker": "w1"}));
     b.set(&w, vec![lim(0.2, Unit::LimitShare)]);
     assert!(
-        b.reading(&w, "claude", 0.5, None, 1000.0).is_empty(),
+        b.reading(&w, "claude", "5h", 0.5, None, 1000.0).is_empty(),
         "the first reading is a baseline"
     );
-    let hits = b.reading(&w, "claude", 0.75, None, 2000.0);
+    let hits = b.reading(&w, "claude", "5h", 0.75, None, 2000.0);
     assert_eq!(hits.len(), 1);
     assert!(hits[0].estimate());
     assert_eq!(hits[0].unit, Unit::LimitShare);
@@ -132,23 +135,23 @@ fn pace_forecasts_exhaustion() {
     let b = Budgets::default();
     let w = sc(json!({"worker": "w1"}));
     // 0.1 at t=0, 0.2 an hour later: 0.1 an hour, so the remaining 0.8 lasts 8 hours
-    b.reading(&w, "claude", 0.1, None, 0.0);
-    b.reading(&w, "claude", 0.2, None, 3600.0);
+    b.reading(&w, "claude", "5h", 0.1, None, 0.0);
+    b.reading(&w, "claude", "5h", 0.2, None, 3600.0);
     let p = &b.pace(Some("claude"), 3600.0)[0];
     assert!((p.used_share - 0.2).abs() < 1e-9);
     assert!((p.rate_per_hour - 0.1).abs() < 1e-9);
     assert!((p.exhausted_at.unwrap() - (3600.0 + 8.0 * 3600.0)).abs() < 1e-6);
     assert!(b.pace(Some("codex"), 3600.0).is_empty());
     // a window that resets before then is not forecast to run out
-    b.reading(&w, "claude", 0.3, Some(3600.0 * 5.0), 7200.0);
+    b.reading(&w, "claude", "5h", 0.3, Some(3600.0 * 5.0), 7200.0);
     assert_eq!(b.pace(None, 7200.0)[0].exhausted_at, None);
     // a drop is a new window: the rate starts over
-    b.reading(&w, "claude", 0.05, Some(1e9), 8000.0);
+    b.reading(&w, "claude", "5h", 0.05, Some(1e9), 8000.0);
     let p = &b.pace(None, 8000.0)[0];
     assert_eq!(p.rate_per_hour, 0.0);
     assert_eq!(p.exhausted_at, None);
     // readings older than 24 h fall out of the window
-    b.reading(&w, "claude", 0.06, None, 8000.0 + 25.0 * 3600.0);
+    b.reading(&w, "claude", "5h", 0.06, None, 8000.0 + 25.0 * 3600.0);
     assert_eq!(b.pace(None, 8000.0 + 25.0 * 3600.0)[0].rate_per_hour, 0.0);
 }
 
@@ -225,13 +228,13 @@ fn a_cumulative_reading_answers_with_the_delta_it_booked() {
 fn readings_survive_a_save_and_load() {
     let b = Budgets::default();
     let w = sc(json!({"worker": "w1"}));
-    b.reading(&w, "claude", 0.5, Some(9.0e9), 1000.0);
-    b.reading(&w, "claude", 0.6, Some(9.0e9), 2000.0);
+    b.reading(&w, "claude", "5h", 0.5, Some(9.0e9), 1000.0);
+    b.reading(&w, "claude", "5h", 0.6, Some(9.0e9), 2000.0);
     let text = serde_json::to_string(&b.saved()).unwrap();
     let c = Budgets::default();
     c.restore(serde_json::from_str(&text).unwrap());
     assert_eq!(
-        c.history("claude", 2000.0),
+        c.history("claude", "5h", 2000.0),
         vec![(1000.0, 0.5), (2000.0, 0.6)]
     );
     assert_eq!(c.pace(None, 2000.0), b.pace(None, 2000.0));
@@ -247,10 +250,10 @@ fn the_history_keeps_one_reading_per_quarter_hour_for_eight_days() {
     let w = sc(json!({"worker": "w1"}));
     let nine_days = 9 * 24 * 3600;
     for t in (0..=nine_days).step_by(60) {
-        b.reading(&w, "claude", 0.5, None, f64::from(t));
+        b.reading(&w, "claude", "5h", 0.5, None, f64::from(t));
     }
     let now = f64::from(nine_days);
-    let h = b.history("claude", now);
+    let h = b.history("claude", "5h", now);
     assert!(h.len() <= 768, "{}", h.len());
     assert!(h.len() > 760, "{}", h.len());
     assert!(h.windows(2).all(|p| p[1].0 - p[0].0 >= 900.0));
@@ -263,12 +266,12 @@ fn the_rate_still_reads_the_last_day() {
     let b = Budgets::default();
     let w = sc(json!({"worker": "w1"}));
     let day = 24.0 * 3600.0;
-    b.reading(&w, "claude", 0.1, None, 0.0);
-    b.reading(&w, "claude", 0.5, None, 2.0 * day);
-    b.reading(&w, "claude", 0.6, None, 2.0 * day + 3600.0);
+    b.reading(&w, "claude", "5h", 0.1, None, 0.0);
+    b.reading(&w, "claude", "5h", 0.5, None, 2.0 * day);
+    b.reading(&w, "claude", "5h", 0.6, None, 2.0 * day + 3600.0);
     let p = &b.pace(None, 2.0 * day + 3600.0)[0];
     assert!((p.rate_per_hour - 0.1).abs() < 1e-9, "{}", p.rate_per_hour);
-    assert_eq!(b.history("claude", 2.0 * day + 3600.0).len(), 3);
+    assert_eq!(b.history("claude", "5h", 2.0 * day + 3600.0).len(), 3);
 }
 
 /// Pure (D): a meter that reset starts a segment; its fall is not a negative rise.
@@ -457,4 +460,282 @@ fn an_old_per_job_plan_scope_becomes_its_run() {
         0
     );
     assert_eq!(c.limits(&run), vec![lim(20.0, Unit::Usd)]);
+}
+
+/// An agent's usage update carries its cost as a number or as `{"amount", "currency"}`: one reader takes both, and
+/// nothing else.
+#[test]
+fn a_cost_is_a_number_or_an_object_with_an_amount() {
+    use serde_json::json;
+    assert_eq!(cost_amount(&json!(0.25)), Some(0.25));
+    assert_eq!(
+        cost_amount(&json!({"amount": 0.01, "currency": "USD"})),
+        Some(0.01)
+    );
+    for bad in [
+        json!(null),
+        json!("0.5"),
+        json!({"currency": "USD"}),
+        json!({"amount": "x"}),
+        json!([0.1]),
+    ] {
+        assert_eq!(cost_amount(&bad), None, "{bad}");
+    }
+}
+
+fn run_scope(id: &str) -> BudgetScope {
+    serde_json::from_value(json!({"run": id})).unwrap()
+}
+
+#[test]
+fn burn_is_the_hourly_rate_after_ten_minutes_of_spend() {
+    let b = Budgets::default();
+    let s = run_scope("job-1");
+    b.spend_at(&s, Unit::Usd, 1.0, 1000.0);
+    // under ten minutes seen: nothing yet
+    assert!(b.burn(&s, 1300.0).is_empty());
+    b.spend_at(&s, Unit::Usd, 1.0, 1600.0);
+    // 2 usd over 1200 s is 6 usd an hour
+    let burn = b.burn(&s, 2200.0);
+    assert_eq!(burn.len(), 1);
+    assert_eq!(burn[0].unit, Unit::Usd);
+    assert!((burn[0].amount - 6.0).abs() < 1e-9, "{burn:?}");
+    // an hour on, the old readings left the ring
+    assert!(b.burn(&s, 1000.0 + 3700.0 + 3600.0).is_empty());
+}
+
+#[test]
+fn a_scope_nears_at_eighty_percent_of_its_binding_limit() {
+    let b = Budgets::default();
+    let s = run_scope("job-2");
+    assert_eq!(b.state(&s), BudgetState::None);
+    b.set(
+        &s,
+        vec![Limit {
+            amount: 10.0,
+            unit: Unit::Usd,
+        }],
+    );
+    assert_eq!(b.state(&s), BudgetState::Ok);
+    b.spend(&s, Unit::Usd, 7.9);
+    assert_eq!(b.state(&s), BudgetState::Ok);
+    b.spend(&s, Unit::Usd, 0.2);
+    assert_eq!(b.state(&s), BudgetState::Nearing);
+    b.spend(&s, Unit::Usd, 2.0);
+    assert_eq!(b.state(&s), BudgetState::Reached);
+}
+
+#[test]
+fn changes_are_taken_once_with_the_ancestors() {
+    let b = Budgets::default();
+    let (p, r) = (run_scope("p"), run_scope("r"));
+    b.link(&r, &p);
+    b.spend(&r, Unit::Usd, 1.0);
+    b.spend(&r, Unit::Usd, 1.0);
+    let got = b.take_changed();
+    assert_eq!(got.len(), 1 + 1, "{got:?}");
+    assert!(b.take_changed().is_empty());
+}
+
+#[test]
+fn the_binding_unit_is_the_least_remaining_share() {
+    let b = Budgets::default();
+    let s = run_scope("job-3");
+    b.set(
+        &s,
+        vec![
+            Limit {
+                amount: 100.0,
+                unit: Unit::Tokens,
+            },
+            Limit {
+                amount: 10.0,
+                unit: Unit::Usd,
+            },
+        ],
+    );
+    b.spend(&s, Unit::Tokens, 50.0); // half left
+    b.spend(&s, Unit::Usd, 9.0); // a tenth left
+    assert_eq!(b.binding(&s), Some((Unit::Usd, 9.0, 10.0)));
+    b.spend(&s, Unit::Tokens, 45.0); // a twentieth left
+    assert_eq!(b.binding(&s).map(|(u, ..)| u), Some(Unit::Tokens));
+}
+
+#[test]
+fn events_coalesce_to_one_a_second_per_scope() {
+    // ten spends inside one second: one event for the run and one for its plan, the last value; the next second,
+    // with nothing spent, none
+    let b = Budgets::default();
+    let (p, r) = (run_scope("p2"), run_scope("r2"));
+    b.link(&r, &p);
+    for _ in 0..10 {
+        b.spend(&r, Unit::Usd, 0.1);
+    }
+    let events = b.flush(0.0);
+    assert_eq!(events.len(), 2, "{events:?}");
+    let run = events.iter().find(|e| e.scope == r).unwrap();
+    assert!((run.spent[0].amount - 1.0).abs() < 1e-9);
+    assert!(b.flush(1.0).is_empty(), "nothing moved: no event");
+    b.spend(&r, Unit::Usd, 0.1);
+    assert_eq!(b.flush(2.0).len(), 2);
+}
+
+fn scope_of(kind: &str, id: &str) -> BudgetScope {
+    serde_json::from_value(json!({ kind: id })).unwrap()
+}
+
+#[test]
+fn tree_walks_project_to_worker() {
+    let b = Budgets::default();
+    let (proj, spec, plan) = (
+        scope_of("project", "proj"),
+        scope_of("spec", "spec:s"),
+        scope_of("plan", "plan:p"),
+    );
+    let (run, worker) = (run_scope("job-1"), scope_of("worker", "w1"));
+    b.link(&spec, &proj);
+    b.link(&plan, &spec);
+    b.link(&run, &plan);
+    b.link(&worker, &run);
+    let t = b.tree_scopes(None, None);
+    let order: Vec<_> = t.iter().map(|(_, s, _)| s.clone()).collect();
+    assert_eq!(
+        order,
+        vec![
+            proj.clone(),
+            spec.clone(),
+            plan.clone(),
+            run.clone(),
+            worker.clone()
+        ]
+    );
+    assert_eq!(t[0].2, None);
+    assert_eq!(t[4].2.as_ref(), Some(&run));
+    // a root and a depth cut the walk
+    let sub: Vec<_> = b
+        .tree_scopes(Some(&plan), Some(1))
+        .into_iter()
+        .map(|(_, s, _)| s)
+        .collect();
+    assert_eq!(sub, vec![plan, run]);
+}
+
+#[test]
+fn a_run_carries_its_share_of_the_plan() {
+    let b = Budgets::default();
+    let plan = scope_of("plan", "plan:p");
+    let (r1, r2) = (run_scope("job-1"), run_scope("job-2"));
+    b.link(&r1, &plan);
+    b.link(&r2, &plan);
+    b.set(
+        &plan,
+        vec![Limit {
+            amount: 100.0,
+            unit: Unit::Usd,
+        }],
+    );
+    b.spend(&r1, Unit::Usd, 6.0);
+    b.spend(&r2, Unit::Usd, 4.0);
+    // an unrelated unit must not dilute the share
+    b.spend(&r1, Unit::Tokens, 1000.0);
+    let n1 = b.node(&r1, Some(&plan), "run 1".into(), 0.0);
+    let n2 = b.node(&r2, Some(&plan), "run 2".into(), 0.0);
+    assert!((n1.share_of_parent.unwrap() - 0.6).abs() < 1e-9, "{n1:?}");
+    assert!((n2.share_of_parent.unwrap() - 0.4).abs() < 1e-9);
+    // a plan has none, and neither has a run with no plan above it
+    assert_eq!(b.node(&plan, None, "p".into(), 0.0).share_of_parent, None);
+    assert_eq!(b.node(&r1, None, "r".into(), 0.0).share_of_parent, None);
+}
+
+#[test]
+fn tree_pages_with_after() {
+    let keys: Vec<String> = (0..5).map(|i| format!("k{i}")).collect();
+    let ks: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let (r, next) = page_of(&ks, None, 2);
+    assert_eq!((r, next.as_deref()), (0..2, Some("k1")));
+    let (r, next) = page_of(&ks, Some("k1"), 2);
+    assert_eq!((r, next.as_deref()), (2..4, Some("k3")));
+    let (r, next) = page_of(&ks, Some("k3"), 2);
+    assert_eq!((r, next), (4..5, None));
+    // an exact fit ends without a next
+    let (r, next) = page_of(&ks, None, 5);
+    assert_eq!((r, next), (0..5, None));
+}
+
+#[test]
+fn claude_five_hour_and_week_are_two_meters() {
+    let five = json!({"rateLimitType": "five_hour", "utilization": 0.8, "resetsAt": 100});
+    let seven = json!({"rateLimitType": "seven_day", "utilization": 0.3, "resetsAt": 900});
+    let other = json!({"rateLimitType": "seven_day_opus", "utilization": 0.1});
+    assert_eq!(meter_of("_claude/rateLimit", &five)[0].1, "5h");
+    assert_eq!(meter_of("_claude/rateLimit", &seven)[0].1, "week");
+    assert_eq!(meter_of("_claude/rateLimit", &other)[0].1, "seven_day_opus");
+    let b = Budgets::default();
+    let w = sc(json!({"worker": "w1"}));
+    b.reading(&w, "claude", "5h", 0.8, Some(100.0), 1000.0);
+    b.reading(&w, "claude", "week", 0.3, Some(900.0), 1000.0);
+    let paces = b.pace(Some("claude"), 1000.0);
+    let by: Vec<(&str, f64)> = paces
+        .iter()
+        .map(|p| (p.window.as_str(), p.used_share))
+        .collect();
+    assert_eq!(by, vec![("5h", 0.8), ("week", 0.3)]);
+}
+
+#[test]
+fn codex_keeps_each_window() {
+    let codex = json!({"primary": {"usedPercent": 42.0, "windowMinutes": 300, "resetsAt": 100},
+        "secondary": {"usedPercent": 60.0, "windowMinutes": 10080, "resetsAt": 200}});
+    let b = Budgets::default();
+    let w = sc(json!({"worker": "w1"}));
+    for (provider, window, share, resets) in meter_of("_codex/rateLimits", &codex) {
+        b.reading(&w, provider, &window, share, resets, 1000.0);
+    }
+    let paces = b.pace(Some("codex"), 1000.0);
+    assert_eq!(paces.len(), 2);
+    assert_eq!(paces[0].resets_at, Some(100.0));
+    assert_eq!(paces[1].resets_at, Some(200.0));
+    // a window the agent names only by its place keeps that name
+    let odd = json!({"primary": {"usedPercent": 10.0, "windowMinutes": 60}});
+    assert_eq!(meter_of("_codex/rateLimits", &odd)[0].1, "primary");
+}
+
+#[test]
+fn the_seven_day_rate_reads_the_history() {
+    let b = Budgets::default();
+    let w = sc(json!({"worker": "w1"}));
+    let day = 86_400.0;
+    b.reading(&w, "claude", "week", 0.10, None, 0.0);
+    // under a day of readings: no rate
+    b.reading(&w, "claude", "week", 0.12, None, day * 0.5);
+    assert_eq!(b.pace(Some("claude"), day * 0.5)[0].rate_7d_per_hour, None);
+    // 0.34 over two days: 0.12 per day, 0.005 an hour
+    b.reading(&w, "claude", "week", 0.34, None, 2.0 * day);
+    let p = &b.pace(Some("claude"), 2.0 * day)[0];
+    assert!((p.rate_7d_per_hour.unwrap() - 0.005).abs() < 1e-9, "{p:?}");
+    // a five-hour meter has none
+    b.reading(&w, "claude", "5h", 0.1, None, 0.0);
+    b.reading(&w, "claude", "5h", 0.9, None, 2.0 * day);
+    let five = b
+        .pace(Some("claude"), 2.0 * day)
+        .into_iter()
+        .find(|p| p.window == "5h")
+        .unwrap();
+    assert_eq!(five.rate_7d_per_hour, None);
+}
+
+#[test]
+fn history_is_on_the_wire_only_when_asked() {
+    let b = Budgets::default();
+    let w = sc(json!({"worker": "w1"}));
+    b.reading(&w, "claude", "5h", 0.1, None, 0.0);
+    b.reading(&w, "claude", "5h", 0.2, None, 2000.0);
+    assert!(b.pace_with(None, 2000.0, false)[0].history.is_empty());
+    assert_eq!(
+        b.pace_with(None, 2000.0, true)[0].history,
+        vec![(0.0, 0.1), (2000.0, 0.2)]
+    );
+    // and the wire leaves the key out when it is empty
+    let v = serde_json::to_value(&b.pace_with(None, 2000.0, false)[0]).unwrap();
+    assert!(v.get("history").is_none(), "{v}");
 }

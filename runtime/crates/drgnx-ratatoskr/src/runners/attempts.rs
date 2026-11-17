@@ -134,6 +134,9 @@ pub enum Event {
     HubRestarted,
     /// The user stopped JOB.
     Cancel { job: String },
+    /// The user restarted JOB on another machine: its open attempt is cancelled on its runner and the job goes back
+    /// to the queue.
+    Move { job: String },
 }
 
 /// What the shell does.
@@ -194,6 +197,8 @@ pub const RUNNER_LOST: &str = "infra: runner lost";
 pub const PREEMPTED: &str = "infra: preempted";
 /// The reason a requeue for a refused offer carries.
 pub const REFUSED: &str = "refused";
+/// The reason a requeue for the user's move carries.
+pub const MOVED: &str = "moved by you";
 
 /// The result an attempt ends with when it is cancelled and its runner can't say so itself.
 fn cancelled() -> Value {
@@ -367,6 +372,31 @@ impl Core {
                     }
                     _ => {}
                 }
+            }
+            Event::Move { job } => {
+                let Some(row) = self.jobs.get(&job) else {
+                    return out;
+                };
+                let key = (job, row.current);
+                let Some(a) = self.attempts.get_mut(&key).filter(|a| a.state.open()) else {
+                    return out;
+                };
+                // a runner that may hold it is told; its late result is kept as this attempt's, never applied
+                if matches!(a.state, AttemptState::Running | AttemptState::Offered) {
+                    out.push(Effect::SendCancel {
+                        runner: a.runner.clone(),
+                        r: JobRef {
+                            job: key.0.clone(),
+                            attempt: key.1,
+                            nonce: a.nonce,
+                        },
+                    });
+                }
+                a.state = AttemptState::Requeued;
+                out.push(Effect::Requeue {
+                    job: key.0,
+                    reason: MOVED.into(),
+                });
             }
         }
         out

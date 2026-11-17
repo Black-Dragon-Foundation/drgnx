@@ -97,9 +97,8 @@ answer with KEYS.  The harness's queue delivers each note to the read itself, so
 (defun drgnx-look-echo-ui-test--unshown ()
   "Stop watching redisplay for the box, and take the marker pause out of the harness's queue."
   (remove-hook 'pre-redisplay-functions #'drgnx-look-echo-ui-test--redisplay)
-  (setq drgnx-look-echo-ui-test--shown nil
-        drgnx-uitest--queue (seq-remove (lambda (e) (memq (car-safe e) '(drgnx-uitest-pause drgnx-uitest-until)))
-                                        drgnx-uitest--queue)))
+  (setq drgnx-look-echo-ui-test--shown nil)
+  (drgnx-uitest-unqueue (lambda (e) (memq (car-safe e) '(drgnx-uitest-pause drgnx-uitest-until)))))
 
 (defun drgnx-look-echo-ui-test--at-shown (box fn keys)
   "Run FN at the redisplay that shows BOX, which the read now starting does as it waits, then answer with KEYS.
@@ -265,6 +264,51 @@ buffer and point, the selected window, the frame's size and its buffers survive.
       (drgnx-look-echo-off)
       (dolist (x (list f new back)) (when (frame-live-p x) (delete-frame x t)))
       (mapc #'kill-buffer (list a b c))
+      (when (frame-live-p was) (select-frame-set-input-focus was))
+      (drgnx-test-wait-presented))))
+
+(defvar drgnx-look-echo-ui-test--during nil "A row's function to run once the next minibuffer is up.")
+
+(defun drgnx-look-echo-ui-test--during ()
+  "On `minibuffer-setup-hook', once: the row's function."
+  (remove-hook 'minibuffer-setup-hook #'drgnx-look-echo-ui-test--during)
+  (when drgnx-look-echo-ui-test--during (funcall (prog1 drgnx-look-echo-ui-test--during
+                                                   (setq drgnx-look-echo-ui-test--during nil)))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-echo/a-swap-held-by-a-prompt-keeps-a-frame-made-during-it ()
+  "A swap asked while a prompt is up waits for its end, then swaps only the frames still wrong for the setting: a
+frame made during the prompt (under the setting) and the frames that already fit stay; nothing else closes."
+  (skip-unless (display-graphic-p))
+  (let ((was (selected-frame)) (before (frame-list)) f g (swaps drgnx-look-echo-swaps))
+    (unwind-protect
+        (progn
+          (drgnx-look-echo-on)
+          (setq f (make-frame '((width . 90) (height . 30))))      ; the box: wrong once it is off
+          (drgnx-test-wait-presented :frame f)
+          (drgnx-look-echo-off)
+          (setq drgnx-look-echo-ui-test--during
+                (lambda ()
+                  (drgnx-look-echo-apply-frames)                     ; held: a minibuffer is in use
+                  (setq g (make-frame '((width . 60) (height . 20)))) ; made under the setting: a row
+                  (drgnx-uitest-enqueue (append (listify-key-sequence "x\r") nil))))
+          (add-hook 'minibuffer-setup-hook #'drgnx-look-echo-ui-test--during)
+          (should (equal (read-string "Name: ") "x"))
+          (should (= drgnx-look-echo-swaps swaps))                   ; nothing swapped while it was up
+          (should-not (memq #'drgnx-look-echo--apply-later minibuffer-exit-hook)) ; the prompt's end took it
+          ;; what the held timer then runs; its owner, ui/look, does not run in a test session, so it starts no
+          ;; timer here (`drgnx-timer-start' starts nothing for an owner that is gone)
+          (drgnx-look-echo-apply-frames)
+          (should (= drgnx-look-echo-swaps (1+ swaps)))              ; f only
+          (should-not (frame-live-p f))
+          (should (frame-live-p g))
+          (should (frame-live-p was)))
+      (remove-hook 'minibuffer-setup-hook #'drgnx-look-echo-ui-test--during)
+      (setq drgnx-look-echo-ui-test--during nil)
+      (drgnx-look-echo-off)
+      ;; f, g and the swap's replacement of f: every top-level frame the row added
+      (dolist (x (frame-list))
+        (when (and (frame-live-p x) (not (frame-parent x)) (not (memq x before)))
+          (delete-frame x t)))
       (when (frame-live-p was) (select-frame-set-input-focus was))
       (drgnx-test-wait-presented))))
 

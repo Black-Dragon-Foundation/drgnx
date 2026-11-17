@@ -2104,6 +2104,8 @@ mod tests {
                             snapshot: None,
                             log_version: None,
                             acp: None,
+                            machine: None,
+                            slots: None,
                         },
                     )?;
                     if let Some(h) = head {

@@ -20,6 +20,15 @@
  ;; graphical debugging's breakpoint column (300 marks while scrolling; F9 on 20 lines): input within a frame
  (debug-gutter-scroll (:input :p95) 16) (debug-gutter-scroll (:input :max) 50)
  (debug-ruler-scroll (:input :p95) 16) (debug-ruler-scroll (:input :max) 50)
+ ;; the open minimap over a 10,000-line scroll (design §8): within a frame, and judged against minimap-baseline
+ (minimap-scroll (:input :p95) 16) (minimap-scroll (:input :max) 50)
+ ;; the line model (design §8): typing with it on within a frame (and within 0.3 ms p95 of it off: the relative rule),
+ ;; its first build of 1 MB at most 25 ms, at most 40 bytes a line
+ (minimap-type (:input :p95) 16) (minimap-type (:input :max) 50)
+ (minimap-type-250k (:input :p95) 16) (minimap-type-250k (:input :max) 50)
+ (lines-build-1mb (:build_ms) 25) (lines-memory (:bytes_per_line) 40)
+ ;; Fold All over 10,000 lines of the fixture (design §8): ≤ 50 ms, at most one overlay a range
+ (fold-all-10k (:fold_ms) 50) (fold-all-10k (:overlays_per_range) 1)
  (debug-edges-scroll (:input :p95) 16) (debug-edges-scroll (:input :max) 50)
  (debug-breakpoint-click (:input :p95) 16) (debug-breakpoint-click (:input :max) 50)
  ;; a step's stop drawn (spec §5): the arrow, band and point moved within a frame (16 ms p95, from the event)
@@ -332,4 +341,13 @@
  (agents-typing-none (:input :p95) 16) (agents-typing-none (:stalls) 0)
  (agents-follow (:input :p95) 16) (agents-follow (:stalls) 0)
  (agent-panel-stream (:input :p95) 16) (agent-panel-stream (:stalls) 0)
- (pair-typing (:input :p95) 16) (pair-typing (:stalls) 0))
+ (pair-typing (:input :p95) 16) (pair-typing (:stalls) 0)
+ ;; the budget event (budget plan H4): a scope has at most one `budget' event a second, and one flush (30 agents spending)
+ ;; costs at most 4 ms p95 -- the hub's bench `budget_event' (docs/develop/perf.md), judged in the perf lane
+ (budget-event (:events-per-scope-per-sec) 1) (budget-event-patch (:patch :p95) 4)
+ ;; the budget page's first page of the tree: 500 scopes, the first 200 nodes built within 20 ms (the hub's half of the
+ ;; page's 100 ms row; the bench `budget_event' as well)
+ (budget-tree-open (:first-page) 20)
+ ;; forecast/plan over 12 plans of 20 tasks: the first call (a joint draw) and the repeats (cached), the hub's `forecast_plan_perf'
+ (forecast-plan-miss (:ms) 300) (forecast-plan-hit (:ms) 5)
+)

@@ -53,6 +53,7 @@ fn tool_names_are_the_lisp_names() {
                 | "plan_write"
                 | "extensions_suggest"
                 | "huddle_reply"
+                | "comment_reply"
                 | "procedure_get"
         ) && !n.starts_with("job_")
             && !n.starts_with("debug_")
@@ -100,6 +101,8 @@ const BUDGET_PART1: usize = 4_266;
 const BUDGET_EXTENSIONS: usize = 800;
 /// `huddle_reply`, which every agent has (a huddle's position).
 const BUDGET_HUDDLE: usize = 800;
+/// `comment_reply`, which every agent has (an answer in a paragraph comment's thread).
+const BUDGET_COMMENT: usize = 600;
 /// `procedure_get`, which every agent has (the job's pack's procedures).
 const BUDGET_PROCEDURE: usize = 600;
 /// The six debugger tools a session gets once its project debugs (graphical debugging D4; the matrix's `debug.*` rows
@@ -110,6 +113,7 @@ const _: () = assert!(
         + BUDGET_JOBS
         + BUDGET_EXTENSIONS
         + BUDGET_HUDDLE
+        + BUDGET_COMMENT
         + BUDGET_PROCEDURE
         + BUDGET_DEBUG
         <= 40_000
@@ -158,6 +162,13 @@ fn the_tool_list_fits_the_budget() {
         huddle <= BUDGET_HUDDLE,
         "huddle_reply is {huddle} bytes, over {BUDGET_HUDDLE}"
     );
+    let comment = json!({"tools": listing(norn::tools::comment::tools())})
+        .to_string()
+        .len();
+    assert!(
+        comment <= BUDGET_COMMENT,
+        "comment_reply is {comment} bytes, over {BUDGET_COMMENT}"
+    );
     let procedure = json!({"tools": listing(norn::tools::procedure::tools())})
         .to_string()
         .len();
@@ -186,7 +197,7 @@ fn the_tool_list_fits_the_budget() {
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"
     );
     // the 18 alone: what the list weighs without the job tools, part 1's three and extensions_suggest
-    let base = bytes16 - jobs - part1 - ext - huddle - procedure - debug;
+    let base = bytes16 - jobs - part1 - ext - huddle - comment - procedure - debug;
     assert!(
         base <= BUDGET_BYTES_16,
         "tools/list without the tracker, job and part-1 tools is {base} bytes, over {BUDGET_BYTES_16}"

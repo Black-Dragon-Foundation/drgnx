@@ -1,10 +1,11 @@
 //! Jobs: every change answers the job summary the cockpit and `drgnx job` read.
 
 use super::agents::ById;
+use super::matrix::Limit;
 use super::method;
 use crate::registry::Method;
 use crate::types::{
-    AbsPath, Bounded, CardAction, Delta, Id, PlanId, Prompt, StringOrNumber, TaskRef, Text, Usd,
+    AbsPath, Bounded, CardAction, Delta, Id, PlanId, Prompt, StringOrNumber, TaskRef, Text,
     null_as_empty,
 };
 use schemars::JsonSchema;
@@ -34,9 +35,13 @@ pub struct JobSummary {
     pub repo: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
-    /// US dollars.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<f64>,
+    /// The plan's own limits by unit (its budget): none when it has none.
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub limits: Vec<Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -120,8 +125,9 @@ pub struct ProposeParams {
     pub plan: PlanRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<AbsPath>,
+    /// The plan's limits by unit, one per unit (none leaves them as they are; empty clears).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<Usd>,
+    pub limits: Option<Bounded<Vec<Limit>, 5>>,
     /// Approve at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto: Option<bool>,
@@ -165,10 +171,23 @@ pub struct OrderParams {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct WithBudget {
+pub struct WithLimits {
     pub id: Id,
+    /// The plan's limits by unit, one per unit: none leaves them as they are, empty clears them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<Usd>,
+    pub limits: Option<Bounded<Vec<Limit>, 5>>,
+}
+
+fn check_with_limits(p: &WithLimits) -> Result<(), crate::wire::Error> {
+    p.limits
+        .as_ref()
+        .map_or(Ok(()), |l| super::timeline::check_limits(l))
+}
+
+fn check_propose(p: &ProposeParams) -> Result<(), crate::wire::Error> {
+    p.limits
+        .as_ref()
+        .map_or(Ok(()), |l| super::timeline::check_limits(l))
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -205,7 +224,8 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "job/propose", JobPropose(ProposeParams) -> JobSummary,
             classes: [User], writes: true,
-            doc: "a job from a plan, proposed (approved at once with auto)",
+            doc: "a job from a plan, proposed (approved at once with auto), with optional limits by unit on its plan",
+            check: check_propose,
         ),
         method!(
             "job/start-task", JobStartTask(StartTaskParams) -> JobSummary,
@@ -233,9 +253,10 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "a task moves in its job's run order (the Work graph)",
         ),
         method!(
-            "job/approve", JobApprove(WithBudget) -> JobSummary,
+            "job/approve", JobApprove(WithLimits) -> JobSummary,
             classes: [User], writes: true,
-            doc: "a proposed job runs, with an optional budget",
+            doc: "a proposed job runs, with optional limits by unit on its plan",
+            check: check_with_limits,
         ),
         method!(
             "job/stop", JobStop(ById) -> JobSummary,
@@ -243,9 +264,10 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "a job's agents stop and it waits",
         ),
         method!(
-            "job/resume", JobResume(WithBudget) -> JobSummary,
+            "job/resume", JobResume(WithLimits) -> JobSummary,
             classes: [User], writes: true,
-            doc: "a stopped job runs again, with an optional new budget",
+            doc: "a stopped job runs again, with optional new limits by unit on its plan",
+            check: check_with_limits,
         ),
         method!(
             "job/card", JobCard(CardParams) -> JobSummary,

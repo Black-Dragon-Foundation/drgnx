@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod agents_side;
 pub mod changes;
+pub mod comments;
 pub mod config;
 pub mod coord;
 pub mod debug;
@@ -213,9 +214,9 @@ params! {
     JobBlock(jobs::BlockParams),
     JobUnblock(jobs::ByTask),
     JobOrder(jobs::OrderParams),
-    JobApprove(jobs::WithBudget),
+    JobApprove(jobs::WithLimits),
     JobStop(agents::ById),
-    JobResume(jobs::WithBudget),
+    JobResume(jobs::WithLimits),
     JobCard(jobs::CardParams),
     JobReply(jobs::ReplyParams),
     JobDismiss(jobs::ByMessage),
@@ -261,9 +262,11 @@ params! {
     DecisionsEffects(plans::EffectsParams),
     TimelineGet(timeline::TimelineParams),
     BudgetGet(timeline::BudgetGetParams),
+    BudgetTreePage(timeline::BudgetTreeParams),
     BudgetSet(timeline::BudgetSetParams),
     PaceGet(timeline::PaceParams),
     ForecastGet(forecast::ForecastParams),
+    ForecastPlan(forecast::ForecastPlanParams),
     ForecastSession(forecast::SessionForecastParams),
     ForecastAccuracy(forecast::AccuracyParams),
     SayStart(say::SayStart),
@@ -274,6 +277,11 @@ params! {
     RecordsConflict(exec::ById),
     RecordsResolve(records::ResolveParams),
     MachinesReport(work::MachineReport),
+    MachinesMove(work::MoveParams),
+    CommentsAdd(comments::AddParams),
+    CommentsReply(comments::ReplyParams),
+    CommentsList(comments::ListParams),
+    CommentsResolve(comments::ResolveParams),
     MachinesList(Empty),
     WorkConclusions(work::ConclusionsParams),
     ReviewEffects(work::EffectsParams),
@@ -283,6 +291,7 @@ params! {
     AgentsBufferUnwatch(editor::BufferUnwatch),
     WorkMapSubscribe(work::MapSubscribe),
     WorkMapSet(work::MapSet),
+    WorkTargetSet(work::TargetSetParams),
     WorkMapClose(work::MapClose),
     WorkTrailSubscribe(work::TrailSubscribe),
     WorkTrailClose(work::TrailClose),
@@ -301,6 +310,7 @@ params! {
     BuffersSet(view::BuffersSet),
     OutlineSet(view::OutlineSet),
     OutlineScopes(view::OutlineScopesParams),
+    MinimapWatch(view::MinimapWatch),
     TermOpen(term::TermOpen),
     TermConfig(term::TermConfig),
     TermKey(term::TermKey),
@@ -508,6 +518,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(forecast::methods());
     v.extend(say::methods());
     v.extend(records::methods());
+    v.extend(comments::methods());
     v.extend(past::methods());
     v.extend(work::methods());
     v.extend(view::methods());

@@ -1369,7 +1369,7 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
     (close-all "C-k C-w" nil) (focus-buffers "C-k e" nil) (focus-buffers "C-S-b" nil)
     (buffers-next "<down>" drgnx-buffers-mode-map) (buffers-previous "<up>" drgnx-buffers-mode-map)
     (buffers-open "RET" drgnx-buffers-mode-map) (buffers-close "<delete>" drgnx-buffers-mode-map)
-    (buffers-filter "C-M-f" drgnx-buffers-mode-map) (edit-fold "C-{" nil) (edit-unfold "C-}" nil)
+    (buffers-filter "C-M-f" drgnx-buffers-mode-map)
     (edit-expand "M-S-<right>" nil) (edit-shrink "M-S-<left>" nil) (edit-select-all "C-S-a" nil)
     (edit-select-line "C-l" nil) (edit-redo "C-S-z" nil) (edit-comment "C-/" nil) (edit-delete-line "C-S-k" nil)
     (edit-move-up "M-<up>" nil) (edit-move-down "M-<down>" nil) (edit-duplicate "M-S-<down>" nil)
@@ -1389,7 +1389,7 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
     (work-take-wheel "W" drgnx-work-live-file-mode-map) (work-files "e" drgnx-work-map-mode-map)
     (work-diffs "d" drgnx-work-map-mode-map) (work-diff-quit "q" drgnx-work-diff-mode-map)
     (work-diff-accept-hunk "a" drgnx-work-diff-mode-map) (work-diff-reject-hunk "D" drgnx-work-diff-mode-map)
-    (work-job-log "l" drgnx-work-detail-mode-map) (work-who-is-here "C-k h" nil) (work-left "<left>" drgnx-work-lens-map) (work-right "<right>" drgnx-work-lens-map)
+    (work-move-machine "M" drgnx-work-item-map) (work-job-log "l" drgnx-work-detail-mode-map) (work-who-is-here "C-k h" nil) (work-left "<left>" drgnx-work-lens-map) (work-right "<right>" drgnx-work-lens-map)
     (work-why "<up>" drgnx-work-lens-map) (work-touches "<down>" drgnx-work-lens-map)
     (work-back "M-<left>" drgnx-work-lens-map) (work-forward "M-<right>" drgnx-work-lens-map)
     (work-next-agent "TAB" drgnx-work-lens-map) (work-previous-agent "<backtab>" drgnx-work-lens-map)
@@ -1503,6 +1503,7 @@ The commands of modules that need no installed package are in it, the later stag
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste
                               code-next-problem code-previous-problem ; M12d: F8 / S-F8
+                              change-next change-previous bookmark-next bookmark-previous ; the minimap plan's mark keys
                               quick-help quick-help-close             ; M12f's quick help
                               close-pane                              ; M12f's Esc and q in a pane
                               settings-lisp-files-open           ; settings Task 28: RET on the Lisp files page
@@ -1556,6 +1557,9 @@ The commands of modules that need no installed package are in it, the later stag
                               kit-activate      ; RET on a kit component's action
                               face-menu         ; a lone Alt opens the menu (Nidhogg's `lone-alt')
                               editor-recent editor-recent-up ; C-<tab>: VS Code's previous editor
+                              edit-fold edit-unfold ; registered by editor/fold now: later in the order
+                              fold-toggle fold-recursive unfold-recursive fold-all unfold-all fold-level fold-kind
+                              fold-focus unfold-focus fold-create fold-remove ; editor/fold: VS Code's C-k folding chords
                               tile-full-size  ; the grid's Full-Size Tile (C-k C-m, C-k RET)
                               ;; moving tiles by keys: focus (palette before), move, swap, stack, unstack, resize
                               focus-left focus-right focus-up focus-down
@@ -1568,6 +1572,9 @@ The commands of modules that need no installed package are in it, the later stag
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
                            (seq-remove (lambda (b) (memq (plist-get b :id) new)) (plist-get r :bindings)))
                    drgnx-keys-test--linux-snapshot))
+    (should (equal (drgnx-keys-test--keys r 'edit-fold) '("C-{")))
+    (should (equal (drgnx-keys-test--keys r 'fold-toggle) '("C-k C-l")))   ; VS Code's own; Next Layout is C-k l
+    (should (equal (drgnx-keys-test--keys r 'layout-next) '("C-k l")))
     (should (equal (drgnx-keys-test--keys r 'edit-line-start) '("<home>")))
     (should (equal (drgnx-keys-test--keys r 'edit-word-left) '("C-<left>")))
     (should (equal (drgnx-keys-test--keys r 'face-menu) '("<lone-alt>")))   ; ui/face's own command, set up for real

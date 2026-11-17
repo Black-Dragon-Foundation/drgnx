@@ -325,6 +325,9 @@ mod tests {
             head: head.map(Into::into),
             history_op: None,
             undone_by: None,
+            machine: None,
+            slots_used: None,
+            slots_total: None,
         }
     }
 
