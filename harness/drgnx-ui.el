@@ -1084,8 +1084,15 @@ so `drgnx-ui-prepare-run' refuses it — moves on to the next one."
   "Sessions this process started and has not stopped: (NAME . STATE-ROOT), or (:group . RUN) for a test-suite
 session.")
 
-(defun drgnx-ui--own-add (name root) (push (cons name root) drgnx-ui--own))
-(defun drgnx-ui--own-remove (name) (setq drgnx-ui--own (seq-remove (lambda (e) (equal (car e) name)) drgnx-ui--own)))
+(defun drgnx-ui--own-set (own)
+  "Set `drgnx-ui--own' to OWN.  `drgnx-ui--stop-own-on-exit' is on `kill-emacs-hook' exactly while OWN holds an
+entry, so a process that only loads this file (a GUI test's fixture, for the progress clock) leaves no hook behind."
+  (setq drgnx-ui--own own)
+  (if own (add-hook 'kill-emacs-hook #'drgnx-ui--stop-own-on-exit)
+    (remove-hook 'kill-emacs-hook #'drgnx-ui--stop-own-on-exit)))
+
+(defun drgnx-ui--own-add (name root) (drgnx-ui--own-set (cons (cons name root) drgnx-ui--own)))
+(defun drgnx-ui--own-remove (name) (drgnx-ui--own-set (seq-remove (lambda (e) (equal (car e) name)) drgnx-ui--own)))
 
 (defun drgnx-ui--stop-no-block (name root)
   "Tell session NAME's systemd unit (of state ROOT) to stop, without waiting; nothing if it is not this root's unit."
@@ -1105,9 +1112,7 @@ Without it nothing is stopped: `drgnx ui start' sessions are meant to outlive th
         (if (eq (car e) :group) (drgnx-ui--kill-group (cdr e))
           (let ((process-environment (cons (concat "DRGNX_UI_STATE=" (cdr e)) process-environment)))
             (drgnx-ui-stop (car e))))))
-    (setq drgnx-ui--own nil)))
-
-(add-hook 'kill-emacs-hook #'drgnx-ui--stop-own-on-exit)
+    (drgnx-ui--own-set nil)))
 
 (defun drgnx-ui--claim-and-launch (config size root &optional daemon monitors compositor scales)
   "Claim a name in ROOT and launch the session's processes; the session plist.  Unit names are the
@@ -1947,14 +1952,14 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
                                                  extra-env)))
          (cmd (mapconcat #'shell-quote-argument
                          (append (drgnx-ui-env-argv env) (drgnx-ui-compositor-argv sess)) " "))
-         (_ (push (cons :group run) drgnx-ui--own))     ; this process ended meanwhile: its group goes too
+         (_ (drgnx-ui--own-set (cons (cons :group run) drgnx-ui--own)))     ; this process ended meanwhile: its group goes too
          (scope (equal (drgnx-ui-launcher) "systemd"))
          (r (apply #'drgnx-ui--run-with-timeout (or timeout 110)
                    (drgnx-ui--test-run-argv
                     name (or timeout 110) scope
                     (format "echo $$ > %s; exec %s > %s 2>&1" (shell-quote-argument pgid-file) cmd
                             (shell-quote-argument (expand-file-name "session.log" run)))))))
-    (setq drgnx-ui--own (delete (cons :group run) drgnx-ui--own))
+    (drgnx-ui--own-set (delete (cons :group run) drgnx-ui--own))
     (when (eq (car r) 'timeout)
       (drgnx-ui--hang-report sess run)
       (drgnx-ui--kill-group run))

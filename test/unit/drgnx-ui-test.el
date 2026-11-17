@@ -690,7 +690,7 @@ wrong-number-of-arguments (19 rows of this file, once a row loaded the kit)."
 (ert-deftest drgnx-ui/a-test-process-ending-stops-the-sessions-it-started ()
   ;; bin/drgnx check (and the test-* tiers) set DRGNX_UI_STOP_ON_EXIT: a test process that is ended — a
   ;; timeout, C-c — stops its own sessions on the way out; `drgnx ui start' sessions are meant to outlive it
-  (let ((drgnx-ui--own nil) (stopped nil))
+  (let ((drgnx-ui--own nil) (stopped nil) (kill-emacs-hook nil))
     (cl-letf (((symbol-function 'drgnx-ui-stop) (lambda (n) (push (cons n (getenv "DRGNX_UI_STATE")) stopped))))
       (drgnx-ui--own-add "drgnx-ui-7-00000a" "/tmp/root-a")
       (let ((process-environment (cons "DRGNX_UI_STOP_ON_EXIT" process-environment)))   ; unset
@@ -699,14 +699,16 @@ wrong-number-of-arguments (19 rows of this file, once a row loaded the kit)."
       (let ((process-environment (cons "DRGNX_UI_STOP_ON_EXIT=1" process-environment)))
         (drgnx-ui--stop-own-on-exit)
         (should (equal stopped '(("drgnx-ui-7-00000a" . "/tmp/root-a")))))))     ; in the root it was started in
-  (let ((drgnx-ui--own nil))
+  (let ((drgnx-ui--own nil) (kill-emacs-hook nil))
     (drgnx-ui--own-add "drgnx-ui-8-00000a" "/tmp/r")
+    (should (memq #'drgnx-ui--stop-own-on-exit kill-emacs-hook))                 ; the exit hook only while one is owned
     (drgnx-ui--own-remove "drgnx-ui-8-00000a")                                   ; a session stopped normally is forgotten
-    (should-not drgnx-ui--own)))
+    (should-not drgnx-ui--own)
+    (should-not (memq #'drgnx-ui--stop-own-on-exit kill-emacs-hook))))
 
 (ert-deftest drgnx-ui/ending-stops-all-own-units-without-blocking-before-it-waits ()
   ;; CHK-2: the stops run side by side — one slow session cannot use up the grace the others need
-  (let ((drgnx-ui--own nil) (events nil))
+  (let ((drgnx-ui--own nil) (events nil) (kill-emacs-hook nil))
     (cl-letf (((symbol-function 'drgnx-ui-stop) (lambda (n) (push (list 'stop n) events)))
               ((symbol-function 'drgnx-ui--unit-owned-p) (lambda (n run) (and (string-suffix-p n run) t)))
               ((symbol-function 'drgnx-ui--run) (lambda (&rest args) (push (cons 'run args) events) (cons 0 ""))))
