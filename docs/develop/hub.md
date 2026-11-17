@@ -3133,7 +3133,9 @@ The Outline section's rows: the definitions of the file in the editor, built by 
   the hub can read, such as a buffer without one or a remote file), outlines it and answers `true` once its model and
   rows have gone. The editor sends it when the file it shows changes and after a save, never per keystroke.
 - **The text.** The editor's own text of the file where the edit history tracks the buffer (unsaved typing included,
-  from the mirror Search already reads), else the file on disk. An edit the history takes for a shown file outlines it
+  from the mirror Search already reads), else the file on disk. A buffer that has sent nothing since it registered
+  reads the disk too: it is unmodified then (a modified one is resynced at once), while the history's document still
+  holds the base commit's text, none for a file in no commit (`editor::mirror_of`). An edit the history takes for a shown file outlines it
   again once the edits pause for 500 ms of the hub's clock (`QUIET`); an answer for an ask a later one replaced is
   dropped.
 - **The size guard.** One check, `too_large` (`OUTLINE_MAX`, 1 MiB, the Lisp Outline's limit), on both paths: a text or

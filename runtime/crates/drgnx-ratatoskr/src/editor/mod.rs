@@ -642,8 +642,9 @@ pub(crate) fn mirror_lines(front: &Front, file: &str) -> Option<marks::Lines> {
 }
 
 /// The text and version of the editor's tracked buffer of FILE (the history's mirror: unsaved typing included, the
-/// version the last batch or resync carried); none when its project's history is not open or no buffer of it is
-/// tracked.  The editor sends nothing of the text.
+/// version the last batch or resync carried); none when its project's history is not open, no buffer of it is
+/// tracked, or the buffer has sent nothing since it registered (its text is the disk's).  The editor sends nothing of
+/// the text.
 pub(crate) async fn mirror_of(front: &Front, file: &str) -> Option<(String, u64)> {
     let hubs = front.core.history.clone();
     let file = file.to_string();
@@ -655,8 +656,14 @@ pub(crate) async fn mirror_of(front: &Front, file: &str) -> Option<(String, u64)
             .to_string_lossy()
             .into_owned();
         let (hub, tree) = hubs.open_of(&top)?;
-        let text = hub.mirror_text(&tree, &rel).ok().flatten()?;
         let version = hub.mirror_version(&tree, &rel).ok().flatten()?;
+        // version 0: nothing from the editor since it registered the buffer, which is then the file on disk (a
+        // modified one is resynced at once); the document still holds the base commit's text (none for a file in no
+        // commit), so the caller reads the disk
+        if version == 0 {
+            return None;
+        }
+        let text = hub.mirror_text(&tree, &rel).ok().flatten()?;
         Some((text, version))
     })
     .await

@@ -2894,14 +2894,21 @@ palette's child frame is not judged, one under any other child frame is an error
       (let* ((ws (drgnx-look-scene--scrollbar-windows))
              (root (seq-filter (lambda (w) (not (frame-parent (window-frame w)))) ws))
              (with (and (fboundp 'glitnir-snapshot) root (drgnx-uitest-snapshot)))
-             (specs (mapcar (lambda (w) (cons w (window-parameter w 'glitnir-ruler))) root))
+             ;; the strip and an open minimap (the strip widened over the text) both go for the snapshot without:
+             ;; a minimap left on would cover the strip's rect in both and read as a strip that draws nothing
+             (specs (mapcar (lambda (w) (list w (window-parameter w 'glitnir-ruler) (window-parameter w 'glitnir-minimap)))
+                            root))
              without)
         (when with
           (unwind-protect
-              (progn (dolist (s specs) (set-window-parameter (car s) 'glitnir-ruler nil))
+              (progn (dolist (s specs)
+                       (set-window-parameter (car s) 'glitnir-ruler nil)
+                       (set-window-parameter (car s) 'glitnir-minimap nil))
                      (drgnx-look-scene--settle-frame)
                      (setq without (drgnx-uitest-snapshot)))
-            (dolist (s specs) (set-window-parameter (car s) 'glitnir-ruler (cdr s)))
+            (dolist (s specs)
+              (set-window-parameter (car s) 'glitnir-ruler (nth 1 s))
+              (set-window-parameter (car s) 'glitnir-minimap (nth 2 s)))
             (drgnx-look-scene--settle-frame)))
         (dolist (w ws)
           (let* ((spec (window-parameter w 'glitnir-ruler))
@@ -2974,14 +2981,29 @@ pointer's dwell is the GUI rows' to judge, `:open' stands for it here) once the 
   (drgnx-look-scene--theme theme)
   (drgnx-look-scene--editor)
   (drgnx-look-scene--try "minimap-hover"
+    ;; the labels are the scenes' hub's, read with the Rust pack's grammar: a hub with none labels nothing
+    (unless (getenv "DRGNX_PACK_LOCK")
+      (error "No pack grammars for the hub: DRGNX_PACK_LOCK and DRGNX_PACK_GRAMMARS (test/packs/hub-grammars.sh)"))
+    (drgnx-look-scene--hub)
     (let ((f (expand-file-name "runtime/src/parser.rs" drgnx-look-scene--project)))
       (unless (file-exists-p f)
         (make-directory (file-name-directory f) t)
         (write-region (drgnx-look-scene--parser-rs) nil f nil 'silent)))
     (drgnx-look-scene--goto "runtime/src/parser.rs" 812 4 800)
     (let* ((w (selected-window)) (file (drgnx-minimap--file (window-buffer w))))
-      (drgnx-look-scene--until 20 "minimap labels"
-                               (lambda () (and file (nidhogg-view-minimap 'get file "labels"))))
+      ;; `get' answers (VERSION COUNT): the file's 50 definitions (5 structs, 5 impls, 40 functions), not just an answer
+      (unless (drgnx-look-scene--until 20 "minimap labels"
+                                       (lambda () (>= (or (cadr (and file (nidhogg-view-minimap 'get file "labels"))) 0)
+                                                      50)))
+        (push (format "minimap-hover: labels for %s: %S; the hub said: %s" file
+                      (and file (nidhogg-view-minimap 'get file "labels"))
+                      (let ((b (get-buffer " *ratatoskr*")))
+                        (if b (with-current-buffer b
+                                (string-join (seq-filter (lambda (l) (string-match-p "pack\\|grammar\\|minimap\\|outline\\|WARN\\|ERROR" l))
+                                                         (split-string (buffer-string) "\n"))
+                                             " | "))
+                          "no hub buffer")))
+              drgnx-look-scene--errors))
       ;; the spec is placed again whenever the strip is (a window change): the window is marked and every placing
       ;; adds `:open'
       (set-window-parameter w 'drgnx-look-scene-minimap-open t)
