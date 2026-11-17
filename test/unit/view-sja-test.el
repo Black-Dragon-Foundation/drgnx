@@ -31,16 +31,17 @@
   "Row KEY with TEXT and MORE (`:runs', `:props', ...), as the hub writes it."
   (append (list :key key :text text) more))
 
-(cl-defun view-sja-test--push (view ops &key (base 0) (version 1) styles)
+(cl-defun view-sja-test--push (view ops &key (base 0) (version 1) styles model)
   "A row patch of VIEW (OPS: a list of op plists) from BASE to VERSION, on the hub's `view-model' line; returns Sjá's
-decision."
+decision.  MODEL: the model version the patch names (applied with it)."
   (drgnx-view-model-line
    (json-serialize
     (list :event "view-model"
           :data (list :view view
                       :rows (append (list :view view :class "c" :hub 7 :base base :version version :env_epoch 0
                                           :ops (vconcat (mapcar (lambda (op) (view-sja-test--op op)) ops)))
-                                    (and styles (list :styles (vconcat styles)))))))))
+                                    (and styles (list :styles (vconcat styles)))
+                                    (and model (list :model model))))))))
 
 (defun view-sja-test--op (op)
   "OP with its rows as JSON arrays."
@@ -298,5 +299,84 @@ decision."
       (should (equal (drgnx-view-nav--sja-spans "n1") '((11 . 14)))))))
 
 (defface drgnx-view-sja-test-chip '((t :box t)) "A boxed run, for the tests.")
+
+;;;; The selection: the whole row (kit Task 10)
+
+(require 'drgnx-view-nav)
+
+(defconst view-sja-test--model
+  (concat "{\"ops\":[{\"reset\":{\"descriptor\":{\"scheme\":\"links\",\"chain_kinds\":[\"link\"],"
+          "\"match_fields\":[\"label\"],\"lists\":[\"all\"],\"classes\":[\"selected\"],\"start\":\"all\"},"
+          "\"nodes\":[{\"id\":\"n1\",\"kind\":\"row\",\"nav\":{\"down\":\"n2\"},\"fields\":[[\"label\",\"a\"]]},"
+          "{\"id\":\"n2\",\"kind\":\"row\",\"nav\":{\"up\":\"n1\"},\"fields\":[[\"label\",\"b\"]]}],"
+          "\"edges\":[],\"lists\":[{\"name\":\"all\",\"ids\":[\"n1\",\"n2\"]}]}}]}")
+  "Two list rows, n1 above n2, with the class `selected'.")
+
+(defun view-sja-test--list (view)
+  "VIEW's model and its two rows: n1 \"name chip Accept\" (a chip and a button boxed, its id over the whole row)
+and n2 \"other\"."
+  (drgnx-view-model-event (list :view view :hub 7 :base 0 :version 1 :reset t :model view-sja-test--model))
+  (view-sja-test--push
+   view (list (list :reset (list (view-sja-test--row "a" "name chip Accept"
+                                                     :runs [[5 9 "drgnx-view-sja-test-chip"]
+                                                            [10 16 "drgnx-view-sja-test-chip"]]
+                                                     :props [[0 16 "drgnx-work-id" "n1"]])
+                                 (view-sja-test--row "b" "other" :props [[0 5 "drgnx-work-id" "n2"]]))))
+   :model 1)
+  (view-sja-test--text))
+
+(ert-deftest rows-sja/the-selection-is-its-whole-row-chips-and-all ()
+  "Pattern D: on a terminal the selected list row is one overlay from its first character past its newline, over its
+chip and button too (no hole, no edge where a boxed run starts); moved, the old row keeps none."
+  (view-sja-test--with
+    (switch-to-buffer buf)
+    (view-sja-test--list view)
+    (should (equal "n1" (drgnx-view-nav 'select "n1")))
+    (let ((ovs (cl-remove-if-not (lambda (o) (eq (overlay-get o 'face) 'drgnx-view-selected))
+                                 (overlays-in (point-min) (point-max)))))
+      (should (= 1 (length ovs)))
+      (should (equal (cons (overlay-start (car ovs)) (overlay-end (car ovs)))
+                     (cons (point-min) (+ (point-min) 17)))))
+    (should (equal "n2" (drgnx-view-nav 'select "n2")))
+    (let ((ovs (cl-remove-if-not (lambda (o) (eq (overlay-get o 'face) 'drgnx-view-selected))
+                                 (overlays-in (point-min) (point-max)))))
+      (should (equal (mapcar (lambda (o) (cons (overlay-start o) (overlay-end o))) ovs)
+                     (list (cons (+ (point-min) 17) (+ (point-min) 23))))))))
+
+(ert-deftest rows-sja/the-selection-block-is-per-window ()
+  "Pattern D: where Glitnir draws, the selected row is a `row' block of each window that shows the view: the full
+selection in the selected window, the inactive one in the other; the buffer gone, no window keeps it."
+  (view-sja-test--with
+    (switch-to-buffer buf)
+    (delete-other-windows)
+    (let ((other (split-window)))
+      (set-window-buffer other buf)
+      (cl-letf (((symbol-function 'drgnx-view-nav-selection-style) (lambda () 'block))
+                ;; the faces' backgrounds, which the blocks are filled with (unthemed in batch)
+                ((symbol-function 'face-background)
+                 (lambda (face &rest _) (pcase face ('drgnx-selected "#102030") ('drgnx-selected-inactive "#405060")))))
+        (view-sja-test--list view)
+        (should (equal "n1" (drgnx-view-nav 'select "n1")))
+        (let ((b (car (window-parameter (selected-window) 'glitnir-blocks)))
+              (o (car (window-parameter other 'glitnir-blocks))))
+          (should (eq 'row (car b)))
+          (should (equal (list (marker-position (nth 1 b)) (marker-position (nth 2 b)))
+                         (list (point-min) (+ (point-min) 17))))
+          (should (equal "#102030" (plist-get (nthcdr 3 b) :fill)))
+          (should (equal "#405060" (plist-get (nthcdr 3 o) :fill))))
+        ;; no class overlay draws it besides
+        (should-not (cl-find 'drgnx-view-selected (overlays-in (point-min) (point-max))
+                             :key (lambda (o) (overlay-get o 'face))))
+        (select-window other)
+        (run-hook-with-args 'window-selection-change-functions other)
+        (should (equal "#102030" (plist-get (nthcdr 3 (car (window-parameter other 'glitnir-blocks))) :fill)))
+        (view-sja-test--sel-clear buf)
+        (should-not (window-parameter other 'glitnir-blocks))
+        (should-not (window-parameter (next-window other) 'glitnir-blocks)))
+      (delete-window other))))
+
+(defun view-sja-test--sel-clear (buf)
+  "What killing BUF does to the selection's blocks (`drgnx-view-nav--sel-clear')."
+  (with-current-buffer buf (drgnx-view-nav--sel-clear)))
 
 ;;; view-sja-test.el ends here
