@@ -106,8 +106,10 @@ again, **Toggle Fold** does whichever applies. Fold on a line already folded fol
   its first line.
 - Searching (`C-s`, the Find widget's isearch) opens a fold it passes through.
 
-Where blocks come from (`drgnx-fold-source`): in code, indentation — a line and the lines after it indented deeper, as
-VS Code's indentation folding; in Markdown, headings (each to the next heading of its level or above); in a notebook,
+Where blocks come from (`drgnx-fold-source`): in code with a tree-sitter mode, the syntax tree, by the language pack's
+fold query — functions, classes, comments, imports, tests and blocks as the language has them, kept current as you type
+(a pack without its own fold query folds its definitions); in other code, indentation — a line and the lines after it
+indented deeper, as VS Code's indentation folding; in Markdown, headings (each to the next heading of its level or above); in a notebook,
 its cells; Org folds its own headings (Fold, Unfold, Toggle Fold, Fold All, Unfold All and Fold Level act on them). `indent`
 uses indentation everywhere, `off` leaves only the folds you make. `drgnx-fold-summary` sets what a folded line shows
 (`full`, `lines`, or an ellipsis); `drgnx-fold-max` caps the blocks a file keeps (20,000; the smallest go first). The

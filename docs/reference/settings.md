@@ -933,8 +933,9 @@ The most fold ranges a buffer keeps (the smallest go first past it), as VS Code'
 
 ## drgnx-fold-source
 
-Where fold ranges come from: `auto', the best source the buffer has (Markdown headings, notebook cells, else
-indentation; Org folds its own headings); `indent', indentation always; `off', no folding but manual folds.
+Where fold ranges come from: `auto', the best source the buffer has (Markdown headings, notebook cells, the
+buffer's tree-sitter parser through its language pack's fold query, else indentation; Org folds its own headings);
+`indent', indentation always; `off', no folding but manual folds.
 
 | Key | Value |
 | --- | --- |
