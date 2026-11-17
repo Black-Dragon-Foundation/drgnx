@@ -28,15 +28,12 @@
 (declare-function nidhogg-lines-set-folds "nidhogg-lines" (buffer source folds &optional max))
 (declare-function nidhogg-lines-set-fold-sources "nidhogg-lines" (buffer indent heading-regexp))
 (declare-function nidhogg-lines-set-hidden "nidhogg-lines" (buffer ranges))
+(declare-function drgnx-packs-language-dir "drgnx-packs" (language))
 (declare-function nidhogg-treesit-refold "treesit.c" (parser))
 (declare-function treesit-parser-list "treesit.c" (&optional buffer language tag))
 (declare-function treesit-parser-language "treesit.c" (parser))
 (declare-function treesit-parser-root-node "treesit.c" (parser))
 (declare-function treesit-query-compile "treesit.c" (language query &optional eager))
-(declare-function drgnx-packs-builtins "drgnx-packs")
-(declare-function drgnx-packs-builtin-dir "drgnx-packs")
-(declare-function drgnx-packs-active "drgnx-packs")
-(declare-function drgnx-packs-read-manifest "drgnx-packs" (file))
 (defvar nidhogg-treesit-fold-query)
 (defvar treesit-primary-parser)
 (declare-function org-back-to-heading "org" (&optional invisible-ok))
@@ -138,26 +135,12 @@ class; any other a block).  The other captures fold nothing (Nidhogg folds only 
              (t "@fold"))))
    tags t t))
 
-(defun drgnx-fold--pack-dir (language)
-  "The folder of the language pack whose main grammar is LANGUAGE (a symbol): a built-in pack's, else an installed
-one's (`drgnx-packs-active'); nil when no pack has it."
-  (when (require 'drgnx-packs nil t)
-    (let ((main (lambda (m) (plist-get (seq-find (lambda (g) (plist-get g :required)) (plist-get m :grammars)) :name))))
-      (or (when-let* ((p (seq-find (lambda (p) (eq (funcall main (cdr p)) language))
-                                   (ignore-errors (drgnx-packs-builtins)))))
-            (expand-file-name (car p) (drgnx-packs-builtin-dir)))
-          (seq-some (lambda (p)
-                      (let ((file (plist-get (cdr p) :manifest)))
-                        (and file (eq (funcall main (ignore-errors (drgnx-packs-read-manifest file))) language)
-                             (file-name-directory file))))
-                    (plist-get (drgnx-packs-active) :packs))))))
-
 (defun drgnx-fold--query (language)
   "LANGUAGE's compiled fold query: its pack's `queries/folds.scm', else its `queries/tags.scm' as one
 (`drgnx-fold--tags-query'); nil when it has neither, or it does not compile.  Compiled once a language."
   (let ((q (gethash language drgnx-fold--queries)))
     (unless q
-      (setq q (or (when-let* ((dir (drgnx-fold--pack-dir language)))
+      (setq q (or (when-let* ((dir (and (require 'drgnx-packs nil t) (drgnx-packs-language-dir language))))
                     (let ((folds (expand-file-name "queries/folds.scm" dir))
                           (tags (expand-file-name "queries/tags.scm" dir)))
                       (when-let* ((src (cond ((file-readable-p folds)

@@ -310,4 +310,73 @@ stays."
       (drgnx-ruler--place w)
       (should-not (window-parameter w 'glitnir-minimap)))))
 
+(defun ruler-test--python-grammar-p ()
+  "Whether a python grammar is here (as fold-test.el's: a promised grammar that is not loadable fails)."
+  (when-let* ((dir (getenv "DRGNX_TEST_TS_GRAMMARS")) ((file-directory-p dir)))
+    (add-to-list 'treesit-extra-load-path dir))
+  (let ((here (and (fboundp 'treesit-available-p) (treesit-available-p) (treesit-language-available-p 'python))))
+    (when (and (not here) (or (getenv "DRGNX_TEST_TS_GRAMMARS") (getenv "DRGNX_TEST_TS_REQUIRED")))
+      (ert-fail "a python grammar was promised (DRGNX_TEST_TS_GRAMMARS or DRGNX_TEST_TS_REQUIRED) and is not loadable"))
+    here))
+
+(defvar nidhogg-treesit-highlight-query)
+(declare-function nidhogg-lines-classes "nidhogg-lines" (buffer line))
+(declare-function nidhogg-lines-disable "nidhogg-lines" (&optional buffer))
+
+(ert-deftest drgnx-minimap/a-tree-sitter-buffer-is-coloured-by-class ()
+  "A tree-sitter buffer's minimap colours its bars by class: by its pack's highlights query, else by its own
+font-lock rules' queries that are on; the spec gives each class its standard face, and leaving takes the query away."
+  (skip-unless (and (fboundp 'nidhogg-lines-classes) (ruler-test--python-grammar-p)))
+  (load (expand-file-name "modules/editor/drgnx-minimap" drgnx-dir) nil t)
+  ;; loaded before the lookup is replaced below: a first load inside `cl-letf' would define the real one over it
+  (require 'drgnx-packs)
+  (should (eq (alist-get 'keyword (plist-get (drgnx-minimap--spec (selected-window)) :classes))
+              'font-lock-keyword-face))
+  (let ((dir (make-temp-file "drgnx-pack" t)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "queries" dir))
+          (with-temp-file (expand-file-name "queries/highlights.scm" dir)
+            (insert "(function_definition name: (identifier) @function)\n"))
+          ;; by the pack's query: the function's name only
+          (clrhash drgnx-minimap--queries)
+          (cl-letf (((symbol-function 'drgnx-packs-language-dir) (lambda (_) dir)))
+            (with-temp-buffer
+              (insert "def norm(x):\n    return 1\n")
+              (python-ts-mode)
+              (nidhogg-lines-enable nil t)
+              (drgnx-minimap--highlight)
+              (should (equal (nidhogg-lines-classes nil 0) '((4 4 2))))
+              (should-not (nidhogg-lines-classes nil 1))
+              (nidhogg-lines-disable)))
+          ;; no pack query: python-ts-mode's own rules (`def' and `return' keywords, the name a function, 1 a
+          ;; constant)
+          (clrhash drgnx-minimap--queries)
+          (cl-letf (((symbol-function 'drgnx-packs-language-dir) (lambda (_) nil)))
+            (with-temp-buffer
+              (insert "def norm(x):\n    return 1\n")
+              (python-ts-mode)
+              (nidhogg-lines-enable nil t)
+              (drgnx-minimap--highlight)
+              (should (equal (assoc 0 (nidhogg-lines-classes nil 0)) '(0 3 1)))
+              (should (equal (assoc 4 (nidhogg-lines-classes nil 0)) '(4 4 2)))
+              (should (equal (assoc 4 (nidhogg-lines-classes nil 1)) '(4 6 1)))
+              (should (equal (assoc 11 (nidhogg-lines-classes nil 1)) '(11 1 6)))
+              (drgnx-minimap--off)
+              (should-not (local-variable-p 'nidhogg-treesit-highlight-query))
+              (nidhogg-lines-disable)))
+          ;; rules that are off do not colour: at level 1 the keywords are not on
+          (clrhash drgnx-minimap--queries)
+          (cl-letf (((symbol-function 'drgnx-packs-language-dir) (lambda (_) nil)))
+            (with-temp-buffer
+              (insert "def norm(x):\n    return 1\n")
+              (require 'treesit)
+              (let ((treesit-font-lock-level 1)) (python-ts-mode))
+              (nidhogg-lines-enable nil t)
+              (drgnx-minimap--highlight)
+              (should-not (assoc 0 (nidhogg-lines-classes nil 0)))
+              (should (equal (assoc 4 (nidhogg-lines-classes nil 0)) '(4 4 2)))
+              (nidhogg-lines-disable))))
+      (delete-directory dir t))))
+
 ;;; ruler-test.el ends here
