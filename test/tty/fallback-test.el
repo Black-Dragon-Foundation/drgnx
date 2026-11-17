@@ -184,7 +184,10 @@ so no stage rebinds it; the module stages are over first all the same."
       ;; and the next F6 p is the palette again
       (drgnx-tty-session-send c (concat f6 "p"))
       (drgnx-tty-keys-test--ran s 'drgnx-palette "C-S-p")
-      (drgnx-tty-keys-test--quit s c 'legacy))))
+      (drgnx-tty-keys-test--quit s c 'legacy)
+      ;; F6 Shift+Tab : Ctrl+Shift+Tab (the terminal sends Shift+Tab's ESC [ Z for both, so F6 is its way in)
+      (drgnx-tty-session-send c (concat f6 "\e[Z"))
+      (drgnx-tty-keys-test--ran s 'drgnx-chrome-recent-editor-up "C-S-<tab>"))))
 
 (ert-deftest drgnx-tty-fallback/the-hint-waits-while-f6-waits ()
   ;; the hint's timer comes due while F6 waits for its key: the prompt stays, and the hint is said once the key is in.
