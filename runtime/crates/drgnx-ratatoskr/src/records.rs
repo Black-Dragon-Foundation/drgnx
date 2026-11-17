@@ -176,8 +176,50 @@ fn discover(root: &Path, only: Option<RecordKind>) -> Vec<Found> {
             out.push(found(p, kind));
         }
     }
+    // the sdd ledgers, `.superpowers/sdd/<name>/progress.md`, anywhere under the root (not in a build or vendor folder)
+    let mut sdd = Vec::new();
+    walk_sdd(root, 8, &mut sdd);
+    sdd.sort();
+    out.extend(sdd.into_iter().map(|p| found(p, RecordKind::Ledgers)));
     out.retain(|f| only.is_none_or(|o| o == f.kind));
     out
+}
+
+/// The folders the scan never enters.
+const SKIP: &[&str] = &[
+    ".git",
+    "node_modules",
+    "eln-cache",
+    "elpa",
+    "target",
+    "dist",
+    "build",
+];
+
+/// Every `.superpowers/sdd/<name>/progress.md` under DIR, at most DEPTH folders down (links are not followed).
+fn walk_sdd(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let Ok(t) = e.file_type() else { continue };
+        if !t.is_dir() {
+            continue;
+        }
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if name == ".superpowers" {
+            if let Ok(subs) = std::fs::read_dir(e.path().join("sdd")) {
+                out.extend(
+                    subs.flatten()
+                        .map(|s| s.path().join("progress.md"))
+                        .filter(|p| p.is_file()),
+                );
+            }
+        } else if depth > 0 && !SKIP.contains(&&*name) {
+            walk_sdd(&e.path(), depth - 1, out);
+        }
+    }
 }
 
 fn civil(days: i64) -> (i64, u32, u32) {
@@ -952,19 +994,79 @@ impl Views {
     }
 }
 
-/// The plan file and its ledger when PATH is either (`X.md` and `X.ledger.md`).
+/// The first line of a `.superpowers/sdd/<plan>/progress.md` ledger names its plan: `# SDD ledger — plan: NAME`.
+const SDD_FIRST: &str = "# SDD ledger — plan: ";
+
+/// Whether PATH is `.../.superpowers/sdd/<name>/progress.md`.
+fn is_sdd_progress(path: &Path) -> bool {
+    if path.file_name().and_then(|n| n.to_str()) != Some("progress.md") {
+        return false;
+    }
+    let parts: Vec<_> = path.components().map(|c| c.as_os_str()).collect();
+    parts
+        .windows(2)
+        .any(|w| w[0] == ".superpowers" && w[1] == "sdd")
+}
+
+/// The plan file the sdd ledger LEDGER names on its first line: absolute, or relative to the ledger's folder or one of
+/// its ancestors (the repository, or the nearest folder holding `docs/`: the first that exists), never to the scanning
+/// process's folder.  None when it names none that exists.
+fn sdd_plan_named_by(ledger: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(ledger).ok()?;
+    let name = text.lines().next()?.strip_prefix(SDD_FIRST)?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let named = Path::new(name);
+    if named.is_absolute() {
+        return named.is_file().then(|| named.to_path_buf());
+    }
+    ledger
+        .parent()?
+        .ancestors()
+        .map(|a| a.join(named))
+        .find(|c| c.is_file())
+}
+
+/// The sdd ledger that names the plan PLAN: `.superpowers/sdd/*/progress.md` of the plan's folder or an ancestor.
+fn sdd_ledger_of(plan: &Path) -> Option<PathBuf> {
+    for a in plan.parent()?.ancestors() {
+        let Ok(dirs) = std::fs::read_dir(a.join(".superpowers/sdd")) else {
+            continue;
+        };
+        let mut found: Vec<PathBuf> = dirs
+            .flatten()
+            .map(|d| d.path().join("progress.md"))
+            .filter(|p| p.is_file() && sdd_plan_named_by(p).as_deref() == Some(plan))
+            .collect();
+        found.sort();
+        if let Some(l) = found.into_iter().next() {
+            return Some(l);
+        }
+    }
+    None
+}
+
+/// The plan file and its ledger when PATH is either (`X.md` and `X.ledger.md`, or a plan and the
+/// `.superpowers/sdd/*/progress.md` that names it, or such a ledger).
 fn plan_and_ledger(path: &Path) -> Option<(PathBuf, PathBuf)> {
+    if is_sdd_progress(path) {
+        return Some((sdd_plan_named_by(path)?, path.to_path_buf()));
+    }
     let name = path.file_name()?.to_str()?;
-    let stem = name.strip_suffix(".ledger.md").or_else(|| {
+    let beside = name.strip_suffix(".ledger.md").or_else(|| {
         let s = name.strip_suffix(".md")?;
         path.with_file_name(format!("{s}.ledger.md"))
             .is_file()
             .then_some(s)
-    })?;
-    Some((
-        path.with_file_name(format!("{stem}.md")),
-        path.with_file_name(format!("{stem}.ledger.md")),
-    ))
+    });
+    match beside {
+        Some(stem) => Some((
+            path.with_file_name(format!("{stem}.md")),
+            path.with_file_name(format!("{stem}.ledger.md")),
+        )),
+        None => Some((path.to_path_buf(), sdd_ledger_of(path)?)),
+    }
 }
 
 /// What the plan's ledger says of each of its tasks, kept on the task as `data.ledger` (`done`, `commits` as written,
@@ -2308,6 +2410,45 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+
+    /// The scan's other ledger: `.superpowers/sdd/<plan>/progress.md`, named for its plan by its first line (a path
+    /// relative to the repository, here the project root).  Found by the import, it marks its plan's tasks as a
+    /// `X.ledger.md` beside the plan does (the Lisp scan's `drgnx-work--classify` and `drgnx-work--ledger-plan`).
+    #[tokio::test]
+    async fn an_sdd_progress_ledger_is_named_for_its_plan_by_its_first_line() {
+        let f = fix();
+        let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [x] b\n";
+        let pp = f.root.join("docs/plans/drgnx/pair.md");
+        std::fs::write(&pp, plan).unwrap();
+        let dir = f.root.join(".superpowers/sdd/pair");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("progress.md"),
+            "# SDD ledger — plan: docs/plans/drgnx/pair.md\nTask 1: complete (commit abc1234, tests ok)\n",
+        )
+        .unwrap();
+        // a progress.md outside .superpowers/sdd is no ledger
+        std::fs::create_dir_all(f.root.join("notes")).unwrap();
+        std::fs::write(
+            f.root.join("notes/progress.md"),
+            "# SDD ledger — plan: docs/plans/drgnx/pair.md\nTask 2: complete (commit 1234567)\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let one: Value = serde_json::from_str(&ledger_of(&f, "1").await).unwrap();
+        assert_eq!(one["done"], true, "{one}");
+        assert_eq!(one["commits"], json!(["abc1234"]));
+        assert!(
+            one["file"]
+                .as_str()
+                .unwrap()
+                .ends_with(".superpowers/sdd/pair/progress.md"),
+            "{one}"
+        );
+        assert_eq!(ledger_of(&f, "2").await, "none");
+        // the plan's text is untouched
+        assert_eq!(std::fs::read_to_string(&pp).unwrap(), plan);
     }
 
     #[tokio::test]
