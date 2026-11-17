@@ -151,6 +151,23 @@ choice of two nobody has."
             (should-not (seq-filter (lambda (p) (string-prefix-p "drgnx-podman" (process-name p))) (process-list)))))
       (delete-directory bin t))))
 
+(ert-deftest drgnx-remote/containers-read-the-answer-of-a-fast-podman ()
+  "A podman that has exited before it is first looked at: its exit is known, its output not yet read.  The names are
+still the answer, never nil."
+  :tags '(:timing)
+  (let* ((sleep (executable-find "sleep"))                                    ; found before the PATH below hides it
+         (bin (make-temp-file "drgnx-podman" t))
+         (exec-path (list bin)) (process-environment (cons (concat "PATH=" bin) process-environment))
+         ;; after the start, a pause that reads nothing: the fake ends meanwhile and Emacs learns of its exit
+         (late (lambda (proc) (call-process sleep nil nil nil "0.3") proc)))
+    (unwind-protect
+        (progn
+          (drgnx-remote-test--script bin "podman" "printf 'web\\ndb\\n'")
+          (advice-add 'make-process :filter-return late)
+          (should (equal (drgnx-remote-containers) '("web" "db"))))
+      (advice-remove 'make-process late)
+      (delete-directory bin t))))
+
 ;;;; Open Remote…
 
 (ert-deftest drgnx-remote/open-sets-the-root ()
