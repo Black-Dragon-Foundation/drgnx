@@ -568,6 +568,10 @@ as a prompt.
 
 A frame cannot gain or lose its minibuffer, so turning the echo box on or off (`drgnx-look-echo-row`) replaces each
 graphical frame with one like it: the same windows, buffers, points, window and frame parameters, size and selection.
+The windows go in by `window-state-put` while the new frame may not have the old one's size yet, so they are shared
+out by their normal sizes, which the swap first sets from the saved pixel sizes (`drgnx-look-echo--normal-sizes`):
+Emacs's own can be stale after pixel-wise resizes (a folded dock section was saved with a negative one), and the put
+then fails ("Cannot resize window").
 `drgnx-frame-replaced-functions` runs with OLD and NEW after NEW is up and before OLD is deleted. Whoever keeps a frame
 or a window in a variable moves it there (`drgnx-frame-replaced-window` finds a window's counterpart in NEW) or lets
 it go, from its module's setup through `drgnx-module-hook`, so the teardown removes it. The main window stays main
@@ -3424,11 +3428,12 @@ named by its main window (`drgnx-grid-tile-main`).
   unstack or a split (`drgnx-grid-split-tile`, the groups' split) changes nothing and says "No room there"; the
   automatic placements fall back to their dock instead. A move first pushes the grid (`drgnx-grid-push` `move`); a
   docked tile moved or swapped loses `drgnx-tile-dock`. The pane backend's `:move` and `:stack` are these.
-- **Drag and drop** (`drgnx-grid--drag`, while `drgnx-grid-drag`): `down-mouse-1` on the grip (`drgnx-grid--grip`,
+- **Drag and drop** (`drgnx-grid--drag`, while `drgnx-grid-drag`): `down-mouse-1` on the grip (`drgnx-grid--grip`: the kit's `grip-vertical` glyph through `drgnx-face-glyph`, ASCII `::` on a non-UTF-8 terminal;
   map `drgnx-grid-grip-map` on the tab line and the header line) starts it: on a tool tile's row (`drgnx-grid--tab-row`),
   a docked area's (`drgnx-area--tab-row`, its header line) and an editor's (`drgnx-chrome--grip`, the row's leading
-  room). A press on a tool tile's tab (`drgnx-grid--tab-press`) is a click when released on the row, else a drag of
-  that kind (`drgnx-grid--drag-source` unstacks it first). The loop reads events under `track-mouse`; each movement
+  room). A press on a tab (`drgnx-grid-tab-press`: a tool tile's, from `drgnx-grid--tab-press`, or an editor's, from
+  `drgnx-chrome--tab-press` with its buffer) is a click when released on the row, else a drag of that kind or buffer
+  (`drgnx-grid--drag-source` unstacks it into a tile of its own first when it is one of several tabs). The loop reads events under `track-mouse`; each movement
   finds the tile and zone (`drgnx-grid-drop-target`, `drgnx-grid-zone`) and replaces only that tile's row line
   (`drgnx-grid--row-param`: the tab line, or a docked area's header line) with "⤓ drop: …" (face `drgnx-grid-drop`);
   the release calls `drgnx-grid--drop` → `drgnx-grid-move`; Esc or `C-g` cancels; the row comes back in an
@@ -4086,7 +4091,9 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   that skipped by name (`  SKIP NAME`), so a green tier shows what it did not run.
 - **A frame resized.** The GUI sessions' root frame is fullscreen, and a fullscreen frame keeps its output's size: a
   `set-frame-size` there does nothing, and a row that checked the windows after it passed on the size it had. A row
-  that resizes leaves fullscreen first with `(drgnx-test-frame-fullscreen FRAME nil)` (it waits until the size holds
+  that resizes leaves fullscreen first with `(drgnx-test-frame-fullscreen FRAME nil)` (on Nidhogg's shell it first
+  waits for the compositor's answer, `nhwl--frame-states` without `fullscreen`, since a resize asked before that is
+  dropped and a loaded machine can paint the old size twice first; then it waits until the size holds
   over presented frames, not for it to change: a frame with no bars leaves fullscreen maximized at the size it had,
   and returns the state to put back), then resizes with `(drgnx-test-frame-text-size FRAME WIDTH HEIGHT)`,
   which fails the test unless the text size took (within a character) and still holds over presented frames (a late
