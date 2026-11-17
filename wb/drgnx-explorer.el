@@ -30,7 +30,7 @@
 (require 'drgnx-git)
 (require 'drgnx-timer)
 (require 'drgnx-file-stream)
-(defvar drgnx-view-env-right-reserve)
+(defvar drgnx-view-env-tail)
 (require 'drgnx-quick-open)                ; Find's rows from the hub (`search/files')
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
@@ -1001,13 +1001,14 @@ The marks and colours of an ordinal are the display's: who is here (tools/agents
 (defun drgnx-explorer--rows-tail (key beg eol)
   "Give KEY's drawn row (BEG to EOL) its tail at the right edge, its overlay moved rather than made again: the ⋯
 control and the hover, and the git mark of the status the hub put on the name (a file's letter, ● for a folder with
-changes inside)."
+changes inside).  A row whose name reaches the ⋯'s place (`drgnx-row-tail-short', from the hub) leaves it out."
   (let* ((status (and (< beg eol) (intern-soft (get-text-property (1- eol) 'drgnx-git-status))))
          (status (and (assq status drgnx-git--looks) status))
          (mark (and status (if (and (not (memq status '(ignored untracked)))
                                     (eql 1 (drgnx-view-nav-field "dir" key)))
                                "●" (drgnx-git-letter status))))
-         (o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) nil
+         (o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status))
+                                       (and (< beg eol) (get-text-property beg 'drgnx-row-tail-short) 'none)
                                        (gethash key drgnx-explorer--tails))))
     (overlay-put o 'evaporate t)
     (puthash key o drgnx-explorer--tails)))
@@ -1125,8 +1126,8 @@ Explorer buffer's: the twin's kill leaves them."
     (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)
     (drgnx-explorer--wait-for-hub)
     (require 'drgnx-view-env)
-    ;; each row's tail is drawn from the window's right edge: the hub fits the rows short of it
-    (setq-local drgnx-view-env-right-reserve #'drgnx-wb-tail-reserve)
+    ;; each row's tail is drawn from the window's right edge: the hub ends a row's text short of what it draws
+    (setq-local drgnx-view-env-tail #'drgnx-wb-tail-px)
     (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--rows-subscribe)
     (drgnx-explorer--rows-subscribe)))
 

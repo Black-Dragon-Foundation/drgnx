@@ -46813,6 +46813,27 @@
             "format": "float",
             "type": "number"
           },
+          "tail": {
+            "description": "Where the editor draws a row's tail after its text (`drgnx-wb-row-tail`: the Explorer's, the Buffers panel's),\n`[mark, control]` px (a terminal's: columns) from the window's right edge: the start of its git mark and of its\ncontrol. The rows a view gives a tail keep their text short of what it always draws\n(`drgnx_rows::fit_row::Room::tail`). None: the view's rows get no tail.",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            ],
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "tty_widths": {
             "default": [],
             "description": "`[from, to, width]`: the terminal's character widths that differ from Unicode's.",

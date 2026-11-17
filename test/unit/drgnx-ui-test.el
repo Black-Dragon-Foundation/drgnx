@@ -48,7 +48,30 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                       (drgnx-ui-session-env s)))
       (drgnx-ui-stop "drgnx-ui-1-00000a")
       (should-not (file-exists-p (file-name-directory (plist-get s :socket))))
-      (should-not (file-exists-p (drgnx-ui-socket-dir "" deep))))))   ; the per-root dir, once empty
+      ;; the shared per-root dir stays: another process may be starting a session in it
+      (should (file-directory-p (drgnx-ui-socket-dir "" deep))))))
+
+(ert-deftest drgnx-ui/a-session-starts-while-another-removes-the-shared-dir ()
+  ;; sessions start and stop from several processes at once: a stop that removed the per-root socket dir once it was
+  ;; empty could fall between another start's making of that dir and the making of its own in it (2026-11-17, kwin:
+  ;; "Creating directory: No such file or directory", exit 255).  A stop leaves the shared dir in place.
+  (drgnx-ui-test--with-state
+    (let* ((shared (drgnx-ui-socket-dir "" root))
+           (real (symbol-function 'make-directory))
+           (stopped nil))
+      (drgnx-ui-prepare-run "drgnx-ui-1-00000c" nil nil root)   ; the session that stops
+      (cl-letf (((symbol-function 'make-directory)
+                 (lambda (dir &optional parents)
+                   (when (and (not stopped) (equal (file-name-directory (directory-file-name dir))
+                                                   (file-name-as-directory shared)))
+                     (setq stopped t)
+                     (drgnx-ui-stop "drgnx-ui-1-00000c"))   ; the other process's stop, at that moment
+                   (funcall real dir parents))))
+        (let ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000b" nil nil root)))
+          (should stopped)
+          (should (file-directory-p (file-name-directory (plist-get s :socket))))
+          (should (= (file-modes shared) #o700))
+          (delete-directory (file-name-directory (plist-get s :socket)) t))))))
 
 (ert-deftest drgnx-ui/socket-dirs-differ-between-state-roots ()
   (drgnx-ui-test--with-state
@@ -924,15 +947,37 @@ wrong-number-of-arguments (19 rows of this file, once a row loaded the kit)."
       (should (member "DRGNX_TEST_SELECTOR=\"^drgnx-scn/\"" env))
       (should (member "DRGNX_SCENARIO_CONFIG=minimal" env)))))
 
-(defun drgnx-ui-test--file-sessions-here (files _jobs out-dir)
+(defun drgnx-ui-test--file-sessions-here (files _jobs out-dir &optional on-start on-end)
   "`drgnx-ui--run-file-sessions' in this Emacs, no child Emacs: each of FILES through `drgnx-ui-run-ui-file-session',
 so through `drgnx-ui-test-session-function', which a row binds to a stand-in."
   (let ((i 0))
     (mapcar (lambda (f)
               (let ((out (expand-file-name (format "%d.json" (cl-incf i)) out-dir)))
+                (when on-start (funcall on-start f))
                 (drgnx-ui-run-ui-file-session f out)
-                (list f out 0 0.0 nil)))
+                (let ((r (list f out 0 0.0 nil))) (when on-end (funcall on-end r)) r)))
             files)))
+
+(ert-deftest drgnx-ui/each-file-is-told-as-it-starts-and-ends ()
+  :tags '(:cond)                        ; real processes stand in for the files' sessions
+  ;; a run the slot guard kills prints nothing that comes at the end: the per-file runner tells each file's start and
+  ;; end as they happen, so a hung file is named (2026-11-17, a kwin lane killed after 21 min said nothing)
+  (let ((out-dir (make-temp-file "duis" t)) (told nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-ui--start-file-session)
+                   (lambda (file _out)
+                     (make-process :name file :command (list "sh" "-c" (if (equal file "slow") "sleep 2" "true"))
+                                   :noquery t :connection-type 'pipe
+                                   :sentinel (lambda (p _e) (unless (process-live-p p) (process-put p :done (float-time))))))))
+          (drgnx-ui--run-file-sessions
+           '("fast" "slow") 2 out-dir
+           (lambda (f) (push (list 'start f) told))
+           (lambda (r) (push (list 'end (car r) (and (process-live-p (get-process "slow")) t)) told)))
+          (setq told (nreverse told))
+          (should (equal (seq-take told 2) '((start "fast") (start "slow"))))
+          (should (equal (nth 2 told) '(end "fast" t)))      ; told while the slow one still runs
+          (should (equal (car (nth 3 told)) 'end)))
+      (delete-directory out-dir t))))
 
 (defmacro drgnx-ui-test--with-ui-repo (repo &rest body)
   "Run BODY with REPO bound to a fresh checkout holding one GUI test file (test/ui/a-test.el) and `drgnx-ui-repo-dir'

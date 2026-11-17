@@ -9,7 +9,7 @@ use super::{Key, Views, git, icons, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use drgnx_rows::faces::FaceId;
-use drgnx_rows::{ImageId, Row, RowBuilder};
+use drgnx_rows::{ImageId, Row, RowBuilder, Tail};
 use runstav::methods::view::{BufferOp, BuffersSet};
 use runstav::wire::Error;
 use serde_json::json;
@@ -195,6 +195,15 @@ fn buffer_row(
     if b.modified {
         r.prop(name, end, FaceId::BuffersModified.name(), json!(true));
     }
+    // the editor's tail at the right edge: the git letter when the row has one, the unsaved ● (always drawn), else
+    // the close button on hover
+    r.tail(if mark.is_some_and(|_| !ignored) {
+        Tail::Mark
+    } else if b.modified {
+        Tail::Control
+    } else {
+        Tail::Hover
+    });
     r.prop(0, end, "drgnx-work-id", json!(b.id));
     r.finish()
 }

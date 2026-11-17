@@ -321,20 +321,25 @@ right edge on the selected frame (`drgnx-wb-row-tail')."
                (at-dots (max 3.0 (+ end (/ dots cell)))))
     (list end at-dots (max 4.0 (+ at-dots (/ (+ gap mark-px) cell))))))
 
-(defun drgnx-wb-tail-reserve (window)
-  "The pixels (a terminal's: columns) a row keeps free at WINDOW's right edge for its tail, mark and ⋯
-\(`drgnx-wb-row-tail'), which are placed from that edge: a row's text that ran into them would push them past it.  The
-`drgnx-view-env-right-reserve' of the views whose rows get tails (the Explorer's, the Buffers panel's)."
+(defun drgnx-wb-tail-px (window)
+  "(MARK CONTROL): where a row's tail (`drgnx-wb-row-tail') starts its git mark and its control, in pixels (a
+terminal's: columns) from WINDOW's right edge.  The `drgnx-view-env-tail' of the views whose rows get tails (the
+Explorer's, the Buffers panel's): the hub ends a row's text short of what its tail always draws (the mark of a row
+that has one, a control that is always shown), and marks a row whose text reaches the place of a control shown on
+hover only (`drgnx-row-tail-short'), whose tail then leaves the control out."
   (with-selected-frame (window-frame window)
-    (ceiling (* (nth 2 (drgnx-wb--tail-places)) (frame-char-width)))))
+    (pcase-let ((`(,_ ,at-dots ,at-mark) (drgnx-wb--tail-places)))
+      (list (ceiling (* at-mark (frame-char-width))) (ceiling (* at-dots (frame-char-width)))))))
 
 (defun drgnx-wb-row-tail (mark face row &optional control)
   "The string at a row's right edge: MARK (a string or nil) in FACE and the code face, then the control: on a
 graphical frame hidden until the row is hovered (window-dark.html), drawn in the row's colour; on a terminal shown.
 CONTROL is the ⋯ by default; a CONTROL with a face of its own (the Buffers panel's ● of a modified file) is always
-shown in it.  The control carries `drgnx-row-control', so a click can tell it from the row.  ROW is the face of the
-selected row (`drgnx-wb-row-face') or nil: the whole string is in it, as the row's text is (an overlay string takes
-no face from the overlays around it), and its mouse face keeps the selection.
+shown in it; CONTROL `none' leaves it out (a row whose text reaches its place, `drgnx-row-tail-short': the tail is
+the row's end alone, and the control is drawn over the text on hover).  The control carries `drgnx-row-control', so
+a click can tell it from the row.  ROW is the face of the selected row (`drgnx-wb-row-face') or nil: the whole
+string is in it, as the row's text is (an overlay string takes no face from the overlays around it), and its mouse
+face keeps the selection.
 Both are placed from the window's right edge, so the marks of all rows line up.  The places are in columns (the
 measured pixels over the cell), not pixels: the overlay is painted once into a buffer that graphical and terminal
 frames may both show, and each frame reads a column as its own cell, where a terminal would read a pixel as a column.
@@ -343,22 +348,27 @@ the ⋯ starts 3 in and the mark 4: the same on every frame, whichever painted i
 the tail on to the text area's right edge (`drgnx-wb--row-end'), so the fill, the hover and the ring end at the
 card's inset."
   (pcase-let* ((`(,end ,at-dots ,at-mark) (drgnx-wb--tail-places))
-               (c (or control drgnx-wb--control))
-               (c (if (get-text-property 0 'face c) c
+               (c (if (eq control 'none) "" (or control drgnx-wb--control)))
+               (c (if (or (equal c "") (get-text-property 0 'face c)) c
                     (let ((hidden (drgnx-look-hover-control c nil)))
                       ;; hidden in the selection's colour on the selected row
                       (if (and row (eq (get-text-property 0 'face hidden) 'drgnx-control-hidden))
                           (propertize c 'face (list :foreground (face-background (plist-get row :inherit) nil t)))
                         hidden))))
-               (s (concat (propertize " " 'display `(space :align-to (- right ,at-mark)))
-                          (if mark (propertize mark 'face (list face 'drgnx-code-small)) "")
-                          (propertize " " 'display `(space :align-to (- right ,at-dots)))
-                          (propertize c 'drgnx-row-control t)
-                          ;; the terminal's end; on a graphical frame a plain space, so the row's end is a stretch
-                          ;; of its own: Emacs draws a run of adjacent stretches with the first one's box edges, and
-                          ;; Nidhogg puts the closing edge on the last
-                          (propertize " " 'display `(when (not (display-graphic-p)) space :align-to (- right ,end)))
-                          (drgnx-wb--row-end nil))))
+               (s (if (eq control 'none)
+                      (concat (if mark (concat (propertize " " 'display `(space :align-to (- right ,at-mark)))
+                                               (propertize mark 'face (list face 'drgnx-code-small)))
+                                "")
+                              (drgnx-wb--row-end nil))
+                    (concat (propertize " " 'display `(space :align-to (- right ,at-mark)))
+                            (if mark (propertize mark 'face (list face 'drgnx-code-small)) "")
+                            (propertize " " 'display `(space :align-to (- right ,at-dots)))
+                            (propertize c 'drgnx-row-control t)
+                            ;; the terminal's end; on a graphical frame a plain space, so the row's end is a stretch
+                            ;; of its own: Emacs draws a run of adjacent stretches with the first one's box edges, and
+                            ;; Nidhogg puts the closing edge on the last
+                            (propertize " " 'display `(when (not (display-graphic-p)) space :align-to (- right ,end)))
+                            (drgnx-wb--row-end nil)))))
     (when row (add-face-text-property 0 (length s) row t s))
     (put-text-property 0 (length s) 'mouse-face (if row (drgnx-wb--row-mouse-face row) (drgnx-wb-row-hover-face)) s)
     s))

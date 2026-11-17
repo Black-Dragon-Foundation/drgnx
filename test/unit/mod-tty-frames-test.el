@@ -810,15 +810,64 @@ the tail's text."
         (should-not (drgnx-tty-frames--tmux-setup (selected-frame))))
       (should (= calls 0)))))
 
-(ert-deftest drgnx-tty-frames/a-hung-tmux-is-asked-once-per-terminal ()
-  ;; a tmux that does not answer costs its 1 s once, not once per frame or setup step
+;; `drgnx-timer-start' stubbed: the retry it would start, (KEY SECS FN ARGS OWNER), kept in `timers'.
+(defmacro drgnx-tty-frames-test--timers (&rest body)
+  `(let ((timers nil))
+     (cl-letf (((symbol-function 'drgnx-timer-start)
+                (cl-function (lambda (key secs fn &key args owner &allow-other-keys)
+                               (push (list key secs fn args owner) timers) key))))
+       ,@body)))
+
+(ert-deftest drgnx-tty-frames/a-hung-tmux-is-asked-once-per-miss-ttl ()
+  ;; a tmux that does not answer costs its 1 s once per `drgnx-tty-frames-tmux-miss-ttl', not once per frame or
+  ;; setup step; after that it is asked again, and a retry is due then
   (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
-    (drgnx-tty-frames-test--with-tmux nil
-      (let ((drgnx-tty-frames-tmux-ttl 0))
-        (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
-        (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
-        (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
-        (should (= calls 1))))))
+    (drgnx-tty-frames-test--timers
+     (drgnx-tty-frames-test--with-tmux nil
+       (let ((drgnx-tty-frames-tmux-ttl 0))
+         (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+         (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+         (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+         (should (= calls 1))
+         (should (equal (mapcar (lambda (tm) (list (car tm) (nth 1 tm) (nth 4 tm))) timers)
+                        `(((tmux-retry . ,(selected-frame)) ,drgnx-tty-frames-tmux-miss-ttl ui/terminal))))
+         ;; past the miss TTL: asked again, and the next retry waits twice as long
+         (let ((kept (terminal-parameter nil 'drgnx-tty-tmux)))
+           (set-terminal-parameter nil 'drgnx-tty-tmux (cons (- (car kept) drgnx-tty-frames-tmux-miss-ttl) nil)))
+         (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+         (should (= calls 2))
+         (should (= (nth 1 (car timers)) (* 2 drgnx-tty-frames-tmux-miss-ttl))))))))
+
+(ert-deftest drgnx-tty-frames/a-tmux-that-answers-late-upgrades-the-terminal ()
+  ;; tmux did not answer within its 1 s at the terminal's setup (a loaded machine): its keys stayed legacy.  The retry
+  ;; asks again; the answer turns modifyOtherKeys on in the live terminal and the report says so
+  (drgnx-tty-frames-test--state
+   (let (sent answer)
+     (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &optional _) (push s sent)))
+               ((symbol-function 'xterm--init-modify-other-keys)
+                (lambda () (send-string-to-terminal "\e[>4;1m")
+                  (set-terminal-parameter nil 'tty-mode-set-strings
+                                          (cons "\e[>4;1m" (terminal-parameter nil 'tty-mode-set-strings))))))
+       (drgnx-tty-frames-test--terminal '((drgnx-tty-mok-decoded . t)) drgnx-tty-frames-test--tmux-env
+         (drgnx-tty-frames-test--timers
+          (drgnx-tty-frames-test--with-tmux answer
+            (drgnx-tty-frames--tmux-setup (selected-frame))
+            (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy))
+            (should (= calls 1))
+            (let ((retry (car timers)))
+              (should retry)
+              ;; tmux answers now; the retry comes after the miss TTL
+              (setq answer '(:version "3.8" :extended-keys "on" :extended-keys-format "xterm" :focus-events "on"
+                                      :set-clipboard "on" :rgb t))
+              (let ((kept (terminal-parameter nil 'drgnx-tty-tmux)))
+                (set-terminal-parameter nil 'drgnx-tty-tmux (cons (- (car kept) drgnx-tty-frames-tmux-miss-ttl) nil)))
+              (apply (nth 2 retry) (nth 3 retry))
+              (should (= calls 2))
+              (should (member "\e[>4;1m" sent))
+              (should (member "\e[?1004h" sent))
+              (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok))
+              (let ((entry (cdr (assoc "kx-a" (plist-get (drgnx-tty-frames-test--report) :terminals)))))
+                (should (eq (plist-get (plist-get entry :caps) :keys) 'mok)))))))))))
 
 (ert-deftest drgnx-tty-frames/the-tmux-level-setting-reaches-open-terminals ()
   ;; changing `drgnx-tty-tmux-mok-level' takes effect in the tmux windows already open, both ways

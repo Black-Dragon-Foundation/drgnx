@@ -44,7 +44,8 @@ reordered or rerun to pass.
 
 The GUI tier's report gives a FAIL line per failed row with its condition cut to 2,000 characters, saying how many were
 left out (`drgnx-ui--fail-line`): a condition can hold a whole screen, and a log over 5 MB does not come back from the
-desktop.
+desktop. Each file's session prints `ui file FILE: started` as it starts and its result line as it ends, not at the
+end of the tier, so a run killed meanwhile (the slot guard) still names the file that hung.
 
 **The leak check after each file.** With `DRGNX_TEST_FILE_LEAKS=1` (the GUI tier's session sets it; `DRGNX_UI_LEAKS=0` turns
 it off there) `harness/run-ert.el` reads the full fingerprint (`core/drgnx-modules-fingerprint.el`) when a test file's
@@ -336,7 +337,10 @@ and nothing talks to your own Emacs.
 `drgnx test --ui`, `--scenario`, `--bench`, `--perf`, `--soak` and `--day` run in a directory of their own
 (`$DRGNX_RUN_TMP`, removed when they end) and keep their sessions' run directories in its `ui/`, unless
 `DRGNX_UI_STATE` names a root; every session, whatever its compositor, has a private `XDG_RUNTIME_DIR` next to its
-socket directory: its Wayland display and IPC sockets live there, never in the caller's. A session id is
+socket directory: its Wayland display and IPC sockets live there, never in the caller's. A stop removes its own
+socket directory but leaves the shared per-root one above it (an empty 0700 directory, gone with the runtime
+directory): a session starting in another process at that moment may be making its own directory in it. A session
+id is
 `drgnx-ui-N-HEX`, never reused, and another MCP client's session is refused unless adopted):
 
 ```

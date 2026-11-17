@@ -49,6 +49,12 @@ pub struct ViewEnv {
     pub cell: (u32, u32),
     /// The narrowest live window of the class showing the view, body px.
     pub width_px: u32,
+    /// Where the editor draws a row's tail after its text (`drgnx-wb-row-tail`: the Explorer's, the Buffers panel's),
+    /// `[mark, control]` px (a terminal's: columns) from the window's right edge: the start of its git mark and of its
+    /// control. The rows a view gives a tail keep their text short of what it always draws
+    /// (`drgnx_rows::fit_row::Room::tail`). None: the view's rows get no tail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail: Option<(u32, u32)>,
     /// `[role, colour]`: the SVG writer's colours, from the theme.
     #[serde(default)]
     pub palette: Vec<(String, String)>,

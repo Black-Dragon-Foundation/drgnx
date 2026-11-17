@@ -13,7 +13,7 @@ use super::{Key, Views, git, icons, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use drgnx_rows::faces::FaceId;
-use drgnx_rows::{ImageId, Row, RowBuilder};
+use drgnx_rows::{ImageId, Row, RowBuilder, Tail};
 use runstav::methods::search::{ExplorerParams, ExplorerStarted};
 use runstav::methods::view::{Display, ViewEnv};
 use runstav::wire::{Error, ErrorCode};
@@ -660,6 +660,12 @@ fn entry_row(
     if let Some(k) = mark.filter(|k| *k != git::Kind::Ignored) {
         b.prop(name, end, "drgnx-git-status", json!(k.name()));
     }
+    // the editor's tail at the right edge: the git mark when the row has one, the ⋯ on hover
+    b.tail(if mark.is_some_and(|k| k != git::Kind::Ignored) {
+        Tail::Mark
+    } else {
+        Tail::Hover
+    });
     if let Some(ords) = here.filter(|o| !o.is_empty()) {
         b.prop(name, end, "drgnx-agents-here", json!(ords));
     }
