@@ -81,7 +81,9 @@ The display-buffer entry is checked by `drgnx-rules--sync-entry-notice` (a start
 in the state folder go this way: `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
 (`drgnx-check--save-durations`) and `terminal-report.eld` (`drgnx-tty-frames--save-report`, from a terminal frame's
 hooks: an error goes to `drgnx-hooks-problems`) are written with `drgnx-file-write ... :fsync nil`, so a failed write
-keeps the old report. They are read with `drgnx-file-read`: `drgnx-tty--read-report` (which ui/terminal's
+keeps the old report. A terminal report waits for tmux on the way, and Emacs runs other work then: it reads the file
+again just before it writes, and writes nothing when a newer report of the same terminal was written meanwhile
+(`drgnx-tty-frames--report-pending`), so older caps never replace newer ones. They are read with `drgnx-file-read`: `drgnx-tty--read-report` (which ui/terminal's
 `drgnx-tty-frames--read-report-data` calls too), `drgnx-agent-check-results`,
 `drgnx-check-durations` and the doctor's `drgnx-doctor--state-file` / `drgnx-doctor--keys-report` give the data of an
 `ok` file, else nil (missing, over 1 MiB, a mistake, text after the form, not plain data). A report is rebuilt by its

@@ -160,6 +160,37 @@ ui/terminal's teardown does, so no later test finds the prefix bound."
          (should (equal (car names) "kx-5"))
          (should (member "kx-3" names)))))))
 
+(ert-deftest drgnx-tty-frames/a-report-written-during-another-is-not-overwritten ()
+  ;; the tmux question a report asks waits for a process, and Emacs runs other work meanwhile (a client's eval, a
+  ;; timer): a second report written then is newer.  The first must not write its older caps over it, nor drop the
+  ;; entry of another terminal written meanwhile.
+  (drgnx-tty-frames-test--state
+   (let* ((name "kx-a")
+          (caps '(:id vte :outer nil :version "8000" :keys legacy :osc52 nil :colors 256 :mouse t))
+          (nested nil))
+     (cl-letf (((symbol-function 'drgnx-tty-frame-caps) (lambda (&optional _) caps))
+               ((symbol-function 'terminal-name) (lambda (&optional _) name))
+               ((symbol-function 'drgnx-tty-frames--tmux-options)
+                (lambda (&rest _)
+                  (when nested
+                    (let ((f nested))
+                      (setq nested nil)
+                      (funcall f)))
+                  nil)))
+       ;; the same terminal: its caps change while its first report waits
+       (setq nested (lambda () (setq caps (plist-put (copy-sequence caps) :keys 'mok))
+                      (drgnx-tty-frames-write-report (selected-frame))))
+       (drgnx-tty-frames-write-report (selected-frame))
+       (let ((entries (plist-get (drgnx-tty-frames-test--report) :terminals)))
+         (should (= (length entries) 1))
+         (should (eq (plist-get (plist-get (cdr (assoc "kx-a" entries)) :caps) :keys) 'mok)))
+       ;; another terminal's report written meanwhile stays
+       (setq nested (lambda () (setq name "kx-b") (drgnx-tty-frames-write-report (selected-frame)) (setq name "kx-a")))
+       (drgnx-tty-frames-write-report (selected-frame))
+       (let ((entries (plist-get (drgnx-tty-frames-test--report) :terminals)))
+         (should (assoc "kx-a" entries))
+         (should (assoc "kx-b" entries)))))))
+
 (ert-deftest drgnx-tty-frames/a-failed-infocmp-is-asked-again-after-a-while ()
   ;; nothing printed (no infocmp, a timeout, a type it does not know) is remembered for `--miss-ttl' seconds only
   ;; (a hanging infocmp is not run at every new frame, M12b-F-4); then it is asked again; an answer is kept
