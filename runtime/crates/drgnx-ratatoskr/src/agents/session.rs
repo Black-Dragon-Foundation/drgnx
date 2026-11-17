@@ -11,6 +11,14 @@
 
 #[cfg(test)]
 pub(crate) mod attach_tests;
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "the Agents side and the conversation tab read these"
+    )
+)]
+pub(crate) mod blocks;
 pub(crate) mod panel;
 pub(crate) mod rows;
 pub(crate) mod turn_core;
