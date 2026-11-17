@@ -51,6 +51,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// `ready` this often.
 pub const READY_EVERY: Duration = Duration::from_secs(2);
+/// The cleanup runs at least this often (orphan containers, design §5.7).
+pub const CLEANUP_EVERY: Duration = Duration::from_secs(600);
 /// `ping` this often.
 pub const PING_EVERY: Duration = Duration::from_secs(10);
 /// The link is lost after this long without a frame.
@@ -300,6 +302,8 @@ pub struct Serve<W: Write> {
     last_ping: Instant,
     last_frame: Instant,
     last_units: Instant,
+    /// The last cleanup (at start, at a job's end, or by the timer: [`CLEANUP_EVERY`]).
+    last_cleanup: Instant,
     /// Where a thread of this `serve` (an origin fetch) tells the loop it ended; none: such work runs in the loop.
     events: Option<mpsc::Sender<Event>>,
     /// The images the attempts it started ran in (so present here), for `ready`.
@@ -420,6 +424,7 @@ impl<W: Write> Serve<W> {
             last_ping: now,
             last_frame: now,
             last_units: now,
+            last_cleanup: now,
             events: None,
             images: BTreeSet::new(),
             heartbeat: Default::default(),

@@ -355,6 +355,7 @@ impl Platform for DarwinPlatform {
             units: vec![],
             folders: attempts::scan(root, &|unit: &str| attempt::active(Path::new(unit))),
             bundles: cleanup::bundles(root),
+            slices: None,
         };
         cleanup::apply(root, &cleanup::plan(owner, &seen));
     }

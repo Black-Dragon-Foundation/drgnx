@@ -355,6 +355,35 @@ fn an_attempt_runs_through_the_platform() {
     assert!(calls.borrow().cleanups >= 1);
 }
 
+/// [D] The cleanup runs every ten minutes from the serve loop's tick, besides `serve`'s start and every job's end, so
+/// an orphan container never outlives ten minutes plus its sweep (the clock: the last cleanup's time, backdated).
+#[test]
+fn the_cleanup_runs_every_ten_minutes() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut s, out, calls, _) = serve(d.path());
+    s.handle(Frame::Hello {
+        version: PROTO_VERSION,
+        hub_id: "hubA".into(),
+    });
+    out.take();
+    let before = calls.borrow().cleanups;
+    assert!(s.tick() == Next::Go);
+    assert_eq!(calls.borrow().cleanups, before, "not before ten minutes");
+    s.last_cleanup = Instant::now() - CLEANUP_EVERY + Duration::from_secs(5);
+    assert!(s.tick() == Next::Go);
+    assert_eq!(calls.borrow().cleanups, before, "five seconds early");
+    s.last_cleanup = Instant::now() - CLEANUP_EVERY;
+    assert!(s.tick() == Next::Go);
+    assert_eq!(calls.borrow().cleanups, before + 1);
+    assert!(s.tick() == Next::Go);
+    assert_eq!(
+        calls.borrow().cleanups,
+        before + 1,
+        "the timer starts again"
+    );
+    assert_eq!(CLEANUP_EVERY, Duration::from_secs(600));
+}
+
 fn offer(s: &mut Serve<Out>) {
     s.handle(Frame::Offer {
         r: jr(),

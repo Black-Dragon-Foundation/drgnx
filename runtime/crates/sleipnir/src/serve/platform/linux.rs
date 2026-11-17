@@ -400,6 +400,7 @@ impl Platform for LinuxPlatform {
             units: cleanup::units(&self.prefix),
             folders: attempts::scan(root, &unit::active),
             bundles: cleanup::bundles(root),
+            slices: None,
         };
         cleanup::apply(root, &cleanup::plan(owner, &seen));
     }

@@ -6,6 +6,7 @@
 use super::attempts::Found;
 use crate::linux::run;
 use crate::proto::AttemptState;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -29,6 +30,8 @@ pub struct Seen {
     /// Every attempt folder under the root, of any hub.
     pub folders: Vec<Found>,
     pub bundles: Vec<Bundle>,
+    /// The job ids whose job slice is up (`<root>-work-<id>.slice` active); none: the slices couldn't be listed.
+    pub slices: Option<HashSet<String>>,
 }
 
 /// A `bin/<name>` folder.
@@ -149,6 +152,12 @@ pub fn containers(prefix: &str, hub: &str) -> serde_json::Value {
         }
     };
     serde_json::from_slice(&out.stdout).unwrap_or(serde_json::Value::Null)
+}
+
+/// The job ids of ROOT's active job slices in LIST (`systemctl list-units --plain --no-legend` lines).
+pub fn live_slices(root: &str, list: &str) -> HashSet<String> {
+    let _ = (root, list);
+    HashSet::new()
 }
 
 /// Our prefix's units, loaded or not.
@@ -327,6 +336,7 @@ mod tests {
                 // put there after v3: a hub's update about to serve
                 bundle("v4", false, 4),
             ],
+            slices: None,
         };
         let owner = Owner {
             hub_id: "hubA",
@@ -380,6 +390,74 @@ mod tests {
             !plan(&loose, &seen)
                 .iter()
                 .any(|r| matches!(r, Remove::Bundle(_)))
+        );
+    }
+
+    fn running_a1() -> Seen {
+        Seen {
+            containers: serde_json::json!([
+                ctr("run-a1", Some("hubA")),
+                ctr("run-px-a1", Some("hubA")),
+            ]),
+            folders: vec![folder("hubA", "a1", AttemptState::Running, false, 10)],
+            ..Seen::default()
+        }
+    }
+
+    const A: Owner = Owner {
+        hub_id: "hubA",
+        prefix: "run",
+        own_bundle: "",
+    };
+
+    /// [D] A labelled container of ours whose job's slice is gone is an orphan (its unit died, or it started outside
+    /// any job) and goes, even while its folder still says running; with its slice up it stays; when the slices
+    /// couldn't be listed nothing is removed for that reason.
+    #[test]
+    fn a_labelled_container_without_its_slice_is_removed() {
+        let mut seen = running_a1();
+        seen.slices = Some(HashSet::new());
+        assert_eq!(
+            plan(&A, &seen),
+            vec![
+                Remove::Container("run-a1".into()),
+                Remove::Container("run-px-a1".into()),
+            ]
+        );
+        seen.slices = Some(HashSet::from(["a1".to_string()]));
+        assert_eq!(plan(&A, &seen), vec![]);
+        seen.slices = None;
+        assert_eq!(plan(&A, &seen), vec![]);
+    }
+
+    /// [D] A container without our label is never touched, whatever its name and whether any slice is up: the user's
+    /// own `nidhogg-build-x`, and one of our prefix with no label.
+    #[test]
+    fn an_unlabelled_container_is_never_touched() {
+        let seen = Seen {
+            containers: serde_json::json!([ctr("nidhogg-build-x", None), ctr("run-x", None)]),
+            slices: Some(HashSet::new()),
+            ..Seen::default()
+        };
+        assert_eq!(plan(&A, &seen), vec![]);
+        let nidhogg = Owner {
+            prefix: "nidhogg",
+            ..A
+        };
+        assert_eq!(plan(&nidhogg, &seen), vec![]);
+    }
+
+    /// [D] The slice names systemd lists become the job ids whose slice is up: only `<root>-work-<id>.slice` units that
+    /// are active.
+    #[test]
+    fn the_live_slices_come_from_the_unit_list() {
+        let list = "drgnx-runner-work-a1.slice loaded active active a1\n\
+                    drgnx-runner-work-b2.slice loaded inactive dead b2\n\
+                    drgnx-runner-work.slice loaded active active work\n\
+                    other-work-c3.slice loaded active active c3\n";
+        assert_eq!(
+            live_slices("drgnx-runner", list),
+            HashSet::from(["a1".to_string()])
         );
     }
 }
