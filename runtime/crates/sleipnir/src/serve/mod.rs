@@ -1883,6 +1883,7 @@ pub(crate) fn tests_spec() -> forseti::JobSpec {
         keys: vec![],
         local_only: false,
         writes: vec![],
+        derived: Default::default(),
     }
 }
 

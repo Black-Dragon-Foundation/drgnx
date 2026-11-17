@@ -205,6 +205,23 @@ pub struct JobSpec {
     pub local_only: bool,
     /// The paths the job writes back to the tree.
     pub writes: Vec<String>,
+    /// What the hub derives for the job or its pack declares beyond the starter's request.
+    #[serde(default)]
+    pub derived: Derived,
+}
+
+/// A job's derived fields ([`JobSpec::derived`]): the hub fills them at submit, from the frozen tree and the pack.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Derived {
+    /// `floor(log2(MiB))` of the frozen tree the job reads ([`tree_bucket`]): a history key class, so a tree ten times
+    /// bigger keeps its own expected time and memory.
+    pub tree_bucket: Option<u8>,
+}
+
+/// The history class of a tree of BYTES: `floor(log2(MiB))`, 0 below 2 MiB.
+pub fn tree_bucket(bytes: u64) -> u8 {
+    let mib = (bytes >> 20).max(1);
+    (63 - mib.leading_zeros()) as u8
 }
 
 impl JobSpec {

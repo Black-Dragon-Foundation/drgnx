@@ -489,6 +489,7 @@ impl Drill {
             keys: keys.clone(),
             local_only: false,
             writes: vec![],
+            derived: Default::default(),
             os: Default::default(),
         };
         Submit {

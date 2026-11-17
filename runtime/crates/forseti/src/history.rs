@@ -250,14 +250,60 @@ mod tests {
         );
         assert_eq!(a, c);
         assert_ne!(a, at("/src/main", &["bash", "test/other.sh"]));
-        // A suite's key is its suite and rows, whatever the command.
+        // A suite's key is its suite and its selector's class, whatever the command.
         let mut s = spec("j");
         s.suite = Some("ert".into());
-        s.select = Some("^drgnx-a".into());
+        s.select = Some("^drgnx-a/".into());
         let k = history_key(&s);
         s.command = vec!["anything".into()];
         assert_eq!(history_key(&s), k);
-        s.select = Some("^drgnx-b".into());
+        s.suite = Some("ui1".into());
         assert_ne!(history_key(&s), k);
+    }
+
+    #[test]
+    fn ert_prefixes_of_one_class_share_a_key() {
+        // [D] pure (design §5.3 item 5): `ert=^drgnx-fold/` and `ert=^drgnx-marks/` share a p95.
+        let at = |sel: &str| {
+            let mut s = spec("j");
+            s.suite = Some("ert".into());
+            s.select = Some(sel.into());
+            history_key(&s)
+        };
+        assert_eq!(at("^drgnx-fold/"), at("^drgnx-marks/"));
+        assert_eq!(at("^drgnx-fold-"), at("^drgnx-marks/"));
+        assert_eq!(selector_class(Some("^drgnx-fold/")), "prefix");
+        assert_eq!(selector_class(None), "all");
+    }
+
+    #[test]
+    fn an_alternation_is_another_class() {
+        // [D] pure
+        let at = |sel: Option<&str>| {
+            let mut s = spec("j");
+            s.suite = Some("ert".into());
+            s.select = sel.map(String::from);
+            history_key(&s)
+        };
+        assert_eq!(selector_class(Some(r"^drgnx-a/\|^drgnx-b/")), "alt");
+        assert_eq!(selector_class(Some("moved-down$")), "other");
+        assert_ne!(at(Some(r"^drgnx-a/\|^drgnx-b/")), at(Some("^drgnx-a/")));
+        assert_ne!(at(None), at(Some("^drgnx-a/")));
+        assert_ne!(at(Some("moved-down$")), at(Some("^drgnx-a/")));
+    }
+
+    #[test]
+    fn a_tree_ten_times_bigger_is_another_bucket() {
+        // [D] pure
+        let at = |bytes: Option<u64>| {
+            let mut s = spec("j");
+            s.suite = Some("ert".into());
+            s.derived.tree_bucket = bytes.map(crate::model::tree_bucket);
+            history_key(&s)
+        };
+        assert_eq!(at(Some(100 << 20)), at(Some(120 << 20)));
+        assert_ne!(at(Some(100 << 20)), at(Some(1000 << 20)));
+        assert_eq!(crate::model::tree_bucket(0), 0);
+        assert_eq!(crate::model::tree_bucket(1 << 30), 10);
     }
 }
