@@ -386,6 +386,63 @@ mod tests {
     }
 
     #[test]
+    fn small_jobs_start_back_to_back() {
+        // [D] pure (design §5.3 item 3): no gap between two jobs whose history peaks under 1 GiB.
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
+        let j = job("j", Priority::P3, 0);
+        let mut m = machine(Profile::Dedicated);
+        m.last_start = Some(m.now - 1);
+        m.last_start_small = true;
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&j, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_job_without_history_keeps_the_gap() {
+        // [D] pure
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
+        assert_eq!(lim.start_gap_s, 10);
+        let j = job("j", Priority::P3, 0);
+        let mut m = machine(Profile::Dedicated);
+        m.last_start = Some(m.now - 1);
+        m.last_start_small = true;
+        let b = budget(&m, &lim);
+        let unknown = Expected {
+            minutes: 10.0,
+            cpu: 1.0,
+            mem_p95_mib: None,
+        };
+        assert_eq!(
+            admit(&j, Priority::P3, &unknown, &m, &b, &lim),
+            Err(WaitReason::Gap { secs: 9 })
+        );
+    }
+
+    #[test]
+    fn a_small_job_after_a_big_one_waits() {
+        // [D] pure: the gap lets the last start's memory show before the next is judged; only two small ones skip it.
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
+        let j = job("j", Priority::P3, 0);
+        let mut m = machine(Profile::Dedicated);
+        m.last_start = Some(m.now - 1);
+        m.last_start_small = false;
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&j, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::Gap { secs: 9 })
+        );
+        // and a big job after a small one waits too
+        m.last_start_small = true;
+        assert_eq!(
+            admit(&j, Priority::P3, &known(1.0, SMALL_PEAK_MIB), &m, &b, &lim),
+            Err(WaitReason::Gap { secs: 9 })
+        );
+    }
+
+    #[test]
     fn grant_formulas() {
         // [D] pure
         let mut j = job("j", Priority::P3, 0);
