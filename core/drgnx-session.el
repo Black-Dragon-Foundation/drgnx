@@ -29,6 +29,7 @@
 (declare-function server-running-p "server")
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-explorer-roots "drgnx-explorer")
+(declare-function project-root "project" (project))
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
 (declare-function drgnx-explorer-open-root "drgnx-explorer")
 (declare-function drgnx-start-put-away "drgnx-start" (frame))
@@ -187,6 +188,20 @@ is not raised.  As File → Open Folder… it asks for DIR (`drgnx-session-read-
       (when (fboundp 'drgnx-start-put-away) (drgnx-start-put-away (selected-frame)))   ; no start page, as `code DIR'
       (with-current-buffer drgnx-explorer-buffer-name (setq default-directory dir)))
     t))
+
+(defun drgnx-session-workspace-folder (dir)
+  "The workspace folder that holds DIR: the innermost of the Explorer's folders, else DIR's project, else DIR.  A
+remote DIR is DIR (no project lookup on a host).  Where a new terminal starts and where Open File asks, as VS Code's."
+  (if (file-remote-p dir) dir
+    (let* ((d (file-name-as-directory (expand-file-name dir)))
+           (roots (and (fboundp 'drgnx-explorer-roots)
+                       (mapcar (lambda (r) (file-name-as-directory (expand-file-name r)))
+                               (seq-remove #'file-remote-p (drgnx-explorer-roots)))))
+           (in (seq-filter (lambda (r) (string-prefix-p r d)) roots)))
+      (or (car (sort in (lambda (a b) (> (length a) (length b)))))
+          (when-let* ((p (progn (require 'project) (let ((default-directory d)) (project-current)))))
+            (file-name-as-directory (expand-file-name (project-root p))))
+          dir))))
 
 ;;;; Closing and quitting
 
