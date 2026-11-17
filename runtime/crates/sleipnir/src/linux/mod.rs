@@ -2,7 +2,7 @@
 //! machine share ([`reserve`]), and the executor: the slice tree ([`slices`]), a job's unit ([`unit`]), job-exec
 //! ([`jobexec`]) and its `result.json` ([`result`]), a job's disk watch ([`disk`]), live resizing ([`resize`]), the row parsers ([`parse`]), the one
 //! podman argv ([`podman`]), whether podman can run a networked job ([`netcheck`]), a confined SELinux login that can't
-//! run containers ([`confined`]) and jobq's shim ([`shim`]).
+//! run containers ([`confined`]), jobq's shim ([`shim`]) and the progress guard ([`progress`]).
 //!
 //! systemd and the cgroup files are a desktop-distro fact, so those modules are `target_os = "linux"` only. Android
 //! (`target_os = "android"`) has no user manager to run jobs under: it gets none of them, and a runner there refuses
@@ -13,6 +13,7 @@ pub mod confined;
 pub mod netcheck;
 pub mod parse;
 pub mod podman;
+pub mod progress;
 pub mod result;
 pub mod shim;
 
