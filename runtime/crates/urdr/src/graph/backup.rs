@@ -322,7 +322,8 @@ mod tests {
                 }
                 false
             }),
-        );
+        )
+        .expect("the test's progress handler installs (without it the copy is never held)");
     }
     use crate::graph::tx::{Class, TxMeta};
     use crate::graph::writer::Writer;
