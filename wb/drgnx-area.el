@@ -231,8 +231,12 @@ makes one."
         (when (and start (window-live-p w) (not (drgnx-area--content-p (window-buffer w))))
           (funcall start))))))
 
+(declare-function drgnx-grid-tab-menu-click "drgnx-grid-frames" (event))
 (defvar drgnx-area--tab-map
-  (let ((m (make-sparse-keymap))) (define-key m [header-line mouse-1] #'drgnx-area--tab-click) m))
+  (let ((m (make-sparse-keymap)))
+    (define-key m [header-line mouse-1] #'drgnx-area--tab-click)
+    (define-key m [header-line mouse-3] #'drgnx-grid-tab-menu-click) ; its menu: Move to New Window
+    m))
 
 (defun drgnx-area--close-click (event)
   "A click on an area's ✕: hide the area (its size and tabs are kept)."

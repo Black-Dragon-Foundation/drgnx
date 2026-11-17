@@ -167,6 +167,7 @@ Shortcuts\", \"Extensions\", the start page \"Welcome\").  A file's buffer keeps
     name))
 
 (declare-function drgnx-grid-tab-press "drgnx-grid-ops" (event kind click))
+(declare-function drgnx-grid-tab-menu-click "drgnx-grid-frames" (event))
 
 (defun drgnx-chrome--tab-press (event)
   "A press on an editor's tab: under the grid with dragging on, a click shows it and a drag off the row moves it
@@ -183,6 +184,7 @@ Shortcuts\", \"Extensions\", the start page \"Welcome\").  A file's buffer keeps
     (define-key m [tab-line down-mouse-1] #'drgnx-chrome--tab-press)
     (define-key m [tab-line mouse-1] #'drgnx-chrome--select-tab)
     (define-key m [tab-line mouse-2] #'drgnx-chrome--close-clicked)
+    (define-key m [tab-line mouse-3] #'drgnx-grid-tab-menu-click) ; its menu: Move to New Window
     m))
 
 (defvar drgnx-chrome--close-map

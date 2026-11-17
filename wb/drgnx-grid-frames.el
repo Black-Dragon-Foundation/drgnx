@@ -167,6 +167,132 @@ A SNAP that is not valid changes nothing and gives one notice.  Non-nil when res
       (select-frame (if (frame-live-p selected) selected main))
       t)))
 
+;;;; Tear-out: Move to New Window
+
+(declare-function drgnx-grid-tile-main "drgnx-grid-ops" (window))
+(declare-function drgnx-grid--state "drgnx-grid-ops" (window))
+(declare-function drgnx-grid--put "drgnx-grid-ops" (state window))
+(declare-function drgnx-grid--undock "drgnx-grid-ops" (window))
+(declare-function drgnx-grid--entries "drgnx-grid-ops" (window))
+(declare-function drgnx-grid--delete-tile "drgnx-grid" (window))
+(declare-function drgnx-grid--tile-root "drgnx-grid" (window))
+(declare-function drgnx-grid--main-of "drgnx-grid" (window))
+(declare-function drgnx-grid--next-id "drgnx-grid" (frame))
+(declare-function drgnx-grid--note-good "drgnx-grid" (frame))
+(declare-function drgnx-grid--fill-leaf "drgnx-grid" (node w frame))
+(declare-function drgnx-grid--tool-tile "drgnx-grid" (w kinds frame horizontal))
+(declare-function drgnx-grid--put-buffer "drgnx-grid" (window kind frame &optional buffer))
+(declare-function drgnx-grid--put-row "drgnx-grid" (window))
+(declare-function drgnx-grid--bring-to-front "drgnx-grid" (window kind frame &optional buffer))
+(declare-function drgnx-grid-editor-tile-p "drgnx-grid" (window))
+(declare-function drgnx-grid-leave-full-size "drgnx-grid" (&optional frame))
+(declare-function drgnx-grid-show "drgnx-grid" (kind))
+(declare-function drgnx-chrome--close "drgnx-chrome" (w b))
+(declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab))
+(defvar drgnx-wb--areas)
+
+(defun drgnx-grid--leave-frame (me frame)
+  "Tile ME leaves FRAME as a move leaves it (its space to the tile it took it from); FRAME's last editor stays, empty
+\(its tabs gone, `*scratch*' shown)."
+  (when (eq (drgnx-grid-tile-main (frame-selected-window frame)) me)
+    (when-let* ((other (seq-find (lambda (w) (not (eq (drgnx-grid-tile-main w) me))) (drgnx-grid-tiles frame 'editor))))
+      (set-frame-selected-window frame other)))
+  (if (and (drgnx-grid-editor-tile-p me) (not (cdr (drgnx-grid-tiles frame 'editor))))
+      (progn (set-window-parameter me 'drgnx-tabs nil)
+             (set-window-buffer me (get-scratch-buffer-create)))
+    (set-window-parameter me 'delete-window nil)
+    (drgnx-grid--delete-tile (drgnx-grid--tile-root me)))
+  (drgnx-grid--note-good frame)
+  (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply frame t)))
+
+(defun drgnx-grid--new-frame-done (new main)
+  "NEW, a frame made by a tear-out, selected with MAIN, its one tile, selected and its rows drawn."
+  (drgnx-grid--note-good new)
+  (select-frame-set-input-focus new)
+  (select-window main)
+  (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply new t))
+  new)
+
+(defun drgnx-grid-move-to-new-frame (&optional window)
+  "Move WINDOW's tile (default the selected window's) to a new window, as that window's only tile: the tile whole (a
+conversation's three windows go together), with its kind, stack, buffers, start and point; an editor with its tabs.  A
+docked tile is no dock's there.  It leaves its window as a move does; a window's last editor stays, empty.  The layout
+before is pushed (`drgnx-grid-push' `tear-out').  Returns the new frame."
+  (interactive)
+  (let* ((me (drgnx-grid-tile-main (or window (selected-window)))) (frame (window-frame me)))
+    (drgnx-grid-leave-full-size frame)
+    (drgnx-grid-push 'tear-out)
+    (let* ((editor (drgnx-grid-editor-tile-p me))
+           ;; an editor goes as its window's state (buffer, tabs, start, point, parameters: as a move); a tool tile is
+           ;; made again there from its stack and buffer, so its companions (a conversation's header and composer)
+           ;; come with it, fitted to the new window (a whole atom's state cannot be put into a frame's only window)
+           (state (and editor (drgnx-grid--state me)))
+           (entries (and (not editor) (drgnx-grid--entries me)))
+           (buffer (window-buffer me)) (start (window-start me)) (point (window-point me))
+           (new (drgnx-frames--new (get-scratch-buffer-create) nil))
+           (w (frame-first-window new)))
+      (drgnx-grid--leave-frame me frame)
+      (if editor
+          (drgnx-grid--put state w)
+        (drgnx-grid--tool-tile w entries new nil)
+        (drgnx-grid--put-buffer w (car entries) new buffer)
+        (set-window-start w start t)
+        (set-window-point w point)
+        (drgnx-grid--put-row w))
+      (let ((main (drgnx-grid--main-of (frame-root-window new))))
+        (set-window-parameter main 'drgnx-tile-id (drgnx-grid--next-id new))
+        (drgnx-grid--undock main)
+        (drgnx-grid--new-frame-done new main)))))
+
+(defun drgnx-grid-move-tab-to-new-frame (&optional window kind)
+  "Move to New Window: tab KIND of WINDOW's tile (default the selected window's shown tab: an editor's buffer, a tool
+tile's front kind, a docked area's tab) to a new window.  One of several tabs goes alone (an editor's file leaves its
+tabs, a kind leaves the stack), into a tile of its own there; a tile's only tab moves the tile whole
+\(`drgnx-grid-move-to-new-frame').  Returns the new frame."
+  (interactive)
+  (let* ((me (drgnx-grid-tile-main (or window (selected-window)))) (frame (window-frame me))
+         (editor (drgnx-grid-editor-tile-p me))
+         (stack (window-parameter me 'drgnx-pane-stack))
+         (kind (or kind (if editor (window-buffer me) (car (drgnx-grid--entries me))))))
+    (cond
+     ((and editor (remq kind (drgnx-chrome-tabs me)))
+      (drgnx-grid-leave-full-size frame)
+      (drgnx-grid-push 'tear-out)
+      (drgnx-chrome--close me kind)
+      (let ((new (drgnx-frames--new kind (list kind))))
+        (drgnx-grid--new-frame-done new (frame-first-window new))))
+     ((and (not editor) (cdr stack) (memq kind stack))
+      (drgnx-grid-leave-full-size frame)
+      (drgnx-grid-push 'tear-out)
+      (set-window-parameter me 'drgnx-pane-stack (remq kind stack))
+      (when (eq kind (car stack)) (drgnx-grid--bring-to-front me (car (remq kind stack)) frame))
+      (let* ((new (drgnx-frames--new (get-scratch-buffer-create) nil)) (w (frame-first-window new)))
+        (drgnx-grid--fill-leaf (list 'tile :id (drgnx-grid--next-id new) :kinds (list kind) :shown kind) w new)
+        (drgnx-grid--new-frame-done new w)))
+     (t
+      ;; a docked area's other tab: shown first, then its tile moves
+      (let ((role (window-parameter me 'drgnx-role)))
+        (when (and (not editor) (not stack) role (assq role drgnx-wb--areas) (not (eq kind (car (drgnx-grid--entries me)))))
+          (setq me (drgnx-grid-tile-main (drgnx-wb-area-show role kind)))))
+      (drgnx-grid-move-to-new-frame me)))))
+
+(defun drgnx-grid-tab-menu (window kind)
+  "The context menu of tab KIND of WINDOW's tile (an editor's buffer, a tool tile's or docked area's kind)."
+  (list 'keymap "Tab"
+        (list 'move-to-new-window 'menu-item "Move to New Window"
+              (lambda () (interactive) (drgnx-grid-move-tab-to-new-frame window kind)))))
+
+(defun drgnx-grid-tab-menu-click (event)
+  "A right click on a tab or a tile's grip: its context menu (`drgnx-grid-tab-menu')."
+  (interactive "e")
+  (let* ((posn (event-start event)) (w (posn-window posn)) (s (posn-string posn))
+         (prop (lambda (p) (and s (get-text-property (cdr s) p (car s)))))
+         (kind (or (funcall prop 'drgnx-buffer) (funcall prop 'drgnx-grid-kind) (cdr (funcall prop 'drgnx-tab)))))
+    (when (window-live-p w)
+      (let ((choice (x-popup-menu event (drgnx-grid-tab-menu w kind))))
+        (when-let* ((cmd (and choice (lookup-key (drgnx-grid-tab-menu w kind) (apply #'vector choice)))))
+          (call-interactively cmd))))))
+
 ;;;; The stack
 
 (defun drgnx-grid--same-layout-p (a b)

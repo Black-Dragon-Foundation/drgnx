@@ -270,7 +270,7 @@ profile:
 | `SPC w c` | Close Tile |
 | `SPC w g` | Move Editor Group into New Window |
 | `SPC w m` | Move Editor into Next Group |
-| `SPC w n` | Move Editor into New Window |
+| `SPC w n` | Move to New Window |
 | `SPC w o` | Open Editor in New Window |
 | `SPC w s` | Split Editor Down |
 | `SPC w v` | Split Editor Right |
