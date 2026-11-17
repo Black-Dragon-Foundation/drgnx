@@ -142,7 +142,11 @@ module stages are over first."
     (drgnx-tty-session-wait-screen s "Problems +Output +Results +Terminal" 10)
     ;; ctrl+.: the code actions (Quick Fix)
     (drgnx-tty-session-kitty-key s "ctrl+.")
-    (drgnx-tty-keys-test--ran s 'drgnx-lang-quick-fix "C-.")))
+    (drgnx-tty-keys-test--ran s 'drgnx-lang-quick-fix "C-.")
+    (drgnx-tty-kitty-test--quit s)
+    ;; ctrl+shift+tab arrives as itself (a legacy terminal sends Shift+Tab's bytes for it)
+    (drgnx-tty-session-kitty-key s "ctrl+shift+tab")
+    (drgnx-tty-keys-test--ran s 'drgnx-chrome-recent-editor-up "C-S-<tab>")))
 
 (ert-deftest drgnx-kitty/c-g-interrupts-a-blocking-call ()
   ;; under kkp C-g is an escape sequence; around a program Emacs waits for, kitty sends the plain byte again

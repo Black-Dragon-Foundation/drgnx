@@ -293,6 +293,7 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-f` | View: Search | `Alt+Shift+F` | `F6 f` |
 | `C-S-o` | Go to Symbol | — | `F6 o` |
 | `C-<tab>` | Open Previous Editor in Group | — | `F6 Tab` |
+| `C-S-<tab>` | Open Previous Editor in Group (Up) | — | `F6 Shift+Tab` |
 | `C-S-h` | Replace in Files | `Alt+Shift+H` | `F6 h` |
 | `` C-S-` `` | New Terminal | — | `F6 ~` |
 | `C-S-g` | Source Control | `Alt+Shift+G` | `F6 g` |
