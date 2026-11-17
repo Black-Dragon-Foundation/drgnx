@@ -240,7 +240,7 @@ pub fn slice_used_mib(manager: &Path, slice: &str) -> Option<u64> {
 /// The reader of the hub's own jobs' use the queue counts ([`crate::runners::queue::Queue::read_local_use`]): each
 /// job's slice under this process's user manager.
 #[cfg(target_os = "linux")]
-pub fn local_use() -> Box<dyn Fn(&str) -> Option<u64> + Send + Sync> {
+pub fn local_use() -> crate::runners::queue::LocalUse {
     let uid = rustix::process::getuid().as_raw();
     let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
     let manager =
