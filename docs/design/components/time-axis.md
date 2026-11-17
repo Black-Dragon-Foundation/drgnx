@@ -4,11 +4,7 @@
 
 The kit's `time-axis` component: one definition in `etc/ui/components.eld`, expanded the same way by the hub (`drgnx_rows::kit`) and by the Lisp chrome (`drgnx-ui-kit-expand`). Sizes are logical pixels; every colour is a [token](../tokens.md). Open it live with **Design: Component Catalogue**.
 
-![The time-axis component, dark](../img/kit-time-axis-dark.png)
-
-![The time-axis component, light](../img/kit-time-axis-light.png)
-
-![The time-axis component, high contrast](../img/kit-time-axis-hc.png)
+The hub draws this component alone (the Lisp chrome has no expansion of it), so it has no sheet: its rows are checked in Rust (`drgnx-rows`).
 
 ## Variants
 

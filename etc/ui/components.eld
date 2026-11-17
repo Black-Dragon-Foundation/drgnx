@@ -10,7 +10,8 @@
 ;; `underline', `dim').  Rows have no box edges in hover or selection.
 ;;
 ;; ENTRY: (ID :variants ((AXIS VALUE...)...) :defaults (AXIS VALUE...) :geometry GEOM :tty TTY :label LABEL
-;;         :bind BINDINGS :replaces ((OLD-FACE . KIT-FACE)...) :helpers (OLD-FN...) :lint BOOL)
+;;         :bind BINDINGS :replaces ((OLD-FACE . KIT-FACE)...) :helpers (OLD-FN...) :lint BOOL :sheet nil)
+;;   :sheet nil: the hub draws the component alone (no Lisp expansion): it has no sheet and its page no pictures
 ;;   GEOM, all logical px: :height :pad (START . END) :gap :box :radius :line-height :hit (action-carrying padding each
 ;;   side) :indent.  A value may be (:by AXIS (VALUE X)...) where variants differ, or (density KEY): the size
 ;;   `drgnx-look-density-value' gives KEY at the user's density.
@@ -185,7 +186,7 @@
              :helpers nil :lint t)
   ;; a time axis: ticks every STEP with their labels in the zone, a now marker; a terminal's marker is `│' (`|').  The
   ;; now line through the rows is `now-stop': one 1 px stop in the focus colour per row
-  (time-axis :variants nil :defaults nil
+  (time-axis :variants nil :defaults nil :sheet nil
              :geometry (:height 0 :pad (0 . 0) :gap 0 :box nil :radius 0 :hit 0)
              :tty (:pad 0 :glyphs (axis-now))
              :label "time axis"

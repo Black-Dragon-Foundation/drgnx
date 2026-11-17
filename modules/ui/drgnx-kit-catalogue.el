@@ -136,7 +136,8 @@ frame's)."
          (tty (cond (gui nil) ((drgnx-ui-ascii-frame-p frame) 'ascii) (t t)))
          (patch (drgnx-view-patch--make :view "kit-catalogue" :class "kit" :epoch 1)))
     (dolist (c (alist-get 'components (drgnx-ui-kit-components)))
-      (when (or (null component) (eq component (car c)) (and (eq component 'meter) (eq (car c) 'progress)))
+      (when (and (not (and (plist-member (cdr c) :sheet) (null (plist-get (cdr c) :sheet))))   ; hub-only: no cells
+                 (or (null component) (eq component (car c)) (and (eq component 'meter) (eq (car c) 'progress))))
         (insert (propertize (format "%s\n" (car c)) 'face 'drgnx-ui-heading) "\n")
         (dolist (variants (drgnx-kit-catalogue--combos (cdr c)))
           (when (drgnx-kit-catalogue--shown-p component (car c) variants)
