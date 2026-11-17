@@ -8,7 +8,7 @@
 use crate::coord::fail;
 use crate::dispatch::Caller;
 use crate::front::Front;
-use norn::deny::{DenyList, RootVerdict};
+use norn::deny::{DenyList, RootVerdict, Verdict};
 use norn::store::CoordDb;
 use runstav::methods::records::{
     ByPath, Conflict, ImportParams, ImportReport, ImportedFile, Keep, RecordKind, RecordsConflict,
@@ -2536,7 +2536,9 @@ pub async fn import_core(
     if let RootVerdict::Denied { .. } = deny.check_root(root) {
         return Err(err(PERSONAL_NOTES_REFUSAL));
     }
-    let found = discover(root, only);
+    // a file the hard tier denies (a spec a plan names inside `~/org`, even through a link) is never read
+    let mut found = discover(root, only);
+    found.retain(|f| deny.check(&f.path) == Verdict::Allowed);
     let mut fresh = Vec::new();
     for f in &found {
         if !noticed(db, &f.path).await? {
@@ -3938,6 +3940,42 @@ mod tests {
         // a project outside it is read
         let ok = import_core(&f.db, &f.views, &f.hub, &f.root, None, false, &heard, &deny).await;
         assert!(ok.is_ok());
+    }
+
+    /// A spec a plan names inside the user's `~/org` (by its path, or through a link) is not read: the hard tier
+    /// denies the file whatever names it (`a-spec-into-org-is-not-sent`, `a-spec-symlink-into-org-is-not-sent`).
+    #[tokio::test]
+    async fn a_spec_a_plan_names_inside_org_is_never_read() {
+        let f = fix();
+        let home = f._dir.path().join("home");
+        std::fs::create_dir_all(home.join("org")).unwrap();
+        let secret = home.join("org/secret.md");
+        std::fs::write(&secret, "# Secret spec\n").unwrap();
+        std::fs::create_dir_all(f.root.join("docs/specs")).unwrap();
+        std::os::unix::fs::symlink(&secret, f.root.join("docs/specs/link.md")).unwrap();
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/named.md"),
+            format!(
+                "# Names it\n\n**Spec:** `{}`\n\n### Task 1: a\n\n- [ ] x\n",
+                secret.display()
+            ),
+        )
+        .unwrap();
+        let deny = DenyList::load(&home, &f._dir.path().join("config"));
+        let heard = |_e: ViewEvent| {};
+        import_core(&f.db, &f.views, &f.hub, &f.root, None, false, &heard, &deny)
+            .await
+            .unwrap();
+        let titles: Vec<String> =
+            f.db.read(|c| {
+                let mut q = c.prepare("select title from entity where retired_tx is null")?;
+                Ok(q.query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<_, _>>()?)
+            })
+            .await
+            .unwrap();
+        assert!(titles.iter().all(|t| !t.contains("Secret")), "{titles:?}");
+        assert!(titles.iter().any(|t| t == "Names it"), "{titles:?}");
     }
 
     /// A root that is itself named `plans` or `specs` classifies by the paths under it alone
