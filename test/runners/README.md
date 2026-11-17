@@ -96,7 +96,7 @@ are gated the same way, by the `fleet` feature:
 
 ```
 cargo test -p drgnx-ratatoskr --features fleet --test fleet_link --no-run      # in the dev container
-cargo test -p drgnx-ratatoskr --features fleet --test fleet_runners --no-run
+cargo test -p drgnx-ratatoskr --features fleet --test fleet --no-run   # fleet_runners:: and fleet_registry::, fleet_sync::, fleet_keys::, term_scope:: are rows of it too
 ```
 
 `test` copies the `sleipnir` binary beside the test's `deps/` into the share and tells the rows where the share is

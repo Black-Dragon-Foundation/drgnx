@@ -120,6 +120,16 @@ strip = true
 lto = "thin"
 panic = "unwind"
 
+# Test builds (cargo test is a dev build): the dependencies carry no debug info (a backtrace through them names no
+# line; the workspace's own crates keep whatever `debug` the profile sets, `line-tables-only` in CI and under the
+# build wrapper, so a panic in workspace code still prints file:line), and the debug info of what is built is kept in
+# `.dwo` files beside the objects instead of being linked into each binary (every test binary links a big lib). The
+# macOS jobs' cargo-config override of the same table (`line-tables-only`, docs/develop/ci.md) takes precedence there
+[profile.dev]
+split-debuginfo = "unpacked"
+[profile.dev.package."*"]
+debug = false
+
 # `cargo test` is a debug build, and a real-model test would crawl in one
 [profile.dev.package.hrafn-embed]
 opt-level = 3

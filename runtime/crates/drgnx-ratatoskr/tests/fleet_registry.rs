@@ -3,10 +3,10 @@
 //! run in a fleet's harness only:
 //!
 //! ```text
-//! cargo test -p drgnx-ratatoskr --features fleet --test fleet_registry --no-run
+//! cargo test -p drgnx-ratatoskr --features fleet --test fleet --no-run
 //! cargo build -p sleipnir --features test-hooks        # the bundle each row copies (fleet.sh test shares it)
 //! fleet.sh up --runners 1
-//! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test --test-threads=1
+//! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test --test-threads=1 fleet_registry::
 //! ```
 //!
 //! Every row is [C]: a real `sleipnir serve` over the user's real ssh, and the rows wait with `skuld::wait_until_async`

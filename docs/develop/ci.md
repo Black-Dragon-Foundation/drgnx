@@ -248,7 +248,9 @@ Round 8 was cut at the 45 minutes on a cold build of 32 (no registry, target or 
 the caches are saved on `main` only) and tests of 10. Since then the macOS tests and conformance jobs give the
 dependencies line tables only (`profile.dev.package."*"`, appended to cargo's config by a step): a backtrace still
 names files and lines, which the step "a backtrace names files and lines" checks on one panic (draugr's and tokio's
-frames), and the workspace's crates keep full debug info for a debugger. The tests step runs each test binary of
+frames), and the workspace's crates keep full debug info for a debugger. (`runtime/Cargo.toml` now sets the same table to
+`debug = false` and `split-debuginfo = "unpacked"` for every dev and test build; the config step's value wins over the
+manifest's, so these jobs keep the dependencies' line tables.) The tests step runs each test binary of
 `test-bins.json` itself, from its package's folder as cargo does, in a process group of its own bounded at 600 s: a
 binary that hangs is killed with its children and named in the summary, and the rest still run; the doc tests follow
 through cargo. The build step writes `--timings` (artifact `cargo-timings-macos`): the job is split further only on

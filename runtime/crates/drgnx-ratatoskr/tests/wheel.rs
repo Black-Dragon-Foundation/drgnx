@@ -3,7 +3,7 @@
 //! sandbox does not show a program in the checkout's `target/`, and refuses the start.
 #![cfg(feature = "test-hooks")]
 
-mod support;
+use crate::support;
 
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;

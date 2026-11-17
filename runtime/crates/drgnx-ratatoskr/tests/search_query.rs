@@ -5,7 +5,7 @@
 //! session's socket is there when `mcp/session` has answered, and an index's progress is read from `search/status`
 //! until the condition holds (`skuld::wait_until`, whose deadline only bounds a failure).
 
-mod support;
+use crate::support;
 
 use drgnx_ratatoskr::search::project::REQUEST_KEYS;
 use rmcp::model::{

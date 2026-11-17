@@ -68,6 +68,28 @@ one test file in the container. Rust and `domr` groups run `cargo`, which never 
 `ratatoskr-cargo.sh`, or a slot script); without it `--run` refuses those groups (exit 2, nothing cached). The
 wrapper's words come before every group's command.
 
+### One Rust test file
+
+A crate with many `tests/*.rs` files (`drgnx-ratatoskr`, `hrafn`, `verdandi`, `vegvisir`, `norn`, `skald`, `saga`,
+`hrafn-embed`, `drgnx-term`, `drgnx-rows`) builds them as **one** test binary, `it`, so the crate's lib links once and
+not once per file: its `Cargo.toml` sets `autotests = false`, and `tests/main.rs` has a `mod <file>;` line per file (the
+files stay where they are; shared helpers are `use crate::support;`, not `mod support;`). One file's rows:
+`cargo test -p hrafn --test it graph::` (a test is `<file>::<name>`, so `--exact` takes `graph::<name>`).
+
+A file that must run in a process of its own stays a `[[test]]` of its own, with the reason in `Cargo.toml` (a
+process-wide registry or clock it installs, the environment it sets, timing rows that must have the machine to
+themselves, real-sandbox and real-sshd lanes the workflows run by name): `cargo test -p hrafn --test door_no_git`.
+drgnx-ratatoskr has three more such binaries, each a root in `tests/groups/` that names its files with
+`#[path = "../<file>.rs"] mod <file>;`: `timing` (the four timing files), `sandbox` (the real-sandbox lane:
+`browser_sandboxed`, `launch_sandboxed`, `sandbox_inner`, `sandbox_run`, `hrafn_parse_sandbox`) and `fleet`
+(`fleet_keys`, `fleet_registry`, `fleet_runners`, `fleet_sync`, `term_scope`; `required-features = ["fleet"]` as before):
+`cargo test -p drgnx-ratatoskr --test sandbox launch_sandboxed::`. `fleet_link`, `fleet_cloud` (both set
+`SSH_AUTH_SOCK`) and `fleet_drills` (sets `HOME`) stay their own binaries, as do `browser_real`, `macos`, `mac_runner`
+and `search_index`. **A new file** is a `mod` line in `tests/main.rs`
+(or, for a process of its own, a `[[test]]` plus its name in `APART` there): the test
+`every_test_file_is_a_module_here_or_a_declared_binary` fails and names a file that is neither, because with
+`autotests = false` an unlisted file would otherwise never run, silently.
+
 ## Live notebook kernels
 
 `notebook::kernel::tests_live` (ignored rows) start a real ipykernel, over ipc and over loopback tcp: ready, `print`, an error,

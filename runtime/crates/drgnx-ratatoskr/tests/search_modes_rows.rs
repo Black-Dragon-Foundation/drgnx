@@ -5,7 +5,7 @@
 //! test-pattern: handshake (C): the hub answers a ping when it is ready, and an index's progress is read from
 //! `search/status` until it holds the files (`skuld::wait_until`, whose deadline only bounds a failure).
 
-mod support;
+use crate::support;
 
 use serde_json::{Value, json};
 use std::path::Path;
