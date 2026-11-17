@@ -127,9 +127,9 @@
   (drgnx-grid-test--with
     (drgnx-pane-show 'g-term)
     (let ((term (drgnx-pane-window 'g-term)))
-      (should (string-search drgnx-grid-grip (drgnx-grid--tab-row term)))
+      (should (string-search (drgnx-face-glyph 'grip-vertical) (drgnx-grid--tab-row term)))
       (let ((drgnx-grid-drag nil))
-        (should-not (string-search drgnx-grid-grip (drgnx-grid--tab-row term)))
+        (should-not (string-search (drgnx-face-glyph 'grip-vertical) (drgnx-grid--tab-row term)))
         (should-not (drgnx-grid-grip-press (list 'down-mouse-1 (drgnx-grid-drag-test--posn term 1 1 'tab-line))))))))
 
 (provide 'grid-drag-test)

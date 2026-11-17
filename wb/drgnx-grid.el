@@ -20,6 +20,7 @@
 (require 'drgnx-state)
 (require 'drgnx-state-intent)
 (require 'drgnx-pixels)
+(require 'drgnx-ui-kit)                 ; the grip's glyph (`drgnx-face-glyph')
 (require 'drgnx-grid-tree)
 (require 'drgnx-panes)
 
@@ -653,8 +654,6 @@ For invoked commands only (`split-editor-right' and `split-editor-down' on a too
 another tile's edge (a split there) or middle (a stack).  Nil: no grip is drawn and drags do nothing."
   :type 'boolean :group 'drgnx-grid)
 
-(defconst drgnx-grid-grip "⠿" "The grip at a tool tile's tab line's start (`drgnx-grid-drag').")
-
 (defvar drgnx-grid-grip-map
   (let ((m (make-sparse-keymap)))
     (define-key m [tab-line down-mouse-1] #'drgnx-grid-grip-press)
@@ -662,10 +661,11 @@ another tile's edge (a split there) or middle (a stack).  Nil: no grip is drawn 
     m)
   "The grip's mouse map: a press drags the tile (`drgnx-grid-grip-press').")
 
-(defun drgnx-grid--grip ()
-  "The grip string for a tab row, or \"\" when `drgnx-grid-drag' is off."
+(defun drgnx-grid--grip (&optional frame)
+  "The grip string for a tab row on FRAME (default the selected one): the kit's `grip-vertical' glyph, its ASCII
+form on a terminal that is not UTF-8 (`drgnx-face-glyph'); \"\" when `drgnx-grid-drag' is off."
   (if drgnx-grid-drag
-      (propertize (concat " " drgnx-grid-grip) 'local-map drgnx-grid-grip-map 'mouse-face 'highlight
+      (propertize (concat " " (drgnx-face-glyph 'grip-vertical frame)) 'local-map drgnx-grid-grip-map 'mouse-face 'highlight
                   'pointer 'hand 'help-echo "Drag to move this tile")
     ""))
 
@@ -681,7 +681,7 @@ another tile's edge (a split there) or middle (a stack).  Nil: no grip is drawn 
   (let* ((stack (window-parameter window 'drgnx-pane-stack)) (shown (car stack))
          (kinds (seq-filter (lambda (k) (member k stack)) (append (drgnx-pane-kinds) stack))))
     (concat
-     (drgnx-grid--grip)
+     (drgnx-grid--grip (window-frame window))
      (mapconcat (lambda (k)
                   (let ((title (drgnx-grid--title k)))
                     (propertize (concat " " title " ")

@@ -3428,7 +3428,7 @@ named by its main window (`drgnx-grid-tile-main`).
   unstack or a split (`drgnx-grid-split-tile`, the groups' split) changes nothing and says "No room there"; the
   automatic placements fall back to their dock instead. A move first pushes the grid (`drgnx-grid-push` `move`); a
   docked tile moved or swapped loses `drgnx-tile-dock`. The pane backend's `:move` and `:stack` are these.
-- **Drag and drop** (`drgnx-grid--drag`, while `drgnx-grid-drag`): `down-mouse-1` on the grip (`drgnx-grid--grip`,
+- **Drag and drop** (`drgnx-grid--drag`, while `drgnx-grid-drag`): `down-mouse-1` on the grip (`drgnx-grid--grip`: the kit's `grip-vertical` glyph through `drgnx-face-glyph`, ASCII `::` on a non-UTF-8 terminal;
   map `drgnx-grid-grip-map` on the tab line and the header line) starts it: on a tool tile's row (`drgnx-grid--tab-row`),
   a docked area's (`drgnx-area--tab-row`, its header line) and an editor's (`drgnx-chrome--grip`, the row's leading
   room). A press on a tab (`drgnx-grid-tab-press`: a tool tile's, from `drgnx-grid--tab-press`, or an editor's, from

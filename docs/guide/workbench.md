@@ -353,7 +353,7 @@ they are, a stack puts one tile's tabs onto another's (editors onto editors, pan
 Shown Tab puts it into a new tile beside, on the side with more room; Resize Tiles (`C-k r` · `C-x w z` · `SPC w z`)
 lets the arrows move the tile's edges one step each (Resize Tile Left/Right/Up/Down, in Resize Tiles' own map, so a profile or your keys.eld can rebind them) until any other key, which then does what it does. With no room
 for a move or a split nothing changes and the echo area says "No room there". A docked tile moved is no dock's any
-more. **Dragging a tile:** press its grip, the ⠿ at the start of its tab row (an editor's tab row, a tool tile's, a
+more. **Dragging a tile:** press its grip, the ⠿ (`::` on a terminal that is not UTF-8) at the start of its tab row (an editor's tab row, a tool tile's, a
 docked panel's or side's header row), and drag: the tile under the pointer says on its own tab row what a drop does
 there ("⤓ drop: split right" near its right edge, left, up or down near the others, "stack" in the middle); let go
 to do it, or press Esc or `C-g` to stop. A tab dragged off its row moves only that file or pane (a click on it
