@@ -317,6 +317,12 @@
     (should-error (drgnx-packs-cli '("sync" "--bogus")) :type 'drgnx-packs-error)))
 
 (provide 'packs-test)
+(ert-deftest drgnx-packs/a-language-finds-its-pack ()
+  "A tree-sitter language finds the pack whose main grammar it is (C#'s grammar is `c-sharp', its pack `csharp')."
+  (should (equal (file-name-nondirectory (directory-file-name (drgnx-packs-language-dir 'c-sharp))) "csharp"))
+  (should (equal (file-name-nondirectory (directory-file-name (drgnx-packs-language-dir 'python))) "python"))
+  (should-not (drgnx-packs-language-dir 'no-such-language)))
+
 ;;; packs-test.el ends here
 
 (ert-deftest drgnx-packs/an-installed-pack-with-its-own-mode-can-be-off-in-a-project ()
