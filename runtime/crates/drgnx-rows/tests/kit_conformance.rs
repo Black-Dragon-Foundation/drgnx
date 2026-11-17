@@ -35,6 +35,7 @@ fn expansions() -> Value {
             } else {
                 &[]
             },
+            icons: None,
         };
         for c in cases["comps"].as_array().unwrap() {
             let name = format!(

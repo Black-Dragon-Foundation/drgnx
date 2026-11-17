@@ -14,7 +14,7 @@
 use crate::builder::RowBuilder;
 use crate::faces::FaceId;
 use crate::kit_gen::{self, Geom, STATES};
-use crate::row::Row;
+use crate::row::{ImageId, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -29,7 +29,23 @@ pub struct KitEnv<'a> {
     pub tty: bool,
     pub glyphs: &'a [(String, String)],
     pub density: Density,
+    /// On a graphical display that draws icons: the image of an icon name at a size in device px (the view keeps
+    /// its SVG), none where the name has no file. Without it an icon is its glyph.
+    pub icons: Option<Icons<'a>>,
 }
+
+/// The image of an icon NAME at PX device px (`KitEnv::icons`).
+#[derive(Clone, Copy)]
+pub struct Icons<'a>(pub &'a dyn Fn(&str, u32) -> Option<ImageId>);
+
+impl std::fmt::Debug for Icons<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Icons")
+    }
+}
+
+/// An icon's size in logical px (Lucide at 16, as the Explorer draws them).
+pub const ICON_PX: u16 = 16;
 
 /// The user's density (`drgnx-look-density`): the sizes the kit's `(density KEY)` geometry takes. On the wire, its
 /// name; an env without one is comfortable.
@@ -97,6 +113,10 @@ pub enum Comp {
         text: String,
         #[serde(default)]
         state: State,
+        /// An icon before the text (a file kind, a folder): its name, an image where the env draws icons, else its
+        /// glyph.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
     },
@@ -152,6 +172,7 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             twisty,
             text,
             state,
+            icon,
             action,
         } => {
             let variant = [kind.name(), env.density.name()];
@@ -171,9 +192,27 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             let lead_chars =
                 usize::from(g.tty_pad) + usize::from(*depth) * usize::from(g.tty_indent);
             pad(b, env, lead, lead_chars, face);
-            if let (Some(open), Some((closed_name, open_name))) = (twisty, g.twisty) {
-                let mark = glyph(env, if *open { open_name } else { closed_name });
-                b.push(&format!("{mark} "), face);
+            // the twisty and the icon: images then a gap where the env draws icons, else glyphs then a space
+            let twisty_name = match (twisty, g.twisty) {
+                (Some(open), Some((closed, opened))) => Some(if *open { opened } else { closed }),
+                _ => None,
+            };
+            for name in twisty_name.into_iter().chain(icon.as_deref()) {
+                let mark = glyph(env, name);
+                match env
+                    .icons
+                    .filter(|_| !env.tty)
+                    .and_then(|i| (i.0)(name, px(ICON_PX, env.scale)))
+                {
+                    Some(id) => {
+                        b.image(id, mark);
+                        pad(b, env, px(g.gap, env.scale), 0, face);
+                    }
+                    None if !mark.is_empty() => {
+                        b.push(&format!("{mark} "), face);
+                    }
+                    None => {}
+                }
             }
             b.push(text, face);
             pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
@@ -223,6 +262,7 @@ mod tests {
             twisty,
             text: "a".into(),
             state: State::Rest,
+            icon: None,
             action: None,
         }
     }
@@ -238,6 +278,7 @@ mod tests {
             tty: true,
             glyphs: &glyphs,
             density: Density::Comfortable,
+            icons: None,
         };
         assert_eq!(expand_rows(&env, "k", &row(Some(true)))[0].text, "   v a ");
         assert_eq!(expand_rows(&env, "k", &row(Some(false)))[0].text, "   > a ");
@@ -247,6 +288,7 @@ mod tests {
             tty: true,
             glyphs: &[],
             density: Density::Comfortable,
+            icons: None,
         };
         assert_eq!(expand_rows(&env, "k", &row(Some(true)))[0].text, "   ⌄ a ");
         assert_eq!(expand_rows(&env, "k", &row(None))[0].key, "k/0");
@@ -261,6 +303,7 @@ mod tests {
             twisty: None,
             text: "a".into(),
             state: State::Selected,
+            icon: None,
             action: None,
         };
         let r = &expand_rows(
@@ -269,6 +312,7 @@ mod tests {
                 tty: false,
                 glyphs: &[],
                 density: Density::Comfortable,
+                icons: None,
             },
             "k",
             &c,
@@ -286,6 +330,43 @@ mod tests {
     }
 
     #[test]
+    fn twisty_and_icon_are_images_where_the_env_draws_icons() {
+        // a tree row with an open twisty and a folder icon: two images (16 px at 1.25: 20) each with the row's gap
+        // after it (6 at 1.25: 8); without icons, the chevron's glyph and a space, and an icon with no glyph is left out
+        let c = Comp::Row {
+            kind: RowKind::Tree,
+            depth: 0,
+            twisty: Some(true),
+            text: "src".into(),
+            state: State::Rest,
+            icon: Some("folder".into()),
+            action: None,
+        };
+        let img = |name: &str, px: u32| {
+            Some(ImageId {
+                hash: if name == "folder" { 2 } else { 1 } * 1000 + u64::from(px),
+                epoch: 0,
+            })
+        };
+        let env = |icons| KitEnv {
+            scale: 1.25,
+            tty: false,
+            glyphs: &[],
+            density: Density::Comfortable,
+            icons,
+        };
+        let r = &expand_rows(&env(Some(Icons(&img))), "k", &c)[0];
+        let ids: Vec<u64> = r.images.iter().map(|(_, id, _)| id.hash).collect();
+        assert_eq!(ids, vec![1020, 2020]);
+        assert_eq!(r.images[0].0, 1);
+        assert_eq!(r.spaces, vec![(0, 8, 0), (2, 8, 0), (4, 8, 0), (8, 8, 0)]);
+        assert_eq!(r.text, "     src ");
+        let plain = &expand_rows(&env(None), "k", &c)[0];
+        assert!(plain.images.is_empty());
+        assert_eq!(plain.text, " ⌄ src ");
+    }
+
+    #[test]
     fn roomy_env_indents_14() {
         // a tree level is the density's `tree-indent`: 12 at comfortable, 14 at roomy
         let at = |density| {
@@ -295,6 +376,7 @@ mod tests {
                     tty: false,
                     glyphs: &[],
                     density,
+                    icons: None,
                 },
                 "k",
                 &row(None),
