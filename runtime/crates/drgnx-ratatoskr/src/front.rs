@@ -744,6 +744,12 @@ impl Front {
             Params::MinimapWatch(p) => crate::view::minimap::watch(self, &caller, p)
                 .await
                 .map(|b| json!(b)),
+            Params::FoldsSave(p) => crate::editor::anchors::save(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::FoldsLoad(p) => crate::editor::anchors::load(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
             Params::OutlineScopes(p) => crate::view::outline::scopes(self, p)
                 .await
                 .map(|r| json!(r)),

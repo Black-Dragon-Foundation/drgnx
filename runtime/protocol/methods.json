@@ -20934,6 +20934,212 @@
       "classes": [
         "user"
       ],
+      "doc": "the folds and pinned regions kept for a file (asked when it opens): the editor matches each to its text by kind and first-line hash within 50 lines",
+      "name": "folds/load",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`folds/load`: the folds and pins kept for PATH in WORKTREE.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktree",
+          "path"
+        ],
+        "title": "FoldsLoad",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Anchor": {
+            "additionalProperties": false,
+            "description": "One fold or pin: its kind, its first and last line (from 1), the hash of its first line's trimmed text, its name,\nand a fold's kind (`function`, `class`, …, or `manual` for a fold made from a selection).  OPEN: a manual fold kept\nunfolded.",
+            "properties": {
+              "end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "fold_kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hash": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/AnchorKind"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "open": {
+                "type": "boolean"
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "start",
+              "end",
+              "hash"
+            ],
+            "type": "object"
+          },
+          "AnchorKind": {
+            "description": "What an anchor is.",
+            "oneOf": [
+              {
+                "const": "fold",
+                "description": "A folded range, or a manual fold (`fold_kind` \"manual\").",
+                "type": "string"
+              },
+              {
+                "const": "pin",
+                "description": "A pinned region (X5).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The answer of `folds/load`, in the order they were saved.",
+        "properties": {
+          "anchors": {
+            "items": {
+              "$ref": "#/$defs/Anchor"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "anchors"
+        ],
+        "title": "FoldsLoaded",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a file's folds and pinned regions now (sent on kill, save and an idle 30 s after a fold changes): kept as Urdr anchor records per worktree and path, replacing the file's last ones; true when they changed",
+      "name": "folds/save",
+      "params": {
+        "$defs": {
+          "Anchor": {
+            "additionalProperties": false,
+            "description": "One fold or pin: its kind, its first and last line (from 1), the hash of its first line's trimmed text, its name,\nand a fold's kind (`function`, `class`, …, or `manual` for a fold made from a selection).  OPEN: a manual fold kept\nunfolded.",
+            "properties": {
+              "end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "fold_kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hash": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/AnchorKind"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "open": {
+                "type": "boolean"
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "start",
+              "end",
+              "hash"
+            ],
+            "type": "object"
+          },
+          "AnchorKind": {
+            "description": "What an anchor is.",
+            "oneOf": [
+              {
+                "const": "fold",
+                "description": "A folded range, or a manual fold (`fold_kind` \"manual\").",
+                "type": "string"
+              },
+              {
+                "const": "pin",
+                "description": "A pinned region (X5).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`folds/save`: the folds and pins of PATH (relative) in WORKTREE (absolute) are ANCHORS now (none: forget them).",
+        "properties": {
+          "anchors": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Anchor"
+            },
+            "type": "array"
+          },
+          "path": {
+            "type": "string"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktree",
+          "path"
+        ],
+        "title": "FoldsSave",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "how past forecasts fared against the finished tasks: coverage of the p90 and the median actual over p50, per role and profile",
       "name": "forecast/accuracy",
       "params": {

@@ -444,6 +444,8 @@ mod tests {
         ]);
         // one hunk staged in git's index
         want.extend(["git/stage-hunk"]);
+        // a file's folds and pinned regions, as Urdr anchor records
+        want.extend(["folds/save"]);
         // the Source Control view's: the index, the working tree, commits, branches, stashes and the remotes
         want.extend([
             "git/checkout",

@@ -1441,6 +1441,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `extensions/recommended` | user | `{ids: [string], version: natnum}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
+| `folds/load` | user | `{path: string, worktree: string}` | `{anchors: [Anchor]}` | no |
+| `folds/save` | user | `{anchors?: [{end: natnum, fold_kind?: string, hash: string, kind: "fold" \| "pin", name?: string, open?: boolean, start: natnum}], path: string, worktree: string}` | `boolean` | yes |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
 | `forecast/get` | user | `{job: Id, remaining?: boolean}` | `Forecast` | no |
 | `forecast/plan` | user | `{plans: [string]}` | `{forecast: Forecast, running?: [RunningPlan]}` | no |
@@ -3258,6 +3260,19 @@ With the labels goes the file's `folds` layer (`items: [[first line, last line, 
 fetched pack's in its parse worker; [packs.md](packs.md), "Fold queries"). A file with no grammar has no `folds`
 layer. Nidhogg takes it as the line model's `hub` fold source for a buffer that has no tree-sitter parser of its own;
 one with a parser folds by the same query in the editor.
+
+### Folds remembered (`folds/save`, `folds/load`)
+
+A file's folds and pinned regions are Urdr entities of kind `anchor` (`editor/anchors.rs`), one for each, keyed by the
+file's worktree (absolute) and its path in it: `data` holds `{worktree, path, i, kind: "fold" | "pin", start, end,
+hash, name?, fold_kind?, open?}`, lines from 1, `hash` what the editor finds the first line again by, `fold_kind` the
+fold table's kind or `manual`, `open` a manual fold not folded, `i` the order. `folds/save {worktree, path, anchors}`
+replaces the file's set in one transaction (the old entities retired, the new created; an empty set forgets the file)
+and answers whether it wrote: a set equal to the kept one is read first and writes nothing, so the editor's save on
+every kill costs no transaction. `folds/load {worktree, path}` answers `{anchors}` in their order. Limits: 20,000
+anchors a file, paths of 4 KiB, names, hashes and kinds of 256 bytes. The editor sends the set when the file is saved
+or killed and 30 s idle after a fold change, asks for it in `find-file-hook`, and finds each again within 50 lines by
+its hash (module `editor/fold`, `drgnx-fold-remember`; [the guide](../guide/editing.md), "Folding").
 
 ### The agent panel's rows
 

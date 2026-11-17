@@ -131,6 +131,8 @@
   "extensions/recommended": ["user"],
   "extensions/rows": ["user"],
   "extensions/search": ["user", "agent"],
+  "folds/load": ["user"],
+  "folds/save": ["user"],
   "forecast/accuracy": ["user"],
   "forecast/get": ["user"],
   "forecast/plan": ["user"],

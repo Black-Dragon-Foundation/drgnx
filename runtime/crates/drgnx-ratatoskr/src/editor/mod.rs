@@ -12,6 +12,7 @@
 //! about to land: its pending lines; a projected agent: its lines and its conflicts with the user's). Nothing is built
 //! for a file no view shows.
 
+pub mod anchors;
 pub mod buffer_view;
 pub mod follow;
 pub mod marks;

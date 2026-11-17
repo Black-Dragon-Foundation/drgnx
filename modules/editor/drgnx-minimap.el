@@ -147,6 +147,9 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
     (change-previous "Previous Change" drgnx-marks-previous-change "Go to the previous change against the last commit")
     (bookmark-next "Next Bookmark" drgnx-marks-next-bookmark "Go to the next bookmark in this file")
     (bookmark-previous "Previous Bookmark" drgnx-marks-previous-bookmark "Go to the previous bookmark in this file")
+    (bookmark-toggle "Toggle Bookmark" drgnx-marks-bookmark-toggle "Set a bookmark on this line, or clear it")
+    (bookmark-name "Name Bookmark…" drgnx-marks-bookmark-name "Name the bookmark on this line")
+    (bookmark-go "Go to Bookmark…" drgnx-marks-bookmark-go "Go to a bookmark, this file's first")
     (agent-edit-next "Next Agent Edit" drgnx-marks-next-agent-edit "Go to the next place an agent edited in this file")
     (agent-edit-previous "Previous Agent Edit" drgnx-marks-previous-agent-edit
                          "Go to the previous place an agent edited in this file"))

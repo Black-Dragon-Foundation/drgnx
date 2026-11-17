@@ -20,7 +20,8 @@ pub struct LinkKind {
 /// orchestration records: `evidence` (one fact a gate reads), `rule_pack` (a project's gate rules), `batch` (a merge
 /// batch) and `followup` (a held line's DEFERRED row), `debug_run` (a recorded debug run: graphical debugging D1) and
 /// `debug_hypothesis` (a partner agent's hypothesis about a bug: D4), and `comment` (a thread on a paragraph of a spec,
-/// plan, decision or task: the frontend flow's paragraph comments).
+/// plan, decision or task: the frontend flow's paragraph comments), and `anchor` (a fold or pinned region the editor
+/// keeps for a file: the minimap and folding design, F7).
 pub const ENTITY_KINDS: &[&str] = &[
     "task",
     "decision",
@@ -57,6 +58,7 @@ pub const ENTITY_KINDS: &[&str] = &[
     "debug_run",
     "debug_hypothesis",
     "comment",
+    "anchor",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -212,7 +214,8 @@ mod tests {
                 "followup",
                 "debug_run",
                 "debug_hypothesis",
-                "comment"
+                "comment",
+                "anchor"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS

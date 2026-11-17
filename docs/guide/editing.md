@@ -105,6 +105,12 @@ again, **Toggle Fold** does whichever applies. Fold on a line already folded fol
   Fold…** and **Remove Manual Fold** act on the one at the cursor. A fold you made wins over the file's own blocks on
   its first line.
 - Searching (`C-s`, the Find widget's isearch) opens a fold it passes through.
+- A file's folds are remembered: what is folded, and the folds you made, named or not, folded or open, come back when
+  you open the file again. Each is found again by the text of its first line, up to 50 lines from where it was, so
+  lines added or removed above it do not lose it; one whose first line changed or went is dropped. The hub keeps them
+  per project and file, sent when you save, when you close the file and 30 s after a fold change once you stop
+  typing. With no hub running, the folds stay in the open file and go to the hub when it comes back.
+  `drgnx-fold-remember` (on) turns this off.
 
 Where blocks come from (`drgnx-fold-source`): in code with a tree-sitter mode, the syntax tree, by the language pack's
 fold query — functions, classes, comments, imports, tests and blocks as the language has them, kept current as you type

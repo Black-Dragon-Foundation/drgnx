@@ -48,6 +48,15 @@
 (declare-function nidhogg-lines-describe "nidhogg-lines" (&optional buffer))
 (declare-function bookmark-get-filename "bookmark" (bookmark-name-or-record))
 (declare-function bookmark-get-position "bookmark" (bookmark-name-or-record))
+(declare-function bookmark-maybe-load-default-file "bookmark" ())
+(declare-function bookmark-make-record-default "bookmark" (&optional no-file no-context posn))
+(declare-function bookmark-store "bookmark" (name alist no-overwrite))
+(declare-function bookmark-delete "bookmark" (bookmark-name &optional batch))
+(declare-function bookmark-rename "bookmark" (old-name &optional new-name))
+(declare-function bookmark-jump "bookmark" (bookmark &optional display-func))
+(declare-function bookmark-get-bookmark "bookmark" (bookmark-name-or-record &optional noerror))
+(declare-function bookmark-name-from-full-record "bookmark" (bookmark-record))
+(declare-function bookmark-default-handler "bookmark" (bmk-record))
 (declare-function flymake-diagnostic-text "flymake" (diag))
 (declare-function flymake-goto-next-error "flymake" (&optional n filter interactive))
 (declare-function flymake-goto-prev-error "flymake" (&optional n filter interactive))
@@ -202,6 +211,82 @@ kind, one after another, is one mark from its first line to its last."
         (let ((marks (drgnx-marks--bookmarks)))
           (when (or marks (assq 'bookmarks drgnx-ruler--sources))
             (drgnx-ruler-source 'bookmarks (and marks #'drgnx-marks--bookmarks))))))))
+
+;;;; Bookmark commands: bookmark.el records with the handler `drgnx-bookmark'
+
+(defun drgnx-bookmark (bookmark)
+  "bookmark.el's handler of the bookmarks drgnx sets: BOOKMARK's file at its line, found again by the text around it
+when the line moved, as bookmark.el's own."
+  (bookmark-default-handler bookmark))
+
+(defun drgnx-marks--bookmarks-ready ()
+  "bookmark.el loaded, with the user's bookmarks file read."
+  (require 'bookmark)
+  (bookmark-maybe-load-default-file))
+
+(defun drgnx-marks--in-file-p (bookmark file)
+  "Whether BOOKMARK is in FILE (a true name)."
+  (let ((f (bookmark-get-filename bookmark)))
+    (and f file (string= (file-truename (expand-file-name f)) file))))
+
+(defun drgnx-marks--line-bookmarks ()
+  "The bookmarks on point's line of this buffer's file."
+  (let ((file (and buffer-file-name (file-truename buffer-file-name)))
+        (bol (line-beginning-position)) (eol (line-end-position)))
+    (seq-filter (lambda (b) (let ((pos (bookmark-get-position b)))
+                              (and pos (<= bol pos eol) (drgnx-marks--in-file-p b file))))
+                bookmark-alist)))
+
+(defun drgnx-marks--bookmark-set (name)
+  "Set a bookmark named NAME at the start of point's line."
+  (unless buffer-file-name (user-error "Bookmarks are on lines of files"))
+  (save-excursion
+    (beginning-of-line)
+    (bookmark-store name (cons (cons 'handler #'drgnx-bookmark) (bookmark-make-record-default)) nil)))
+
+(defun drgnx-marks-bookmark-toggle ()
+  "Set a bookmark on this line, or clear the bookmarks on it."
+  (interactive)
+  (drgnx-marks--bookmarks-ready)
+  (if-let* ((on (drgnx-marks--line-bookmarks)))
+      (dolist (b on) (bookmark-delete (bookmark-name-from-full-record b) t))
+    (let* ((base (format "%s:%d" (file-name-nondirectory (or buffer-file-name (buffer-name))) (line-number-at-pos)))
+           (name base) (n 2))
+      (while (bookmark-get-bookmark name t) (setq name (format "%s <%d>" base n) n (1+ n)))
+      (drgnx-marks--bookmark-set name))))
+
+(defun drgnx-marks-bookmark-name (name)
+  "Name the bookmark on this line NAME, setting one when there is none."
+  (interactive (progn (drgnx-marks--bookmarks-ready)
+                      (list (read-string "Bookmark name: "
+                                         (when-let* ((b (car (drgnx-marks--line-bookmarks))))
+                                           (bookmark-name-from-full-record b))))))
+  (drgnx-marks--bookmarks-ready)
+  (when (string-empty-p (string-trim name)) (user-error "A bookmark needs a name"))
+  (let ((b (car (drgnx-marks--line-bookmarks))))
+    (unless (and b (equal name (bookmark-name-from-full-record b)))
+      (when (bookmark-get-bookmark name t) (user-error "A bookmark is named %s already" name))
+      (if b (bookmark-rename (bookmark-name-from-full-record b) name) (drgnx-marks--bookmark-set name)))))
+
+(defun drgnx-marks-bookmark-go (name)
+  "Go to the bookmark NAME: asked among every bookmark, this file's first, by line."
+  (interactive
+   (progn
+     (drgnx-marks--bookmarks-ready)
+     (let* ((file (and buffer-file-name (file-truename buffer-file-name)))
+            (here (seq-filter (lambda (b) (drgnx-marks--in-file-p b file)) bookmark-alist))
+            (names (mapcar #'bookmark-name-from-full-record
+                           (append (sort (copy-sequence here) (lambda (a b) (< (or (bookmark-get-position a) 0) (or (bookmark-get-position b) 0))))
+                                   (seq-remove (lambda (b) (memq b here)) bookmark-alist)))))
+       (unless names (user-error "No bookmarks yet"))
+       (list (completing-read "Go to bookmark: "
+                              (lambda (string pred action)
+                                (if (eq action 'metadata)
+                                    '(metadata (category . bookmark) (display-sort-function . identity))
+                                  (complete-with-action action names string pred)))
+                              nil t)))))
+  (drgnx-marks--bookmarks-ready)
+  (bookmark-jump name))
 
 ;;;; Uses of the symbol at point
 
