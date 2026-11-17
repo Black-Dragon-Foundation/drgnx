@@ -2,14 +2,13 @@
 ;; test-class: cond
 ;; test-pattern: handshake
 
-;; Pattern D (sway, Nidhogg's mouse sensors): the Explorer with a file whose name runs to the sidebar's edge, so the
+;; Pattern D (any compositor, Nidhogg's mouse sensors): the Explorer with a file whose name runs to the sidebar's edge, so the
 ;; hub cuts it at the full body and its tail leaves the ⋯ out (`drgnx-row-tail-short').  The compositor's pointer
 ;; moves onto its row: the ⋯ is drawn over the end of the name at its place (`drgnx-wb-cover-sense'), and a click
 ;; there lands on it; off the row, the cover goes, and the module turned off leaves no cover anywhere.
 
 (require 'ert)
 (require 'cl-lib)
-(require 'json)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
 (require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
@@ -25,21 +24,6 @@
 (load (expand-file-name "modules/ui/drgnx-look-fonts" drgnx-ui-look-explorer-cover--repo) nil t)
 (load (expand-file-name "modules/ui/drgnx-look-density" drgnx-ui-look-explorer-cover--repo) nil t)
 (load (expand-file-name "themes/drgnx-theme-gen" drgnx-ui-look-explorer-cover--repo) nil t)
-
-(defun drgnx-ui-look-explorer-cover--origin ()
-  "Where the focused sway window's client area starts in the layout, (X . Y)."
-  (let ((json (with-temp-buffer
-                (call-process "swaymsg" nil t nil "-t" "get_tree")
-                (goto-char (point-min))
-                (json-parse-buffer :object-type 'alist :array-type 'list)))
-        found)
-    (cl-labels ((walk (n)
-                  (when (eq (alist-get 'focused n) t) (setq found n))
-                  (mapc #'walk (alist-get 'nodes n))
-                  (mapc #'walk (alist-get 'floating_nodes n))))
-      (walk json))
-    (let ((r (alist-get 'rect found)) (w (alist-get 'window_rect found)))
-      (cons (+ (alist-get 'x r) (alist-get 'x w)) (+ (alist-get 'y r) (alist-get 'y w))))))
 
 (defun drgnx-ui-look-explorer-cover--settle ()
   (drgnx-uitest-run nil)
@@ -104,10 +88,12 @@ the name at the ⋯'s place, where a click lands on it; off the row the cover go
                    (on-dots (lambda ()
                               (let ((s (posn-string (posn-at-x-y dots-x (+ y top (/ h 2)) w))))
                                 (and (stringp (car s)) (get-text-property (cdr s) 'drgnx-row-control (car s))))))
-                   (origin (drgnx-ui-look-explorer-cover--origin))
-                   (s (drgnx-pixels-scale))   ; a Lisp pixel is a device pixel; sway takes logical ones
+                   ;; the frame's place from the harness, on any compositor (sway's tree is not there under KWin)
+                   (origin (drgnx-uitest-frame-origin))
+                   (s (drgnx-pixels-scale))   ; a Lisp pixel is a device pixel; the pointer takes logical ones
                    (point-at (lambda (x y) (drgnx-uitest-pointer-set (+ (car origin) (round (/ x s)))
                                                                      (+ (cdr origin) (round (/ y s)))))))
+              (should origin)
               ;; at rest: the name runs under the ⋯'s place, no ⋯ drawn
               (should-not (funcall on-dots))
               (should-not (drgnx-ui-look-explorer-cover--covers))
