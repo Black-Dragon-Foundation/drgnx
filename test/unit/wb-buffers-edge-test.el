@@ -25,11 +25,14 @@
        (unwind-protect
            (progn
              (delete-other-windows)
-             (drgnx-buffers-setup)
+             ;; set up as a module's setup does, so its teardown below removes what it added
+             (let ((drgnx-modules--current 'test/buffers-edge) (drgnx-modules--setup-load load-file-name))
+               (drgnx-buffers-setup))
              (drgnx-signal--flush)
              (drgnx-wb-show-sidebar)
              ,@body)
          (drgnx-wb-hide-sidebar)
+         (drgnx-modules--unwind 'test/buffers-edge)
          (delete-other-windows)
          (dolist (b (buffer-list))
            (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b)))
