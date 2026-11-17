@@ -3184,7 +3184,7 @@ The Outline section's rows: the definitions of the file in the editor, built by 
   edit history tracks asks through it (`drgnx-history-ask`: its changes go first), another by its file. The last
   `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
 
-### The minimap's labels (`minimap/watch`)
+### The minimap's labels and folds (`minimap/watch`)
 
 `minimap/watch {file, on}` says the editor shows FILE (absolute, its true name) in a minimap, or no longer. While a
 connection watches it, the hub sends it the file's definitions as the minimap's `labels` layer (`view/minimap.rs`):
@@ -3195,6 +3195,12 @@ Outline's 1 MiB; a larger file gets an empty layer). It is sent before the answe
 hub's clock) after the edits to it pause (`outline::touched` calls `minimap::touched`); a later ask or `on: false`
 drops a pending send. Versions come from one counter for the hub, so a later layer is always newer. A connection's
 watches end with it. MARK sections are not the hub's: Nidhogg's line model finds them.
+
+With the labels goes the file's `folds` layer (`items: [[first line, last line, kind]]`, lines from 1, kind a name from
+`hrafn::chunk::folds::KINDS`): the language pack's fold query over the same text (`hrafn::chunk::folds::of_file`; a
+fetched pack's in its parse worker; [packs.md](packs.md), "Fold queries"). A file with no grammar has no `folds`
+layer. Nidhogg takes it as the line model's `hub` fold source for a buffer that has no tree-sitter parser of its own;
+one with a parser folds by the same query in the editor.
 
 ### The agent panel's rows
 

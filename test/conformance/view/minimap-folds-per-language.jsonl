@@ -1,0 +1,40 @@
+{"scenario": "view/minimap-folds-per-language", "requires": ["v1", "test-hooks"], "doc": "The hub's fold ranges (minimap and folding design \u00a77.4, the source for a buffer with no parser of its own) for each of the eleven built-in tree-sitter languages: each pack's queries/folds.scm against its pinned grammar, on a fixture in test/conformance/fixtures/folds, pinned as a golden list of [first line, last line, kind] (lines from 1). A node within one line is no range; of the ranges starting on one line the largest stays, on a tie the more specific kind."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q -b main && cp $SCENARIOS/fixtures/folds/* . && git add . && git -c user.email=t@example.invalid -c user.name=t commit -qm base"], "expect_code": 0}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.rs", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.rs", "layer": "folds", "version": "$number", "items": [[1, 4, "import"], [6, 7, "comment"], [8, 11, "class"], [13, 21, "class"], [14, 20, "function"], [15, 18, "block"], [24, 29, "test"], [26, 28, "test"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.c", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.c", "layer": "folds", "version": "$number", "items": [[3, 4, "comment"], [5, 8, "class"], [10, 18, "function"], [12, 18, "block"], [14, 16, "block"], [20, 22, "block"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.cpp", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.cpp", "layer": "folds", "version": "$number", "items": [[3, 14, "class"], [5, 12, "class"], [7, 10, "function"], [8, 10, "block"], [16, 22, "function"], [17, 22, "block"], [18, 20, "function"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.py", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.py", "layer": "folds", "version": "$number", "items": [[1, 4, "import"], [7, 19, "class"], [8, 9, "comment"], [11, 19, "function"], [12, 15, "block"], [16, 19, "block"], [18, 19, "block"], [22, 24, "test"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.js", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.js", "layer": "folds", "version": "$number", "items": [[1, 3, "import"], [5, 6, "comment"], [7, 11, "class"], [8, 10, "function"], [13, 15, "function"], [17, 21, "test"], [18, 20, "test"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.ts", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.ts", "layer": "folds", "version": "$number", "items": [[1, 4, "class"], [6, 9, "class"], [11, 14, "function"], [16, 18, "test"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.tsx", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.tsx", "layer": "folds", "version": "$number", "items": [[1, 3, "class"], [5, 11, "function"], [6, 10, "block"], [7, 9, "block"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 8, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 9, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.go", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.go", "layer": "folds", "version": "$number", "items": [[3, 6, "import"], [8, 11, "class"], [13, 18, "function"], [14, 16, "block"], [20, 22, "test"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 9, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 10, "method": "minimap/watch", "params": {"file": "$ROOT/repo/A.java", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/A.java", "layer": "folds", "version": "$number", "items": [[3, 4, "comment"], [5, 15, "class"], [6, 9, "function"], [7, 9, "block"], [11, 14, "test"], [12, 14, "block"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 10, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 11, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.cs", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.cs", "layer": "folds", "version": "$number", "items": [[3, 20, "class"], [4, 20, "block"], [5, 19, "class"], [6, 19, "block"], [9, 12, "function"], [10, 12, "block"], [14, 18, "test"], [16, 18, "block"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 11, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 12, "method": "minimap/watch", "params": {"file": "$ROOT/repo/a.sh", "on": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/a.sh", "layer": "folds", "version": "$number", "items": [[3, 6, "function"], [8, 12, "block"], [10, 11, "block"], [14, 16, "block"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 12, "result": true}}

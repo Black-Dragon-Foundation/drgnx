@@ -94,6 +94,8 @@ drgnx is free software under the **GNU General Public License v3.0 or later** (s
 Code derived from [Emacs Bedrock](https://codeberg.org/ashton314/emacs-bedrock) keeps its MIT notice.
 The Seatbelt base policy in `runtime/crates/gleipnir/src/sbpl/base.sbpl` is OpenAI Codex's, Copyright 2025 OpenAI, under the
 Apache License 2.0 (`LICENSES/Apache-2.0.txt`).
+The language packs' fold queries (`packs/*/queries/folds.scm`) are drgnx's own; which nodes fold follows
+[nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter)'s `folds.scm` files, under the Apache License 2.0.
 The Black Dragon Foundation logo (`etc/images/banner.jpg`, `etc/images/drgnx-logo.jpg`) is Copyright 2026 Black Dragon
 Foundation, under the GPL v3.0 or later like the rest of drgnx.
 The app icon (`etc/images/icon/`) is an AI redraw of the project's dragon art, made at 1024 px and scaled down for the
