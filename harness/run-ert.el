@@ -44,6 +44,49 @@ killed at its deadline leaves no results, and its runner reads this instead, to 
        (format "end %s %s" (ert-test-name test)
                (cond ((ert-test-passed-p r) "passed") ((ert-test-skipped-p r) "skipped") (t "failed")))))))
 
+(defconst drgnx-run-ert--report-string-max 2000
+  "The characters of each string in a failure's condition that ERT's report prints (`drgnx-run-ert--cut-strings').")
+
+(defun drgnx-run-ert--cut-strings (obj &optional depth)
+  "OBJ with every string longer than `drgnx-run-ert--report-string-max' cut to it (saying how much was left out), in
+conses and vectors to DEPTH (default 8) levels; a copy where something was cut, else OBJ itself."
+  (let ((depth (or depth 8)) (max drgnx-run-ert--report-string-max))
+    (cond ((and (stringp obj) (> (length obj) max))
+           (format "%s… (%d more characters)" (substring obj 0 max) (- (length obj) max)))
+          ((<= depth 0) obj)
+          ((consp obj)
+           (let* ((a (drgnx-run-ert--cut-strings (car obj) (1- depth)))
+                  (d (drgnx-run-ert--cut-strings (cdr obj) (1- depth))))
+             (if (and (eq a (car obj)) (eq d (cdr obj))) obj (cons a d))))
+          ((and (vectorp obj) (not (recordp obj)))
+           (let ((v (vconcat (mapcar (lambda (x) (drgnx-run-ert--cut-strings x (1- depth))) obj))))
+             (if (cl-every #'eq v obj) obj v)))
+          (t obj))))
+
+(defun drgnx-run-ert--report-off-the-echo-area (args)
+  "`ert-run-tests' advice (:filter-args) on ARGS (SELECTOR LISTENER …): ERT's report (the LISTENER) is bounded and,
+in a graphical session, kept off the echo area.  A failure's condition can be megabytes (a row's pixels): the report
+prints each string in it cut (`drgnx-run-ert--cut-strings'; the results keep it whole), and in a graphical session
+the listener runs with `inhibit-message', so the report goes to *Messages* only.  The echo area resizing to a 5 MB
+message laid out all of it without a quit check, so the session hung between rows (2026-11-17, kwin: a failed
+Explorer row, then 150 s in `bidi_find_bracket_pairs')."
+  (if (not (functionp (nth 1 args)))
+      args
+    (let ((listener (nth 1 args)) (gui (not noninteractive)))
+      (append (list (car args)
+                    (lambda (&rest event)
+                      (let* ((result (and (eq (car event) 'test-ended) (nth 3 event)))
+                             (condition (and (ert-test-result-with-condition-p result)
+                                             (ert-test-result-with-condition-condition result)))
+                             (inhibit-message (or gui inhibit-message)))
+                        (if (not condition)
+                            (apply listener event)
+                          (setf (ert-test-result-with-condition-condition result)
+                                (drgnx-run-ert--cut-strings condition))
+                          (unwind-protect (apply listener event)
+                            (setf (ert-test-result-with-condition-condition result) condition))))))
+              (nthcdr 2 args)))))
+
 (defvar drgnx-run-ert--self)
 
 (defun drgnx-run-ert--off-files ()
@@ -888,6 +931,7 @@ names the run would run, in that order, to FILE and runs none."
   "Load every *-test.el under DIR (or the files of the list DIR: a shard), run all tests, write a JSON
 summary to RESULTS-FILE.  Return t if every test passed."
   (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
+  (advice-add 'ert-run-tests :filter-args #'drgnx-run-ert--report-off-the-echo-area)
   (setq drgnx-run-ert--progress (and results-file (concat results-file ".progress")))
   (when drgnx-run-ert--progress
     (ignore-errors (delete-file drgnx-run-ert--progress))

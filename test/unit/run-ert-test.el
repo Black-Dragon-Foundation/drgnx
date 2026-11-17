@@ -46,6 +46,31 @@ characters: a backtrace's frames print whole forms, which would push its error l
             (should (equal (plist-get (aref (plist-get r :failures) 0) :name) "drgnx-fixture/fails"))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-graphical-sessions-report-stays-off-the-echo-area ()
+  ;; ERT's report `message's a failure's condition, megabytes for a row's pixels; in a graphical session the echo
+  ;; area resized to it in a bidi scan with no quit check, and the session hung between rows (2026-11-17, kwin)
+  (should (advice-member-p #'drgnx-run-ert--report-off-the-echo-area 'ert-run-tests))   ; this run has it
+  (let* ((got 'not-called) (seen nil)
+         (listener (lambda (&rest event)
+                     (setq got inhibit-message)
+                     (when (nth 3 event) (setq seen (ert-test-result-with-condition-condition (nth 3 event))))))
+         (gui (let ((noninteractive nil)) (drgnx-run-ert--report-off-the-echo-area (list 'sel listener 'more))))
+         (batch (drgnx-run-ert--report-off-the-echo-area (list 'sel listener))))
+    (should (equal (list (car gui) (nth 2 gui)) '(sel more)))
+    (let ((inhibit-message nil)) (funcall (nth 1 gui) 'test-started))
+    (should (eq got t))
+    ;; a batch Emacs prints it to stderr, as before
+    (let ((inhibit-message nil)) (funcall (nth 1 batch) 'test-started))
+    (should (eq got nil))
+    ;; the report prints a megabyte string in a failure's condition cut; the result keeps it whole
+    (let* ((big (make-string 1000000 ?x))
+           (condition (list 'ert-test-failed (list (list 'should '(f)) :value (vector 1 big))))
+           (result (make-ert-test-failed :condition condition :backtrace nil :infos nil)))
+      (funcall (nth 1 batch) 'test-ended nil nil result)
+      (should (< (length (prin1-to-string seen)) 3000))
+      (should (string-match-p "(998000 more characters)" (prin1-to-string seen)))
+      (should (eq (ert-test-result-with-condition-condition result) condition)))))
+
 (ert-deftest drgnx-run-ert/a-run-notes-each-tests-start-and-end-beside-its-results ()
   "One Emacs's run (a GUI session's) writes RESULTS.progress as it goes: each test's start, then its end and result,
 so a run killed at its deadline, which writes no results, still says how far it got and which test was running."
