@@ -135,6 +135,14 @@ pub struct StartParams {
     /// `exec/stop` and the hub's stop still end it.  With `timebox_s` it is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_timebox: Option<bool>,
+    /// The progress guard's stall limit: seconds with no output, CPU under a tenth of a core and no IO before the job
+    /// ends `infra: stuck (stall)` (1 to 86400; default 1200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_s: Option<u64>,
+    /// The progress guard's silent limit: seconds with no output, whatever the CPU, before the job ends
+    /// `infra: stuck (silent)` (1 to 86400; default 2700).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent_s: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<ExecKind>,
     /// A container job's image: a name on `agents-container-images` (kind container only).

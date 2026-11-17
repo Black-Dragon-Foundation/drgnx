@@ -1262,6 +1262,11 @@ mod tests {
             a.windows(2).any(|w| w == ["-e", "CARGO_BUILD_JOBS=2"]),
             "{a:?}"
         );
+        // the job's deadline passes through from job-exec's environment (design §5.7)
+        assert!(
+            a.windows(2).any(|w| w == ["-e", "DRGNX_JOB_DEADLINE"]),
+            "{a:?}"
+        );
         assert!(!a.iter().any(|s| s.starts_with("--mount")
             || s.starts_with("--volume")
             || s.starts_with("--device")));

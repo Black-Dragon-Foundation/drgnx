@@ -128,6 +128,11 @@ pub struct UserJob {
     /// The job has no time box: `ExecSpec::timebox` is not used and the timer never ends it.
     #[serde(default)]
     pub no_timebox: bool,
+    /// The progress guard's stall and silent limits in seconds (`sleipnir::linux::progress`); none: the defaults.
+    #[serde(default)]
+    pub stall_s: Option<u64>,
+    #[serde(default)]
+    pub silent_s: Option<u64>,
 }
 
 impl ExecSpec {
@@ -235,6 +240,10 @@ pub struct Hooks {
     pub cards: Option<hostgrants::Hub>,
     /// The providers' key variables (`key_env`) as the settings say now: never in a user's job's environment.
     pub key_envs: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// The cgroup folder of a local job's slice, by job id, for the progress guard; none: the job's
+    /// `drgnx-job-<id>.slice` under this process's user manager (tests pass a fixture).
+    #[allow(clippy::type_complexity)]
+    pub guard_slice: Option<Arc<dyn Fn(&str) -> Option<PathBuf> + Send + Sync>>,
     /// The projects' edit histories and the state folder they live in: a runner's applied changes are one version
     /// there. None: they are applied unrecorded (tests).
     pub history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
@@ -268,6 +277,7 @@ impl Default for Hooks {
             nevers: None,
             cards: None,
             key_envs: Arc::new(Vec::new),
+            guard_slice: None,
             history: None,
             #[cfg(test)]
             plain_sessions: false,
@@ -3505,6 +3515,8 @@ fn user_job(sid: &Option<String>, kind: CheckKind, p: &StartParams) -> Result<Us
         memory_max: p.memory_max.as_ref().map(|m| m.to_string()),
         nice: p.nice,
         no_timebox: p.no_timebox == Some(true),
+        stall_s: None,
+        silent_s: None,
     })
 }
 

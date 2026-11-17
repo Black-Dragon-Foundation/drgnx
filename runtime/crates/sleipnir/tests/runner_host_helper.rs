@@ -121,6 +121,8 @@ fn spec(id: &str, dir: &Path, argv: Vec<String>, helper: HelperSpec) -> JobExec 
             reserve_mib: 128,
         },
         timeout_s: 300,
+        stall_s: None,
+        silent_s: None,
         helper: Some(helper),
     }
 }

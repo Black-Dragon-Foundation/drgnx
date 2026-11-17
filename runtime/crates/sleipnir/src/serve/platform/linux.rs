@@ -292,6 +292,8 @@ impl Platform for LinuxPlatform {
             expect: meta.spec.expect,
             grant: meta.grant,
             timeout_s: meta.spec.timeout_s,
+            stall_s: meta.spec.derived.stall_s,
+            silent_s: meta.spec.derived.silent_s,
             // every runner job has its helper: the disk watch, and its keys and proxy when it has them
             helper: Some(HelperSpec {
                 root: self.root.clone(),

@@ -216,6 +216,10 @@ pub struct Derived {
     /// `floor(log2(MiB))` of the frozen tree the job reads ([`tree_bucket`]): a history key class, so a tree ten times
     /// bigger keeps its own expected time and memory.
     pub tree_bucket: Option<u8>,
+    /// The progress guard's stall and silent limits in seconds, when the starter or the pack names them (none: the
+    /// defaults, `sleipnir::linux::progress`).
+    pub stall_s: Option<u64>,
+    pub silent_s: Option<u64>,
 }
 
 /// The history class of a tree of BYTES: `floor(log2(MiB))`, 0 below 2 MiB.

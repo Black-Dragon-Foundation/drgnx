@@ -294,6 +294,11 @@ mod tests {
             a.windows(2).any(|w| w == ["-e", "CARGO_BUILD_JOBS=2"]),
             "{a:?}"
         );
+        // its deadline passes through from the podman client's environment (design §5.7)
+        assert!(
+            a.windows(2).any(|w| w == ["-e", "DRGNX_JOB_DEADLINE"]),
+            "{a:?}"
+        );
         assert!(a.windows(2).any(|w| w == ["--memory-swap", "4G"]));
         assert!(a.contains(&"--oom-score-adj=1000".to_string()));
         let cgroup: Vec<&String> = a

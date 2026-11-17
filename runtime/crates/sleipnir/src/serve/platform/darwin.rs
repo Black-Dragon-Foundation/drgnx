@@ -273,6 +273,8 @@ impl Platform for DarwinPlatform {
             expect: meta.spec.expect,
             grant: meta.grant,
             timeout_s: meta.spec.timeout_s,
+            stall_s: None,
+            silent_s: None,
             helper: net.as_ref().map(|(l, port)| HelperSpec {
                 hub_allow: Some(dir.join(proxy::ALLOW)),
                 proxy_fd: Some(l.as_raw_fd()),

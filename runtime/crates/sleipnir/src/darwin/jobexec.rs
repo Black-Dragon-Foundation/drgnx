@@ -412,6 +412,8 @@ mod tests {
                 reserve_mib: 512,
             },
             timeout_s: 600,
+            stall_s: None,
+            silent_s: None,
             helper: None,
         }
     }

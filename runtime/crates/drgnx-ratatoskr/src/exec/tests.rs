@@ -660,6 +660,8 @@ async fn a_user_job_gets_its_name_env_and_nice() {
         memory_max: None,
         nice: Some(7),
         no_timebox: false,
+        stall_s: None,
+        silent_s: None,
     };
     let id = r.start(s).await.unwrap();
     let row = ended(&r, &id).await;
@@ -2391,4 +2393,146 @@ async fn without_a_reader_an_ended_job_is_busy_nowhere() {
     let r = open(d.path());
     run_to_done(&r, d.path(), "exit 0").await;
     assert!(!r.busy_in(d.path()));
+}
+
+/// A hub whose jobs' slices are SLICE (a fixture cgroup folder; none: unreadable).
+fn guard_open(root: &Path, slice: Option<PathBuf>) -> Runner {
+    let r = Runner::default();
+    r.open(
+        root.join("exec"),
+        Hooks {
+            guard_slice: Some(Arc::new(move |_| slice.clone())),
+            ..hooks()
+        },
+    );
+    r
+}
+
+/// A fixture slice that never moves: no CPU, no IO.
+fn idle_slice(root: &Path) -> PathBuf {
+    let s = root.join("slice");
+    std::fs::create_dir_all(&s).unwrap();
+    for (f, t) in [
+        ("memory.current", "1048576\n"),
+        ("cpu.stat", "usage_usec 1000\n"),
+        ("io.stat", ""),
+        ("memory.events", "oom 0\noom_kill 0\n"),
+    ] {
+        std::fs::write(s.join(f), t).unwrap();
+    }
+    s
+}
+
+/// SCRIPT as a job with the local rows' short limits (stall 2 s, silent 4 s: test settings, read every second).
+fn guarded_spec(root: &Path, script: &str) -> ExecSpec {
+    let mut s = spec(Starter::User, root, script, Duration::from_secs(60));
+    s.user.stall_s = Some(2);
+    s.user.silent_s = Some(4);
+    s
+}
+
+/// A local job stopped as stuck by RULE: `infra`, its `why`, `stuck.txt` and the log's last line.
+fn local_stuck(root: &Path, row: &ExecRow, id: &str, rule: &str) {
+    assert_eq!(row.status, ExecStatus::Infra, "{row:?}");
+    let dir = root.join("exec").join(id);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("why")).unwrap(),
+        format!("infra: stuck ({rule})")
+    );
+    let report = std::fs::read_to_string(dir.join("stuck.txt")).unwrap();
+    assert!(report.starts_with(&format!("stuck ({rule}): ")), "{report}");
+    let log = std::fs::read_to_string(dir.join("log")).unwrap();
+    assert!(
+        log.lines()
+            .last()
+            .is_some_and(|l| l.starts_with(&format!("=== stopped as stuck ({rule}, "))),
+        "{log}"
+    );
+}
+
+/// [C] The hub's own job that sleeps (its slice shows no CPU, no IO, and it prints nothing) stops at stall, as
+/// `infra: stuck (stall)`, with its report.
+#[tokio::test]
+async fn progress_local_idle_job_stops_at_stall() {
+    let d = tempfile::tempdir().unwrap();
+    let r = guard_open(d.path(), Some(idle_slice(d.path())));
+    let t0 = std::time::Instant::now();
+    let id = r.start(guarded_spec(d.path(), "sleep 60")).await.unwrap();
+    let row = ended(&r, &id).await;
+    local_stuck(d.path(), &row, &id, "stall");
+    assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
+}
+
+/// [C] A busy loop that prints nothing stops at silent; a slice the hub can't read never stalls (an unknown is no
+/// proof of idleness).
+#[tokio::test]
+async fn progress_local_busy_job_stops_at_silent() {
+    let d = tempfile::tempdir().unwrap();
+    let r = guard_open(d.path(), None);
+    let id = r
+        .start(guarded_spec(d.path(), "while :; do :; done"))
+        .await
+        .unwrap();
+    let row = ended(&r, &id).await;
+    local_stuck(d.path(), &row, &id, "silent");
+}
+
+/// [C] A job that prints every half second for longer than both limits is never stopped; it sees its deadline in
+/// `DRGNX_JOB_DEADLINE` (epoch seconds: its start plus its time box). A job with no limits named, no container and no
+/// test suite is not guarded.
+#[tokio::test]
+async fn progress_local_printing_job_is_not_stopped() {
+    let d = tempfile::tempdir().unwrap();
+    let r = guard_open(d.path(), Some(idle_slice(d.path())));
+    let start = now();
+    let script = "echo deadline=$DRGNX_JOB_DEADLINE; i=0; while [ $i -lt 14 ]; do echo .; sleep 0.5; i=$((i+1)); done";
+    let id = r.start(guarded_spec(d.path(), script)).await.unwrap();
+    let row = ended(&r, &id).await;
+    assert_eq!(row.status, ExecStatus::Done, "{row:?}");
+    assert_eq!(row.summary.unwrap().exit, Some(0));
+    let dir = d.path().join("exec").join(&id);
+    assert!(!dir.join("stuck.txt").exists());
+    let log = std::fs::read_to_string(dir.join("log")).unwrap();
+    let deadline: f64 = log
+        .lines()
+        .find_map(|l| l.strip_prefix("deadline="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| panic!("no deadline: {log}"));
+    assert!(
+        (start + 59.0..=start + 62.0).contains(&deadline),
+        "{deadline} vs {start}"
+    );
+    // unguarded: the same idle job without limits runs to its end
+    let mut plain = spec(Starter::User, d.path(), "sleep 5", Duration::from_secs(60));
+    plain.user.stall_s = None;
+    let id = r.start(plain).await.unwrap();
+    assert_eq!(ended(&r, &id).await.status, ExecStatus::Done);
+}
+
+/// [D] `stall_s` and `silent_s` on `exec/start` (1 to 86400 each) reach the job and, for a runner, its spec.
+#[test]
+fn the_guard_limits_reach_the_job_and_a_runner() {
+    let p = params(json!({"stall_s": 60, "silent_s": 120}));
+    let user = user_job(&None, CheckKind::Other, &p).unwrap();
+    assert_eq!((user.stall_s, user.silent_s), (Some(60), Some(120)));
+    let mut s = spec(
+        Starter::User,
+        Path::new("/p"),
+        "true",
+        Duration::from_secs(5),
+    );
+    s.user = user;
+    let f = s.forseti_spec("x1", "1G");
+    assert_eq!(
+        (f.derived.stall_s, f.derived.silent_s),
+        (Some(60), Some(120))
+    );
+    let decode = runstav::registry::find("exec/start").unwrap().decode;
+    for bad in [json!({"stall_s": 0}), json!({"silent_s": 86_401})] {
+        let mut v = json!({"argv": ["true"], "cwd": "/"});
+        v.as_object_mut()
+            .unwrap()
+            .extend(bad.as_object().unwrap().clone());
+        assert!(decode(&v).is_err(), "{v}");
+    }
 }

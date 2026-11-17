@@ -58,6 +58,11 @@ pub struct JobExec {
     pub expect: Expect,
     pub grant: Grant,
     pub timeout_s: u64,
+    /// The progress guard's stall and silent limits in seconds (`linux::progress`); none: the defaults.
+    #[serde(default)]
+    pub stall_s: Option<u64>,
+    #[serde(default)]
+    pub silent_s: Option<u64>,
     /// The job's helper (keys, network, the disk watch), started before the command; none: the job has no helper.
     #[serde(default)]
     pub helper: Option<HelperSpec>,
@@ -473,6 +478,8 @@ mod tests {
                 reserve_mib: 256,
             },
             timeout_s: 60,
+            stall_s: None,
+            silent_s: None,
             helper: None,
         }
     }

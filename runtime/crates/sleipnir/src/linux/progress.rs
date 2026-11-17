@@ -149,6 +149,38 @@ pub fn log_line(s: &Stop) -> String {
     )
 }
 
+/// The report's file name in the attempt's (or local job's) folder.
+pub const STUCK: &str = "stuck.txt";
+
+/// How often a host reads a job: once a minute, or four times within the shortest of L's limits when that is shorter
+/// (at least once a second).
+pub fn period_s(l: &GuardLimits) -> u64 {
+    let _ = l;
+    unimplemented!()
+}
+
+/// A reading at AT of the job's SLICE (its cgroup folder) and LOGS, after PREV.
+pub fn read(
+    at: u64,
+    slice: Option<&std::path::Path>,
+    logs: &[std::path::PathBuf],
+    prev: &Reading,
+) -> Reading {
+    let _ = (at, slice, logs, prev);
+    unimplemented!()
+}
+
+/// Writes [`STUCK`] into DIR for STOP of the job in SLICE with LOG.
+pub fn stuck_report(
+    dir: &std::path::Path,
+    stop: &Stop,
+    slice: Option<&std::path::Path>,
+    log: &std::path::Path,
+) -> std::io::Result<()> {
+    let _ = (dir, stop, slice, log);
+    unimplemented!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +352,103 @@ mod tests {
         assert_eq!(wall_limit(5400, Some(3600)), 5400);
         assert_eq!(wall_limit(5400, None), 5400);
         assert_eq!(wall_limit(9000, Some(0)), 0);
+    }
+
+    /// [D] The hosts read once a minute, or four times within the shortest limit when that is shorter (the host rows'
+    /// short limits); a reading takes the slice's CPU and IO and the logs' sizes; a slice that can't be read counts as
+    /// a busy core (an unknown is never idle), so it can only go silent.
+    #[test]
+    fn a_host_reads_the_slice_and_its_logs() {
+        assert_eq!(period_s(&limits()), 60);
+        let short = GuardLimits {
+            stall_s: 20,
+            silent_s: 40,
+            ..limits()
+        };
+        assert_eq!(period_s(&short), 5);
+        let tiny = GuardLimits {
+            stall_s: 2,
+            silent_s: 4,
+            ..limits()
+        };
+        assert_eq!(period_s(&tiny), 1);
+
+        let d = tempfile::tempdir().unwrap();
+        let slice = d.path().join("slice");
+        std::fs::create_dir_all(&slice).unwrap();
+        for (f, s) in [
+            ("memory.current", "1048576\n"),
+            ("cpu.stat", "usage_usec 5000000\n"),
+            (
+                "io.stat",
+                "8:0 rbytes=10 wbytes=20 rios=1 wios=1 dbytes=0 dios=0\n",
+            ),
+        ] {
+            std::fs::write(slice.join(f), s).unwrap();
+        }
+        let (a, b) = (d.path().join("a.log"), d.path().join("b.log"));
+        std::fs::write(&a, "12345").unwrap();
+        std::fs::write(&b, "678").unwrap();
+        let prev = Reading {
+            at: 60,
+            cpu_usec: 1,
+            ..Reading::default()
+        };
+        let logs = [a, b, d.path().join("none.log")];
+        let r = read(120, Some(&slice), &logs, &prev);
+        assert_eq!(
+            r,
+            Reading {
+                at: 120,
+                log_bytes: 8,
+                cpu_usec: 5_000_000,
+                io_bytes: 30,
+                rows: 0
+            }
+        );
+        let unread = read(120, Some(&d.path().join("gone")), &logs, &prev);
+        assert_eq!((unread.cpu_usec, unread.io_bytes), (60_000_001, 0));
+        assert_eq!(read(120, None, &logs, &prev).cpu_usec, 60_000_001);
+    }
+
+    /// [D] `stuck.txt`: the rule, the slice's processes with their state and CPU, each container's `podman top`, the
+    /// log's last 60 lines and the slice's `memory.events`.
+    #[test]
+    fn a_stuck_report_has_its_sections() {
+        let d = tempfile::tempdir().unwrap();
+        let slice = d.path().join("slice");
+        let svc = slice.join("job.service");
+        std::fs::create_dir_all(&svc).unwrap();
+        std::fs::write(
+            svc.join("cgroup.procs"),
+            format!("{}\n", std::process::id()),
+        )
+        .unwrap();
+        std::fs::write(slice.join("memory.events"), "oom 0\noom_kill 0\n").unwrap();
+        let log = d.path().join("job.log");
+        let lines: String = (1..=100).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&log, lines).unwrap();
+        let stop = Stop {
+            rule: Rule::Stall,
+            minutes: 20,
+        };
+        stuck_report(d.path(), &stop, Some(&slice), &log).unwrap();
+        let t = std::fs::read_to_string(d.path().join(STUCK)).unwrap();
+        assert!(
+            t.starts_with("stuck (stall): no progress for 20 min\n"),
+            "{t}"
+        );
+        let me = format!("\n{} ", std::process::id());
+        let procs = t.split("== processes").nth(1).unwrap();
+        assert!(procs.contains(&me), "{t}");
+        assert!(t.contains("== containers\nnone\n"), "{t}");
+        let tail = t.split("== log (last 60 lines)\n").nth(1).unwrap();
+        assert!(
+            tail.starts_with("line 41\n") && tail.contains("line 100\n"),
+            "{t}"
+        );
+        assert!(!tail.contains("line 40\n"));
+        assert!(t.contains("== memory.events\noom 0\noom_kill 0\n"), "{t}");
     }
 
     /// [D] A stop's verdict is `infra: stuck (<rule>)` through `forseti::classify`, whatever the exit (the kill's
