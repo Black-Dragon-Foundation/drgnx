@@ -2535,7 +2535,7 @@ it builds for Android too).
   "Actions and focus-visible"). Besides rows the kit has `{"c": "agent-mark", "slot": 1-12, "handle": "Q"}` (the
   handle on its agent's colour) and `{"c": "progress", "kind": "bar"|"ring", "value": 0-1, "width": LOGICAL-PX}` (a bar
   of `kit::BAR_PX`-high spaces, the fill then the track, or a ring glyph), each with its spoken label as `help-echo`
-  (`docs/design/components/marks-and-progress.md`). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
+  (`docs/design/components/chips-and-keys.md`). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
   (`tests/kit_conformance.rs` and `drgnx-ui-kit/conformance` over `test/fixtures/kit`) keeps the two equal.
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.

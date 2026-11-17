@@ -145,9 +145,10 @@
                  '(drgnx-kit-zz-probe-loud :background "accent-fill" :foreground "on-accent"))))
 
 (ert-deftest drgnx-ui-kit/third-party-theme-styles-every-kit-face ()
-  ;; a theme that knows nothing of drgnx still gives every kit face that has colours a fill or a ring, through the
-  ;; standard faces it inherits: checked on the real faces, and on the fixture's specs (the real file may have few
-  ;; faces yet).  A binding with no colours (the row's: the UI font, on the surface's own fill) is exempt.
+  ;; a theme that knows nothing of drgnx still gives every kit face that has colours a fill or a ring (one that has only
+  ;; a text colour, a progress ring's: a text colour), through the standard faces it inherits: checked on the real
+  ;; faces, and on the fixture's specs (the real file may have few faces yet).  A binding with no colours (the row's: the
+  ;; UI font, on the surface's own fill) is exempt.
   (dolist (theme '(modus-vivendi doom-one-fixture))
     (unwind-protect
         (progn
@@ -156,13 +157,16 @@
           (dolist (f (append (drgnx-ui-kit-face-bindings) (drgnx-ui-kit-face-bindings ui-kit-test--fixture)))
             (when-let* ((inherit (plist-get (nth 2 f) :inherit))
                         ((seq-some (lambda (k) (plist-get (nth 2 f) k)) '(:bg :fg :edge))))
-              (should (cl-some (lambda (parent)
-                                 (or (drgnx-face-color parent :background 'gui)
-                                     (plist-get (drgnx-faces--clause-plist parent 'gui) :box)))
-                               inherit))
-              (when (facep (car f))
-                (should (or (drgnx-face-color (car f) :background 'gui)
-                            (plist-get (drgnx-faces--clause-plist (car f) 'gui) :box)))))))
+              (if (seq-some (lambda (k) (plist-get (nth 2 f) k)) '(:bg :edge))
+                  (progn
+                    (should (cl-some (lambda (parent)
+                                       (or (drgnx-face-color parent :background 'gui)
+                                           (plist-get (drgnx-faces--clause-plist parent 'gui) :box)))
+                                     inherit))
+                    (when (facep (car f))
+                      (should (or (drgnx-face-color (car f) :background 'gui)
+                                  (plist-get (drgnx-faces--clause-plist (car f) 'gui) :box)))))
+                (should (cl-some (lambda (parent) (drgnx-face-color parent :foreground 'gui)) inherit))))))
       (mapc #'disable-theme custom-enabled-themes))))
 
 ;;;; The expansion: one with the hub's (test/fixtures/kit, runtime/crates/drgnx-rows/tests/kit_conformance.rs)

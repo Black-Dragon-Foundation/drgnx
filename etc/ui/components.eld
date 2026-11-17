@@ -81,7 +81,10 @@
                                :radius (:by kind (bar 2) (ring 0)) :hit 0)
             :tty (:pad 0 :glyphs (bar-left bar-full bar-right progress-0 progress-1 progress-2 progress-3 progress-4))
             :label "percent"
-            :bind ((() :bg progress-track :inherit (drgnx-ui-caption) :font (drgnx-ui-caption))
-                   ((ring) :fg progress-fill :inherit (drgnx-ui-caption) :font (drgnx-ui-caption))
-                   ((fill) :bg progress-fill :fg progress-fill :inherit (drgnx-ui-caption) :font (drgnx-ui-caption)))
+            ;; under a theme that knows nothing of drgnx: the track a secondary selection, the fill the highlight,
+            ;; the ring a link's colour
+            :bind ((() :bg progress-track :inherit (drgnx-ui-caption secondary-selection) :font (drgnx-ui-caption))
+                   ((ring) :fg progress-fill :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption))
+                   ((fill) :bg progress-fill :fg progress-fill :inherit (drgnx-ui-caption highlight)
+                    :font (drgnx-ui-caption)))
             :replaces nil :helpers nil :lint t)))

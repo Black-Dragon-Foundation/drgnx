@@ -7,7 +7,7 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | Component | What it is |
 |---|---|
 | [Cards](cards.md) | the islands the window is made of, on the gap |
-| [Chips, keycaps and buttons](chips-and-keys.md) | the small things inside rows and bars |
+| [Chips, keycaps and buttons](chips-and-keys.md) | the small things inside rows and bars, agent marks and progress among them |
 | [Title row](title-row.md) | the top of the window: project, search, needs-you |
 | [Status bar](status-bar.md) | the one quiet bar at the bottom |
 | [Explorer](explorer.md) | the file tree, and the list pattern every list follows |
@@ -18,7 +18,6 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Research trail](trail.md) | an agent's steps, in order |
 | [Notebook cell](notebook-cell.md) | a Jupyter cell as a card on Glitnir, a band elsewhere |
 | [Empty states](empty-states.md) | what a list or view says when there is nothing in it |
-| [Agent marks and progress](marks-and-progress.md) | an agent's handle on its colour; a bar or a ring of how far |
 | [Row (kit)](row.md) | a list, tree or map row, as the kit expands it (generated from `etc/ui/components.eld`) |
 | [Button (kit)](button.md) | a label in a rounded box, four styles and two sizes, with its key hint |
 | [Key hint (kit)](key-hint.md) | the keys of an action in the code font, in a small box |

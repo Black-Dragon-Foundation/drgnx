@@ -115,7 +115,6 @@
     - [Status bar](design/components/status-bar.md)
     - [Title row](design/components/title-row.md)
     - [Research trail](design/components/trail.md)
-    - [Agent marks and progress](design/components/marks-and-progress.md)
     - [Row (kit)](design/components/row.md)
     - [Button (kit)](design/components/button.md)
     - [Key hint (kit)](design/components/key-hint.md)

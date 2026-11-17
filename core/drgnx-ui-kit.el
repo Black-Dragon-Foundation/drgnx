@@ -393,8 +393,9 @@ skipped.  Returns the faces it set."
           (push old done))))))
 
 (defun drgnx-ui-kit-glyph-names (&optional table)
-  "The glyph names the components of TABLE (default the components file) draw (:tty :glyph, :twisty and :glyphs), in order, each
-once: the glyphs a view's env sends (`ViewEnv.glyphs') and the hub's table falls back on (`kit_gen::GLYPHS')."
+  "The glyph names the components of TABLE (default the components file) draw (:tty :glyph, :twisty and :glyphs), in
+order, each once: the glyphs a view's env sends (`ViewEnv.glyphs') and the hub's table falls back on
+\(`kit_gen::GLYPHS')."
   (let (names)
     (dolist (c (alist-get 'components (or table (drgnx-ui-kit-components))))
       (let ((tty (plist-get (cdr c) :tty)))
