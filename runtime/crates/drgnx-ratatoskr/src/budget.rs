@@ -164,7 +164,7 @@ impl Meter {
         }
     }
 
-    fn pace(&self, provider: &str, now: f64) -> Option<Pace> {
+    fn pace(&self, provider: &str, window: &str, now: f64, history: bool) -> Option<Pace> {
         let (_, used) = *self.samples.back()?;
         let (first_at, first) = *self.samples.iter().find(|(t, _)| now - *t <= PACE_WINDOW)?;
         let (last_at, _) = *self.samples.back()?;
@@ -185,12 +185,35 @@ impl Meter {
         };
         Some(Pace {
             provider: provider.to_string(),
+            window: window.to_string(),
             used_share: used,
             rate_per_hour: rate,
             exhausted_at,
             resets_at: self.resets_at,
             estimate: true,
+            rate_7d_per_hour: (window == "week").then(|| self.rate_7d(now)).flatten(),
+            history: if history {
+                self.history
+                    .iter()
+                    .copied()
+                    .filter(|(t, _)| now - *t < HISTORY_SPAN)
+                    .collect()
+            } else {
+                Vec::new()
+            },
         })
+    }
+
+    /// The mean rise per hour over the last seven days of readings, once there are 24 hours of them.
+    fn rate_7d(&self, now: f64) -> Option<f64> {
+        let week: Vec<(f64, f64)> = self
+            .history
+            .iter()
+            .copied()
+            .filter(|(t, _)| now - *t < 7.0 * 24.0 * 3600.0)
+            .collect();
+        let hours = (week.last()?.0 - week.first()?.0) / 3600.0;
+        (hours >= 24.0).then(|| rise_total(&week) / hours)
     }
 }
 
@@ -306,6 +329,11 @@ const BURN_MIN: f64 = 600.0;
 
 /// The share of the binding limit spent from which a scope is `nearing`.
 const NEARING: f64 = 0.8;
+
+/// The key of a provider's meter for one of its windows.
+fn meter_key(provider: &str, window: &str) -> String {
+    format!("{provider}/{window}")
+}
 
 fn is_dollars(unit: Unit) -> bool {
     matches!(unit, Unit::Usd | Unit::UsdEst)
@@ -469,6 +497,10 @@ impl Budgets {
         }
         // the readings are replayed, so the 24 h window of the pace is rebuilt from the history
         for m in s.meters {
+            // a meter saved by provider alone (before windows) is dropped
+            if !m.provider.contains('/') {
+                continue;
+            }
             let mut meter = Meter::default();
             for (at, share) in m.history {
                 meter.read(at, share, None);
@@ -964,12 +996,14 @@ impl Budgets {
             .collect()
     }
 
-    /// A meter reading by the session SCOPE: PROVIDER's window is at SHARE (0 to 1) at time NOW.  The rise since the
-    /// session's last reading is its `limit-share` spend.
+    /// A meter reading by the session SCOPE: PROVIDER's WINDOW is at SHARE (0 to 1) at time NOW.  The rise since the
+    /// session's last reading of that window is its `limit-share` spend when the window is the fullest of the
+    /// provider's (the one that binds first); another window's rise is not added to it.
     pub fn reading(
         &self,
         scope: &BudgetScope,
         provider: &str,
+        window: &str,
         share: f64,
         resets_at: Option<f64>,
         now: f64,
@@ -977,16 +1011,26 @@ impl Budgets {
         if !(0.0..=1.0 + 1e-9).contains(&share) {
             return Vec::new();
         }
-        let fresh = self
-            .st()
-            .meters
-            .entry(provider.to_string())
-            .or_default()
-            .read(now, share, resets_at);
+        let mkey = meter_key(provider, window);
+        let (fresh, binds) = {
+            let mut st = self.st();
+            let fresh = st
+                .meters
+                .entry(mkey.clone())
+                .or_default()
+                .read(now, share, resets_at);
+            let fullest = st
+                .meters
+                .iter()
+                .filter(|(k, _)| k.starts_with(&format!("{provider}/")))
+                .filter_map(|(_, m)| m.samples.back().map(|(_, s)| *s))
+                .fold(0.0_f64, f64::max);
+            (fresh, share + 1e-9 >= fullest)
+        };
         if fresh {
             self.save();
         }
-        let what = format!("limit-share:{provider}");
+        let what = format!("limit-share:{mkey}");
         let delta = {
             let mut st = self.st();
             let seen = st.seen.entry((key(scope), what)).or_insert(share);
@@ -995,14 +1039,19 @@ impl Budgets {
             *seen = share;
             d
         };
-        self.spend(scope, Unit::LimitShare, delta)
+        if binds {
+            self.spend(scope, Unit::LimitShare, delta)
+        } else {
+            Vec::new()
+        }
     }
 
-    /// PROVIDER's meter readings of the last eight days as of NOW, one for each quarter hour at most, in time order.
-    pub fn history(&self, provider: &str, now: f64) -> Vec<(f64, f64)> {
+    /// PROVIDER's WINDOW meter readings of the last eight days as of NOW, one for each quarter hour at most, in time
+    /// order.
+    pub fn history(&self, provider: &str, window: &str, now: f64) -> Vec<(f64, f64)> {
         self.st()
             .meters
-            .get(provider)
+            .get(&meter_key(provider, window))
             .map(|m| {
                 m.history
                     .iter()
@@ -1013,13 +1062,22 @@ impl Budgets {
             .unwrap_or_default()
     }
 
-    /// The pace of PROVIDER's meter, or of every meter, as of NOW.
+    /// The pace of PROVIDER's meters (each window), or of every meter, as of NOW; with HISTORY, each carries its
+    /// readings of the last eight days.
     pub fn pace(&self, provider: Option<&str>, now: f64) -> Vec<Pace> {
+        self.pace_with(provider, now, false)
+    }
+
+    pub fn pace_with(&self, provider: Option<&str>, now: f64, history: bool) -> Vec<Pace> {
         self.st()
             .meters
             .iter()
-            .filter(|(p, _)| provider.is_none_or(|w| w == p.as_str()))
-            .filter_map(|(p, m)| m.pace(p, now))
+            .filter_map(|(k, m)| {
+                let (p, w) = k.split_once('/')?;
+                provider
+                    .is_none_or(|want| want == p)
+                    .then(|| m.pace(p, w, now, history))?
+            })
             .collect()
     }
 }
@@ -1035,26 +1093,50 @@ pub fn parse_claude(params: &Value) -> Option<(f64, Option<f64>)> {
     }
 }
 
-/// `_codex/rateLimits`' reading: the fullest window's `usedPercent` as a share.
-pub fn parse_codex(params: &Value) -> Option<(f64, Option<f64>)> {
+/// The window a Claude reading is of: `5h` for `five_hour`, `week` for `seven_day`, else the agent's own name for it
+/// (a reading with none is the five-hour one, which is what the agent reported before it named them).
+pub fn claude_window(params: &Value) -> String {
+    match params.get("rateLimitType").and_then(Value::as_str) {
+        Some("five_hour") | None => "5h".to_owned(),
+        Some("seven_day") => "week".to_owned(),
+        Some(other) => other.to_owned(),
+    }
+}
+
+/// `_codex/rateLimits`' readings: each window the agent reports, named by its length (300 minutes `5h`, 10080 `week`;
+/// else the agent's own name, `primary` or `secondary`), with its `usedPercent` as a share and when it resets.
+pub fn parse_codex(params: &Value) -> Vec<(String, f64, Option<f64>)> {
     ["primary", "secondary"]
         .iter()
-        .filter_map(|w| params.get(w))
-        .filter_map(|w| {
+        .filter_map(|name| Some((*name, params.get(name)?)))
+        .filter_map(|(name, w)| {
+            let window = match w.get("windowMinutes").and_then(Value::as_u64) {
+                Some(300) => "5h".to_owned(),
+                Some(10080) => "week".to_owned(),
+                _ => name.to_owned(),
+            };
             Some((
+                window,
                 w.get("usedPercent").and_then(Value::as_f64)? / 100.0,
                 w.get("resetsAt").and_then(Value::as_f64),
             ))
         })
-        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .collect()
 }
 
-/// An agent's extension notification as a meter reading: `(provider, share, resets_at)`.
-pub fn meter_of(method: &str, params: &Value) -> Option<(&'static str, f64, Option<f64>)> {
+/// An agent's extension notification as meter readings: `(provider, window, share, resets_at)` for each window it
+/// reports.
+pub fn meter_of(method: &str, params: &Value) -> Vec<(&'static str, String, f64, Option<f64>)> {
     match method {
-        "_claude/rateLimit" => parse_claude(params).map(|(s, r)| ("claude", s, r)),
-        "_codex/rateLimits" => parse_codex(params).map(|(s, r)| ("codex", s, r)),
-        _ => None,
+        "_claude/rateLimit" => parse_claude(params)
+            .map(|(s, r)| ("claude", claude_window(params), s, r))
+            .into_iter()
+            .collect(),
+        "_codex/rateLimits" => parse_codex(params)
+            .into_iter()
+            .map(|(w, s, r)| ("codex", w, s, r))
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -1170,10 +1252,11 @@ pub async fn set(f: &Front, _: &Caller, p: BudgetSetParams) -> Result<BudgetView
 
 pub async fn pace(f: &Front, _: &Caller, p: PaceParams) -> Result<Paces, Error> {
     Ok(Paces {
-        meters: f
-            .core
-            .budgets
-            .pace(p.provider.as_ref().map(|s| s.as_str()), now()),
+        meters: f.core.budgets.pace_with(
+            p.provider.as_ref().map(|s| s.as_str()),
+            now(),
+            p.history.unwrap_or(false),
+        ),
     })
 }
 

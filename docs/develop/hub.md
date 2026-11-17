@@ -1536,7 +1536,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `outline/scopes` | user | `{file?: string, line: natnum, path?: string, worktree_root?: string}` | `{scopes: [OutlineScope]}` | no |
 | `outline/set` | user | `{file?: string, view: string}` | `boolean` | no |
-| `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
+| `pace/get` | user | `{history?: boolean, provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
 | `pair/open` | user | `{file: AbsPath, kind: "normal" \| "large" \| "remote"}` | `boolean` | no |

@@ -33024,6 +33024,13 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "history": {
+            "description": "The 8-day quarter-hour readings of each meter too (`Pace.history`); off by default.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "provider": {
             "description": "One provider's meter; none: every meter the hub reads.",
             "maxLength": 64,
@@ -33053,8 +33060,35 @@
                   "null"
                 ]
               },
+              "history": {
+                "description": "`(at, share)`, one for each quarter hour of the last eight days; only with `PaceParams.history`.",
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    {
+                      "format": "double",
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
               "provider": {
                 "type": "string"
+              },
+              "rate_7d_per_hour": {
+                "description": "A weekly meter's mean rise per hour over its last seven days; none with under 24 hours of readings (or not a\nweekly meter).",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
               },
               "rate_per_hour": {
                 "format": "double",
@@ -33071,10 +33105,15 @@
                 "description": "The share of the window's limit used, 0 to 1.",
                 "format": "double",
                 "type": "number"
+              },
+              "window": {
+                "description": "Which of the provider's windows: `5h`, `week`, or the agent's own name for it.",
+                "type": "string"
               }
             },
             "required": [
               "provider",
+              "window",
               "used_share",
               "rate_per_hour",
               "estimate"

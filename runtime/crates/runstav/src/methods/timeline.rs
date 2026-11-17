@@ -359,6 +359,9 @@ pub struct BudgetView {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct PaceParams {
+    /// The 8-day quarter-hour readings of each meter too (`Pace.history`); off by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<bool>,
     /// One provider's meter; none: every meter the hub reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<Bounded<String, 64>>,
@@ -369,6 +372,8 @@ pub struct PaceParams {
 #[serde(deny_unknown_fields)]
 pub struct Pace {
     pub provider: String,
+    /// Which of the provider's windows: `5h`, `week`, or the agent's own name for it.
+    pub window: String,
     /// The share of the window's limit used, 0 to 1.
     pub used_share: f64,
     pub rate_per_hour: f64,
@@ -378,6 +383,13 @@ pub struct Pace {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<f64>,
     pub estimate: bool,
+    /// A weekly meter's mean rise per hour over its last seven days; none with under 24 hours of readings (or not a
+    /// weekly meter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_7d_per_hour: Option<f64>,
+    /// `(at, share)`, one for each quarter hour of the last eight days; only with `PaceParams.history`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<(f64, f64)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

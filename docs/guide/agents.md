@@ -1006,6 +1006,13 @@ reads the last 24 hours. A job's forecast uses them to say what share of the wee
 and warns when its high end would use the limit up before it resets. The meter is the account's, so use outside drgnx
 counts: the share is an estimate.
 
+Each window is its own meter: Claude's five-hour (`5h`) and weekly (`week`) readings and each window Codex reports, named
+by its length (`5h`, `week`) or by the agent's own name. `pace/get` answers one `Pace` per meter with its `window`; a
+weekly meter also has `rate_7d_per_hour`, its mean rise per hour over the last seven days once it has 24 hours of
+readings. With `history: true` each meter carries its readings of the last eight days (one every quarter hour); without
+it the key is left out. A session's `limit-share` spend counts the rise of the provider's fullest window, the one that
+binds first. A forecast reads that window. A meter state saved by provider alone (before windows) is dropped on load.
+
 ## The supervisor
 
 The hub looks at every session once a second (no model call) and pauses one that is stuck: the agent stops after
