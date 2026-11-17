@@ -385,6 +385,15 @@ window moves), **Shift** and a letter to swap your tile with that one (inside on
 across windows too, and press RET. Esc closes it; any other key closes it and then does what it does. Letters count once
 the cards are up (a blink, 120 ms, or one frame with reduced motion): one typed sooner goes to the tile you are in.
 
+**Esc Esc** opens it too, in every profile: press Esc where it cancels something (leaves Vim's insert state, quits, clears
+a Work view's search, or closes nothing), then Esc again within 0.3 s (`drgnx-esc-double-tap`; nil turns this off). A
+single Esc still does what it did, at once. Where Esc is only Emacs's Meta prefix (the Emacs profile, and the VS Code
+profile in a terminal window) any two quick Escs open it, `Esc x` is still `M-x` and a slow Esc Esc Esc is still quit.
+A third quick Esc closes the switcher and quits. In a terminal tile Esc always goes to the program (Claude Code's
+rewind, vim in a shell): use **`C-<escape>`** there (every profile; in a terminal window that cannot send it, `F6` then
+Esc). In a terminal window, Alt+Esc counts as Esc Esc; in a graphical one GNOME keeps Alt+Esc for switching windows.
+A fast `Esc Esc :` opens the switcher and the `:` closes it again and runs: type `M-:` for eval-expression.
+
 ### The layout survives a restart
 
 When Emacs exits, the workbench of every window is saved to `$XDG_STATE_HOME/drgnx/workbench.eld`

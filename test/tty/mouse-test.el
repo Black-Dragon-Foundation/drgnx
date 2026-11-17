@@ -145,6 +145,21 @@ tab before b.txt replaces it.  Tabs are apart by a gap of spaces (wb/drgnx-chrom
     (drgnx-tty-mouse-test--click-on s "a\\.txt ×" :dx 1)
     (should (equal (drgnx-tty-session-wait s `(and (equal ,drgnx-tty-mouse-test--editor-buffer "a.txt") t)) t))))
 
+(ert-deftest drgnx-tty-mouse/a-tab-release-read-by-the-press-selects-it ()
+  ;; With tile dragging on, the press's command reads the release itself (`drgnx-grid-tab-press').  The release
+  ;; is sent only once that command waits, so it is read there, not by the command loop: it must come decoded
+  ;; (xterm-mouse's `input-decode-map' entry), a mouse-1 on the tab line, not the ESC of its raw bytes.
+  (drgnx-tty-session-with (s :size "120x40")
+    (drgnx-tty-mouse-test--project s)
+    (drgnx-tty-mouse-test--two-tabs s)
+    (should (drgnx-tty-session-eval s '(and drgnx-grid-mode drgnx-grid-drag t)))
+    (let* ((pos (drgnx-tty-session-wait-screen s "a\\.txt ×"))
+           (col (1+ (car pos))) (row (cdr pos)))
+      (drgnx-tty-session-send s (format "\e[<0;%d;%dM" col row))
+      (drgnx-tty-session-wait s '(eq this-command 'drgnx-chrome--tab-press))
+      (drgnx-tty-session-send s (format "\e[<0;%d;%dm" col row)))
+    (should (equal (drgnx-tty-session-wait s `(and (equal ,drgnx-tty-mouse-test--editor-buffer "a.txt") t)) t))))
+
 (ert-deftest drgnx-tty-mouse/tab-close-click-closes-it ()
   (drgnx-tty-session-with (s :size "120x40")
     (drgnx-tty-mouse-test--project s)

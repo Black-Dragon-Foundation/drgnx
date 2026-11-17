@@ -418,7 +418,9 @@ called with EVENT); dragged off the row it moves that tab (`drgnx-grid--drag', `
     (when (window-live-p w)
       (if (not drgnx-grid-drag)
           (funcall click event)
-        (let ((ev (read-event)))
+        ;; `read-key', not `read-event': on a terminal the release is xterm-mouse's bytes, decoded only through
+        ;; `input-decode-map' (`read-event' would return their ESC)
+        (let ((ev (read-key)))
           (if (and (consp ev) (eq (event-basic-type ev) 'mouse-1) (not (mouse-movement-p ev))
                    (eq (posn-window (event-end ev)) w) (eq (posn-area (event-end ev)) area))
               (funcall click event)
