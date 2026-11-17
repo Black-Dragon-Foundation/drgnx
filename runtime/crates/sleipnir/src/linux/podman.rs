@@ -160,6 +160,9 @@ pub struct RunnerArgs {
     /// Who owns the containers: the data-dir tag of a hub (8 hex), or `<prefix>/<hub id>` on a runner. A hub's
     /// containers carry it as `drgnx.owner`, and its sidecar's name.
     pub owner: String,
+    /// The hub's own job: `CARGO_BUILD_JOBS` from its grant (a runner's job carries it in [`RunnerMounts`]); 0: not
+    /// set.
+    pub cargo_jobs: u32,
     /// The job container carries the owner's labels (`drgnx.owner` or `drgnx.runner`, and `drgnx.job`), so a sweep
     /// finds exactly its own.
     pub job_labels: bool,
@@ -174,6 +177,7 @@ impl RunnerArgs {
             name_prefix: LOCAL_PREFIX.to_string(),
             owner: owner_tag.to_string(),
             job_labels: true,
+            cargo_jobs: 0,
         }
     }
 
@@ -185,6 +189,7 @@ impl RunnerArgs {
             name_prefix: format!("{prefix}-"),
             owner: format!("{prefix}/{hub_id}"),
             job_labels: true,
+            cargo_jobs: 0,
         }
     }
 }
@@ -483,6 +488,10 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
         None => {
             a.push("-v".into());
             a.push(format!("{source}:{WORK}:Z").into());
+            if ra.cargo_jobs > 0 {
+                a.push("-e".into());
+                a.push(format!("CARGO_BUILD_JOBS={}", ra.cargo_jobs).into());
+            }
         }
         Some(m) => {
             a.push("-v".into());

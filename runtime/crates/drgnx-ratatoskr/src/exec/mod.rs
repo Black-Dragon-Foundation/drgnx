@@ -1704,6 +1704,22 @@ impl Inner {
 
     /// The `podman run` of a container job.  The container is the sandbox, so the starter's Gleipnir spec is not used;
     /// the hub pulls the image first, the job never does.
+    /// `CARGO_BUILD_JOBS` for local job ID from its grant (its cores and SPEC's memory cap, design §3 #4); None when
+    /// the queue holds no grant for it.
+    fn cargo_jobs(&self, id: &str, spec: &ExecSpec) -> Option<u32> {
+        let memory = spec
+            .user
+            .memory_max
+            .as_deref()
+            .unwrap_or(self.hooks.memory.as_str());
+        let grant = forseti::Grant {
+            cores: self.queue.local_cores(id)?,
+            mem_cap_mib: mem_mib(memory),
+            reserve_mib: 0,
+        };
+        Some(forseti::admit::cargo_jobs(&grant))
+    }
+
     async fn container_spec(
         &self,
         id: &str,
@@ -1799,7 +1815,13 @@ impl Inner {
         }
         // the container runs in the job's slice beside its scope, so the slice holds all the job uses
         let slice = self.hooks.systemd.then(|| unit::job_slice_name(id));
-        let args = match container::argv(&req, &caps, &owner, slice.as_deref()) {
+        // cargo in the container builds as many units at once as the job's grant allows, unless the job says otherwise
+        let cargo_jobs = if spec.user.env.iter().any(|(k, _)| k == "CARGO_BUILD_JOBS") {
+            0
+        } else {
+            self.cargo_jobs(id, spec).unwrap_or(0)
+        };
+        let args = match container::argv(&req, &caps, &owner, slice.as_deref(), cargo_jobs) {
             Ok(a) => a,
             Err(e) => {
                 if let Some(r) = relay {
@@ -2003,15 +2025,11 @@ impl Inner {
         // cargo builds as many units at once as the job's grant allows (design §3 #4), unless the job says otherwise
         if status.is_none()
             && !inner.env.iter().any(|(k, _)| k == "CARGO_BUILD_JOBS")
-            && let Some(cores) = self.queue.local_cores(id)
+            && let Some(n) = self.cargo_jobs(id, &spec)
         {
-            let grant = forseti::Grant {
-                cores,
-                mem_cap_mib: mem_mib(memory),
-                reserve_mib: 0,
-            };
-            let n = forseti::admit::cargo_jobs(&grant).to_string();
-            inner.env.push(("CARGO_BUILD_JOBS".into(), n.into()));
+            inner
+                .env
+                .push(("CARGO_BUILD_JOBS".into(), n.to_string().into()));
         }
         let wrap = if keyed.is_some() {
             unit::wrap_to_hub

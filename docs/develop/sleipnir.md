@@ -790,7 +790,7 @@ podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
 slice `drgnx-runner-work-<id>.slice`, which gets `MemoryHigh` at the grant's reservation plus a fifth (at most the cap)
 and `MemoryMax` at its cap, `slices::job_props`; job-exec reverts them at the job's end; the container gets
 `CARGO_BUILD_JOBS = max(1, min(cores, cap / 2.5 GiB))`, `forseti::admit::cargo_jobs`, as a job on the hub's own machine
-does) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
+does, in its environment or, for a container job, its container's `-e`, unless the job sets it) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
 `RuntimeMaxSec` = the timeout + 60 s (job-exec's own timeout writes the verdict first). The reservation passes to the
 unit's main pid, so it outlives `serve`. Then `started`. Every attempt gets its job helper (the disk watch); a keyed
 one also its key mounts and `drgnx-key exec` (its spec's key names, each into the variable of that name), and one

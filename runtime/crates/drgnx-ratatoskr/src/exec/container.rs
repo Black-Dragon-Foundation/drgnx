@@ -80,10 +80,12 @@ pub fn resolve<'a>(caps: &'a Caps, name: &str) -> Result<&'a str, Refusal> {
 }
 
 /// The placement of the hub's own jobs: `drgnx-job-<id>`, labelled with the hub's OWNER tag, in SLICE (the job's
-/// `drgnx-job-<id>.slice`, beside its scope) when systemd runs the jobs.
-pub fn placement(owner: &str, slice: Option<&str>) -> podman::RunnerArgs {
+/// `drgnx-job-<id>.slice`, beside its scope) when systemd runs the jobs, with `CARGO_BUILD_JOBS` set to CARGO_JOBS
+/// (0: not set).
+pub fn placement(owner: &str, slice: Option<&str>, cargo_jobs: u32) -> podman::RunnerArgs {
     let mut p = podman::RunnerArgs::local(owner);
     p.cgroup_parent = slice.map(String::from);
+    p.cargo_jobs = cargo_jobs;
     p
 }
 
@@ -104,14 +106,15 @@ pub fn tag_of(socket: &Path) -> String {
 }
 
 /// The `podman run` arguments (without the program) for REQ under CAPS: the shared builder with the hub's own
-/// placement ([`placement`] of OWNER, in SLICE).
+/// placement ([`placement`] of OWNER, in SLICE, with CARGO_JOBS).
 pub fn argv(
     req: &ContainerReq,
     caps: &Caps,
     owner: &str,
     slice: Option<&str>,
+    cargo_jobs: u32,
 ) -> Result<Vec<OsString>, Refusal> {
-    podman::argv(req, caps, &placement(owner, slice)).map_err(|r| refuse(r.message))
+    podman::argv(req, caps, &placement(owner, slice, cargo_jobs)).map_err(|r| refuse(r.message))
 }
 
 /// The refusal for a hub that found no `podman` on its PATH at start.

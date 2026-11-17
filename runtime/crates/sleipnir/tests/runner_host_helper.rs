@@ -386,6 +386,7 @@ mod relay_keys {
             name_prefix: PREFIX.into(),
             owner: String::new(),
             job_labels: false,
+            cargo_jobs: 0,
         }
     }
 
