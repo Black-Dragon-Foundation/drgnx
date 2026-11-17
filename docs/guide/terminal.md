@@ -454,6 +454,16 @@ fit a dock never shows an error. The two sizes are the settings `drgnx-tty-layou
 `drgnx-tty-layout-lines` (30) (`M-x customize-variable`). A window opened for one file (`emacsclient -t FILE`) shows
 the editor only and is left alone.
 
+### Tiles in a terminal
+
+The workbench's tiles work in a terminal as in a graphical window. The sidebar, the panel and the right side are
+tiles, and you can split the editor beside them. A tile's tab row starts with its grip (`⠿`, `::` where the terminal
+does not write UTF-8). Drag the grip with the mouse onto another tile's edge to put the tile there, or onto its middle
+to stack the two. **Full-Size Tile** shows one tile alone and brings every tile back where it was. The status bar is
+the mode line of the editor you used last, and tool tiles have none. When the terminal shrinks, the tiles get smaller
+and none closes; they come back to their sizes when it grows. Each tile keeps at least 12 columns and 3 lines while
+there is room for that.
+
 ## Clipboard
 
 Copying in drgnx puts the text on your computer's clipboard through OSC 52 when the terminal takes it (the table's
