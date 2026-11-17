@@ -1638,7 +1638,7 @@ async fn commits_reachable(db: &CoordDb, tasks: &[Piece]) -> Result<(), Error> {
             let present: Vec<&str> = shas
                 .iter()
                 .copied()
-                .filter(|s| !missing.iter().any(|m| m == s))
+                .filter(|s| !missing.contains(s))
                 .collect();
             let mut args = vec!["rev-list"];
             args.extend(present.iter().copied());
@@ -1651,7 +1651,7 @@ async fn commits_reachable(db: &CoordDb, tasks: &[Piece]) -> Result<(), Error> {
                     .unwrap_or_default()
             };
             for r in probe.iter().filter(|r| r.3 == repo) {
-                let g = missing.iter().any(|m| *m == r.2) || unreachable.iter().any(|u| *u == r.2);
+                let g = missing.contains(&r.2) || unreachable.contains(&r.2);
                 out.push((r.0, g));
             }
         }
@@ -2518,6 +2518,13 @@ async fn backup_store(db: &CoordDb, dir: &Path) -> Result<(), Error> {
 /// The adoption of ROOT's record files: on the first one the files and the graph store are backed up and the notice
 /// goes out (EMIT) before anything is rewritten; files the graph does not have yet are imported (their text as the
 /// records), the others merged ([`Views::sync`]).  A dry run reads and counts.
+/// What an import tells and asks: who hears its events, and the deny-list that keeps the user's notes out.
+#[derive(Clone, Copy)]
+pub struct Ears<'a> {
+    pub emit: &'a (dyn Fn(ViewEvent) + Send + Sync),
+    pub deny: &'a DenyList,
+}
+
 /// Why a root inside `~/org` is refused.
 pub const PERSONAL_NOTES_REFUSAL: &str =
     "the work tracker never reads a project inside ~/org (personal notes)";
@@ -2529,9 +2536,9 @@ pub async fn import_core(
     root: &Path,
     only: Option<RecordKind>,
     dry: bool,
-    emit: &(dyn Fn(ViewEvent) + Send + Sync),
-    deny: &DenyList,
+    ears: Ears<'_>,
 ) -> Result<ImportReport, Error> {
+    let Ears { emit, deny } = ears;
     // the user's personal notes (`~/org`) are never read: the hard tier, whatever the user opted in; the one
     // exception is exactly `~/org/board.org`, which the product reads (`only: board` names it, nothing else of the root)
     let board_only =
@@ -2720,8 +2727,10 @@ pub async fn import(f: &Front, _: &Caller, p: ImportParams) -> Result<ImportRepo
         Path::new(p.root.as_str()),
         p.only,
         p.dry_run.unwrap_or(false),
-        &emit,
-        &deny,
+        Ears {
+            emit: &emit,
+            deny: &deny,
+        },
     )
     .await
 }
@@ -2937,8 +2946,10 @@ mod tests {
                 &self.root,
                 only,
                 dry,
-                &emit,
-                &self.deny,
+                Ears {
+                    emit: &emit,
+                    deny: &self.deny,
+                },
             )
             .await
             .unwrap();
@@ -3940,11 +3951,35 @@ mod tests {
         .unwrap();
         let deny = DenyList::load(&home, &f._dir.path().join("config"));
         let heard = |_e: ViewEvent| {};
-        let got = import_core(&f.db, &f.views, &f.hub, &proj, None, false, &heard, &deny).await;
+        let got = import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &proj,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
+        )
+        .await;
         assert_eq!(got.unwrap_err().message, PERSONAL_NOTES_REFUSAL);
         assert_eq!(f.count(RECS).await, 0);
         // a project outside it is read
-        let ok = import_core(&f.db, &f.views, &f.hub, &f.root, None, false, &heard, &deny).await;
+        let ok = import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &f.root,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
+        )
+        .await;
         assert!(ok.is_ok());
     }
 
@@ -3969,9 +4004,20 @@ mod tests {
         .unwrap();
         let deny = DenyList::load(&home, &f._dir.path().join("config"));
         let heard = |_e: ViewEvent| {};
-        import_core(&f.db, &f.views, &f.hub, &f.root, None, false, &heard, &deny)
-            .await
-            .unwrap();
+        import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &f.root,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
+        )
+        .await
+        .unwrap();
         let titles: Vec<String> =
             f.db.read(|c| {
                 let mut q = c.prepare("select title from entity where retired_tx is null")?;
@@ -4001,7 +4047,19 @@ mod tests {
         std::fs::write(org.join("board.org"), "* TODO a board item\n").unwrap();
         let deny = DenyList::load(&home, &f._dir.path().join("config"));
         let heard = |_e: ViewEvent| {};
-        let full = import_core(&f.db, &f.views, &f.hub, &org, None, false, &heard, &deny).await;
+        let full = import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &org,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
+        )
+        .await;
         assert_eq!(full.unwrap_err().message, PERSONAL_NOTES_REFUSAL);
         let got = import_core(
             &f.db,
@@ -4010,8 +4068,10 @@ mod tests {
             &org,
             Some(RecordKind::Board),
             false,
-            &heard,
-            &deny,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
         )
         .await
         .unwrap();
@@ -4020,6 +4080,46 @@ mod tests {
         assert_eq!(live_of(&f, &org.join("board.org")).await > 0, true);
         assert_eq!(live_of(&f, &org.join("docs/plans/p.md")).await, 0);
         assert_eq!(live_of(&f, &org.join("notes.org")).await, 0);
+    }
+
+    /// `### Task 14b:` is a task of its own, not Task 14; `### Task A1 (now): …` is one; a heading inside a code fence
+    /// is none, and nor are the steps in it
+    /// (`task-headings-14b-and-a1-are-tasks-and-fenced-ones-are-not`).
+    #[tokio::test]
+    async fn task_headings_14b_and_a1_are_tasks_and_fenced_ones_are_not() {
+        let f = fix();
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/heads.md"),
+            "# Plan\n\n### Task 14: fourteen\n- [ ] a\n\n### Task 14b: between\n- [ ] b\n\n\
+             ### Task A1 (now): lettered\n- [ ] c\n\n```\n### Task 99: only an example\n- [ ] x\n```\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let numbers: Vec<String> = f
+            .db
+            .read(|c| {
+                let mut q = c.prepare(
+                    "select json_extract(data, '$.number') from entity where kind = 'task' and retired_tx is null \
+                     and json_extract(data, '$.records.file') like '%/heads.md' order by 1",
+                )?;
+                Ok(q.query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<_, _>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(numbers, ["14", "14b", "A1"]);
+        let steps: i64 =
+            f.db.read(|c| {
+                Ok(c.query_row(
+                    "select count(*) from entity where kind = 'step' and retired_tx is null \
+                     and json_extract(data, '$.records.file') like '%/heads.md'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(steps, 3);
     }
 
     /// A root that is itself named `plans` or `specs` classifies by the paths under it alone
@@ -4091,8 +4191,10 @@ mod tests {
             &wt,
             Some(RecordKind::Plans),
             false,
-            &heard,
-            &f.deny,
+            Ears {
+                emit: &heard,
+                deny: &f.deny,
+            },
         )
         .await
         .unwrap();
@@ -4103,8 +4205,10 @@ mod tests {
             &wt,
             Some(RecordKind::Ledgers),
             false,
-            &heard,
-            &f.deny,
+            Ears {
+                emit: &heard,
+                deny: &f.deny,
+            },
         )
         .await
         .unwrap();
