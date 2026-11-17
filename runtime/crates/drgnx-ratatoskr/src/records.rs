@@ -1638,7 +1638,7 @@ async fn commits_reachable(db: &CoordDb, tasks: &[Piece]) -> Result<(), Error> {
             let present: Vec<&str> = shas
                 .iter()
                 .copied()
-                .filter(|s| !missing.contains(s))
+                .filter(|s| !missing.iter().any(|m| m == s))
                 .collect();
             let mut args = vec!["rev-list"];
             args.extend(present.iter().copied());
@@ -3890,6 +3890,9 @@ mod tests {
         .await
         .unwrap();
         std::fs::remove_file(&lp).unwrap();
+        // the plan alone is read again (a hub change event, not an import): the marks of the ledger that went are gone
+        f.sync(&f.root.join("docs/plans/drgnx/pair.md")).await;
+        assert_eq!(ledger_of(&f, "1").await, "none");
         f.import(None, false).await;
         f.views.sync_all(&f.db).await.unwrap();
         let got = implements_of(&f).await;
@@ -3924,12 +3927,10 @@ mod tests {
         // the spec is deleted: the plan is a root
         std::fs::remove_file(f.root.join("sub/docs/design/s.md")).unwrap();
         f.import(None, false).await;
-        f.views.sync_all(&f.db).await.unwrap();
         assert!(derives_of(&f).await.is_empty());
         // back again, then the plan goes: the spec goes with its last plan
         w("sub/docs/design/s.md", "# Loose spec\n");
         f.import(None, false).await;
-        f.views.sync_all(&f.db).await.unwrap();
         assert_eq!(derives_of(&f).await.len(), 1);
         std::fs::remove_file(f.root.join("sub/docs/plans/x.md")).unwrap();
         f.import(None, false).await;
