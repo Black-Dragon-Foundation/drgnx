@@ -222,9 +222,12 @@ The named reasons are in `classify::infra`: `runner lost`, `preempted`, `disk`, 
 Every finished run leaves a `HistRow { key, machine, grant, wall_s, cpu_s, mem_peak_mib, verdict, disturbed, at,
 warm }`.
 
-- **`history_key(spec)`**: the kind, then the suite and the rows selected, or else the command with paths
-  normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a `.claude/tmp` path `{tmp}`),
-  so one command run from two worktrees has one history.
+- **`history_key(spec)`**: the kind, then the suite (a check's stage), the class of the rows selected
+  (`selector_class`: `all`, `prefix` for one `^name/` or `^name-`, `alt` for an alternation, `other`) and the tree's
+  size bucket (`Derived::tree_bucket`, `floor(log2(MiB))` of the frozen tree, set by the hub at submit); or else the
+  command with paths normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a
+  `.claude/tmp` path `{tmp}`), so one command run from two worktrees has one history. `ert=^drgnx-fold/` and
+  `ert=^drgnx-marks/` share an expected time and memory; a tree ten times bigger keeps its own.
 - **`expected(rows, other, speed_ratio, suite_default)`**: the median time of the last 5 undisturbed runs on this
   machine, with their mean CPU and the p95 of their peak memory; else the same from other machines' rows, the time ×
   the static speed ratio; else the suite's default; else 10 minutes. The last two know no CPU or memory.

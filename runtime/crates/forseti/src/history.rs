@@ -28,19 +28,42 @@ pub struct HistRow {
     pub warm: bool,
 }
 
-/// The key runs of the same work share: the kind, then the suite and the rows selected, or else the command with
-/// paths normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a `.claude/tmp` path
-/// `{tmp}`), so a command run from two worktrees has one history.
+/// The key runs of the same work share: the kind, then the suite (a check's stage), the class of the rows selected
+/// ([`selector_class`]) and the tree's size bucket (`Derived::tree_bucket`), or else the command with paths
+/// normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a `.claude/tmp` path `{tmp}`),
+/// so a command run from two worktrees has one history.
 pub fn history_key(spec: &JobSpec) -> String {
     const SEP: char = '\u{1f}';
     let kind = spec.kind.name();
     if let Some(suite) = &spec.suite {
-        let rows = spec.select.as_deref().unwrap_or("");
-        return format!("{kind}{SEP}suite{SEP}{suite}{SEP}{rows}");
+        let class = selector_class(spec.select.as_deref());
+        let bucket = spec
+            .derived
+            .tree_bucket
+            .map_or(String::new(), |b| b.to_string());
+        return format!("{kind}{SEP}suite{SEP}{suite}{SEP}{class}{SEP}{bucket}");
     }
     let tree = spec.tree.to_string_lossy();
     let args: Vec<String> = spec.command.iter().map(|a| normalise(a, &tree)).collect();
     format!("{kind}{SEP}cmd{SEP}{}", args.join(&SEP.to_string()))
+}
+
+/// The class of a row selector, so selections of one shape share a history: `all` (none), `alt` (an alternation,
+/// `\|`), `prefix` (one `^name/` or `^name-` prefix: letters, digits and `-`, then `/` or `-`), `other`.
+pub fn selector_class(select: Option<&str>) -> &'static str {
+    let Some(s) = select else {
+        return "all";
+    };
+    if s.contains(r"\|") {
+        return "alt";
+    }
+    let prefix = s.strip_prefix('^').is_some_and(|rest| {
+        let name = rest.trim_end_matches(['/', '-']);
+        name.len() + 1 == rest.len()
+            && !name.is_empty()
+            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    if prefix { "prefix" } else { "other" }
 }
 
 /// The start of the path that contains byte `at`: the arg's start, or just after a space, `=` or `:`.

@@ -1641,6 +1641,8 @@ impl Queue {
         }
         if let Some(f) = &s.inputs {
             s.spec.trust = f.trust(&s.place.keys);
+            // the tree's size class keys the job's history (design §5.3 item 5)
+            s.spec.derived.tree_bucket = Some(forseti::tree_bucket(f.tree_bytes));
             self.put_input(f, now);
         }
         let j = QJob::new(s, now, QState::Queued, 0);
@@ -4589,6 +4591,7 @@ mod tests {
             not_on_origin: 0,
             visibility: sync::Visibility::Private,
             shared_overlay: false,
+            tree_bytes: 0,
         }
     }
 
