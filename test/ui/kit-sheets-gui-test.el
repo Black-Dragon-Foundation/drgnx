@@ -155,5 +155,128 @@ picture goes to the evidence folder.  The caller skips a session with no graphic
   (let ((drgnx-kit-sheet--edges t))
     (drgnx-kit-sheet-check 'row)))
 
+;;;; The selection Sjá draws: one rounded row block per window (Task 10)
+
+(require 'drgnx-view-sja)
+(require 'drgnx-view-nav)
+
+(defvar drgnx-kit-sheet--n 0 "A counter for each selection test's own view name (Sjá's views are the process's).")
+
+(defconst drgnx-kit-sheet--sel-model
+  (concat "{\"ops\":[{\"reset\":{\"descriptor\":{\"scheme\":\"links\",\"chain_kinds\":[\"link\"],"
+          "\"match_fields\":[\"label\"],\"lists\":[\"all\"],\"classes\":[\"selected\"],\"start\":\"all\"},"
+          "\"nodes\":[{\"id\":\"n1\",\"kind\":\"row\",\"nav\":{\"down\":\"n2\"},\"fields\":[[\"label\",\"a\"]]},"
+          "{\"id\":\"n2\",\"kind\":\"row\",\"nav\":{\"up\":\"n1\"},\"fields\":[[\"label\",\"b\"]]}],"
+          "\"edges\":[],\"lists\":[{\"name\":\"all\",\"ids\":[\"n1\",\"n2\"]}]}}]}")
+  "Two list rows, n1 above n2, with the class `selected'.")
+
+(defun drgnx-kit-sheet--argb (face)
+  "FACE's background as the (A R G B) a snapshot gives."
+  (cons 255 (mapcar (lambda (v) (/ v 257)) (color-values (face-background face nil t)))))
+
+(defmacro drgnx-kit-sheet--with-list (&rest body)
+  "BODY with the selected window showing `buf', a hub list in Sjá of two rows: n1 \"name  CHIP  Accept\" (a chip and a
+primary button, each with a background of its own) and n2 \"other\", in the dark theme, the window's fringes the rows'
+inset.  `view' is the view's name."
+  (declare (indent 0))
+  `(let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
+         (drgnx-view-patch--hooked nil)
+         (drgnx-view-model--views (make-hash-table :test #'equal))
+         (drgnx-view-patch-send-function #'ignore)
+         (buf (get-buffer-create " *kit-sel*"))
+         (view (format "kit-sel-%d" (cl-incf drgnx-kit-sheet--n))))
+     (drgnx-uitest-bare-frame)
+     (load-theme 'drgnx-dark t)
+     (delete-other-windows)
+     (unwind-protect
+         (progn
+           (switch-to-buffer buf)
+           (setq-local cursor-type nil)
+           (let ((inset (drgnx-px drgnx-wb--row-inset)))
+             (set-window-fringes nil inset inset))
+           (drgnx-view-sja-attach view "c" :ack t :delay 0)
+           (drgnx-view-model-event (list :view view :hub 7 :base 0 :version 1 :reset t :model drgnx-kit-sheet--sel-model))
+           (drgnx-view-model-line
+            (json-serialize
+             (list :event "view-model"
+                   :data (list :view view
+                               :rows (list :view view :class "c" :hub 7 :base 0 :version 1 :env_epoch 0 :model 1
+                                           :ops (vector
+                                                 (list :reset
+                                                       (vector (list :key "a" :text "  name  CHIP  Accept"   ; a lead: the start probe meets no glyph
+                                                                     :runs [[8 12 "drgnx-chip-attention"]
+                                                                            [14 20 "drgnx-ui-button-primary"]]
+                                                                     :props [[0 20 "drgnx-work-id" "n1"]])
+                                                               (list :key "b" :text "other"
+                                                                     :props [[0 5 "drgnx-work-id" "n2"]])))))))))
+           (drgnx-view-sja-draw-now buf)
+           ,@body)
+       (with-current-buffer buf (drgnx-view-nav--sel-clear))
+       (drgnx-test-wait-presented)                ; Glitnir drops its own copy of the blocks at the next redisplay
+       (drgnx-view-patch-teardown)
+       (delete-other-windows)
+       (kill-buffer buf)
+       (mapc #'disable-theme custom-enabled-themes))))
+
+(defun drgnx-kit-sheet--row-at (window pos s)
+  "WINDOW's device y of the middle of POS's row, and its text area's device left and right x (S the device scale)."
+  (let ((edges (window-inside-pixel-edges window)) (xy (posn-x-y (posn-at-point pos window))))
+    (list (round (* s (+ (cadr edges) (cdr xy)
+                         (/ (with-selected-window window (save-excursion (goto-char pos) (line-pixel-height))) 2.0))))
+          (round (* s (car edges))) (round (* s (nth 2 edges))))))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/selected-row-under-a-chip ()
+  "A selected hub list row with a chip and a button: the selection's fill runs from inset to inset, the chip and the
+button keep their own colours, and its top edge is the fill (no ring)."
+  (skip-unless (and (display-graphic-p) (fboundp 'glitnir-active-p) (glitnir-active-p) (fboundp 'nidhogg-view-rows)))
+  (drgnx-kit-sheet--with-list
+    (should (equal "n1" (drgnx-view-nav 'select "n1")))
+    (drgnx-test-wait-presented)
+    (pcase-let* ((s (drgnx-uitest-device-scale (selected-frame))) (snap (drgnx-uitest-snapshot))
+                 (`(,y ,x0 ,x1) (drgnx-kit-sheet--row-at (selected-window) (point-min) s))
+                 (fill (drgnx-kit-sheet--argb 'drgnx-selected))
+                 (px (lambda (x y) (drgnx-uitest-pixel snap x y)))
+                 (at (lambda (pos) (round (* s (+ (car (window-inside-pixel-edges)) (car (posn-x-y (posn-at-point pos)))))))))
+      (should (equal (list 'start fill) (list 'start (funcall px (+ x0 (round (* s 2))) y))))
+      (should (equal (list 'end fill) (list 'end (funcall px (- x1 (round (* s 2))) y))))
+      (should (equal (list 'gap fill) (list 'gap (funcall px (+ (funcall at (+ (point-min) 6)) (round s)) y))))
+      ;; the chip and the button keep their own backgrounds: their colour is among their run's pixels (its glyphs
+      ;; cover the rest)
+      (pcase-dolist (`(,what ,face ,from ,to) '((chip drgnx-chip-attention 8 12) (button drgnx-ui-button-primary 14 20)))
+        (let ((want (drgnx-kit-sheet--argb face)))
+          (should (equal (list what want)
+                         (list what (cl-loop for x from (funcall at (+ (point-min) from))
+                                             below (funcall at (+ (point-min) to))
+                                             when (equal want (funcall px x y)) return want))))))
+      (let ((top (round (* s (cadr (window-inside-pixel-edges))))))
+        (should (equal (list 'top-edge fill) (list 'top-edge (funcall px (+ x0 (round (* s 12))) top)))))
+      ;; the next row is not selected
+      (pcase-let ((`(,y2 . ,_) (drgnx-kit-sheet--row-at (selected-window) (save-excursion (goto-char (point-min))
+                                                                                          (forward-line 1) (point))
+                                                        s)))
+        (should-not (equal (list 'next fill) (list 'next (funcall px (+ x0 (round (* s 2))) y2))))))))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/selection-per-window ()
+  "The view in two windows: the selection's fill in the focused one, the inactive selection in the other; focus
+moved, they swap."
+  (skip-unless (and (display-graphic-p) (fboundp 'glitnir-active-p) (glitnir-active-p) (fboundp 'nidhogg-view-rows)))
+  (drgnx-kit-sheet--with-list
+    (let ((other (split-window-right)))
+      (set-window-buffer other buf)
+      (let ((inset (drgnx-px drgnx-wb--row-inset))) (set-window-fringes other inset inset))
+      (should (equal "n1" (drgnx-view-nav 'select "n1")))
+      (let ((check
+             (lambda (focused unfocused)
+               (drgnx-test-wait-presented)
+               (let* ((s (drgnx-uitest-device-scale (selected-frame))) (snap (drgnx-uitest-snapshot)))
+                 (dolist (c (list (cons focused 'drgnx-selected) (cons unfocused 'drgnx-selected-inactive)))
+                   (pcase-let ((`(,y ,x0 . ,_) (drgnx-kit-sheet--row-at (car c) (with-current-buffer buf (point-min)) s)))
+                     (should (equal (list (cdr c) (drgnx-kit-sheet--argb (cdr c)))
+                                    (list (cdr c) (drgnx-uitest-pixel snap (+ x0 (round (* s 2))) y))))))))))
+        (funcall check (selected-window) other)
+        (let ((w (selected-window)))
+          (select-window other)
+          (funcall check other w))))))
+
 (provide 'kit-sheets-gui-test)
 ;;; kit-sheets-gui-test.el ends here

@@ -39,6 +39,7 @@
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
 (declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
+(declare-function glitnir-active-p "glitnir")
 
 (defface drgnx-view-match '((t :inherit match))
   "A node that matches a hub-fed view's search."
@@ -318,6 +319,116 @@ model or theme makes them again, and the table with them).  Bounded by the face 
             (push ov ovs)))
         (when ovs (puthash id ovs table))))))
 
+;;;; The selection: one rounded row block per window
+;;
+;; Where Glitnir draws, the selected node's whole rows are a `row' block of each window that shows the view
+;; (`glitnir-blocks'): its fill lies beneath the rows' glyphs, so chips and buttons keep their own colours, rounded and
+;; continuous across them; `drgnx-selected' in the selected window, `drgnx-selected-inactive' in the others.  Elsewhere
+;; (a terminal) one overlay per row covers the whole row, its newline too, in the class face.
+
+(defun drgnx-view-nav-selection-style ()
+  "How the current buffer's view draws its selection: `block' where Glitnir draws (`drgnx-view-nav--sel-sync'), else
+`overlay' (one overlay per row over the whole row, in the class face)."
+  (if (and (fboundp 'glitnir-active-p) (glitnir-active-p)) 'block 'overlay))
+
+(defvar-local drgnx-view-nav--sel nil
+  "(ID . ROWS): the selected node and its rows as drawn, ((FROM . TO) ...) markers, consecutive rows joined; nil: none.")
+
+(defvar-local drgnx-view-nav--sel-ovs nil "The selection's overlays (style `overlay').")
+
+(defun drgnx-view-nav--sja-rows (id)
+  "Node ID's whole rows as Sjá drew them (`rowspans'), consecutive ones joined: ((BEG . END) ...) buffer positions."
+  (let* ((s drgnx-view-patch) (beg (drgnx-view-patch-beg s))
+         (v (nidhogg-view-rows (drgnx-view-patch-handle s) 'rowspans nil
+                               (concat (symbol-name drgnx-view-patch-id-prop) "\t" id)))
+         (i 0) rows)
+    (while (< i (length v))
+      (let ((from (+ beg (aref v i))) (to (+ beg (aref v (1+ i)))))
+        (if (and rows (= (cdar rows) from)) (setcdr (car rows) to) (push (cons from to) rows)))
+      (setq i (+ i 2)))
+    (nreverse rows)))
+
+(defun drgnx-view-nav--selected-class-p (class)
+  "Whether CLASS (an index) is Sjá's `selected' class."
+  (let ((names (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'class-names)))
+    (and class (< class (length names)) (equal (elt names class) "selected"))))
+
+(defun drgnx-view-nav--whole-rows-p (id rows)
+  "Whether node ID's spans cover each of its ROWS from its start to its newline: a list's row, not a card among
+others on a line (a Work map's), whose selection stays on its spans."
+  (let ((spans (drgnx-view-nav--sja-spans id t)))
+    (cl-every (lambda (r)
+                (let ((at (car r)))
+                  (dolist (sp spans) (when (and (<= (car sp) at) (> (cdr sp) at)) (setq at (cdr sp))))
+                  (>= at (1- (cdr r)))))
+              rows)))
+
+(defun drgnx-view-nav--sel-set (id face)
+  "Node ID is the selection in FACE: its whole rows where its spans fill them (`drgnx-view-nav--whole-rows-p'), as
+`drgnx-view-nav-selection-style' draws them; else over its spans as any class.  ID nil: none."
+  (mapc #'delete-overlay drgnx-view-nav--sel-ovs)
+  (setq drgnx-view-nav--sel-ovs nil)
+  (dolist (r (cdr drgnx-view-nav--sel)) (set-marker (car r) nil) (set-marker (cdr r) nil))
+  (setq drgnx-view-nav--sel nil)
+  (when id
+    (let ((rows (drgnx-view-nav--sja-rows id)))
+      (drgnx-view-nav--sja-overlays id (and (not (drgnx-view-nav--whole-rows-p id rows)) face))
+      (cond
+       ((gethash id (drgnx-view-patch-spans drgnx-view-patch)))     ; drawn over its spans
+       ((eq (drgnx-view-nav-selection-style) 'block)
+        (setq drgnx-view-nav--sel
+              (cons id (mapcar (lambda (r) (cons (copy-marker (car r)) (copy-marker (cdr r)))) rows))))
+       (t
+        (dolist (r rows)
+          (let ((ov (make-overlay (car r) (cdr r))))
+            (overlay-put ov 'face face)
+            (overlay-put ov 'priority 10)
+            (push ov drgnx-view-nav--sel-ovs)))))))
+  (drgnx-view-nav--sel-sync))
+
+(defun drgnx-view-nav--sel-sync (&optional _window)
+  "Each window that shows the current buffer gets the selection's row blocks (`glitnir-blocks'), in
+`drgnx-selected' in the selected window and `drgnx-selected-inactive' in the others; none without a selection.  Also
+`window-selection-change-functions' (buffer-local): the fill follows the focus."
+  (let ((rows (cdr drgnx-view-nav--sel)) (buf (current-buffer)))
+    (when rows
+      (add-hook 'window-selection-change-functions #'drgnx-view-nav--sel-sync nil t)
+      (add-hook 'kill-buffer-hook #'drgnx-view-nav--sel-clear nil t))
+    ;; a window that showed the buffer before keeps no block of it
+    (walk-windows (lambda (w) (unless (eq (window-buffer w) buf) (drgnx-view-nav--sel-unset w buf))) nil t)
+    (dolist (w (get-buffer-window-list buf nil t))
+      (let* ((face (if (eq w (selected-window)) 'drgnx-selected 'drgnx-selected-inactive))
+             ;; the face's background: Glitnir reads a face given as `:fill' for its foreground (as a ring's); a
+             ;; theme change draws the rows again, which sets the selection, and this, again
+             (fill (face-background face (window-frame w) t))
+             (spec (and fill
+                        (mapcar (lambda (r) `(row ,(car r) ,(cdr r) :radius ,(drgnx-px 6 (window-frame w)) :fill ,fill))
+                                rows))))
+        (unless (equal (window-parameter w 'glitnir-blocks) spec)
+          (set-window-parameter w 'glitnir-blocks spec))))))
+
+(defun drgnx-view-nav--sel-unset (window buffer)
+  "WINDOW keeps no selection block of BUFFER's (its `glitnir-blocks' are the selection's markers in BUFFER)."
+  (let ((b (car (window-parameter window 'glitnir-blocks))))
+    (when (and (eq (car-safe b) 'row) (markerp (nth 1 b)) (eq (marker-buffer (nth 1 b)) buffer))
+      (set-window-parameter window 'glitnir-blocks nil))))
+
+(defun drgnx-view-nav--sel-clear ()
+  "`kill-buffer-hook' (buffer-local): no window keeps the buffer's selection block, its markers go."
+  (let ((buf (current-buffer)))
+    (walk-windows (lambda (w) (drgnx-view-nav--sel-unset w buf)) nil t)
+    (dolist (r (cdr drgnx-view-nav--sel)) (set-marker (car r) nil) (set-marker (cdr r) nil))
+    (setq drgnx-view-nav--sel nil)))
+
+(defun drgnx-view-nav--sja-class (id class dim)
+  "Node ID's CLASS (an index, or nil) drawn: the selection as its rows (`drgnx-view-nav--sel-set'), another class over
+its spans (`drgnx-view-nav--sja-overlays'); DIM, the dim class, is drawn by runs."
+  (let ((face (and class (not (eql class dim)) (drgnx-view-nav--face-of class))))
+    (if (and face (drgnx-view-nav--selected-class-p class))
+        (drgnx-view-nav--sel-set id face)
+      (when (equal id (car drgnx-view-nav--sel)) (drgnx-view-nav--sel-set nil nil))
+      (drgnx-view-nav--sja-overlays id face))))
+
 (defun drgnx-view-nav--sja-dim (h dim redrawn)
   "The dim runs and the lone dim nodes of H's rows as Sjá answers them for class DIM; REDRAWN: the nodes a draw drew
 again (a table), whose lone overlays are made again."
@@ -359,14 +470,13 @@ again (a table), whose lone overlays are made again."
       (while (< i (length changes))
         (let ((id (aref changes i)) (class (aref changes (1+ i))))
           (puthash id t done)
-          (drgnx-view-nav--sja-overlays id (and class (not (eql class dim)) (drgnx-view-nav--face-of class))))
+          (drgnx-view-nav--sja-class id class dim))
         (setq i (+ i 2)))
       (dotimes (j (length ids))
         (let ((id (aref ids j)))
           (unless (gethash id done)
             (puthash id t done)
-            (let ((class (nidhogg-view-get h 'class id)))
-              (drgnx-view-nav--sja-overlays id (and class (not (eql class dim)) (drgnx-view-nav--face-of class)))))))
+            (drgnx-view-nav--sja-class id (nidhogg-view-get h 'class id) dim))))
       (if dim
           (drgnx-view-nav--sja-dim h dim done)
         (when drgnx-view-nav--sja-dim

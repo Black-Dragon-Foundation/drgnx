@@ -197,8 +197,15 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 (Some(open), Some((closed, opened))) => Some(if *open { opened } else { closed }),
                 _ => None,
             };
-            for name in twisty_name.into_iter().chain(icon.as_deref()) {
+            let names = twisty_name
+                .map(|n| (n, true))
+                .into_iter()
+                .chain(icon.as_deref().map(|n| (n, false)));
+            for (name, is_twisty) in names {
+                let at = b.pos();
                 let mark = glyph(env, name);
+                // the twisty in the subtle role (the mockups' chevrons), above the row's own and state colours
+                let subtle = FaceId::TextSubtle.name();
                 match env
                     .icons
                     .filter(|_| !env.tty)
@@ -206,7 +213,17 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 {
                     Some(id) => {
                         b.image(id, mark);
+                        if is_twisty {
+                            b.face(at, at + 1, subtle);
+                        }
                         pad(b, env, px(g.gap, env.scale), 0, face);
+                    }
+                    None if !mark.is_empty() && is_twisty => {
+                        b.push(mark, Some(subtle));
+                        if let Some(f) = face {
+                            b.face(at, b.pos(), f);
+                        }
+                        b.push(" ", face);
                     }
                     None if !mark.is_empty() => {
                         b.push(&format!("{mark} "), face);
@@ -364,6 +381,16 @@ mod tests {
         let plain = &expand_rows(&env(None), "k", &c)[0];
         assert!(plain.images.is_empty());
         assert_eq!(plain.text, " ⌄ src ");
+        // the twisty (image or glyph) in the subtle role, the icon in the row's colours (the mockups' chevrons)
+        let subtle = |r: &Row| {
+            r.runs
+                .iter()
+                .filter(|x| x.2 == FaceId::TextSubtle.name())
+                .map(|x| (x.0, x.1))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(subtle(r), vec![(1, 2)]);
+        assert_eq!(subtle(plain), vec![(1, 2)]);
     }
 
     #[test]
