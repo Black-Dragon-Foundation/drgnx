@@ -18,6 +18,7 @@ pub mod model;
 pub mod nav;
 mod overlap;
 pub mod render;
+pub mod schedule;
 pub mod trail;
 mod view;
 

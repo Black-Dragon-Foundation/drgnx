@@ -707,6 +707,24 @@ fn view_rows(
     (rows, images)
 }
 
+/// Machines as the strip and the Schedule show them: label, slots used, slots.
+pub type Machines = Vec<(String, u32, u32)>;
+
+/// One row of a connection's List, with what the Schedule reads of its item.
+#[derive(Clone, Debug)]
+pub struct ListRow {
+    pub entry: vegvisir::list::ListEntry,
+    pub kind: Option<Kind>,
+    /// A done task, or a spec or plan with nothing live and nothing waiting under it.
+    pub done: bool,
+    /// A spec's or plan's target date.
+    pub target: Option<f64>,
+    /// Its agent waits on the user, a machine or a job.
+    pub waiting: bool,
+    /// Its agent's session.
+    pub session: Option<String>,
+}
+
 /// The renderer's view of ENV: a card line's height and ascent from the `caption` font (else the cell's, 80 % up).
 pub(crate) fn render_env<'a>(env: &'a ViewEnv, palette: &'a Palette) -> render::Env<'a> {
     let line = env
@@ -1572,6 +1590,57 @@ impl Map {
                 (it.label, used, total)
             })
             .collect()
+    }
+
+    /// The List of connection CONN's map view (a shown one first, else any): its entries in order, each with what the
+    /// Schedule reads of its item, and the machines (label, slots used, slots); none when CONN has no map view.
+    pub fn list_of(&self, conn: u64) -> Option<(Vec<ListRow>, Machines)> {
+        let g = lock(&self.inner);
+        let (_, v) = g
+            .views
+            .iter()
+            .filter(|(k, _)| k.conn == conn)
+            .max_by_key(|(_, v)| v.shown)?;
+        let m = g.spaces.get(&v.space)?.core.model();
+        let rows = vegvisir::list::entries(m, &v.state, m.minute())
+            .into_iter()
+            .map(|entry| {
+                let it = m.item(&entry.item);
+                let agent = entry.agent.as_ref().and_then(|a| m.item(a));
+                ListRow {
+                    kind: it.as_ref().map(|i| i.kind),
+                    done: it.as_ref().is_some_and(|i| i.done),
+                    target: it.as_ref().and_then(|i| i.fields.target_at).map(|t| t.0),
+                    waiting: agent.as_ref().is_some_and(|a| {
+                        a.needs_you
+                            || matches!(
+                                a.fields.state,
+                                Some(State::Waiting | State::NeedsYou | State::Queued)
+                            )
+                    }),
+                    session: entry
+                        .agent
+                        .as_ref()
+                        .and_then(|a| a.0.strip_prefix("agent:"))
+                        .map(str::to_owned),
+                    entry,
+                }
+            })
+            .collect();
+        let mut machines: Vec<vegvisir::model::Item> = m
+            .items()
+            .into_values()
+            .filter(|it| it.kind == Kind::Machine)
+            .collect();
+        machines.sort_by_key(|it| it.order);
+        let machines = machines
+            .into_iter()
+            .map(|it| {
+                let (used, total) = it.fields.slots.unwrap_or((0, 0));
+                (it.label, used, total)
+            })
+            .collect();
+        Some((rows, machines))
     }
 
     pub fn near(&self, conn: u64) -> Vec<String> {
