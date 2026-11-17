@@ -3537,7 +3537,8 @@ an event itself:
   when it closed nothing (`drgnx-close--closed`).
 - `drgnx-esc--map` at the front of `emulation-mode-map-alists` (placed by `drgnx-modal-order-alists` right after the
   modules' `drgnx-modal-front-alists`: after Close Pane's and quick help's, before the modal engine's) binds `<escape>` to `drgnx-esc`: within `drgnx-esc-double-tap` of a
-  cancel (`drgnx-esc-cancel-commands`) it opens the switcher, else it runs what `<escape>` means without the map
+  cancel (`drgnx-esc-cancel-commands`) it opens the switcher (never for an Esc a keyboard macro replays: its keys are
+  not taps, so Vim's `q a A ! Esc j q @ a` leaves insert state), else it runs what `<escape>` means without the map
   (`key-binding` with `drgnx-esc--on` nil), or gives an unbound Esc back as ESC. In a buffer of
   `drgnx-esc-process-modes` it runs the major mode's own binding every time (so a terminal tile gets its Esc ahead of
   evil's).
