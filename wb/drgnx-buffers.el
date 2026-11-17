@@ -24,7 +24,7 @@
 (declare-function drgnx-wb-fit-sections "drgnx-wb")
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe headless))
-(defvar drgnx-view-env-right-reserve)
+(defvar drgnx-view-env-tail)
 (defvar drgnx-hub--events)
 
 (defface drgnx-buffers-close '((t :inherit shadow)) "The × of each row." :group 'drgnx)
@@ -224,17 +224,20 @@ the same object through every repaint, so a repaint under a still pointer is no 
 (defun drgnx-buffers--tail (key beg eol)
   "Give KEY's drawn row (BEG to EOL) its tail at the right edge, its overlay moved rather than made again: the git
 letter of the status the hub put on the name, and the close button, or ● while the hub says the buffer has unsaved
-changes and the pointer is not on the row."
+changes and the pointer is not on the row.  A row whose name reaches the close button's place
+\(`drgnx-row-tail-short', from the hub) leaves it out."
   (let* ((b (gethash key drgnx-buffers--by-id))
          (status (and (< beg eol) (intern-soft (get-text-property (1- eol) 'drgnx-git-status))))
          (status (and (assq status drgnx-git--looks) status))
          (letter (and status (car (drgnx-git-look status))))
          (modified (and (< beg eol) (get-text-property (1- eol) 'drgnx-buffers-modified)))
          (o (drgnx-wb-row-tail-overlay eol letter (and letter (drgnx-wb-git-mark-face status))
-                                       (if (and modified (not (eq b drgnx-buffers--hovered)))
-                                           (propertize (drgnx-face-glyph 'dot) 'face 'drgnx-buffers-modified
-                                                       'help-echo "Unsaved changes")
-                                         (propertize (drgnx-face-glyph 'close) 'help-echo "Close"))
+                                       (cond
+                                        ((and (< beg eol) (get-text-property beg 'drgnx-row-tail-short)) 'none)
+                                        ((and modified (not (eq b drgnx-buffers--hovered)))
+                                         (propertize (drgnx-face-glyph 'dot) 'face 'drgnx-buffers-modified
+                                                     'help-echo "Unsaved changes"))
+                                        (t (propertize (drgnx-face-glyph 'close) 'help-echo "Close")))
                                        (gethash key drgnx-buffers--tails) (and b (drgnx-buffers--sensor b)))))
     (overlay-put o 'evaporate t)
     (puthash key o drgnx-buffers--tails)))
@@ -303,8 +306,8 @@ follow the rows."
         (add-hook 'window-scroll-functions #'drgnx-buffers--scrolled nil t)
         (drgnx-buffers--wait-for-hub)
         (require 'drgnx-view-env)
-        ;; each row's tail is drawn from the window's right edge: the hub fits the rows short of it
-        (setq-local drgnx-view-env-right-reserve #'drgnx-wb-tail-reserve)
+        ;; each row's tail is drawn from the window's right edge: the hub ends a row's text short of what it draws
+        (setq-local drgnx-view-env-tail #'drgnx-wb-tail-px)
         (drgnx-view-env-register drgnx-buffers-hub-view (current-buffer) #'drgnx-buffers--resend)
         (drgnx-buffers--resend)
         (current-buffer))))
