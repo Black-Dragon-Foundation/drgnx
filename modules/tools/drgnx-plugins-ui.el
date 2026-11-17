@@ -149,7 +149,7 @@ write); a refused value or a missing file is a `user-error'."
      'face (if (equal state "approved") 'default 'drgnx-plugins-warn))))
 
 (defun drgnx-plugins--button (label action)
-  (make-text-button (copy-sequence label) nil 'action (lambda (_) (funcall action)) 'follow-link t))
+  (drgnx-ui-kit-text-button label action nil 'secondary 'sm))
 
 (defun drgnx-plugins-page-insert (name &optional root)
   "Insert the page of plugin NAME at point (from the rows of the last `plugins/list'): its state and hash, abilities,

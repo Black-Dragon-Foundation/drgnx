@@ -386,7 +386,7 @@ in the windows that showed the buffer.  A modified buffer is refused: switching 
 
 (defun drgnx-large-files--button (mode label)
   "A header button \"[LABEL]\" that switches to MODE."
-  (propertize (concat "[" label "]") 'face 'button 'mouse-face 'mode-line-highlight
+  (propertize (concat "[" label "]") 'face 'drgnx-kit-button-quiet 'mouse-face 'mode-line-highlight
               'help-echo (format "mouse-1: %s" label) 'local-map drgnx-large-files--button-map
               'drgnx-large-files-switch mode))
 
