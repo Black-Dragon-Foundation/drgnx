@@ -1285,6 +1285,9 @@ mod tests {
         fx.cdp(r#"{"id":1,"method":"Fake.stubborn"}"#);
         fx.reply(1);
         fx.control(json!({"op": "stop", "why": "idle"}));
+        // the host takes the stop and sits in its grace before the next frames are written (a sleep only separates the
+        // writes, so the two cannot be read as one chunk; the check below is on what is read, not on this wait)
+        std::thread::sleep(Duration::from_millis(300));
         fx.control(json!({"op": "start"}));
         fx.cdp(r#"{"id":2,"method":"Page.enable"}"#);
         use std::os::fd::AsRawFd;
