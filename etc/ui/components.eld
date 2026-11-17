@@ -73,7 +73,7 @@
               :tty (:pad 0) :label "agent"
               :bind ((() :inherit (drgnx-ui-caption) :inverse t))
               :replaces nil :helpers nil :lint t)
-  ;; progress: a bar (4 px tall, `drgnx-ui-kit-progress-bar-px', centred on the line: the fill, rounded at its start,
+  ;; progress: a bar (4 px tall, `drgnx-ui-kit-progress-bar-px', on the caption's centre line: the fill, rounded at its start,
   ;; then the track, rounded at its end; each an SVG in `currentColor', so its face's text colour, as the icons are) or
   ;; a ring (one of five glyphs); its word is "N percent".  A terminal draws the bar as a cell per 8 px of its width
   ;; (`drgnx-ui-kit-progress-cell-px'): the filled cells `bar-full' and a partial block (`bar-1'..`bar-7', eighths) in
@@ -84,9 +84,8 @@
             :tty (:pad 0 :glyphs (bar-left bar-full bar-1 bar-2 bar-3 bar-4 bar-5 bar-6 bar-7 bar-empty bar-right
                                            progress-0 progress-1 progress-2 progress-3 progress-4))
             :label "percent"
-            ;; text colours only (the bar's images and glyphs are drawn in them); under a theme that knows nothing of
-            ;; drgnx: the track the shadow's colour, the fill and the ring a link's
+            ;; text colours only (the bar's images and glyphs are drawn in them; the ring is in the fill's face); under a
+            ;; theme that knows nothing of drgnx: the track the shadow's colour, the fill a link's
             :bind ((() :fg progress-track :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption))
-                   ((ring) :fg progress-fill :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption))
                    ((fill) :fg progress-fill :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption)))
             :replaces nil :helpers nil :lint t)))

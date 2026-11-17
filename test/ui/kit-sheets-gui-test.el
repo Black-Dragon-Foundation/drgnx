@@ -72,11 +72,34 @@ whose values VARIANTS all have."
 (defvar drgnx-kit-sheet--edges nil
   "Non-nil while a sheet also checks that hovered and selected cells have no edge (`drgnx-kit-sheet/state-table').")
 
+(defun drgnx-kit-sheet--baseline (beg s edges)
+  "The device row of the baseline of BEG's line, at device scale S in a window at EDGES: a marker image whose bottom is
+the baseline (`:ascent 100') is drawn at the line's end in the fill's face, its lowest pixel found, and taken away."
+  (let* ((at (save-excursion (goto-char beg) (line-end-position)))
+         (img (create-image "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"6\"><rect width=\"4\" height=\"6\" fill=\"currentColor\"/></svg>"
+                            'svg t :ascent 100 :scale 1))
+         (inhibit-read-only t))
+    (save-excursion
+      (goto-char at)
+      (insert (propertize "m" 'display img 'face 'drgnx-kit-progress-fill)))
+    (unwind-protect
+        (progn
+          (drgnx-test-wait-presented)
+          (let* ((snap (drgnx-uitest-snapshot))
+                 (want (drgnx-kit-sheet--rgb (face-foreground 'drgnx-kit-progress-fill nil t)))
+                 (x (+ (drgnx-kit-sheet--x at s edges) 1))
+                 (top (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point at)))))))
+                 (h (round (* s (save-excursion (goto-char at) (line-pixel-height))))))
+            (1+ (or (cl-loop for y from (+ top h -1) downto top when (equal want (drgnx-uitest-pixel snap x y)) return y)
+                    (error "No baseline marker drawn at %s" at)))))
+      (save-excursion (goto-char at) (delete-char 1)))))
+
 (defun drgnx-kit-sheet--check-bar (what props variant scale snap beg s edges)
   "The progress bar of PROPS drawn at BEG (WHAT the cell, for the failures), at SCALE: down the column halfway into its
-fill, the fill (`progress-fill') is the bar's height (`drgnx-ui-kit-progress-bar-px' at SCALE) and centred on the line
-\(within a device px); along its middle row the fill is VALUE of the width's device px rounded half up (within one,
-its rounded start), and the track (`progress-track') follows it."
+fill, the fill (`progress-fill') is the bar's height (`drgnx-ui-kit-progress-bar-px' at SCALE) and its middle on the
+caption's centre line (within a device px: the baseline less half the caption font's ascent less its descent, the
+line icons and the bar are centred on, whatever pads the line box); along its middle row the fill is VALUE of the
+width's device px rounded half up (within one, its rounded start), and the track (`progress-track') follows it."
   (let* ((fill (drgnx-kit-sheet--rgb (drgnx-look-token 'progress-fill variant)))
          (track (drgnx-kit-sheet--rgb (drgnx-look-token 'progress-track variant)))
          (want (floor (+ (* (drgnx-px (plist-get props :width) nil scale) (plist-get props :value)) 0.5 1e-9)))
@@ -86,11 +109,18 @@ its rounded start), and the track (`progress-track') follows it."
          (h (round (* s (save-excursion (goto-char beg) (line-pixel-height)))))
          (rows (cl-loop for y from top below (+ top h) when (equal fill (drgnx-uitest-pixel snap xm y)) collect y)))
     (should (equal (list what 'bar-drawn t) (list what 'bar-drawn (and rows t))))
-    ;; the bar's height, and its middle on the line's
+    ;; the bar's height, and its middle on the caption's centre line
     (should (equal (list what 'bar-height (drgnx-px drgnx-ui-kit-progress-bar-px nil scale))
                    (list what 'bar-height (length rows))))
-    (let ((off (- (+ (car rows) (/ (length rows) 2.0)) (+ top (/ h 2.0)))))
-      (should (equal (list what 'bar-centred t) (list what 'bar-centred (<= (abs off) 1.0)))))
+    (let* ((font (font-info (face-font 'drgnx-ui-caption)))
+           (base (drgnx-kit-sheet--baseline beg s edges))
+           ;; `font-info': [OPENED-NAME FULL-NAME SIZE HEIGHT BASELINE-OFFSET RELATIVE-COMPOSE DEFAULT-ASCENT MAX-WIDTH
+           ;; ASCENT DESCENT ...]
+           (centre (- base (* s (/ (- (aref font 8) (aref font 9)) 2.0))))
+           (off (- (+ (car rows) (/ (length rows) 2.0)) centre)))
+      (should (equal (list what 'bar-on-the-caption-centre-line t)
+                     (list what 'bar-on-the-caption-centre-line
+                           (or (<= (abs off) 1.0) (list off 'baseline base 'centre centre 'rows (car rows) (length rows)))))))
     ;; the fill's width: its pixels along the middle row (the rounded start may lose one to its edge's blend), the
     ;; track's right after them
     (let* ((y (nth (/ (length rows) 2) rows))

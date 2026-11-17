@@ -229,7 +229,7 @@ const PROGRESS_GEOM: [[Geom; 3]; 2] = [
     ],
 ];
 const PROGRESS_LABEL: [Option<&str>; 2] = [Some("percent"), Some("percent")];
-const PROGRESS_FACE: [FaceId; 2] = [FaceId::KitProgress, FaceId::KitProgressRing];
+const PROGRESS_FACE: [FaceId; 2] = [FaceId::KitProgress, FaceId::KitProgress];
 
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {

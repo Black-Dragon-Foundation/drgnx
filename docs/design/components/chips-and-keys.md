@@ -50,7 +50,8 @@ An agent's handle (one or two letters) on its colour, the way an avatar marks a 
 How far something has got, as a bar or a ring.
 
 - **Bar:** the fill (`progress-fill`, the accent) then the track (`progress-track`), 4 px high and centred on the
-  line, radius 2 at its outer ends. The fill is the value times the bar's width in device pixels, rounded half up.
+  caption's centre line (the text's, as icons are, not the line box's: the bar lines up with the caption and icons
+  beside it), radius 2 at its outer ends. The fill is the value times the bar's width in device pixels, rounded half up.
   Each part is an SVG rectangle in `currentColor`, coloured by its face as the icons are, so a theme change needs no
   redraw (a space's background would fill the whole line). On a terminal it is one cell per 8 px of the width: `█`
   filled and a partial block (eighths, `▏` to `▉`) in the fill's colour, then `░` in the track's; ASCII is

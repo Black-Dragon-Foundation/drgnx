@@ -73,7 +73,11 @@ state); the cell's text, its line's height in device px (the expansion's :height
                 (drgnx-kit-catalogue--hub-row id props scale tty patch)
               (drgnx-ui-kit-string id props 'text nil))))
     (put-text-property 0 (length s) 'drgnx-kit-cell (list id (mapcar #'cdr variants) state) s)
-    s))
+    ;; progress beside its caption, as it is used: the bar and the ring on the caption's centre line
+    (if (and (eq id 'progress) (not tty))
+        (concat s (propertize " " 'display `(space :width (,(drgnx-px 12 nil scale))))
+                (propertize (get-text-property 0 'help-echo s) 'face 'drgnx-ui-caption))
+      s)))
 
 (defun drgnx-kit-catalogue--combos (entry)
   "Every combination of ENTRY's variant axes, as ((AXIS . VALUE)...), the last axis fastest; (nil) for none."

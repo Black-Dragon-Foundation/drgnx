@@ -1034,15 +1034,13 @@ pub enum FaceId {
     KitAgentMark,
     /// `drgnx-kit-progress`
     KitProgress,
-    /// `drgnx-kit-progress-ring`
-    KitProgressRing,
     /// `drgnx-kit-progress-fill`
     KitProgressFill,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 515] = [
+    pub const ALL: [FaceId; 514] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1556,7 +1554,6 @@ impl FaceId {
         FaceId::KitKeyHintMenu,
         FaceId::KitAgentMark,
         FaceId::KitProgress,
-        FaceId::KitProgressRing,
         FaceId::KitProgressFill,
     ];
 
@@ -2076,7 +2073,6 @@ impl FaceId {
             FaceId::KitKeyHintMenu => "drgnx-kit-key-hint-menu",
             FaceId::KitAgentMark => "drgnx-kit-agent-mark",
             FaceId::KitProgress => "drgnx-kit-progress",
-            FaceId::KitProgressRing => "drgnx-kit-progress-ring",
             FaceId::KitProgressFill => "drgnx-kit-progress-fill",
         }
     }
@@ -2597,7 +2593,6 @@ impl FaceId {
             "drgnx-kit-key-hint-menu" => FaceId::KitKeyHintMenu,
             "drgnx-kit-agent-mark" => FaceId::KitAgentMark,
             "drgnx-kit-progress" => FaceId::KitProgress,
-            "drgnx-kit-progress-ring" => FaceId::KitProgressRing,
             "drgnx-kit-progress-fill" => FaceId::KitProgressFill,
             _ => return None,
         })

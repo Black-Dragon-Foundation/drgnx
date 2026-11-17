@@ -678,7 +678,8 @@ terminal (TTY, `ascii' for ASCII glyphs).  A bar is the fill (`drgnx-kit-progres
 half up) then the track (`drgnx-kit-progress'), each a space `drgnx-ui-kit-progress-bar-px' high, which the
 editor draws as the bar's images (`drgnx-ui-kit-bar-display'); on a terminal its cells (one per
 `drgnx-ui-kit-progress-cell-px'), the filled ones `bar-full' and a partial block, then `bar-empty'.  A ring is one of
-the five glyphs `progress-0'..`progress-4'.  Its label, \"N percent\", is its `help-echo'.  As `drgnx-ui-kit--expand'."
+the five glyphs `progress-0'..`progress-4', in the fill's face.  Its label, \"N percent\", is its `help-echo'.  As
+`drgnx-ui-kit--expand'."
   (let* ((kind (if (equal (plist-get props :kind) "ring") 'ring 'bar))
          (v (max 0.0 (min 1.0 (float (or (plist-get props :value) 0)))))
          (width (or (plist-get props :width) 0))
@@ -688,7 +689,7 @@ the five glyphs `progress-0'..`progress-4'.  Its label, \"N percent\", is its `h
     (cond
      ((eq kind 'ring)
       (let ((g (drgnx-ui-kit--glyph (intern (format "progress-%d" (drgnx-ui-kit--round (* 4 v)))) tty)))
-        (push g parts) (push (list 0 (length g) face) runs) (setq pos (length g))))
+        (push g parts) (push (list 0 (length g) 'drgnx-kit-progress-fill) runs) (setq pos (length g))))
      (tty
       ;; eighths of a cell: the filled cells, then a partial block when the env draws one (an ASCII terminal does not:
       ;; there the fill rounds to whole cells), then the empty ones
@@ -779,7 +780,8 @@ above 0: a progress bar's) makes it that high."
 ;; A progress bar's parts are spaces of a height (the hub's and Lisp's alike); a stretch glyph's background fills its
 ;; whole line whatever its height, so the editor draws each part as an image instead: a rectangle in `currentColor'
 ;; (the text colour of the part's face, `drgnx-kit-progress-fill' or `drgnx-kit-progress', as the icons take theme
-;; colours: no colour named, nothing redrawn on a theme change), centred on the line, its outer ends rounded.
+;; colours: no colour named, nothing redrawn on a theme change), centred on its face's font's centre line (the caption's,
+;; `:ascent center', as icons are), its outer ends rounded.
 
 (defconst drgnx-ui-kit--bar-faces '("drgnx-kit-progress-fill" "drgnx-kit-progress")
   "The faces of a progress bar's parts, by name.")
@@ -790,7 +792,7 @@ take; a part is remade at its next draw).")
 
 (defun drgnx-ui-kit-bar-image (width height radius start end)
   "A part of a progress bar: WIDTH x HEIGHT device px in `currentColor', its START and END corners rounded by RADIUS
-device px where non-nil, centred on the line."
+device px where non-nil, centred on its face's font's centre line."
   (let ((key (list width height radius start end)))
     (or (gethash key drgnx-ui-kit--bar-images)
         (progn

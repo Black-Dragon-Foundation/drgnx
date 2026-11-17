@@ -514,5 +514,4 @@
  drgnx-kit-key-hint-menu
  drgnx-kit-agent-mark
  drgnx-kit-progress
- drgnx-kit-progress-ring
  drgnx-kit-progress-fill)

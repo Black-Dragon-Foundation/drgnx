@@ -518,7 +518,7 @@ fn progress(b: &mut RowBuilder, env: &KitEnv, kind: ProgressKind, value: f64, wi
     match kind {
         ProgressKind::Ring => {
             let name = format!("progress-{}", round_half_up(4.0 * v));
-            b.push(glyph(env, &name), Some(face));
+            b.push(glyph(env, &name), Some(fill_face));
         }
         ProgressKind::Bar if env.tty => {
             // eighths of a cell: the filled cells, then a partial block where the env draws one (an ASCII terminal
