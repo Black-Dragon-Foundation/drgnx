@@ -433,6 +433,20 @@ fn the_reply_sets_the_state_and_an_aborted_cell_is_not_an_error() {
 }
 
 #[test]
+fn the_answer_to_the_hubs_own_readiness_ping_is_not_the_kernels_log() {
+    // the hub asks `kernel_info` again until a status comes; an answer that arrives after the kernel is ready is not news
+    let mut r = Router::new();
+    assert_eq!(
+        r.apply(
+            Channel::Shell,
+            &msg("kernel_info_reply", "ping", json!({"status": "ok"}))
+        ),
+        None
+    );
+    assert_eq!(r.log().count(), 0);
+}
+
+#[test]
 fn a_message_that_answers_nothing_goes_to_the_log_never_to_a_cell() {
     let mut r = Router::new();
     r.begin("run-1");
