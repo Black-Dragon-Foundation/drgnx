@@ -121,7 +121,7 @@ open one, two spaces a file).  The hub's rows draw the chevron as an image, so i
             (drgnx-modal-session-act sess "C-g")
             (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*" 'visible))))
             ;; SPC SPC the palette, SPC f p Quick Open, SPC s p project search
-            (pcase-dolist (`(,keys . ,prompt) '(("SPC SPC" . "Command") ("SPC f p" . "Find file in")
+            (pcase-dolist (`(,keys . ,prompt) '(("SPC SPC" . "Command") ("SPC f p" . "Quick Open")
                                                 ("SPC s p" . "Search in project")))
               (drgnx-modal-session-act sess keys)
               (should (drgnx-modal-ui-test--prompt-p sess prompt))
@@ -308,7 +308,7 @@ open one, two spaces a file).  The hub's rows draw the chevron as an image, so i
             (should-not (drgnx-modal-session-prompt sess))
             ;; C-o in insert state: VS Code's Open File
             (drgnx-modal-session-act sess "i" "C-o")
-            (should (drgnx-modal-ui-test--prompt-p sess "Find file"))
+            (should (drgnx-modal-ui-test--prompt-p sess "Open File"))
             (drgnx-modal-session-act sess "C-g" "<escape>")
             ;; the key sheet names the per-state conflict
             (drgnx-modal-session-act sess "SPC ?")
