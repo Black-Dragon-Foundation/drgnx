@@ -416,6 +416,17 @@ makes that tab again (`drgnx-chrome--tab') and no other; the line itself is kept
         (puthash w (vector look tabs line) drgnx-chrome--tab-lines)
         line))))
 
+(defvar drgnx-grid-grip-map)
+(defvar drgnx-grid-drag)
+
+(defun drgnx-chrome--grip (prefix)
+  "An editor tile's tab row PREFIX (the room before its first tab) as the tile's grip while the grid is on and
+`drgnx-grid-drag': a press there drags the tile (`drgnx-grid-grip-press').  Its width does not change."
+  (if (and (not (string-empty-p prefix)) (bound-and-true-p drgnx-grid-mode) (bound-and-true-p drgnx-grid-drag)
+           (boundp 'drgnx-grid-grip-map))
+      (propertize prefix 'local-map drgnx-grid-grip-map 'pointer 'hand 'help-echo "Drag to move this tile")
+    prefix))
+
 (defun drgnx-chrome--tab-parts (w look)
   "(ROWS PAINT PREFIX GAP BUTTONS) of W's row, made once per LOOK (kept in its last slot)."
   (or (aref look 15)
@@ -428,8 +439,9 @@ makes that tab again (`drgnx-chrome--tab') and no other; the line itself is kept
                                           (when (cdr paint) (add-face-text-property 0 1 (cdr paint) nil s))
                                           s))))
               (list rows paint
-                    (concat (and extent (drgnx-pixels-spacer 'drgnx-chrome-tab (nth 0 rows) descent frame))
-                            (and paint (funcall stretch drgnx-chrome--tab-row-pad)))
+                    (drgnx-chrome--grip
+                     (concat (and extent (drgnx-pixels-spacer 'drgnx-chrome-tab (nth 0 rows) descent frame))
+                             (and paint (funcall stretch drgnx-chrome--tab-row-pad))))
                     (if paint (funcall stretch drgnx-chrome--tab-gap) " ")
                     (and rows (drgnx-chrome--tab-buttons w rows (cdr paint))))))))
 
