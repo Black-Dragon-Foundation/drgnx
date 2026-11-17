@@ -33,6 +33,19 @@
 (declare-function drgnx-area--pad "drgnx-area" (px &optional frame))
 (declare-function drgnx-area--row-with-close "drgnx-area" (title area &optional frame))
 (declare-function drgnx-agent-panel-composer--pad "drgnx-agent-panel-composer" ())
+(declare-function drgnx-agent-panel-composer--frame "drgnx-agent-panel-composer" ())
+(declare-function drgnx-agent-panel-composer--bar "drgnx-agent-panel-composer" ())
+(declare-function drgnx-state-sync "drgnx-state" (&optional frame))
+(defvar drgnx-agent-panel--snap)
+(defun drgnx-ui-chrome-scale--align-to (string)
+  "N of the `(space :align-to (- right (N)))' display in STRING, or nil."
+  (let ((i 0) found)
+    (while (and (not found) (< i (length string)))
+      (let ((d (get-text-property i 'display string)))
+        (when (and (consp d) (eq (car d) 'space) (plist-get (cdr d) :align-to))
+          (setq found (car (car (last (plist-get (cdr d) :align-to)))))))
+      (setq i (or (next-single-property-change i 'display string) (length string))))
+    found))
 (defun drgnx-ui-chrome-scale--space-widths (string)
   "The `(space :width (N))' values of STRING's display properties."
   (let (out (i 0))
@@ -76,10 +89,19 @@ bar's row and the stretches (`drgnx-chrome--px') are the second frame's own pixe
                 (should (= (drgnx-area--pad 8 f) (drgnx-px 8 f)))
                 (should (member (drgnx-px 8 f)
                                 (drgnx-ui-chrome-scale--space-widths (drgnx-area--row-with-close "title" 'right f))))
-                ;; the composer's pad: a buffer shown in this frame draws for it
+                ;; the composer: a buffer shown in this frame draws for it, its pad and its buttons' widths in this
+                ;; frame's pixels whichever frame is selected: the bar is the same with this frame selected
                 (with-temp-buffer
+                  (setq-local drgnx-agent-panel--snap nil)
                   (set-window-buffer win (current-buffer))
-                  (should (= (drgnx-agent-panel-composer--pad) (drgnx-px 20 f))))))
+                  (drgnx-state-sync f)
+                  (should (eq f (drgnx-agent-panel-composer--frame)))
+                  (should (= (drgnx-agent-panel-composer--pad) (drgnx-px 20 f)))
+                  (let ((from-a (drgnx-ui-chrome-scale--align-to (drgnx-agent-panel-composer--bar)))
+                        (from-f (with-selected-frame f
+                                  (drgnx-ui-chrome-scale--align-to (drgnx-agent-panel-composer--bar)))))
+                    (should from-a)
+                    (should (= from-a from-f))))))
             ;; the second frame's chrome is twice the first's, the selected frame being the first
             (should (= (car (drgnx-chrome--tab-rows (frame-root-window b)))
                        (* 2 (car (drgnx-chrome--tab-rows (frame-root-window a))))))))
