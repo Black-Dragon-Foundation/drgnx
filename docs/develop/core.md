@@ -3244,7 +3244,9 @@ the adapter's `:version` argv, the program's own version flag with no IPC (`sway
 `drgnx-platform-doctor-timeout`. `x11` has no `:tool`: it moves frames by position, and xrandr only counts monitors.
 
 Tests use `test/fixtures/wm/fake-wm.sh`, linked as `swaymsg`, `i3-msg`, `hyprctl` and `niri` into a temp bin: it logs
-its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail.
+its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail. A failing sway or
+i3 row prints its marks: when each call to the fake tool started and ended (with its status), and when a call's time
+limit or a placement's deadline fired, in seconds from the row's start, so a red names the stage that was late.
 
 ## Pane kinds (`wb/drgnx-panes.el`)
 
