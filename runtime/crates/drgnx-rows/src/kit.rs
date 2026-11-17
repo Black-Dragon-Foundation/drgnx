@@ -659,12 +659,12 @@ fn progress(b: &mut RowBuilder, env: &KitEnv, kind: ProgressKind, value: f64, wi
             // does not: there the fill rounds to whole cells), then the empty ones
             let cells = round_half_up(f64::from(width) / f64::from(BAR_CELL_PX)).max(1);
             let units = round_half_up(f64::from(cells) * 8.0 * v);
-            let part = if units % 8 > 0 {
+            let part = if !units.is_multiple_of(8) {
                 glyph(env, &format!("bar-{}", units % 8))
             } else {
                 ""
             };
-            let full = if units % 8 > 0 && part.is_empty() {
+            let full = if !units.is_multiple_of(8) && part.is_empty() {
                 round_half_up(f64::from(cells) * v)
             } else {
                 units / 8
