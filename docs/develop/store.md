@@ -289,7 +289,7 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
 - **Schedule.** `drgnx_ratatoskr::backup_timer` (pure `due(now, last_ok, since_attempt)`, the clock injected): a copy
   is due when the local time is 03:00 or later, no good copy was made today, and the last try is over an hour old (a
   failure is retried hourly, not every tick). The hub's 2 s schema tick asks it, so a hub that was off at 03:00 copies
-  at its first tick after it is ready. At start the newest `work-*.db` seeds the record, so a restart does not copy
+  at its first tick after it is ready and has run five minutes (`SETTLE`: the copy is a request on the store's writer, which a shutdown waits out, so a hub stopped in its first minutes never waits for one). At start the newest `work-*.db` seeds the record, so a restart does not copy
   twice a day. No copy starts while an excise runs (`backup_timer::excising`) or the writer is not `Ready`.
 - **Record.** `graph::run_backup` (the body of `graph/backup` and of the timer) logs and records the outcome;
   `status.store.last_backup` (RFC 3339) and `backup_ok` come from it.

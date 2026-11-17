@@ -145,6 +145,53 @@ tab before b.txt replaces it.  Tabs are apart by a gap of spaces (wb/drgnx-chrom
     (drgnx-tty-mouse-test--click-on s "a\\.txt ×" :dx 1)
     (should (equal (drgnx-tty-session-wait s `(and (equal ,drgnx-tty-mouse-test--editor-buffer "a.txt") t)) t))))
 
+(ert-deftest drgnx-tty-mouse/a-tab-release-read-by-the-press-selects-it ()
+  ;; With tile dragging on, the press's command reads the release itself (`drgnx-grid-tab-press').  The release
+  ;; is sent only once that command waits, so it is read there, not by the command loop: it must come decoded
+  ;; (xterm-mouse's `input-decode-map' entry), a mouse-1 on the tab line, not the ESC of its raw bytes.
+  (drgnx-tty-session-with (s :size "120x40")
+    (drgnx-tty-mouse-test--project s)
+    (drgnx-tty-mouse-test--two-tabs s)
+    (should (drgnx-tty-session-eval s '(and drgnx-grid-mode drgnx-grid-drag t)))
+    (let* ((pos (drgnx-tty-session-wait-screen s "a\\.txt ×"))
+           (col (1+ (car pos))) (row (cdr pos)))
+      (drgnx-tty-session-send s (format "\e[<0;%d;%dM" col row))
+      (drgnx-tty-session-wait s '(eq this-command 'drgnx-chrome--tab-press))
+      (drgnx-tty-session-send s (format "\e[<0;%d;%dm" col row)))
+    (should (equal (drgnx-tty-session-wait s `(and (equal ,drgnx-tty-mouse-test--editor-buffer "a.txt") t)) t))))
+
+(ert-deftest drgnx-tty-mouse/a-tab-dragged-to-another-editor-moves ()
+  ;; The drag loop (`drgnx-grid--drag') reads the motion and the release itself: each arrives decoded (xterm-mouse's
+  ;; `input-decode-map' entry), so the motion shows "drop:" on the target's row and the release moves the tab there.
+  ;; Each report is sent only once the one before it was handled.
+  (drgnx-tty-session-with (s :size "120x40")
+    (let ((dir (drgnx-tty-mouse-test--project s)))
+      (drgnx-tty-mouse-test--two-tabs s)
+      (drgnx-tty-session-eval s `(progn (setq drgnx-tty-mouse-test--left (drgnx-wb-editor-window))
+                                        (with-selected-window drgnx-tty-mouse-test--left
+                                          (set-window-buffer (drgnx-groups-split-right)
+                                                             (find-file-noselect ,(expand-file-name "src/c.el" dir))))
+                                        t))
+      (drgnx-tty-session-wait-screen s "(defun c () 1)")
+      (should (drgnx-tty-session-eval s '(and drgnx-grid-mode drgnx-grid-drag
+                                              (memq (get-buffer "b.txt")
+                                                    (window-parameter drgnx-tty-mouse-test--left 'drgnx-tabs))
+                                              t)))
+      (let* ((tab (drgnx-tty-session-wait-screen s "b\\.txt ×"))
+             (over (drgnx-tty-session-wait-screen s "(defun c () 1)"))
+             (to (cons (+ (car over) 6) (+ (cdr over) 8))))
+        (drgnx-tty-session-send s (format "\e[<0;%d;%dM" (1+ (car tab)) (cdr tab)))
+        (drgnx-tty-session-wait s '(eq this-command 'drgnx-chrome--tab-press))
+        (drgnx-tty-session-send s (format "\e[<32;%d;%dM" (car to) (cdr to)))
+        (drgnx-tty-session-wait-screen s "drop:")
+        (drgnx-tty-session-send s (format "\e[<0;%d;%dm" (car to) (cdr to))))
+      (should (drgnx-tty-session-wait
+               s '(let ((b (get-buffer "b.txt")))
+                    (and (not (memq b (window-parameter drgnx-tty-mouse-test--left 'drgnx-tabs)))
+                         (get-buffer-window b)
+                         (not (eq (get-buffer-window b) drgnx-tty-mouse-test--left))))))
+      (should-not (drgnx-tty-session-find s "drop:")))))
+
 (ert-deftest drgnx-tty-mouse/tab-close-click-closes-it ()
   (drgnx-tty-session-with (s :size "120x40")
     (drgnx-tty-mouse-test--project s)

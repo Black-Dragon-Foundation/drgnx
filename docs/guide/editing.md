@@ -155,8 +155,8 @@ cannot draw (a typo) stays code, said once, until its text changes. Module `lang
 **Copy**, **Cut** and **Paste** work on the selection. In the VS Code profile they are `C-c`, `C-x` and `C-v`
 (`s-c`, `s-x`, `s-v` on a Mac): `C-c` and `C-x` act only while text is selected, so without a selection they stay
 Emacs's prefixes (`C-x C-s`, `C-c C-c` in a mode). Paste replaces the selection, in one undo step. The Emacs profile
-keeps `M-w`, `C-w` and `C-y`; the Vim profile `y`, `d` and `p`. A prefix key typed with a selection (`C-x C-s`, `C-x b`) still works: they wait 0.3 seconds
-(`drgnx-editing-prefix-delay`) for the next key before they cut. Details are in [keys.md](keys.md#copy-cut-and-paste). In a terminal window the copy also reaches the terminal's
+keeps `M-w`, `C-w` and `C-y`; the Vim profile `y`, `d` and `p`. Copy and Cut are instant: with a selection `C-c` copies and `C-x` cuts at once; drop the selection first (`Escape`) to type
+an Emacs prefix such as `C-x C-s` (or set `drgnx-editing-prefix-delay` to a number of seconds to have them wait for a next key). Details are in [keys.md](keys.md#copy-cut-and-paste). In a terminal window the copy also reaches the terminal's
 clipboard ([terminal.md](terminal.md#clipboard)). Module `editor/editing`.
 
 ## The system clipboard
