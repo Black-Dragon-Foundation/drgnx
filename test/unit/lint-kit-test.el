@@ -161,7 +161,6 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("core/drgnx-modules.el" status-dot 5)
     ("core/drgnx-notices.el" status-dot 1)
     ("core/drgnx-onboard.el" status-dot 1)
-    ("core/drgnx-settings-page.el" chip 1)
     ("modules/editor/drgnx-fold.el" chip 2)
     ("modules/extra/drgnx-debug-console.el" chip 2)
     ("modules/extra/drgnx-debug-disassembly.el" chip 1)
