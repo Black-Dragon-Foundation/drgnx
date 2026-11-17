@@ -300,6 +300,12 @@ faces a landed kit component replaces (`drgnx-ui-kit-replaced-faces'): they inhe
           (header-line-highlight :background ,(c 'hover))
           (tab-bar :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'gap))   ; the title row (§4)
           (menu :inherit drgnx-ui-text :foreground ,(c 'fg) :background ,(c 'overlay))   ; the menu bar's menus (popups)
+          ;; Nidhogg's menus (lisp/term/nhwl-menu.el): the overlay card, the state table's selection, the subtle keys
+          (nhwl-menu :inherit drgnx-ui-text :foreground ,(c 'fg) :background ,(c 'overlay))
+          (nhwl-menu-selected :inherit drgnx-selected)
+          (nhwl-menu-disabled :inherit drgnx-text-disabled)
+          (nhwl-menu-key :inherit (drgnx-text-subtle drgnx-code-small))
+          (nhwl-menu-separator :inherit nhwl-menu-disabled :strike-through ,(c 'border))   ; the rule (look.css .sep)
           (drgnx-topline-strong :inherit drgnx-ui-heading :foreground ,(c 'fg) :background ,(c 'gap))
           (tab-bar-tab :inherit drgnx-ui-text :foreground ,(c 'fg) :background ,(c 'editor))
           (tab-bar-tab-inactive :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'panel))

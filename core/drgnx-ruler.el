@@ -126,10 +126,12 @@ the whole, outside the rows the buffer holds; it brings those rows and puts WIND
   "Whether WINDOW is a scrollable surface that gets the scroll bar: an editor group, a docked pane (the Explorer, the
 panel, the right dock), a popup lane, or a window of a child frame (a palette's list); never the minibuffer, chrome
 \(the status bar and other windows with a `drgnx-role' that is not a pane), a package's side window, or a window
-marked `drgnx-minimap-exclude' (the peek card's, the sticky header's)."
+marked `drgnx-minimap-exclude' (the peek card's, the sticky header's) or of a frame with that parameter (Nidhogg's
+menus: sized to their rows, a strip would cut them)."
   (and (window-live-p window)
        (not (window-minibuffer-p window))
        (not (window-parameter window 'drgnx-minimap-exclude))
+       (not (frame-parameter (window-frame window) 'drgnx-minimap-exclude))
        (let ((role (window-parameter window 'drgnx-role)))
          (if role
              (memq role '(dock panel right))
