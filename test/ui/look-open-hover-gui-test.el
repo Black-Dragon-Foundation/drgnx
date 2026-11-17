@@ -26,21 +26,6 @@
 (load (expand-file-name "modules/ui/drgnx-look-density" drgnx-ui-look-open-hover--repo) nil t)
 (load (expand-file-name "themes/drgnx-theme-gen" drgnx-ui-look-open-hover--repo) nil t)
 
-(defun drgnx-ui-look-open-hover--origin ()
-  "Where the focused sway window's client area starts in the layout, (X . Y)."
-  (let ((json (with-temp-buffer
-                (call-process "swaymsg" nil t nil "-t" "get_tree")
-                (goto-char (point-min))
-                (json-parse-buffer :object-type 'alist :array-type 'list)))
-        found)
-    (cl-labels ((walk (n)
-                  (when (eq (alist-get 'focused n) t) (setq found n))
-                  (mapc #'walk (alist-get 'nodes n))
-                  (mapc #'walk (alist-get 'floating_nodes n))))
-      (walk json))
-    (let ((r (alist-get 'rect found)) (w (alist-get 'window_rect found)))
-      (cons (+ (alist-get 'x r) (alist-get 'x w)) (+ (alist-get 'y r) (alist-get 'y w))))))
-
 (defun drgnx-ui-look-open-hover--shot (name)
   "Copy the frame's picture to the evidence folder as NAME-s<scale>.png, when the session has one."
   (when-let* ((dir (getenv "DRGNX_UI_EVIDENCE")) ((file-directory-p dir)))
@@ -96,9 +81,10 @@ and off the row, not."
                  (y (cdr (posn-x-y (posn-at-point row open))))
                  (edges (window-inside-pixel-edges open))
                  (h (with-current-buffer drgnx-buffers-buffer-name (line-pixel-height)))
-                 (origin (drgnx-ui-look-open-hover--origin))
+                 (origin (drgnx-uitest-frame-origin root))
                  (s (with-selected-frame root (drgnx-pixels-scale))))   ; a Lisp pixel is a device pixel; sway takes logical ones
             (should row)
+            (should origin)
             (drgnx-ui-look-open-hover--shot "open-rest")
             (should-not (buffer-local-value 'drgnx-buffers--hovered (window-buffer open)))
             (should (eq t (drgnx-uitest-pointer-set (+ (car origin) (round (/ (+ (nth 0 edges) (nth 2 edges)) 2.0 s)))
