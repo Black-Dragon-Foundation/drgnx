@@ -1515,6 +1515,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
+| `minimap/watch` | user | `{file: string, on: boolean}` | `boolean` | no |
 | `notebook/clear` | user | `{cell?: string, id: string}` | `boolean` | no |
 | `notebook/close` | user | `{id: string}` | `boolean` | no |
 | `notebook/execute` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
@@ -3149,6 +3150,18 @@ The Outline section's rows: the definitions of the file in the editor, built by 
   tree-sitter (those starting above the window's top line, `modules/editor/drgnx-sticky.el`) read it; a buffer the
   edit history tracks asks through it (`drgnx-history-ask`: its changes go first), another by its file. The last
   `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
+
+### The minimap's labels (`minimap/watch`)
+
+`minimap/watch {file, on}` says the editor shows FILE (absolute, its true name) in a minimap, or no longer. While a
+connection watches it, the hub sends it the file's definitions as the minimap's `labels` layer (`view/minimap.rs`):
+a `view-model` line whose data holds `minimap` (`{file, layer: "labels", version, items: [[line, depth, kind,
+name]]}`), on the model's raw path, so the editor hands it to Sjá unparsed. The text is the Outline's (the edit
+history's mirror where it tracks the buffer, else the disk), outlined by Hrafn, up to `LABELS_MAX` (8 MiB, past the
+Outline's 1 MiB; a larger file gets an empty layer). It is sent before the answer, and again `QUIET` (500 ms of the
+hub's clock) after the edits to it pause (`outline::touched` calls `minimap::touched`); a later ask or `on: false`
+drops a pending send. Versions come from one counter for the hub, so a later layer is always newer. A connection's
+watches end with it. MARK sections are not the hub's: Nidhogg's line model finds them.
 
 ### The agent panel's rows
 

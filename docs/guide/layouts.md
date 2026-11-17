@@ -33,7 +33,7 @@ is on screen.
 
 | Command | VS Code | Emacs | Vim |
 |---|---|---|---|
-| View: Next Layout — Agent, Editor, Zen, Browser, then yours, and around | `C-k C-l` | the palette | `SPC l n` |
+| View: Next Layout — Agent, Editor, Zen, Browser, then yours, and around | `C-k l` | the palette | `SPC l n` |
 | View: Layout… — pick one by name | the palette | the palette | `SPC l l` |
 | View: Layout Agent / Editor / Zen / Browser | the palette | the palette | the palette |
 | View: Save Layout As… | the palette | the palette | the palette |

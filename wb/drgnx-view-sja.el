@@ -31,8 +31,10 @@
 
 (require 'cl-lib)
 (require 'drgnx-view)
+(require 'drgnx-ruler)
 
 (declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional a b))
 (declare-function drgnx-view-nav-sja-step "drgnx-view-nav" (&optional ids))
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (defvar nidhogg-view--row-decisions)
@@ -55,6 +57,48 @@ starts): a view's own fit of the text before the stop (a terminal's wide cells),
 (defvar-local drgnx-view-sja-drawn-functions nil
   "Called with (BEG END) in a view held in Sjá after a draw changed BEG..END of its buffer (the cursor of a terminal,
 the link patterns the user set).")
+
+;;;; The scroll bar of a view the hub sends a window of
+
+(defvar-local drgnx-view-sja-window-list "order"
+  "The model's list whose window the buffer's rows are, when the hub sends a window of it (a big tree, a long
+result list): the scroll bar stands for its whole TOTAL (`drgnx-view-sja-ruler-span').  Nil: none.")
+
+(defvar-local drgnx-view-sja--ruler-goto nil
+  "(WINDOW . ROW): a press on the scroll bar asked the hub for the window holding ROW; the next draw shows it.")
+
+(defun drgnx-view-sja-ruler-span ()
+  "The buffer's rows as a part of its view, (FROM LENGTH TOTAL) from Sjá's window of `drgnx-view-sja-window-list',
+or nil when the buffer holds every row (`drgnx-ruler-span-function')."
+  (when-let* ((drgnx-view-sja-window-list) (s drgnx-view-patch) (h (drgnx-view-patch-handle s))
+              (w (ignore-errors (nidhogg-view-get h 'window drgnx-view-sja-window-list))))
+    (and (< (nth 1 w) (nth 2 w)) w)))
+
+(defun drgnx-view-sja--ruler-row (window row)
+  "Put WINDOW on the view's ROW, one of the rows held (a row a line), centred."
+  (let ((beg (drgnx-view-patch-beg drgnx-view-patch)) (from (or (car (drgnx-view-sja-ruler-span)) 0)))
+    (with-selected-window window
+      (goto-char beg)
+      (forward-line (max 0 (- row from)))
+      (recenter))))
+
+(defun drgnx-view-sja-ruler-goto (window frac)
+  "`drgnx-ruler-goto-fraction-function': a press on the scroll bar at FRAC of the view, outside the rows held.  The
+hub is asked for the window with that row in its middle; the draw that brings it puts WINDOW there."
+  (when-let* ((span (drgnx-view-sja-ruler-span)))
+    (let* ((row (min (1- (nth 2 span)) (floor (* frac (nth 2 span)))))
+           (from (max 0 (min (- (nth 2 span) (nth 1 span)) (- row (/ (nth 1 span) 2))))))
+      (setq drgnx-view-sja--ruler-goto (cons window row))
+      (funcall drgnx-view-patch-send-function "view/window"
+               (list :view (drgnx-view-patch-view drgnx-view-patch) :list drgnx-view-sja-window-list :from from)))))
+
+(defun drgnx-view-sja--ruler-drawn ()
+  "After a draw: the windows' scroll bars follow the view's window, and a press waiting for its rows goes there."
+  (when drgnx-ruler-span-function (drgnx-ruler-update))
+  (when-let* ((goto drgnx-view-sja--ruler-goto) (span (drgnx-view-sja-ruler-span)))
+    (when (and (window-live-p (car goto)) (<= (nth 0 span) (cdr goto)) (< (cdr goto) (+ (nth 0 span) (nth 1 span))))
+      (setq drgnx-view-sja--ruler-goto nil)
+      (drgnx-view-sja--ruler-row (car goto) (cdr goto)))))
 
 (defconst drgnx-view-sja-table-max 4096
   "The most styles or images a buffer holds from Sjá; past that it drops them and asks Sjá for every live one again
@@ -98,6 +142,8 @@ epoch is held until a reset (else applied: a terminal's faces repaint in place).
       ;; a start set from Lisp (`set-window-start', a scroll command) runs no `window-scroll-functions': the window's
       ;; redisplay comes next, and the pin before it, in the window's buffer
       (add-hook 'pre-redisplay-functions #'drgnx-view-sja--pin-end nil t)
+      (setq-local drgnx-ruler-span-function #'drgnx-view-sja-ruler-span
+                  drgnx-ruler-goto-fraction-function #'drgnx-view-sja-ruler-goto)
       (drgnx-view-patch--hooks)
       s)))
 
@@ -366,6 +412,7 @@ its place), else BEG."
               (when-let* ((o (drgnx-view-patch-stale-overlay s))) (move-overlay o (point-min) (point-max))))
             (dolist (w wins) (set-marker (nth 4 w) nil) (set-marker (nth 5 w) nil))))
         (when lo (run-hook-with-args 'drgnx-view-sja-drawn-functions lo hi))
+        (when lo (drgnx-view-sja--ruler-drawn))
         (when drawn
           ;; the model's classes on what was drawn, then the view's own marks over the rows drawn (KEYS)
           (let ((keys (append (nth 7 drawn) nil)))

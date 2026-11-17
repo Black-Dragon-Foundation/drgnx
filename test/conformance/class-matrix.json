@@ -216,6 +216,7 @@
   "messages/mark": ["user"],
   "messages/retract": ["user"],
   "messages/send": ["user"],
+  "minimap/watch": ["user"],
   "notebook/clear": ["user"],
   "notebook/close": ["user"],
   "notebook/execute": ["user"],

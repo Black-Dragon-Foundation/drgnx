@@ -31,14 +31,6 @@
     (drgnx-editing-case-cycle)
     (should (equal (buffer-string) "(setq my-var 1)"))))
 
-(ert-deftest drgnx-editing/fold-and-unfold ()
-  (drgnx-editing-test--in "(defun f ()\n  |(list 1\n        2))\n" #'emacs-lisp-mode
-    (goto-char (point-min))
-    (drgnx-editing-fold)
-    (should (invisible-p (line-end-position)))
-    (drgnx-editing-unfold)
-    (should-not (invisible-p (line-end-position)))))
-
 (ert-deftest drgnx-editing/expand-and-shrink-selection ()
   (drgnx-editing-test--in "(a (b |cde f) g)" #'emacs-lisp-mode
     (drgnx-editing-expand)
@@ -221,10 +213,10 @@ off gives the desktop's `auto' back, so popups stop animating when GNOME asks fo
 
 (ert-deftest drgnx-editing/the-module-sets-up-and-turns-off ()
   (drgnx-test-with-modules '(editor/editing) :strict t
-                           (should (drgnx-commands-get 'edit-fold))
+                           (should (drgnx-commands-get 'edit-case-cycle))
                            (should (memq 'drgnx-editing--region-alist emulation-mode-map-alists)))
   (should-not (memq 'drgnx-editing--region-alist emulation-mode-map-alists))
-  (should-not (drgnx-commands-get 'edit-fold)))
+  (should-not (drgnx-commands-get 'edit-case-cycle)))
 
 (ert-deftest drgnx-editing/case-cycle-on-one-word-says-so ()
   ;; M4-12: a one-word symbol has nothing to cycle: said, not silent.

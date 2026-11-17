@@ -150,6 +150,26 @@ pub enum FaceId {
     HistoryEffect,
     /// `drgnx-history-label`
     HistoryLabel,
+    /// `drgnx-marks-added`
+    MarksAdded,
+    /// `drgnx-marks-changed`
+    MarksChanged,
+    /// `drgnx-marks-deleted`
+    MarksDeleted,
+    /// `drgnx-marks-error`
+    MarksError,
+    /// `drgnx-marks-warning`
+    MarksWarning,
+    /// `drgnx-marks-info`
+    MarksInfo,
+    /// `drgnx-marks-hit`
+    MarksHit,
+    /// `drgnx-marks-bookmark`
+    MarksBookmark,
+    /// `drgnx-marks-symbol`
+    MarksSymbol,
+    /// `drgnx-marks-agent`
+    MarksAgent,
     /// `drgnx-modal-normal`
     ModalNormal,
     /// `drgnx-modal-insert`
@@ -310,6 +330,12 @@ pub enum FaceId {
     WbIslandTitle,
     /// `drgnx-wb-island-control`
     WbIslandControl,
+    /// `drgnx-fold-summary`
+    FoldSummary,
+    /// `drgnx-fold-name`
+    FoldName,
+    /// `drgnx-minimap-label`
+    MinimapLabel,
     /// `drgnx-sticky`
     Sticky,
     /// `drgnx-blame`
@@ -994,7 +1020,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 491] = [
+    pub const ALL: [FaceId; 504] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1066,6 +1092,16 @@ impl FaceId {
         FaceId::HistoryHeading,
         FaceId::HistoryEffect,
         FaceId::HistoryLabel,
+        FaceId::MarksAdded,
+        FaceId::MarksChanged,
+        FaceId::MarksDeleted,
+        FaceId::MarksError,
+        FaceId::MarksWarning,
+        FaceId::MarksInfo,
+        FaceId::MarksHit,
+        FaceId::MarksBookmark,
+        FaceId::MarksSymbol,
+        FaceId::MarksAgent,
         FaceId::ModalNormal,
         FaceId::ModalInsert,
         FaceId::ModalVisual,
@@ -1146,6 +1182,9 @@ impl FaceId {
         FaceId::WbSection,
         FaceId::WbIslandTitle,
         FaceId::WbIslandControl,
+        FaceId::FoldSummary,
+        FaceId::FoldName,
+        FaceId::MinimapLabel,
         FaceId::Sticky,
         FaceId::Blame,
         FaceId::DebugBisectGood,
@@ -1562,6 +1601,16 @@ impl FaceId {
             FaceId::HistoryHeading => "drgnx-history-heading",
             FaceId::HistoryEffect => "drgnx-history-effect",
             FaceId::HistoryLabel => "drgnx-history-label",
+            FaceId::MarksAdded => "drgnx-marks-added",
+            FaceId::MarksChanged => "drgnx-marks-changed",
+            FaceId::MarksDeleted => "drgnx-marks-deleted",
+            FaceId::MarksError => "drgnx-marks-error",
+            FaceId::MarksWarning => "drgnx-marks-warning",
+            FaceId::MarksInfo => "drgnx-marks-info",
+            FaceId::MarksHit => "drgnx-marks-hit",
+            FaceId::MarksBookmark => "drgnx-marks-bookmark",
+            FaceId::MarksSymbol => "drgnx-marks-symbol",
+            FaceId::MarksAgent => "drgnx-marks-agent",
             FaceId::ModalNormal => "drgnx-modal-normal",
             FaceId::ModalInsert => "drgnx-modal-insert",
             FaceId::ModalVisual => "drgnx-modal-visual",
@@ -1642,6 +1691,9 @@ impl FaceId {
             FaceId::WbSection => "drgnx-wb-section",
             FaceId::WbIslandTitle => "drgnx-wb-island-title",
             FaceId::WbIslandControl => "drgnx-wb-island-control",
+            FaceId::FoldSummary => "drgnx-fold-summary",
+            FaceId::FoldName => "drgnx-fold-name",
+            FaceId::MinimapLabel => "drgnx-minimap-label",
             FaceId::Sticky => "drgnx-sticky",
             FaceId::Blame => "drgnx-blame",
             FaceId::DebugBisectGood => "drgnx-debug-bisect-good",
@@ -2059,6 +2111,16 @@ impl FaceId {
             "drgnx-history-heading" => FaceId::HistoryHeading,
             "drgnx-history-effect" => FaceId::HistoryEffect,
             "drgnx-history-label" => FaceId::HistoryLabel,
+            "drgnx-marks-added" => FaceId::MarksAdded,
+            "drgnx-marks-changed" => FaceId::MarksChanged,
+            "drgnx-marks-deleted" => FaceId::MarksDeleted,
+            "drgnx-marks-error" => FaceId::MarksError,
+            "drgnx-marks-warning" => FaceId::MarksWarning,
+            "drgnx-marks-info" => FaceId::MarksInfo,
+            "drgnx-marks-hit" => FaceId::MarksHit,
+            "drgnx-marks-bookmark" => FaceId::MarksBookmark,
+            "drgnx-marks-symbol" => FaceId::MarksSymbol,
+            "drgnx-marks-agent" => FaceId::MarksAgent,
             "drgnx-modal-normal" => FaceId::ModalNormal,
             "drgnx-modal-insert" => FaceId::ModalInsert,
             "drgnx-modal-visual" => FaceId::ModalVisual,
@@ -2139,6 +2201,9 @@ impl FaceId {
             "drgnx-wb-section" => FaceId::WbSection,
             "drgnx-wb-island-title" => FaceId::WbIslandTitle,
             "drgnx-wb-island-control" => FaceId::WbIslandControl,
+            "drgnx-fold-summary" => FaceId::FoldSummary,
+            "drgnx-fold-name" => FaceId::FoldName,
+            "drgnx-minimap-label" => FaceId::MinimapLabel,
             "drgnx-sticky" => FaceId::Sticky,
             "drgnx-blame" => FaceId::Blame,
             "drgnx-debug-bisect-good" => FaceId::DebugBisectGood,

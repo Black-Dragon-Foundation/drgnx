@@ -24,7 +24,7 @@ profile's; every command is also in the palette.
 | Rename a symbol (the language server's edits, reviewed first) | Rename Symbol `F2` | [replace.md](replace.md) | — (batch: `mod-replace-view-test.el`) | — |
 | Find and replace in a file (the find bar) | Replace in File `C-h` | [replace.md](replace.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` | — |
 | Sidebar views: Explorer, Search | View: Explorer `C-S-e`, View: Search `C-S-f` | [workbench.md](workbench.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` | explorer |
-| Layouts (Agent, Editor, Zen, Browser, your own) | Next Layout `C-k C-l` | [layouts.md](layouts.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` | — |
+| Layouts (Agent, Editor, Zen, Browser, your own) | Next Layout `C-k l` | [layouts.md](layouts.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` | — |
 | A web page beside the editor; Playwright reports | `tools/browser` | [browser.md](browser.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` (without WebKit) | — |
 | Watch and take over the agents' browser (waits for a later update; agents' browsers: [agent-browser.md](agent-browser.md)) | `tools/live` | [live.md](live.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` (a mock browser) | live-view |
 | Edit on another machine (ssh hosts, podman containers), a status-line segment, Reconnect | `tools/remote` | [remote.md](remote.md) | `drgnx-ui-m11c2/agent-settings-and-remote` (a podman container) | remote-typing |

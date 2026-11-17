@@ -89,6 +89,34 @@ Touchpad and wheel scrolling move by pixels, not lines, on graphical frames: wit
 `ultra-scroll` to `:packages` in `packages.eld`), else Emacs's own `pixel-scroll-precision-mode`. Terminal frames
 scroll by lines as always. **Toggle Smooth Scrolling**. Module `ui/smooth`.
 
+## Folding
+
+Fold a block to see the code around it: **Fold** (`C-{` in the VS Code keys, `C-c @ C-h` in the Emacs keys, `z c` in
+the Vim keys) hides the block at the cursor after its first line, which then ends with `⋯ N lines`; **Unfold** shows it
+again, **Toggle Fold** does whichever applies. Fold on a line already folded folds the block around it.
+
+- **Fold All** / **Unfold All**; **Fold Recursively** / **Unfold Recursively** (the block and every block in it);
+  **Fold Level…** (every block at one nesting level, 1 the outermost, but the one you are in; VS Code's `C-k C-1` …
+  `C-k C-7`); **Fold One Level More** / **Less** (Vim's `z m` / `z r`: the deepest blocks still open fold, the
+  deepest folded open); **Fold by Kind…** (functions, classes, comments, imports, tests, regions or cells, as the file has them;
+  `C-k C-/` folds the comments); **Fold All Except Here** folds every block that does not hold the cursor or the
+  selection and opens those that do; **Unfold All Except Here** opens every fold but those; **Next / Previous Fold**.
+- **Create Fold from Selection** folds the selected lines, with an optional name shown when it is folded; **Name
+  Fold…** and **Remove Manual Fold** act on the one at the cursor. A fold you made wins over the file's own blocks on
+  its first line.
+- Searching (`C-s`, the Find widget's isearch) opens a fold it passes through.
+
+Where blocks come from (`drgnx-fold-source`): in code, indentation — a line and the lines after it indented deeper, as
+VS Code's indentation folding; in Markdown, headings (each to the next heading of its level or above); in a notebook,
+its cells; Org folds its own headings (Fold, Unfold, Toggle Fold, Fold All, Unfold All and Fold Level act on them). `indent`
+uses indentation everywhere, `off` leaves only the folds you make. `drgnx-fold-summary` sets what a folded line shows
+(`full`, `lines`, or an ellipsis); `drgnx-fold-max` caps the blocks a file keeps (20,000; the smallest go first). The
+blocks live in Nidhogg's line model, kept with every edit, so a fold command reads them at once and the scroll bar
+leaves folded lines out. The Emacs keys are hideshow's (`C-c @ C-c` toggle, `C-c @ C-M-h` / `C-c @ C-M-s` all,
+`C-c @ C-l` level, `C-c @ C-n` from the selection); hideshow's own folds, if you turn `hs-minor-mode` on, are separate.
+With Vim keys, evil's fold keys (`zc`, `zo`, `za`, `zC`, `zO`, `zM`, `zR`) act on these folds, `zm` / `zr` fold one level more / less, and `zf` (visual), `zd`,
+`zj`, `zk` make, remove and step through them. Module `editor/fold`.
+
 ## Sticky scroll
 
 When the start of the function, class or block you are in has scrolled off the top, its name shows in the header,

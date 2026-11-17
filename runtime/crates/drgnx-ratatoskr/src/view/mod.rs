@@ -27,6 +27,7 @@ pub mod files;
 pub mod fonts;
 pub mod git;
 pub mod icons;
+pub mod minimap;
 pub mod model;
 pub mod outline;
 pub mod panel;
@@ -628,6 +629,8 @@ pub struct Views {
     buffers: buffers::Buffers,
     /// The Outline panels' outlines (`outline/set`).
     outlines: outline::Outlines,
+    /// The files the editor shows in a minimap (`minimap/watch`).
+    pub(crate) minimaps: minimap::Watches,
     /// The Source Control views (`scm/subscribe`).
     scms: scm::Scms,
     /// The Changes views (`changes/subscribe`): what the agents changed, by task.
@@ -658,6 +661,7 @@ impl Default for Views {
             lists: extensions::Lists::default(),
             buffers: buffers::Buffers::default(),
             outlines: outline::Outlines::default(),
+            minimaps: minimap::Watches::default(),
             scms: scm::Scms::default(),
             changes: changes::Changes::default(),
             agents_sides: agents_side::AgentsSides::default(),
@@ -1038,6 +1042,7 @@ impl Views {
         self.lists.gone(conn);
         self.buffers.gone(conn);
         self.outlines.gone(conn);
+        self.minimaps.gone(conn);
         self.scms.gone(conn);
         self.changes.gone(conn);
         self.agents_sides.gone(conn);

@@ -1583,35 +1583,102 @@ An owner starts each margin string with `(drgnx-margins-pad OWNER)`: blanks up t
 buffer's first window. `drgnx-margins-changed-functions` runs with the buffer when places may have moved. Tests:
 `test/unit/margins-test.el`.
 
-## The overview ruler (`drgnx-ruler.el`)
+## The scroll bar and its marks (`drgnx-ruler.el`)
 
-A file's marks at the window's right edge, the whole file top to bottom (the mockup's `debugging-extras.html`).
-Nidhogg draws it: Glitnir's overview ruler, the window parameter `glitnir-ruler` (Nidhogg's case
-`2026-11-13-glitnir-overview-ruler-case`). The strip, its marks and the band are block bars that C lists at each publish.
+Every scrollable surface's scroll bar: a strip at the window's right edge with a thumb over the part shown and the
+file's marks, the whole content top to bottom (the minimap design's state A, `minimap-folding.html`; the user guide is
+[minimap.md](../guide/minimap.md)). Nidhogg draws it: Glitnir's overview ruler, the window parameter `glitnir-ruler`
+(Nidhogg's case `2026-11-13-glitnir-overview-ruler-case`). The strip, its marks and the thumb are block bars that C
+lists at each publish.
 
+- **Where.** `drgnx-scrollbar-mode` (global; module `editor/minimap`, setting `drgnx-minimap-ruler`) gives every
+  window `drgnx-scrollbar-window-p` names the strip: editor groups, the docked panes (`drgnx-role` `dock`, `panel`,
+  `right`), popup lanes and child frames' windows. Never the minibuffer, chrome (the status bar and other roles), a
+  package's side window, or a window with the parameter `drgnx-minimap-exclude`.
+- **Hidden while it fits.** With `drgnx-minimap-hide-short` the spec carries `:hide-short`, and C draws nothing while
+  the window's first row starts the text and a row reaches its end (a window fitted to its lines, the agent panel's
+  header, has no row for the final newline's empty line). The fringe keeps the strip's width, so nothing reflows
+  when the content grows past the window.
+- **Views the hub sends a window of.** A buffer that holds rows FROM to FROM + LENGTH of a view of TOTAL rows names
+  them through `drgnx-ruler-span-function` (Sjá's buffers: `drgnx-view-sja-ruler-span`, the window of
+  `drgnx-view-sja-window-list`). The spec's `:span` makes the strip stand for the TOTAL rows. The Sjá draw calls
+  `drgnx-ruler-update`, which sets the parameter only when the span moved. A press outside the rows held goes to
+  `drgnx-ruler-goto-fraction-function`, which asks the hub for the window around that row (`view/window`) and goes
+  there after the draw.
 - **Producers.** One owner draws; producers hand it marks. A producer calls `(drgnx-ruler-source OWNER FUNCTION)` in a
-  buffer. FUNCTION returns `(POS LANE FACE PRIORITY)` marks, LANE `left`, `middle`, `right` or `full`.
-  - nil for FUNCTION takes OWNER's marks away. With no producer left, the mode goes off.
+  buffer. FUNCTION returns `(POS LANE FACE PRIORITY [SHAPE END])` marks, LANE `left`, `middle`, `right` or `full`,
+  SHAPE nil or `dot` (6 px round, a breakpoint), END a position the mark runs down to (a run of changed lines).
+  - nil for FUNCTION takes OWNER's marks away. With no producer left, `drgnx-ruler-mode` goes off; the strip stays
+    while the scroll bar is on.
   - The ruler asks again on `drgnx-ruler-refresh` (a producer's marks changed) and, debounced 0.3 s, after an edit.
   - A higher PRIORITY is drawn on top.
-  - Today's only producer is the debug column: breakpoints in the middle lane, the stopped line across the strip.
-- **The strip.** It is 12 logical px wide (lanes 0–3, 3–9, 9–12, through `drgnx-px`), in the window's right fringe,
-  beside the text.
-  - The fringe is widened by the strip with `set-window-fringes` only when the ruler turns on or off in the window.
-    Its own width is kept in the window parameter `drgnx-ruler-fringe`, which is also the strip's `:right`.
-  - The fringe's own pixels stay outermost, so `drgnx-look-edge-drag` keeps its hit area: it takes the outer half of
-    the own width.
-  - A window that shows another buffer loses the strip and its width (`window-buffer-change-functions`). The ruler
+  - Producers (`core/drgnx-marks.el`): the change bars (left lane, one mark per run of lines), Flymake
+    (right lane, set once per report after 100 ms), isearch hits (middle lane, the whole buffer once per search
+    string), the Problems list's error and warning rows, bookmarks in the file (a variable watcher on
+    `bookmark-alist`, debounced), the symbol at point's uses (`drgnx-marks-symbol-uses`, a 400 ms idle timer), agent
+    edits (the edit history's `drgnx-history-drained-functions`, origin `agent:…`, kept as at most
+    `drgnx-marks-agent-max` marker pairs); the debug column (breakpoints as `dot`s, the stopped line).
+- **Kinds and the line model.** Each mark has a kind (`drgnx-ruler-kinds`; its index is the line model's number):
+  its face's (`drgnx-ruler-face-kinds`, a problem's severity), else its producer's (`drgnx-ruler-owner-kinds`), else
+  `other`. `drgnx-marks-kinds` filters them. On Nidhogg, `drgnx-ruler--sync` gives the buffer text's line model
+  (`nidhogg-lines-set-marks`, Nidhogg's Hlidskjalf) each kind's marks as `[POS END LANE CLASS PRIORITY]` vectors, only
+  the kinds whose set changed; after an edit (the model has moved them) every kind once more. The model shifts them on
+  every edit, and the strip then measures visible lines.
+- **Next and previous.** `drgnx-marks-step KINDS DIR` goes to the next mark after the current line (or the previous
+  before it), wrapping, and says `drgnx-marks-announcement`: "KIND N of M[: MESSAGE], line L" (a problem's message
+  is Flymake's first line). The line model answers (`nidhogg-lines-next-mark`, `nidhogg-lines-counts`); without it,
+  the marks as last asked. Commands (module `editor/minimap`): `mark-next`/`-previous`, `change-next`/`-previous`,
+  `bookmark-next`/`-previous`, `agent-edit-next`/`-previous`; `code-next-problem`/`-previous` (module `lang`) go
+  through `drgnx-marks-next-problem`, which falls back to Flymake's own when the buffer has no problem marks.
+- **The hub's layers.** What the hub knows of a file that the line model does not (labels, fold ranges for buffers no
+  parser folds, heat, a huge file's density buckets) goes to Nidhogg's Sjá as a `view-model` line whose data holds
+  `minimap` (`view::minimap::line` in Ratatoskr: file, layer `labels`, `folds`, `heat:SOURCE` or `density`, version,
+  items; null items remove the layer). The framed reader hands it to Sjá whole, so no Lisp string is made of it; Sjá
+  keeps the newest version of each layer by file, and the line model and the minimap layer read it there
+  (`nidhogg-view-minimap` from Lisp). The fixture `tests/fixtures/minimap-push.json` is the hub's lines, and Sjá's
+  test loads the same file.
+- **The minimap.** `editor/minimap` hooks `drgnx-ruler-place-functions` (run with each window and whether it shows
+  the strip, when its strip is placed: no Lisp per scroll). An editor window (`drgnx-minimap-window-p`: the strip
+  shown, `drgnx-minimap` on, a file or a `prog-mode`/`text-mode` buffer that is neither a Sjá view nor a special mode)
+  gets the window parameter `glitnir-minimap`: `:width` (`drgnx-minimap-width`, 80–200), the colours, `:nesting`,
+  and with `drgnx-minimap-labels` the labels' `:labels` (`t` or `marks-only`), their colours (`:label`, `:sub` for a
+  nested definition, `:accent` for the one under the pointer, `:mark` for a MARK section), `:label-face` (the font)
+  and `:file`, the file's true name, which keys the hub's `labels` layer in Sjá. The buffer's line model gets the MARK
+  expression (`nidhogg-lines-set-section-regexp`, `drgnx-minimap-mark-regexp`, Rust regex syntax) and finds the MARK
+  sections itself; the hub is told the file is shown (`minimap/watch`, once per change of file) and sends the
+  definitions. Nidhogg draws the rest (Glitnir's minimap layer: tiles, labels, the pointer).
+- **Folding.** `editor/fold` (`modules/editor/drgnx-fold.el`) reads the line model's one fold table (`nidhogg-lines-folds`,
+  `nidhogg-lines-fold-at`: `(BEG END KIND DEPTH SOURCE)`, BEG the first line's start, END the last line's end). Its
+  sources are numbers: 0 tree-sitter, 1 the hub, 2 headings and 4 indentation (the model finds those itself, again
+  after each change: `nidhogg-lines-set-fold-sources`), 3 notebook cells and 5 manual folds (sent by the module,
+  `nidhogg-lines-set-folds`). Kinds: 0 block, 1 function, 2 class, 3 comment, 4 import, 5 test, 6 region, 7 cell,
+  8 heading (`drgnx-fold-kinds`). A fold is an overlay (`drgnx-fold` t, `invisible`, `display` the summary,
+  `isearch-open-invisible`) from the first line's end to END; after each command the overlays' ranges go to the model
+  (`nidhogg-lines-set-hidden`), which leaves their lines out of the scroll bar and the minimap. Org folds with
+  `org-fold`; `evil-fold-list` gets a provider for `drgnx-fold-mode`.
+- **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
+  8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
+  at 26 %; all through `drgnx-px`.
+  - The fringe is widened by the strip with `set-window-fringes` only when the strip comes or goes, or the scale
+    changes (`drgnx-scrollbar-refresh-all` on the density hook). Its own width is kept in the window parameter
+    `drgnx-ruler-fringe`, which is also the strip's `:right`.
+  - The fringe's own pixels stay outermost, so `drgnx-look-edge-drag` keeps its hit area: a press there goes to it
+    (`drgnx-ruler-press`).
+  - A window that shows another buffer gets that buffer's strip (`window-buffer-change-functions`). The ruler mode
     turns off before a new major mode or a kill drops its locals.
-- **Marks and band.** Marks sit at their position's fraction of the buffer, by characters, as Emacs's scroll bar
-  measures. The band over the part shown (`drgnx-ruler-view`, its foreground at 0.35) is computed by C from the
-  window's start and end. So a scroll runs no Lisp of the ruler's.
+- **Marks and thumb.** Marks sit at their position's fraction of the buffer (of the view with a span), by characters,
+  as Emacs's scroll bar measures. The thumb is computed by C from the window's start and end. So a scroll runs no Lisp.
 - **When it is set.** `glitnir-ruler` is set only when its value changes. Glitnir resolves the faces again on a theme
   change.
-- **Clicks.** A click on the strip (`<right-fringe> <mouse-1>`, `drgnx-ruler-click`) goes to `glitnir-ruler-position`'s
-  place, centred.
-- **Where there is none.** No ruler without Nidhogg's feature `glitnir-ruler`, or in a terminal
+- **Mouse.** A press on the strip (`<right-fringe> <down-mouse-1>`, `drgnx-ruler-press`) goes to the place under the
+  pointer, centred, and a drag follows the pointer until the button comes up: one `recenter` per motion, the one
+  place Lisp runs per pointer move. `drgnx-ruler-click` serves buffers whose marks show without the scroll bar.
+- **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler`, or in a terminal
   (`drgnx-ruler-available-p`).
+- **Checks.** `ruler-test.el` and `marks-test.el` (batch); the look scenes check every scrollable window of every
+  scene (`drgnx-look-scene-scrollbars`: the strip is set, and drawn exactly when the content runs past the window; a strip under the palette's child frame is not
+  judged, one under any other child frame, a toast say, is an error);
+  Nidhogg's `glitnir-gui/the-ruler-*` rows check the pixels.
 - **Perf.** `debug-ruler-scroll` (10,000 lines, 200 marks) against `debug-ruler-baseline`, the same scroll with the
   ruler off (docs/develop/perf.md, "The overview ruler"). The margin version this
   replaced cost 0.4–1.1 ms a page, all of it in the margin's glyphs.

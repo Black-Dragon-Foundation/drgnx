@@ -72,6 +72,16 @@
  drgnx-history-heading
  drgnx-history-effect
  drgnx-history-label
+ drgnx-marks-added
+ drgnx-marks-changed
+ drgnx-marks-deleted
+ drgnx-marks-error
+ drgnx-marks-warning
+ drgnx-marks-info
+ drgnx-marks-hit
+ drgnx-marks-bookmark
+ drgnx-marks-symbol
+ drgnx-marks-agent
  drgnx-modal-normal
  drgnx-modal-insert
  drgnx-modal-visual
@@ -152,6 +162,9 @@
  drgnx-wb-section
  drgnx-wb-island-title
  drgnx-wb-island-control
+ drgnx-fold-summary
+ drgnx-fold-name
+ drgnx-minimap-label
  drgnx-sticky
  drgnx-blame
  drgnx-debug-bisect-good

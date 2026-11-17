@@ -2449,6 +2449,115 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :check "(and (featurep 'glitnir-ruler) (= 200 (length (plist-get (window-parameter nil 'glitnir-ruler) :marks))) t)"   ; Nidhogg has the ruler's 200 marks
        :teardown ,(concat "(progn (with-current-buffer (window-buffer) (widen)) (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; the minimap's baseline: the fixture narrowed to its first 10,000 lines with the line model on, scrolled as
+      ;; code-scrolling; minimap-scroll differs from it only by the open minimap
+      (minimap-baseline
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (narrow-to-region (point-min) (progn (forward-line 10000) (point))) (goto-char (point-min))"
+                      " (when (fboundp 'nidhogg-lines-enable) (nidhogg-lines-enable nil t))"
+                      " (set-window-parameter nil 'glitnir-minimap nil) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(null (window-parameter nil 'glitnir-minimap))"
+       :teardown ,(concat "(progn (with-current-buffer (window-buffer) (widen)) " kill-fixture " t)"))
+      ;; the open minimap (design §8, state B) over the same scroll: Nidhogg draws it from the line model at each
+      ;; publish (tiles of 256 rows, cached), so a scroll runs no Lisp of the minimap's; its colours are the default
+      ;; face's (judged against minimap-baseline, which differs only by it)
+      (minimap-scroll
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (narrow-to-region (point-min) (progn (forward-line 10000) (point))) (goto-char (point-min))"
+                      " (when (fboundp 'nidhogg-lines-enable) (nidhogg-lines-enable nil t))"
+                      " (set-window-parameter nil 'glitnir-minimap"
+                      "   (list :width 120 :open t :fill (cons (face-background 'default nil t) 1)"
+                      "         :text (cons (face-foreground 'default nil t) 0.5)"
+                      "         :band (cons (face-foreground 'default nil t) 0.08))) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(and (featurep 'glitnir) (vectorp (window-parameter nil 'glitnir--minimap)) t)"   ; Nidhogg resolved it
+       :teardown ,(concat "(progn (set-window-parameter nil 'glitnir-minimap nil)"
+                          " (with-current-buffer (window-buffer) (widen)) " kill-fixture " t)"))
+      ;; the line model (design §8): typing in a 10,000-line file (the fixture's first 10,000 lines) with the model off
+      ;; and on, the second within 0.3 ms p95 of the first; the same in the whole fixture (about 250k lines, the
+      ;; density limit); 20 models open against 20 plain buffers (GC pauses); the first build of 1 MB; its memory a line
+      ,@(let* ((type (lambda (s) (list :type s)))
+               (keys (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
+               (f10k "drgnx-perf--lines-10k")
+               (setup (format "(progn (defvar %s nil) (defvar drgnx-perf--lines-bufs nil)
+                                (setq %s (make-temp-file \"drgnx-perf-lines\" nil \".el\"))
+                                (with-temp-file %s (insert-file-contents %S) (goto-char (point-min)) (forward-line 10000)
+                                  (delete-region (point) (point-max)))
+                                t)"
+                              f10k f10k f10k (or drgnx-perf-run--fixture "")))
+               (visit10k (format "(let ((f %s) (large-file-warning-threshold nil))
+                                   (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+                                   (find-file f) (goto-char (point-min)) (forward-line 5000))"
+                                 f10k))
+               (kill10k (format "(progn (when-let* ((b (find-buffer-visiting %s))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)) t)" f10k))
+               (teardown (format "(progn %s (delete-file %s) t)" kill10k f10k))
+               (model (lambda (on) (if on "(when (fboundp 'nidhogg-lines-enable) (nidhogg-lines-enable nil t))"
+                                     "(when (fboundp 'nidhogg-lines-disable) (nidhogg-lines-disable))")))
+               (has-model "(and (fboundp 'nidhogg-lines-describe) (plist-get (nidhogg-lines-describe) :lines) t)")
+               (no-model "(not (and (fboundp 'nidhogg-lines-describe) (nidhogg-lines-describe)))")
+               ;; 20 buffers holding the 10,000 lines, each with a model (or none), while typing in a 21st
+               (bufs (lambda (on) (format "(setq drgnx-perf--lines-bufs
+                                             (mapcar (lambda (i) (with-current-buffer (generate-new-buffer (format \" lines-%%d\" i))
+                                                                   (insert-file-contents %s) %s (current-buffer)))
+                                                     (number-sequence 1 20)))"
+                                          f10k (funcall model on))))
+               (kill-bufs "(progn (mapc #'kill-buffer drgnx-perf--lines-bufs) (setq drgnx-perf--lines-bufs nil) t)"))
+          `((minimap-type-baseline :setup ,setup :each ,(concat "(progn " visit10k " " (funcall model nil) " t)")
+                                   :actions ,keys :check ,(concat "(with-current-buffer (window-buffer) " no-model ")")
+                                   :teardown ,teardown)
+            (minimap-type :setup ,setup :each ,(concat "(progn " visit10k " " (funcall model t) " t)")
+                          :actions ,keys :check ,(concat "(with-current-buffer (window-buffer) " has-model ")")
+                          :teardown ,teardown)
+            (minimap-type-250k-baseline :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " " (funcall model nil) " t)")
+                                        :actions ,keys :check ,(concat "(with-current-buffer (window-buffer) " no-model ")")
+                                        :teardown ,kill-fixture)
+            (minimap-type-250k :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " " (funcall model t) " t)")
+                               :actions ,keys :check ,(concat "(with-current-buffer (window-buffer) " has-model ")")
+                               :teardown ,kill-fixture)
+            (lines-gc-baseline :setup ,setup :each ,(concat "(progn " (funcall bufs nil) " " visit10k " t)")
+                               :actions ,keys :check "(= 20 (length drgnx-perf--lines-bufs))"
+                               :teardown ,(concat "(progn " kill-bufs " " teardown ")"))
+            (lines-gc :setup ,setup :each ,(concat "(progn " (funcall bufs t) " " visit10k " t)")
+                      :actions ,keys
+                      :check "(and (fboundp 'nidhogg-lines-describe) (seq-every-p (lambda (b) (nidhogg-lines-describe b)) drgnx-perf--lines-bufs))"
+                      :teardown ,(concat "(progn " kill-bufs " " teardown ")"))
+            ;; the first build of 1 MB of the fixture, synchronous (a text under 1 MB may be built at once: ≤ 25 ms)
+            (lines-build-1mb
+             :measure ,(format "(let ((b (generate-new-buffer \" lines-1mb\")))
+                                  (unwind-protect
+                                      (with-current-buffer b
+                                        (insert-file-contents %S nil 0 1048576)
+                                        (let ((t0 (float-time)))
+                                          (nidhogg-lines-enable b t)
+                                          (list :build_ms (drgnx-perf--round (* 1000 (- (float-time) t0)))
+                                                :lines (plist-get (nidhogg-lines-describe b) :lines))))
+                                    (kill-buffer b)))"
+                               (or drgnx-perf-run--fixture "")))
+            ;; Fold All over the fixture's first 10,000 lines (indentation ranges, nested): ≤ 50 ms, one overlay a range
+            (fold-all-10k
+             :measure ,(format "(let ((b (generate-new-buffer \" fold-10k\")))
+                                  (unwind-protect
+                                      (with-current-buffer b
+                                        (insert-file-contents %S)
+                                        (goto-char (point-min)) (forward-line 10000) (delete-region (point) (point-max))
+                                        (prog-mode) (goto-char (point-min))
+                                        (let* ((n (length (drgnx-fold-ranges))) (t0 (float-time)))
+                                          (drgnx-fold-fold-all)
+                                          (let ((ms (* 1000 (- (float-time) t0))) (o (length (drgnx-fold--overlays))))
+                                            (drgnx-fold-unfold-all)
+                                            (list :fold_ms (drgnx-perf--round ms) :ranges n
+                                                  :overlays_per_range (drgnx-perf--round (/ (float o) (max n 1)))))))
+                                    (kill-buffer b)))"
+                               (or drgnx-perf-run--fixture ""))
+             :check "(fboundp 'drgnx-fold-fold-all)")
+            ;; the model's memory a line, over the whole fixture (≤ 40 B)
+            (lines-memory
+             :measure ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " " (funcall model t)
+                               " (let ((d (nidhogg-lines-describe)))
+                                   (prog1 (list :bytes_per_line (drgnx-perf--round (/ (float (plist-get d :bytes)) (plist-get d :lines)))
+                                                :lines (plist-get d :lines))
+                                     " kill-fixture ")))"))))
       ;; Glitnir's edges (the heap graph's references): debug-gutter-baseline's file and keys with 200 edges in the
       ;; window's `glitnir-edges', one every 50 lines, each from a line's 10th column down three lines with two bends
       ;; and an arrow; judged against debug-gutter-baseline as it is (Nidhogg resolves the points at each publish: a
@@ -3060,6 +3169,14 @@ pairs below, each judged only when both sides were measured."
         (gutter-base (drgnx-perf--get results 'debug-gutter-baseline '(:input :p50)))
         (ruler (drgnx-perf--get results 'debug-ruler-scroll '(:input :p50)))
         (ruler-base (drgnx-perf--get results 'debug-ruler-baseline '(:input :p50)))
+        (minimap (drgnx-perf--get results 'minimap-scroll '(:input :p50)))
+        (minimap-base (drgnx-perf--get results 'minimap-baseline '(:input :p50)))
+        (mtype (drgnx-perf--get results 'minimap-type '(:input :p95)))
+        (mtype-base (drgnx-perf--get results 'minimap-type-baseline '(:input :p95)))
+        (mtype250 (drgnx-perf--get results 'minimap-type-250k '(:input :p95)))
+        (mtype250-base (drgnx-perf--get results 'minimap-type-250k-baseline '(:input :p95)))
+        (lgc (drgnx-perf--get results 'lines-gc '(:gc_pause :p95)))
+        (lgc-base (drgnx-perf--get results 'lines-gc-baseline '(:gc_pause :p95)))
         (edges (drgnx-perf--get results 'debug-edges-scroll '(:input :p50))))
     (append
      ;; the breakpoint column: at most the larger of 5 % and 0.3 ms over the same scroll with its margin (and hunks')
@@ -3077,6 +3194,22 @@ pairs below, each judged only when both sides were measured."
        (list (format "debug-ruler-scroll input p50 %s ms is %s%% (%s ms) over debug-ruler-baseline's %s ms (the ruler may add at most 5 %% or 0.3 ms)"
                      (drgnx-perf--round ruler) (round (* 100 (- (/ ruler ruler-base) 1)))
                      (drgnx-perf--round (- ruler ruler-base)) (drgnx-perf--round ruler-base))))
+     ;; the open minimap, by the same rule, against the same scroll without it
+     (when (and (numberp minimap) (numberp minimap-base)
+                (> minimap (+ (max (* 1.05 minimap-base) (+ minimap-base 0.3)) 1e-6)))
+       (list (format "minimap-scroll input p50 %s ms is %s%% (%s ms) over minimap-baseline's %s ms (the minimap may add at most 5 %% or 0.3 ms)"
+                     (drgnx-perf--round minimap) (round (* 100 (- (/ minimap minimap-base) 1)))
+                     (drgnx-perf--round (- minimap minimap-base)) (drgnx-perf--round minimap-base))))
+     ;; the line model while typing (design §8): p95 within 0.3 ms of the same typing with the model off, at 10,000
+     ;; lines and at the density limit
+     (cl-loop for (row base name) in (list (list mtype mtype-base "minimap-type") (list mtype250 mtype250-base "minimap-type-250k"))
+              when (and (numberp row) (numberp base) (> row (+ base 0.3 1e-6)))
+              collect (format "%s input p95 %s ms is %s ms over %s-baseline's %s ms (the line model may add at most 0.3 ms)"
+                              name (drgnx-perf--round row) (drgnx-perf--round (- row base)) name (drgnx-perf--round base)))
+     ;; 20 line models open: the GC pauses do not grow (the models are Rust memory); p95 at most 1 ms over 20 plain buffers
+     (when (and (numberp lgc) (numberp lgc-base) (> lgc (+ lgc-base 1.0 1e-6)))
+       (list (format "lines-gc gc_pause p95 %s ms is %s ms over lines-gc-baseline's %s ms (20 models may add at most 1 ms)"
+                     (drgnx-perf--round lgc) (drgnx-perf--round (- lgc lgc-base)) (drgnx-perf--round lgc-base))))
      ;; Glitnir's edges, by the same rule
      (when (and (numberp edges) (numberp gutter-base)
                 (> edges (+ (max (* 1.05 gutter-base) (+ gutter-base 0.3)) 1e-6)))
@@ -3354,6 +3487,9 @@ version and the commit, as JSON in FILE."
                                     debug-step-line debug-inline debug-inline-heavy debug-toolbar-show debug-step-variables debug-expand-chunks
                                     debug-console-flood
                                     debug-bisect-typing view-remove-above view-select-dim))
+    ,@(mapcar (lambda (w) (cons w "the minimap: its allocation, CPU and rows are set from three pinned runs on the desktop island"))
+              '(minimap-baseline minimap-scroll minimap-type-baseline minimap-type minimap-type-250k-baseline
+                                 minimap-type-250k lines-gc-baseline lines-gc))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))
