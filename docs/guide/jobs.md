@@ -18,8 +18,11 @@ it does not depend on the agent that started it or on the editor, and it survive
   worktree or in a folder inside it: the hub resolves the `cwd` the agent names (links and `..` included) and refuses
   any other ("… is outside your worktree …"); `job_start` without a `cwd` uses the worktree. Your own jobs run with
   your rights, in the folder they name. On Linux the job is
-  a transient `systemd-run --user` scope with a memory cap (`agents-job-memory`, default 4G); without a user systemd it
-  has a session and process group of its own. `machine` is `auto` (the default: whichever allowed machine finishes it
+  a transient `systemd-run --user` scope with a memory cap (`agents-job-memory`, default 4G), in a slice of its own,
+  `drgnx-job-<id>.slice`, which also holds its containers (`--cgroup-parent`) and carries the same cap; the queue counts
+  what the slice uses (its memory less page cache) against the machine's budget at each tick, and a slice it can't
+  read counts the job's whole reservation (said once in the hub's log). The slice is stopped and its limit dropped when
+  the job ends. Without a user systemd it has a session and process group of its own. `machine` is `auto` (the default: whichever allowed machine finishes it
   first), `local`, or one of your runners by name (see `docs/guide/runners.md`); a name that is no runner is refused.
 - **Its files.** `<state>/hub/exec/<id>/` holds the log, the exit code and the result. The hub reads the same files
   after a restart: a job still running is picked up again (by its process and start time, not just its pid), one that

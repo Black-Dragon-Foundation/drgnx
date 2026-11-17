@@ -113,6 +113,8 @@ pub struct RunnerMounts {
     /// The slot's target dir.
     pub target: PathBuf,
     pub caches: Vec<CacheMount>,
+    /// `CARGO_BUILD_JOBS` from the job's grant (`forseti::admit::cargo_jobs`); 0: not set.
+    pub cargo_jobs: u32,
 }
 
 /// A cache the job's suite declares: a folder under the runner's `cache/<project>/<trust>/`, at its path inside.
@@ -498,6 +500,10 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
             a.push(format!("{}:{TARGET}:rw,Z", mount_source(&m.target)?).into());
             a.push("-e".into());
             a.push(format!("CARGO_TARGET_DIR={TARGET}").into());
+            if m.cargo_jobs > 0 {
+                a.push("-e".into());
+                a.push(format!("CARGO_BUILD_JOBS={}", m.cargo_jobs).into());
+            }
             for c in &m.caches {
                 let inside = &c.inside;
                 if !inside.starts_with('/')
@@ -901,6 +907,7 @@ mod tests {
                     host: "/r/cache/p/public/cargo".into(),
                     inside: "/cache/cargo".into(),
                 }],
+                cargo_jobs: 2,
             }),
             keys: Some(KeyMounts {
                 helper: "/r/bin/0.1.0/drgnx-key".into(),
@@ -1240,6 +1247,11 @@ mod tests {
         assert!(
             a.windows(2)
                 .any(|w| w == ["-e", "CARGO_TARGET_DIR=/target"])
+        );
+        // cargo builds as many units at once as the grant allows (design §3 #4)
+        assert!(
+            a.windows(2).any(|w| w == ["-e", "CARGO_BUILD_JOBS=2"]),
+            "{a:?}"
         );
         assert!(!a.iter().any(|s| s.starts_with("--mount")
             || s.starts_with("--volume")
