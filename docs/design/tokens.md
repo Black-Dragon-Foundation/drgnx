@@ -71,8 +71,13 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #6b6e7a"></span> | `button-edge` | `#6b6e7a` | `subtle` at 75 % over `panel` | component | `drgnx-kit-button-secondary` |
 | <span class="swatch" style="background: #6b6e7a"></span> | `key-hint-edge` | `#6b6e7a` | `subtle` at 75 % over `panel` | component | `drgnx-kit-key-hint-cap` |
 | <span class="swatch" style="background: #ff9566"></span> | `card-needs-you-edge` | `#ff9566` | the colour of `attention` | component | - |
-| <span class="swatch" style="background: #212228"></span> | `progress-track` | `#212228` | the colour of `border-subtle` | component | `drgnx-kit-progress` |
+| <span class="swatch" style="background: #212228"></span> | `progress-track` | `#212228` | the colour of `border-subtle` | component | `drgnx-kit-progress`, `drgnx-kit-progress-meter-tick`, `drgnx-kit-progress-meter-tick-near` |
 | <span class="swatch" style="background: #7aa5ff"></span> | `progress-fill` | `#7aa5ff` | the colour of `accent` | component | `drgnx-kit-progress-fill` |
+| <span class="swatch" style="background: #7aa5ff"></span> | `meter-fill` | `#7aa5ff` | the colour of `accent` | semantic | `drgnx-kit-progress-meter-fill` |
+| <span class="swatch" style="background: #e9bc5c"></span> | `meter-near` | `#e9bc5c` | the colour of `warn` | semantic | `drgnx-kit-progress-meter-near`, `drgnx-kit-progress-meter-tick-near` |
+| <span class="swatch" style="background: #f47a72"></span> | `meter-reached` | `#f47a72` | the colour of `error` | semantic | `drgnx-kit-progress-meter-reached` |
+| <span class="swatch" style="background: #a2a5b2"></span> | `meter-tick` | `#a2a5b2` | the colour of `muted` | semantic | `drgnx-kit-progress-meter-tick`, `drgnx-kit-progress-meter-outline` |
+| <span class="swatch" style="background: #46484f"></span> | `meter-span` | `#46484f` | `muted` at 35 % over `editor` | semantic | `drgnx-kit-progress-meter-span` |
 
 ## Light
 
@@ -141,8 +146,13 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #898c97"></span> | `button-edge` | `#898c97` | `subtle` at 75 % over `panel` | component | `drgnx-kit-button-secondary` |
 | <span class="swatch" style="background: #898c97"></span> | `key-hint-edge` | `#898c97` | `subtle` at 75 % over `panel` | component | `drgnx-kit-key-hint-cap` |
 | <span class="swatch" style="background: #b8461a"></span> | `card-needs-you-edge` | `#b8461a` | the colour of `attention` | component | - |
-| <span class="swatch" style="background: #e9eaee"></span> | `progress-track` | `#e9eaee` | the colour of `border-subtle` | component | `drgnx-kit-progress` |
+| <span class="swatch" style="background: #e9eaee"></span> | `progress-track` | `#e9eaee` | the colour of `border-subtle` | component | `drgnx-kit-progress`, `drgnx-kit-progress-meter-tick`, `drgnx-kit-progress-meter-tick-near` |
 | <span class="swatch" style="background: #2c5fd4"></span> | `progress-fill` | `#2c5fd4` | the colour of `accent` | component | `drgnx-kit-progress-fill` |
+| <span class="swatch" style="background: #2c5fd4"></span> | `meter-fill` | `#2c5fd4` | the colour of `accent` | semantic | `drgnx-kit-progress-meter-fill` |
+| <span class="swatch" style="background: #8a5d00"></span> | `meter-near` | `#8a5d00` | the colour of `warn` | semantic | `drgnx-kit-progress-meter-near`, `drgnx-kit-progress-meter-tick-near` |
+| <span class="swatch" style="background: #c22f28"></span> | `meter-reached` | `#c22f28` | the colour of `error` | semantic | `drgnx-kit-progress-meter-reached` |
+| <span class="swatch" style="background: #545866"></span> | `meter-tick` | `#545866` | the colour of `muted` | semantic | `drgnx-kit-progress-meter-tick`, `drgnx-kit-progress-meter-outline` |
+| <span class="swatch" style="background: #c3c5c9"></span> | `meter-span` | `#c3c5c9` | `muted` at 35 % over `editor` | semantic | `drgnx-kit-progress-meter-span` |
 
 ## High contrast
 
@@ -212,5 +222,10 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #c9ccd3"></span> | `button-edge` | `#c9ccd3` | the colour of `border-strong` | component | `drgnx-kit-button-secondary` |
 | <span class="swatch" style="background: #c9ccd3"></span> | `key-hint-edge` | `#c9ccd3` | the colour of `border-strong` | component | `drgnx-kit-key-hint-cap` |
 | <span class="swatch" style="background: #ffb38a"></span> | `card-needs-you-edge` | `#ffb38a` | the colour of `attention` | component | - |
-| <span class="swatch" style="background: #8c909a"></span> | `progress-track` | `#8c909a` | the colour of `border` | component | `drgnx-kit-progress` |
+| <span class="swatch" style="background: #8c909a"></span> | `progress-track` | `#8c909a` | the colour of `border` | component | `drgnx-kit-progress`, `drgnx-kit-progress-meter-tick`, `drgnx-kit-progress-meter-tick-near` |
 | <span class="swatch" style="background: #a8c6ff"></span> | `progress-fill` | `#a8c6ff` | the colour of `accent` | component | `drgnx-kit-progress-fill` |
+| <span class="swatch" style="background: #a8c6ff"></span> | `meter-fill` | `#a8c6ff` | the colour of `accent` | semantic | `drgnx-kit-progress-meter-fill` |
+| <span class="swatch" style="background: #ffd36b"></span> | `meter-near` | `#ffd36b` | the colour of `warn` | semantic | `drgnx-kit-progress-meter-near`, `drgnx-kit-progress-meter-tick-near` |
+| <span class="swatch" style="background: #ff9a92"></span> | `meter-reached` | `#ff9a92` | the colour of `error` | semantic | `drgnx-kit-progress-meter-reached` |
+| <span class="swatch" style="background: #ffffff"></span> | `meter-tick` | `#ffffff` | the colour of `fg` | semantic | `drgnx-kit-progress-meter-tick`, `drgnx-kit-progress-meter-outline` |
+| <span class="swatch" style="background: #d6d8de"></span> | `meter-span` | `#d6d8de` | the colour of `muted` | semantic | `drgnx-kit-progress-meter-span` |

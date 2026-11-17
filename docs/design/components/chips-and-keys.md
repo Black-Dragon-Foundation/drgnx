@@ -59,6 +59,39 @@ How far something has got, as a bar or a ring.
 - **Ring:** one of `○ ◔ ◑ ◕ ●` (ASCII `0`–`4`), the value rounded to the nearest quarter, in the fill colour.
 - **Spoken label:** "N percent" (its `help-echo`).
 
+### Meters
+
+A meter is progress of kind `meter`: an amount spent against a limit (a budget), its text always beside it. The hub
+sends `{"c": "meter", …}` and formats the text ("$31 / $40", "≈$31 / $40 est.", "62 % wk"); the kit never converts a
+unit.
+
+| Part | |
+|---|---|
+| fill | spent / limit, in the state's colour |
+| forecast tick | where the forecast's p50 total lands: a 1 px line in a 2 px slot (high contrast: the whole slot) |
+| span | on a `wide` meter, from the tick to the p90 total, faded (high contrast: an outline) |
+| text | the hub's, in the caption |
+| state word | after a ` · `, in the state's colour |
+
+| State | Fill | Word |
+|---|---|---|
+| ok (under 80 %) | `meter-fill` (accent) | — |
+| nearing (from 80 %) | `meter-near` (warn) | "N %" |
+| reached | `meter-reached` (error) | "at limit" |
+| over | `meter-reached` | "over" |
+| forecast over | `meter-fill`, the tick `meter-near` | "p90 over" |
+| none | no bar | "no limit" |
+| inherited | `meter-fill` against the ancestor's remaining, the track an outline | — (the hub's text: "of plan's $9 left") |
+| unpriced | no bar | "unpriced" |
+
+- **Sizes:** `row` 46 × 4 px, `card` its width × 3 px, `wide` its width × 6 px with the forecast span. The bar sits on
+  the caption's centre line, as the progress bar does, then a 6 px gap and the text.
+- **Terminal:** a progress bar's cells (one per 8 px, eighths in the state's colour), then the text: `█████▍ $36 / $40
+  · 90 %`.
+- **Spoken label:** "31 of 40 dollars, nearing", then ", estimate" for `usd-est` and ", forecast P50 to P90" when
+  there is one; with no bar "12 dollars, no limit".
+- **Lisp chrome:** `(drgnx-ui-kit-meter SPENT LIMIT UNIT FORECAST STATE SIZE TEXT WHERE &optional WIDTH FRAME)`.
+
 ### Rules for marks and progress
 
 - Do give a mark its slot, never a colour: the slot's face follows the theme, high contrast included.

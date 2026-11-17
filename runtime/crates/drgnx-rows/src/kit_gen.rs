@@ -214,13 +214,18 @@ const AGENT_MARK_GEOM: [[Geom; 3]; 1] = [
 const AGENT_MARK_LABEL: [Option<&str>; 1] = [Some("agent")];
 const AGENT_MARK_FACE: [FaceId; 1] = [FaceId::KitAgentMark];
 
-const PROGRESS_AXES: &[&[&str]] = &[&["bar", "ring"]];
+const PROGRESS_AXES: &[&[&str]] = &[&["bar", "ring", "meter"]];
 const PROGRESS_DEFAULTS: &[usize] = &[0];
-const PROGRESS_GEOM: [[Geom; 3]; 2] = [
+const PROGRESS_GEOM: [[Geom; 3]; 3] = [
     [
         Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
         Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
         Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 2, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
     ],
     [
         Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
@@ -228,8 +233,8 @@ const PROGRESS_GEOM: [[Geom; 3]; 2] = [
         Geom { height: 0, pad: (0, 0), gap: 0, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
     ],
 ];
-const PROGRESS_LABEL: [Option<&str>; 2] = [Some("percent"), Some("percent")];
-const PROGRESS_FACE: [FaceId; 2] = [FaceId::KitProgress, FaceId::KitProgress];
+const PROGRESS_LABEL: [Option<&str>; 3] = [Some("percent"), Some("percent"), Some("percent")];
+const PROGRESS_FACE: [FaceId; 3] = [FaceId::KitProgress, FaceId::KitProgress, FaceId::KitProgress];
 
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {

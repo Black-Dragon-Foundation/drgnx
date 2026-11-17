@@ -3703,6 +3703,10 @@ kit_conformance`, read it before committing) and `drgnx-ui-kit/conformance` chec
   (spaces `drgnx-ui-kit-progress-bar-px` high, the fill then the track, drawn as images by
   `drgnx-ui-kit-bar-display`, which the inserter calls too) or a `ring`, VALUE 0 to 1. Each carries its
   spoken label ("agent H", "N percent") as `help-echo`; `docs/design/components/chips-and-keys.md`.
+- `(drgnx-ui-kit-meter SPENT LIMIT UNIT FORECAST STATE SIZE TEXT WHERE &optional WIDTH FRAME)`: a meter (progress of
+  kind `meter`), SPENT against LIMIT (nil: no bar) with FORECAST (P50 . P90), in STATE at SIZE (`row`, `card`,
+  `wide`), then TEXT as the caller formats it and the state's word; its parts are bar images of the same path
+  (`drgnx-ui-kit--bar-faces` gives each face its shape: fill, tick, span, outline).
 - `(drgnx-ui-kit-string COMPONENT PROPS WHERE FRAME)`: the same as a propertized string for WHERE, `text`,
   `header-line`, `mode-line` or `tab-line`, at FRAME's scale (or as its terminal draws it). In `text` a pad is
   `(space :width N)` with N = px / `frame-char-width`, canonical characters, so one buffer is right on frames of two

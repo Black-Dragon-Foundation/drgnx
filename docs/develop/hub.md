@@ -2533,8 +2533,9 @@ it builds for Android too).
   and `mouse-face` over the component, which the editor maps to the kind's one keymap (`docs/develop/core.md`,
   "Actions and focus-visible"). Besides rows the kit has `{"c": "agent-mark", "slot": 1-12, "handle": "Q"}` (the
   handle on its agent's colour) and `{"c": "progress", "kind": "bar"|"ring", "value": 0-1, "width": LOGICAL-PX}` (a bar
-  of `kit::BAR_PX`-high spaces, the fill then the track, which the editor draws as images, or a ring glyph), each
-  with its spoken label as `help-echo`
+  of `kit::BAR_PX`-high spaces, the fill then the track, which the editor draws as images, or a ring glyph) and
+  `{"c": "meter", "spent", "limit", "unit", "forecast": [P50, P90], "state", "size", "width", "text"}` (a budget against
+  its limit; the hub formats `text`, the kit never converts a unit), each with its spoken label as `help-echo`
   (`docs/design/components/chips-and-keys.md`). `core/drgnx-ui-kit.el` expands the same way for Lisp chrome; the conformance test
   (`tests/kit_conformance.rs` and `drgnx-ui-kit/conformance` over `test/fixtures/kit`) keeps the two equal.
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after

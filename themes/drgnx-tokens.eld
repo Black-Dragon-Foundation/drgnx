@@ -42,7 +42,8 @@
   ;; component tier
   (button-primary-bg . accent-fill) (button-primary-fg . on-accent) (button-edge over panel subtle . 0.75)
   (key-hint-edge over panel subtle . 0.75) (card-needs-you-edge . attention) (progress-track . border-subtle)
-  (progress-fill . accent))
+  (progress-fill . accent) (meter-fill . accent) (meter-near . warn) (meter-reached . error) (meter-tick . muted)
+  (meter-span tint muted . 0.35))
  (light
   (gap . "#dfe0e6") (editor . "#ffffff") (panel . "#f6f6f8") (raised . "#ffffff") (overlay . "#ffffff")
   (hover . "#eeeff2") (sel . "#dbe5fb") (sel-quiet . "#ececf0") (sel-inactive . "#dadbe1") (current-line . "#f7f8fa")
@@ -63,7 +64,8 @@
   ;; component tier
   (button-primary-bg . accent-fill) (button-primary-fg . on-accent) (button-edge over panel subtle . 0.75)
   (key-hint-edge over panel subtle . 0.75) (card-needs-you-edge . attention) (progress-track . border-subtle)
-  (progress-fill . accent))
+  (progress-fill . accent) (meter-fill . accent) (meter-near . warn) (meter-reached . error) (meter-tick . muted)
+  (meter-span tint muted . 0.35))
  (hc
   (gap . "#000000") (editor . "#000000") (panel . "#000000") (raised . "#0b0b0b") (overlay . "#0b0b0b")
   (hover . "#1a1a1a") (sel . "#1a3166") (sel-fg . "#ffffff") (sel-quiet . "#1a1a1a") (sel-inactive . "#242424")
@@ -86,4 +88,5 @@
   ;; component tier
   (button-primary-bg . accent-fill) (button-primary-fg . on-accent) (button-edge . border-strong)
   (key-hint-edge . border-strong) (card-needs-you-edge . attention) (progress-track . border)
-  (progress-fill . accent)))
+  (progress-fill . accent) (meter-fill . accent) (meter-near . warn) (meter-reached . error) (meter-tick . fg)
+  (meter-span . muted)))
