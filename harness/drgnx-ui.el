@@ -594,19 +594,14 @@ without its \"drgnx-ui-\" (the socket inside it has the whole NAME)."
                       (expand-file-name (substring (md5 root) 0 8)
                                         (expand-file-name "drgnx-ui" runtime)))))
 
-(defun drgnx-ui--make-private-dir (dir &optional tries)
-  "Create DIR and missing parents, each mode 0700 (server-start refuses anything else).
-TRIES counts the times a parent went away under us (internal)."
+(defun drgnx-ui--make-private-dir (dir)
+  "Create DIR and missing parents, each mode 0700 (server-start refuses anything else)."
   (unless (file-directory-p dir)
     (drgnx-ui--make-private-dir (directory-file-name (file-name-directory (directory-file-name dir))))
     ;; another Emacs may make a shared parent between the check and here (sessions start from several processes);
-    ;; a file of that name that is no directory is still an error (and keeps its mode).  Another one's stop may also
-    ;; remove the shared per-root dir once it is empty (drgnx-ui-stop) between the parent's making and DIR's: make
-    ;; the parents again, a few times at most
+    ;; a file of that name that is no directory is still an error (and keeps its mode)
     (condition-case err (make-directory dir)
-      (file-already-exists (unless (file-directory-p dir) (signal (car err) (cdr err))))
-      (file-missing (if (>= (or tries 0) 3) (signal (car err) (cdr err))
-                      (drgnx-ui--make-private-dir dir (1+ (or tries 0))))))
+      (file-already-exists (unless (file-directory-p dir) (signal (car err) (cdr err)))))
     (set-file-modes dir #o700)))
 
 (defun drgnx-ui--owner ()
@@ -1271,8 +1266,9 @@ with LEGACY-OK, which reap passes to also take a legacy drgnx-ui-N."
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
     (when (file-directory-p run) (delete-directory run t))
-    (when (file-directory-p sock) (delete-directory sock t))
-    (ignore-errors (delete-directory (file-name-directory sock))))   ; the per-root dir, once empty
+    ;; the shared per-root dir above it stays: a session starting in another process may be about to make its own
+    ;; dir in it (an empty 0700 dir under the runtime dir, which goes with it)
+    (when (file-directory-p sock) (delete-directory sock t)))
   (list :stopped name))
 
 (defun drgnx-ui--yours-p (owner client)
@@ -1805,8 +1801,7 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
         (drgnx-ui--poll-pause 0.05)))
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
-    (delete-directory (drgnx-ui-socket-dir name) t)
-    (ignore-errors (delete-directory (drgnx-ui-socket-dir "")))
+    (delete-directory (drgnx-ui-socket-dir name) t)   ; the shared per-root dir stays (drgnx-ui-stop)
     (list (if (eq (car r) 'timeout) 124 (car r))
           (and (file-exists-p results) (drgnx-ui--read-json results))
           run)))

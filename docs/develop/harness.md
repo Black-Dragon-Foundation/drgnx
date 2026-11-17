@@ -336,9 +336,10 @@ and nothing talks to your own Emacs.
 `drgnx test --ui`, `--scenario`, `--bench`, `--perf`, `--soak` and `--day` run in a directory of their own
 (`$DRGNX_RUN_TMP`, removed when they end) and keep their sessions' run directories in its `ui/`, unless
 `DRGNX_UI_STATE` names a root; every session, whatever its compositor, has a private `XDG_RUNTIME_DIR` next to its
-socket directory: its Wayland display and IPC sockets live there, never in the caller's. A stop removes the shared
-per-root socket directory once it is empty; a session starting at that moment in another process makes it again
-(mode 0700), a few times at most. A session id is
+socket directory: its Wayland display and IPC sockets live there, never in the caller's. A stop removes its own
+socket directory but leaves the shared per-root one above it (an empty 0700 directory, gone with the runtime
+directory): a session starting in another process at that moment may be making its own directory in it. A session
+id is
 `drgnx-ui-N-HEX`, never reused, and another MCP client's session is refused unless adopted):
 
 ```
