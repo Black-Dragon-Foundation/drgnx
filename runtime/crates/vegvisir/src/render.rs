@@ -1524,6 +1524,17 @@ fn meter_text(m: &crate::model::ItemBudget) -> String {
 /// item's id, which the editor's keys and clicks read. The kit draws these rows later; this is the plain form.
 pub fn list_rows(entries: &[crate::list::ListEntry], selected: Option<&ItemId>) -> Vec<Row> {
     use crate::list::ListChip;
+    if entries.is_empty() {
+        // a workspace with nothing in it says so (the graph's layers have their labels; a list has no rows to show)
+        let mut b = RowBuilder::new("empty:list");
+        b.push(
+            "  Nothing here yet: an agent, a spec or a plan puts something on the map",
+            None,
+        );
+        let end = b.pos();
+        b.face(0, end, FaceId::WorkDim.name());
+        return vec![b.finish()];
+    }
     entries
         .iter()
         .enumerate()

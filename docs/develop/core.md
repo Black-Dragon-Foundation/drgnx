@@ -3371,6 +3371,13 @@ changes by the scales' ratio; the next tree records the new logical sizes. The r
 are logical (`drgnx-px` at the frame's scale). `test/ui/grid-scales-gui-test.el` moves the session's monitor through
 mutter (`gdctl`) from 1.25 to 2.
 
+**Terminal frames.** `(drgnx-grid-home-size DOCK FRACTION MINIMUM &optional FRAME)` gives a dock FRACTION of the
+frame's columns (lines for `bottom`), at least MINIMUM of them: its tile now, when it shows, and the size it comes back
+at (the `:sizes` intent, by `auto`). ui/terminal-layout sizes its docks with it (`drgnx-tty-layout--homes`). The side
+bar's leaf keeps its sections' heights (`:state` `:parts`, logical, top to bottom), so a side bar made again by
+`drgnx-grid-apply-tree` (full size and back, a layout) has them as before. `test/tty/grid-test.el` runs six tiles in
+tmux: resizes, a drag through SGR mouse reports, full size, the status row and a C locale.
+
 **Validation.** `(drgnx-grid-valid-tree-p TREE)` is t or nil, and nothing is built from a tree it refuses. It refuses a
 non-list, an object that cannot be written and read back (a buffer, marker, window or frame, also inside a tile's
 `:state`), a depth over 16, more than 64 leaves, a non-symbol kind, a `:px` that is not an integer in 1–20000, a

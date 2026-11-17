@@ -6,10 +6,9 @@
 ;; A terminal has the size it has: the workbench's docks follow it.  For each terminal frame
 ;; (`drgnx-tty-layout-apply'):
 ;;
-;; - The sizes are fractions of the terminal, through the frame parameters the docks already read:
-;;   `drgnx-wb-dock-px' (the sidebar: 25% of the columns, at least 20), `drgnx-wb-right-px' (the right dock: 30%,
-;;   at least 24), `drgnx-wb-panel-px' (the panel: 30% of the lines, at least 6).  In a terminal a pixel is a
-;;   column or a line.
+;; - The sizes are fractions of the terminal, given through the grid (`drgnx-grid-home-size': the dock's tile now, and
+;;   the size it comes back at): the sidebar 25% of the columns, at least 20; the right dock 30%, at least 24; the
+;;   panel 30% of the lines, at least 6 (`drgnx-tty-layout--homes').  In a terminal a pixel is a column or a line.
 ;; - A new frame shows the sidebar when it has `drgnx-tty-layout-columns' columns and the panel when it has
 ;;   `drgnx-tty-layout-lines' lines; the right dock stays hidden, as in a graphical window.  A dock the size
 ;;   kept from showing is shown when the terminal grows enough — unless you toggled it since.
@@ -30,6 +29,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-modules)
 (require 'drgnx-wb)
+(require 'drgnx-grid)                   ; the docks' sizes (`drgnx-grid-home-size')
 (require 'drgnx-frame-kind)
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function drgnx-wb-area-window "drgnx-area")
@@ -57,11 +57,17 @@ lays nothing out.")
 (defvar drgnx-tty-layout--applying nil
   "Non-nil while the layout shows a dock itself: that is no toggle by the user (`drgnx-tty-layout--toggled').")
 
+(defconst drgnx-tty-layout--homes '((dock left 0.25 20) (right right 0.30 24) (panel bottom 0.30 6))
+  "Each dock KEY the layout looks after: (KEY HOME FRACTION MINIMUM), the sidebar at home `left', the right dock at
+`right', the panel at `bottom'; FRACTION of the terminal's columns (lines at `bottom'), at least MINIMUM of them.")
+
 (defun drgnx-tty-layout-sizes (columns lines)
-  "The dock sizes for a terminal of COLUMNS by LINES: (:dock COLUMNS :right COLUMNS :panel LINES)."
-  (list :dock (max 20 (round (* 0.25 columns)))
-        :right (max 24 (round (* 0.30 columns)))
-        :panel (max 6 (round (* 0.30 lines)))))
+  "The dock sizes for a terminal of COLUMNS by LINES: (:dock COLUMNS :right COLUMNS :panel LINES), each its fraction
+of the terminal, at least its minimum (`drgnx-tty-layout--homes')."
+  (mapcan (lambda (h) (pcase-let ((`(,key ,home ,fraction ,minimum) h))
+                        (list (intern (format ":%s" key))
+                              (max minimum (round (* fraction (if (eq home 'bottom) lines columns)))))))
+          drgnx-tty-layout--homes))
 
 (defun drgnx-tty-layout--fits-p (dock columns lines)
   "A terminal of COLUMNS by LINES has room to show DOCK (`dock', the sidebar, or `panel')."
@@ -82,8 +88,10 @@ lays nothing out.")
 ;; Which docks the layout looks after: DOCK is the sidebar, PANEL the bottom panel, RIGHT the right dock.
 (defconst drgnx-tty-layout--docks '(dock panel right))
 
-(defun drgnx-tty-layout--param (key)
-  (pcase key ('dock 'drgnx-wb-dock-px) ('panel 'drgnx-wb-panel-px) ('right 'drgnx-wb-right-px)))
+(defun drgnx-tty-layout--home (key)
+  "Give the selected frame's dock KEY its fraction of the terminal, at least its minimum: now if it shows, and when it
+next shows (`drgnx-grid-home-size')."
+  (apply #'drgnx-grid-home-size (cdr (assq key drgnx-tty-layout--homes))))
 
 (defun drgnx-tty-layout--window (key)
   "The selected frame's window of dock KEY, or nil."
@@ -203,14 +211,15 @@ the docks that show."
                        (cons 'right (plist-get sizes :right))))
          (owned (frame-parameter nil 'drgnx-tty-layout-owned))
          (mine (seq-remove (lambda (key) (memq key owned)) drgnx-tty-layout--docks)))
-    (dolist (key mine) (set-frame-parameter nil (drgnx-tty-layout--param key) (alist-get key wanted)))
+    (dolist (key mine) (drgnx-tty-layout--home key))
     (dolist (dock (frame-parameter nil 'drgnx-tty-layout-withheld))
       (cond ((drgnx-tty-layout--showing-p dock) (drgnx-tty-layout--withheld-drop dock))
             ((drgnx-tty-layout--fits-p dock columns lines)
              (drgnx-tty-layout--try-show dock)
              ;; hiding a half-built dock remembered its size: the size it was meant to have stays
-             (when (memq dock mine) (set-frame-parameter nil (drgnx-tty-layout--param dock) (alist-get dock wanted)))
+             (when (memq dock mine) (drgnx-tty-layout--home dock))
              (when (drgnx-tty-layout--showing-p dock) (drgnx-tty-layout--withheld-drop dock)))))
+    ;; the docks shown now, at their size (a dock window outside the grid too: the areas backend)
     (dolist (key mine) (drgnx-tty-layout--resize-dock key (alist-get key wanted)))
     ;; a dock you sized stays that size, whatever Emacs made of it when the terminal changed
     (dolist (c (seq-filter (lambda (c) (memq (car c) owned)) (frame-parameter nil 'drgnx-tty-layout-set)))
