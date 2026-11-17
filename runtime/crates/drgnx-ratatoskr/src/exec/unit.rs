@@ -269,7 +269,7 @@ mod tests {
         let s = wrap(
             bare(&["a"]),
             Path::new("/d"),
-            Some(("drgnx-exec-x", "4G")),
+            Some(("drgnx-exec-x", "4G", "drgnx-job-x.slice")),
             None,
             &shell,
         );
@@ -277,7 +277,13 @@ mod tests {
         let args: Vec<_> = s.args.iter().map(|a| a.to_string_lossy()).collect();
         assert!(args.contains(&"MemoryMax=4G".into()));
         assert!(args.contains(&"drgnx-exec-x".into()));
+        // the scope runs in the job's slice, beside its containers (design §0.3 R2)
+        assert!(
+            args.contains(&"--slice=drgnx-job-x.slice".into()),
+            "{args:?}"
+        );
         assert_eq!(unit_name("x"), "drgnx-exec-x");
+        assert_eq!(job_slice_name("x1a"), "drgnx-job-x1a.slice");
     }
 
     #[test]

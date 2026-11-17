@@ -261,23 +261,30 @@ mod tests {
             .collect()
     }
 
-    /// The hub's jobs go through the shared builder with the hub's own placement: its name prefix, no parent slice,
-    /// no runner label; refusals keep their rule.  The builder's own rows are `sleipnir::linux::podman`'s tests.
+    /// The hub's jobs go through the shared builder with the hub's own placement: its name prefix, the job's own slice
+    /// as the only cgroup argument (design §0.3 R2: its scope and its containers in `drgnx-job-<id>.slice`), no runner
+    /// label; refusals keep their rule.  The builder's own rows are `sleipnir::linux::podman`'s tests.
     #[test]
     fn the_hub_builds_its_jobs_with_the_shared_argv() {
-        let a = strs(argv(&req(&["make", "test"]), &caps(), "0a1b2c3d").unwrap());
+        let slice = crate::exec::unit::job_slice_name("x1a");
+        let a = strs(argv(&req(&["make", "test"]), &caps(), "0a1b2c3d", Some(&slice)).unwrap());
         assert_eq!(a[2..4], ["--name", "drgnx-job-x1a"]);
         assert!(a.windows(2).any(|w| w == ["--memory-swap", "4G"]));
         assert!(a.contains(&"--oom-score-adj=1000".to_string()));
-        assert!(
-            !a.iter()
-                .any(|s| s.starts_with("--cgroup-parent") || s.starts_with("drgnx.runner="))
-        );
+        let cgroup: Vec<&String> = a
+            .iter()
+            .filter(|s| s.starts_with("--cgroup-parent"))
+            .collect();
+        assert_eq!(cgroup, ["--cgroup-parent=drgnx-job-x1a.slice"]);
+        assert!(!a.iter().any(|s| s.starts_with("drgnx.runner=")));
         assert_eq!(a[a.len() - 3..], [REF, "make", "test"]);
+        // without systemd there is no slice: no cgroup argument at all
+        let a = strs(argv(&req(&["make", "test"]), &caps(), "0a1b2c3d", None).unwrap());
+        assert!(!a.iter().any(|s| s.starts_with("--cgroup-parent")));
         let mut r = req(&["ls"]);
         r.image = "evil".into();
         assert_eq!(
-            argv(&r, &caps(), "0a1b2c3d").unwrap_err().rule,
+            argv(&r, &caps(), "0a1b2c3d", None).unwrap_err().rule,
             Rule::Malformed
         );
         assert_eq!(resolve(&caps(), "tools").unwrap(), REF);
@@ -305,13 +312,13 @@ mod tests {
         };
         let c = crate::settings::containers::caps(&v);
         assert_eq!((c.memory.as_str(), c.cpus, c.pids), ("512M", 3, PIDS));
-        let a = strs(argv(&req(&["ls"]), &c, "0a1b2c3d").unwrap());
+        let a = strs(argv(&req(&["ls"]), &c, "0a1b2c3d", None).unwrap());
         assert!(a.windows(2).any(|w| w == ["--memory", "512M"]));
         assert!(a.windows(2).any(|w| w == ["--cpus", "3"]));
         // a limit podman would misread is refused
         v.agents_job_memory = "4G --privileged".into();
         let c = crate::settings::containers::caps(&v);
-        assert!(argv(&req(&["ls"]), &c, "0a1b2c3d").is_err());
+        assert!(argv(&req(&["ls"]), &c, "0a1b2c3d", None).is_err());
         // the job's proxy pins what the setting pins
         v.sandbox_proxy_pins = vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())];
         assert_eq!(

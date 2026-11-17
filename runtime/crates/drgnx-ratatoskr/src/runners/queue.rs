@@ -4150,6 +4150,48 @@ mod tests {
         assert!(!forseti::admit::small(&st.expected_on(&spec, "r2")));
     }
 
+    // [D] pure (a cgroup tree in a folder, as `slices.rs`'s rows): a job here counts what its slice uses (design §0.3
+    // R2, C1): `memory.current` 3 GiB less 0.5 GiB of page cache is 2,560 MiB, read at each tick
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_local_job_counts_what_its_slice_uses() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = dir.path().join("cg");
+        let slice = crate::exec::unit::job_slice_name("x1");
+        let at = manager.join(sleipnir::linux::probe::slice_path(&slice));
+        std::fs::create_dir_all(&at).unwrap();
+        std::fs::write(at.join("memory.current"), format!("{}\n", 3u64 << 30)).unwrap();
+        std::fs::write(
+            at.join("memory.stat"),
+            format!("anon 1\nfile {}\n", 512u64 << 20),
+        )
+        .unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        q.read_local_use(Box::new(move |id| {
+            super::super::local::slice_used_mib(&manager, &crate::exec::unit::job_slice_name(id))
+        }));
+        q.submit(job("x1", Priority::P3, 4096), 100);
+        assert_eq!(q.tick(100).starts, vec!["x1".to_string()]);
+        q.tick(101);
+        assert_eq!(q.lock().local_running["x1"].current_mib, 2560);
+    }
+
+    // [D] pure: a slice that can't be read counts the job's whole reservation as used, and the queue says so once
+    #[test]
+    fn an_unreadable_slice_counts_its_reserve_and_says_so_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        q.read_local_use(Box::new(|_| None));
+        q.submit(job("x1", Priority::P3, 4096), 100);
+        q.tick(100);
+        q.tick(101);
+        q.tick(102);
+        let st = q.lock();
+        let rj = &st.local_running["x1"];
+        assert_eq!(rj.current_mib, rj.reserve_mib);
+        assert_eq!(st.unread_said, 1, "said once, not per tick");
+    }
+
     /// Job ID (see [`job`]) that needs the jobs NEEDS.
     fn needing(id: &str, own: Priority, needs: &[&str]) -> Submit {
         let mut s = job(id, own, 64);
