@@ -250,6 +250,14 @@ fn wire_range(r: sim::Range) -> wire::Range {
     }
 }
 
+/// R, offsets from ORIGIN, as times from the same clock (ORIGIN 0: offsets as they are).
+fn at_clock(r: sim::Range, origin: f64) -> wire::Range {
+    wire::Range {
+        p50: origin + r.p50,
+        p90: origin + r.p90,
+    }
+}
+
 fn unit_of(s: &str) -> Option<Unit> {
     serde_json::from_value(Value::String(s.to_owned())).ok()
 }
@@ -350,15 +358,34 @@ async fn history(front: &Front, wants: &[Want]) -> Result<History, Error> {
         .map_err(crate::coord::fail)
 }
 
+/// What is known of a running job's tasks ([`sim::Fixed`], one per want, times from NOW) and NOW, the wall clock they
+/// are measured from.
+struct Remaining {
+    fixed: Vec<sim::Fixed>,
+    now: f64,
+}
+
+/// F, the simulation's work, off the async worker when the runtime has others to give it to (the hub's).
+fn off_worker<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
 /// One more run like these WANTS: the forecast, and the `forecast_made` rows of it (the plan's `JOB#N`, and the
 /// plan's total as `JOB`), each with the p90 as it stood before calibration.  PLAIN weighs every observation of a
-/// class alike (a session has no brief).
+/// class alike (a session has no brief).  With REMAINING, what is left of a running job ([`sim::simulate_fixed`]):
+/// times are wall-clock, done tasks their actuals (neither widened nor calibrated), and the totals what remains.
 async fn build(
     front: &Front,
     job_key: &str,
     wants: Vec<Want>,
     plain: bool,
+    remaining: Option<&Remaining>,
 ) -> Result<(wire::Forecast, Vec<Made>), Error> {
+    let fixed: &[sim::Fixed] = remaining.map_or(&[], |r| r.fixed.as_slice());
+    let origin = remaining.map_or(0.0, |r| r.now);
     let hist = history(front, &wants).await?;
     let (managers, tasks): (Vec<&SampleRow>, Vec<&SampleRow>) =
         hist.samples.iter().partition(|r| r.role == "manager");
@@ -438,23 +465,58 @@ async fn build(
     }
     let seed = sim::seed_of(&seed_parts.iter().map(String::as_str).collect::<Vec<_>>());
     let slots = crate::runner::agent_slots(front);
-    let totals = sim::simulate(&wants, &classes, &all, &price, slots, seed, sim::DRAWS);
-    let wake_totals = sim::simulate(&wants, &classes, &all, &wake_price, slots, seed, sim::DRAWS);
+    let (totals, wake_totals) = off_worker(|| {
+        (
+            sim::simulate_fixed(
+                &wants,
+                &classes,
+                &all,
+                &price,
+                slots,
+                seed,
+                sim::DRAWS,
+                fixed,
+            ),
+            sim::simulate_fixed(
+                &wants,
+                &classes,
+                &all,
+                &wake_price,
+                slots,
+                seed,
+                sim::DRAWS,
+                fixed,
+            ),
+        )
+    });
 
     let made_at = crate::clock::wall_secs();
     let mut out_tasks = Vec::new();
     let mut made = Vec::new();
     let mut unpriced: Vec<String> = Vec::new();
+    let mut past_every_run: Vec<String> = Vec::new();
     for (i, w) in wants.iter().enumerate() {
         let class = &classes[i];
+        let at = remaining.map(|_| match fixed.get(i) {
+            Some(sim::Fixed::Done { .. }) => wire::TaskAt::Done,
+            Some(sim::Fixed::Running { .. }) => wire::TaskAt::Running,
+            _ => wire::TaskAt::Waiting,
+        });
+        let is_done = at == Some(wire::TaskAt::Done);
+        // a done task's actuals are what they are: no class floor, no calibration
+        let n = if is_done { u32::MAX } else { class.n };
         let factor = hist
             .pairs
             .get(&(w.role.clone(), w.profile.clone(), w.model.clone()))
-            .and_then(|p| sim::conformal(p));
+            .and_then(|p| sim::conformal(p))
+            .filter(|_| !is_done);
         let t = &totals.per_task[i];
-        let tokens = wire_range(sim::widen(t.tokens, class.n));
-        let active = wire_range(sim::widen(t.active, class.n));
-        let (cost, cost_kept) = cost_ranges(&t.cost, class.n, factor);
+        if t.past_every_run {
+            past_every_run.push(format!("T{} is past every run like it", w.n));
+        }
+        let tokens = wire_range(sim::widen(t.tokens, n));
+        let active = wire_range(sim::widen(t.active, n));
+        let (cost, cost_kept) = cost_ranges(&t.cost, n, factor);
         if cost.is_empty() && !unpriced.contains(&w.profile) {
             unpriced.push(w.profile.clone());
         }
@@ -477,8 +539,9 @@ async fn build(
             tokens: shown(tokens),
             active_secs: shown(active),
             cost,
-            start: wire_range(t.start),
-            finish: wire_range(t.finish),
+            start: at_clock(t.start, origin),
+            finish: at_clock(t.finish, origin),
+            at,
         });
         made.push(Made {
             job: job_key.to_owned(),
@@ -560,7 +623,7 @@ async fn build(
         }
     }
     let mut pace = Vec::new();
-    let mut warnings = Vec::new();
+    let mut warnings = past_every_run;
     for name in meters {
         // the provider's window that binds first: the fullest
         let Some(meter) = front
@@ -581,7 +644,18 @@ async fn build(
                         None
                     }
                 };
-                let t = sim::simulate(&wants, &classes, &all, &own, slots, seed, sim::DRAWS);
+                let t = off_worker(|| {
+                    sim::simulate_fixed(
+                        &wants,
+                        &classes,
+                        &all,
+                        &own,
+                        slots,
+                        seed,
+                        sim::DRAWS,
+                        fixed,
+                    )
+                });
                 t.cost.get("usd-est").map(|r| {
                     plan_shown(wire::Range {
                         p50: r.p50 * ratio,
@@ -679,6 +753,7 @@ fn manager_line(front: &Front, rows: &[&SampleRow]) -> Option<wire::TaskForecast
         cost,
         start: wire::Range::default(),
         finish: wire::Range::default(),
+        at: None,
     })
 }
 
@@ -688,7 +763,7 @@ pub async fn for_job(
     job_key: &str,
     wants: Vec<Want>,
 ) -> Result<(wire::Forecast, Vec<Made>), Error> {
-    build(front, job_key, wants, false).await
+    build(front, job_key, wants, false, None).await
 }
 
 /// The forecast of WANTS, a plan of job JOB_KEY.
@@ -747,13 +822,127 @@ pub(crate) fn wants_from(front: &Front, job_id: &str, data: &Map<String, Value>)
         .collect()
 }
 
-/// `forecast/get`: a job's forecast, from its data as proposed.
+/// `forecast/get`: a job's forecast, from its data as proposed; with `remaining`, what is left of it from now.
 pub async fn get(
     front: &Front,
     _caller: &Caller,
     p: wire::ForecastParams,
 ) -> Result<wire::Forecast, Error> {
+    if p.remaining == Some(true) {
+        return remaining_forecast(front, p.job.as_str(), crate::clock::wall_secs()).await;
+    }
     job_forecast(front, p.job.as_str()).await
+}
+
+/// What job JOB's tasks (one per want) have done, from their steps at NOW: a finished or dropped task its first start,
+/// last end, cost and tokens; a task with a step and not finished is running since its first start; the rest are
+/// open.  With it, the job's newest step id (what the cache is keyed on).
+async fn fixed_of(
+    front: &Front,
+    job: &str,
+    wants: &[Want],
+    tasks: &[norn::read::tasks::Task],
+    now: f64,
+) -> Result<(Vec<sim::Fixed>, i64), Error> {
+    use norn::read::steps::{Scope, rollup};
+    let status: HashMap<i64, Option<String>> = tasks
+        .iter()
+        .map(|t| (t.row.n, t.row.status.clone()))
+        .collect();
+    let asked: Vec<(String, bool)> = wants
+        .iter()
+        .map(|w| {
+            let done = matches!(
+                status.get(&w.n).cloned().flatten().as_deref(),
+                Some("done" | "dropped")
+            );
+            (format!("{job}#{}", w.n), done)
+        })
+        .collect();
+    let prefix = format!("{job}#");
+    front
+        .writer
+        .db
+        .read(move |c| {
+            let mut fixed = Vec::with_capacity(asked.len());
+            for (tid, done) in &asked {
+                let r = rollup(c, Scope::Task, tid)?;
+                let t = &r.tokens;
+                let tokens = (t.input + t.output + t.cache_read + t.cache_write) as f64;
+                fixed.push(match (done, r.first) {
+                    (true, first) => sim::Fixed::Done {
+                        start: first.unwrap_or(now) - now,
+                        finish: r.last.or(first).unwrap_or(now) - now,
+                        cost: r.cost_by_unit.into_iter().collect(),
+                        tokens,
+                    },
+                    (false, Some(first)) => sim::Fixed::Running {
+                        start: first - now,
+                        elapsed: (now - first).max(0.0),
+                    },
+                    (false, None) => sim::Fixed::Open,
+                });
+            }
+            let last: i64 = c.query_row(
+                "select coalesce(max(id), 0) from step where substr(task, 1, length(?1)) = ?1",
+                [&prefix],
+                |r| r.get(0),
+            )?;
+            Ok((fixed, last))
+        })
+        .await
+        .map_err(crate::coord::fail)
+}
+
+/// The remaining forecasts kept, by (job, newest step id): a new step misses, and so do 5 s.
+type RemainingKept = HashMap<(String, i64), (std::time::Instant, wire::Forecast)>;
+
+static REMAINING_CACHE: std::sync::Mutex<Option<RemainingKept>> = std::sync::Mutex::new(None);
+
+const REMAINING_CACHE_SECS: u64 = 5;
+const REMAINING_CACHE_MAX: usize = 64;
+
+/// What is left of job ID at NOW ([`Remaining`]), with the baseline of an approved job.
+async fn remaining_forecast(front: &Front, id: &str, now: f64) -> Result<wire::Forecast, Error> {
+    let l = crate::runner::load(front, id, false)
+        .await?
+        .ok_or_else(|| crate::runner::invalid(format!("No job {id}")))?;
+    let data = match &l.job.data {
+        Some(Value::Object(m)) => m.clone(),
+        _ => Map::new(),
+    };
+    let wants = wants_from(front, id, &data);
+    if wants.is_empty() {
+        return Err(crate::runner::invalid(format!(
+            "Job {id} has no tasks to forecast"
+        )));
+    }
+    let (fixed, last) = fixed_of(front, id, &wants, &l.tasks, now).await?;
+    let key = (id.to_owned(), last);
+    let at = std::time::Instant::now();
+    let kept = REMAINING_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .and_then(|c| c.get(&key).cloned())
+        .filter(|(t, _)| at.duration_since(*t).as_secs() < REMAINING_CACHE_SECS);
+    if let Some((_, f)) = kept {
+        return Ok(f);
+    }
+    let r = Remaining { fixed, now };
+    let (mut forecast, _) = build(front, id, wants, false, Some(&r)).await?;
+    if l.job.status.as_deref() != Some("proposed") {
+        forecast.baseline = baseline_of(front, id).await?;
+    }
+    let mut cache = REMAINING_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let cache = cache.get_or_insert_with(HashMap::new);
+    if cache.len() >= REMAINING_CACHE_MAX {
+        cache.clear();
+    }
+    cache.insert(key, (at, forecast.clone()));
+    Ok(forecast)
 }
 
 /// JOB's forecast, with the baseline of an approved one.
@@ -900,7 +1089,7 @@ pub(crate) async fn plan_forecast(
             let wants = joint_wants(&open);
             let (f, _made) = if wants.is_empty() {
                 // no plan to draw: the empty forecast of no tasks
-                build(front, "forecast/plan", Vec::new(), false).await?
+                build(front, "forecast/plan", Vec::new(), false, None).await?
             } else {
                 for_job(front, "forecast/plan", wants).await?
             };
@@ -928,8 +1117,7 @@ pub(crate) async fn plan_forecast(
     })
 }
 
-/// `forecast/plan`: the plans from the graph, a running job's forecast read as `forecast/get` does.  (A running job's
-/// forecast is the plan's as proposed until the remaining-work forecast of a running job exists.)
+/// `forecast/plan`: the plans from the graph; a running job's is what remains of it (`forecast/get` with `remaining`).
 pub async fn plan(front: &Front, p: wire::ForecastPlanParams) -> Result<wire::PlanForecast, Error> {
     let mut ins = Vec::new();
     for id in p.plans.into_inner() {
@@ -954,7 +1142,7 @@ pub async fn plan(front: &Front, p: wire::ForecastPlanParams) -> Result<wire::Pl
         };
         let running = match running {
             Some(job) => {
-                let f = job_forecast(front, &job).await?;
+                let f = remaining_forecast(front, &job, crate::clock::wall_secs()).await?;
                 Some((job, f))
             }
             None => None,
@@ -1059,7 +1247,7 @@ pub async fn session(
         brief_bytes: 0,
         deps: Vec::new(),
     };
-    Ok(build(front, &sid, vec![want], true).await?.0)
+    Ok(build(front, &sid, vec![want], true, None).await?.0)
 }
 
 /// `forecast/accuracy`: how past forecasts fared against what the tasks took, per role and profile.
@@ -1874,6 +2062,133 @@ mod tests {
             "miss {miss:?}"
         );
         assert!(hit < std::time::Duration::from_millis(5), "hit p95 {hit:?}");
+    }
+
+    /// A job J of TASKS tasks, each needing the one before, with its tasks' data as a proposal keeps it; tasks
+    /// numbered in DONE are finished, each with one closed step that ended before NOW.
+    async fn half_done_job(f: &Front, tasks: i64, done: &[i64], now: f64) {
+        use norn::write::jobs::{NewJob, NewTask, job_create, job_set};
+        use norn::write::steps::{StepClass, StepEnd, StepNew, close, open};
+        let done = done.to_vec();
+        f.writer
+            .write(&crate::runner::service(), "test/job", move |tx| {
+                let deps = |n: i64| if n > 1 { vec![n - 1] } else { Vec::new() };
+                let data: Vec<Value> = (1..=tasks)
+                    .map(|n| json!({"n": n, "role": "implement", "deps": deps(n), "body": "b"}))
+                    .collect();
+                job_create(
+                    tx,
+                    NewJob {
+                        id: "J".into(),
+                        title: "j".into(),
+                        plan: None,
+                        repo: None,
+                        tasks: (1..=tasks)
+                            .map(|n| NewTask {
+                                n,
+                                title: format!("t{n}"),
+                                role: Some("implement".into()),
+                                deps: deps(n),
+                            })
+                            .collect(),
+                        data: Some(json!({"tasks": data, "routes": {"implement": "claude"}})),
+                    },
+                    1.0,
+                )?;
+                job_set(tx, "J", Some("running"), None, 2.0)?;
+                for n in &done {
+                    let tid = format!("J#{n}");
+                    norn::write::tasks::force_status(tx, &tid, "done", None, now)?;
+                    let start = now - 1000.0 * (3 - n) as f64;
+                    let id = open(
+                        tx,
+                        StepNew {
+                            session: format!("session:s{n}"),
+                            task: Some(tid.clone()),
+                            plan: None,
+                            project: None,
+                            agent: None,
+                            provider: None,
+                            class: StepClass::Think,
+                            start,
+                            tool: None,
+                            tool_kind: None,
+                            message_id: None,
+                            turn_id: None,
+                            snapshot: None,
+                            log_version: None,
+                            acp: None,
+                            machine: None,
+                            slots: None,
+                        },
+                    )?;
+                    close(
+                        tx,
+                        id,
+                        StepEnd {
+                            end: start + 600.0,
+                            cost: Some(0.5),
+                            cost_unit: Some("usd-est".into()),
+                            ..StepEnd::default()
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    /// Pure (D): a store in a temp folder, a fixed seed.  With two of four chained tasks done, what remains of the job
+    /// (the running plan `forecast/plan` shows) ends sooner than the whole job's forecast, and costs less; the done
+    /// tasks are their actuals at the wall clock, the next one starts no earlier than now.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_half_done_plans_remaining_is_under_its_whole_forecast() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let now = 1_000_000.0;
+        half_done_job(&f, 4, &[1, 2], now).await;
+        let whole = job_forecast(&f, "J").await.unwrap();
+        let left = remaining_forecast(&f, "J", now).await.unwrap();
+        assert!(
+            left.wall_secs.p50 < whole.wall_secs.p50,
+            "{} against {}",
+            left.wall_secs.p50,
+            whole.wall_secs.p50
+        );
+        assert!(left.tokens.p50 < whole.tokens.p50);
+        let at: Vec<Option<wire::TaskAt>> = left.tasks.iter().map(|t| t.at).collect();
+        use wire::TaskAt::{Done, Waiting};
+        assert_eq!(at, [Some(Done), Some(Done), Some(Waiting), Some(Waiting)]);
+        assert_eq!(
+            left.tasks[0].start,
+            Range {
+                p50: now - 2000.0,
+                p90: now - 2000.0
+            }
+        );
+        assert_eq!(left.tasks[1].finish.p50, now - 400.0);
+        assert_eq!(left.tasks[1].finish.p90, now - 400.0);
+        assert!(left.tasks[2].start.p50 >= now, "{:?}", left.tasks[2].start);
+        // a proposal's forecast has no state on its tasks
+        assert!(whole.tasks.iter().all(|t| t.at.is_none()));
+    }
+
+    /// The perf lane's row `forecast-remaining` (300 ms): what remains of a 40-task job, half done, asked once (a
+    /// miss of the cache).  Ignored in normal runs: release, pinned (`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo
+    /// test --release -p drgnx-ratatoskr --lib -- --ignored --nocapture forecast_remaining_perf`).
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "perf lane"]
+    async fn forecast_remaining_perf() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let now = 1_000_000.0;
+        half_done_job(&f, 40, &(1..=20).collect::<Vec<_>>(), now).await;
+        let t = std::time::Instant::now();
+        remaining_forecast(&f, "J", now).await.unwrap();
+        let took = t.elapsed();
+        println!("forecast-remaining: {took:?}");
+        assert!(took < std::time::Duration::from_millis(300), "{took:?}");
     }
 
     /// Pure (D): the runner's tick and the forecast count slots with one function.
