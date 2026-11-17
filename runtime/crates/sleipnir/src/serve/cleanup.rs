@@ -1,5 +1,6 @@
-//! The cleanup `serve` runs when it starts and at every job end. It removes only what is this hub's: containers with
-//! both its prefix and its `drgnx.runner=<hub id>` label whose attempt has ended, its job folders that are collected
+//! The cleanup `serve` runs when it starts, at every job end and every ten minutes. It removes only what is this hub's:
+//! containers with both its prefix and its `drgnx.runner=<hub id>` label whose attempt has ended or whose job slice is
+//! gone, its job folders that are collected
 //! or older than 24 h, its own units that no longer run; and bundle versions nothing runs from. Anything of another
 //! hub, another prefix or another scheduler stays, whatever it looks like.
 
@@ -75,6 +76,8 @@ pub fn plan(owner: &Owner, seen: &Seen) -> Vec<Remove> {
         .filter(ours)
         .filter(running)
         .map(|f| f.meta.r.job.clone())
+        // a job whose slice is gone has no unit left to own its containers: they are orphans (design §5.7)
+        .filter(|job| seen.slices.as_ref().is_none_or(|s| s.contains(job)))
         .collect();
     let left = crate::linux::podman::leftovers(
         &seen.containers,
@@ -156,8 +159,36 @@ pub fn containers(prefix: &str, hub: &str) -> serde_json::Value {
 
 /// The job ids of ROOT's active job slices in LIST (`systemctl list-units --plain --no-legend` lines).
 pub fn live_slices(root: &str, list: &str) -> HashSet<String> {
-    let _ = (root, list);
-    HashSet::new()
+    let pfx = format!("{root}-work-");
+    crate::linux::unit::parse_list(list)
+        .into_iter()
+        .filter(|u| u.active == "active")
+        .filter_map(|u| {
+            Some(
+                u.unit
+                    .strip_prefix(&pfx)?
+                    .strip_suffix(".slice")?
+                    .to_string(),
+            )
+        })
+        .collect()
+}
+
+/// ROOT's job ids whose job slice is up, from systemd; none when it can't be asked (then no container goes for
+/// lack of its slice).
+pub fn slices(root: &str) -> Option<HashSet<String>> {
+    let out = run::systemctl(&[
+        "list-units",
+        "--all",
+        "--plain",
+        "--no-legend",
+        "--full",
+        "--type=slice",
+        &format!("{root}-work-*"),
+    ])
+    .ok()
+    .filter(|o| o.status.success())?;
+    Some(live_slices(root, &String::from_utf8_lossy(&out.stdout)))
 }
 
 /// Our prefix's units, loaded or not.

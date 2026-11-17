@@ -852,12 +852,15 @@ runner it pauses the lowest-priority long builds at `pressure` and lets them go 
 is marked `disturbed` first. After the ladder, `ready` grows the jobs near their caps and sets the CPU weights (live
 resizing, above).
 
-**The cleanup**, at start, at every job end and at every `done`, removes only what is this hub's
+**The cleanup**, at start, at every job end, at every `done` and every ten minutes (`CLEANUP_EVERY`), removes only what is this hub's
 (`serve::cleanup::plan`, pure):
 
 - containers of its prefix labelled `drgnx.runner=<hub id>` whose `drgnx.job` attempt doesn't run, the job's
   container (`<prefix>-<id>`) before its relay sidecar (`<prefix>-px-<id>`): `linux::podman::leftovers`, the sweep the
-  hub shares, over `podman ps -a --format json` (a running job's sidecar stays);
+  hub shares, over `podman ps -a --format json` (a running job's sidecar stays). An attempt counts as running only
+  while its job slice `drgnx-runner-work-<id>.slice` is up (`cleanup::slices`, from `systemctl --user list-units`;
+  when that can't be asked, the folders alone decide): a labelled container whose slice is gone is an orphan and goes.
+  A container without the label is never touched (the user's own `nidhogg-build-*`);
 - this hub's ended units (named in its own attempt records) still loaded;
 - this hub's job folders, collected or older than 24 h, whose attempt doesn't run;
 - bundles put there before its own that no process runs from and no running attempt (of any hub) started from (a

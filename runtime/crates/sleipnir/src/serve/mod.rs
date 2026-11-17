@@ -1607,6 +1607,11 @@ impl<W: Write> Serve<W> {
                 return Next::Stop;
             }
         }
+        // orphans (a labelled container whose job slice is gone) end within ten minutes, job ends or not
+        if self.last_cleanup.elapsed() >= CLEANUP_EVERY {
+            self.last_cleanup = Instant::now();
+            self.cleanup();
+        }
         let check_units = self.last_units.elapsed() >= READY_EVERY;
         if check_units {
             self.last_units = Instant::now();
