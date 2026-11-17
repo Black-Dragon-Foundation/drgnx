@@ -9,6 +9,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-faces)
 (require 'drgnx-ui-kit)
+(require 'drgnx-color)
 (unless (featurep 'drgnx-theme-gen)
   (load (expand-file-name "themes/drgnx-theme-gen" drgnx-dir) nil t))
 (add-to-list 'custom-theme-load-path (expand-file-name "test/fixtures/themes" drgnx-dir))
@@ -144,16 +145,17 @@
                  '(drgnx-kit-zz-probe-loud :background "accent-fill" :foreground "on-accent"))))
 
 (ert-deftest drgnx-ui-kit/third-party-theme-styles-every-kit-face ()
-  ;; a theme that knows nothing of drgnx still gives every kit face a fill or a ring, through the standard faces it
-  ;; inherits: checked on the real faces, and on the fixture's specs (the real file may have few faces yet)
+  ;; a theme that knows nothing of drgnx still gives every kit face that has colours a fill or a ring, through the
+  ;; standard faces it inherits: checked on the real faces, and on the fixture's specs (the real file may have few
+  ;; faces yet).  A binding with no colours (the row's: the UI font, on the surface's own fill) is exempt.
   (dolist (theme '(modus-vivendi doom-one-fixture))
     (unwind-protect
         (progn
           (mapc #'disable-theme custom-enabled-themes)
           (if (get theme 'theme-settings) (enable-theme theme) (load-theme theme t))
           (dolist (f (append (drgnx-ui-kit-face-bindings) (drgnx-ui-kit-face-bindings ui-kit-test--fixture)))
-            (let ((inherit (plist-get (nth 2 f) :inherit)))
-              (should inherit)
+            (when-let* ((inherit (plist-get (nth 2 f) :inherit))
+                        ((seq-some (lambda (k) (plist-get (nth 2 f) k)) '(:bg :fg :edge))))
               (should (cl-some (lambda (parent)
                                  (or (drgnx-face-color parent :background 'gui)
                                      (plist-get (drgnx-faces--clause-plist parent 'gui) :box)))
@@ -192,7 +194,7 @@
                (got (drgnx-ui-kit-expand (intern (plist-get comp :c)) comp (float (plist-get e :scale))
                                          (and (eq (plist-get e :tty) t) (if (eq (plist-get e :ascii) t) 'ascii t)))))
           (should (equal (plist-get w :name) (format "%s/%s" (plist-get e :name) (plist-get c :name))))
-          (dolist (k '(:text :runs :props :spaces))
+          (dolist (k '(:text :runs :props :spaces :height))
             (unless (equal (plist-get got k) (plist-get w k))
               (push (list (plist-get w :name) k (plist-get got k) (plist-get w k)) fails)))
           (setq i (1+ i)))))
@@ -314,10 +316,7 @@
                                     append (mapcar (lambda (st) (list 'row (list k) st)) drgnx-ui-kit-states))))
             (pcase-dolist (`(,_ ,variants ,state ,beg ,end) cells)
               ;; each cell is the kit's expansion, dressed as the hub's rows are: the state's face on its text
-              (let ((e (drgnx-ui-kit-expand 'row (list :kind (symbol-name (car variants)) :depth (if (eq (car variants) 'tree) 1 0)
-                                                       :twisty (and (eq (car variants) 'tree) :false)
-                                                       :text (format "%s · %s" (car variants) state)
-                                                       :state (symbol-name state))
+              (let ((e (drgnx-ui-kit-expand 'row (drgnx-kit-catalogue--props 'row (list (cons 'kind (car variants))) state)
                                             (drgnx-pixels-scale (selected-frame))
                                             (cond ((display-graphic-p) nil) ((drgnx-ui-ascii-frame-p) 'ascii) (t t)))))
                 (should (equal (plist-get e :text) (buffer-substring-no-properties beg end)))
@@ -367,6 +366,91 @@
                  (names (mapcar (lambda (f) (plist-get f :name)) (plist-get r :failures))))
             (should (seq-some (lambda (n) (string-match-p "faces-test\\.el: unknown faces: drgnx-no-such-face (1)" n)) names))))
       (delete-directory tmp t))))
+
+;; The state table everywhere (Task 9): every row selection reads `drgnx-row-selected', which follows the focus
+(declare-function drgnx-ui-kit-focus-remap "drgnx-ui-kit" (window))
+(declare-function drgnx-ui-kit-focus-remap-enable "drgnx-ui-kit")
+(declare-function drgnx-ui-kit-state-face "drgnx-ui-kit" (state))
+
+(ert-deftest drgnx-ui-kit/every-selected-face-reads-the-state-table ()
+  (require 'drgnx-view)
+  (require 'drgnx-explorer)
+  (dolist (f '("modules/tools/drgnx-work-space" "modules/lang/drgnx-notebook"))
+    (load (expand-file-name f drgnx-dir) nil t))
+  (let ((replaces (plist-get (drgnx-ui-kit-component 'row) :replaces)))
+    (should (assq 'drgnx-view-selected replaces))
+    (should (plist-get (drgnx-ui-kit-component 'row) :lint))
+    (should (eq (drgnx-ui-kit-state-face 'selected) 'drgnx-selected))
+    (should (eq (drgnx-ui-kit-state-face 'selected-inactive) 'drgnx-selected-inactive))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (should (eq 'drgnx-selected-inactive (face-attribute 'drgnx-row-selected :inherit)))
+          (pcase-dolist (`(,old . ,kit) replaces)
+            (should (facep old))
+            ;; the old face inherits its kit face and the theme leaves it alone
+            (should (equal (list old kit) (list old (car (ensure-list (face-attribute old :inherit))))))
+            (should (equal (list old (face-attribute kit :background nil t))
+                           (list old (face-attribute old :background nil t))))))
+      (mapc #'disable-theme custom-enabled-themes))))
+
+(ert-deftest drgnx-ui-kit/unfocused-list-shows-sel-inactive ()
+  ;; a list's selection is the full selection while its window is the selected one and the inactive one otherwise
+  ;; (the remap follows `window-selection-change-functions'); the inactive one is >= 1.25:1 on the panel
+  (let ((list (get-buffer-create " *kit-list*")) (other (get-buffer-create " *kit-other*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer list)
+          (drgnx-ui-kit-focus-remap-enable)
+          (let ((lw (selected-window)) (ow (split-window)))
+            (set-window-buffer ow other)
+            (drgnx-ui-kit-focus-remap lw)
+            (with-current-buffer list
+              (should (memq 'drgnx-selected (ensure-list (alist-get 'drgnx-row-selected face-remapping-alist)))))
+            (select-window ow)
+            (drgnx-ui-kit-focus-remap lw)
+            (with-current-buffer list
+              (should-not (alist-get 'drgnx-row-selected face-remapping-alist)))
+            (select-window lw)
+            (drgnx-ui-kit-focus-remap lw)
+            (with-current-buffer list
+              (should (memq 'drgnx-selected (ensure-list (alist-get 'drgnx-row-selected face-remapping-alist)))))))
+      (kill-buffer list) (kill-buffer other)))
+  (dolist (v '(dark light hc))
+    (should (<= 1.25 (drgnx-color-contrast (drgnx-look-token 'sel-inactive v) (drgnx-look-token 'panel v))))))
+
+(ert-deftest drgnx-ui-kit/rows-are-in-the-ui-font ()
+  ;; a row's text and pads are in its kit face, which is the UI font (the mockups' Explorer and lists), on a graphical
+  ;; display and a terminal alike
+  (should (memq 'drgnx-ui-text (ensure-list (face-attribute 'drgnx-kit-row :inherit))))
+  ;; and drgnx's themes keep it (a theme's spec replaces the defface's)
+  (unwind-protect
+      (progn (mapc #'disable-theme custom-enabled-themes)
+             (load-theme 'drgnx-dark t)
+             (should (memq 'drgnx-ui-text (ensure-list (face-attribute 'drgnx-kit-row :inherit nil t)))))
+    (mapc #'disable-theme custom-enabled-themes))
+  (dolist (tty '(nil t))
+    (let* ((e (drgnx-ui-kit-expand 'row '(:kind "tree" :depth 1 :twisty t :text "src") 1.0 tty))
+           (len (length (plist-get e :text))))
+      (should (equal (list tty (vector 0 len "drgnx-kit-row"))
+                     (list tty (aref (plist-get e :runs) 0)))))))
+
+(ert-deftest drgnx-ui-kit/row-icons-are-images-with-the-gap ()
+  ;; the hub's twisty_and_icon_are_images_where_the_env_draws_icons, in Lisp: where icons are drawn, the chevron and
+  ;; the icon are images (a `display' prop each), each with the row's gap (6 at 1.25: 8) after it; else glyphs
+  (let* ((props '(:kind "tree" :twisty t :icon "folder" :text "src"))
+         (e (let ((drgnx-ui-kit--icons (lambda (name px) (list 'image :type 'svg :data (format "%s %s" name px)))))
+              (drgnx-ui-kit-expand 'row props 1.25 nil))))
+    (should (equal (plist-get e :text) "     src "))
+    (should (equal (plist-get e :spaces) [[0 8 0] [2 8 0] [4 8 0] [8 8 0]]))
+    (should (equal (mapcar (lambda (p) (list (aref p 0) (aref p 2) (plist-get (cdr (append (aref p 3) nil)) :data)))
+                           (plist-get e :props))
+                   '((1 "display" "chevron-down 16") (3 "display" "folder 16"))))
+    (let ((plain (drgnx-ui-kit-expand 'row props 1.25 nil)))
+      (should (string-prefix-p " ⌄ " (plist-get plain :text)))
+      (should (equal (plist-get plain :props) [])))))
 
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

@@ -10,6 +10,8 @@
 (declare-function drgnx-signal-mode "drgnx-signal")
 (declare-function drgnx-grid-mode "drgnx-grid")
 (declare-function drgnx-grid-full-size-toggle "drgnx-grid" (&optional window))
+(declare-function drgnx-grid-unstack-tile "drgnx-grid-ops" ())
+(declare-function drgnx-grid-resize-mode "drgnx-grid-ops" ())
 (declare-function drgnx-state-mode "drgnx-state")
 (declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-state-intent--user-resized "drgnx-state-intent")
@@ -130,6 +132,39 @@ another buffer (BUFFER-NAME) is left as it was."
                        (dolist (cmd '(delete-other-windows evil-window-delete-others evil-window-set-height
                                                            evil-window-set-width))
                          (drgnx-module-define-key 'global-map (vector 'remap cmd) #'drgnx-grid-full-size-toggle))
+                       ;; Moving tiles by keys (docs/guide/workbench.md, "Moving tiles")
+                       (pcase-dolist (`(,dir ,title) '((left "Left") (right "Right") (up "Up") (down "Down")))
+                         (drgnx-command-define (intern (format "tile-move-%s" dir)) :category "View" :scope 'window
+                                               :title (format "Move Tile %s" title)
+                                               :command (intern (format "drgnx-grid-move-tile-%s" dir))
+                                               :doc (format "Move this tile beyond the tile to its %s" (downcase title)))
+                         (drgnx-command-define (intern (format "tile-swap-%s" dir)) :category "View" :scope 'window
+                                               :title (format "Swap Tile with %s" title)
+                                               :command (intern (format "drgnx-grid-swap-tile-%s" dir))
+                                               :doc (format "Swap this tile with the one to its %s; the sizes stay" (downcase title)))
+                         (drgnx-command-define (intern (format "tile-stack-%s" dir)) :category "View" :scope 'window
+                                               :title (format "Stack Tile onto %s" title)
+                                               :command (intern (format "drgnx-grid-stack-tile-%s" dir))
+                                               :doc (format "Stack this tile's tabs onto the tile to its %s" (downcase title)))
+                         ;; Resize Tiles' arrows, in its own map (`drgnx-grid-resize-map')
+                         (drgnx-command-define (intern (format "tile-resize-%s" dir)) :category "View" :scope 'window
+                                               :title (format "Resize Tile %s" title)
+                                               :command (intern (format "drgnx-grid-resize-%s" dir))
+                                               :doc (format "Grow this tile toward the %s by one step (shrink it at the grid's edge)"
+                                                            (downcase title))))
+                       (drgnx-command-define 'tile-unstack :category "View" :title "Unstack the Shown Tab" :scope 'window
+                                             :command #'drgnx-grid-unstack-tile
+                                             :doc "Put this tile's shown tab into a new tile beside it")
+                       (drgnx-command-define 'tile-resize :category "View" :title "Resize Tiles" :scope 'window
+                                             :command #'drgnx-grid-resize-mode
+                                             :doc "The arrows grow or shrink this tile, one step each; any other key ends")
+                       ;; Vim's C-w H/L/K/J move the tile, C-w x swaps it (right, else below)
+                       (pcase-dolist (`(,cmd . ,ours) '((evil-window-move-far-left . drgnx-grid-move-tile-left)
+                                                        (evil-window-move-far-right . drgnx-grid-move-tile-right)
+                                                        (evil-window-move-very-top . drgnx-grid-move-tile-up)
+                                                        (evil-window-move-very-bottom . drgnx-grid-move-tile-down)
+                                                        (evil-window-exchange . drgnx-grid-exchange)))
+                         (drgnx-module-define-key 'global-map (vector 'remap cmd) ours))
                        (require 'drgnx-popup)
                        ;; A warning is logged and counted on the status bar, never shown by itself (as VS Code's Output)
                        (drgnx-module-advice 'display-warning :around quiet-warning (fn type message &optional level buffer-name)
@@ -200,10 +235,10 @@ another buffer (BUFFER-NAME) is left as it was."
                                         (help-mode-menu "Menu for This Mode" drgnx-help-mode-menu nil "The major mode's menu, at point")))
                          (drgnx-command-define id :category "View" :title title :scope 'window :command fn :context ctx :doc doc))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((focus-left "Focus Left" drgnx-wb-focus-left "Move focus to the editor group or dock on the left")
-                                        (focus-right "Focus Right" drgnx-wb-focus-right "Move focus to the editor group or dock on the right")
-                                        (focus-up "Focus Above" drgnx-wb-focus-up "Move focus to the editor group or dock above")
-                                        (focus-down "Focus Below" drgnx-wb-focus-down "Move focus to the editor group or dock below")))
+                                      '((focus-left "Focus Tile Left" drgnx-wb-focus-left "Move focus to the tile on the left")
+                                        (focus-right "Focus Tile Right" drgnx-wb-focus-right "Move focus to the tile on the right")
+                                        (focus-up "Focus Tile Up" drgnx-wb-focus-up "Move focus to the tile above")
+                                        (focus-down "Focus Tile Down" drgnx-wb-focus-down "Move focus to the tile below")))
                          (drgnx-command-define id :category "View" :title title :scope 'window :command fn :doc doc))
                        ;; The layout survives a restart.
                        (require 'drgnx-persist)

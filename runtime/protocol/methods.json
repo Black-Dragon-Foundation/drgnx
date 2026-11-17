@@ -1411,6 +1411,27 @@
     {
       "data": {
         "$defs": {
+          "Slots": {
+            "additionalProperties": false,
+            "description": "A machine's slots: in use, and in all.",
+            "properties": {
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "total"
+            ],
+            "type": "object"
+          },
           "Step": {
             "additionalProperties": false,
             "description": "One row of the `step` table.",
@@ -1522,6 +1543,13 @@
                   "null"
                 ]
               },
+              "machine": {
+                "description": "The machine the step ran on (none: the hub's own, or not known).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "message_id": {
                 "description": "The anchors (part 4's rewind): the message, the turn, the step snapshot (a tree id) and the decision log's\nversion.",
                 "type": [
@@ -1560,6 +1588,17 @@
               },
               "session": {
                 "type": "string"
+              },
+              "slots": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Slots"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A machine-queue step: the slots in use and in all when the wait began."
               },
               "snapshot": {
                 "type": [
@@ -9665,6 +9704,27 @@
             ],
             "type": "string"
           },
+          "Slots": {
+            "additionalProperties": false,
+            "description": "A machine's slots: in use, and in all.",
+            "properties": {
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "total"
+            ],
+            "type": "object"
+          },
           "Step": {
             "additionalProperties": false,
             "description": "One row of the `step` table.",
@@ -9776,6 +9836,13 @@
                   "null"
                 ]
               },
+              "machine": {
+                "description": "The machine the step ran on (none: the hub's own, or not known).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "message_id": {
                 "description": "The anchors (part 4's rewind): the message, the turn, the step snapshot (a tree id) and the decision log's\nversion.",
                 "type": [
@@ -9814,6 +9881,17 @@
               },
               "session": {
                 "type": "string"
+              },
+              "slots": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Slots"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A machine-queue step: the slots in use and in all when the wait began."
               },
               "snapshot": {
                 "type": [
@@ -11478,6 +11556,433 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the budget scopes the hub knows as a tree (200 nodes a page, depth first): limits, spend, remaining, state, burn, and a run's share of its plan",
+      "name": "budget/tree",
+      "params": {
+        "$defs": {
+          "BudgetScope": {
+            "description": "What a budget is set on (the limit is kept on the scope's entity); the remaining amount is the least over its\nancestors.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "project": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
+                "properties": {
+                  "plan": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A manager session.",
+                "properties": {
+                  "manager": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "manager"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A worker session.",
+                "properties": {
+                  "worker": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "worker"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`budget/tree`: the scopes the hub knows, depth first in chain order, a page at a time.",
+        "properties": {
+          "after": {
+            "default": null,
+            "description": "The `next` of the page before.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "depth": {
+            "default": null,
+            "description": "How many levels below the root (0: only the root); none: all.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BudgetScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The scope to start at, itself included; none: every scope with no parent, in turn."
+          }
+        },
+        "title": "BudgetTreeParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BudgetNode": {
+            "description": "One scope of the tree.",
+            "properties": {
+              "burn_per_hour": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "label": {
+                "description": "What the user calls it: the entity's title, a session's name, \"run N\" for the runs of a parent in start order.",
+                "type": "string"
+              },
+              "limits": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "parent": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BudgetScope"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "remaining": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "scope": {
+                "$ref": "#/$defs/BudgetScope"
+              },
+              "share_of_parent": {
+                "default": null,
+                "description": "A run's spend over its plan's, in the plan's binding unit (0 to 1); nothing else has one.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "spent": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
+              },
+              "state": {
+                "$ref": "#/$defs/BudgetState"
+              }
+            },
+            "required": [
+              "scope",
+              "label",
+              "state"
+            ],
+            "type": "object"
+          },
+          "BudgetScope": {
+            "description": "What a budget is set on (the limit is kept on the scope's entity); the remaining amount is the least over its\nancestors.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "project": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "project"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A spec: every plan that derives from it counts toward it.",
+                "properties": {
+                  "spec": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A plan (the document's entity id): every run of it counts toward it.",
+                "properties": {
+                  "plan": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "One run of a plan (a job id).",
+                "properties": {
+                  "run": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "run"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A task (its entity id): the workers that worked on it count toward it.",
+                "properties": {
+                  "task": {
+                    "maxLength": 4352,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A manager session.",
+                "properties": {
+                  "manager": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "manager"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A worker session.",
+                "properties": {
+                  "worker": {
+                    "$ref": "#/$defs/Id"
+                  }
+                },
+                "required": [
+                  "worker"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "BudgetState": {
+            "description": "Where a scope stands against its limits (and those above it).",
+            "oneOf": [
+              {
+                "const": "ok",
+                "description": "Within its limits.",
+                "type": "string"
+              },
+              {
+                "const": "nearing",
+                "description": "80 % or more of the binding limit is spent: the unit whose remaining share is the least.",
+                "type": "string"
+              },
+              {
+                "const": "reached",
+                "description": "A limit is reached.",
+                "type": "string"
+              },
+              {
+                "const": "none",
+                "description": "No limit on the scope or above it.",
+                "type": "string"
+              }
+            ]
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A page of the tree.",
+        "properties": {
+          "next": {
+            "default": null,
+            "description": "Pass as `after` for the next page; none at the end.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nodes": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/BudgetNode"
+            },
+            "type": "array"
+          }
+        },
+        "title": "BudgetTree",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -16688,6 +17193,13 @@
               "null"
             ]
           },
+          "placed_why": {
+            "description": "Why it was placed on `machine` and not elsewhere (\"r1: about 4 min, warm cache; local: …\", or \"pinned by\nyou\"); absent while it waits.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "priority": {
             "description": "Its priority, 1 (the user's) to 5 (background work), as the hub set it.",
             "format": "uint8",
@@ -16940,6 +17452,13 @@
               "null"
             ]
           },
+          "placed_why": {
+            "description": "Why it was placed on `machine` and not elsewhere (\"r1: about 4 min, warm cache; local: …\", or \"pinned by\nyou\"); absent while it waits.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "priority": {
             "description": "Its priority, 1 (the user's) to 5 (background work), as the hub set it.",
             "format": "uint8",
@@ -17121,6 +17640,13 @@
               },
               "name": {
                 "description": "The name the user gave it, if any.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "placed_why": {
+                "description": "Why it was placed on `machine` and not elsewhere (\"r1: about 4 min, warm cache; local: …\", or \"pinned by\nyou\"); absent while it waits.",
                 "type": [
                   "string",
                   "null"
@@ -17869,6 +18395,13 @@
           },
           "name": {
             "description": "The name the user gave it, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "placed_why": {
+            "description": "Why it was placed on `machine` and not elsewhere (\"r1: about 4 min, warm cache; local: …\", or \"pinned by\nyou\"); absent while it waits.",
             "type": [
               "string",
               "null"
@@ -20064,6 +20597,13 @@
                 },
                 "type": "array"
               },
+              "finish": {
+                "$ref": "#/$defs/Range",
+                "default": {
+                  "p50": 0.0,
+                  "p90": 0.0
+                }
+              },
               "n": {
                 "description": "The task's number in its plan.",
                 "format": "uint64",
@@ -20081,6 +20621,14 @@
               },
               "role": {
                 "type": "string"
+              },
+              "start": {
+                "$ref": "#/$defs/Range",
+                "default": {
+                  "p50": 0.0,
+                  "p90": 0.0
+                },
+                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros)."
               },
               "tokens": {
                 "$ref": "#/$defs/Range",
@@ -20490,6 +21038,13 @@
                 },
                 "type": "array"
               },
+              "finish": {
+                "$ref": "#/$defs/Range",
+                "default": {
+                  "p50": 0.0,
+                  "p90": 0.0
+                }
+              },
               "n": {
                 "description": "The task's number in its plan.",
                 "format": "uint64",
@@ -20507,6 +21062,14 @@
               },
               "role": {
                 "type": "string"
+              },
+              "start": {
+                "$ref": "#/$defs/Range",
+                "default": {
+                  "p50": 0.0,
+                  "p90": 0.0
+                },
+                "description": "When the task starts and ends, in seconds from the run's start: its own distribution over the simulated runs\n(a manager's row has none: zeros)."
               },
               "tokens": {
                 "$ref": "#/$defs/Range",
@@ -26614,7 +27177,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a proposed job runs, with an optional budget",
+      "doc": "a proposed job runs, with optional limits by unit on its plan",
       "name": "job/approve",
       "params": {
         "$defs": {
@@ -26624,36 +27187,131 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
             "type": "string"
           },
-          "Usd": {
-            "description": "an amount of US dollars",
-            "maximum": 1000000,
-            "minimum": 0,
-            "type": "number"
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
-          "budget": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/Usd"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "id": {
             "$ref": "#/$defs/Id"
+          },
+          "limits": {
+            "description": "The plan's limits by unit, one per unit: none leaves them as they are, empty clears them.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "maxItems": 5,
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
           "id"
         ],
-        "title": "WithBudget",
+        "title": "WithLimits",
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
@@ -26662,14 +27320,6 @@
             "default": [],
             "items": true,
             "type": "array"
-          },
-          "budget": {
-            "description": "US dollars.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "cards": {
             "default": [],
@@ -26685,6 +27335,13 @@
           "estimate": true,
           "id": {
             "type": "string"
+          },
+          "limits": {
+            "description": "The plan's own limits by unit (its budget): none when it has none.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
           },
           "messages": {
             "default": [],
@@ -26795,6 +27452,57 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
@@ -26803,14 +27511,6 @@
             "default": [],
             "items": true,
             "type": "array"
-          },
-          "budget": {
-            "description": "US dollars.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "cards": {
             "default": [],
@@ -26826,6 +27526,13 @@
           "estimate": true,
           "id": {
             "type": "string"
+          },
+          "limits": {
+            "description": "The plan's own limits by unit (its budget): none when it has none.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
           },
           "messages": {
             "default": [],
@@ -26948,6 +27655,57 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
@@ -26956,14 +27714,6 @@
             "default": [],
             "items": true,
             "type": "array"
-          },
-          "budget": {
-            "description": "US dollars.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "cards": {
             "default": [],
@@ -26979,6 +27729,13 @@
           "estimate": true,
           "id": {
             "type": "string"
+          },
+          "limits": {
+            "description": "The plan's own limits by unit (its budget): none when it has none.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
           },
           "messages": {
             "default": [],
@@ -27112,6 +27869,57 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
@@ -27120,14 +27928,6 @@
             "default": [],
             "items": true,
             "type": "array"
-          },
-          "budget": {
-            "description": "US dollars.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "cards": {
             "default": [],
@@ -27143,6 +27943,13 @@
           "estimate": true,
           "id": {
             "type": "string"
+          },
+          "limits": {
+            "description": "The plan's own limits by unit (its budget): none when it has none.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
           },
           "messages": {
             "default": [],
@@ -27214,7 +28021,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a job from a plan, proposed (approved at once with auto)",
+      "doc": "a job from a plan, proposed (approved at once with auto), with optional limits by unit on its plan",
       "name": "job/propose",
       "params": {
         "$defs": {
@@ -27223,6 +28030,24 @@
             "maxLength": 4096,
             "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
             "type": "string"
+          },
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
           },
           "MergeGate": {
             "description": "What gates a job's merge.",
@@ -27249,11 +28074,36 @@
             ],
             "description": "A plan: its entity in the graph, or (until the records move into the graph) its file, which the runner imports\nfirst.  The entity is a `plan:` id, so what is neither (a remote (TRAMP) name, a relative path) is refused."
           },
-          "Usd": {
-            "description": "an amount of US dollars",
-            "maximum": 1000000,
-            "minimum": 0,
-            "type": "number"
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -27265,16 +28115,6 @@
               "null"
             ]
           },
-          "budget": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/Usd"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "gate": {
             "anyOf": [
               {
@@ -27283,6 +28123,17 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "limits": {
+            "description": "The plan's limits by unit, one per unit (none leaves them as they are; empty clears).",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "maxItems": 5,
+            "type": [
+              "array",
+              "null"
             ]
           },
           "plan": {
@@ -27307,6 +28158,57 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
@@ -27315,14 +28217,6 @@
             "default": [],
             "items": true,
             "type": "array"
-          },
-          "budget": {
-            "description": "US dollars.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "cards": {
             "default": [],
@@ -27338,6 +28232,13 @@
           "estimate": true,
           "id": {
             "type": "string"
+          },
+          "limits": {
+            "description": "The plan's own limits by unit (its budget): none when it has none.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
           },
           "messages": {
             "default": [],
@@ -27438,6 +28339,57 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
@@ -27446,14 +28398,6 @@
             "default": [],
             "items": true,
             "type": "array"
-          },
-          "budget": {
-            "description": "US dollars.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "cards": {
             "default": [],
@@ -27469,6 +28413,13 @@
           "estimate": true,
           "id": {
             "type": "string"
+          },
+          "limits": {
+            "description": "The plan's own limits by unit (its budget): none when it has none.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
           },
           "messages": {
             "default": [],
@@ -27579,7 +28530,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a stopped job runs again, with an optional new budget",
+      "doc": "a stopped job runs again, with optional new limits by unit on its plan",
       "name": "job/resume",
       "params": {
         "$defs": {
@@ -27589,36 +28540,131 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
             "type": "string"
           },
-          "Usd": {
-            "description": "an amount of US dollars",
-            "maximum": 1000000,
-            "minimum": 0,
-            "type": "number"
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
-          "budget": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/Usd"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "id": {
             "$ref": "#/$defs/Id"
+          },
+          "limits": {
+            "description": "The plan's limits by unit, one per unit: none leaves them as they are, empty clears them.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "maxItems": 5,
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
           "id"
         ],
-        "title": "WithBudget",
+        "title": "WithLimits",
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
@@ -27627,14 +28673,6 @@
             "default": [],
             "items": true,
             "type": "array"
-          },
-          "budget": {
-            "description": "US dollars.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "cards": {
             "default": [],
@@ -27650,6 +28688,13 @@
           "estimate": true,
           "id": {
             "type": "string"
+          },
+          "limits": {
+            "description": "The plan's own limits by unit (its budget): none when it has none.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
           },
           "messages": {
             "default": [],
@@ -27805,6 +28850,57 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
@@ -27813,14 +28909,6 @@
             "default": [],
             "items": true,
             "type": "array"
-          },
-          "budget": {
-            "description": "US dollars.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "cards": {
             "default": [],
@@ -27836,6 +28924,13 @@
           "estimate": true,
           "id": {
             "type": "string"
+          },
+          "limits": {
+            "description": "The plan's own limits by unit (its budget): none when it has none.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
           },
           "messages": {
             "default": [],
@@ -27953,14 +29048,6 @@
                 "items": true,
                 "type": "array"
               },
-              "budget": {
-                "description": "US dollars.",
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
               "cards": {
                 "default": [],
                 "description": "Open cards.",
@@ -27975,6 +29062,13 @@
               "estimate": true,
               "id": {
                 "type": "string"
+              },
+              "limits": {
+                "description": "The plan's own limits by unit (its budget): none when it has none.",
+                "items": {
+                  "$ref": "#/$defs/Limit"
+                },
+                "type": "array"
               },
               "messages": {
                 "default": [],
@@ -28038,6 +29132,55 @@
               "id"
             ],
             "type": "object"
+          },
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -28091,6 +29234,57 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
@@ -28099,14 +29293,6 @@
             "default": [],
             "items": true,
             "type": "array"
-          },
-          "budget": {
-            "description": "US dollars.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "cards": {
             "default": [],
@@ -28122,6 +29308,13 @@
           "estimate": true,
           "id": {
             "type": "string"
+          },
+          "limits": {
+            "description": "The plan's own limits by unit (its budget): none when it has none.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
           },
           "messages": {
             "default": [],
@@ -28217,6 +29410,57 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "Limit": {
+            "additionalProperties": false,
+            "description": "An amount in a unit.",
+            "properties": {
+              "amount": {
+                "format": "double",
+                "type": "number"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job as `drgnx-job-summary` has it.  Its lists are `[]` when empty, also when the backend sent `null`.",
@@ -28225,14 +29469,6 @@
             "default": [],
             "items": true,
             "type": "array"
-          },
-          "budget": {
-            "description": "US dollars.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "cards": {
             "default": [],
@@ -28248,6 +29484,13 @@
           "estimate": true,
           "id": {
             "type": "string"
+          },
+          "limits": {
+            "description": "The plan's own limits by unit (its budget): none when it has none.",
+            "items": {
+              "$ref": "#/$defs/Limit"
+            },
+            "type": "array"
           },
           "messages": {
             "default": [],
@@ -28396,6 +29639,63 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "move a job (job:ID) or an agent's next jobs (session:ID) to a machine: a waiting job is placed there; a running one is never stopped here, a card asks Restart or Keep; an unknown or untrusted machine is refused with why",
+      "name": "machines/move",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`machines/move`: move a job, or a session's next jobs, to another machine.",
+        "properties": {
+          "machine": {
+            "description": "`local` (this machine) or a runner's name.",
+            "type": "string"
+          },
+          "target": {
+            "description": "`job:ID` (a job of the queue) or `session:ID` (an agent: its next jobs).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "machine"
+        ],
+        "title": "MoveParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`machines/move`'s answer.",
+        "properties": {
+          "card": {
+            "description": "The card asking whether to restart a job that runs (Restart / Keep), by id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "moved": {
+            "description": "The move is made: a waiting job waits for the machine named, or the session's next jobs go there. False when\nit was already there, or when it runs and the user is asked first (`card`).",
+            "type": "boolean"
+          },
+          "said": {
+            "description": "What happened, in words (\"its next jobs go to laptop\").",
+            "type": "string"
+          }
+        },
+        "required": [
+          "moved",
+          "said"
+        ],
+        "title": "MoveResult",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -43761,6 +45061,21 @@
                 },
                 "type": "array"
               },
+              "first": {
+                "description": "The first step's start and the last step's end, seconds since the epoch; `last` is none while a step is open.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "last": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "secs": {
                 "default": [],
                 "items": {
@@ -43774,6 +45089,27 @@
             },
             "required": [
               "tokens"
+            ],
+            "type": "object"
+          },
+          "Slots": {
+            "additionalProperties": false,
+            "description": "A machine's slots: in use, and in all.",
+            "properties": {
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "total"
             ],
             "type": "object"
           },
@@ -43888,6 +45224,13 @@
                   "null"
                 ]
               },
+              "machine": {
+                "description": "The machine the step ran on (none: the hub's own, or not known).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "message_id": {
                 "description": "The anchors (part 4's rewind): the message, the turn, the step snapshot (a tree id) and the decision log's\nversion.",
                 "type": [
@@ -43926,6 +45269,17 @@
               },
               "session": {
                 "type": "string"
+              },
+              "slots": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Slots"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A machine-queue step: the slots in use and in all when the wait began."
               },
               "snapshot": {
                 "type": [
@@ -45645,6 +46999,44 @@
       "classes": [
         "user"
       ],
+      "doc": "set (or with null clear) the target date of a spec or a plan; true when the item exists",
+      "name": "work/target/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/target/set`'s params: the target date of a spec or a plan (null clears it).",
+        "properties": {
+          "item": {
+            "description": "`spec:ID` or `plan:ID`.",
+            "maxLength": 4352,
+            "type": "string"
+          },
+          "target_at": {
+            "description": "Seconds since the epoch; null removes the target.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "title": "TargetSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "end one trail, Timeline or Board view of this connection (a connection's views end with it)",
       "name": "work/trail/close",
       "params": {
@@ -45744,5 +47136,5 @@
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 12
+  "schema": 13
 }

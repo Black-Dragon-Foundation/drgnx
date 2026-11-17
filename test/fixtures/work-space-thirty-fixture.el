@@ -270,6 +270,16 @@ buffer."
       (error "The map holds %d agents, not %d" (drgnx-work-thirty-agent-items buffer) (length drgnx-work-thirty--mirrors)))
     buffer))
 
+(defun drgnx-work-thirty-only-window ()
+  "The selected window alone in its frame, as `delete-other-windows' made it before the grid: every other window goes
+by its own `delete-window' (an editor tile is deleted, a tool tile such as the Work Detail the map opens is hidden), as
+the grid keeps its tiles from `delete-other-windows' (a layout survives a package's call: docs/develop/core.md, \"The
+grid\")."
+  (delete-other-windows)
+  (dolist (w (window-list nil 'nomini))
+    (unless (eq w (selected-window))
+      (when (window-live-p w) (ignore-errors (delete-window w))))))
+
 (defun drgnx-work-thirty-premise (&optional buffer shown)
   "Whether what a workload measures holds, else an error naming what does not: 30 sessions streaming (busy) and, with
 BUFFER, its map holds 30 agents and is shown to the hub when SHOWN, hidden when not."

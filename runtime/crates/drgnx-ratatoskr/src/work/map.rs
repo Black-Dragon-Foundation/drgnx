@@ -21,7 +21,7 @@ use runstav::methods::work::{
     PresenceMode, Workspace,
 };
 use runstav::wire::{Error, ErrorCode};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -319,10 +319,7 @@ impl Sess {
         // the cost is a number, or an object with an `amount` (what the agent's usage update carries)
         let spend = usage
             .and_then(|u| u.cost.as_ref())
-            .and_then(|c| {
-                c.as_f64()
-                    .or_else(|| c.get("amount").and_then(Value::as_f64))
-            })
+            .and_then(crate::budget::cost_amount)
             .map(|c| format!("${c:.2}"));
         let mut out = vec![Event::Session(SessionFact {
             id: s.id.clone(),
@@ -629,6 +626,7 @@ pub(crate) fn job_fact(row: &runstav::methods::exec::ExecRow, keys: Vec<String>)
             .timebox_s
             .map(|s| u32::try_from(s.div_ceil(60)).unwrap_or(u32::MAX)),
         keys,
+        why: row.placed_why.clone().filter(|_| running),
     }
 }
 
@@ -1669,7 +1667,8 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
         })
         .collect();
     // the seed: the store's records and refs, the machines, the sessions and who is in which file now
-    let (records, cards) = read_store(f).await;
+    let (mut records, cards) = read_store(f).await;
+    records.extend(budget_events(f, &records));
     let refs = refs_of(f, &p.workspace).await;
     let machines = crate::work::machines::facts_now(f);
     let sessions: Vec<(Snapshot, Vec<crate::work::subagents::Child>)> = f
@@ -1753,6 +1752,45 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
         hub: f.core.views.hub(),
         version,
     })
+}
+
+/// `work/target/set`: the target date of a spec or plan, written into its data through the writer (the map reads the
+/// store again after the write); null removes it.  False when no such live entity.
+pub async fn target_set(
+    f: &Front,
+    _: &Caller,
+    p: runstav::methods::work::TargetSetParams,
+) -> Result<bool, Error> {
+    let id = p.item.as_str().to_owned();
+    let at = p.target_at;
+    f.writer
+        .db
+        .write(
+            urdr::graph::TxMeta::new("user", urdr::graph::Class::User, "work/target"),
+            move |tx| {
+                let Some(e) =
+                    urdr::graph::entity::by_id(tx.sql(), &id)?.filter(|e| e.retired_tx.is_none())
+                else {
+                    return Ok(false);
+                };
+                urdr::graph::entity::update(
+                    tx,
+                    e.n,
+                    None,
+                    urdr::graph::entity::Changes {
+                        data_patch: Some(serde_json::json!({ "target_at": at })),
+                        ..Default::default()
+                    },
+                )?;
+                Ok(true)
+            },
+        )
+        .await
+        .map_err(|e| Error {
+            code: ErrorCode::Internal,
+            message: format!("work/target/set: {e}"),
+            path: None,
+        })
 }
 
 /// `work/map/set`: VIEW changes; the user's own change relayouts at once (drawn anew); the answer is the view's
@@ -1922,6 +1960,62 @@ fn legacy_duplicates<'a>(
 /// The plan item that holds the tasks no plan holds.
 const NO_PLAN: &str = "no-plan";
 
+/// The budget facts of the records READ and of the live sessions: spend against the binding limit, none when no limit
+/// counts for the item.
+fn budget_events(f: &Front, records: &[Event]) -> Vec<Event> {
+    use runstav::methods::timeline::BudgetScope;
+    let mut items: Vec<(String, BudgetScope)> = Vec::new();
+    let scope = |kind: &str, id: &str| -> Option<BudgetScope> {
+        serde_json::from_value(json!({ kind: format!("{kind}:{id}") })).ok()
+    };
+    for e in records {
+        if let Event::Graph(g) = e {
+            let (kind, id) = match g {
+                GraphFact::Spec { id, .. } => ("spec", id),
+                GraphFact::Plan { id, .. } if id != NO_PLAN => ("plan", id),
+                GraphFact::Task { id, .. } => ("task", id),
+                _ => continue,
+            };
+            if let Some(s) = scope(kind, id) {
+                items.push((format!("{kind}:{id}"), s));
+            }
+        }
+    }
+    for s in f.core.agents.live_sessions() {
+        items.push((format!("agent:{}", s.id), s.scope()));
+    }
+    items
+        .into_iter()
+        .map(|(item, s)| {
+            Event::Graph(GraphFact::Budget {
+                item,
+                budget: item_budget(&f.core.budgets, &s),
+            })
+        })
+        .collect()
+}
+
+/// What SCOPE has spent against its binding limit; none with no limit at or above it.
+pub(crate) fn item_budget(
+    b: &crate::budget::Budgets,
+    scope: &runstav::methods::timeline::BudgetScope,
+) -> Option<vegvisir::model::ItemBudget> {
+    let (unit, spent, limit) = b.binding(scope)?;
+    let own = b.limits(scope).iter().any(|l| l.unit == unit);
+    Some(vegvisir::model::ItemBudget {
+        spent: vegvisir::model::Num(spent),
+        limit: own.then_some(vegvisir::model::Num(limit)),
+        unit: serde_json::to_value(unit)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default(),
+        state: serde_json::to_value(b.state(scope))
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default(),
+    })
+}
+
 /// The store's records the map shows: asks, specs, plans and their tasks, `asked` and `derives`; and the open cards.
 async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
     f.writer
@@ -1958,7 +2052,7 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                 let mut q = c.prepare(
                     "select id, kind, coalesce(title, ''), coalesce(status, ''), \
                      coalesce(json_extract(data, '$.text'), title, ''), json_extract(data, '$.records.file'), \
-                     json_extract(data, '$.ledger.done'), \
+                     json_extract(data, '$.ledger.done'), json_extract(data, '$.target_at'), \
                      coalesce((select at from tx where tx.id = entity.updated_tx), 0) \
                      from entity where retired_tx is null and kind in ('ask', 'spec', 'plan', 'task') order by n",
                 )?;
@@ -1972,7 +2066,8 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                             r.get::<_, String>(4)?,
                             r.get::<_, Option<String>>(5)?,
                             r.get::<_, Option<bool>>(6)?.unwrap_or(false),
-                            r.get::<_, f64>(7)?,
+                            r.get::<_, Option<f64>>(7)?,
+                            r.get::<_, f64>(8)?,
                         ))
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1991,7 +2086,7 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                         updated: 0,
                     }));
                 }
-                for (rank, (id, kind, title, status, text, _, ledger_done, at)) in
+                for (rank, (id, kind, title, status, text, _, ledger_done, target, at)) in
                     all.into_iter().enumerate()
                 {
                     // when the record last changed, in minutes (the Active filter's window)
@@ -1999,6 +2094,12 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                     if hidden.contains(&strip(&id)) {
                         continue;
                     }
+                    let target_ev = matches!(kind.as_str(), "spec" | "plan").then(|| {
+                        Event::Graph(GraphFact::Target {
+                            item: id.clone(),
+                            at: target.map(vegvisir::Instant),
+                        })
+                    });
                     out.push(match kind.as_str() {
                         "ask" => Event::Graph(GraphFact::Ask {
                             key: strip(&id),
@@ -2027,6 +2128,7 @@ async fn read_store(f: &Front) -> (Vec<Event>, Vec<Card>) {
                             })
                         }
                     });
+                    out.extend(target_ev);
                 }
             }
             for (a, kind, b) in links {
@@ -2097,7 +2199,8 @@ pub async fn run(front: Arc<Front>) {
         if !front.core.map.open() {
             continue;
         }
-        let (records, cards) = read_store(&front).await;
+        let (mut records, cards) = read_store(&front).await;
+        records.extend(budget_events(&front, &records));
         let spaces: Vec<(String, Vec<PathBuf>)> = {
             let g = lock(&front.core.map.inner);
             g.spaces

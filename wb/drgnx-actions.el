@@ -63,13 +63,18 @@
 
 ;;;; Focus by direction
 
+(declare-function drgnx-grid-focus-direction "drgnx-grid-ops" (direction))
+(declare-function drgnx-wb-grid-p "drgnx-wb" ())
+
 (defun drgnx-wb-focus-direction (dir)
   "Select the window next to this one in DIR (`left', `right', `up' or `down'), among the editor groups and
-the docks (their `no-other-window' does not hide them here).  At an edge nothing changes."
-  (let ((w (window-in-direction (or (alist-get dir '((left . left) (right . right) (up . above) (down . below)))
-                                    (error "No such direction: %S" dir))
-                                nil t)))
-    (when w (select-window w))))
+the docks (their `no-other-window' does not hide them here).  At an edge nothing changes.  With the grid on, the tile
+next to this one by pixel edges (`drgnx-grid-neighbour')."
+  (if (drgnx-wb-grid-p) (drgnx-grid-focus-direction dir)
+    (let ((w (window-in-direction (or (alist-get dir '((left . left) (right . right) (up . above) (down . below)))
+                                      (error "No such direction: %S" dir))
+                                  nil t)))
+      (when w (select-window w)))))
 
 (defun drgnx-wb-focus-left () "Move focus to the group or dock on the left." (interactive) (drgnx-wb-focus-direction 'left))
 (defun drgnx-wb-focus-right () "Move focus to the group or dock on the right." (interactive) (drgnx-wb-focus-direction 'right))

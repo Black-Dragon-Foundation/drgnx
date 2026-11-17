@@ -989,13 +989,8 @@ async fn propose(front: &Front, sid: &str, p: &Planning) -> Result<(String, bool
         .await
         .map_err(|e| e.message)?;
     let plan: PlanRef = serde_json::from_value(json!(written.plan)).map_err(|e| e.to_string())?;
-    let budget = d
-        .budget
-        .iter()
-        .filter(|l| matches!(l.unit, Unit::Usd | Unit::UsdEst))
-        .map(|l| l.amount)
-        .reduce(f64::min);
-    let s = crate::runner::propose_graph(front, &user, &plan, &p.repo, budget, d.gate)
+    let limits = (!d.budget.is_empty()).then(|| d.budget.clone());
+    let s = crate::runner::propose_graph(front, &user, &plan, &p.repo, limits, d.gate)
         .await
         .map_err(|e| e.message)?;
     let s_id = sid.to_owned();

@@ -27,6 +27,7 @@
 - [Large files](guide/large-files.md)
 - [Git and review](guide/git.md)
 - [The Work space](guide/work-space.md)
+- [Review: what a change does to the tasks under way](guide/review.md)
 - [Work tracker](guide/work.md)
 - [Search and replace](guide/replace.md)
 - [Layouts](guide/layouts.md)

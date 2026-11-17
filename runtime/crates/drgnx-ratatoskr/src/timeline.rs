@@ -15,7 +15,8 @@ use crate::front::Front;
 use norn::read::steps as table;
 use runstav::methods::matrix::{Limit, Unit};
 use runstav::methods::timeline::{
-    ClassSecs, Rollup, Scope, Step, StepClass, Timeline as TimelineAnswer, TimelineParams, Tokens,
+    ClassSecs, Rollup, Scope, Slots, Step, StepClass, Timeline as TimelineAnswer, TimelineParams,
+    Tokens,
 };
 use runstav::wire::{Error, ErrorCode};
 use std::collections::BTreeSet;
@@ -356,6 +357,11 @@ fn step_of(s: table::Step) -> Step {
         cost: s.cost,
         cost_unit: s.cost_unit.as_deref().and_then(unit_of),
         detail: None,
+        machine: s.machine,
+        slots: s.slots_used.zip(s.slots_total).map(|(used, total)| Slots {
+            used: used as u32,
+            total: total as u32,
+        }),
         acp: s.acp,
         head: s.head,
         revertible: s.history_op.is_some(),
@@ -392,6 +398,8 @@ fn rollup_of(r: table::Rollup) -> Rollup {
             cache_read: r.tokens.cache_read as u64,
             cache_write: r.tokens.cache_write as u64,
         },
+        first: r.first,
+        last: r.last,
     }
 }
 
@@ -519,6 +527,9 @@ mod tests {
             head: Some(HEAD.into()),
             history_op,
             undone_by: Some(9),
+            machine: None,
+            slots_used: None,
+            slots_total: None,
         }
     }
 

@@ -911,6 +911,7 @@ impl Front {
             | Params::BriefSet(_)
             | Params::TimelineGet(_)
             | Params::BudgetGet(_)
+            | Params::BudgetTreePage(_)
             | Params::BudgetSet(_)
             | Params::PaceGet(_)
             | Params::ForecastGet(_)
@@ -930,6 +931,7 @@ impl Front {
             | Params::RecordsConflict(_)
             | Params::RecordsResolve(_)
             | Params::MachinesReport(_)
+            | Params::MachinesMove(_)
             | Params::MachinesList(_)
             | Params::RunnersList(_)
             | Params::RunnersProbeHost(_)
@@ -975,6 +977,7 @@ impl Front {
             | Params::AgentsBufferUnwatch(_)
             | Params::WorkMapSubscribe(_)
             | Params::WorkMapSet(_)
+            | Params::WorkTargetSet(_)
             | Params::WorkMapClose(_)
             | Params::WorkTrailSubscribe(_)
             | Params::WorkTrailClose(_)
@@ -1151,6 +1154,9 @@ impl Front {
                 self.core.huddles.card_settled(&me, card).await;
             }
             self.core.plugins.card_settled(card);
+            if let Some(me) = self.tool_hub.front() {
+                crate::work::machines::card_settled(&me, card).await;
+            }
         }
         if let Err(e) = &result
             && e.code != ErrorCode::Internal

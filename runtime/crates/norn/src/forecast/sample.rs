@@ -588,6 +588,8 @@ mod tests {
                 snapshot: None,
                 log_version: None,
                 acp: None,
+                machine: None,
+                slots: None,
             },
         )
         .unwrap();
@@ -833,6 +835,8 @@ mod tests {
                 snapshot: None,
                 log_version: None,
                 acp: None,
+                machine: None,
+                slots: None,
             },
         )
         .unwrap();

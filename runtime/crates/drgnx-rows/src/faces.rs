@@ -76,6 +76,8 @@ pub enum FaceId {
     SelectedQuiet,
     /// `drgnx-selected-inactive`
     SelectedInactive,
+    /// `drgnx-row-selected`
+    RowSelected,
     /// `drgnx-selected-secondary`
     SelectedSecondary,
     /// `drgnx-focus`
@@ -1012,11 +1014,13 @@ pub enum FaceId {
     ToplineHover,
     /// `drgnx-topline-strong`
     ToplineStrong,
+    /// `drgnx-kit-row`
+    KitRow,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 502] = [
+    pub const ALL: [FaceId; 504] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1051,6 +1055,7 @@ impl FaceId {
         FaceId::Selected,
         FaceId::SelectedQuiet,
         FaceId::SelectedInactive,
+        FaceId::RowSelected,
         FaceId::SelectedSecondary,
         FaceId::Focus,
         FaceId::StatusAttention,
@@ -1519,6 +1524,7 @@ impl FaceId {
         FaceId::Topline,
         FaceId::ToplineHover,
         FaceId::ToplineStrong,
+        FaceId::KitRow,
     ];
 
     /// The face's Emacs name.
@@ -1558,6 +1564,7 @@ impl FaceId {
             FaceId::Selected => "drgnx-selected",
             FaceId::SelectedQuiet => "drgnx-selected-quiet",
             FaceId::SelectedInactive => "drgnx-selected-inactive",
+            FaceId::RowSelected => "drgnx-row-selected",
             FaceId::SelectedSecondary => "drgnx-selected-secondary",
             FaceId::Focus => "drgnx-focus",
             FaceId::StatusAttention => "drgnx-status-attention",
@@ -2026,6 +2033,7 @@ impl FaceId {
             FaceId::Topline => "drgnx-topline",
             FaceId::ToplineHover => "drgnx-topline-hover",
             FaceId::ToplineStrong => "drgnx-topline-strong",
+            FaceId::KitRow => "drgnx-kit-row",
         }
     }
 
@@ -2066,6 +2074,7 @@ impl FaceId {
             "drgnx-selected" => FaceId::Selected,
             "drgnx-selected-quiet" => FaceId::SelectedQuiet,
             "drgnx-selected-inactive" => FaceId::SelectedInactive,
+            "drgnx-row-selected" => FaceId::RowSelected,
             "drgnx-selected-secondary" => FaceId::SelectedSecondary,
             "drgnx-focus" => FaceId::Focus,
             "drgnx-status-attention" => FaceId::StatusAttention,
@@ -2534,6 +2543,7 @@ impl FaceId {
             "drgnx-topline" => FaceId::Topline,
             "drgnx-topline-hover" => FaceId::ToplineHover,
             "drgnx-topline-strong" => FaceId::ToplineStrong,
+            "drgnx-kit-row" => FaceId::KitRow,
             _ => return None,
         })
     }

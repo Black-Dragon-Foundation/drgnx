@@ -24,7 +24,8 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::matrix::{Limit, Unit};
 use runstav::methods::timeline::{
-    BudgetGetParams, BudgetScope, BudgetSetParams, BudgetView, Pace, PaceParams, Paces,
+    BudgetEvent, BudgetGetParams, BudgetNode, BudgetScope, BudgetSetParams, BudgetState,
+    BudgetTree, BudgetTreeParams, BudgetView, Pace, PaceParams, Paces,
 };
 use runstav::wire::Error;
 use serde::{Deserialize, Serialize};
@@ -208,6 +209,10 @@ struct St {
     meters: BTreeMap<String, Meter>,
     /// The scopes whose `usd` and `usd-est` limits bind together ([`Budgets::set_joint`]).
     joint: BTreeSet<Key>,
+    /// What each scope spent in the last hour, `(at, unit, amount)`, in memory only ([`Budgets::burn`]).
+    ring: BTreeMap<Key, std::collections::VecDeque<(f64, Unit, f64)>>,
+    /// The scopes whose spend moved since the last [`Budgets::take_changed`].
+    changed: BTreeSet<Key>,
 }
 
 /// The version of [`Saved`] this build writes.  Before 2 a job with no plan had its own `plan` scope, `plan:JOB`: such
@@ -293,6 +298,15 @@ fn chain(st: &St, key: &str) -> Vec<Key> {
     out
 }
 
+/// How far back the burn ring remembers, in seconds (an hour).
+const RING_SPAN: f64 = 3600.0;
+
+/// How much spend the burn needs before it says anything, in seconds (ten minutes).
+const BURN_MIN: f64 = 600.0;
+
+/// The share of the binding limit spent from which a scope is `nearing`.
+const NEARING: f64 = 0.8;
+
 fn is_dollars(unit: Unit) -> bool {
     matches!(unit, Unit::Usd | Unit::UsdEst)
 }
@@ -367,6 +381,14 @@ fn reached(st: &mut St, key: &str, only: Option<Unit>) -> Vec<Hit> {
         }
     }
     hits
+}
+
+/// The amount of a cost an agent's usage update carries: a bare number, or the object `{"amount": 0.01, "currency":
+/// "USD"}` the agents send.  The one reader of every path that books or shows a session's cost.
+pub fn cost_amount(cost: &Value) -> Option<f64> {
+    cost.as_f64()
+        .or_else(|| cost.get("amount").and_then(Value::as_f64))
+        .filter(|a| a.is_finite())
 }
 
 impl Budgets {
@@ -595,6 +617,182 @@ impl Budgets {
         remaining_of(&self.st(), &key(scope))
     }
 
+    /// What SCOPE spent per hour over the last hour (or over what was seen, at least ten minutes of it), in each unit;
+    /// empty before ten minutes of spend.  NOW is the time asked at.
+    pub fn burn(&self, scope: &BudgetScope, now: f64) -> Vec<Limit> {
+        let st = self.st();
+        let Some(ring) = st.ring.get(&key(scope)) else {
+            return Vec::new();
+        };
+        let from = now - RING_SPAN;
+        let Some(first) = ring
+            .iter()
+            .map(|(t, ..)| *t)
+            .filter(|t| *t >= from)
+            .reduce(f64::min)
+        else {
+            return Vec::new();
+        };
+        let seen = now - first;
+        if seen < BURN_MIN {
+            return Vec::new();
+        }
+        let mut sums: BTreeMap<Unit, f64> = BTreeMap::new();
+        for (t, unit, amount) in ring.iter().filter(|(t, ..)| *t >= from) {
+            let _ = t;
+            *sums.entry(*unit).or_default() += amount;
+        }
+        sums.into_iter()
+            .map(|(unit, sum)| Limit {
+                amount: sum / (seen / 3600.0),
+                unit,
+            })
+            .collect()
+    }
+
+    /// The limit SCOPE (or an ancestor) holds that is closest to spent: `(unit, spent, limit)`, the unit whose remaining
+    /// share is the least; none with no limit anywhere up the chain.
+    pub fn binding(&self, scope: &BudgetScope) -> Option<(Unit, f64, f64)> {
+        let st = self.st();
+        let k = key(scope);
+        let mut best: Option<(f64, Unit, f64, f64)> = None;
+        for c in chain(&st, &k) {
+            for l in st.limits.get(&c).into_iter().flatten() {
+                let spent = spent_against(&st, &c, l.unit);
+                let share = if l.amount > 0.0 {
+                    ((l.amount - spent) / l.amount).max(0.0)
+                } else {
+                    0.0
+                };
+                if best.is_none_or(|(s, ..)| share < s) {
+                    best = Some((share, l.unit, spent, l.amount));
+                }
+            }
+        }
+        best.map(|(_, unit, spent, limit)| (unit, spent, limit))
+    }
+
+    /// Where SCOPE stands: `reached` at or past the binding limit, `nearing` from 80 % of it, `none` with no limit up the
+    /// chain.
+    pub fn state(&self, scope: &BudgetScope) -> BudgetState {
+        match self.binding(scope) {
+            None => BudgetState::None,
+            Some((_, spent, limit)) if limit <= 0.0 || spent >= limit => BudgetState::Reached,
+            Some((_, spent, limit)) if spent / limit >= NEARING => BudgetState::Nearing,
+            Some(_) => BudgetState::Ok,
+        }
+    }
+
+    /// The scopes whose spend moved since the last call (each once).
+    pub fn take_changed(&self) -> Vec<BudgetScope> {
+        let mut st = self.st();
+        let keys: Vec<Key> = std::mem::take(&mut st.changed).into_iter().collect();
+        keys.iter()
+            .filter_map(|k| st.scopes.get(k).cloned())
+            .collect()
+    }
+
+    /// The scopes below ROOT (itself included; none: every scope with no parent) down to DEPTH levels, depth first, each
+    /// with its parent; children in key order, so a page's `after` (a key) finds its place again.
+    pub fn tree_scopes(
+        &self,
+        root: Option<&BudgetScope>,
+        depth: Option<u8>,
+    ) -> Vec<(Key, BudgetScope, Option<BudgetScope>)> {
+        let st = self.st();
+        let mut kids: BTreeMap<&Key, Vec<&Key>> = BTreeMap::new();
+        for (c, p) in &st.parent {
+            kids.entry(p).or_default().push(c);
+        }
+        let mut out = Vec::new();
+        let roots: Vec<Key> = match root {
+            Some(r) => vec![key(r)],
+            None => st
+                .scopes
+                .keys()
+                .filter(|k| !st.parent.contains_key(*k))
+                .cloned()
+                .collect(),
+        };
+        // an explicit stack: (key, level), children pushed in reverse so the least key is next
+        let mut stack: Vec<(Key, u8)> = roots.into_iter().rev().map(|k| (k, 0)).collect();
+        let mut seen = BTreeSet::new();
+        while let Some((k, level)) = stack.pop() {
+            if !seen.insert(k.clone()) {
+                continue;
+            }
+            let Some(scope) = st
+                .scopes
+                .get(&k)
+                .cloned()
+                .or_else(|| root.filter(|r| key(r) == k).cloned())
+            else {
+                continue;
+            };
+            let parent = st.parent.get(&k).and_then(|p| st.scopes.get(p)).cloned();
+            out.push((k.clone(), scope, parent));
+            if depth.is_none_or(|d| level < d) {
+                for c in kids.get(&k).into_iter().flatten().rev() {
+                    stack.push(((*c).clone(), level + 1));
+                }
+            }
+        }
+        out
+    }
+
+    /// SCOPE's node: its view, state and burn at NOW, and, for a run under a plan, its share of the plan's spend in
+    /// the plan's binding unit.
+    pub fn node(
+        &self,
+        scope: &BudgetScope,
+        parent: Option<&BudgetScope>,
+        label: String,
+        now: f64,
+    ) -> BudgetNode {
+        let v = self.view(scope);
+        let share = match (scope, parent) {
+            (BudgetScope::Run(_), Some(p @ BudgetScope::Plan(_))) => {
+                self.binding(p).and_then(|(unit, spent, _)| {
+                    let mine = v.spent.iter().find(|l| l.unit == unit)?.amount;
+                    (spent > 0.0).then_some((mine / spent).clamp(0.0, 1.0))
+                })
+            }
+            _ => None,
+        };
+        BudgetNode {
+            scope: scope.clone(),
+            parent: parent.cloned(),
+            label,
+            limits: v.limits,
+            spent: v.spent,
+            remaining: v.remaining,
+            state: self.state(scope),
+            burn_per_hour: self.burn(scope, now),
+            share_of_parent: share,
+        }
+    }
+
+    /// One flush: the events of every scope whose spend moved since the last flush, one each however many spends it
+    /// took (the hub calls it once a second).
+    pub fn flush(&self, now: f64) -> Vec<BudgetEvent> {
+        self.take_changed()
+            .iter()
+            .map(|s| self.event_of(s, now))
+            .collect()
+    }
+
+    /// SCOPE's `budget` event as of NOW.
+    pub fn event_of(&self, scope: &BudgetScope, now: f64) -> BudgetEvent {
+        let v = self.view(scope);
+        BudgetEvent {
+            scope: scope.clone(),
+            spent: v.spent,
+            remaining: v.remaining,
+            state: self.state(scope),
+            burn_per_hour: self.burn(scope, now),
+        }
+    }
+
     /// SCOPE's view: its limits, its spend, what remains.
     pub fn view(&self, scope: &BudgetScope) -> BudgetView {
         let st = self.st();
@@ -621,6 +819,11 @@ impl Budgets {
 
     /// AMOUNT of UNIT spent by SCOPE: it and every ancestor count it.  The limits it reached are returned.
     pub fn spend(&self, scope: &BudgetScope, unit: Unit, amount: f64) -> Vec<Hit> {
+        self.spend_at(scope, unit, amount, now())
+    }
+
+    /// [`Budgets::spend`] at time AT (the burn ring's clock).
+    pub fn spend_at(&self, scope: &BudgetScope, unit: Unit, amount: f64, at: f64) -> Vec<Hit> {
         if !(amount.is_finite() && amount > 0.0) {
             return Vec::new();
         }
@@ -634,6 +837,12 @@ impl Budgets {
                 .or_default()
                 .entry(unit)
                 .or_default() += amount;
+            let ring = st.ring.entry(c.clone()).or_default();
+            ring.push_back((at, unit, amount));
+            while ring.front().is_some_and(|(t, ..)| *t < at - RING_SPAN) {
+                ring.pop_front();
+            }
+            st.changed.insert(c.clone());
             hits.extend(reached(&mut st, &c, Some(unit)));
         }
         hits
@@ -853,6 +1062,103 @@ pub async fn get(f: &Front, _: &Caller, p: BudgetGetParams) -> Result<BudgetView
     Ok(f.core.budgets.view(&p.scope))
 }
 
+/// Nodes in a page of `budget/tree`.
+const TREE_PAGE: usize = 200;
+
+/// The slice of KEYS a page of SIZE after AFTER covers (the start when AFTER is none or unknown), and the `next` to ask
+/// for the page after it.
+fn page_of(
+    keys: &[&str],
+    after: Option<&str>,
+    size: usize,
+) -> (std::ops::Range<usize>, Option<String>) {
+    let start = after
+        .and_then(|a| keys.iter().position(|k| *k == a).map(|i| i + 1))
+        .unwrap_or(0);
+    let end = (start + size).min(keys.len());
+    let next = (end < keys.len() && end > start).then(|| keys[end - 1].to_owned());
+    (start..end, next)
+}
+
+/// The titles of the graph's specs, plans and tasks, by entity id.
+async fn titles(f: &Front) -> BTreeMap<String, String> {
+    f.writer
+        .db
+        .read(|c| {
+            let mut q = c.prepare(
+                "select id, coalesce(title, '') from entity where retired_tx is null and kind in ('spec', 'plan', 'task')",
+            )?;
+            let rows = q
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows.into_iter().collect())
+        })
+        .await
+        .unwrap_or_default()
+}
+
+pub async fn tree(f: &Front, _: &Caller, p: BudgetTreeParams) -> Result<BudgetTree, Error> {
+    let b = &f.core.budgets;
+    let all = b.tree_scopes(p.root.as_ref(), p.depth);
+    let titles = titles(f).await;
+    let names: BTreeMap<String, String> = f
+        .core
+        .agents
+        .live_sessions()
+        .iter()
+        .map(|s| {
+            (
+                s.id.to_string(),
+                s.snapshot().name.unwrap_or_else(|| s.id.to_string()),
+            )
+        })
+        .collect();
+    // "run N": a parent's runs in start order (the job ids sort by their start)
+    let mut runs: BTreeMap<Option<Key>, Vec<Key>> = BTreeMap::new();
+    for (k, s, parent) in &all {
+        if matches!(s, BudgetScope::Run(_)) {
+            runs.entry(parent.as_ref().map(key))
+                .or_default()
+                .push(k.clone());
+        }
+    }
+    for v in runs.values_mut() {
+        v.sort();
+    }
+    let label = |k: &Key, s: &BudgetScope, parent: &Option<BudgetScope>| -> String {
+        match s {
+            BudgetScope::Spec(i) | BudgetScope::Plan(i) | BudgetScope::Task(i) => titles
+                .get(i.as_str())
+                .filter(|t| !t.is_empty())
+                .cloned()
+                .unwrap_or_else(|| i.as_str().to_owned()),
+            BudgetScope::Project(i) => i.as_str().to_owned(),
+            BudgetScope::Run(_) => {
+                let n = runs
+                    .get(&parent.as_ref().map(key))
+                    .and_then(|v| v.iter().position(|x| x == k))
+                    .map_or(1, |i| i + 1);
+                format!("run {n}")
+            }
+            BudgetScope::Manager(i) | BudgetScope::Worker(i) => names
+                .get(i.as_str())
+                .cloned()
+                .unwrap_or_else(|| i.as_str().to_owned()),
+        }
+    };
+    let keys: Vec<&str> = all.iter().map(|(k, ..)| k.as_str()).collect();
+    let (range, next) = page_of(&keys, p.after.as_ref().map(|a| a.as_str()), TREE_PAGE);
+    let page: Vec<_> = all[range].iter().collect();
+    let at = now();
+    Ok(BudgetTree {
+        nodes: page
+            .into_iter()
+            .map(|(k, s, parent)| b.node(s, parent.as_ref(), label(k, s, parent), at))
+            .collect(),
+        next,
+    })
+}
+
 pub async fn set(f: &Front, _: &Caller, p: BudgetSetParams) -> Result<BudgetView, Error> {
     let b = &f.core.budgets;
     let hits = b.set(&p.scope, p.limits.into_inner());
@@ -903,6 +1209,19 @@ pub async fn run(f: Arc<Front>, mut notes: mpsc::UnboundedReceiver<Note>) {
             }
         }
         f.core.budgets.save();
+    }
+}
+
+/// Once a second, a `budget` event for every scope whose spend moved: a burst of spend is one event, the last value.
+pub async fn broadcast_changes(f: Arc<Front>) {
+    let mut tick = crate::clock::interval(std::time::Duration::from_secs(1));
+    loop {
+        tick.tick().await;
+        for e in f.core.budgets.flush(now()) {
+            f.broadcast("budget", serde_json::to_value(&e).unwrap_or(Value::Null));
+        }
+        // the map's items carry their budget: they read it again
+        f.writer.signals.map.notify_one();
     }
 }
 

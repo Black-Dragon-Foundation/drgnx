@@ -868,6 +868,11 @@ in the same transaction as the change they record:
   summary) and a merge into the job's branch (`status`).
 - **Cards, decisions and tasks** (`norn::write::{cards,decisions}`, `norn::tracker`): `card`, `question`, `answer`,
   `decision` and `task` rows.
+- **Budgets** (`budget.rs`): the `budget` event (`BudgetEvent`: `scope`, `spent`, `remaining`, `state` one of `ok`,
+  `nearing` from 80 % of the binding limit, `reached`, `none`, and `burn_per_hour`) goes to every subscriber once a
+  second for each scope whose spend moved (bursts coalesce, the last value wins; ancestors count). The burn is a
+  per-hour rate over the last hour from an in-memory ring (empty before ten minutes of spend; lost on restart). A
+  cost an agent reports is a number or `{"amount", "currency"}`: `budget::cost_amount` reads both, everywhere.
 - **Retention:** the hub's housekeeping runs the daily prune (`coord/prune`, `norn::write::prune`): by age once a
   day, and on every call the row cap.
 
@@ -1347,6 +1352,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
 | `budget/get` | user | `{scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
+| `budget/tree` | user | `{after?: string, depth?: natnum, root?: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{next?: string, nodes?: [BudgetNode]}` | no |
 | `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
 | `changes/close` | user | `{view: string}` | `boolean` | no |
@@ -1485,20 +1491,21 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `history/revert/preview` | user | `{decision?: integer, seq?: integer, session?: string}` | `RevertCard` | no |
 | `history/take` | user | `{from: string, hunks: [{path: string, theirs_end: integer, theirs_start: integer}], worktree: string}` | `{op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |
-| `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
+| `job/approve` | user | `{id: Id, limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}]}` | `JobSummary` | yes |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |
 | `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes |
 | `job/dismiss` | user | `{message: natnum}` | `boolean` | yes |
 | `job/order` | user | `{delta: Delta, task: TaskRef}` | `JobSummary` | yes |
-| `job/propose` | user | `{auto?: boolean, budget?: Usd, gate?: "review" \| "review+accept", plan: PlanRef, repo?: AbsPath}` | `JobSummary` | yes |
+| `job/propose` | user | `{auto?: boolean, gate?: "review" \| "review+accept", limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], plan: PlanRef, repo?: AbsPath}` | `JobSummary` | yes |
 | `job/reassign` | user | `{profile: string, task: TaskRef}` | `JobSummary` | yes |
 | `job/reply` | user | `{message: natnum, text: Prompt}` | `boolean` | yes |
-| `job/resume` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
+| `job/resume` | user | `{id: Id, limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}]}` | `JobSummary` | yes |
 | `job/start-task` | user | `{auto?: boolean, gate?: "review" \| "review+accept", n: TaskNo, plan: PlanRef}` | `JobSummary` | yes |
 | `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no |
 | `job/stop` | user | `{id: Id}` | `JobSummary` | yes |
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
+| `machines/move` | user | `{machine: string, target: string}` | `{card?: string, moved: boolean, said: string}` | yes |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
 | `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit" \| "huddles" \| "debug.read" \| "debug.probe" \| "debug.fork" \| "debug.live-eval" \| "debug.drive", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
@@ -1650,6 +1657,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
 | `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
 | `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
+| `work/target/set` | user | `{item: string, target_at?: number}` | `boolean` | yes |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
 | `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
@@ -2089,6 +2097,14 @@ send each personality's real shapes. A Claude Code subagent's steps (the `Task` 
 Edits have their own words (table in `runtime/conformance/src/mock_acp/mod.rs`): `provider:edit-stream`,
 `provider:pending-edit`, `provider:diff-hunks`, `provider:whole-diff`, `provider:native-edit` and `moves N [SECONDS]`.
 
+The step table's schema 13 (`norn::migrate13`) adds `machine`, `slots_used`, `slots_total` and the index
+`step_session_start (session, start)`. A step carries the machine it ran on (`Step.machine`; none: the hub's own or not
+known) and a machine-queue step the slots in use and in all when its wait began (`Step.slots`); a session's steps carry its machine, the hub's own (`work::machines::LOCAL`) until
+`Session::set_machine` says another (the placement's setter); `slots` stay empty, because nothing queues a session for a
+machine any more (`JobEvent::Queued` and `Admitted` are not sent: a job that finds the machine full is recorded as queued
+and its starter told at once, so no step waits in the queue). A roll-up carries `first` (the
+first step's start) and `last` (the last step's end, none while a step is open).
+
 ### The presence model
 
 Who is in which file, at which line, now (`work::presence`; agent system part 2 builds it, part 3's cursors, gutter
@@ -2292,7 +2308,10 @@ out, and sends the connection that shows it the view's model and rows.
   version}`. `view` is the editor's id for it: one editor can show two workspaces, or one at two widths, so the hub
   keeps state per (connection, view). `work/map/set {view, filters? | collapsed? | width_units? | density? | shown? |
   selected? | clear? | outline?}` answers `{version}`; an unknown view is `invalid-params`. `work/map/close {view}`
-  ends one; a connection's views end with it. A workspace no view shows is dropped. `version` counts the view's
+  ends one; a connection's views end with it. `work/target/set {item, target_at}` writes (null removes) a spec's or
+  plan's target date, seconds since the epoch, into the entity's `data.target_at`; the map reads the store again after
+  the write and the item's `fields.target_at` carries it (`vegvisir::GraphFact::Target`); a `task:` id or a
+  non-finite time is `invalid-params`, an id with no live entity answers false. A workspace no view shows is dropped. `version` counts the view's
   layouts and changes from the subscription's 1.
 - **Model and rows** ("The native view model" and "Rows" below). The subscription sends the view's model as
   `view-model` (a reset first: the items shown as nodes with their links, the edges among them, the lists the keys
@@ -3808,6 +3827,31 @@ watched while it runs. Every 250 ms the hub reads `FILE.plan.json` and then `FIL
 each that changed since the last look and holds a JSON object it broadcasts `exec-progress {id, file, plan}` or
 `{id, file, step}`; one last look runs before `exec-done`, so the final step is never lost. The editor's jobs take
 these events instead of watching and reading the files themselves.
+
+**Where a job runs, and moving it.** Each placement records why (`runners/queue.rs`, `why_placed`): a job whose
+machine was named says "pinned by you" (`Placement.by_user`: the user's connection named it, moved it, or set its
+session's preference) or "pinned by its starter"; otherwise the machine chosen and its estimate come first, then every
+other candidate with the reason it was passed over (held for the head, refused by admission here, a filter's refusal
+in `wait_text`'s words, or just its estimate): "r1: about 4 min, warm cache; local: every job slot of the machine is in
+use". The text is `Row.placed_why`, the `ExecRow`'s `placed_why` (absent while the job waits; a requeue clears it), and
+the map's `JobFact.why`; the Detail of a job's agent says "Runs on r1 · why: …".
+
+`machines/move {target, machine}` (user class only; `work/machines.rs`, `move_to`) answers `{moved, card?, said}`:
+
+- `session:ID`: the session's next jobs that name no machine are pinned to `machine` (`Queue::prefer`; a job that
+  machine can't take is placed as before). The choice is kept in `runtime.db` on the session's `asession` row
+  (column `machine`, migration 11; the row is upserted, so recording the session again keeps it) and comes back
+  after a hub restart with the queue's other state (`queue::kept`). A running turn is not moved.
+- `job:ID` of a waiting job: `Queue::move_job` pins it there (`by_user`) and the queue ticks; `moved: true`.
+- `job:ID` of a running job: nothing stops. The hub opens a `machine-move` card ("Restart make check on laptop? It
+  stops the run on desk", choices `restart` and `keep`) and answers its id. Only the card's Restart moves it
+  (`card_settled`): a job on a runner gets `attempts::Event::Move` (its attempt is cancelled there and requeued,
+  `Effect::Requeue` "moved by you", a late result kept as that attempt's); a job running here has no attempt to
+  requeue, so it is stopped and its start request (`Pending`) started again, pinned to the machine, as a new job.
+- The job's own machine is a no-op (`moved: false`). A machine the queue doesn't know (`no runner NAME`), a job that
+  runs here only, or a machine one of the placement filters refuses (trust, OS, features, the send and accept modes,
+  the matrix cell) is refused, `invalid-params` at `machine`; an unknown session or job at `target`. A runner that is
+  only benched, unreachable or draining is accepted: the job waits for it.
 
 ## Runners: the transport
 

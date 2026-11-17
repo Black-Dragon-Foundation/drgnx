@@ -30,10 +30,17 @@
   "Run START (a function that starts an ediff session from the selected editor tile) and check the layout, then quit.
 On a frame of its own, deleted after: the grid's frame parameters stay off the session's frame."
   (unless (display-graphic-p) (ert-skip "needs a graphical frame"))
-  (let ((frame (make-frame '((width . 160) (height . 50)))))
+  ;; well inside the monitor: a frame near the work area's size is maximized by mutter a while after it maps, which
+  ;; moved every window under the row; the grid fixture's 160 × 50 would be that size, so it is not applied
+  (let ((frame (make-frame '((width . 100) (height . 30)))))
     (unwind-protect
         (with-selected-frame frame
-          (drgnx-ui-grid-ediff--on-frame start))
+          ;; the echo area stays one line: a message wrapping in this narrower frame would take a line from every
+          ;; window under the row
+          (cl-letf (((symbol-function 'set-frame-size) #'ignore))
+            (let ((resize-mini-windows nil))
+              (message nil)
+              (drgnx-ui-grid-ediff--on-frame start))))
       (delete-frame frame))))
 
 (defun drgnx-ui-grid-ediff--settled (window)
@@ -59,14 +66,15 @@ the frame was made at)."
            (frames (frame-list))
            (outer (progn (select-window left) (drgnx-ui-grid-ediff--settled left)))
            (others (mapcar (lambda (w) (cons w (window-pixel-edges w))) (list right chat)))
-           (before (window-list nil 'nomini))
+           ;; this frame's windows, by name: the window manager may give the session's own frame the focus meanwhile
+           (before (window-list (window-frame left) 'nomini))
            (control nil))
       (funcall start)
       (redisplay t)
       (setq control (seq-find (lambda (b) (with-current-buffer b (derived-mode-p 'ediff-mode))) (buffer-list)))
       (should control)
       (should (equal (frame-list) frames))                          ; no frame for ediff
-      (let ((added (seq-difference (window-list nil 'nomini) before)))
+      (let ((added (seq-difference (window-list (window-frame left) 'nomini) before)))
         (should (>= (length added) 2))                              ; B and the control window, at least
         (dolist (w (cons left added))
           (should (drgnx-ui-grid-ediff--inside-p (window-pixel-edges w) outer)))
@@ -76,7 +84,7 @@ the frame was made at)."
         (should (equal (window-pixel-edges w) edges)))
       (with-current-buffer control (ediff-really-quit nil))
       (redisplay t)
-      (should (equal (window-list nil 'nomini) before))
+      (should (equal (window-list (window-frame left) 'nomini) before))
       (should (equal (window-pixel-edges left) outer))
       (pcase-dolist (`(,w . ,edges) others) (should (equal (window-pixel-edges w) edges))))))
 

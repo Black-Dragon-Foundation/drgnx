@@ -791,6 +791,9 @@ tokens, active and wall time, and cost, each as a range ("about 12–41 USD (est
   plans went past their high end, once nine finished plans were forecast; that total is what the Autonomous preset
   checks against its spend cell and the week. `forecast/accuracy` shows, per role and profile, how many tasks
   finished, the share that stayed within their p90, and the median of actual over p50.
+- **When each task runs.** Each task also has a start and a finish, in seconds from the run's start, as a middle and a
+  high end of their own: the tasks run on the job's slots in the order the runner takes them, a task starting after
+  the tasks it needs. The plan's wall time is the last finish of each simulated run, not the highest finish of any task.
 - **Wakes and the manager.** The wake line ("of which wakes: 1–3 cold, about 3 USD") is part of the total, not added to
   it. A manager's own spend, where history has one, shows beside the total.
 - **`usd` and `usd-est`.** On a gateway profile the cost is exact dollars (`usd`). On a subscription it is what the
@@ -964,6 +967,17 @@ when a subscription profile can run its tasks, a `usd-est` limit of the same amo
 counts what the gateway measured plus what the subscription's agents estimated, so "$20" caps the plan's dollars once,
 not $20 of each; the gateway may spend only what that sum leaves, and the card for the limit says it is an estimate
 ([jobs.md](jobs.md#routes-and-the-estimate)).
+
+A job takes its plan's limits when it starts or resumes, by unit: `job/propose`, `job/approve` and `job/resume` take
+`limits` (one per unit, at most five), so "$5" is `{amount: 5, unit: usd}` and "a share of the week" is
+`{amount: 0.15, unit: limit-share}`, which sets no dollar limit. Without `limits` the plan's stay as they are; an empty
+list clears them. `drgnx job ... --budget N` is the dollar limit. Only a `usd` limit on a plan a subscription can run
+becomes the joint pair with `usd-est`; every other unit is set as given.
+
+`budget/tree` lists the scopes as a tree (a project, its specs, plans, runs, tasks, managers and workers; 200 nodes a
+page, `after` asks for the next): each node has its limits, spend, what remains, its state (`ok`, `nearing` from 80 % of
+the binding limit, `reached`, `none`), the burn per hour and a label (the title, a session's name, "run N" in start
+order); a run under a plan also has `share_of_parent`, its part of the plan's spend in the plan's binding unit.
 
 Budgets nest. What a worker spends counts against the worker, its task, its run (one job), its plan, the plan's spec and
 the project, and what it may still spend is the least remaining over that chain (a worker a manager started counts

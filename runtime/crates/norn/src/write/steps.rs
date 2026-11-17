@@ -70,6 +70,10 @@ pub struct StepNew {
     pub log_version: Option<i64>,
     /// The agent conversation (ACP session id) the step ran in: a session can run several, one after a revert.
     pub acp: Option<String>,
+    /// The machine the step ran on (none: the hub's own, or not known).
+    pub machine: Option<String>,
+    /// For a step that waited on a machine's slot: the slots in use and in all when the wait began.
+    pub slots: Option<(i64, i64)>,
 }
 
 /// How a step ended.
@@ -122,7 +126,19 @@ pub fn open(tx: &WTx<'_>, new: StepNew) -> Result<i64, CoordError> {
             &new.acp,
         ),
     )?;
-    Ok(tx.sql().last_insert_rowid())
+    let id = tx.sql().last_insert_rowid();
+    if new.machine.is_some() || new.slots.is_some() {
+        tx.sql().execute(
+            "update step set machine = ?2, slots_used = ?3, slots_total = ?4 where id = ?1",
+            (
+                id,
+                &new.machine,
+                new.slots.map(|s| s.0),
+                new.slots.map(|s| s.1),
+            ),
+        )?;
+    }
+    Ok(id)
 }
 
 /// End step ID.  A step already closed, or none, is refused.
@@ -253,7 +269,64 @@ mod tests {
             snapshot: None,
             log_version: Some(3),
             acp: Some("acp-1".into()),
+            machine: None,
+            slots: None,
         }
+    }
+
+    /// Pattern D: a roll-up says when its steps began and ended: the first start and the last end, and no end while a
+    /// step is still open.
+    #[test]
+    fn rollup_has_first_start_and_last_end() {
+        let mut c = db7();
+        let tx = tx_of(&mut c);
+        for (start, end) in [(1.0, 2.0), (3.0, 5.0), (2.5, 3.5)] {
+            let id = open(&tx, new("s1", "task:a", StepClass::Tool, start)).unwrap();
+            close(
+                &tx,
+                id,
+                StepEnd {
+                    end,
+                    ..StepEnd::default()
+                },
+            )
+            .unwrap();
+        }
+        let r = rollup(tx.sql(), Scope::Session, "s1").unwrap();
+        assert_eq!((r.first, r.last), (Some(1.0), Some(5.0)));
+        open(&tx, new("s1", "task:a", StepClass::Think, 6.0)).unwrap();
+        let r = rollup(tx.sql(), Scope::Session, "s1").unwrap();
+        assert_eq!((r.first, r.last), (Some(1.0), None), "a step is open");
+        let none = rollup(tx.sql(), Scope::Session, "nobody").unwrap();
+        assert_eq!((none.first, none.last), (None, None));
+    }
+
+    /// Pattern D: a step keeps the machine it ran on, and a machine-queue step the slots in use and in all.
+    #[test]
+    fn a_step_carries_its_machine_and_its_slots() {
+        let mut c = db7();
+        let tx = tx_of(&mut c);
+        let mut own = new("s1", "task:a", StepClass::Tool, 1.0);
+        own.machine = Some("desktop".into());
+        open(&tx, own).unwrap();
+        let mut queued = new("s1", "task:a", StepClass::MachineQueue, 2.0);
+        queued.machine = Some("desktop".into());
+        queued.slots = Some((3, 4));
+        open(&tx, queued).unwrap();
+        open(&tx, new("s1", "task:a", StepClass::Think, 3.0)).unwrap();
+        let rows = for_session(tx.sql(), "s1", 0).unwrap();
+        let got: Vec<_> = rows
+            .iter()
+            .map(|s| (s.machine.clone(), s.slots_used, s.slots_total))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (Some("desktop".into()), None, None),
+                (Some("desktop".into()), Some(3), Some(4)),
+                (None, None, None),
+            ]
+        );
     }
 
     /// Pattern D: a revert marks the session's steps after its point; the steps before it, another session's, and the

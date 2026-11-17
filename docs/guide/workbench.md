@@ -346,7 +346,14 @@ in a tool tile — a dock, the panel, the right side — a new tile beside the w
 any pane, which moves there from its dock), Close Tile (palette · `C-x 0` · `SPC w c`; an editor group closes and the
 last one stays, a tool tile hides), Full-Size Tile (`C-k C-m` · `C-x w m`, also `C-x 1` · `C-w o`, `C-w _`, `C-w |`:
 this tile alone, its tab row saying "Full size · 1 of N · KEY back"; again, or any other tile command, puts every tile
-back exactly where it was; Zen is the same plus centred text), Close All Editors in Group (`C-k w`; the
+back exactly where it was; Zen is the same plus centred text), **Moving tiles** (the table in the key guide):
+Focus Tile, Move Tile, Swap Tile and Stack Tile, each Left/Right/Up/Down by the tiles' edges (across the docks); a
+moved tile takes half of the one it lands beside and gives its space to the one it leaves, a swap keeps the sizes where
+they are, a stack puts one tile's tabs onto another's (editors onto editors, panes onto a tile of panes); Unstack the
+Shown Tab puts it into a new tile beside, on the side with more room; Resize Tiles (`C-k r` · `C-x w z` · `SPC w z`)
+lets the arrows move the tile's edges one step each (Resize Tile Left/Right/Up/Down, in Resize Tiles' own map, so a profile or your keys.eld can rebind them) until any other key, which then does what it does. With no room
+for a move or a split nothing changes and the echo area says "No room there". A docked tile moved is no dock's any
+more, Close All Editors in Group (`C-k w`; the
 palette in the Emacs and Vim profiles; its tabs go, the files stay open; the group closes, or, the last one, shows
 `*scratch*`), Focus Group 1–3 (`C-1`–`C-3` · `C-x o` · `SPC 1`–`SPC 3`; one past the last makes a group to the right),
 Move Editor into Next Group (`C-M-<right>` · palette · `SPC w m`; a group left without tabs closes, as in VS Code),
@@ -697,7 +704,8 @@ What "nothing moves on its own" means, each pinned by a test in a GUI session wi
 | I8 | 50 commands that display buffers: no split, no resize, no frame, nothing unrouted | `drgnx-inv/i8-fuzz-of-fifty-commands` (`test/fixtures/fuzz-commands.eld`) |
 | I9 | No window moved from a timer or a window change hook except the caller's own | every report's `guard_violations` = 0 |
 | I10 | Each step settles within 250 ms, without oscillation | `drgnx-inv/i1-i9-i10-explorer-and-buffers-flows` |
-| I11 | Under a tiling window manager, a resize the WM makes goes to the editors: docks and panel keep their pixel size | `drgnx-wm/i11-docks-keep-their-size-when-the-wm-resizes`, `drgnx-wm/popups-under-tiling-leave-no-trace` (`test/live/drgnx-tiling-test.el`, sway tier: `bin/drgnx test --container --ui --compositor sway`) |
+| I11 | Under a tiling window manager, a resize the WM makes goes to the editors: docks and panel keep their pixel size | `drgnx-wm/i11-docks-keep-their-size-when-the-wm-resizes` (`test/live/drgnx-tiling-test.el`, sway tier: `bin/drgnx test --container --ui --compositor sway`); popups leave no trace on every compositor: `drgnx-ui-grid-popups/popups-over-tiles-leave-no-trace` (`test/ui/grid-popups-gui-test.el`, tagged `:compositor`) |
+| I11 (moves) | A tile move, swap or stack by keys changes at most three tiles: the one moved, the one it leaves its space to and the one it lands on | `drgnx-inv/i11-moves-touch-three-tiles-at-most` |
 | I12 | Across monitors, drgnx moves a window only when asked (Move to Monitor, Next, Previous) and in the restore of auxiliary windows; a restore moves no other window and no other app | `drgnx-wm/move-to-monitor-2-and-back`, `drgnx-wm/a-fullscreen-window-stays-fullscreen-on-its-new-monitor`, `drgnx-wm/restore-puts-the-aux-window-back-on-its-monitor`, `drgnx-wm/a-missing-monitor-on-restore-is-skipped`, `drgnx-wm/a-restore-under-sway-moves-nothing-else`, `drgnx-wm/mutter-explains-and-moves-nothing` (`test/live/drgnx-wm-test.el`; see Tests) |
 
 Two Emacs behaviours the workbench corrects so that these hold: `balance-windows` on a whole frame (finder calls

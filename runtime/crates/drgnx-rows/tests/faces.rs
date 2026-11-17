@@ -35,6 +35,7 @@ fn kit_tables_answer() {
         kit_gen::geom(CompId::Row, &[]),
         kit_gen::geom(CompId::Row, &["list", "comfortable"])
     );
-    assert_eq!(kit_gen::face(CompId::Row, &[]), FaceId::Default);
+    // the row's own face: the UI font (its binding of ()), no colours
+    assert_eq!(kit_gen::face(CompId::Row, &[]), FaceId::KitRow);
     assert_eq!(kit_gen::label(CompId::Row, &[]), None);
 }

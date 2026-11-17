@@ -458,3 +458,203 @@ fn an_old_per_job_plan_scope_becomes_its_run() {
     );
     assert_eq!(c.limits(&run), vec![lim(20.0, Unit::Usd)]);
 }
+
+/// An agent's usage update carries its cost as a number or as `{"amount", "currency"}`: one reader takes both, and
+/// nothing else.
+#[test]
+fn a_cost_is_a_number_or_an_object_with_an_amount() {
+    use serde_json::json;
+    assert_eq!(cost_amount(&json!(0.25)), Some(0.25));
+    assert_eq!(
+        cost_amount(&json!({"amount": 0.01, "currency": "USD"})),
+        Some(0.01)
+    );
+    for bad in [
+        json!(null),
+        json!("0.5"),
+        json!({"currency": "USD"}),
+        json!({"amount": "x"}),
+        json!([0.1]),
+    ] {
+        assert_eq!(cost_amount(&bad), None, "{bad}");
+    }
+}
+
+fn run_scope(id: &str) -> BudgetScope {
+    serde_json::from_value(json!({"run": id})).unwrap()
+}
+
+#[test]
+fn burn_is_the_hourly_rate_after_ten_minutes_of_spend() {
+    let b = Budgets::default();
+    let s = run_scope("job-1");
+    b.spend_at(&s, Unit::Usd, 1.0, 1000.0);
+    // under ten minutes seen: nothing yet
+    assert!(b.burn(&s, 1300.0).is_empty());
+    b.spend_at(&s, Unit::Usd, 1.0, 1600.0);
+    // 2 usd over 1200 s is 6 usd an hour
+    let burn = b.burn(&s, 2200.0);
+    assert_eq!(burn.len(), 1);
+    assert_eq!(burn[0].unit, Unit::Usd);
+    assert!((burn[0].amount - 6.0).abs() < 1e-9, "{burn:?}");
+    // an hour on, the old readings left the ring
+    assert!(b.burn(&s, 1000.0 + 3700.0 + 3600.0).is_empty());
+}
+
+#[test]
+fn a_scope_nears_at_eighty_percent_of_its_binding_limit() {
+    let b = Budgets::default();
+    let s = run_scope("job-2");
+    assert_eq!(b.state(&s), BudgetState::None);
+    b.set(
+        &s,
+        vec![Limit {
+            amount: 10.0,
+            unit: Unit::Usd,
+        }],
+    );
+    assert_eq!(b.state(&s), BudgetState::Ok);
+    b.spend(&s, Unit::Usd, 7.9);
+    assert_eq!(b.state(&s), BudgetState::Ok);
+    b.spend(&s, Unit::Usd, 0.2);
+    assert_eq!(b.state(&s), BudgetState::Nearing);
+    b.spend(&s, Unit::Usd, 2.0);
+    assert_eq!(b.state(&s), BudgetState::Reached);
+}
+
+#[test]
+fn changes_are_taken_once_with_the_ancestors() {
+    let b = Budgets::default();
+    let (p, r) = (run_scope("p"), run_scope("r"));
+    b.link(&r, &p);
+    b.spend(&r, Unit::Usd, 1.0);
+    b.spend(&r, Unit::Usd, 1.0);
+    let got = b.take_changed();
+    assert_eq!(got.len(), 1 + 1, "{got:?}");
+    assert!(b.take_changed().is_empty());
+}
+
+#[test]
+fn the_binding_unit_is_the_least_remaining_share() {
+    let b = Budgets::default();
+    let s = run_scope("job-3");
+    b.set(
+        &s,
+        vec![
+            Limit {
+                amount: 100.0,
+                unit: Unit::Tokens,
+            },
+            Limit {
+                amount: 10.0,
+                unit: Unit::Usd,
+            },
+        ],
+    );
+    b.spend(&s, Unit::Tokens, 50.0); // half left
+    b.spend(&s, Unit::Usd, 9.0); // a tenth left
+    assert_eq!(b.binding(&s), Some((Unit::Usd, 9.0, 10.0)));
+    b.spend(&s, Unit::Tokens, 45.0); // a twentieth left
+    assert_eq!(b.binding(&s).map(|(u, ..)| u), Some(Unit::Tokens));
+}
+
+#[test]
+fn events_coalesce_to_one_a_second_per_scope() {
+    // ten spends inside one second: one event for the run and one for its plan, the last value; the next second,
+    // with nothing spent, none
+    let b = Budgets::default();
+    let (p, r) = (run_scope("p2"), run_scope("r2"));
+    b.link(&r, &p);
+    for _ in 0..10 {
+        b.spend(&r, Unit::Usd, 0.1);
+    }
+    let events = b.flush(0.0);
+    assert_eq!(events.len(), 2, "{events:?}");
+    let run = events.iter().find(|e| e.scope == r).unwrap();
+    assert!((run.spent[0].amount - 1.0).abs() < 1e-9);
+    assert!(b.flush(1.0).is_empty(), "nothing moved: no event");
+    b.spend(&r, Unit::Usd, 0.1);
+    assert_eq!(b.flush(2.0).len(), 2);
+}
+
+fn scope_of(kind: &str, id: &str) -> BudgetScope {
+    serde_json::from_value(json!({ kind: id })).unwrap()
+}
+
+#[test]
+fn tree_walks_project_to_worker() {
+    let b = Budgets::default();
+    let (proj, spec, plan) = (
+        scope_of("project", "proj"),
+        scope_of("spec", "spec:s"),
+        scope_of("plan", "plan:p"),
+    );
+    let (run, worker) = (run_scope("job-1"), scope_of("worker", "w1"));
+    b.link(&spec, &proj);
+    b.link(&plan, &spec);
+    b.link(&run, &plan);
+    b.link(&worker, &run);
+    let t = b.tree_scopes(None, None);
+    let order: Vec<_> = t.iter().map(|(_, s, _)| s.clone()).collect();
+    assert_eq!(
+        order,
+        vec![
+            proj.clone(),
+            spec.clone(),
+            plan.clone(),
+            run.clone(),
+            worker.clone()
+        ]
+    );
+    assert_eq!(t[0].2, None);
+    assert_eq!(t[4].2.as_ref(), Some(&run));
+    // a root and a depth cut the walk
+    let sub: Vec<_> = b
+        .tree_scopes(Some(&plan), Some(1))
+        .into_iter()
+        .map(|(_, s, _)| s)
+        .collect();
+    assert_eq!(sub, vec![plan, run]);
+}
+
+#[test]
+fn a_run_carries_its_share_of_the_plan() {
+    let b = Budgets::default();
+    let plan = scope_of("plan", "plan:p");
+    let (r1, r2) = (run_scope("job-1"), run_scope("job-2"));
+    b.link(&r1, &plan);
+    b.link(&r2, &plan);
+    b.set(
+        &plan,
+        vec![Limit {
+            amount: 100.0,
+            unit: Unit::Usd,
+        }],
+    );
+    b.spend(&r1, Unit::Usd, 6.0);
+    b.spend(&r2, Unit::Usd, 4.0);
+    // an unrelated unit must not dilute the share
+    b.spend(&r1, Unit::Tokens, 1000.0);
+    let n1 = b.node(&r1, Some(&plan), "run 1".into(), 0.0);
+    let n2 = b.node(&r2, Some(&plan), "run 2".into(), 0.0);
+    assert!((n1.share_of_parent.unwrap() - 0.6).abs() < 1e-9, "{n1:?}");
+    assert!((n2.share_of_parent.unwrap() - 0.4).abs() < 1e-9);
+    // a plan has none, and neither has a run with no plan above it
+    assert_eq!(b.node(&plan, None, "p".into(), 0.0).share_of_parent, None);
+    assert_eq!(b.node(&r1, None, "r".into(), 0.0).share_of_parent, None);
+}
+
+#[test]
+fn tree_pages_with_after() {
+    let keys: Vec<String> = (0..5).map(|i| format!("k{i}")).collect();
+    let ks: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let (r, next) = page_of(&ks, None, 2);
+    assert_eq!((r, next.as_deref()), (0..2, Some("k1")));
+    let (r, next) = page_of(&ks, Some("k1"), 2);
+    assert_eq!((r, next.as_deref()), (2..4, Some("k3")));
+    let (r, next) = page_of(&ks, Some("k3"), 2);
+    assert_eq!((r, next), (4..5, None));
+    // an exact fit ends without a next
+    let (r, next) = page_of(&ks, None, 5);
+    assert_eq!((r, next), (0..5, None));
+}

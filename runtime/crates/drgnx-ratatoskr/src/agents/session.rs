@@ -1054,6 +1054,8 @@ pub struct Session {
     writer: crate::coord::Writer,
     /// The plan and project each session works under (the matrix's project and plan layers).
     scopes: crate::runner::Scopes,
+    /// The machine the session's process runs on, stamped on each step ([`Session::set_machine`]).
+    machine: Arc<Mutex<String>>,
     budgets: crate::budget::Budgets,
     /// The token of the session's gateway registration (a gateway profile).
     gateway: Mutex<Option<String>>,
@@ -2399,6 +2401,7 @@ fn assemble(
     let (done, done_rx) = tokio::sync::mpsc::unbounded_channel();
     let (steps, rx) = tokio::sync::mpsc::unbounded_channel();
     let flow = Arc::new(StepFlow::default());
+    let machine = Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string()));
     let ctx = StepCtx {
         flow: flow.clone(),
         session: i.id.clone(),
@@ -2407,6 +2410,7 @@ fn assemble(
         provider: step_provider(profile),
         cwd: i.cwd.clone(),
         acp: Some(l.acp.0.to_string()),
+        machine: machine.clone(),
         history: front
             .dirs
             .get()
@@ -2522,6 +2526,7 @@ fn assemble(
         settings: front.settings.clone(),
         writer: front.writer.clone(),
         scopes: front.core.runs.scopes(),
+        machine,
         budgets: front.core.budgets.clone(),
         gateway: Mutex::new(l.gateway.clone()),
         net: Mutex::new(l.net),
@@ -3257,6 +3262,8 @@ struct StepCtx {
     cwd: PathBuf,
     /// The agent conversation its steps run in.
     acp: Option<String>,
+    /// The machine its process runs on (the hub's own, `work::machines::LOCAL`, until [`Session::set_machine`]).
+    machine: Arc<Mutex<String>>,
     /// The projects' edit histories and the hub's state folder, to name the record a step anchors (none: a test).
     history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
 }
@@ -3298,6 +3305,10 @@ fn step_row(c: &ClosedStep, sink: &StepSink, ctx: &StepCtx) -> StepRow {
         snapshot: None,
         log_version: None,
         acp: ctx.acp.clone(),
+        machine: Some(lock(&ctx.machine).clone()),
+        // no slots: nothing queues a session for a machine any more (`exec::JobEvent`: Queued and Admitted are not
+        // sent), so no step waits on one
+        slots: None,
     };
     let end = table::StepEnd {
         end: c.end,
@@ -3465,6 +3476,8 @@ async fn write_steps(
                 head,
                 history_op: history_op.map(|op| op as u64),
                 undone_by: None,
+                machine: None,
+                slots: None,
                 revertible: history_op.is_some(),
                 call: c.open.tool_id.clone(),
                 hooks: Vec::new(),
@@ -3808,6 +3821,15 @@ fn named_rels(cwd: &Path, c: &ClosedStep) -> Vec<String> {
 /// The newest record of the edit history this session caused at or before END: what a revert to the step restores the
 /// text to; with STEP, only a record that step caused.  None when the session has no history (a folder that is no git
 /// worktree, a test, a history that fails).
+/// The cost TOTAL a `usage_update` carries (a number, or `{"amount", "currency"}`): what the budget books; none for any
+/// other update.
+fn usage_cost_total(update: &Value) -> Option<f64> {
+    update
+        .get("cost")
+        .and_then(crate::budget::cost_amount)
+        .filter(|_| update.get("sessionUpdate") == Some(&json!("usage_update")))
+}
+
 async fn newest_record(ctx: &StepCtx, end: f64, step: Option<i64>) -> Option<i64> {
     let (hubs, state) = ctx.history.clone()?;
     let (cwd, sid) = (ctx.cwd.clone(), ctx.session.clone());
@@ -3844,8 +3866,12 @@ async fn insert_row(db: &urdr::Handle, s: &Session) {
     let r = db
         .write(move |c| {
             c.execute(
-                "insert or replace into asession(sid, name, profile, role, cwd, task, job, acp, enforced, parent, at) \
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                // an upsert, not a replace: the row keeps what others set on it (the machine the user moved it to)
+                "insert into asession(sid, name, profile, role, cwd, task, job, acp, enforced, parent, at) \
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) on conflict(sid) do update set \
+                 name = excluded.name, profile = excluded.profile, role = excluded.role, cwd = excluded.cwd, \
+                 task = excluded.task, job = excluded.job, acp = excluded.acp, enforced = excluded.enforced, \
+                 parent = excluded.parent, at = excluded.at",
                 (sid, name, profile, role, cwd, task, job, acp, i64::from(enforced), parent, at),
             )?;
             Ok(())
@@ -4408,11 +4434,7 @@ impl Session {
                             );
                             return;
                         }
-                        if let Some(total) = v
-                            .pointer("/cost/amount")
-                            .and_then(Value::as_f64)
-                            .filter(|_| v.get("sessionUpdate") == Some(&json!("usage_update")))
-                        {
+                        if let Some(total) = usage_cost_total(&v) {
                             let booked = self.budgets.spend_total_in(
                                 &self.scope(),
                                 "usd-est",
@@ -5701,6 +5723,17 @@ impl Session {
             self.stop_turn();
         }
         n
+    }
+
+    /// The machine the session's process runs on: `work::machines::LOCAL` (the hub's own) from the start.
+    pub fn machine(&self) -> String {
+        lock(&self.machine).clone()
+    }
+
+    /// Say where the session's process runs (a machine of the registry): the steps written from now on carry it
+    /// (`Step.machine`).  The hub's own machine until a placement says otherwise.
+    pub fn set_machine(&self, machine: &str) {
+        *lock(&self.machine) = machine.to_owned();
     }
 
     /// The session's job waits for a machine (ON), or got one.
@@ -7248,6 +7281,29 @@ mod tests {
     }
 
     /// A cost reading TOTAL of conversation CONV, as `Session::handle` books it: the budget's delta is also the turn's.
+    #[test]
+    fn a_usage_update_books_its_cost_as_a_number_or_an_object() {
+        let upd = |cost: Value| json!({"sessionUpdate": "usage_update", "used": 1, "cost": cost});
+        assert_eq!(usage_cost_total(&upd(json!(0.25))), Some(0.25));
+        assert_eq!(
+            usage_cost_total(&upd(json!({"amount": 0.01, "currency": "USD"}))),
+            Some(0.01)
+        );
+        // another kind of update, or no cost, books nothing
+        let other = json!({"sessionUpdate": "agent_message_chunk", "cost": {"amount": 1.0}});
+        assert_eq!(usage_cost_total(&other), None);
+        assert_eq!(
+            usage_cost_total(&json!({"sessionUpdate": "usage_update"})),
+            None
+        );
+        // and the booking itself reads the object's amount through the budget
+        let b = Budgets::default();
+        let mut st = State::new();
+        let total = usage_cost_total(&upd(json!({"amount": 0.10, "currency": "USD"}))).unwrap();
+        read_cost(&b, &mut st, "c1", total);
+        assert!((st.take_turn_cost().unwrap() - 0.10).abs() < 1e-9);
+    }
+
     fn read_cost(b: &Budgets, st: &mut State, conv: &str, total: f64) {
         let scope: BudgetScope = serde_json::from_value(json!({"worker": "w1"})).unwrap();
         let booked = b.spend_total_in(&scope, "usd-est", conv, Unit::UsdEst, total);
@@ -7488,6 +7544,77 @@ mod tests {
         assert_eq!(st.closed[1].open.tool_kind.as_deref(), Some("read"));
     }
 
+    /// A step's row carries the machine its session's process runs on: the hub's own to start with, and what
+    /// `set_machine` says after.
+    #[tokio::test]
+    async fn a_steps_row_carries_the_sessions_machine() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, _seen) = tokio::sync::broadcast::channel(4);
+        let machine = Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string()));
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: None,
+            agent: "mock".into(),
+            provider: None,
+            cwd: PathBuf::new(),
+            acp: None,
+            machine: machine.clone(),
+            history: None,
+        };
+        let sink = StepSink {
+            writer,
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+            predict: None,
+        };
+        let closed = ClosedStep {
+            open: OpenStep {
+                class: StepClass::Think,
+                start: 1.0,
+                tool: None,
+                tool_kind: None,
+                tool_id: None,
+                message_id: None,
+                key: 0,
+                mcp: false,
+                parent_tool: None,
+            },
+            end: 2.0,
+            turn_id: None,
+            tokens_in: 0,
+            tokens_out: 0,
+            cache_read: 0,
+            cache_write: 0,
+            cost: None,
+            detail: None,
+            command: None,
+            context: None,
+            before: None,
+            call_end: None,
+            diffs: Vec::new(),
+            cell: None,
+        };
+        let (row, _, _) = step_row(&closed, &sink, &ctx);
+        assert_eq!(row.machine.as_deref(), Some("local"));
+        assert_eq!(row.slots, None, "nothing queues a session for a machine");
+        *lock(&machine) = "desktop".into();
+        let (row, _, _) = step_row(&closed, &sink, &ctx);
+        assert_eq!(row.machine.as_deref(), Some("desktop"));
+    }
+
     #[tokio::test]
     async fn closed_steps_reach_the_step_table_in_order_and_are_announced() {
         let dir = tempfile::tempdir().unwrap();
@@ -7506,6 +7633,7 @@ mod tests {
             provider: None,
             cwd: PathBuf::new(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: None,
         };
         let sink = StepSink {
@@ -7615,6 +7743,7 @@ mod tests {
             provider: None,
             cwd: PathBuf::new(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: None,
         };
         let sink = StepSink {
@@ -7694,6 +7823,7 @@ mod tests {
             provider: None,
             cwd: PathBuf::new(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: None,
         };
         let sink = StepSink {
@@ -7796,6 +7926,7 @@ mod tests {
             provider: None,
             cwd: work.clone(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: Some((hubs.clone(), state)),
         };
         let sink = StepSink {
@@ -7902,6 +8033,7 @@ mod tests {
             provider: None,
             cwd: work.clone(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: Some((hubs.clone(), state)),
         };
         let sink = StepSink {
@@ -8008,6 +8140,7 @@ mod tests {
             provider: None,
             cwd: wt.clone(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -8096,6 +8229,7 @@ mod tests {
             provider: None,
             cwd: wt.clone(),
             acp: None,
+            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
             history: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

@@ -1140,6 +1140,14 @@ Recorded runs' hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/de
 percentile). It is `#[ignore]`d and measures and prints; run it optimized and alone on a pinned host:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_record -- --ignored --nocapture --test-threads 1`.
 
+The budget event's hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/budget_event.rs`: 30 agents spending ten times
+a second under 3 runs and a plan; a scope has at most one `budget` event a second (`budget-event`, 1) and one flush costs
+at most 4 ms at the 95th percentile (`budget-event-patch`). Run:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench budget_event -- --ignored --nocapture --test-threads 1`.
+
+The budget tree's hub row is the same bench's second test, `budget_tree`: 500 scopes, the first page of 200 nodes built
+(`tree_scopes` and `node`) within 20 ms (`budget-tree-open`, `:first-page`).
+
 Inline values' hub row is the bench `runtime/crates/drgnx-ratatoskr/benches/debug_inline.rs`: `debug-inline`, a stop's
 values for a 2,000-line Python file stopped in a 200-line function with 42 variables, the parse cached (at most 8 ms at
 the 95th percentile; the first parse is printed too). It is `#[ignore]`d and measures and prints:

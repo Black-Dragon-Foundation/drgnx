@@ -960,7 +960,7 @@ async fn a_revision_after_the_job_started_makes_no_second_job() {
     .await;
     let job = job_of(&live);
     let user = crate::runner::user();
-    let approve: runstav::methods::jobs::WithBudget =
+    let approve: runstav::methods::jobs::WithLimits =
         serde_json::from_value(json!({ "id": job })).unwrap();
     crate::runner::approve(&f, &user, approve).await.unwrap();
     feed(

@@ -72,6 +72,24 @@ Once a component lands, it owns its role, and the old ways of drawing that role 
   A branch merged later adds its counts in its merge commit.
 - **Aliases.** `(drgnx-ui-kit-define-aliases)`, called by `ui/look`'s setup, makes each replaced face inherit its kit face. It sets the default spec to `((t :inherit KIT-FACE))` through `drgnx-module-face-spec`. The `defface` stays where it is, so a user's customization of the old name still applies. drgnx's themes stop styling a face once its component has landed (`drgnx-ui-kit-replaced-faces`).
 
+## The state table everywhere
+
+`etc/ui/components.eld`'s `state-table` is the one source of selection, hover, pressed, focus and disabled.  In Lisp
+`drgnx-ui-kit-state-face` names a state's semantic face and `drgnx-ui-kit-row-face` a row's face in that state (the
+rounded inside box of `drgnx-ui-kit-row-box`, cached per state and scale; `drgnx-wb-row-box` calls it).  A selected
+row is `drgnx-row-selected`: the inactive selection, remapped to `drgnx-selected` by `drgnx-ui-kit-focus-remap`
+(buffer-local `window-selection-change-functions`, turned on by every view attach) while the list's window is the
+selected one.  The row component `:replaces` the old per-view selection faces, so the themes drop them and the lint
+counts what is left.  On a terminal the states take their `:tty` forms (`drgnx-theme--terminal-faces`): selected and
+focus inverse, the inactive selection underlined, hover nothing, disabled dim.  Checked by
+`drgnx-ui-kit/every-selected-face-reads-the-state-table`, `drgnx-ui-kit/unfocused-list-shows-sel-inactive`,
+`drgnx-tty-colours/selection-is-inverse-and-unfocused-underlined` and the sheet `drgnx-kit-sheet/state-table` (each
+state's fill, no edge on a hovered or selected row).
+
+A row's twisty and its icon (`:icon`, a file kind or a folder) are images where the frame draws icons (the hub's
+`KitEnv::icons`, Lisp's `drgnx-ui-kit--icons` bound by `drgnx-ui-kit-string`), each followed by the row's `:gap`
+(6 px), at `kit::ICON_PX` (16); elsewhere their glyphs and a space, and an icon with no glyph is left out.
+
 ## The catalogue and the sheets
 
 **Design: Component Catalogue** (`design-component-catalogue`, `modules/ui/drgnx-kit-catalogue.el`) opens

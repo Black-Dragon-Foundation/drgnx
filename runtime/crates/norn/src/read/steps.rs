@@ -39,6 +39,11 @@ pub struct Step {
     pub history_op: Option<i64>,
     /// The revert record that abandoned the step.
     pub undone_by: Option<i64>,
+    /// The machine the step ran on (none: the hub's own, or not known).
+    pub machine: Option<String>,
+    /// A machine-queue step: the slots in use and in all when the wait began.
+    pub slots_used: Option<i64>,
+    pub slots_total: Option<i64>,
 }
 
 /// SESSION's steps with `seq` above SINCE_SEQ, in order.
@@ -89,7 +94,7 @@ fn query(
     let mut st = conn.prepare(&format!(
         "select id, session, task, plan, project, agent, provider, seq, class, start, end, tool, tool_kind, \
          message_id, turn_id, snapshot, log_version, tokens_in, tokens_out, cache_read, cache_write, cost, \
-         cost_unit, acp, head, history_op, undone_by from step where {col} = ?1 and {key} {cmp} ?2 order by {key}{dir} limit ?3",
+         cost_unit, acp, head, history_op, undone_by, machine, slots_used, slots_total from step where {col} = ?1 and {key} {cmp} ?2 order by {key}{dir} limit ?3",
     ))?;
     let rows = st.query_map((id, since, limit), |r| {
         let class: String = r.get(8)?;
@@ -121,6 +126,9 @@ fn query(
             head: r.get(24)?,
             history_op: r.get(25)?,
             undone_by: r.get(26)?,
+            machine: r.get(27)?,
+            slots_used: r.get(28)?,
+            slots_total: r.get(29)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -150,6 +158,9 @@ pub struct Rollup {
     pub secs_by_class: BTreeMap<String, f64>,
     pub cost_by_unit: BTreeMap<String, f64>,
     pub tokens: Tokens,
+    /// The first step's start and the last step's end (none while a step is open: nothing has ended yet).
+    pub first: Option<f64>,
+    pub last: Option<f64>,
 }
 
 /// The roll-up of the steps of SCOPE ID.
@@ -182,6 +193,15 @@ pub fn rollup(conn: &Tx, scope: Scope, id: &str) -> Result<Rollup, CoordError> {
         out.tokens.cache_read += t[2];
         out.tokens.cache_write += t[3];
     }
+    let (first, last, open): (Option<f64>, Option<f64>, i64) = conn.query_row(
+        &format!(
+            "select min(start), max(end), coalesce(sum(end is null), 0) from step where {col} = ?1"
+        ),
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    out.first = first;
+    out.last = if open == 0 { last } else { None };
     let mut st = conn.prepare(&format!(
         "select cost_unit, sum(cost) from step where {col} = ?1 and cost is not null and cost_unit is not null \
          group by cost_unit"

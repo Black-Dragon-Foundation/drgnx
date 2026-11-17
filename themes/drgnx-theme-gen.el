@@ -465,20 +465,29 @@ faces a landed kit component replaces (`drgnx-ui-kit-replaced-faces'): they inhe
   (lambda (name) (funcall tok (if (memq name '(gap panel)) 'editor name))))
 
 (defconst drgnx-theme--terminal-faces
-  '((region :inverse-video t :extend t))
+  '((region :inverse-video t :extend t)
+    ;; the kit's state table on a terminal (etc/ui/components.eld :tty): selected and focus inverse, the inactive
+    ;; selection underlined with no fill and no bold, hover nothing, disabled dim
+    (drgnx-selected :inverse-video t :extend t)
+    (drgnx-selected-inactive :underline t :weight normal)
+    (drgnx-hover :inherit nil)
+    (drgnx-focus :inverse-video t)
+    (drgnx-text-disabled :inherit shadow :weight light))
   "Faces drawn without a colour on a terminal frame: the selection's tint is too close to the editor's colour for a
-terminal to tell apart (Emacs then blinks a copy, as for an unhighlighted region), so there it is inverse video.")
+terminal to tell apart (Emacs then blinks a copy, as for an unhighlighted region), so there it is inverse video; the
+kit's states take their terminal forms (`drgnx-ui-kit-state' :tty).")
 
 (defun drgnx-theme--specs (variant)
   "The arguments of `custom-theme-set-faces' for VARIANT: (FACE SPEC)…
 A true-colour clause first, then one for every other display with the terminal tier; one clause when they agree.
-A face of `drgnx-theme--terminal-faces' gets its terminal attributes in a first clause for every terminal."
+A face of `drgnx-theme--terminal-faces' gets its terminal attributes in a first clause for every terminal that shows
+colours (not batch Emacs's frame, which has none: tests there read the graphical values)."
   (let ((full (drgnx-theme--faces variant (lambda (name) (drgnx-look-token name variant))))
         (tty (drgnx-theme--faces variant (drgnx-theme--tty-token (lambda (name) (drgnx-look-token name variant))))))
     (cl-mapcar (lambda (f g)
                  (list (car f)
                        (append (when-let* ((term (cdr (assq (car f) drgnx-theme--terminal-faces))))
-                                 `((((type tty)) ,@term)))
+                                 `((((type tty) (min-colors 2)) ,@term)))
                                (if (equal f g)
                                    `((t ,@(cdr f)))
                                  `((((class color) (min-colors 16777216)) ,@(cdr f)) (t ,@(cdr g)))))))

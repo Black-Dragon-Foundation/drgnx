@@ -167,7 +167,7 @@ impl JobCommand {
                     params["repo"] = json!(absolute(cwd, r));
                 }
                 if let Some(b) = budget {
-                    params["budget"] = json!(b.number());
+                    params["limits"] = json!([{"amount": b.number(), "unit": "usd"}]);
                 }
                 if *auto {
                     params["auto"] = json!(true);
@@ -191,7 +191,8 @@ impl JobCommand {
 fn with_budget(id: &str, budget: Option<&Usd>) -> Value {
     let mut params = json!({"id": id});
     if let Some(b) = budget {
-        params["budget"] = json!(b.number());
+        // `--budget` is dollars: the plan's `usd` limit
+        params["limits"] = json!([{"amount": b.number(), "unit": "usd"}]);
     }
     params
 }
@@ -265,9 +266,25 @@ pub fn format_job(job: &JobSummary) -> String {
         "  estimate ~{usd:.2} USD, {} tokens{unpriced}",
         col(&est, "tokens")
     );
-    let budget = job
-        .budget
-        .map_or_else(|| "none".to_string(), |b| format!("{b:?} USD"));
+    let budget = if job.limits.is_empty() {
+        "none".to_string()
+    } else {
+        job.limits
+            .iter()
+            .map(|l| {
+                format!(
+                    "{:?} {}",
+                    l.amount,
+                    serde_json::to_value(l.unit)
+                        .ok()
+                        .and_then(|u| u.as_str().map(str::to_owned))
+                        .unwrap_or_default()
+                        .to_uppercase()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let _ = writeln!(
         out,
         "  budget {budget}, spent {:.2} USD",
@@ -424,7 +441,10 @@ mod tests {
             let c = p(&["resume", "job-1", "--budget", text]).unwrap();
             assert_eq!(
                 c.request(Path::new("/w")),
-                ("job/resume", json!({"id": "job-1", "budget": want}))
+                (
+                    "job/resume",
+                    json!({"id": "job-1", "limits": [{"amount": want, "unit": "usd"}]})
+                )
             );
         }
     }
@@ -445,7 +465,7 @@ mod tests {
             ]),
             (
                 "job/propose",
-                json!({"plan": "/w/plans/a.md", "repo": "/w/r", "budget": 5.0, "auto": true})
+                json!({"plan": "/w/plans/a.md", "repo": "/w/r", "limits": [{"amount": 5.0, "unit": "usd"}], "auto": true})
             )
         );
         assert_eq!(

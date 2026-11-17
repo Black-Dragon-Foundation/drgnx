@@ -277,16 +277,21 @@ fn coalescing_in_every_order() {
 }
 
 /// [D] A session whose job runs on a runner is drawn running on that runner's machine: the "runs on" edge points at
-/// the runner, and the agent's card carries the job.
+/// the runner, and the agent's card carries the job; its Detail says where it runs and why there.
 #[test]
 fn runner_job_runs_on_edge_points_at_the_runner() {
     let row: runstav::methods::exec::ExecRow = serde_json::from_value(json!({
         "id": "x1", "session": "s1", "kind": "other", "cwd": "/w", "name": "suite", "status": "running",
-        "started": 100.0, "timebox_s": 360, "machine": "desktop"
+        "started": 100.0, "timebox_s": 360, "machine": "desktop",
+        "placed_why": "desktop: about 6 min; local: every job slot of the machine is in use"
     }))
     .expect("a job row");
     let job = job_fact(&row, vec!["token".into()]);
     assert_eq!(job.runner.as_deref(), Some("desktop"));
+    assert_eq!(
+        job.why.as_deref(),
+        Some("desktop: about 6 min; local: every job slot of the machine is in use")
+    );
     assert_eq!(
         (job.name.as_str(), job.limit_min, job.keys.as_slice()),
         ("suite", Some(6), ["token".to_string()].as_slice())
@@ -344,6 +349,13 @@ fn runner_job_runs_on_edge_points_at_the_runner() {
     assert_eq!(
         a.fields.job.as_ref().map(|j| j.name.as_str()),
         Some("suite")
+    );
+    let lines = detail::lines(core.model(), Some(&a.id), 0);
+    assert!(
+        lines.iter().any(|l| l.0 == "head"
+            && l.1
+                == "Runs on desktop · why: desktop: about 6 min; local: every job slot of the machine is in use"),
+        "{lines:?}"
     );
 }
 
@@ -1507,6 +1519,75 @@ fn a_proposal_on_the_strip_says_what_to_approve_and_which_job() {
     );
 }
 
+/// `work/target/set` writes a plan's or spec's `target_at` into its data, null removes it, and an id that is no
+/// live entity answers false.
+#[tokio::test]
+async fn the_target_of_a_plan_is_written_and_null_clears_it() {
+    use crate::agents::session::attach_tests::Fx;
+    use runstav::methods::work::TargetSetParams;
+    let fx = Fx::new();
+    let db = &fx.front.writer.db;
+    db.write(
+        urdr::graph::TxMeta::new("user", urdr::graph::Class::User, "test"),
+        |tx| {
+            urdr::graph::entity::create(
+                tx,
+                urdr::graph::entity::EntityNew {
+                    id: "plan:p1".into(),
+                    kind: "plan".into(),
+                    project: None,
+                    title: Some("p".into()),
+                    status: None,
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data: serde_json::json!({}),
+                    origin: urdr::graph::entity::Origin::Recorded,
+                    source: None,
+                },
+            )?;
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+    let caller = crate::dispatch::Caller {
+        class: runstav::registry::Class::User,
+        sid: None,
+        job: None,
+        conn_id: 1,
+    };
+    let set = |item: &str, at: Option<f64>| TargetSetParams {
+        item: runstav::types::Bounded(item.into()),
+        target_at: at,
+    };
+    assert!(
+        super::target_set(&fx.front, &caller, set("plan:p1", Some(1.8e9)))
+            .await
+            .unwrap()
+    );
+    let read = || {
+        db.read(|c| {
+            Ok(c.query_row(
+                "select json_extract(data, '$.target_at') from entity where id = 'plan:p1'",
+                [],
+                |r| r.get::<_, Option<f64>>(0),
+            )?)
+        })
+    };
+    assert_eq!(read().await.unwrap(), Some(1.8e9));
+    assert!(
+        super::target_set(&fx.front, &caller, set("plan:p1", None))
+            .await
+            .unwrap()
+    );
+    assert_eq!(read().await.unwrap(), None);
+    assert!(
+        !super::target_set(&fx.front, &caller, set("plan:nope", Some(1.0)))
+            .await
+            .unwrap()
+    );
+}
 /// A session on TASK (a bare task id), in state STATE.
 fn task_session(core: &mut Core, i: u64, task: &str, state: State) {
     let snap: Snapshot = serde_json::from_value(

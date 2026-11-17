@@ -35,6 +35,7 @@ fn expansions() -> Value {
             } else {
                 &[]
             },
+            icons: None,
         };
         for c in cases["comps"].as_array().unwrap() {
             let name = format!(
@@ -46,7 +47,7 @@ fn expansions() -> Value {
             let mut b = RowBuilder::new(name.clone());
             kit::expand(&mut b, &env, &comp);
             let row = b.finish();
-            out.push(json!({"name": name, "text": row.text, "runs": row.runs, "props": row.props, "spaces": row.spaces}));
+            out.push(json!({"name": name, "text": row.text, "runs": row.runs, "props": row.props, "spaces": row.spaces, "height": row.height}));
         }
     }
     Value::Array(out)

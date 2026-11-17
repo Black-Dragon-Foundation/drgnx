@@ -86,7 +86,12 @@ loaded, so there is never a session with Vim keys and no Vim editing:
 | Go to Line | Emacs' `M-g g` | `M-g g` | `SPC g l` |
 | Go to Definition / References / Rename Symbol / Hover | `F12` / `S-F12` / `F2` / `C-S-SPC` | Emacs' `M-.` / `M-?` / palette / `C-h .` | `SPC c d` or `g d` / `SPC c r` or `g r` / `SPC c R` / `SPC c h` or `K` |
 | Next / Previous Problem | `F8` / `S-F8` | palette / palette | `] d` / `[ d` |
-| Focus Left / Right / Above / Below | palette | palette | `C-w h` / `C-w l` / `C-w k` / `C-w j` |
+| Focus Tile Left / Right / Up / Down | `C-k C-←` `→` `↑` `↓` | `C-x w ←` `→` `↑` `↓` | `C-w h` / `C-w l` / `C-w k` / `C-w j` |
+| Move Tile Left / Right / Up / Down | `C-k ←` `→` `↑` `↓` | `C-x w S-←` `→` `↑` `↓` | `C-w H` / `C-w L` / `C-w K` / `C-w J` |
+| Swap Tile with Left / Right / Up / Down | `C-k S-←` `→` `↑` `↓` | `C-x w M-←` `→` `↑` `↓` | `SPC w x h` `l` `k` `j`; `C-w x` swaps right, else below |
+| Stack Tile onto Left / Right / Up / Down | `C-k M-←` `→` `↑` `↓` | `C-x w C-←` `→` `↑` `↓` | `SPC w t h` `l` `k` `j` |
+| Unstack the Shown Tab / Resize Tiles | `C-k g` / `C-k r` | `C-x w g` / `C-x w z` | `SPC w u` / `SPC w z` |
+| Resize Tile Left/Right/Up/Down (while Resize Tiles is on) | arrows | arrows | arrows |
 | Source Control / Blame | `C-S-g` / — | Emacs' `C-x v d` / `C-x v g` | `SPC g s` / `SPC g b` |
 | New Terminal | ``C-S-` `` | — | `SPC t n` |
 | Quick Open / Search in Project / Go to Symbol | `C-p` / palette / `C-S-o` | Emacs' `C-x p f` / `C-x p g` / `M-g i` | `SPC f p` / `SPC s p` / `SPC s s` |
@@ -296,6 +301,8 @@ commands, so the workbench keeps its editor groups, tabs and layout (the key tip
 | `:vs [FILE]`, `C-w v` | Split Editor Right (`FILE` opens in the new group) |
 | `C-w c`, `:clo` | Close Tile |
 | `C-w o`, `C-w _`, `C-w \|` | Full-Size Tile: this tile alone; again to put every tile back |
+| `C-w H` `J` `K` `L` | Move Tile Left / Down / Up / Right (remaps of evil's moves to the far side) |
+| `C-w x` | Swap Tile with the one to the right, else below |
 | `:new [FILE]`, `C-w n` | A new editor group below with an empty buffer (`FILE` opens there) |
 | `:bd[!]` | Kill the buffer; each group showing it closes that tab and goes on with its next one, no group is closed |
 | `:q`, `ZQ` | Close Tab when the group has other tabs, else Close Tile when there is another group, else Close Window |
@@ -318,10 +325,8 @@ quitting; `:cq` and `:wqa` never end Emacs either. In the sidebar or the panel (
 data `drgnx-evil-ex-routes`; evil's `:q`, `:wq`, `:x`, `:qa`, `:wqa`, `:cq`, `:sp`, `:vs` and `C-w s/v/c` are advised while the
 engine runs (`drgnx-evil--advice-pairs`), and evil's own again when Vim editing stops (a command you defined meanwhile
 is kept). With the `core/workbench` module off, all of them are evil's own. Vim's other ex commands are untouched, and so
-are evil's other window keys (`C-w x` `r` `H` `J` `K` `L`): they act on raw Emacs
-windows, not on editor groups, and can leave the workbench's arrangement (`C-w h` `j` `k` `l` `s` `v` `c` are drgnx's, above). In a
-VS Code or Emacs stack Focus Left/Right/Above/Below and the problem commands have no keys (VS Code's `F8` /
-`Shift+F8` go to the next / previous problem); they are in the palette.
+are evil's other window keys (`C-w r`, `C-w p`): they act on raw Emacs
+windows, not on editor groups, and can leave the workbench's arrangement (`C-w h` `j` `k` `l` `s` `v` `c` are drgnx's, above). VS Code's `F8` / `Shift+F8` go to the next / previous problem.
 
 In a terminal window drgnx has the mouse, so the terminal's own selection is **Shift+drag** in most terminals
 (Option+drag in iTerm2; other terminals may use their own modifier); see [terminal.md](terminal.md#mouse).

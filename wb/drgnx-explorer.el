@@ -60,7 +60,7 @@ Only chains in listings already read are joined: a closed folder is never read f
 (defface drgnx-explorer-directory '((t :inherit default)) "Folder names." :group 'drgnx)
 (defface drgnx-explorer-file '((t :inherit default)) "File names." :group 'drgnx)
 (defface drgnx-explorer-guide '((t :inherit shadow)) "Indent guides and chevrons." :group 'drgnx)
-(defface drgnx-explorer-selected '((t :inherit region)) "Rows selected together (multi-select)." :group 'drgnx)
+(defface drgnx-explorer-selected '((t :inherit drgnx-row-selected)) "Rows selected together (multi-select)." :group 'drgnx)
 
 (defconst drgnx-explorer-buffer-name " *drgnx explorer*" "Internal (a leading space): not in C-x b or ibuffer.")
 

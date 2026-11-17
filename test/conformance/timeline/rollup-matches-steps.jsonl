@@ -14,6 +14,6 @@
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1", "class": "think"}}}, "within_ms": 15000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "timeline/get", "params": {"scope": "session", "id": "$sid", "rollup": true}}}
-{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"rollup": {"secs": {"$contains": [{"class": "think", "secs": "$number"}, {"class": "tool", "secs": "$number"}]}, "tokens": {"in": 10, "out": 5}}}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"rollup": {"secs": {"$contains": [{"class": "think", "secs": "$number"}, {"class": "tool", "secs": "$number"}]}, "tokens": {"in": 10, "out": 5}, "first": "$number"}}}}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "timeline/get", "params": {"scope": "session", "id": "$sid", "since": 2}}}
 {"do": "expect", "conn": "c", "json": {"id": 5, "result": {"steps": [{"seq": 3, "class": "think"}]}}}

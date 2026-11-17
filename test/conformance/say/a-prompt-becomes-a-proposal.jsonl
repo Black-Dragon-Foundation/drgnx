@@ -15,7 +15,7 @@
 {"do": "file", "path": "$ROOT/s.log", "contains": "drgnx-proposal", "count": 1}
 {"do": "file", "path": "$ROOT/s.log", "contains": "review the settings code, then fix what it finds", "count": 1}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "job/status", "params": {"id": "$job"}}}
-{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job", "status": "proposed", "title": "Settings review", "budget": 20.0}}, "within_ms": 5000}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job", "status": "proposed", "title": "Settings review", "limits": {"$contains": [{"amount": 20.0, "unit": "usd"}]}}}, "within_ms": 5000}
 {"do": "sql_expect", "sql": "select count(*) from card where job = '$job' and kind = 'proposal' and state = 'open' and title like '%approve to start' and title not like '%Settings review%'", "rows": [[1]]}
 {"do": "sql_expect", "sql": "select count(*) from job where id = '$job' and plan like 'plan:%' and repo like '%/repo/'", "rows": [[1]]}
 {"do": "sql_expect", "sql": "select n, role from jtask where job = '$job' order by n", "rows": [[1, "review"], [2, "implement"]]}

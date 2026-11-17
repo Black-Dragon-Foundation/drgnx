@@ -2316,8 +2316,8 @@ no hub call: `(drgnx-view-nav 'follow "up")`, `(drgnx-view-nav 'walk "team" 1)`,
 class step, and when the selection moved arms the trailing notice and runs `drgnx-view-selected-functions` (BUFFER
 ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` read the model.
 - **Classes on the card:** Sjá answers the nodes whose class changed; each class is a face by the descriptor's class
-  name (`drgnx-view-nav-faces`, then `drgnx-view-nav-default-faces`: `drgnx-view-selected`, the quiet selection
-  `drgnx-selected-quiet` a step above the hover, `drgnx-view-match`, `drgnx-view-chain`, `drgnx-view-lit`, `shadow`
+  name (`drgnx-view-nav-faces`, then `drgnx-view-nav-default-faces`: `drgnx-view-selected`, the kit's row selection
+  `drgnx-row-selected` (inactive until the view's window is selected), `drgnx-view-match`, `drgnx-view-chain`, `drgnx-view-lit`, `shadow`
   for dim), put as an overlay on the node's span (the text whose
   `drgnx-view-patch-id-prop`, `drgnx-work-id` by default, is its id), never on the whole line. Rendering a row notes
   which rows hold which node (`drgnx-view-patch-ids`) and which nodes each row holds (`drgnx-view-patch-keys`, the
@@ -3402,6 +3402,28 @@ more tiles gone in one change, past the grid's own hides (a package's `delete-ot
 store's `windows-changed`). Close Pane (`Esc`, `q`) on a tool tile hides it.
 Tests: `test/unit/grid-rules-test.el` (`drgnx-grid-rules/`).
 
+**Moving tiles** (`wb/drgnx-grid-ops.el`, loaded with the grid). A tile is its whole atom (`drgnx-grid--tile-root`),
+named by its main window (`drgnx-grid-tile-main`).
+
+- `(drgnx-grid-neighbour WINDOW DIRECTION)`: the tile whose facing edge meets WINDOW's tile's in DIRECTION (`left`,
+  `right`, `up`, `down`) and overlaps it most, the one at the cursor's line or column first; by pixel edges across atoms
+  and docks; nil at the grid's edge. Focus Tile (`drgnx-grid-focus-direction`, under `drgnx-wb-focus-direction`).
+- `(drgnx-grid-move WINDOW TARGET ZONE)`, ZONE `left` `right` `above` `below` or `center` (a stack): WINDOW's tile's
+  state (`window-state-get` of its atom with every window parameter made persistent for the call, so ids, stacks,
+  tabs and roles travel) is put into half of TARGET's tile, split on ZONE; the space it leaves goes to its neighbour
+  (R3). Every other tile keeps its edges.
+- `(drgnx-grid-swap A B)`: the two tiles' states trade places; the places keep their sizes.
+- `(drgnx-grid-stack WINDOW ONTO)`: an editor's tabs onto an editor, a tool tile's kinds (a docked area's shown tab)
+  onto a tile of the grid's own; `(drgnx-grid-unstack WINDOW)`: the shown tab into a new tile beside, right when the
+  tile is at least as wide as tall, else below.
+- `(drgnx-grid-resize-mode)`: a transient map; each arrow moves the tile's edge on that side one step
+  (`drgnx-grid-resize-step-px`, 24 logical px; a column or a line in a terminal), the opposite edge at the grid's edge.
+- No room (`drgnx-grid-room-p`: the tile split in two below the least tile size, `drgnx-grid-min-size`): a move, an
+  unstack or a split (`drgnx-grid-split-tile`, the groups' split) changes nothing and says "No room there"; the
+  automatic placements fall back to their dock instead. A move first pushes the grid (`drgnx-grid-push` `move`); a
+  docked tile moved or swapped loses `drgnx-tile-dock`. The pane backend's `:move` and `:stack` are these.
+Tests: `test/unit/grid-moves-test.el`; I11 in `test/live/drgnx-invariants-test.el`.
+
 ### Tiles and the `grid` backend (`wb/drgnx-grid.el`)
 
 `drgnx-grid-mode` (global) makes `grid` the pane backend (`drgnx-pane-backend`): pane kinds then live in **tool
@@ -3415,7 +3437,10 @@ tiles**, ordinary windows of the frame's window tree, not side windows. Callers 
   `delete-window` parameter that hides it. It is dedicated (`drgnx`), so `display-buffer` never puts another buffer
   there.
 - An **editor tile** is an editor window (role `editor`) with a `drgnx-tile-id` and `no-delete-other-windows`; its
-  `delete-window` refuses the last one.
+  `delete-window` refuses the last one. So `delete-other-windows` called from Lisp keeps the other editor tiles too;
+  code that wants one window deletes the others by their own `delete-window`, which hides a tool tile (the
+  Work fixture's `drgnx-work-thirty-only-window`). Turning `drgnx-grid-mode` off gives the editor windows these parameters back, and
+  once a frame has no tile its grid frame parameters are emptied (`drgnx-grid--release`).
 - `(drgnx-grid-root &optional FRAME)` is `window-main-window`; `(drgnx-grid-tiles &optional FRAME FILTER)` lists the
   tiles in reading order (`editor`, `tool` or nil for both); `(drgnx-grid-dock DOCK &optional FRAME)` is the tile
   docked there; `(drgnx-grid-toggle-dock DOCK)` hides it or shows it with the kind it showed last.
@@ -4036,10 +4061,15 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   sample redisplays and takes `drgnx-uitest-snapshot`: `glitnir-snapshot` presents what was drawn, forces a paint and
   returns what that paint committed, so a sample is one trip through the compositor, which answers a size or a map in
   order with those paints. The wait ends when FRAMES samples in a row are the same (the picture, or VALUE's result for
-  a state the picture does not show) and, on the native shell, `nhwl-presenter-stats` shows no commit owed since the
-  last such wait. A paint that does not come within the primitive's 1 s is the next try; a timeout fails the test. Do
+  a state the picture does not show) and, on the native shell, `nhwl-presenter-stats` shows every request gone out
+  (its `:presented` has reached its `:published`). Not a count of commits since the last wait: a packet merged into
+  one still waiting owes no commit of its own, so under a compositor that answered no frame callback (KWin with no
+  render device) that count settled on a picture that never went out. A paint that does not come within the primitive's 1 s is the next try; a timeout fails the test. Do
   not use it across a count of draws: the samples are paints. A row with a popup that has no parent (mini-frame detaches
-  its frame) passes FRAME, since `drgnx-uitest-root-frame` can find that popup. The session's output lists every test
+  its frame) passes FRAME, since `drgnx-uitest-root-frame` can find that popup. A frame deleted before or during the
+  wait never presents, so the wait fails at its next look with `:dead-frame` and `:deleted-by`, the functions on the
+  stack when it was deleted (the fixture notes the last 8 deletions on `delete-frame-functions`), instead of sampling
+  a dead frame until its deadline. The session's output lists every test
   that skipped by name (`  SKIP NAME`), so a green tier shows what it did not run.
 - **A frame resized.** The GUI sessions' root frame is fullscreen, and a fullscreen frame keeps its output's size: a
   `set-frame-size` there does nothing, and a row that checked the windows after it passed on the size it had. A row

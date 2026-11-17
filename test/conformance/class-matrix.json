@@ -49,6 +49,7 @@
   "browser/check": ["user"],
   "brief/set": ["user"],
   "budget/get": ["user"],
+  "budget/tree": ["user"],
   "budget/set": ["user"],
   "buffers/set": ["user"],
   "cards/settle": ["user"],
@@ -206,6 +207,7 @@
   "job/unblock": ["user"],
   "matrix/check": ["user"],
   "machines/list": ["user"],
+  "machines/move": ["user"],
   "machines/report": ["user"],
   "matrix/get": ["user"],
   "mcp/attach": ["service"],
@@ -353,6 +355,7 @@
   "work/map/close": ["user"],
   "work/map/set": ["user"],
   "work/map/subscribe": ["user"],
+  "work/target/set": ["user"],
   "work/trail/close": ["user"],
   "work/trail/subscribe": ["user"]
 }

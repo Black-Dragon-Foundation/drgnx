@@ -414,7 +414,10 @@ through the session's allowlist. The lease is off in CI, in the detached launche
 Input is synthetic but goes through Emacs' normal command loop: `harness/drgnx-uitest.el` queues events and
 delivers **one per 40 ms timer tick** (`drgnx-uitest-tick`) onto `unread-command-events`. Redisplay runs
 between events exactly as it does for a person typing or clicking; dumping a whole sequence at once would
-skip redisplay and hide the very jank we want to see.
+skip redisplay and hide the very jank we want to see. The tick stops as it delivers the last key (a last mouse event keeps one tick more:
+its pointer position stands while its command runs), so a test that ends on its last key leaves no timer; a test that
+takes entries back out of the queue (a pause it no longer needs) calls `drgnx-uitest-unqueue`, which stops the tick at
+once when nothing is left, so the file's leak check finds no `drgnx-uitest--tick` timer.
 
 - **Pixels:** clicks take root-frame pixel coordinates — the same pixels as a screenshot (top-left = 0,0).
   `(posn-at-x-y x y root-frame)` turns them into the click position.
@@ -875,7 +878,8 @@ session launcher         systemd         # or detached (process group, no system
   util-linux`, ~2.3 GB; `kwin_wayland` and `sway` lose their `cap_sys_nice` file capability, which the container does
   not grant), with the same cap and security options. A KWin run gets `/dev/udmabuf` (never `/dev/dri`): KWin 6.8's
   virtual backend composites only on a render device, and udmabuf gives it Mesa's llvmpipe on any machine; without
-  it KWin answers no frame callback and the presenter holds every packet after its first commit. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
+  it KWin answers no frame callback and the presenter holds every packet after its first commit, so a host without
+  `/dev/udmabuf` is refused (exit 2, with the reason). `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
   too. `DRGNX_TEST_WM_IMAGE` uses a prebuilt one (`DRGNX_TEST_GUI_IMAGE` does not apply: that image has neither).
 - **A local run builds an image only when it must.** `bin/drgnx test --container` takes the image `NAME:TAG` (TAG as
   above) from the local store when it is there; else pulls `ghcr.io/black-dragon-foundation/NAME:TAG` (CI's copy of the
@@ -1286,7 +1290,10 @@ bin/drgnx test --container --tty              # in a Fedora 45 container, Emacs 
 SIGPIPE ignored, in a temp directory of its own; the environment is the caller's (the sessions start theirs with
 `env -i`). `DRGNX_TEST_SELECTOR` narrows it. In a container the image `drgnx-test-tty:TAG` (`test/container/image-tag.sh`) is built from
 `test/container/Containerfile.tty` with `--build-arg FEDORA=NN`; the image has tmux, plus kitty and mutter for the exit
-test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label=disable`) and `--memory 3g`.
+test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label=disable`) and `--memory 3g
+--memory-swap 3g`; with `DRGNX_TEST_JOBS` of 3 or more, 1.5 GB a file (`6144m` for 4: four files at 3g met the cap
+dozens of times a run and swapped, and their waits timed out at random; they peak near 4.4 GB), and
+`DRGNX_TEST_TTY_MEMORY` sets another size.
 `DRGNX_USER_ELPA` (a directory holding the pinned kkp, and corfu, unpacked) is mounted read-only as `/elpa`, so the
 kkp tests and the kitty exit test run there too; without it they skip. Every `--container` tier mounts it the same
 way, so the batch tests that load a package (the extras teardown) run in a container too.
