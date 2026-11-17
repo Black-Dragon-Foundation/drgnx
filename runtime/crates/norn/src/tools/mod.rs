@@ -12,6 +12,7 @@ use urdr::graph::{ReadPool, WriterHandle};
 use crate::deny::{DenyList, SharedDeny};
 use crate::store::CoordDb;
 
+pub mod comment;
 pub mod debug;
 pub mod extensions;
 pub mod graph;
@@ -159,6 +160,17 @@ pub trait Hub: Send + Sync {
         _proposal: Option<String>,
     ) -> BoxFuture<'_, Result<String, String>> {
         Box::pin(async { Err("huddles are the hub's: none here".to_string()) })
+    }
+
+    /// Session SID's answer TEXT in the thread of COMMENT, which the hub steered to it: the tool's text, or the
+    /// refusal's.  The default (no hub): no comments.
+    fn comment_reply(
+        &self,
+        _sid: &str,
+        _comment: String,
+        _text: String,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("comments are the hub's: none here".to_string()) })
     }
 
     /// Session SID's debugger tool OP (`debug_read`, …; graphical debugging D4) with ARGS: the answer's text, or the

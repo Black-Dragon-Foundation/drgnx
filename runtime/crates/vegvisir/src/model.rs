@@ -28,6 +28,8 @@ pub enum GraphFact {
     },
     /// A spec's or plan's target date (`spec:ID` or `plan:ID`; none: no target).
     Target { item: String, at: Option<Instant> },
+    /// A spec's or plan's paragraph comments that wait because no agent is writing it (`spec:ID` or `plan:ID`).
+    Comments { item: String, waiting: u32 },
     /// A spec's, plan's, task's or agent's budget (`spec:ID`, `plan:ID`, `task:ID` or `agent:ID`; none: no limit).
     Budget {
         item: String,
@@ -309,6 +311,9 @@ pub struct Fields {
     pub context: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress: Option<(u32, u32)>,
+    /// A spec's or plan's paragraph comments waiting because no agent is writing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comments_waiting: Option<u32>,
     /// A spec's or plan's target date, seconds since the epoch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_at: Option<Instant>,
@@ -537,6 +542,8 @@ struct Facts {
     plans: BTreeMap<Sym, PlanF>,
     /// spec or plan → its target date
     targets: BTreeMap<Sym, Instant>,
+    /// spec or plan → its comment threads that wait for a writer (none: 0)
+    waiting: BTreeMap<Sym, u32>,
     /// spec, plan, task or agent → its budget
     budgets: BTreeMap<Sym, ItemBudget>,
     /// spec, plan and task → when its record last changed (minutes)
@@ -811,6 +818,7 @@ impl Model {
             Kind::Ask => f.asks.get(&y).cloned().unwrap_or_default(),
             Kind::Spec => {
                 fields.target_at = f.targets.get(&y).copied();
+                fields.comments_waiting = f.waiting.get(&y).copied();
                 fields.budget = f.budgets.get(&y).cloned();
                 f.specs.get(&y).cloned().unwrap_or_default()
             }
@@ -818,6 +826,7 @@ impl Model {
                 let (title, _, progress) = &f.plans[&y];
                 fields.progress = *progress;
                 fields.target_at = f.targets.get(&y).copied();
+                fields.comments_waiting = f.waiting.get(&y).copied();
                 fields.budget = f.budgets.get(&y).cloned();
                 title.clone()
             }
@@ -1037,6 +1046,21 @@ impl Model {
                     match now {
                         Some(a) => f.targets.insert(y, a),
                         None => f.targets.remove(&y),
+                    };
+                    touched.insert(y);
+                }
+                GraphFact::Comments { item, waiting } => {
+                    let (kind, id) = item
+                        .split_once(':')
+                        .filter(|(k, _)| matches!(*k, "spec" | "plan"))?;
+                    let y = n.intern_as(kind, id);
+                    let now = (waiting > 0).then_some(waiting);
+                    if f.waiting.get(&y).copied() == now {
+                        return None;
+                    }
+                    match now {
+                        Some(w) => f.waiting.insert(y, w),
+                        None => f.waiting.remove(&y),
                     };
                     touched.insert(y);
                 }

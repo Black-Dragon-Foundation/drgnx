@@ -1358,6 +1358,10 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `changes/close` | user | `{view: string}` | `boolean` | no |
 | `changes/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
 | `changes/subscribe` | user | `{view: string}` | `boolean` | no |
+| `comments/add` | user | `{anchor: {heading?: [string], key?: string, quote?: string, state?: string}, record: string, text: string}` | `{anchor: Anchor, comment: string, sent_to?: string}` | yes |
+| `comments/list` | user | `{record: string}` | `{threads: [Thread]}` | no |
+| `comments/reply` | user | `{comment: string, text: string}` | `{at: number, author: string, id: string, text: string}` | yes |
+| `comments/resolve` | user | `{comment: string}` | `boolean` | yes |
 | `config/changed` | user | `{}` | `boolean` | no |
 | `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no |
 | `coord/agent` | user | `{register?: {base?: string, branch?: string, clear?: ["kind" \| "name" \| "cwd" \| "worktree" \| "branch" \| "base" \| "plan" \| "task" \| "pid"], cwd?: string, id: AgentName, kind?: string, name?: string, pid?: natnum, plan?: string, task?: TaskRef, worktree?: string}, seen?: AgentName}` | `{id?: string, seen?: number}` | yes |
@@ -2297,6 +2301,33 @@ session the task's `works_on` link comes from.
 - **A code change**, `{paths, branch?}`: `paths` relative to the repository. A task under way whose agent edited one
   (`work::edits::edited`) or is in one now (the presence model) `overlaps` ("Task 5 edits session.rs: it would need to
   rebase."). `branch`, the change's own branch, leaves out the task the runner made it for (`job/JOB-N`).
+
+### Paragraph comments
+
+A comment on one paragraph of a spec, plan, decision or task (`work/comments.rs`; the user's guide is
+[Writing documents with agents](../guide/documents.md)). Methods: `comments/add {record, anchor, text}` → `{comment,
+sent_to?, anchor}`, `comments/reply {comment, text}` → the reply, `comments/list {record}` → `{threads}`, and
+`comments/resolve {comment}`. All are user-class; the three that write are the hub's writes (`("hub", System)`, through
+`norn::write::work::{new_comment, new_reply, move_anchor, comment_patch}`), which refuse any other author.
+
+- **Records.** A thread is a `comment` entity (`comment:N`, numbered in order; data `{text, author, at, sent_to?,
+  resolved?}`, `author` `user` or the answering session) with a `comments_on` link to the record. The link's data is the
+  thread's anchor `{heading, key, quote, state}` (records.md, "Comment anchors"). Replies are `comment` entities with a
+  `replies_to` link to the thread's first comment; a reply to a reply joins the same thread.
+- **The writer.** On `comments/add`, the hub picks the record's writer: of the live sessions, the one whose write in
+  the record's file is the newest. That is the newest history record of the file's text, by `blame` over the file in
+  the session's tree, that the session made; the file is matched in its own worktree of the same repository too.
+  Failing that, a live session with a `works_on` link to a task of a run whose plan file is the record's file, newest
+  link first.
+- **Delivery.** The comment reaches the writer as `Comment on "<heading>" ¶ "<quote…>": <text> (reply with
+  comment_reply, id comment:N)`: a prompt keyed `comment:N` when the session is free, so an idle writer answers now;
+  while a turn runs, a steer (`steer_in`) ahead of the queued prompts, read at the next turn. Neither cancels a turn. The thread's `sent_to` notes the session. With no writer, `sent_to` stays empty and the thread
+  waits. The delivery pass tries the waiting threads again every 5 s at most, and the Work map's Detail of a waiting
+  spec or plan says "N comments waiting: no agent is writing it" (`GraphFact::Comments`). A user's reply is steered to
+  the thread's session, or to the record's writer now when that session is gone.
+- **`comment_reply {comment, text}`** is a drgnx MCP tool every session has (`norn::tools::comment`, through the hub's
+  `comment_reply`). Only the session the thread was steered to may answer; anyone else is refused ("comment:N was not
+  sent to you"), and nothing is written.
 
 ### The Work map
 

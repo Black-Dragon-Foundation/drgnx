@@ -237,6 +237,158 @@ pub fn link_asked(tx: &mut WTx<'_>, ask: &str, to: &str) -> Result<(), CoordErro
     Ok(())
 }
 
+/// The refusal text for a comment written by anyone but the hub (a user's comment and an agent's reply reach the store
+/// through the hub's methods and tool, which check who may write them).
+pub const COMMENTS_HUB_ONLY: &str = "comments are written through the hub";
+
+/// A new paragraph comment or reply: its words, who wrote it (`user` or a session id) and when.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommentNew {
+    pub text: String,
+    pub author: String,
+    pub at: f64,
+    pub project: Option<i64>,
+}
+
+fn comments_hub_only(tx: &WTx<'_>) -> Result<(), CoordError> {
+    hub_only(tx).map_err(|_| CoordError::Refused(COMMENTS_HUB_ONLY.into()))
+}
+
+/// The entity ID, or a refusal naming it.
+fn ent(tx: &WTx<'_>, id: &str) -> Result<entity::Ent, CoordError> {
+    entity::by_id(tx.sql(), id)?
+        .filter(|e| e.retired_tx.is_none())
+        .ok_or_else(|| CoordError::Refused(format!("no {id}")))
+}
+
+/// Create the comment C (`comment:N`, numbered in order); its id.
+fn create_comment(tx: &mut WTx<'_>, c: CommentNew) -> Result<(String, i64), CoordError> {
+    let next: i64 = tx.sql().query_row(
+        "select coalesce(max(cast(substr(id, 9) as integer)), 0) + 1 from entity where kind = 'comment'",
+        [],
+        |r| r.get(0),
+    )?;
+    let id = format!("comment:{next}");
+    let e = entity::create(
+        tx,
+        EntityNew {
+            id: id.clone(),
+            kind: "comment".into(),
+            project: c.project,
+            title: Some(c.text.chars().take(40).collect()),
+            status: None,
+            body: Some(c.text.clone()),
+            priority: None,
+            assignee: None,
+            data: json!({"text": c.text, "author": c.author, "at": c.at}),
+            origin: Origin::Recorded,
+            source: None,
+        },
+    )?;
+    Ok((id, e.n))
+}
+
+/// Create a comment on RECORD (a spec, plan, decision or task) at ANCHOR, kept as its `comments_on` link's data; its id.
+pub fn new_comment(
+    tx: &mut WTx<'_>,
+    c: CommentNew,
+    record: &str,
+    anchor: serde_json::Value,
+) -> Result<String, CoordError> {
+    comments_hub_only(tx)?;
+    let r = ent(tx, record)?;
+    if !crate::kinds::link_allowed("comments_on", "comment", &r.kind) {
+        return Err(CoordError::Refused(format!(
+            "a comment is on a spec, plan, decision or task, not a {}",
+            r.kind
+        )));
+    }
+    let (id, n) = create_comment(tx, c)?;
+    link::add(
+        tx,
+        n,
+        "comments_on",
+        r.n,
+        Some(anchor),
+        Origin::Recorded,
+        None,
+    )?;
+    Ok(id)
+}
+
+/// Create a reply to ROOT, a thread's first comment (a reply to a reply joins the same thread); its id.
+pub fn new_reply(tx: &mut WTx<'_>, c: CommentNew, root: &str) -> Result<String, CoordError> {
+    comments_hub_only(tx)?;
+    let r = ent(tx, root)?;
+    if r.kind != "comment" {
+        return Err(CoordError::Refused(format!("{root} is no comment")));
+    }
+    let (id, n) = create_comment(tx, c)?;
+    link::add(tx, n, "replies_to", r.n, None, Origin::Recorded, None)?;
+    Ok(id)
+}
+
+/// COMMENT's anchor is now ANCHOR: its `comments_on` link is retired and made again with the new data, so the link's
+/// history keeps where it was.  Nothing changes when the anchor is the same.
+pub fn move_anchor(
+    tx: &mut WTx<'_>,
+    comment: &str,
+    anchor: serde_json::Value,
+) -> Result<(), CoordError> {
+    comments_hub_only(tx)?;
+    let c = ent(tx, comment)?;
+    let found: Vec<(i64, Option<String>)> = {
+        let mut st = tx.sql().prepare(
+            "select dst, data from link where src = ?1 and kind = 'comments_on' and tx_to = ?2",
+        )?;
+        st.query_map([c.n, urdr::graph::schema::SENTINEL], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<Result<_, _>>()?
+    };
+    let Some((dst, data)) = found.into_iter().next() else {
+        return Err(CoordError::Refused(format!("{comment} starts no thread")));
+    };
+    if data.and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok()) == Some(anchor.clone())
+    {
+        return Ok(());
+    }
+    link::retire(tx, c.n, "comments_on", dst)?;
+    link::add(
+        tx,
+        c.n,
+        "comments_on",
+        dst,
+        Some(anchor),
+        Origin::Recorded,
+        None,
+    )?;
+    Ok(())
+}
+
+/// Merge PATCH into COMMENT's data (`sent_to`: the session it was steered to; `resolved`).
+pub fn comment_patch(
+    tx: &mut WTx<'_>,
+    comment: &str,
+    patch: serde_json::Value,
+) -> Result<(), CoordError> {
+    comments_hub_only(tx)?;
+    let c = ent(tx, comment)?;
+    if c.kind != "comment" {
+        return Err(CoordError::Refused(format!("{comment} is no comment")));
+    }
+    entity::update(
+        tx,
+        c.n,
+        None,
+        entity::Changes {
+            data_patch: Some(patch),
+            ..entity::Changes::default()
+        },
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,5 +583,97 @@ mod tests {
         let parsed: Vec<Source> =
             serde_json::from_value(json!([{"path": "a", "lines": [1, 3]}, {"url": "u"}])).unwrap();
         assert_eq!(parsed.len(), 2);
+    }
+
+    fn comment(text: &str, author: &str) -> CommentNew {
+        CommentNew {
+            text: text.into(),
+            author: author.into(),
+            at: 1.0,
+            project: None,
+        }
+    }
+
+    /// A comment and its reply are the hub's writes, numbered in order and joined by their links; an anchor that moves
+    /// keeps its old place in the link's history; anyone else writes nothing.
+    #[test]
+    fn comments_are_the_hubs_and_threaded() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        entity::create(
+            &mut tx,
+            EntityNew {
+                id: "spec:s".into(),
+                kind: "spec".into(),
+                project: None,
+                title: Some("S".into()),
+                status: None,
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({}),
+                origin: Origin::Recorded,
+                source: None,
+            },
+        )
+        .unwrap();
+        let a = json!({"key": "k1", "state": "here"});
+        let root = new_comment(&mut tx, comment("tighten", "user"), "spec:s", a.clone()).unwrap();
+        assert_eq!(root, "comment:1");
+        let reply = new_reply(&mut tx, comment("done", "s1"), &root).unwrap();
+        assert_eq!(reply, "comment:2");
+        assert!(new_reply(&mut tx, comment("x", "s1"), "spec:s").is_err());
+        assert!(new_comment(&mut tx, comment("x", "user"), "spec:none", a.clone()).is_err());
+        let links = |tx: &WTx<'_>, live: bool| -> Vec<(String, String)> {
+            let mut st = tx
+                .sql()
+                .prepare(&format!(
+                    "select l.kind, coalesce(l.data, '') from link l where l.kind in ('comments_on', 'replies_to') {} order by l.id",
+                    if live { "and l.tx_to = 4611686018427387904" } else { "" }
+                ))
+                .unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            links(&tx, true),
+            [
+                ("comments_on".to_string(), a.to_string()),
+                ("replies_to".to_string(), String::new())
+            ]
+        );
+        let moved = json!({"key": "k2", "state": "moved"});
+        move_anchor(&mut tx, &root, moved.clone()).unwrap();
+        move_anchor(&mut tx, &root, moved.clone()).unwrap();
+        assert_eq!(
+            links(&tx, true)[1],
+            ("comments_on".to_string(), moved.to_string())
+        );
+        assert_eq!(
+            links(&tx, false).len(),
+            3,
+            "the old anchor stays in the history, once"
+        );
+        comment_patch(&mut tx, &root, json!({"sent_to": "s1"})).unwrap();
+        let e = entity::by_id(tx.sql(), &root).unwrap().unwrap();
+        assert_eq!(
+            (e.data["sent_to"].as_str(), e.data["author"].as_str()),
+            (Some("s1"), Some("user"))
+        );
+        drop(tx);
+        for (class, actor) in [(Class::Agent, "agent:s1"), (Class::User, "user")] {
+            let mut tx = guarded_tx(&mut c, class, actor);
+            let refused = Err(CoordError::Refused(COMMENTS_HUB_ONLY.into()));
+            assert_eq!(
+                new_comment(&mut tx, comment("x", "user"), "spec:s", json!({})),
+                refused
+            );
+            assert_eq!(
+                new_reply(&mut tx, comment("x", "user"), "comment:1"),
+                refused
+            );
+        }
     }
 }

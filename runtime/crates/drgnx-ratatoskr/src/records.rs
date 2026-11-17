@@ -1,7 +1,8 @@
 //! Records (`docs/develop/records.md`): a project's record files adopted into the graph (the files and the store
 //! backed up first, then `saga`'s graph operations with `Origin::Imported`, then the notice), and kept in step with it
 //! both ways by [`Views::sync`]: a three-way merge per piece against what the hub last wrote or read, under a lock
-//! per file, re-reading the file just before the rename.  A hand edit is applied; a piece both sides changed keeps
+//! per file, re-reading the file just before the rename.  After each sync the paragraph comments on the file's records
+//! find their paragraphs again (`work::comments::reanchor`).  A hand edit is applied; a piece both sides changed keeps
 //! the file's text and is flagged until it is resolved.  The hub never commits the files.
 
 use crate::coord::fail;
@@ -804,6 +805,10 @@ impl Views {
     ) -> Result<(Flush, u64, Vec<String>), Error> {
         let r = self.sync_inner(db, path).await?;
         ledger_marks(db, path).await?;
+        // the comment threads on the file's records find their paragraphs again; a failure leaves them where they were
+        if let Err(e) = crate::work::comments::reanchor(db, path).await {
+            tracing::warn!(path = %path.display(), "comments not re-anchored: {e}");
+        }
         Ok(r)
     }
 

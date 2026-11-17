@@ -429,6 +429,8 @@ mod tests {
             "runners/set",
             "runners/unbench",
         ]);
+        // paragraph comments: a thread, a reply, a resolve
+        want.extend(["comments/add", "comments/reply", "comments/resolve"]);
         // say's: a planning session, the proposal it writes, its end
         want.extend(["say/end", "say/revise", "say/start"]);
         // the plugins': an approval and a switch-off change what the hub may run
