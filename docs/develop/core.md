@@ -3371,8 +3371,8 @@ tiles**, ordinary windows of the frame's window tree, not side windows. Callers 
   there.
 - An **editor tile** is an editor window (role `editor`) with a `drgnx-tile-id` and `no-delete-other-windows`; its
   `delete-window` refuses the last one. So `delete-other-windows` called from Lisp keeps the other editor tiles too;
-  code that wants one editor window deletes the others by `delete-window` (the Work fixture's
-  `drgnx-work-thirty-only-window`). Turning `drgnx-grid-mode` off gives the editor windows these parameters back, and
+  code that wants one window deletes the others by their own `delete-window`, which hides a tool tile (the
+  Work fixture's `drgnx-work-thirty-only-window`). Turning `drgnx-grid-mode` off gives the editor windows these parameters back, and
   once a frame has no tile its grid frame parameters are emptied (`drgnx-grid--release`).
 - `(drgnx-grid-root &optional FRAME)` is `window-main-window`; `(drgnx-grid-tiles &optional FRAME FILTER)` lists the
   tiles in reading order (`editor`, `tool` or nil for both); `(drgnx-grid-dock DOCK &optional FRAME)` is the tile
