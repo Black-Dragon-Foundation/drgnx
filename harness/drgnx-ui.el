@@ -2078,15 +2078,18 @@ to know (a Lisp plist: :rc :run :report :lines).  Return 0: whether the file pas
                   "-l" "drgnx-ui" "-f" "drgnx-ui-cli" "--" "test-ui-file" file out)
    :sentinel (lambda (p _e) (unless (process-live-p p) (process-put p :done (float-time))))))
 
-(defun drgnx-ui--run-file-sessions (files jobs out-dir)
+(defun drgnx-ui--run-file-sessions (files jobs out-dir &optional on-start on-end)
   "Run each of FILES in a session of its own, JOBS at once, the results of file N in OUT-DIR/N.json.  Return the
-list of (FILE OUT EXIT SECONDS), in the order of FILES.  A tier stopped meanwhile ends the sessions' Emacsen."
+list of (FILE OUT EXIT SECONDS CHILD-OUTPUT), in the order of FILES.  ON-START is called with a file as its session
+starts, ON-END with its entry as it ends (so a run killed meanwhile has told which files ran).  A tier stopped
+meanwhile ends the sessions' Emacsen."
   (let ((pending (let ((i 0)) (mapcar (lambda (f) (list f (expand-file-name (format "%d.json" (cl-incf i)) out-dir))) files)))
         (running nil) (done nil))
     (unwind-protect
         (while (or pending running)
           (while (and pending (< (length running) jobs))
             (pcase-let ((`(,f ,out) (pop pending)))
+              (when on-start (funcall on-start f))
               (push (list (drgnx-ui--start-file-session f out) f out (float-time)) running)))
           (accept-process-output nil 0.2)
           (dolist (r running)
@@ -2096,6 +2099,7 @@ list of (FILE OUT EXIT SECONDS), in the order of FILES.  A tier stopped meanwhil
                 (push (list f out (process-exit-status p) (- (float-time) t0)
                             (when-let* ((b (process-buffer p))) (and (buffer-live-p b) (with-current-buffer b (buffer-string)))))
                       done)
+                (when on-end (funcall on-end (car done)))
                 (when-let* ((b (process-buffer p))) (when (buffer-live-p b) (kill-buffer b)))
                 (setq running (delq r running))))))
       (dolist (r running) (drgnx-run-ert--end-process (car r) 10)))
@@ -2132,19 +2136,27 @@ characters (saying how many were left out) and made printable (`drgnx-run-ert--p
 session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exit code."
   (let* ((out-dir (make-temp-file "drgnx-ui-files" t)) (t-start (float-time))
          (profile (and (equal (getenv "DRGNX_UI_PROFILE") "1") (list nil)))
-         (runs (drgnx-ui--run-file-sessions files (min (drgnx-ui--test-jobs) (length files)) out-dir))
+         (meta-of (lambda (out) (ignore-errors (car (read-from-string (with-temp-buffer (insert-file-contents (concat out ".meta"))
+                                                                                        (buffer-string)))))))
+         ;; each file's line as it starts and ends, not at the end: a run killed meanwhile (the slot guard) names the
+         ;; file that hung
+         (runs (drgnx-ui--run-file-sessions
+                files (min (drgnx-ui--test-jobs) (length files)) out-dir
+                (lambda (f) (princ (format "ui file %s: started\n" (file-name-nondirectory f))))
+                (pcase-lambda (`(,f ,out ,exit ,secs ,_))
+                  (let ((results (and (file-readable-p out) (drgnx-ui--read-json out))))
+                    (princ (format "ui file %s: %s in %.1fs\n" (file-name-nondirectory f)
+                                   (if results (format "%s/%s passed" (plist-get results :passed) (plist-get results :total))
+                                     (format "no results (exit %s)" (or (plist-get (funcall meta-of out) :rc) exit)))
+                                   secs))))))
          (total 0) (passed 0) (ok t) fails skips)
     (unwind-protect
         (dolist (r runs)
-          (pcase-let* ((`(,f ,out ,exit ,secs ,child-out) (or r (list nil nil nil 0 nil)))
+          (pcase-let* ((`(,f ,out ,exit ,_secs ,child-out) (or r (list nil nil nil 0 nil)))
                        (base (and f (file-name-nondirectory f)))
-                       (meta (and f (ignore-errors (car (read-from-string (with-temp-buffer (insert-file-contents (concat out ".meta")) (buffer-string)))))))
+                       (meta (and f (funcall meta-of out)))
                        (results (and f (file-readable-p out) (drgnx-ui--read-json out))))
             (when f
-              (princ (format "ui file %s: %s in %.1fs\n" base
-                             (if results (format "%s/%s passed" (plist-get results :passed) (plist-get results :total))
-                               (format "no results (exit %s)" (or (plist-get meta :rc) exit)))
-                             secs))
               (if results
                   (progn
                     (cl-incf total (plist-get results :total)) (cl-incf passed (plist-get results :passed))

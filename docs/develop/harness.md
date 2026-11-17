@@ -44,7 +44,8 @@ reordered or rerun to pass.
 
 The GUI tier's report gives a FAIL line per failed row with its condition cut to 2,000 characters, saying how many were
 left out (`drgnx-ui--fail-line`): a condition can hold a whole screen, and a log over 5 MB does not come back from the
-desktop.
+desktop. Each file's session prints `ui file FILE: started` as it starts and its result line as it ends, not at the
+end of the tier, so a run killed meanwhile (the slot guard) still names the file that hung.
 
 **The leak check after each file.** With `DRGNX_TEST_FILE_LEAKS=1` (the GUI tier's session sets it; `DRGNX_UI_LEAKS=0` turns
 it off there) `harness/run-ert.el` reads the full fingerprint (`core/drgnx-modules-fingerprint.el`) when a test file's
