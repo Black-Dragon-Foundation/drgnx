@@ -931,6 +931,25 @@ The most fold ranges a buffer keeps (the smallest go first past it), as VS Code'
 | `:agents` | `grantable` |
 | `:schema` | - |
 
+## drgnx-fold-remember
+
+Whether a file's folds are kept: sent to the hub when it is saved or killed and an idle 30 s after a fold changes,
+and folded again when it opens (each found again by its kind and first line within 50 lines; one not found is
+dropped).
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
 ## drgnx-fold-source
 
 Where fold ranges come from: `auto', the best source the buffer has (Markdown headings, notebook cells, the

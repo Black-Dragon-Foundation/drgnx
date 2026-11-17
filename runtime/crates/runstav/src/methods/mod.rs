@@ -20,6 +20,7 @@ pub mod debug_runs;
 pub mod editor;
 pub mod exec;
 pub mod extensions;
+pub mod folds;
 pub mod forecast;
 pub mod gateway;
 pub mod git;
@@ -315,6 +316,8 @@ params! {
     OutlineSet(view::OutlineSet),
     OutlineScopes(view::OutlineScopesParams),
     MinimapWatch(view::MinimapWatch),
+    FoldsSave(folds::FoldsSave),
+    FoldsLoad(folds::FoldsLoad),
     TermOpen(term::TermOpen),
     TermConfig(term::TermConfig),
     TermKey(term::TermKey),
@@ -528,6 +531,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(view::methods());
     v.extend(term::methods());
     v.extend(editor::methods());
+    v.extend(folds::methods());
     v.extend(search::methods());
     v.extend(git::methods());
     v.extend(agents_side::methods());

@@ -1640,6 +1640,10 @@ lists at each publish.
   the marks as last asked. Commands (module `editor/minimap`): `mark-next`/`-previous`, `change-next`/`-previous`,
   `bookmark-next`/`-previous`, `agent-edit-next`/`-previous`; `code-next-problem`/`-previous` (module `lang`) go
   through `drgnx-marks-next-problem`, which falls back to Flymake's own when the buffer has no problem marks.
+- **Bookmarks.** `bookmark-toggle`, `bookmark-name` and `bookmark-go` (`drgnx-marks-bookmark-*`) keep bookmark.el's
+  records: a line's bookmark is `bookmark-make-record-default` at the line's start with the handler `drgnx-bookmark`
+  (bookmark.el's default handler), stored with `bookmark-store`, so bookmark.el's file, `C-x r b` and its list keep
+  working; Go lists this file's bookmarks first, by line. The watch on `bookmark-alist` marks them.
 - **The hub's layers.** What the hub knows of a file that the line model does not (labels, fold ranges for buffers no
   parser folds, heat, a huge file's density buckets) goes to Nidhogg's Sjá as a `view-model` line whose data holds
   `minimap` (`view::minimap::line` in Ratatoskr: file, layer `labels`, `folds`, `heat:SOURCE` or `density`, version,

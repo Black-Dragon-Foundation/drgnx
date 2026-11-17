@@ -46,6 +46,9 @@ are found in files of any size.
 | Next / Previous Problem | `F8` / `S-F8` | palette | `] d` / `[ d` |
 | Next / Previous Change | `M-F5` / `M-S-F5` | `C-x v ]` / `C-x v [` | `] c` / `[ c` |
 | Next / Previous Bookmark | `C-M-l` / `C-M-j` | palette | `] '` / `[ '` |
+| Toggle Bookmark | `C-M-k` | `C-x r m` | `SPC b m` |
+| Name Bookmark… | palette | palette | `SPC b M` |
+| Go to Bookmark… | palette | `C-x r b` | `SPC RET` |
 | Next / Previous Agent Edit | palette | palette | `] a` / `[ a` |
 
 Each goes to the next mark after the current line (or the previous one before it), wraps at the end of the file, and
