@@ -212,6 +212,20 @@ pub fn head_protection(
 mod tests {
     use super::*;
     use crate::model::Profile;
+
+    #[test]
+    fn cargo_jobs_follow_the_grant() {
+        // [D] pure (design §3 #4): a compile unit per 2.5 GiB of the cap, never more than the cores, at least one
+        let g = |cores, cap| Grant {
+            cores,
+            mem_cap_mib: cap,
+            reserve_mib: cap,
+        };
+        assert_eq!(cargo_jobs(&g(12, 6144)), 2);
+        assert_eq!(cargo_jobs(&g(2, 65_536)), 2);
+        assert_eq!(cargo_jobs(&g(12, 1024)), 1);
+        assert_eq!(cargo_jobs(&g(0, 0)), 1);
+    }
     use crate::testkit::{job, machine, running};
 
     fn known(cpu: f64, p95: u64) -> Expected {

@@ -901,6 +901,7 @@ mod tests {
                     host: "/r/cache/p/public/cargo".into(),
                     inside: "/cache/cargo".into(),
                 }],
+                cargo_jobs: 2,
             }),
             keys: Some(KeyMounts {
                 helper: "/r/bin/0.1.0/drgnx-key".into(),
@@ -1240,6 +1241,11 @@ mod tests {
         assert!(
             a.windows(2)
                 .any(|w| w == ["-e", "CARGO_TARGET_DIR=/target"])
+        );
+        // cargo builds as many units at once as the grant allows (design §3 #4)
+        assert!(
+            a.windows(2).any(|w| w == ["-e", "CARGO_BUILD_JOBS=2"]),
+            "{a:?}"
         );
         assert!(!a.iter().any(|s| s.starts_with("--mount")
             || s.starts_with("--volume")

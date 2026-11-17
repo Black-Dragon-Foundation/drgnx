@@ -110,6 +110,23 @@ pub fn direct_cpus(manager: &Path, slice: &str, cpus: &str) -> Result<(), String
 mod tests {
     use super::*;
 
+    /// [D] pure (design §3 #3): a runner job's slice throttles at its reservation plus a fifth and is killed at its cap
+    #[test]
+    fn a_job_slice_gets_high_at_reserve_and_max_at_cap() {
+        assert_eq!(
+            job_props(4096, 6144),
+            [
+                ("MemoryHigh", "4915M".to_string()),
+                ("MemoryMax", "6144M".to_string())
+            ]
+        );
+        // a reservation above the cap throttles at the cap
+        assert_eq!(
+            job_props(8192, 6144)[0],
+            ("MemoryHigh", "6144M".to_string())
+        );
+    }
+
     /// [D] The direct write enables cpuset down to the slice's parent and writes its cpus, on a fixture tree.
     #[test]
     fn the_direct_cpuset_write_enables_the_path() {
