@@ -20,7 +20,7 @@
 
 (defconst drgnx-perf-workers-names
   '(lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open
-              explorer-expand explorer-git-rows explorer-watch quick-open-large quick-open-typing
+              explorer-expand explorer-first-open explorer-git-rows explorer-watch quick-open-large quick-open-typing
               agents-line-motion presence-burst autosave-typing)
   "The new workloads, in the order they run.")
 
@@ -161,6 +161,17 @@ whatever they found)."
         :measure "(drgnx-perf-w-explorer-expand-measure)"
         :check "(drgnx-perf-w-explorer-expand-done)"
         :teardown ,(concat "(progn (drgnx-perf-w-explorer-expand-teardown) " kill-fixture " (drgnx-perf--hub-stop) t)"))
+       ;; the first click on a file in the Explorer against the later ones (audit E4): 40 Lisp files in a git project
+       (explorer-first-open
+        :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
+                        (drgnx-perf-workers--form "(drgnx-perf-w-explorer-first-open-setup)") ")")
+        :each "(drgnx-perf-w-explorer-first-open-each)"
+        :actions ,code
+        :complete-when "(drgnx-perf-w-explorer-first-open-done)"
+        :digest "(drgnx-perf-w-explorer-first-open-digest)"
+        :measure "(drgnx-perf-w-explorer-first-open-measure)"
+        :check "(drgnx-perf-w-explorer-first-open-done)"
+        :teardown ,(concat "(progn (drgnx-perf-w-explorer-first-open-teardown) (drgnx-perf--hub-stop) t)"))
        ;; the status of a 25k-file repository: the hub reads it and sends the letters (a hub of the workload)
        (explorer-git-rows
         :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
