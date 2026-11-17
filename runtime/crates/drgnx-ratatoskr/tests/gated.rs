@@ -2,7 +2,7 @@
 //! requests are served in the order of the client's `__seq`, and `__test_barrier` marks every connection.  Without
 //! `test-hooks` the hooks are not there.
 
-mod support;
+use crate::support;
 
 use serde_json::json;
 use support::{Client, Hub, Root};

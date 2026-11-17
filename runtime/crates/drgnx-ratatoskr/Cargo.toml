@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+autotests = false  # tests/main.rs is the one binary of the files that need no process of their own; the rest are [[test]]s below
 
 [lib]
 name = "drgnx_ratatoskr"
@@ -25,41 +26,28 @@ fuzzing = []
 # harness container (test/runners/); a plain `cargo test --ignored` leaves them out.
 fleet = []
 
-# the transport's rows run in the fake fleet's harness against real sshd
+# The fleet rows (all `#[ignore = "fleet"]`, run in the fake fleet's harness with --test-threads=1): fleet_keys,
+# fleet_registry, fleet_runners, fleet_sync and term_scope are modules of one binary, `fleet` (tests/groups/fleet.rs).
+# Rows: `fleet.sh test <file>::` (fleet_runners' link session, queue and health check against a real `sleipnir serve`;
+# the registry's rows; sync's job trust and overlay; keys; term_scope: a terminal's worker outlives its hub's unit
+# under KillMode=mixed).
+[[test]]
+name = "fleet"
+path = "tests/groups/fleet.rs"
+required-features = ["fleet"]
+
+# the transport's rows run in the fake fleet's harness against real sshd; sets SSH_AUTH_SOCK, as fleet_cloud does
 [[test]]
 name = "fleet_link"
 required-features = ["fleet"]
 
-# the link session's, the queue's and the health check's rows, against a real `sleipnir serve` in a fake runner
-[[test]]
-name = "fleet_runners"
-required-features = ["fleet"]
-
-# the registry's rows: a host becomes a runner, its refusals, its removal
-[[test]]
-name = "fleet_registry"
-required-features = ["fleet"]
-
-# sync's rows: job trust from what the origin has, the shared runner's origin fetch and overlay
-[[test]]
-name = "fleet_sync"
-required-features = ["fleet"]
-
-[[test]]
-name = "fleet_keys"
-required-features = ["fleet"]
-
-# a terminal's worker outlives its hub's unit under KillMode=mixed (a fake runner's systemd)
-[[test]]
-name = "term_scope"
-required-features = ["fleet"]
-
-# the link drills (test/runners/drills.sh): the link broken mid-job, the hub restarted, the runner's guards
+# the link drills (test/runners/drills.sh): the link broken mid-job, the hub restarted, the runner's guards; sets HOME
 [[test]]
 name = "fleet_drills"
 required-features = ["fleet"]
 
-# cloud machines' SSH: a mock cloud's machine (a fake runner) reached by certificate, its pinned host keys
+# cloud machines' SSH: a mock cloud's machine (a fake runner) reached by certificate, its pinned host keys; sets
+# SSH_AUTH_SOCK, as fleet_link does
 [[test]]
 name = "fleet_cloud"
 required-features = ["fleet", "test-hooks"]
@@ -183,3 +171,39 @@ proptest.workspace = true  # the shell-command parser never panics and is determ
 # plugins::hub_io's tests: the fixture plugins, and an in-test TLS server with certificates made at run time
 brokkr = { path = "../brokkr", version = "0.1.0", features = ["test-support"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+
+# --- integration tests: one binary (`it`) plus the files that need a process of their own (reason on each) ---
+
+# every tests/*.rs not named below, as modules of one binary: `cargo test -p drgnx-ratatoskr --test it <file>::`
+[[test]]
+name = "it"
+path = "tests/main.rs"
+
+# the timing rows (`#[ignore]`, `test/timing-rust.sh` runs each alone with --test-threads 1): timing, editor_timing,
+# pair_timing and work_timing are modules of one binary, apart from every other test so no load runs beside them
+[[test]]
+name = "timing"
+path = "tests/groups/timing.rs"
+
+# real browsers: a lock-serialised lane, fds dup2'd into children (the browser image, ignored)
+[[test]]
+name = "browser_real"
+
+# the real-sandbox lane (bwrap, Landlock, seccomp, a netns with relay ports; CI's VM runs the `#[ignore]`d rows by name with
+# --test-threads 1): browser_sandboxed, launch_sandboxed, sandbox_inner, sandbox_run and hrafn_parse_sandbox are modules
+# of one binary, apart from the other tests (their children are sandboxed, their fd and /proc counts want a quiet process)
+[[test]]
+name = "sandbox"
+path = "tests/groups/sandbox.rs"
+
+# the macOS lane runs it by name with --ignored and --test-threads 1 (a Mac runner's bundle in the environment)
+[[test]]
+name = "mac_runner"
+
+# the macOS lane runs it by name with --ignored (a localhost sshd); its inner mod macos would also trip clippy::module_inception as a module
+[[test]]
+name = "macos"
+
+# installs the process-wide virtual clock (clock::install_virtual) and a runtime of its own: no other row may run beside it
+[[test]]
+name = "search_index"

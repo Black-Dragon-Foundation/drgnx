@@ -543,7 +543,7 @@ jobs:
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
         run: |
           skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
-          vm=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed -- --list --format terse --ignored | sed -n 's/: test$//p')
+          vm=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test sandbox -- --list --format terse --ignored browser_sandboxed:: | sed -n 's/: test$//p')
           [ -n "$vm" ] || { echo "browser_sandboxed lists no rows" >&2; exit 1; }
           skips="$skips$(printf '%s\n' "$vm" | awk '{ printf " --skip %s", $1 }')"
           # the Mac runner's end-to-end rows (tests/mac_runner.rs) need a Mac's ssh account (DRGNX_TEST_MAC_RUNNER): the
@@ -567,14 +567,14 @@ jobs:
       - name: the agent browser's rows in a Fedora 45 VM (Landlock ABI 9)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' && runner.arch == 'X64' }}
         run: |
-          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "browser_sandboxed" and (.target.kind | index("test"))) | .executable')
+          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test sandbox --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "sandbox" and (.target.kind | index("test"))) | .executable')
           # the build also reports the ratatoskr bin (the test depends on it): exactly one path must be the test binary
-          [ -n "$bin" ] && [ "$(printf '%s\n' "$bin" | wc -l)" = 1 ] || { echo "expected one browser_sandboxed test binary, got: ${bin:-none}" >&2; exit 1; }
+          [ -n "$bin" ] && [ "$(printf '%s\n' "$bin" | wc -l)" = 1 ] || { echo "expected one sandbox test binary, got: ${bin:-none}" >&2; exit 1; }
           t=$PWD/runtime/target/debug
           bash .github/ci/browser-vm.sh up "$RUNNER_TEMP/vm"
           bash .github/ci/browser-vm.sh put "$RUNNER_TEMP/vm" /usr/bin/bwrap "$t/ratatoskr" "$t/gleipnir-probe" "$t/ratatoskr-mock" \
             "$PWD/runtime/crates/drgnx-ratatoskr/tests/data" "$bin"
-          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1"
+          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1 browser_sandboxed::"
       # The arm runners have no KVM, and an emulated guest never answered within 20 minutes. The rows' only arm64-specific
       # part, the browser host's seccomp filter, is installed for real by gleipnir's own tests above
       # (`installed_filter_denies`, its `browser-` cases); the rest is the same code as on x64, whose VM runs it.
@@ -1315,9 +1315,9 @@ jobs:
       - name: a terminal worker drops another uid's connection (getpeereid, as root)
         if: ${{ !cancelled() }}
         run: |
-          bin=$(jq -r 'select(.profile.test == true and .target.name == "running") | .executable' "$RUNNER_TEMP/test-bins.json" | tail -n 1)
-          [ -x "$bin" ] || { echo "::error::no test binary for drgnx-term's running tests"; exit 1; }
-          out=$(sudo env RUST_LOG=debug "$bin" --exact the_socket_is_private_and_another_uid_is_dropped --nocapture 2>&1) || { echo "$out"; exit 1; }
+          bin=$(jq -r 'select(.profile.test == true and .target.name == "it" and (.manifest_path | endswith("/crates/drgnx-term/Cargo.toml"))) | .executable' "$RUNNER_TEMP/test-bins.json" | tail -n 1)
+          [ -x "$bin" ] || { echo "::error::no test binary for drgnx-term's integration tests"; exit 1; }
+          out=$(sudo env RUST_LOG=debug "$bin" --exact running::the_socket_is_private_and_another_uid_is_dropped --nocapture 2>&1) || { echo "$out"; exit 1; }
           echo "$out"
           if grep -q "not checked" <<< "$out"; then echo "::error::another uid's connection was not checked"; exit 1; fi
       # The hub on a Mac: the runner rows of tests/macos.rs ran above with the workspace; this is the one that needs a

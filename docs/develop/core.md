@@ -3691,8 +3691,8 @@ characters and `:tty :indent` per level, and a glyph takes its terminal form; th
 (none where it has none) and the state's face under it, over the component; an action puts `drgnx-action` and
 `mouse-face` (`drgnx-hover`) over the component and its `:hit` padding. The conformance fixture
 (`test/fixtures/kit/cases.json`, `expected.json`) holds each component at scales 1, 1.25, 1.75 and 2 and on a
-terminal (UTF-8 and ASCII); the hub's test writes `expected.json` (`DRGNX_KIT_BLESS=1 cargo test -p drgnx-rows --test
-kit_conformance`, read it before committing) and `drgnx-ui-kit/conformance` checks Lisp against it.
+terminal (UTF-8 and ASCII); the hub's test writes `expected.json` (`DRGNX_KIT_BLESS=1 cargo test -p drgnx-rows --test it
+kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` checks Lisp against it.
 
 - `(drgnx-ui-kit-expand COMPONENT PROPS SCALE TTY)`: COMPONENT a symbol (`row`), PROPS the hub's `Comp` JSON as a
   plist (`(:c "row" :kind "tree" :depth 2 :twisty t :text "src" :state "selected")`; `:twisty` t open, `:false`

@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+autotests = false  # tests/main.rs is the one binary of the files that need no process of their own; the rest are [[test]]s below
 
 [dependencies]
 bytemuck.workspace = true
@@ -21,3 +22,21 @@ wgpu.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+
+# every tests/*.rs not named below, as modules of one binary: `cargo test -p hrafn-embed --test it <file>::`
+[[test]]
+name = "it"
+path = "tests/main.rs"
+
+# real-model rows (CPU, ignored): one model held in a process-wide cell at a time, memory
+[[test]]
+name = "parity_cpu"
+
+# real-model rows (GPU adapter, ignored): the macOS Metal lane runs it by name
+[[test]]
+name = "parity_gpu"
+
+# timing rows (ignored): latency and memory of the process (/proc/self/status), re-exec of current_exe
+[[test]]
+name = "timing"

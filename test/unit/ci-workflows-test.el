@@ -310,7 +310,7 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
          (vm (drgnx-ci-test--file ".github/ci/browser-vm.sh")))
     (skip-unless job)
     (should vm)
-    (drgnx-ci-test--has job "--test browser_sandboxed -- --list --format terse --ignored"
+    (drgnx-ci-test--has job "--test sandbox -- --list --format terse --ignored browser_sandboxed::"
                         "bash .github/ci/browser-vm.sh up \"$RUNNER_TEMP/vm\""
                         "bash .github/ci/browser-vm.sh put \"$RUNNER_TEMP/vm\" /usr/bin/bwrap"
                         "'$bin' --ignored --test-threads 1")
@@ -1269,7 +1269,7 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
                         "runtime/crates/gleipnir/**"
                         "runtime/crates/drgnx-ratatoskr/tests/launch_sandboxed.rs"
                         "runs-on: ubuntu-26.04" "/dev/kvm" ".github/ci/browser-vm.sh"
-                        "--test launch_sandboxed" "--ignored")
+                        "--test sandbox" "launch_sandboxed::" "--ignored")
     ;; the rows must have run on the reduced tier: a run that fell back to the full tier is red
     (should (string-search "this row runs on the full tier" yml))
     ;; what the rows read on the host that the VM lacks (CI run 43562883339): the mock LLM's script fixtures (two rows

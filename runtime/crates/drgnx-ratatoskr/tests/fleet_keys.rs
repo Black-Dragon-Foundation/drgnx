@@ -4,10 +4,10 @@
 //! They run in a fleet's harness only:
 //!
 //! ```text
-//! cargo test -p drgnx-ratatoskr --features fleet --test fleet_keys --no-run
+//! cargo test -p drgnx-ratatoskr --features fleet --test fleet --no-run
 //! cargo build -p sleipnir --features test-hooks --bin sleipnir --bin drgnx-key   # fleet.sh test shares both
 //! fleet.sh up --runners 1
-//! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test --test-threads=1
+//! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test --test-threads=1 fleet_keys::
 //! ```
 //!
 //! Every key is a throwaway value made by the row. Every row is [C]: a real `serve` and the jobs it starts announce

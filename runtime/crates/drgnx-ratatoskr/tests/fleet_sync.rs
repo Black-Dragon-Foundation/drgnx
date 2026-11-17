@@ -4,10 +4,10 @@
 //! They run in a fleet's harness only:
 //!
 //! ```text
-//! cargo test -p drgnx-ratatoskr --features fleet --test fleet_sync --no-run
+//! cargo test -p drgnx-ratatoskr --features fleet --test fleet --no-run
 //! cargo build -p sleipnir --features test-hooks        # the bundle each row installs (fleet.sh test shares it)
 //! fleet.sh up --runners 1
-//! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test --test-threads=1
+//! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test --test-threads=1 fleet_sync::
 //! ```
 //!
 //! Each row installs the shared `sleipnir` (a `test-hooks` build, which alone fetches from a plain `http://` origin)

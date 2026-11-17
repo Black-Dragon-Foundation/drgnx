@@ -1,6 +1,6 @@
 //! The layout's properties over generated workspaces (proptest; pure, [D]) and its golden layouts.
 //!
-//! Goldens live in `tests/golden/`. `UPDATE_VEGVISIR_GOLDEN=1 cargo test -p vegvisir --test layout golden` rewrites
+//! Goldens live in `tests/golden/`. `UPDATE_VEGVISIR_GOLDEN=1 cargo test -p vegvisir --test it layout::golden` rewrites
 //! them, and refuses a golden whose crossing count is above the one it replaces (`UPDATE_VEGVISIR_GOLDEN=metrics` does not:
 //! a layout metric moved on purpose).
 

@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+autotests = false  # tests/main.rs is the one binary of every tests/*.rs
 
 [dependencies]
 serde.workspace = true
@@ -19,3 +20,9 @@ unicode-segmentation.workspace = true
 [features]
 # the JSON Schemas of the wire types, for the hub protocol's registry (runstav)
 schema = ["dep:schemars"]
+
+
+# every tests/*.rs not named below, as modules of one binary: `cargo test -p drgnx-rows --test it <file>::`
+[[test]]
+name = "it"
+path = "tests/main.rs"
