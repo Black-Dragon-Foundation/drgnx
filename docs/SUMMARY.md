@@ -124,5 +124,7 @@
     - [Progress (kit)](design/components/progress.md)
     - [Chip (kit)](design/components/chip.md)
     - [Status dot (kit)](design/components/status-dot.md)
+    - [Range bar (kit)](design/components/range-bar.md)
+    - [Time axis (kit)](design/components/time-axis.md)
 - [The app icon](design/app-icon.md)
 - [Writing a theme for drgnx](design/theme-authors.md)

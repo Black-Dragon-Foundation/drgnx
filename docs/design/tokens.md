@@ -80,7 +80,7 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #46484f"></span> | `meter-span` | `#46484f` | `muted` at 35 % over `editor` | semantic | `drgnx-kit-progress-meter-span` |
 | <span class="swatch" style="background: #7aa5ff"></span> | `range-done` | `#7aa5ff` | the colour of `accent` | semantic | `drgnx-kit-range-bar`, `drgnx-kit-time-axis-now` |
 | <span class="swatch" style="background: #4d6598"></span> | `range-forecast` | `#4d6598` | `accent` at 55.00000000000001 % over `editor` | semantic | `drgnx-kit-range-bar-forecast` |
-| <span class="swatch" style="background: #38486a"></span> | `range-tail` | `#38486a` | `accent` at 35 % over `editor` | semantic | `drgnx-kit-range-bar-tail` |
+| <span class="swatch" style="background: #5c7aba"></span> | `range-tail` | `#5c7aba` | `accent` at 70 % over `editor` | semantic | `drgnx-kit-range-bar-tail` |
 | <span class="swatch" style="background: #f47a72"></span> | `range-late` | `#f47a72` | the colour of `error` | semantic | `drgnx-kit-range-bar-late` |
 | <span class="swatch" style="background: #e9bc5c"></span> | `range-wait` | `#e9bc5c` | the colour of `warn` | semantic | `drgnx-kit-range-bar-wait` |
 | <span class="swatch" style="background: #6fc6ea"></span> | `seg-read` | `#6fc6ea` | the colour of `info` | semantic | `drgnx-kit-range-bar-seg-read` |
@@ -168,7 +168,7 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #c3c5c9"></span> | `meter-span` | `#c3c5c9` | `muted` at 35 % over `editor` | semantic | `drgnx-kit-progress-meter-span` |
 | <span class="swatch" style="background: #2c5fd4"></span> | `range-done` | `#2c5fd4` | the colour of `accent` | semantic | `drgnx-kit-range-bar`, `drgnx-kit-time-axis-now` |
 | <span class="swatch" style="background: #8ba7e7"></span> | `range-forecast` | `#8ba7e7` | `accent` at 55.00000000000001 % over `editor` | semantic | `drgnx-kit-range-bar-forecast` |
-| <span class="swatch" style="background: #b5c7f0"></span> | `range-tail` | `#b5c7f0` | `accent` at 35 % over `editor` | semantic | `drgnx-kit-range-bar-tail` |
+| <span class="swatch" style="background: #6b8fe1"></span> | `range-tail` | `#6b8fe1` | `accent` at 70 % over `editor` | semantic | `drgnx-kit-range-bar-tail` |
 | <span class="swatch" style="background: #c22f28"></span> | `range-late` | `#c22f28` | the colour of `error` | semantic | `drgnx-kit-range-bar-late` |
 | <span class="swatch" style="background: #8a5d00"></span> | `range-wait` | `#8a5d00` | the colour of `warn` | semantic | `drgnx-kit-range-bar-wait` |
 | <span class="swatch" style="background: #0b6f99"></span> | `seg-read` | `#0b6f99` | the colour of `info` | semantic | `drgnx-kit-range-bar-seg-read` |

@@ -44,7 +44,7 @@
   (key-hint-edge over panel subtle . 0.75) (card-needs-you-edge . attention) (progress-track . border-subtle)
   (progress-fill . accent) (meter-fill . accent) (meter-near . warn) (meter-reached . error) (meter-tick . muted)
   (meter-span tint muted . 0.35)
-  (range-done . accent) (range-forecast tint accent . 0.55) (range-tail tint accent . 0.35) (range-late . error)
+  (range-done . accent) (range-forecast tint accent . 0.55) (range-tail tint accent . 0.70) (range-late . error)
   (range-wait . warn) (seg-read . info) (seg-search . accent) (seg-web . a6) (seg-think . muted) (seg-edit . ok)
   (seg-test . warn) (seg-job . a4) (seg-wait . attention))
  (light
@@ -69,7 +69,7 @@
   (key-hint-edge over panel subtle . 0.75) (card-needs-you-edge . attention) (progress-track . border-subtle)
   (progress-fill . accent) (meter-fill . accent) (meter-near . warn) (meter-reached . error) (meter-tick . muted)
   (meter-span tint muted . 0.35)
-  (range-done . accent) (range-forecast tint accent . 0.55) (range-tail tint accent . 0.35) (range-late . error)
+  (range-done . accent) (range-forecast tint accent . 0.55) (range-tail tint accent . 0.70) (range-late . error)
   (range-wait . warn) (seg-read . info) (seg-search . accent) (seg-web . a6) (seg-think . muted) (seg-edit . ok)
   (seg-test . warn) (seg-job . a4) (seg-wait . attention))
  (hc

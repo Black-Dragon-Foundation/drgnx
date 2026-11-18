@@ -514,13 +514,21 @@ fn range_bar(
             state,
             cells * u32::from(BAR_CELL_PX),
         );
+        // the glyph is the part's role (done, forecast, tail), the colour the state's: a late tail is still a tail
+        let plain = range_layers(
+            variant,
+            from,
+            to,
+            spans,
+            RangeState::OnTrack,
+            cells * u32::from(BAR_CELL_PX),
+        );
         for i in 0..cells {
-            let top = range_top(
-                &layers,
-                i * u32::from(BAR_CELL_PX) + u32::from(BAR_CELL_PX) / 2,
-            );
+            let mid = i * u32::from(BAR_CELL_PX) + u32::from(BAR_CELL_PX) / 2;
+            let top = range_top(&layers, mid);
             let face = top.map(FaceId::name);
-            let text = match (top, variant) {
+            let role = range_top(&plain, mid);
+            let text = match (role, variant) {
                 (None, _) => " ".to_owned(),
                 (Some(_), RangeVariant::Segment(k)) if i == 0 => match k.letter() {
                     Some(c) => c.to_string(),
@@ -2075,8 +2083,8 @@ mod tests {
 
     #[test]
     fn a_time_axis_labels_its_ticks_in_the_zone_and_marks_now() {
-        // 2026-11-18 00:00 UTC is 1_794_873_600; the zone +05:30 reads 05:30; ticks every hour for 3 hours at 100 px
-        let t0 = 1_794_873_600.0;
+        // 2026-11-18 00:00 UTC is 1_794_960_000; the zone +05:30 reads 05:30; ticks every hour for 3 hours at 100 px
+        let t0 = 1_794_960_000.0;
         let c = Comp::TimeAxis {
             from: t0,
             to: t0 + 10_800.0,

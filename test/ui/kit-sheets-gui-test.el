@@ -100,19 +100,24 @@ the baseline (`:ascent 100') is drawn at the line's end in the fill's face, its 
                     (error "No baseline marker drawn at %s" at)))))
       (save-excursion (goto-char at) (delete-char 1)))))
 
-(defun drgnx-kit-sheet--check-range (what e s edges snap beg)
-  "The range bar E (an expansion) drawn at BEG: down the column halfway into its first part, the part's face colour
-fills the bar's height (`drgnx-ui-kit-range-bar-heights' by the density, logical px) in device px of the cell's line."
-  (let* ((run (aref (plist-get e :runs) 0))
-         (face (intern (aref run 2)))
-         (colour (drgnx-kit-sheet--rgb (face-foreground face nil t)))
-         (x0 (drgnx-kit-sheet--x beg s edges))
-         (xm (+ x0 (/ (aref (aref (plist-get e :spaces) 0) 1) 2)))
-         (top (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point beg)))))))
-         (h (round (* s (save-excursion (goto-char beg) (line-pixel-height)))))
-         (rows (cl-loop for y from top below (+ top h) when (equal colour (drgnx-uitest-pixel snap xm y)) collect y))
-         (want (aref (aref (plist-get e :spaces) 0) 2)))
-    (should (equal (list what 'range-bar-height want) (list what 'range-bar-height (length rows))))))
+(defun drgnx-kit-sheet--check-range (what e s edges snap beg variant)
+  "The range bar E (an expansion) drawn at BEG: down the column halfway into each part, the part's colour (its face's
+foreground; the tail's is the `range-tail' token of VARIANT, the bar's colour tinted over the surface, not the full
+colour) fills the bar's height (`drgnx-ui-kit-range-bar-heights' by the density, logical px) in device px of the cell's
+line."
+  (let* ((top (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point beg)))))))
+         (h (round (* s (save-excursion (goto-char beg) (line-pixel-height))))))
+    (dolist (sp (append (plist-get e :spaces) nil))
+      (when-let* ((run (cl-find-if (lambda (r) (and (<= (aref r 0) (aref sp 0)) (< (aref sp 0) (aref r 1)))) (plist-get e :runs)))
+                  ((> (or (aref sp 2) 0) 0))             ; a gap between parts has no part colour
+                  (face (intern (aref run 2))))
+        (let* ((colour (drgnx-kit-sheet--rgb (if (eq face 'drgnx-kit-range-bar-tail)
+                                                 (drgnx-look-token 'range-tail variant)
+                                               (face-foreground face nil t))))
+               (xm (+ (drgnx-kit-sheet--x (+ beg (aref sp 0)) s edges) (/ (aref sp 1) 2)))
+               (rows (cl-loop for y from top below (+ top h) when (equal colour (drgnx-uitest-pixel snap xm y)) collect y)))
+          (should (equal (list what face 'range-bar-height (aref sp 2))
+                         (list what face 'range-bar-height (length rows)))))))))
 
 (defun drgnx-kit-sheet--check-fill (what fill track want total height snap beg s edges)
   "The bar drawn at BEG (WHAT the cell, for the failures), TOTAL device px wide: down the column halfway into its
@@ -234,8 +239,10 @@ Returns the number of cells checked."
         ;; the start and end pads, and between them the text (its icons and their gaps drawn as they are); a meter
         ;; ends in its text, not a pad
         (when (and spaces (not (equal variants '(meter))))
-          (let ((pads (+ (aref (car spaces) 1) (aref (car (last spaces)) 1)))
-                (text (round (* s (string-pixel-width (buffer-substring (1+ beg) (1- end)))))))
+          (let ((pads (if (eq id 'range-bar)   ; a bar is its parts and nothing else: its width is theirs
+                          (apply #'+ (mapcar (lambda (sp) (aref sp 1)) spaces))
+                        (+ (aref (car spaces) 1) (aref (car (last spaces)) 1))))
+                (text (if (eq id 'range-bar) 0 (round (* s (string-pixel-width (buffer-substring (1+ beg) (1- end))))))))
             (should (equal (list what 'width (+ pads text))
                            (list what 'width (- (drgnx-kit-sheet--x end s edges) (drgnx-kit-sheet--x beg s edges)))))))
         ;; (a') a row the expansion gives a height (`:height (density tree-row)'; an inline component, a chip, gives none)
@@ -269,7 +276,7 @@ Returns the number of cells checked."
         ;; (b4) a range bar: down the column halfway into its first part, that part's colour is the bar's height
         ;; (10 logical px, 8 compact, 12 roomy) in device px
         (when (and (eq id 'range-bar) spaces)
-          (drgnx-kit-sheet--check-range what e s edges snap beg))
+          (drgnx-kit-sheet--check-range what e s edges snap beg variant))
         ;; (b3) a meter: its bar, tick and span, or no bar
         (when (and (eq id 'progress) (equal variants '(meter)))
           (drgnx-kit-sheet--check-meter what (drgnx-kit-sheet--props id variants state) variant scale snap beg s edges))

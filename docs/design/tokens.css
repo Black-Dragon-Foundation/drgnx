@@ -77,7 +77,7 @@ html.ayu {
   --drgnx-meter-span: #46484f;
   --drgnx-range-done: #7aa5ff;
   --drgnx-range-forecast: #4d6598;
-  --drgnx-range-tail: #38486a;
+  --drgnx-range-tail: #5c7aba;
   --drgnx-range-late: #f47a72;
   --drgnx-range-wait: #e9bc5c;
   --drgnx-seg-read: #6fc6ea;
@@ -165,7 +165,7 @@ html.rust {
   --drgnx-meter-span: #c3c5c9;
   --drgnx-range-done: #2c5fd4;
   --drgnx-range-forecast: #8ba7e7;
-  --drgnx-range-tail: #b5c7f0;
+  --drgnx-range-tail: #6b8fe1;
   --drgnx-range-late: #c22f28;
   --drgnx-range-wait: #8a5d00;
   --drgnx-seg-read: #0b6f99;
