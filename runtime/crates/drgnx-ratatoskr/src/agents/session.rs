@@ -2228,12 +2228,15 @@ async fn launch_steps(
     if launch::kind(role, cwd, &scratch) == launch::Kind::Chat {
         front.mcp.mark_project_chat(sid);
     }
+    let stages = crate::stages::Stages::new("session launch", sid);
     let mcp = bridge(front, profile, who_of(role, profile), sid, cwd, task, job).await;
+    stages.at("the MCP bridge");
     let mcp_servers = mcp_names(&mcp);
     let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
         Ok(p) => p,
         Err(e) => return Err(e),
     };
+    stages.at("prepared");
     // the provider proxy the spec's relay reaches, bound before the spawn; a start that fails below drops it, and its
     // socket with it.  So are the browser's web proxy and CDP broker, for a session with the browser
     let mut net = super::net::start_session(front, profile, sid, SESSION_NET)
@@ -2264,6 +2267,7 @@ async fn launch_steps(
     let (conn, rx) = Conn::spawn(prep.spec, opts)
         .await
         .map_err(|e| internal(e.to_string()))?;
+    stages.at("the agent spawned");
     let kill = || draugr::kill_group(conn.pid(), Duration::ZERO, &draugr::RealSignaller);
     // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).  A start that fails
     // before the helper speaks says why on stderr (bwrap's own message).  With the browser, the line must say its
@@ -2298,6 +2302,7 @@ async fn launch_steps(
                                                  "_meta": panel::client_meta()}))
             .map_err(|e| hermod::Error::Decode(e.to_string()))?;
         let info = conn.initialize(caps).await?;
+        stages.at("the agent initialized");
         let caps = serde_json::to_value(&info.caps).ok();
         let mut landed = (None, None);
         let acp = match attach {
@@ -2352,7 +2357,10 @@ async fn launch_steps(
         Ok::<_, hermod::Error>((caps, acp, landed))
     };
     let (capabilities, acp, (level, level_why)) = match init.await {
-        Ok(x) => x,
+        Ok(x) => {
+            stages.at("the conversation open");
+            x
+        }
         Err(e) => {
             kill().await;
             // an agent that never answered (its program not found inside the sandbox, a crash) says why on stderr

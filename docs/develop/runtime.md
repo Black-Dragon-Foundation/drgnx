@@ -696,8 +696,11 @@ refuses in a path and resolves in what it reports) holding `home run state data 
 test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH`, `DRGNX_EMACS` (for the rows that
 run the editor's own CLIs, such as the personal-notes canary) and `DBUS_SESSION_BUS_ADDRESS` are inherited, and
 `DRGNX_RATATOSKR_LOG` and `DRGNX_RATATOSKR_STALL_FILE` (the stall watchdog's reports, hub.md) when set. Without it the hub logs `info` with a session's turn stages at `debug` (`HUB_LOG`:
-sending, the snapshot before the prompt, the prompt written, each update read and applied), so a failure's log tail
-(below) names the stage a session stopped at.
+sending, the snapshot before the prompt, the prompt written, each update read and applied) and the long request paths'
+stages (target `drgnx_ratatoskr::stages`, `src/stages.rs`: `history/fork`'s source, step, tree, branch and conversation,
+the fork tree's git steps, a session launch's bridge, spawn, initialize and open, a tool call's hooks, call and
+after-tool, a debugger tool's gate and work; each line with the ms since the request began), so a failure's log tail
+(below) names the stage a session or request stopped at.
 `DRGNX_CONFORMANCE_ROOTS=DIR/PREFIX` makes the roots `DIR/PREFIXXXXXXX/` instead. Keep DIR short: the socket path
 must stay within 103 bytes.
 

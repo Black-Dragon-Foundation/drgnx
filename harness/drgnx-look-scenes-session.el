@@ -2549,7 +2549,8 @@ block's own padding, kept on both sides) counts, and the px past the block are n
                               (if (> s bol) (drgnx-look-scene--px window bol s) 0)))))))))))
 
 (defun drgnx-look-scene--cut-rows (window how)
-  "Each cut in the hub's rows in WINDOW's buffer: (KEY HOW BODY-PX PREFIX AFTER FREE ELLIPSIS-PX ROW-PARTS FONTS),
+  "Each cut drawn in the hub's rows in WINDOW's buffer (none in hidden text): (KEY HOW BODY-PX PREFIX AFTER FREE
+ELLIPSIS-PX ROW-PARTS FONTS),
 PREFIX the row's text before the `…', AFTER its text after it, FREE the px free after it
 \(`drgnx-look-scene--free-after', less `drgnx-look-scene-widths-gap' when a text follows), FONTS the roles
 the hub measured the row in."
@@ -2565,23 +2566,25 @@ the hub measured the row in."
               (when (stringp key)
                 (goto-char bol)
                 (while (search-forward "…" eol t)
-                  (push (list key how (window-body-width window t)
-                              (buffer-substring-no-properties bol (1- (point)))
-                              (buffer-substring-no-properties (point) eol)
-                              ;; a text after the cut on the row keeps the hub's gap from it (a column's, a
-                              ;; place's at the right edge): not the cut text's room
-                              (let ((free (drgnx-look-scene--free-after window bol (point) eol)))
-                                (if (string-blank-p (buffer-substring-no-properties (point) eol)) free
-                                  (max 0 (- free (drgnx-px drgnx-look-scene-widths-gap (window-frame window))))))
-                              ;; with its faces, as the cut text is measured (`drgnx-look-scene--over-cut'):
-                              ;; `window-text-pixel-size' of a char past the body's edge gives the whole line's
-                              (string-pixel-width (let ((e (buffer-substring (1- (point)) (point))))
-                                                    (remove-text-properties 0 1 '(read-only nil front-sticky nil) e)
-                                                    e)
-                                                  (current-buffer))
-                              (drgnx-look-scene--row-parts window bol eol)
-                              (ignore-errors (plist-get (gethash key (drgnx-view-patch-rows drgnx-view-patch)) :fonts)))
-                        out))))
+                  ;; a hidden row (the Explorer's root: its name is the side bar's title) draws no cut
+                  (unless (invisible-p (1- (point)))
+                    (push (list key how (window-body-width window t)
+                                (buffer-substring-no-properties bol (1- (point)))
+                                (buffer-substring-no-properties (point) eol)
+                                ;; a text after the cut on the row keeps the hub's gap from it (a column's, a
+                                ;; place's at the right edge): not the cut text's room
+                                (let ((free (drgnx-look-scene--free-after window bol (point) eol)))
+                                  (if (string-blank-p (buffer-substring-no-properties (point) eol)) free
+                                    (max 0 (- free (drgnx-px drgnx-look-scene-widths-gap (window-frame window))))))
+                                ;; with its faces, as the cut text is measured (`drgnx-look-scene--over-cut'):
+                                ;; `window-text-pixel-size' of a char past the body's edge gives the whole line's
+                                (string-pixel-width (let ((e (buffer-substring (1- (point)) (point))))
+                                                      (remove-text-properties 0 1 '(read-only nil front-sticky nil) e)
+                                                      e)
+                                                    (current-buffer))
+                                (drgnx-look-scene--row-parts window bol eol)
+                                (ignore-errors (plist-get (gethash key (drgnx-view-patch-rows drgnx-view-patch)) :fonts)))
+                          out)))))
             (goto-char (line-end-position))
             (forward-line 1)))))
     (nreverse out)))

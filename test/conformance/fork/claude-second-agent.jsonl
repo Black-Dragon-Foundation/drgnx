@@ -3,7 +3,7 @@
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q && echo base > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--state\" \"$ROOT/state\")))))\n"}
-{"do": "start", "hub": "h"}
+{"do": "start", "hub": "h", "env": {"RATATOSKR_TEST_HISTORY_OFF_RUNTIME": "1"}}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}

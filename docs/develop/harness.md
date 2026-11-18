@@ -730,7 +730,8 @@ How it works:
   in the buffer with its faces), less the `…`, plus the hub's 10 px slack, must not fit the px free after the `…`
   (blanks, a stop's space, the body past the row's end). A blank in a block's face (a box or a background of its own:
   a card's fill, a chip) ends the count: when the row ends in that block, only its end pad less the row's start pad in
-  that face counts (the block's own padding, kept on both sides), never the px past the block. When a text follows
+  that face counts (the block's own padding, kept on both sides), never the px past the block. A `…` in hidden text
+  is not counted (the Explorer's root row is cut as any row, but it is hidden: its name is the side bar's title). When a text follows
   on the row, the view's gap from it (10 logical px: a column's, a place's at the right edge) is not free. The `…` is measured
   with its faces as the cut text is (`window-text-pixel-size` of a char past the body's edge gives the whole
   line's). The drawn width is measured as the shot drew it, then
@@ -855,7 +856,9 @@ Wayland socket. It only ever
 stops what belongs to the current state root: a systemd unit only if its command line names this root's run
 directory (unit names are global — another checkout may run a session of the same id, however unlikely), a detached process group only if
 one of its members names the run directory (a stale `pgid` file may point at a reused id; ids 0 and 1 are never
-signalled), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
+signalled), or its leader is the process the launcher started (its start time from `/proc`, kept in `pgid-start`:
+the leader execs `timeout`, which as the session's leader stays in the group, and an exec'ing process's command line
+reads empty for an instant), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
 current state root — run directories, plus live units whose command line points into it — and leaves sessions
 of other state roots alone. Units also end on their own after 30 minutes (`RuntimeMaxSec=1800`) and are
 capped at 3 GB (`MemoryMax`). A detached session (no systemd: a container, or `DRGNX_UI_LAUNCHER=detached`) has the same time cap, from `timeout -k 10` (also `DRGNX_UI_MAX_RUNTIME`), and a 16 GB virtual-memory `ulimit` (generous on purpose: a GL stack maps a lot; it is a limit per process, not a cap on the whole group like `MemoryMax`). A systemd stop kills what is left after 10 s (`TimeoutStopSec`; systemd's default is 90). A test process that is ended (`DRGNX_UI_STOP_ON_EXIT`) first tells all its units to stop without waiting (`systemctl stop --no-block`), then stops each session in turn, so the stops overlap (that `kill-emacs-hook` entry is there only while the process has a session of its own, so a test file that merely loads `drgnx-ui` for its progress clock leaves no hook behind); one session takes 18 s at the very most (asking Emacs to exit: 8 s, then the unit: 10 s), within the 25 s `bin/drgnx check` gives an ended job. The slow exit seen under load (more than 45 s) was not reproduced on a quiet machine; this bounds it, it does not explain it. A failed `drgnx test --ui` or `--scenario` run keeps its run directory
