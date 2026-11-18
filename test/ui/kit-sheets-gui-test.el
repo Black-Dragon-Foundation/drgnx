@@ -313,7 +313,38 @@ Returns the number of cells checked."
         (cl-incf n)))
     n))
 
-(defun drgnx-kit-sheet-check (id)
+(defun drgnx-kit-sheet--check-question-cells (_id variant _scale)
+  "The question card's cells (one a kind): the head on the attention tint, the ring at the card's edge in the needs-you
+edge's colour, and the first button the primary one (a secondary's fill is the quiet selection); returns the cells."
+  (let* ((frame (selected-frame)) (s (drgnx-uitest-device-scale frame)) (n 0))
+    (pcase-dolist (`(,id ,variants ,_state ,beg ,end) (drgnx-kit-catalogue-cells))
+      (set-window-start nil (save-excursion (goto-char beg) (forward-line -1) (point)))
+      (drgnx-test-wait-presented)
+      (let* ((snap (drgnx-uitest-snapshot)) (edges (window-inside-pixel-edges))
+             (what (list id variants variant))
+             (line (lambda (k) (save-excursion (goto-char beg) (forward-line k) (point))))
+             (y (lambda (k) (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point (funcall line k))))
+                                           (/ (save-excursion (goto-char (funcall line k)) (line-pixel-height)) 2.0))))))
+             (x0 (drgnx-kit-sheet--x beg s edges))
+             (last (- (count-lines beg end) 2)))
+        ;; the head: inside the card's room, its fill is the attention tint
+        (should (equal (list what 'head (drgnx-kit-sheet--rgb (drgnx-look-token 'attention-tint variant)))
+                       (list what 'head (drgnx-uitest-pixel snap (+ x0 (round (* s 2))) (funcall y 0)))))
+        ;; the ring: the leftmost column halfway down the body is the needs-you edge
+        (should (equal (list what 'ring (drgnx-kit-sheet--rgb (drgnx-look-token 'card-needs-you-edge variant)))
+                       (list what 'ring (drgnx-uitest-pixel snap x0 (funcall y 1)))))
+        ;; the first button's fill: in its start pad, the primary's
+        (let* ((label (pcase (car variants) ('question "Use the JSON") ('sign-off "Approve") (_ "Allow once")))
+               (b (save-excursion (goto-char (funcall line last)) (search-forward label (line-end-position) t))))
+          (should b)
+          (should (equal (list what 'primary (drgnx-kit-sheet--rgb (drgnx-look-token 'button-primary-bg variant)))
+                         (list what 'primary (drgnx-uitest-pixel snap (+ (drgnx-kit-sheet--x (- b (length label) 1) s edges)
+                                                                         (round (* s 3)))
+                                                                 (funcall y last))))))
+        (cl-incf n)))
+    n))
+
+(defun drgnx-kit-sheet-check (id &optional checker)
   "Component ID's sheet: the catalogue for ID in each theme of `drgnx-kit-sheet-themes' at each density, at the
 session's scale (and 1.25 at scale 1); every cell checked (`drgnx-kit-sheet--check-cells').  The comfortable sheet's
 picture goes to the evidence folder.  The caller skips a session with no graphical frame."
@@ -337,10 +368,16 @@ picture goes to the evidence folder.  The caller skips a session with no graphic
                     (copy-file root (expand-file-name (format "kit-sheet-%s-%s-s%s.png" id variant fs) evidence) t)
                     (when (= fs 1)
                       (copy-file root (expand-file-name (format "kit-sheet-%s-%s.png" id variant) evidence) t))))
-                (should (< 0 (drgnx-kit-sheet--check-cells id variant scale)))))))
+                (should (< 0 (funcall (or checker #'drgnx-kit-sheet--check-cells) id variant scale)))))))
       (switch-to-buffer old)
       (when (buffer-live-p buf) (kill-buffer buf))
       (mapc #'disable-theme custom-enabled-themes))))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/question-card ()
+  "The question card's sheet: three kinds, the head on the attention tint, the needs-you ring, the first button primary,
+in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'question-card #'drgnx-kit-sheet--check-question-cells))
 
 (drgnx-look-gui-deftest drgnx-kit-sheet/row ()
   "The row's sheet: 3 kinds x 7 states, each pad exact and each state's fill its token, in every theme and density."

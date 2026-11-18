@@ -270,6 +270,44 @@
     (should (= i (length want)))
     (should-not (nreverse fails))))
 
+(defun ui-kit-test--answers (kind labels width)
+  "A question card of KIND with LABELS' answers: (CARD-TEXT . ANSWERS), ANSWERS the indexes the card's handlers got."
+  (let* ((got (list nil))
+         (lines (drgnx-ui-kit-question-card
+                 kind "Run cargo test?" "The agent wants to run a command in the project folder, and waits for you."
+                 (mapcar (lambda (l) (list l nil (lambda (i) (push i (car got))))) labels) width)))
+    (cons (apply #'concat lines) got)))
+
+(ert-deftest drgnx-ui-kit/question-card-keys-answer ()
+  ;; a bare key on the card answers (y/a/n a permission's Allow once, Always, Deny; 1..9 a question's; y/n a sign-off's),
+  ;; through the card's action kind map; a click on its text answers nothing
+  (dolist (case '((permission ("Allow once" "Always" "Deny") (("y" . 0) ("a" . 1) ("n" . 2)))
+                  (question ("A" "B" "C") (("1" . 0) ("3" . 2)))
+                  (sign-off ("Approve" "Request changes") (("y" . 0) ("n" . 1)))))
+    (pcase-let* ((`(,kind ,labels ,keys) case) (c (ui-kit-test--answers kind labels 60)))
+      (with-temp-buffer
+        (insert (car c)) (goto-char (point-min))
+        (dolist (k keys)
+          (setcar (cdr c) nil)
+          (cl-letf (((symbol-function 'this-command-keys-vector) (lambda () (kbd (car k)))))
+            (drgnx-ui-kit-activate))
+          (should (equal (list kind (car k) (cadr c)) (list kind (car k) (list (cdr k))))))
+        (setcar (cdr c) nil)
+        (cl-letf (((symbol-function 'this-command-keys-vector) (lambda () [mouse-1])))
+          (drgnx-ui-kit-activate))
+        (should-not (cadr c))))))
+
+(ert-deftest drgnx-ui-kit/question-card-has-a-primary-first-button-and-the-head-tint ()
+  (let* ((c (car (ui-kit-test--answers 'permission '("Allow once" "Deny") 60)))
+         (lines (split-string c "\n" t)))
+    (should (= (length lines) 5))
+    (should (memq 'drgnx-kit-question-card-head
+                  (ensure-list (get-text-property (string-match "Run cargo" (nth 0 lines)) 'face (nth 0 lines)))))
+    (let* ((row (nth (- (length lines) 2) lines))
+           (a (string-match "Allow once" row)) (d (string-match "Deny" row)))
+      (should (memq 'drgnx-kit-button-primary (ensure-list (get-text-property a 'face row))))
+      (should (memq 'drgnx-kit-button-secondary (ensure-list (get-text-property d 'face row)))))))
+
 (ert-deftest drgnx-ui-kit/buffer-text-uses-canonical-widths ()
   ;; in buffer text a pad is a width in canonical characters, so one buffer is right at two scales
   (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))

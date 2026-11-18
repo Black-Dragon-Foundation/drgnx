@@ -3864,6 +3864,13 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   action. `drgnx-ui-button` keeps its `&key` signature for callers off per-row paths; its faces `drgnx-ui-button` and
   `drgnx-ui-button-primary` (and `drgnx-button`, `drgnx-keycap`) are aliases of the kit
   faces once `ui/look` is on.
+- `question-card` (kind `permission`, `question` or `sign-off`; Task 13) is a block: the hub's `kit::expand_rows`
+  (`Comp::QuestionCard { kind, title, body, choices }`, the caller wraps BODY, one row a line) gives a needs-you card's
+  rows (head on `drgnx-kit-question-card-head`, body, the choices as kit buttons, the first primary, each with the
+  key hint of its `Choice.key` or the kind's); Lisp's `(drgnx-ui-kit-question-card KIND TITLE BODY CHOICES WIDTH)` gives
+  the lines (CHOICES `((LABEL KEY ACTION)...)`, ACTION a function of the answer's index, BODY filled to WIDTH). In Lisp a
+  bare key on the card answers through the action kind `question` (`y a n` a permission's, `1`...`9` a question's, `y n`
+  a sign-off's); a click on its text answers nothing.
 - A binding may name `:font` (faces with no colours: the UI or code font): a drgnx theme's spec for a face with
   colours keeps only those of its `:inherit`, while a third-party theme styles it through the whole `:inherit`.
 

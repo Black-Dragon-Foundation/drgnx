@@ -1128,6 +1128,10 @@ pub enum FaceId {
     KitTabPanelCurrent,
     /// `drgnx-kit-tab-preview`
     KitTabPreview,
+    /// `drgnx-kit-question-card`
+    KitQuestionCard,
+    /// `drgnx-kit-question-card-head`
+    KitQuestionCardHead,
     /// `drgnx-kit-segmented`
     KitSegmented,
     /// `drgnx-kit-segmented-current`
@@ -1136,7 +1140,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 562] = [
+    pub const ALL: [FaceId; 564] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1697,6 +1701,8 @@ impl FaceId {
         FaceId::KitTabCurrentInactive,
         FaceId::KitTabPanelCurrent,
         FaceId::KitTabPreview,
+        FaceId::KitQuestionCard,
+        FaceId::KitQuestionCardHead,
         FaceId::KitSegmented,
         FaceId::KitSegmentedCurrent,
     ];
@@ -2264,6 +2270,8 @@ impl FaceId {
             FaceId::KitTabCurrentInactive => "drgnx-kit-tab-current-inactive",
             FaceId::KitTabPanelCurrent => "drgnx-kit-tab-panel-current",
             FaceId::KitTabPreview => "drgnx-kit-tab-preview",
+            FaceId::KitQuestionCard => "drgnx-kit-question-card",
+            FaceId::KitQuestionCardHead => "drgnx-kit-question-card-head",
             FaceId::KitSegmented => "drgnx-kit-segmented",
             FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
         }
@@ -2832,6 +2840,8 @@ impl FaceId {
             "drgnx-kit-tab-current-inactive" => FaceId::KitTabCurrentInactive,
             "drgnx-kit-tab-panel-current" => FaceId::KitTabPanelCurrent,
             "drgnx-kit-tab-preview" => FaceId::KitTabPreview,
+            "drgnx-kit-question-card" => FaceId::KitQuestionCard,
+            "drgnx-kit-question-card-head" => FaceId::KitQuestionCardHead,
             "drgnx-kit-segmented" => FaceId::KitSegmented,
             "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
             _ => return None,

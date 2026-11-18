@@ -1557,6 +1557,85 @@ row's shape: single, top, mid or bottom, open where the card goes on."
               out)))
     (apply #'concat (nreverse out))))
 
+;;; A question card (a permission, a question, a sign-off) as the lines of a needs-you card
+
+(defun drgnx-ui-kit--question (args)
+  "The action kind `question': ARGS (HANDLER KIND INDEX) calls HANDLER with INDEX, the answer picked; nil INDEX (a click
+on the card's text) does nothing."
+  (when (nth 2 args) (funcall (car args) (nth 2 args))))
+
+(drgnx-ui-kit-define-action
+ 'question #'drgnx-ui-kit--question
+ (append
+  (list (cons "y" (lambda (a) (list (car a) (cadr a) 0)))
+        (cons "a" (lambda (a) (list (car a) (cadr a) 1)))
+        (cons "n" (lambda (a) (list (car a) (cadr a) (if (eq (cadr a) 'sign-off) 1 2)))))
+  (cl-loop for i from 1 to 9
+           collect (let ((i i)) (cons (number-to-string i) (lambda (a) (list (car a) (cadr a) (1- i))))))))
+
+(defun drgnx-ui-kit--question-words (text width)
+  "TEXT filled to WIDTH columns, as a list of lines."
+  (with-temp-buffer
+    (insert text)
+    (let ((fill-column (max 10 width))) (fill-region (point-min) (point-max)))
+    (split-string (buffer-string) "\n")))
+
+(defun drgnx-ui-kit--question-line (text width kind shape head card-props)
+  "TEXT (kit strings and plain text) as one line of the needs-you card (`drgnx-ui-kit-card-lines'): its ring face of
+SHAPE under what TEXT has, HEAD (a face or nil) above that, filled by a stretch to column WIDTH (the text is in the
+proportional UI font: its columns are not the width's) that closes the card at its right edge; the card's own props
+\(CARD-PROPS) on every part that has no action of its own."
+  (let* ((entry (drgnx-ui-kit-component 'card))
+         (ring (drgnx-ui-kit--face 'card (drgnx-ui-kit--chosen entry (list kind shape))))
+         (line (concat " " text))
+         (len (length line)) (pos 0))
+    ;; what has no action of its own (a button has: its boxes stay its own) is the card's: its tint and ring, its props
+    (while (< pos len)
+      (let ((next (next-single-property-change pos 'drgnx-action line len)))
+        (unless (get-text-property pos 'drgnx-action line)
+          (when head (add-face-text-property pos next head nil line))
+          (add-face-text-property pos next ring t line)
+          (add-text-properties pos next card-props line))
+        (setq pos next)))
+    (concat line
+            (apply #'propertize " " 'display `(space :align-to ,(1+ width)) 'face (if head (list head ring) ring)
+                   card-props)
+            "\n")))
+
+(defun drgnx-ui-kit-question-card (kind title body choices width)
+  "A question card as a list of line strings, WIDTH columns wide: KIND (`permission', `question' or `sign-off') sets
+the keys a bare key answers with when point is on the card (permission `y' `a' `n', question `1'...`9', sign-off `y'
+`n'); TITLE on the needs-you head, BODY filled to the width, and CHOICES, ((LABEL KEY ACTION)...), as kit buttons, the
+first primary, each with its key hint KEY (nil: the kind's).  ACTION is a function of the answer's index.  The card's
+accessible text is \"needs you: TITLE\"."
+  (let* ((handler (lambda (i) (funcall (nth 2 (nth i choices)) i)))
+         (card-props (list 'drgnx-action (list 'question handler kind nil) 'keymap (drgnx-ui-kit-action-map 'question)
+                           'help-echo (concat "needs you: " title)))
+         (default-keys (pcase kind
+                         ('question (mapcar #'number-to-string (number-sequence 1 (min 9 (length choices)))))
+                         ('sign-off '("y" "n"))
+                         (_ '("y" "a" "n"))))
+         (head (drgnx-ui-kit-string 'status-dot (list :c "status-dot" :status "needs-you" :word :false) 'text nil))
+         (buttons (let ((i -1))
+                    (mapcar (lambda (c)
+                              (setq i (1+ i))
+                              (drgnx-ui-kit-button (nth 0 c) (list 'question handler kind i) (if (= i 0) 'primary 'secondary)
+                                                   'md 'rest (or (nth 1 c) (nth i default-keys)) 'text))
+                            choices)))
+         (rows (append (list (cons (concat head " " title) 'head))
+                       (mapcar (lambda (l) (cons (propertize l 'face 'drgnx-ui-text) nil)) (and (> (length body) 0) (drgnx-ui-kit--question-words body (- width 2))))
+                       (and buttons (list (cons (mapconcat #'identity buttons (apply #'propertize " " card-props)) nil)
+                                          ;; room under the buttons, so the ring runs unbroken below them
+                                          (cons "" nil)))))
+         (n (length rows)) (i 0) (out nil))
+    (dolist (r rows)
+      (push (drgnx-ui-kit--question-line
+             (car r) width 'needs-you (cond ((= n 1) 'single) ((= i 0) 'top) ((= i (1- n)) 'bottom) (t 'mid))
+             (and (cdr r) 'drgnx-kit-question-card-head) card-props)
+            out)
+      (setq i (1+ i)))
+    (nreverse out)))
+
 ;;; A kit button in buffer text that is also a `button.el' button (`push-button', `forward-button' reach it).
 (defun drgnx-ui-kit-text-button (label fn help style size)
   "LABEL as a kit button (STYLE, SIZE: see `drgnx-ui-kit-button') in buffer text that calls FN, a function of no

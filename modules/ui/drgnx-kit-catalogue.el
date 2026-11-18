@@ -20,7 +20,7 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--stateless '(agent-mark progress card range-bar segmented)
+(defconst drgnx-kit-catalogue--stateless '(agent-mark progress card range-bar segmented question-card)
   "The components that show no state (nothing to hover or select; a segmented switch's current item is its own):
 drawn at rest only.")
 
@@ -106,12 +106,25 @@ dresses a hub row, in STATE (a patch state); the cell's text, its line's height 
     (propertize (drgnx-view-patch--dress state "kit" row (copy-sequence (plist-get e :text)))
                 'drgnx-kit-line-height (plist-get (plist-get e :height) :unit))))
 
+(defun drgnx-kit-catalogue--question-card (kind)
+  "A question card of KIND as the catalogue shows it: its lines, 72 columns wide."
+  (let ((ids (pcase kind
+               ('question '(("Use the JSON schema" nil) ("Use the TOML one" nil) ("Neither" nil)))
+               ('sign-off '(("Approve" nil) ("Request changes" nil)))
+               (_ '(("Allow once" nil) ("Always" nil) ("Deny" nil))))))
+    (apply #'concat
+           (drgnx-ui-kit-question-card
+            kind (pcase kind ('question "Which format?") ('sign-off "Sign off the review?") (_ "Run cargo test?"))
+            "The agent wants this to go on; it waits for you."
+            (mapcar (lambda (c) (list (car c) (cadr c) #'ignore)) ids) 72))))
+
 (defun drgnx-kit-catalogue--cell (id variants state scale tty patch)
   "One cell's text: component ID with VARIANTS in STATE."
   (let* ((props (drgnx-kit-catalogue--props id variants state))
-         (s (if (memq id drgnx-kit-catalogue--hub)
-                (drgnx-kit-catalogue--hub-row id props scale tty patch)
-              (drgnx-ui-kit-string id props 'text nil))))
+         (s (cond ((eq id 'question-card) (drgnx-kit-catalogue--question-card (alist-get 'kind variants)))
+                  ((memq id drgnx-kit-catalogue--hub)
+                   (drgnx-kit-catalogue--hub-row id props scale tty patch))
+                  (t (drgnx-ui-kit-string id props 'text nil)))))
     (put-text-property 0 (length s) 'drgnx-kit-cell (list id (mapcar #'cdr variants) state) s)
     ;; progress beside its caption, as it is used: the bar and the ring on the caption's centre line (a meter has its
     ;; text)

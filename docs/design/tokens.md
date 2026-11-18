@@ -39,7 +39,7 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #322325"></span> | `error-tint` | `#322325` | `error` at 13 % over `editor` | semantic | `show-paren-mismatch`, `drgnx-debug-exception-line`, `flymake-error-echo-at-eol`, `flymake-error-inline`, `drgnx-kit-button-danger`, `drgnx-kit-chip-error-soft` |
 | <span class="swatch" style="background: #352f24"></span> | `stop-band` | `#352f24` | `warn` at 15 % over `editor` | semantic | `drgnx-debug-stopped-line` |
 | <span class="swatch" style="background: #202b33"></span> | `info-tint` | `#202b33` | `info` at 12 % over `editor` | semantic | `flymake-note-echo-at-eol`, `flymake-note-inline` |
-| <span class="swatch" style="background: #382925"></span> | `attention-tint` | `#382925` | `attention` at 15 % over `editor` | semantic | `drgnx-chip-attention` |
+| <span class="swatch" style="background: #382925"></span> | `attention-tint` | `#382925` | `attention` at 15 % over `editor` | semantic | `drgnx-chip-attention`, `drgnx-kit-question-card-head` |
 | <span class="swatch" style="background: #232a3a"></span> | `accent-tint` | `#232a3a` | `accent` at 14.000000000000002 % over `editor` | semantic | `drgnx-pill-accent`, `match`, `show-paren-match`, `drgnx-kit-chip-accent-soft` |
 | <span class="swatch" style="background: #1d2b27"></span> | `add-bg` | `#1d2b27` | `ok` at 11 % over `editor` | semantic | `diff-added` |
 | <span class="swatch" style="background: #2e2124"></span> | `del-bg` | `#2e2124` | `error` at 11 % over `editor` | semantic | `diff-removed` |
@@ -127,7 +127,7 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #faecec"></span> | `error-tint` | `#faecec` | `error` at 9 % over `editor` | semantic | `show-paren-mismatch`, `drgnx-debug-exception-line`, `flymake-error-echo-at-eol`, `flymake-error-inline`, `drgnx-kit-button-danger`, `drgnx-kit-chip-error-soft` |
 | <span class="swatch" style="background: #f7efdb"></span> | `stop-band` | `#f7efdb` | the colour of `warn-tint` | semantic | `drgnx-debug-stopped-line` |
 | <span class="swatch" style="background: #e9f2f6"></span> | `info-tint` | `#e9f2f6` | `info` at 9 % over `editor` | semantic | `flymake-note-echo-at-eol`, `flymake-note-inline` |
-| <span class="swatch" style="background: #f8ece8"></span> | `attention-tint` | `#f8ece8` | `attention` at 10 % over `editor` | semantic | `drgnx-chip-attention` |
+| <span class="swatch" style="background: #f8ece8"></span> | `attention-tint` | `#f8ece8` | `attention` at 10 % over `editor` | semantic | `drgnx-chip-attention`, `drgnx-kit-question-card-head` |
 | <span class="swatch" style="background: #eaeffb"></span> | `accent-tint` | `#eaeffb` | `accent` at 10 % over `editor` | semantic | `drgnx-pill-accent`, `match`, `show-paren-match`, `drgnx-kit-chip-accent-soft` |
 | <span class="swatch" style="background: #eaf3ee"></span> | `add-bg` | `#eaf3ee` | `ok` at 9 % over `editor` | semantic | `diff-added` |
 | <span class="swatch" style="background: #faeeee"></span> | `del-bg` | `#faeeee` | `error` at 8 % over `editor` | semantic | `diff-removed` |
@@ -216,7 +216,7 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #000000"></span> | `error-tint` | `#000000` | `error` at 0 % over `editor` | semantic | `show-paren-mismatch`, `drgnx-debug-exception-line`, `drgnx-kit-button-danger` |
 | <span class="swatch" style="background: #000000"></span> | `stop-band` | `#000000` | the colour of `warn-tint` | semantic | `drgnx-debug-stopped-line` |
 | <span class="swatch" style="background: #000000"></span> | `info-tint` | `#000000` | `info` at 0 % over `editor` | semantic | - |
-| <span class="swatch" style="background: #000000"></span> | `attention-tint` | `#000000` | `attention` at 0 % over `editor` | semantic | `drgnx-chip-attention` |
+| <span class="swatch" style="background: #000000"></span> | `attention-tint` | `#000000` | `attention` at 0 % over `editor` | semantic | `drgnx-chip-attention`, `drgnx-kit-question-card-head` |
 | <span class="swatch" style="background: #000000"></span> | `accent-tint` | `#000000` | `accent` at 0 % over `editor` | semantic | `drgnx-pill-accent`, `match`, `show-paren-match` |
 | <span class="swatch" style="background: #0f2e1b"></span> | `add-bg` | `#0f2e1b` | fixed | semantic | `diff-added` |
 | <span class="swatch" style="background: #3a1210"></span> | `del-bg` | `#3a1210` | fixed | semantic | `diff-removed` |
