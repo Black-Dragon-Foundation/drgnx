@@ -277,7 +277,7 @@ waits for the Explorer's.")
 
 (defun drgnx-look-scene--unfed-views ()
   "The hub-fed views a window of the selected frame shows without the hub's rows: ((VIEW BUFFER CLASSES) ...).  A
-view with no env sent (CLASSES nil), or with no version and an empty buffer, has none."
+view with no env sent (CLASSES nil), or with no version and an empty buffer, has none; a terminal's rows need no env."
   (let ((seen nil) (out nil))
     (dolist (w (window-list nil 'never))
       (let* ((b (window-buffer w)) (state (buffer-local-value 'drgnx-view-patch b))
@@ -285,7 +285,9 @@ view with no env sent (CLASSES nil), or with no version and an empty buffer, has
         (when (and view (not (member view seen)))
           (push view seen)
           (let ((classes (and (fboundp 'drgnx-view-env-classes) (drgnx-view-env-classes view))))
-            (unless (and classes (or (drgnx-view-patch-version state) (> (buffer-size b) 0)))
+            ;; a terminal (`term:ID') is fed by its own worker, not by a view/env: its rows' version says it has them
+            (unless (or (and (stringp view) (string-prefix-p "term:" view) (drgnx-view-patch-version state))
+                        (and classes (or (drgnx-view-patch-version state) (> (buffer-size b) 0))))
               (push (list view b classes) out))))))
     (nreverse out)))
 
