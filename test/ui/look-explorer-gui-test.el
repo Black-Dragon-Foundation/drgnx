@@ -95,6 +95,53 @@ row that is not its background, scanning the row from the window's right edge in
     (cl-loop for x from (round (* s (- (nth 2 e) 2))) downto (round (* s (nth 0 e)))
              unless (equal bg (cdr (drgnx-uitest-pixel snap x y))) return x)))
 
+(defvar drgnx-scrollbar-mode)
+(declare-function drgnx-scrollbar-mode "drgnx-ruler" (&optional arg))
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/no-row-runs-under-the-scroll-strip ()
+  "With the scroll bar's strip in the window's right fringe (12 px more fringe), every row of a narrow Explorer ends
+inside the body: the hub fits the rows to the body the strip leaves, so Emacs cuts none and draws no truncation glyph
+at its end.  Each row's end (the newline after its tail) is in sight."
+  (skip-unless (and (display-graphic-p) (featurep 'glitnir-ruler)))
+  (require 'drgnx-ruler)
+  (drgnx-ui-look-explorer--with root
+    (let* ((w (selected-window)) (other (split-window w (drgnx-px 170) 'left t)))
+      (unwind-protect
+          (progn
+            (drgnx-scrollbar-mode 1)
+            (drgnx-ruler--place w)
+            (drgnx-test-wait (lambda () (window-parameter w 'drgnx-ruler-fringe)) :secs 5 :what "the strip's fringe")
+            (redisplay t)
+            (drgnx-view-env-update drgnx-explorer-hub-view-name)
+            (let ((rows 0) (cut nil))
+              (cl-flet ((measure ()
+                          (redisplay t)
+                          (setq rows 0 cut nil)
+                          (with-current-buffer (window-buffer w)
+                            (save-excursion
+                              (goto-char (point-min))
+                              (while (not (eobp))
+                                (let ((bol (point)) (eol (line-end-position)))
+                                  (when (and (stringp (ignore-errors (drgnx-view-key-at bol))) (not (invisible-p bol))
+                                             (pos-visible-in-window-p bol w))
+                                    (setq rows (1+ rows))
+                                    (unless (pos-visible-in-window-p eol w)
+                                      (push (list (buffer-substring-no-properties bol eol)
+                                                  (car (window-text-pixel-size w bol (min (point-max) (1+ eol)))))
+                                            cut))))
+                                (forward-line 1))))
+                          (and (> rows 2) (null cut))))
+                ;; the hub's rows for the width the strip leaves: they come once it has the env
+                (condition-case nil
+                    (drgnx-test-wait #'measure :secs 5 :what "every row inside the body")
+                  (ert-test-failed
+                   (ert-fail (list "rows cut at the window's edge" cut :rows rows :body (window-body-width w t)
+                                   :fringes (window-fringes w)
+                                   :env (mapcar (lambda (c) (plist-get (cdr c) :width_px))
+                                                (drgnx-view-env--envs drgnx-explorer-hub-view-name)))))))))
+        (drgnx-scrollbar-mode -1)
+        (when (window-live-p other) (delete-window other))))))
+
 (drgnx-look-gui-deftest drgnx-ui-look-explorer/a-section-shows-whole-rows ()
   "Pattern D: a dock section with another below it ends at a whole row, so no part of a row (a glyph fragment) is
 drawn at its foot; the section below takes the pixels left over, and a second fit changes nothing."
