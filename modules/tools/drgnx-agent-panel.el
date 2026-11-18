@@ -465,6 +465,26 @@ panel whose input starts an agent (`drgnx-agent-panel-new-chat'), as VS Code's c
         (drgnx-agent-panel-explain-load-grants))
       buf)))
 
+(declare-function drgnx-grid-show-beside-editor "drgnx-grid" (entry buffer select))
+(defvar drgnx-grid-mode)
+
+(defun drgnx-agent-panel-open-tab (session)
+  "Show SESSION's conversation as an editor tab: the header above, the transcript and the composer below, one tile
+beside the selected editor tile (an atomic tile that tears out and moves like any tile).  Without the grid, or with no
+room for a tile, it opens as `drgnx-agent-panel-open' does.  The right-hand form stays the compact one."
+  (interactive (list (drgnx-agent-panel--read-session)))
+  (if (not (and (bound-and-true-p drgnx-grid-mode) (require 'drgnx-grid nil t)))
+      (drgnx-agent-panel-open session)
+    (let ((buf (drgnx-agent-panel-buffer session)))
+      ;; one place for a conversation at a time: the compact form in the dock gives it up
+      (when-let* ((dock (drgnx-pane-window 'agent-panel)) ((eq (window-buffer dock) buf)))
+        (drgnx-pane-hide 'agent-panel))
+      (drgnx-grid-show-beside-editor (cons 'agent-panel session) buf t)
+      (with-current-buffer buf
+        (drgnx-agent-panel-sync-windows)
+        (drgnx-agent-panel-explain-load-grants))
+      buf)))
+
 (defun drgnx-agent-panel--read-session (&optional none-ok)
   "The session to show: this panel's, the only one, or one picked.  With none, nil when NONE-OK, else an error."
   (or (and (derived-mode-p 'drgnx-agent-panel-mode) drgnx-agent-panel--session)
@@ -609,6 +629,9 @@ class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same b
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"
                         :command #'drgnx-agent-panel-open
                         :doc "One agent session's steps, live, in the right dock; a new chat when none runs")
+  (drgnx-command-define 'agents-panel-open-tab :category "Agents" :title "Open the Conversation as a Tab"
+                        :command #'drgnx-agent-panel-open-tab
+                        :doc "One agent session's conversation as an editor tab: header, transcript and composer in one tile")
   (drgnx-command-define 'agents-new-chat :category "Agents" :title "New Chat"
                         :command #'drgnx-agent-panel-new-chat
                         :doc "An empty chat in the right dock: what you send starts an agent of the default profile")

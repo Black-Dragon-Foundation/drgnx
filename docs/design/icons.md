@@ -96,7 +96,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `settings` | `core/drgnx-palette.el` |
 | `shield` | `modules/ui/drgnx-statusbar.el` |
 | `sparkle` | `modules/tools/drgnx-agent-panel-composer.el` |
-| `square` | `core/drgnx-agent-identity.el`, `modules/lang/drgnx-notebook.el`, `modules/tools/drgnx-replace.el`, `modules/ui/drgnx-topline.el` |
+| `square` | `core/drgnx-agent-identity.el`, `modules/lang/drgnx-notebook.el`, `modules/tools/drgnx-agent-panel-composer.el`, `modules/tools/drgnx-replace.el`, `modules/ui/drgnx-topline.el` |
 | `square-function` | - |
 | `star` | - |
 | `tag` | - |
