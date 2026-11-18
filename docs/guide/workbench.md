@@ -105,7 +105,8 @@ at the next editor change); nothing of it runs while you type. Files with nothin
 instead: an info icon and the reason in the muted text ("No outline for this file"; a file over 1 MiB: "This file is
 too large for an outline"), an empty state that is never selected. Without the hub the section says it waits for it. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
 after the cursor stops — the Outline's own cursor is yours and never moves while you work in a file). Another file
-starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view). An edit that only
+starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view, a third of the
+Outline above it, but never past the list's last row). An edit that only
 moves definitions redraws nothing, and the Outline keeps your place in it when definitions are added above. Its rows
 and notices start in the column of the section's title. Focus Outline: palette · `SPC o`.
 

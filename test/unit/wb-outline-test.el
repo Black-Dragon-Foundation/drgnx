@@ -167,4 +167,20 @@ and what came is drawn.  PRED's value."
         (should (= (window-point w) (drgnx-outline-test--row "fn-150")))
         (should (> (window-start w) (point-min)))))))
 
+(ert-deftest drgnx-outline/a-definition-near-the-end-leaves-no-blank-room-below ()
+  ;; The last definitions: the window ends on the list's last row (a third of the window above the row would start it
+  ;; so late that blank room showed under the list), and the row is in sight.
+  (drgnx-outline-test--with dir src
+    (let ((big (drgnx-outline-test--visit
+                dir "big.el" (mapconcat (lambda (i) (format "(defun fn-%d () %d)\n" i i)) (number-sequence 0 199) ""))))
+      (with-current-buffer big (goto-char (point-min)) (forward-line 198))
+      (drgnx-outline-test--show big)
+      (set-window-point (drgnx-wb-editor-window) (with-current-buffer big (point)))
+      (drgnx-outline-test--settle (lambda () (equal (string-trim (or (drgnx-outline-test--marked) "")) "fn-198")) "the current definition")
+      (let ((w (get-buffer-window drgnx-outline-buffer-name t)))
+        (with-current-buffer drgnx-outline-buffer-name
+          (should (> (window-start w) (point-min)))
+          (should (>= (count-lines (window-start w) (point-max)) (window-body-height w)))
+          (should (<= (window-start w) (window-point w))))))))
+
 ;;; wb-outline-test.el ends here
