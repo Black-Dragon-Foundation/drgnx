@@ -777,6 +777,18 @@ impl Front {
             Params::ChangesClose(p) => {
                 crate::view::changes::close(self, &caller, p).map(|b| json!(b))
             }
+            // the review screen: one change, its effects and reasons (view::review_screen)
+            Params::ReviewScreenSubscribe(p) => {
+                crate::view::review_screen::subscribe(self, &caller, p)
+                    .await
+                    .map(|b| json!(b))
+            }
+            Params::ReviewScreenSet(p) => crate::view::review_screen::set(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::ReviewScreenClose(p) => {
+                crate::view::review_screen::close(self, &caller, p).map(|b| json!(b))
+            }
             // the Source Control view and the git commands it runs (view::scm)
             Params::ScmSubscribe(p) => {
                 crate::view::scm::subscribe(self, &caller, p).map(|b| json!(b))
