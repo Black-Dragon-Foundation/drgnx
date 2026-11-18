@@ -826,7 +826,7 @@
               (fold-previous "z k")
               (modal-toggle "SPC u m")
               (face-toggle-menu-bar :none "the palette; F10 opens the menu as text while the bar is hidden")
-              (face-toggle-wrap :none "the palette")
+              (face-toggle-wrap "SPC t w")
               (face-menu :none "F10 (remap of menu-bar-open)")
               (menu-bar-open-file :none "F10, the title row; Alt keeps its editing keys here")
               (menu-bar-open-edit :none "F10, the title row; Alt keeps its editing keys here")
