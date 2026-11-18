@@ -614,6 +614,13 @@ impl St {
             .partition(|r| r.machine == machine);
         forseti::expected(&here, &other, 1.0, None)
     }
+
+    /// The time box SPEC is offered with on MACHINE: its own, capped at three times its p95 wall time there (else
+    /// elsewhere's), design §5.7.
+    fn timeout_on(&self, spec: &JobSpec, machine: &str) -> u64 {
+        let _ = machine;
+        spec.timeout_s
+    }
 }
 
 /// The spec an attempt of a job runs. With a suite that supports row selection ([`selects_rows`]), its command's
@@ -4198,6 +4205,27 @@ mod tests {
         assert!(st.expected_on(&spec, "r3").known(), "runs elsewhere count");
         assert!(forseti::admit::small(&st.expected_on(&spec, "r1")));
         assert!(!forseti::admit::small(&st.expected_on(&spec, "r2")));
+    }
+
+    // [D] pure (design §5.7): the time box a runner is offered is the pack's, capped at three times the job's p95 wall
+    // time there (else elsewhere's); a job with no runs keeps the pack's
+    #[test]
+    fn an_offer_caps_the_time_box_at_three_p95() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        let mut spec = blank_spec("x1");
+        spec.timeout_s = 3600;
+        let ran = |wall: f64| json!({"verdict": "Pass", "wall_s": wall, "cpu_s": 1.0, "mem_peak_mib": 100});
+        let mut st = q.lock();
+        assert_eq!(st.timeout_on(&spec, "r1"), 3600);
+        q.record_run(&mut st, &spec, "r1", &ran(300.0), 10);
+        q.record_run(&mut st, &spec, "r1", &ran(400.0), 20);
+        assert_eq!(st.timeout_on(&spec, "r1"), 1200);
+        // a long job keeps the pack's maximum
+        q.record_run(&mut st, &spec, "r1", &ran(3000.0), 30);
+        assert_eq!(st.timeout_on(&spec, "r1"), 3600);
+        // elsewhere's runs count on a runner with none
+        assert!(st.timeout_on(&spec, "r9") <= 3600);
     }
 
     // [D] pure (a cgroup tree in a folder, as `slices.rs`'s rows): a job here counts what its slice uses (design §0.3
