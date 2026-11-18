@@ -20,7 +20,7 @@
     ,@(mapcar (lambda (n) (list (intern (format "org-level-%d" n)) '(drgnx-ui-text) :weight 'semibold))
               '(3 4 5 6 7 8))
     (org-todo (drgnx-ui-caption drgnx-chip-attention) :weight semibold :box (:line-width (6 . -1) :style flat-button))
-    (org-done (drgnx-ui-caption drgnx-chip-ok) :weight semibold :box (:line-width (6 . -1) :style flat-button))
+    (org-done (drgnx-ui-caption drgnx-kit-chip-ok-soft) :weight semibold :box (:line-width (6 . -1) :style flat-button))
     (org-headline-done (drgnx-text-muted))
     (org-tag (drgnx-text-subtle) :weight normal)
     (org-block (drgnx-surface-panel) :extend t)

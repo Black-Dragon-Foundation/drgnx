@@ -239,12 +239,12 @@
       (should (equal (get-text-property 1 'drgnx-notebook-run s) "a"))
       (should (equal (get-text-property 1 'drgnx-notebook-action s) "run"))
       (should (< 0 (string-search "[3]" s) (string-search "python" s)))
-      (should (memq 'drgnx-chip-quiet (nb-test--faces-at s "[3]")))
-      (should (memq 'drgnx-chip-quiet (nb-test--faces-at s "python")))
+      (should (memq 'drgnx-kit-chip-neutral-soft (nb-test--faces-at s "[3]")))
+      (should (memq 'drgnx-kit-chip-neutral-soft (nb-test--faces-at s "python")))
       ;; the Lisp draws what it is told: no colour roles, no text of its own for the prompt
       (should-not (string-search "[3]  python" s)))
     ;; a cell with no head from the hub yet shows its type as a chip
-    (should (memq 'drgnx-chip-quiet (nb-test--faces-at (nb-test--head "b") "markdown")))
+    (should (memq 'drgnx-kit-chip-neutral-soft (nb-test--faces-at (nb-test--head "b") "markdown")))
     ;; a tail brings a new head: running is a stop button and an accent count
     (drgnx-notebook--event "notebook-tail"
                            (append (list :cell "c" :head (list :text "[*]  python" :state "running"
@@ -254,8 +254,8 @@
                                    (nb-test--tail "7")))
     (let ((s (nb-test--head "c")))
       (should (equal (get-text-property 1 'drgnx-notebook-action s) "stop"))
-      (should (memq 'drgnx-chip-accent (nb-test--faces-at s "[*]")))
-      (should (memq 'drgnx-chip-quiet (nb-test--faces-at s "python"))))))
+      (should (memq 'drgnx-kit-chip-accent-soft (nb-test--faces-at s "[*]")))
+      (should (memq 'drgnx-kit-chip-neutral-soft (nb-test--faces-at s "python"))))))
 
 (ert-deftest drgnx-notebook/the-selected-cell-has-a-right-aligned-toolbar-of-registry-commands ()
   (nb-test--with

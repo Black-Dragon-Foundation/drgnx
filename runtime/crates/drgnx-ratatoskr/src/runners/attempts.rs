@@ -134,9 +134,9 @@ pub enum Event {
     HubRestarted,
     /// The user stopped JOB.
     Cancel { job: String },
-    /// The user restarted JOB on another machine: its open attempt is cancelled on its runner and the job goes back
-    /// to the queue.
-    Move { job: String },
+    /// JOB leaves its runner for REASON (the user restarted it on another machine, [`MOVED`]; or a whole-machine
+    /// run's drain evicted it, [`EVICTED`]): its open attempt is cancelled there and the job goes back to the queue.
+    Move { job: String, reason: &'static str },
 }
 
 /// What the shell does.
@@ -199,6 +199,8 @@ pub const PREEMPTED: &str = "infra: preempted";
 pub const REFUSED: &str = "refused";
 /// The reason a requeue for the user's move carries.
 pub const MOVED: &str = "moved by you";
+/// Why a job a whole-machine run's drain evicted goes back to the queue (design §5.6).
+pub const EVICTED: &str = "evicted for a whole-machine run";
 
 /// The result an attempt ends with when it is cancelled and its runner can't say so itself.
 fn cancelled() -> Value {
@@ -373,7 +375,7 @@ impl Core {
                     _ => {}
                 }
             }
-            Event::Move { job } => {
+            Event::Move { job, reason } => {
                 let Some(row) = self.jobs.get(&job) else {
                     return out;
                 };
@@ -395,7 +397,7 @@ impl Core {
                 a.state = AttemptState::Requeued;
                 out.push(Effect::Requeue {
                     job: key.0,
-                    reason: MOVED.into(),
+                    reason: reason.into(),
                 });
             }
         }

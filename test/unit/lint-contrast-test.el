@@ -58,7 +58,7 @@
   '(drgnx-status-ok drgnx-status-warn drgnx-status-fail drgnx-status-info drgnx-status-attention))
 
 (defconst drgnx-lint-contrast--chips
-  '(drgnx-chip-quiet drgnx-chip-attention drgnx-chip-accent drgnx-chip-ok drgnx-chip-warn drgnx-chip-error)
+  '(drgnx-kit-chip-neutral-soft drgnx-chip-attention drgnx-kit-chip-accent-soft drgnx-kit-chip-ok-soft drgnx-kit-chip-warn-soft drgnx-kit-chip-error-soft)
   "The chips' faces: a status colour on its own tint (high contrast has no tints, so no chip fill to measure there).")
 
 (defconst drgnx-lint-contrast--agents

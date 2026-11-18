@@ -108,11 +108,17 @@ pub fn tables(text: &str) -> Vec<Table> {
     out
 }
 
-/// A task number at the start of `s` (`"5: x"` → `"5"`, `"22b (wave B1)"` → `"22b"`): digits and then lowercase letters.
+/// A task number at the start of `s` (`"5: x"` → `"5"`, `"22b (wave B1)"` → `"22b"`): digits and then lowercase letters,
+/// or a capital and then digits, as a word of its own (`"A1 (now): x"` → `"A1"`, `"B: x"` → `"B"`, `"Force"` none).
 pub fn task_number(s: &str) -> Option<&str> {
     let digits = s.bytes().take_while(u8::is_ascii_digit).count();
     if digits == 0 {
-        return None;
+        let b = s.as_bytes();
+        if !b.first().is_some_and(u8::is_ascii_uppercase) {
+            return None;
+        }
+        let n = 1 + b[1..].iter().take_while(|c| c.is_ascii_digit()).count();
+        return (!b.get(n).is_some_and(u8::is_ascii_alphanumeric)).then(|| &s[..n]);
     }
     let letters = s[digits..]
         .bytes()

@@ -273,7 +273,7 @@ replaces that one's."
   "The strip's header line for a sent run: the Sent chip, its number where it was recorded, until when it is kept."
   (let ((imported (plist-get drgnx-debug-timeline--meta :imported)))
     (concat " " (propertize (format "Run %s" (plist-get drgnx-debug-timeline--meta :n)) 'face 'bold)
-            " " (propertize (concat " " (drgnx-look-icon 'inbox nil 14) " Sent ") 'face 'drgnx-chip-accent)
+            " " (propertize (concat " " (drgnx-look-icon 'inbox nil 14) " Sent ") 'face 'drgnx-kit-chip-accent-soft)
             (propertize (format " run %s where it was recorded · read-only" (plist-get imported :n))
                         'face 'drgnx-text-muted)
             (if (numberp (plist-get imported :at))

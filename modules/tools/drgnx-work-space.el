@@ -166,7 +166,7 @@ it (a notes repository with the code repositories inside it)."
   :group 'drgnx-work-space)
 (defface drgnx-work-lens-key '((t :inherit drgnx-kit-key-hint-cap)) "A key's badge on the lens bar." :group 'drgnx-work-space)
 (defface drgnx-work-chip '((t :inherit drgnx-selected-quiet)) "A chip." :group 'drgnx-work-space)
-(defface drgnx-work-step-number '((t :inherit (drgnx-chip-solid drgnx-badge)))
+(defface drgnx-work-step-number '((t :inherit (drgnx-kit-chip-accent-solid drgnx-badge)))
   "A trail step's number: a filled circle in the accent's blue (work-space-dark.html `.mk')." :group 'drgnx-work-space)
 (defface drgnx-work-thought '((t :inherit (drgnx-text-muted italic))) "A thought step's text on the trail." :group 'drgnx-work-space)
 (defface drgnx-work-plus '((t :inherit success)) "The added lines of a change." :group 'drgnx-work-space)

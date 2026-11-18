@@ -316,12 +316,13 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
         .collect();
     let slice_dir = slice.as_ref().ok().map(PathBuf::as_path);
     let mut tracker = Tracker::new(progress::read(
-        0,
+        Duration::ZERO,
         slice_dir,
         &logs,
         &progress::Reading::default(),
     ));
     let mut last = progress::Reading::default();
+    let period = Duration::from_secs(period);
     let mut next = period;
     if seen.setup.is_none() {
         let mut cmd = Command::new(&spec.argv[0]);
@@ -365,7 +366,7 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
                     seen.timed_out = true;
                     break;
                 }
-                let at = t0.elapsed().as_secs();
+                let at = t0.elapsed();
                 if at >= next {
                     next = at + period;
                     last = progress::read(at, slice_dir, &logs, &last);

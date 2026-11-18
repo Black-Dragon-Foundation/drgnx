@@ -555,7 +555,7 @@ has the menus), Emacs's own menu bar is not shown and `drgnx-menubar-visibility'
   "The Paused chip of a graphical row (the warn pill with the bug) after 10 px, while a debug session is paused."
   (when (drgnx-topline--paused-p)
     (list (drgnx-topline--item 'drgnx-topline-paused
-                               (concat (drgnx-topline--space 10) (drgnx-topline--chip "Paused" 'drgnx-chip-warn 20 10 'bug))
+                               (concat (drgnx-topline--space 10) (drgnx-topline--chip "Paused" 'drgnx-kit-chip-warn-soft 20 10 'bug))
                                (and (fboundp 'drgnx-debug-toolbar-show-stop) 'drgnx-debug-toolbar-show-stop)
                                drgnx-topline--paused-help))))
 
@@ -574,7 +574,7 @@ count is positive.  NEED and AGENTS stand for the counts (the room the row keeps
        (list (drgnx-topline--item 'drgnx-topline-agents
                                   (concat (drgnx-topline--space 10)
                                           (drgnx-topline--chip (format "%d %s" agents (if (= agents 1) "agent" "agents"))
-                                                               'drgnx-chip-accent 20 10 'bot))
+                                                               'drgnx-kit-chip-accent-soft 20 10 'bot))
                                   (and (fboundp 'drgnx-agent-panel-list-show) 'drgnx-agent-panel-list-show)
                                   "Agents at work"))))))
 

@@ -54,7 +54,7 @@ the UI text role, and keeps them under the pointer and pressed (only the fill ch
   (let ((box (face-attribute 'drgnx-chip :box nil nil)))
     (should (eq 'flat-button (plist-get box :style)))
     (should-not (plist-get box :color)))
-  (should (equal '(drgnx-ui-caption drgnx-chip-quiet) (face-attribute 'drgnx-chip :inherit nil nil)))
+  (should (equal '(drgnx-ui-caption drgnx-kit-chip-neutral-soft) (face-attribute 'drgnx-chip :inherit nil nil)))
   (dolist (face '(drgnx-button drgnx-button-hover drgnx-button-pressed))
     (should (memq 'drgnx-control (ensure-list (face-attribute face :inherit nil nil))))
     (should (eq 'unspecified (face-attribute face :box nil nil)))))

@@ -61,17 +61,17 @@
   "A key's badge on an action: on the button's background." :group 'drgnx-work-space)
 (defface drgnx-work-flow-heading '((t :inherit drgnx-ui-heading)) "The Flow's headings: the run, the batch, a tile's."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok) :height 0.9167)) "A gate that passed."
+(defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-kit-chip-ok-soft) :height 0.9167)) "A gate that passed."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-run '((t :inherit (drgnx-ui-caption drgnx-chip-accent) :height 0.9167))
+(defface drgnx-work-flow-chip-run '((t :inherit (drgnx-ui-caption drgnx-kit-chip-accent-soft) :height 0.9167))
   "A gate that runs."
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-chip-held '((t :inherit (drgnx-ui-caption drgnx-chip-attention) :height 0.9167))
   "A gate that holds the task: it needs you." :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-err '((t :inherit (drgnx-ui-caption drgnx-chip-error) :height 0.9167))
+(defface drgnx-work-flow-chip-err '((t :inherit (drgnx-ui-caption drgnx-kit-chip-error-soft) :height 0.9167))
   "A gate that failed."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-wait '((t :inherit (drgnx-ui-caption drgnx-chip-quiet) :height 0.9167))
+(defface drgnx-work-flow-chip-wait '((t :inherit (drgnx-ui-caption drgnx-kit-chip-neutral-soft) :height 0.9167))
   "A gate not reached yet."
   :group 'drgnx-work-space)
 

@@ -46,7 +46,7 @@ the lines already there."
 (defface drgnx-debug-console-source '((t :inherit (drgnx-ui-caption drgnx-text-subtle)))
   "Where a line came from (a logpoint's place), at the right edge." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-time '((t :inherit drgnx-text-disabled)) "A line's timestamp (the mockup's quiet `--disabled')." :group 'drgnx-debug-console)
-(defface drgnx-debug-console-count '((t :inherit drgnx-chip-quiet)) "How many times a line came in a row." :group 'drgnx-debug-console)
+(defface drgnx-debug-console-count '((t :inherit drgnx-kit-chip-neutral-soft)) "How many times a line came in a row." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-stale '((t :inherit shadow)) "A result whose stop is over." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-prompt '((t :inherit minibuffer-prompt)) "The input's prompt." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-bold '((t :weight bold)) "ANSI bold." :group 'drgnx-debug-console)
@@ -106,7 +106,7 @@ chip of the session the input evaluates in (a click picks another; none without 
   (let ((s (and (fboundp 'drgnx-debug--session) (drgnx-debug--session))))
     (concat (when s
               (propertize (concat " " (plist-get s :name) " " (drgnx-look-icon 'chevron-down nil 14) " ")
-                          'face 'drgnx-chip-quiet 'mouse-face 'highlight
+                          'face 'drgnx-kit-chip-neutral-soft 'mouse-face 'highlight
                           'help-echo "The session the console evaluates in: click for another"
                           'local-map drgnx-debug-console--pick-map))
             " "

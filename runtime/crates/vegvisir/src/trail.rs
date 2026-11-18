@@ -386,7 +386,10 @@ fn conclusion_rows(
             if i == 0 {
                 put_icon(&mut b, env, &c.kind, images);
                 b.push(&format!(" {name} "), Some(FaceId::WorkTitle.name()))
-                    .push(&format!(" {} ", c.n), Some(FaceId::ChipSolid.name()))
+                    .push(
+                        &format!(" {} ", c.n),
+                        Some(FaceId::KitChipAccentSolid.name()),
+                    )
                     .push(&format!(" {}", c.text), Some(FaceId::WorkTitle.name()));
                 if new {
                     // `new`, plain text at the card's right: a box of its own would break the ring
@@ -398,7 +401,7 @@ fn conclusion_rows(
                     &format!("   based on {based}{unmatched} · "),
                     Some(FaceId::TextMuted.name()),
                 )
-                .push(" l ", Some(FaceId::ChipQuiet.name()))
+                .push(" l ", Some(FaceId::KitChipNeutralSoft.name()))
                 .push(" light them · ↵ sources", Some(FaceId::TextMuted.name()));
             }
             // the card runs to the tile's right edge: a stop, in the card's face

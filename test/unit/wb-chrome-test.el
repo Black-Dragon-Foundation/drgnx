@@ -795,7 +795,7 @@ was already a tab never becomes a preview."
                         (switch-to-buffer b) (drgnx-chrome-apply nil t)
                         (drgnx-chrome-note-preview b (and preview new)))
                       b)))
-           (italic (lambda (b) (memq 'drgnx-chrome-tab-preview
+           (italic (lambda (b) (memq 'drgnx-kit-tab-preview
                                      (ensure-list (get-text-property 2 'face (drgnx-chrome--tab w b t t nil)))))))
       (write-region "x\n" nil (expand-file-name "a.el" dir) nil 'silent)
       (write-region "x\n" nil (expand-file-name "b.el" dir) nil 'silent)

@@ -43,7 +43,7 @@
   "A register's name: x86-64's and arm64's.")
 (defface drgnx-debug-disassembly-place '((t :inherit drgnx-text-disabled)) "A source row's file and line."
   :group 'drgnx-debug)
-(defface drgnx-debug-disassembly-step '((t :inherit drgnx-chip-warn))
+(defface drgnx-debug-disassembly-step '((t :inherit drgnx-kit-chip-warn-soft))
   "The header's chip while the step keys step one instruction." :group 'drgnx-debug)
 
 (defconst drgnx-debug-disassembly-buffer-name "*Disassembly*")

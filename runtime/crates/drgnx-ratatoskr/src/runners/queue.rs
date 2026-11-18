@@ -322,6 +322,8 @@ pub enum Outcome {
 pub struct Ticked {
     pub starts: Vec<String>,
     pub outcomes: Vec<Outcome>,
+    /// Jobs here evicted for a whole-machine run's drain: the job layer stops each and starts it again.
+    pub evict: Vec<String>,
 }
 
 /// A job's row as the queue knows it.
@@ -552,6 +554,13 @@ struct St {
     /// or runs; no other job starts on it. The highest P1–P2 priority pending, while that holds every drain back.
     drains: BTreeMap<String, String>,
     drain_behind: Option<Priority>,
+    /// When each machine's drain began (`forseti::drain_abandon`'s and `drain_may_evict_p5`'s start); until when a
+    /// drain that gave up stays off; this tick's whole-machine runs whose drain gave up; and the jobs a drain evicted
+    /// (once each).
+    drain_since: BTreeMap<String, u64>,
+    drain_off: BTreeMap<String, u64>,
+    drain_gave_up: BTreeSet<String>,
+    drain_evicted: BTreeSet<String>,
 }
 
 impl St {
@@ -2108,7 +2117,13 @@ impl Queue {
         let q = st.jobs.get_mut(id).expect("the job");
         q.s.place.machine = to;
         q.s.place.by_user = true;
-        let effects = st.attempts.step(now, AEvent::Move { job: id.into() });
+        let effects = st.attempts.step(
+            now,
+            AEvent::Move {
+                job: id.into(),
+                reason: attempts::MOVED,
+            },
+        );
         let mut out = vec![];
         self.apply(&mut st, effects, now, &mut out);
         drop(st);
@@ -2242,7 +2257,8 @@ impl Queue {
                 rj.priority = rj.priority.max(p);
             }
         }
-        Self::drains(&mut st, &eff);
+        Self::drains(&mut st, &eff, now);
+        t.evict = self.drain_evict(&mut st, &eff, now, &mut t.outcomes);
         if queued.is_empty() {
             Self::tell_head(&mut st, None);
             return t;
@@ -2285,8 +2301,10 @@ impl Queue {
 
     /// This tick's drains (design §5.6, `forseti::drain`): a whole-machine timing run waits while any P1–P2 job is
     /// queued or running (EFF: the effective priorities); otherwise its named machine drains for it until it ends. A P1
-    /// arrival before it starts holds the drain back again, and admission there reopens.
-    fn drains(st: &mut St, eff: &HashMap<JobId, Priority>) {
+    /// arrival before it starts holds the drain back again, and admission there reopens. A drain whose machine hasn't
+    /// emptied in its bound (`forseti::drain_abandon`) gives up: admission there reopens, and the drain starts again
+    /// a bound later.
+    fn drains(st: &mut St, eff: &HashMap<JobId, Priority>, now: u64) {
         let prio = |j: &QJob| eff.get(&JobId(j.s.id.clone())).copied().unwrap_or(j.s.own);
         let whole = |j: &QJob| j.s.spec.lane == forseti::Lane::Timing { pinned: None };
         st.drain_behind = st
@@ -2298,7 +2316,7 @@ impl Queue {
             .filter(|p| *p >= Priority::P2)
             .max();
         let may_start = forseti::drain_may_start(st.drain_behind.is_some());
-        st.drains = st
+        let wanted: Vec<(String, String, bool)> = st
             .jobs
             .values()
             .filter(|j| whole(j) && (may_start || j.state != QState::Queued))
@@ -2308,9 +2326,97 @@ impl Queue {
                     Machine::Runner(n) => n.clone(),
                     Machine::Auto => return None,
                 };
-                Some((on, j.s.id.clone()))
+                Some((on, j.s.id.clone(), j.state == QState::Queued))
             })
             .collect();
+        let (mut drains, mut gave_up, mut since) =
+            (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
+        for (on, id, queued) in wanted {
+            // a run that started has its machine: nothing to give up
+            if !queued {
+                drains.insert(on, id);
+                continue;
+            }
+            if st.drain_off.get(&on).is_some_and(|&until| until > now) {
+                gave_up.insert(id);
+                continue;
+            }
+            let began = st.drain_since.get(&on).copied().unwrap_or(now);
+            if forseti::drain_abandon(began, now) {
+                st.drain_off
+                    .insert(on, now + forseti::drain::DRAIN_ABANDON_S);
+                gave_up.insert(id);
+                continue;
+            }
+            since.insert(on.clone(), began);
+            drains.insert(on, id);
+        }
+        st.drain_off.retain(|_, until| *until > now);
+        st.drains = drains;
+        st.drain_gave_up = gave_up;
+        st.drain_since = since;
+        if st.drain_since.is_empty() {
+            st.drain_evicted.clear();
+        }
+    }
+
+    /// A drain past its eviction time (`forseti::drain_may_evict_p5`) evicts the running P5 restartable work on its
+    /// machine, once each: a job here is returned for the job layer to stop and start again; one on a runner has its
+    /// attempt cancelled there and goes back to the queue ([`attempts::EVICTED`]), what ended into OUT.
+    fn drain_evict(
+        &self,
+        st: &mut St,
+        eff: &HashMap<JobId, Priority>,
+        now: u64,
+        out: &mut Vec<Outcome>,
+    ) -> Vec<String> {
+        let due: Vec<(String, String)> = st
+            .drain_since
+            .iter()
+            .filter(|(_, began)| forseti::drain_may_evict_p5(**began, now))
+            .map(|(on, _)| (on.clone(), st.drains[on].clone()))
+            .collect();
+        let upkeep = |st: &St, id: &str| {
+            !st.drain_evicted.contains(id)
+                && st.jobs.get(id).is_some_and(|j| {
+                    j.s.spec.restartable
+                        && eff.get(&JobId(id.to_owned())).copied().unwrap_or(j.s.own)
+                            == Priority::P5
+                })
+        };
+        let mut here = vec![];
+        for (on, whole) in due {
+            let victims: Vec<String> = if on == LOCAL {
+                st.local_running
+                    .keys()
+                    .filter(|k| **k != whole && upkeep(st, k))
+                    .cloned()
+                    .collect()
+            } else {
+                st.on
+                    .iter()
+                    .filter(|(k, o)| o.machine == on && **k != whole && upkeep(st, k))
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            };
+            for id in victims {
+                st.drain_evicted.insert(id.clone());
+                if on == LOCAL {
+                    here.push(id);
+                    continue;
+                }
+                let effects = st.attempts.step(
+                    now,
+                    AEvent::Move {
+                        job: id.clone(),
+                        reason: attempts::EVICTED,
+                    },
+                );
+                self.apply(st, effects, now, out);
+                self.put_attempts(st, &id);
+            }
+        }
+        here
     }
 
     /// The head still waits after this tick's placing, reserved on a runner (NEED: its need): that runner hears it in
@@ -2494,7 +2600,7 @@ impl Queue {
         let id = job.id.0.clone();
         if let Some(why) = Self::whole_machine_waits(st, job) {
             if let Some(q) = st.jobs.get_mut(&id) {
-                q.waiting = Some(wait_text(&why));
+                q.waiting = Some(why);
             }
             return;
         }
@@ -2632,21 +2738,30 @@ impl Queue {
     }
 
     /// Why whole-machine run JOB waits before placing: behind P1–P2 work while its drain can't start, then while
-    /// anything else still runs on its machine. None for any other job, and once its machine is empty.
-    fn whole_machine_waits(st: &St, job: &Job) -> Option<WaitReason> {
+    /// anything else still runs on its machine, or while its drain is off after giving up. None for any other job,
+    /// and once its machine is empty.
+    fn whole_machine_waits(st: &St, job: &Job) -> Option<String> {
         if job.spec.lane != (forseti::Lane::Timing { pinned: None }) {
             return None;
         }
         let id = &job.id.0;
+        if st.drain_gave_up.contains(id) {
+            let min = forseti::drain::DRAIN_ABANDON_S / 60;
+            return Some(format!(
+                "its machine didn't empty in {min} min: the drain gave up, and starts again in {min} min"
+            ));
+        }
         let Some((on, _)) = st.drains.iter().find(|(_, j)| *j == id) else {
-            return Some(WaitReason::Behind(st.drain_behind.unwrap_or(Priority::P2)));
+            return Some(wait_text(&WaitReason::Behind(
+                st.drain_behind.unwrap_or(Priority::P2),
+            )));
         };
         let busy = if on == LOCAL {
             st.local_running.keys().any(|k| k != id)
         } else {
             st.on.iter().any(|(k, o)| o.machine == *on && k != id)
         };
-        busy.then_some(WaitReason::DrainWaits)
+        busy.then(|| wait_text(&WaitReason::DrainWaits))
     }
 
     /// Offers JOB to runner NAME, where it is expected to take EXPECTED_S (from a WARM start or not): a new attempt
@@ -4410,6 +4525,112 @@ mod tests {
         );
         ran(&q, "t", 130);
         assert_eq!(q.tick(131).starts, vec!["w3".to_string()]);
+    }
+
+    /// A queue whose machine admits four jobs at once, and a whole-machine timing run T pinned to MACHINE.
+    fn drain_queue(dir: &std::path::Path) -> Arc<Queue> {
+        Queue::new(QueueCfg {
+            hub_id: "h".into(),
+            exec_root: dir.to_path_buf(),
+            local: LocalRunner::new(super::super::local::Admission::Fixed(4), dir),
+            db: None,
+        })
+        .0
+    }
+
+    fn whole_run(machine: Machine) -> Submit {
+        let mut t = job("t", Priority::P3, 64);
+        t.spec.lane = forseti::Lane::Timing { pinned: None };
+        t.place.machine = machine;
+        t
+    }
+
+    // [D] pure (design §5.6, `forseti::drain_abandon`): a drain that hasn't emptied its machine within its bound is
+    // given up, the run says so and admission there reopens; the drain starts again a bound later
+    #[test]
+    fn a_drain_that_cannot_finish_is_abandoned_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = drain_queue(dir.path());
+        q.submit(job("w1", Priority::P3, 64), 100);
+        assert_eq!(q.tick(100).starts, vec!["w1".to_string()]);
+        q.submit(whole_run(Machine::Local), 100);
+        q.tick(100);
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+        let gave_up = 100 + forseti::drain::DRAIN_ABANDON_S;
+        q.submit(job("w2", Priority::P3, 64), gave_up);
+        assert_eq!(
+            q.tick(gave_up).starts,
+            vec!["w2".to_string()],
+            "admission reopens"
+        );
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some(
+                "its machine didn't empty in 30 min: the drain gave up, and starts again in 30 min"
+            )
+        );
+        let again = gave_up + forseti::drain::DRAIN_ABANDON_S;
+        q.submit(job("w3", Priority::P3, 64), again);
+        assert!(q.tick(again).starts.is_empty());
+        assert_eq!(
+            q.row("w3").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+    }
+
+    // [D] pure (design §5.6, `forseti::drain_may_evict_p5`): once a drain has gone its eviction time, running P5
+    // restartable work on its machine is evicted for it, once each: here for the job layer to stop and start again,
+    // on a runner requeued; other work runs on
+    #[test]
+    fn p5_upkeep_is_evicted_for_the_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = drain_queue(dir.path());
+        q.submit(job("p5", Priority::P5, 64), 100);
+        q.submit(job("w", Priority::P4, 64), 100);
+        assert_eq!(q.tick(100).starts.len(), 2);
+        q.submit(whole_run(Machine::Local), 100);
+        assert!(q.tick(100).evict.is_empty());
+        let late = 100 + forseti::drain::DRAIN_EVICT_P5_S;
+        assert!(q.tick(late - 1).evict.is_empty(), "not before its time");
+        assert_eq!(q.tick(late).evict, vec!["p5".to_string()]);
+        assert!(q.tick(late + 1).evict.is_empty(), "once");
+    }
+
+    // [D] pure (a link fed by hand): the same on a runner: its P5 attempt is cancelled there and the job requeued,
+    // saying why; its P4 work runs on
+    #[tokio::test]
+    async fn p5_upkeep_on_a_runner_is_requeued_for_the_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        for (id, p) in [("p5", Priority::P5), ("w", Priority::P4)] {
+            let mut s = job(id, p, 64);
+            s.place.machine = Machine::Runner("r1".into());
+            q.submit(s, 100);
+        }
+        q.tick(100);
+        for id in ["p5", "w"] {
+            let r = current(&q, id);
+            admitted(&q, "r1", &r, 64, 101);
+            started(&q, "r1", &r, 102);
+        }
+        q.submit(whole_run(Machine::Runner("r1".into())), 103);
+        q.tick(103);
+        let late = 103 + forseti::drain::DRAIN_EVICT_P5_S;
+        q.tick(late);
+        let row = q.row("p5").unwrap();
+        assert_eq!(row.machine, None, "{row:?}");
+        assert!(
+            row.waiting
+                .as_deref()
+                .is_some_and(|w| w.contains("evicted for a whole-machine run")),
+            "{row:?}"
+        );
+        assert_eq!(q.row("w").unwrap().machine.as_deref(), Some("r1"));
     }
 
     // [D] pure (design §5.2 item 2): a job waits for its needs as `needs`, holding no slot and no reservation; it is

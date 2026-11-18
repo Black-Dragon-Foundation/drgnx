@@ -44,11 +44,11 @@ impl GuardLimits {
     }
 }
 
-/// One reading of a job: AT in seconds (any epoch, the same for all readings), the log's size, the slice's
+/// One reading of a job: AT (since any epoch, the same for all readings), the log's size, the slice's
 /// `cpu.stat usage_usec` and `io.stat` bytes, and the rows parsed so far.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Reading {
-    pub at: u64,
+    pub at: Duration,
     pub log_bytes: u64,
     pub cpu_usec: u64,
     pub io_bytes: u64,
@@ -84,12 +84,12 @@ pub struct Stop {
 /// A job's progress so far.
 #[derive(Clone, Debug)]
 pub struct Tracker {
-    start: u64,
+    start: Duration,
     last: Reading,
     /// The last time the job printed (log bytes or a row).
-    output_at: u64,
+    output_at: Duration,
     /// The last time it made any progress (output, CPU above the floor, IO).
-    active_at: u64,
+    active_at: Duration,
 }
 
 impl Tracker {
@@ -105,7 +105,7 @@ impl Tracker {
 
     /// Takes reading R; the stop when a rule of L is hit.
     pub fn see(&mut self, r: Reading, l: &GuardLimits) -> Option<Stop> {
-        let window_usec = r.at.saturating_sub(self.last.at) * 1_000_000;
+        let window_usec = r.at.saturating_sub(self.last.at).as_micros() as u64;
         let cpu = r.cpu_usec.saturating_sub(self.last.cpu_usec);
         let output = r.log_bytes > self.last.log_bytes || r.rows > self.last.rows;
         let busy = window_usec > 0 && cpu as f64 >= l.cpu_floor * window_usec as f64;
@@ -117,20 +117,21 @@ impl Tracker {
             self.active_at = r.at;
         }
         self.last = r;
-        let since = |t: u64| r.at.saturating_sub(t);
-        let stop = |rule, s: u64| {
+        let since = |t: Duration| r.at.saturating_sub(t);
+        let stop = |rule, s: Duration| {
             Some(Stop {
                 rule,
-                minutes: s / 60,
+                minutes: s.as_secs() / 60,
             })
         };
-        if since(self.active_at) >= l.stall_s {
+        let secs = Duration::from_secs;
+        if since(self.active_at) >= secs(l.stall_s) {
             return stop(Rule::Stall, since(self.active_at));
         }
-        if since(self.output_at) >= l.silent_s {
+        if since(self.output_at) >= secs(l.silent_s) {
             return stop(Rule::Silent, since(self.output_at));
         }
-        if since(self.start) >= l.wall_s {
+        if since(self.start) >= secs(l.wall_s) {
             return stop(Rule::Wall, since(self.start));
         }
         None
@@ -170,7 +171,7 @@ pub const READ_EVERY_S: u64 = 60;
 
 /// A reading at AT of the job's SLICE (its cgroup folder) and LOGS, after PREV. A slice that can't be read counts a
 /// whole core since PREV and no IO: an unknown is never idle, so such a job can only go silent.
-pub fn read(at: u64, slice: Option<&Path>, logs: &[PathBuf], prev: &Reading) -> Reading {
+pub fn read(at: Duration, slice: Option<&Path>, logs: &[PathBuf], prev: &Reading) -> Reading {
     let log_bytes = logs
         .iter()
         .map(|p| fs::metadata(p).map(|m| m.len()).unwrap_or(0))
@@ -178,7 +179,7 @@ pub fn read(at: u64, slice: Option<&Path>, logs: &[PathBuf], prev: &Reading) -> 
     let (cpu_usec, io_bytes) = match slice.map(CgroupStat::read) {
         Some(Ok(s)) => (s.cpu_usec, s.io_bytes),
         _ => (
-            prev.cpu_usec + at.saturating_sub(prev.at) * 1_000_000,
+            prev.cpu_usec + at.saturating_sub(prev.at).as_micros() as u64,
             prev.io_bytes,
         ),
     };
@@ -296,7 +297,7 @@ mod tests {
         for m in 1..=minutes {
             let d = step(m);
             now = Reading {
-                at: m * 60,
+                at: Duration::from_secs(m * 60),
                 log_bytes: now.log_bytes + d.log_bytes,
                 cpu_usec: now.cpu_usec + d.cpu_usec,
                 io_bytes: now.io_bytes + d.io_bytes,
@@ -441,6 +442,26 @@ mod tests {
         );
     }
 
+    /// [D] pure: a host reads between whole seconds (the hub's rows read every second, stall 2 s): output seen at
+    /// 4.99 s and none at 6.0 s is 1.01 s without output, not 2; at 6.99 s it is 2
+    #[test]
+    fn a_reading_counts_the_fraction_of_its_second() {
+        let l = GuardLimits {
+            stall_s: 2,
+            silent_s: 4,
+            ..limits()
+        };
+        let at = |ms| Reading {
+            at: Duration::from_millis(ms),
+            log_bytes: 1,
+            ..Reading::default()
+        };
+        let mut t = Tracker::new(Reading::default());
+        assert_eq!(t.see(at(4990), &l), None);
+        assert_eq!(t.see(at(6000), &l), None, "1.01 s without output");
+        assert_eq!(t.see(at(6990), &l).map(|s| s.rule), Some(Rule::Stall));
+    }
+
     /// [D] With history the wall is three p95s, at most the pack's maximum; without, the pack's.
     #[test]
     fn wall_is_three_p95_capped_by_the_pack() {
@@ -486,25 +507,33 @@ mod tests {
         std::fs::write(&a, "12345").unwrap();
         std::fs::write(&b, "678").unwrap();
         let prev = Reading {
-            at: 60,
+            at: Duration::from_secs(60),
             cpu_usec: 1,
             ..Reading::default()
         };
         let logs = [a, b, d.path().join("none.log")];
-        let r = read(120, Some(&slice), &logs, &prev);
+        let r = read(Duration::from_secs(120), Some(&slice), &logs, &prev);
         assert_eq!(
             r,
             Reading {
-                at: 120,
+                at: Duration::from_secs(120),
                 log_bytes: 8,
                 cpu_usec: 5_000_000,
                 io_bytes: 30,
                 rows: 0
             }
         );
-        let unread = read(120, Some(&d.path().join("gone")), &logs, &prev);
+        let unread = read(
+            Duration::from_secs(120),
+            Some(&d.path().join("gone")),
+            &logs,
+            &prev,
+        );
         assert_eq!((unread.cpu_usec, unread.io_bytes), (60_000_001, 0));
-        assert_eq!(read(120, None, &logs, &prev).cpu_usec, 60_000_001);
+        assert_eq!(
+            read(Duration::from_secs(120), None, &logs, &prev).cpu_usec,
+            60_000_001
+        );
     }
 
     /// [D] `stuck.txt`: the rule, the slice's processes with their state and CPU, each container's `podman top`, the

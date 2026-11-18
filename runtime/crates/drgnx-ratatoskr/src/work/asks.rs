@@ -793,25 +793,44 @@ impl Shell {
     }
 }
 
-/// The shell's task: every input in the order it came, the store's log read before each.
-pub async fn run(front: Arc<Front>) {
+/// The shell after its first look at the store's log, with its inbox; [`run`] feeds it.
+pub struct Started {
+    sh: Shell,
+    rx: tokio::sync::mpsc::UnboundedReceiver<Input>,
+}
+
+/// The shell's first look at the store's log (the mark), taken before the hub serves (`server::run`): a conclusion or
+/// a write a session makes is always after the mark, never hidden by it. None when the inbox is taken already.
+pub async fn start(front: &Front) -> Option<Started> {
     let asks = &front.core.asks;
-    let Some(mut rx) = asks
+    let rx = asks
         .rx
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .take()
-    else {
-        return;
-    };
+        .take()?;
     let mut sh = Shell {
         core: AskCore::new(),
         ids: BTreeMap::new(),
         seen: None,
     };
+    // `RATATOSKR_TEST_ASKS_MARK_DELAY_MS` (test-hooks): the shell's first look at the log comes that late, as on a
+    // loaded machine
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = std::env::var("RATATOSKR_TEST_ASKS_MARK_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        crate::clock::sleep(std::time::Duration::from_millis(ms)).await;
+    }
     // the mark first: what was written before this start is not linked again
-    sh.tail(&front).await;
+    sh.tail(front).await;
     asks.tx.running.store(true, Ordering::SeqCst);
+    Some(Started { sh, rx })
+}
+
+/// The shell's task: every input in the order it came, the store's log read before each.
+pub async fn run(front: Arc<Front>, started: Started) {
+    let Started { mut sh, mut rx } = started;
     while let Some(i) = rx.recv().await {
         sh.input(&front, i).await;
     }
