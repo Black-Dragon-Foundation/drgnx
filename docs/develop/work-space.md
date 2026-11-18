@@ -328,7 +328,10 @@ channel, session, message_id?}`) and `asked` links from it to specs, plans, task
   `SessionGone`). The shell, `work::asks::run` (task `asks:run`), takes its inputs in order on one channel: a session's
   turn sends the user message just before its prompt, `agents/start` the start, `agents/stop` and `agents/kill` the end.
   Before each input it reads the spec, plan and task versions written since the last look from the store's `tx` log
-  (the entity scan runs only when a session wrote), so a write is always seen before the message after it.
+  (the entity scan runs only when a session wrote), so a write is always seen before the message after it. Its first
+  look only sets the mark (`work::asks::start`); `serve` awaits it before the hub accepts a connection, so no conclusion
+  or write a session makes falls behind the mark (a test-hooks hub started with `RATATOSKR_TEST_ASKS_MARK_DELAY_MS=N`
+  takes the mark N ms late, as a loaded machine once did).
 - A session's tool call answers only after its writes are linked: every tool on a session's socket is wrapped
   (`sessions::AfterTool`) to call `norn::tools::Hub::after_tool`, which waits for the shell to read the log. A live
   spec (`work::specs`) goes in as the scan, so its write is sent to the shell directly.
