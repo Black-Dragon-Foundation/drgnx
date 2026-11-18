@@ -11,7 +11,7 @@
 (defvar drgnx-keys--pending-parents)
 (defvar nidhogg-define-key-redirect-function)
 (declare-function drgnx-keys--define "drgnx-keys" (map key def))
-(defvar drgnx-layouts-pane-fillers)
+(defvar drgnx-pane--kinds)
 (defvar drgnx-layouts-shapes)
 (defvar drgnx-persist-state-functions)
 (defvar drgnx-persist-after-restore-functions)
@@ -29,18 +29,18 @@
     file))
 
 (ert-deftest drgnx-test-modules/a-module-set-up-and-gone ()
-  ;; tools/browser registers a pane filler and a layout shape; the layouts module wires the persist hooks.
+  ;; tools/browser registers a pane kind (a layout's pane) and a layout shape; the layouts module wires the persist hooks.
   (drgnx-test-with-modules '(tools/browser) nil)   ; loads the libraries, so the values below are their own
   (let ((state-fns (copy-sequence (bound-and-true-p drgnx-persist-state-functions)))
         (after-fns (copy-sequence (bound-and-true-p drgnx-persist-after-restore-functions)))
-        (fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
+        (kinds (mapcar #'car drgnx-pane--kinds))
         (shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes))))
     (drgnx-test-with-modules '(tools/browser) :strict t
-                             (should (assq 'browser drgnx-layouts-pane-fillers))
+                             (should (plist-get (drgnx-pane-kind 'browser) :fill))
                              (should (assq 'editor+browser drgnx-layouts-shapes))
                              (should (memq 'drgnx-layouts--persist-state drgnx-persist-state-functions))
                              (should (eq 'ok (plist-get (alist-get 'tools/browser (drgnx-modules-report)) :status))))
-    (should (equal fillers (bound-and-true-p drgnx-layouts-pane-fillers)))
+    (should (equal kinds (mapcar #'car drgnx-pane--kinds)))
     (should (equal shapes (bound-and-true-p drgnx-layouts-shapes)))
     (should (equal state-fns drgnx-persist-state-functions))
     (should (equal after-fns drgnx-persist-after-restore-functions))))

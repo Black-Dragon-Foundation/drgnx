@@ -6,7 +6,7 @@
 ;; Nidhogg's menus (lisp/term/nhwl-menu.el) are child frames showing one text row per item, sized by Nidhogg's options
 ;; (group `nhwl-menu': a least width, the rows' height and padding, the menu frames' parameters).  The kit feeds them
 ;; (`drgnx-ui-kit-menu-values'): 220 px wide at least, rows the density's tree row high with 12 px at either end,
-;; separators a thin rule in a 9 px row, the popups' radius and shadow (none in high contrast); the faces put the text in the UI sans on the overlay surface, the
+;; separators a thin rule in a 9 px row, the selected row a rounded fill 4 px in from the sides, the popups' radius and shadow (none in high contrast); the faces put the text in the UI sans on the overlay surface, the
 ;; selected row in the state table's selection and the key hints in the subtle code font.  The values follow a change of
 ;; density or theme; Nidhogg scales them by the frame's scale when a menu opens.
 ;; Part of the module ui/face: set up by its setup, undone by its teardown.  docs/guide/face.md, "The menu bar".
@@ -20,6 +20,8 @@
 (defvar nhwl-menu-row-height)
 (defvar nhwl-menu-row-padding)
 (defvar nhwl-menu-separator-height)
+(defvar nhwl-menu-selection-inset)
+(defvar nhwl-menu-selection-radius)
 (defvar nhwl-menu-frame-parameters)
 (defvar drgnx-look-density-changed-hook)
 (declare-function drgnx-look-chrome-for "drgnx-look" (variant))
@@ -48,6 +50,8 @@
       (drgnx-module-set 'nhwl-menu-row-height (plist-get values :row-height))
       (drgnx-module-set 'nhwl-menu-row-padding (plist-get values :row-padding))
       (drgnx-module-set 'nhwl-menu-separator-height (plist-get values :separator-height))
+      (drgnx-module-set 'nhwl-menu-selection-inset (plist-get values :selection-inset))
+      (drgnx-module-set 'nhwl-menu-selection-radius (plist-get values :selection-radius))
       (drgnx-module-set 'nhwl-menu-frame-parameters params))))
 
 (defun drgnx-menu-look--refeed (&rest _)

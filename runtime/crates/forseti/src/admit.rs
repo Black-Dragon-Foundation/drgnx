@@ -3,14 +3,30 @@
 
 use crate::backfill::{Reservation, backfill_ok};
 use crate::model::{
-    Expected, Grant, Job, JobId, Limits, MachineState, Priority, Range, RunningJob, WaitReason,
+    Expected, Grant, Job, JobId, Lane, Limits, MachineState, Priority, Range, RunningJob,
+    WaitReason,
 };
 use crate::reserve::count_others;
 
-/// A job counts its full reservation for its first 300 s, whatever it uses (a container grows after its setup).
-pub const YOUNG_S: u64 = 300;
-/// The least time between two starts on one machine.
+/// The least time between two starts on one machine by default ([`Limits::start_gap_s`]).
 pub const START_GAP_S: u64 = 10;
+/// A job whose history peaks under this is small: two small jobs in a row start with no gap.
+pub const SMALL_PEAK_MIB: u64 = 1024;
+
+/// The memory one cargo compile unit is given ([`cargo_jobs`]).
+pub const CARGO_UNIT_MIB: u64 = 2560;
+
+/// `CARGO_BUILD_JOBS` for a job of GRANT (design §3 #4): one unit per [`CARGO_UNIT_MIB`] of its cap, never more than
+/// its cores, at least one.
+pub fn cargo_jobs(grant: &Grant) -> u32 {
+    let by_mem = u32::try_from(grant.mem_cap_mib / CARGO_UNIT_MIB).unwrap_or(u32::MAX);
+    by_mem.min(grant.cores).max(1)
+}
+
+/// Whether EXP's history says the job peaks under [`SMALL_PEAK_MIB`].
+pub fn small(exp: &Expected) -> bool {
+    exp.mem_p95_mib.is_some_and(|p| p < SMALL_PEAK_MIB)
+}
 
 /// What a machine can still give: memory (may be negative) and CPU (cores).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,14 +35,11 @@ pub struct Budget {
     pub cpu: f64,
 }
 
-/// The memory a running job of ours holds beyond what it already uses (which `MemAvailable` has lost): its whole
-/// reservation while young, then `(reserve − current)⁺`.
-pub(crate) fn held_beyond_use(rj: &RunningJob, now: u64) -> u64 {
-    if now.saturating_sub(rj.started) < YOUNG_S {
-        rj.reserve_mib
-    } else {
-        rj.reserve_mib.saturating_sub(rj.current_mib)
-    }
+/// The memory a running job of ours holds beyond what it already uses (which `MemAvailable` has lost):
+/// `(reserve − current)⁺` at every age. The reservation is at least the p95 peak × 1.1 ([`size`]), so its unused rest
+/// is the room the job may still grow into; counting the whole reservation while young counted the used part twice.
+pub(crate) fn held_beyond_use(rj: &RunningJob, _now: u64) -> u64 {
+    rj.reserve_mib.saturating_sub(rj.current_mib)
 }
 
 /// The CPU a running job counts: its expected mean, or its grant's cores when it has no history.
@@ -69,14 +82,43 @@ pub fn budget(m: &MachineState, limits: &Limits) -> Budget {
         - limits.reserve_user_mib as i64
         - ours as i64
         - others as i64;
-    let cpu = f64::from(limits.cores_usable) - m.running.iter().map(cpu_counted).sum::<f64>();
+    // while a timing job holds the island, work has the other cores; the timing job's own CPU is the island's
+    let held = m
+        .island
+        .as_ref()
+        .and_then(|i| i.busy.as_ref().map(|j| (i.cpus, j)));
+    let island = held.map_or(0.0, |(cpus, _)| f64::from(cpus));
+    let used: f64 = m
+        .running
+        .iter()
+        .filter(|r| held.is_none_or(|(_, j)| r.id != *j))
+        .map(cpu_counted)
+        .sum();
+    let cpu = f64::from(limits.cores_usable) - island - used;
     Budget { mem_mib, cpu }
 }
 
-/// Whether `job` may start on `m` now. The checks, in order: the count (fixed slots); power; the gap since the last
-/// start; memory (`budget ≥ mem_min`); CPU (`budget ≥` the expected CPU, with overcommit while the running jobs are
-/// mostly idle); the PSI limits; the disk after the job's need. `eff` is the job's effective priority; F1's checks
-/// don't read it.
+/// The timing lane (design §5.6): an island run needs the machine's island, free; a whole-machine run needs the
+/// machine empty (its drain, [`crate::drain`], has emptied it). Work passes.
+fn timing(job: &Job, m: &MachineState) -> Result<(), WaitReason> {
+    match job.spec.lane {
+        Lane::Work => Ok(()),
+        Lane::Timing { pinned: Some(_) } => match &m.island {
+            None => Err(WaitReason::NoIsland),
+            Some(i) if i.busy.is_some() => Err(WaitReason::IslandBusy),
+            Some(_) => Ok(()),
+        },
+        Lane::Timing { pinned: None } if m.running.iter().any(|r| r.id != job.id) => {
+            Err(WaitReason::DrainWaits)
+        }
+        Lane::Timing { pinned: None } => Ok(()),
+    }
+}
+
+/// Whether `job` may start on `m` now. The checks, in order: the timing lane ([`timing`]); the count (fixed
+/// slots); power; the gap since the last start; memory (`budget ≥ mem_min`); CPU (`budget ≥` the expected CPU, with
+/// overcommit while the running jobs are mostly idle); the PSI limits; the disk after the job's need. `eff` is the
+/// job's effective priority; F1's checks don't read it.
 pub fn admit(
     job: &Job,
     eff: Priority,
@@ -86,6 +128,7 @@ pub fn admit(
     limits: &Limits,
 ) -> Result<(), WaitReason> {
     let _ = eff;
+    timing(job, m)?;
     if let Some(n) = limits.fixed_slots {
         return if m.running.len() as u64 >= u64::from(n) {
             Err(WaitReason::Threads)
@@ -96,12 +139,16 @@ pub fn admit(
     if limits.no_jobs_on_battery && !m.on_ac {
         return Err(WaitReason::OnBattery);
     }
+    // the gap lets the last start's memory show before this one is judged; two small jobs in a row need none
+    let gap = if small(exp) && m.last_start_small {
+        0
+    } else {
+        limits.start_gap_s
+    };
     if let Some(last) = m.last_start {
         let since = m.now.saturating_sub(last);
-        if since < START_GAP_S {
-            return Err(WaitReason::Gap {
-                secs: START_GAP_S - since,
-            });
+        if since < gap {
+            return Err(WaitReason::Gap { secs: gap - since });
         }
     }
     let need_mib = job.spec.mem_mib.min;
@@ -206,6 +253,21 @@ pub fn head_protection(
 mod tests {
     use super::*;
     use crate::model::Profile;
+
+    #[test]
+    fn cargo_jobs_follow_the_grant() {
+        // [D] pure (design §3 #4): a compile unit per 2.5 GiB of the cap, never more than the cores, at least one
+        let g = |cores, cap| Grant {
+            cores,
+            mem_cap_mib: cap,
+            reserve_mib: cap,
+        };
+        assert_eq!(cargo_jobs(&g(12, 6144)), 2);
+        assert_eq!(cargo_jobs(&g(2, 65_536)), 2);
+        assert_eq!(cargo_jobs(&g(12, 1024)), 1);
+        assert_eq!(cargo_jobs(&g(0, 0)), 1);
+    }
+    use crate::model::Island;
     use crate::testkit::{job, machine, running};
 
     fn known(cpu: f64, p95: u64) -> Expected {
@@ -216,18 +278,137 @@ mod tests {
         }
     }
 
+    /// Job NAME in the timing lane: on the island (PINNED cores), or the whole machine (none).
+    fn timing(name: &str, pinned: Option<u8>) -> Job {
+        let mut j = job(name, Priority::P3, 0);
+        j.spec.lane = Lane::Timing { pinned };
+        j
+    }
+
     #[test]
-    fn a_job_counts_its_reservation_for_5_minutes() {
-        // [D] pure
+    fn a_second_timing_job_waits_island_busy() {
+        // [D] pure (design §5.6): one timing job holds the island; a second waits for it
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 24);
+        let mut m = machine(Profile::Dedicated);
+        m.island = Some(Island {
+            cpus: 12,
+            busy: Some(JobId("t1".into())),
+        });
+        m.running = vec![running("t1", Priority::P3, m.now - 60, 512, 512)];
+        let t2 = timing("t2", Some(4));
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&t2, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::IslandBusy)
+        );
+        // a work job is no timing job: it doesn't wait for the island
+        let w = job("w", Priority::P3, 0);
+        assert_eq!(
+            admit(&w, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+        m.island.as_mut().unwrap().busy = None;
+        m.running.clear();
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&t2, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn work_cpu_budget_shrinks_while_timing_runs() {
+        // [D] pure (design §5.6): while a timing job holds the island, work has the other cores only; the timing
+        // job's own CPU is the island's, not counted twice
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 24);
+        let mut m = machine(Profile::Dedicated);
+        m.running = vec![
+            running("t1", Priority::P3, m.now - 60, 512, 512),
+            running("w1", Priority::P3, m.now - 60, 512, 512),
+        ];
+        // busy jobs (3 of their 4 cores): no overcommit
+        for r in &mut m.running {
+            r.expected.cpu = 3.0;
+        }
+        m.island = Some(Island {
+            cpus: 12,
+            busy: None,
+        });
+        assert_eq!(budget(&m, &lim).cpu, 18.0);
+        m.island.as_mut().unwrap().busy = Some(JobId("t1".into()));
+        assert_eq!(budget(&m, &lim).cpu, 24.0 - 12.0 - 3.0);
+        // a work job wanting more than the rest waits for cores (it would fit the whole machine's 18)
+        let mut big = job("big", Priority::P3, 0);
+        big.spec.cores.min = 10;
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(
+                &big,
+                Priority::P3,
+                &Expected {
+                    minutes: 10.0,
+                    cpu: 10.0,
+                    mem_p95_mib: Some(512)
+                },
+                &m,
+                &b,
+                &lim
+            ),
+            Err(WaitReason::Threads)
+        );
+    }
+
+    #[test]
+    fn whole_machine_is_refused_without_the_flag() {
+        // [D] pure (design §5.6, memory desktop-perf-island): a timing run asked for the island never silently takes
+        // a machine that has none; only a whole-machine run (asked with `whole_machine`) may, once the machine is
+        // empty
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 24);
+        let mut m = machine(Profile::Dedicated);
+        let b = budget(&m, &lim);
+        let island_run = timing("t", Some(4));
+        assert_eq!(
+            admit(&island_run, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::NoIsland)
+        );
+        let whole = timing("t", None);
+        assert_eq!(
+            admit(&whole, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+        m.running = vec![running("w1", Priority::P5, m.now - 60, 512, 512)];
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&whole, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::DrainWaits)
+        );
+    }
+
+    #[test]
+    fn a_job_holds_its_unused_reservation_at_every_age() {
+        // [D] pure (design §0.3 R1): `MemAvailable` has already lost what a job uses, so it holds only the rest of its
+        // reservation, young or old; past its reservation it holds nothing more.
         let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
         let mut m = machine(Profile::Dedicated);
         m.mem_available_mib = 20_000;
         m.running = vec![running("r", Priority::P4, m.now - 100, 4000, 500)];
-        assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048 - 4000);
-        m.running[0].started = m.now - YOUNG_S;
+        assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048 - 3500);
+        m.running[0].started = m.now - 300;
         assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048 - 3500);
         m.running[0].current_mib = 6000;
         assert_eq!(budget(&m, &lim).mem_mib, 20_000 - 2048);
+    }
+
+    #[test]
+    fn a_young_job_holds_only_what_it_has_not_used() {
+        // [D] pure: the slots-v2 double count (failure #3). A job 10 s old using 3 GiB of a 4 GiB reservation holds
+        // 1 GiB, not 4.
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
+        let mut m = machine(Profile::Dedicated);
+        m.mem_available_mib = 20_480;
+        m.running = vec![running("r", Priority::P4, m.now - 10, 4096, 3072)];
+        assert_eq!(held_beyond_use(&m.running[0], m.now), 1024);
+        assert_eq!(budget(&m, &lim).mem_mib, 20_480 - 2048 - 1024);
     }
 
     #[test]
@@ -374,6 +555,63 @@ mod tests {
                 need_mib: 1024,
                 free_mib: 1000
             })
+        );
+    }
+
+    #[test]
+    fn small_jobs_start_back_to_back() {
+        // [D] pure (design §5.3 item 3): no gap between two jobs whose history peaks under 1 GiB.
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
+        let j = job("j", Priority::P3, 0);
+        let mut m = machine(Profile::Dedicated);
+        m.last_start = Some(m.now - 1);
+        m.last_start_small = true;
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&j, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_job_without_history_keeps_the_gap() {
+        // [D] pure
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
+        assert_eq!(lim.start_gap_s, 10);
+        let j = job("j", Priority::P3, 0);
+        let mut m = machine(Profile::Dedicated);
+        m.last_start = Some(m.now - 1);
+        m.last_start_small = true;
+        let b = budget(&m, &lim);
+        let unknown = Expected {
+            minutes: 10.0,
+            cpu: 1.0,
+            mem_p95_mib: None,
+        };
+        assert_eq!(
+            admit(&j, Priority::P3, &unknown, &m, &b, &lim),
+            Err(WaitReason::Gap { secs: 9 })
+        );
+    }
+
+    #[test]
+    fn a_small_job_after_a_big_one_waits() {
+        // [D] pure: the gap lets the last start's memory show before the next is judged; only two small ones skip it.
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
+        let j = job("j", Priority::P3, 0);
+        let mut m = machine(Profile::Dedicated);
+        m.last_start = Some(m.now - 1);
+        m.last_start_small = false;
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&j, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::Gap { secs: 9 })
+        );
+        // and a big job after a small one waits too
+        m.last_start_small = true;
+        assert_eq!(
+            admit(&j, Priority::P3, &known(1.0, SMALL_PEAK_MIB), &m, &b, &lim),
+            Err(WaitReason::Gap { secs: 9 })
         );
     }
 

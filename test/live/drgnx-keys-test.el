@@ -17,8 +17,8 @@
           (drgnx-ui-measure sess (list (list :keys "C-o")))
           ;; the prompt is the effect of the key: wait for it (an event), never read it at an instant after the key
           (drgnx-test-wait (lambda () (let ((p (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-boot-status)") :prompt)))
-                                        (and (stringp p) (string-prefix-p "Find file" p))))
-                           :secs 20 :what "the Find file prompt")
+                                        (and (stringp p) (string-prefix-p "Open File" p))))
+                           :secs 20 :what "the Open File prompt")
           (drgnx-ui-measure sess (list (list :keys "C-g")))
           (drgnx-ui-call sess "(progn (drgnx-keys-use '((emacs app editing window))) (drgnx-uitest--json (list :ok t)))")
           (let ((before (plist-get (drgnx-ui-call sess scratch-size) :size)))

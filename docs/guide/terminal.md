@@ -269,6 +269,8 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-s` | Save As… | `Alt+Shift+S` | `F6 s` |
 | `C-S-t` | Reopen Closed Tab | `Alt+Shift+T` | `F6 t` |
 | `C-S-n` | New Window | `Alt+Shift+N` | `F6 n` |
+| `C-S-w` | Close Window | `Alt+Shift+W` | `F6 w` |
+| `C-S-u` | View: Output | `Alt+Shift+U` | `F6 u` |
 | `` C-` `` | Toggle Terminal | — | `` F6 ` `` |
 | `C-1` | Focus First Editor Group | — | `F6 1` |
 | `C-2` | Focus Second Editor Group | — | `F6 2` |
@@ -280,7 +282,6 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-b` | Focus Buffers | `Alt+Shift+B` | `F6 b` |
 | `C-{` | Fold | — | `F6 {` |
 | `C-}` | Unfold | — | `F6 }` |
-| `C-S-a` | Select All | `Alt+Shift+A` | `F6 a` |
 | `C-S-z` | Redo | `Alt+Shift+Z` | `F6 z` |
 | `C-/` | Toggle Comment | — | `F6 /` |
 | `C-S-k` | Delete Line | `Alt+Shift+K` | `F6 k` |
@@ -453,6 +454,16 @@ fit a dock never shows an error. The two sizes are the settings `drgnx-tty-layou
 `drgnx-tty-layout-lines` (30) (`M-x customize-variable`). A window opened for one file (`emacsclient -t FILE`) shows
 the editor only and is left alone.
 
+### Tiles in a terminal
+
+The workbench's tiles work in a terminal as in a graphical window. The sidebar, the panel and the right side are
+tiles, and you can split the editor beside them. A tile's tab row starts with its grip (`⠿`, `::` where the terminal
+does not write UTF-8). Drag the grip with the mouse onto another tile's edge to put the tile there, or onto its middle
+to stack the two. **Full-Size Tile** shows one tile alone and brings every tile back where it was. The status bar is
+the mode line of the editor you used last, and tool tiles have none. When the terminal shrinks, the tiles get smaller
+and none closes; they come back to their sizes when it grows. Each tile keeps at least 12 columns and 3 lines while
+there is room for that.
+
 ## Clipboard
 
 Copying in drgnx puts the text on your computer's clipboard through OSC 52 when the terminal takes it (the table's
@@ -502,8 +513,8 @@ terminal; on 256 colours it is approximated, on 8 colours only the basic ones re
 - **Nothing is told by colour alone.** On 8 colours drgnx still tells states apart: git status by its letter at the
   edge of an Explorer row (`M` changed, `A` added, `U` untracked, `D` deleted, `C` conflict; ignored files, which have
   no letter, are italic on a terminal, and an `I` on the Linux console, which draws no italic), a review finding by its
-  severity word, the shown tabs by their weight (bold on a terminal frame only; a graphical window keeps the
-  look's colour cue), and Work items by their glyph and words. Each of
+  severity word, the shown tab in inverse video and a shown tab of another group underlined (on a terminal frame only; a
+  graphical window keeps the look's colour cue), and Work items by their glyph and words. Each of
   these faces is checked on 8, 256 and 24-bit terminals: none draws its text in its own background colour.
   `drgnx-tty-frames-state-faces` lists them with the cue each relies on.
 

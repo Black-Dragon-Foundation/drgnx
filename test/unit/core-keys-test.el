@@ -18,7 +18,7 @@
 (defvar drgnx-keys-test--strict nil
   "Non-nil: `drgnx-keys-test--with-core-commands' fails when the modules leave state behind after their teardown.")
 
-(defvar drgnx-layouts-pane-fillers)
+(defvar drgnx-pane--kinds)
 (defvar drgnx-layouts-shapes)
 (defvar drgnx-persist-state-functions)
 (defvar drgnx-persist-after-restore-functions)
@@ -653,20 +653,32 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
                 (should (eq (drgnx-keys--lookup (symbol-value sym) key) #'ignore)))
        (if prev (keymap-set (symbol-value sym) key prev) (keymap-unset (symbol-value sym) key t))))))
 
+(defun drgnx-keys-test--indents-with-spaces (layers)
+  "With module editor/editing on and LAYERS the key stack, a 4-column indent in a text buffer is 4 spaces, not a tab,
+from Emacs's own default (tabs) on: spaces are the editing default, whatever the profile."
+  (let ((orig (default-value 'indent-tabs-mode)))
+    (unwind-protect
+        (progn
+          (setq-default indent-tabs-mode t)
+          (drgnx-test-with-modules '(editor/editing)
+            (drgnx-keys-test--live
+             (drgnx-keys-use layers)
+             (should (equal (with-temp-buffer
+                              (text-mode)
+                              (insert "x")
+                              (indent-rigidly (point-min) (point-max) 4)
+                              (buffer-string))
+                            "    x")))))
+      (setq-default indent-tabs-mode orig))))
+
 (ert-deftest drgnx-keys/the-vscode-profile-indents-with-spaces ()
-  "VS Code's default is spaces (M12f-AF-3): the profile sets `indent-tabs-mode' nil, the other profiles leave it."
-  (drgnx-keys-test--live
-   (let ((orig (default-value 'indent-tabs-mode)))
-     (unwind-protect
-         (progn
-           (setq-default indent-tabs-mode t)
-           (drgnx-keys-use '((emacs app editing window)))
-           (should (default-value 'indent-tabs-mode))
-           (drgnx-keys-use '((vscode app editing window)))
-           (should-not (default-value 'indent-tabs-mode))
-           (drgnx-keys-use '((emacs app editing window)))
-           (should (default-value 'indent-tabs-mode)))
-       (setq-default indent-tabs-mode orig)))))
+  (drgnx-keys-test--indents-with-spaces '((vscode app editing window))))
+
+(ert-deftest drgnx-keys/the-emacs-profile-indents-with-spaces ()
+  (drgnx-keys-test--indents-with-spaces '((emacs app editing window))))
+
+(ert-deftest drgnx-keys/the-vim-profile-indents-with-spaces ()
+  (drgnx-keys-test--indents-with-spaces '((vim app editing window))))
 
 (defvar nidhogg-lone-modifier-events)
 
@@ -1424,20 +1436,20 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
   "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).
 The commands of modules that need no installed package are in it, the later stages' too (diff, review).")
 
-(ert-deftest drgnx-keys/the-later-stages-leave-no-global-hooks-or-pane-fillers ()
+(ert-deftest drgnx-keys/the-later-stages-leave-no-global-hooks-or-pane-kinds ()
   ;; Setting the modules up for the snapshot must not stay: a registered browser pane made the next layouts test
   ;; open a third editor group, the persist hooks changed every later restore.  The registries' libraries load
   ;; first: run alone, the snapshot would otherwise be taken before layouts' defvars give the built-ins.
   (require 'drgnx-persist)
   (require 'drgnx-layouts (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir))
-  (let ((fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
+  (let ((kinds (mapcar #'car drgnx-pane--kinds))
         (shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes)))
         (state-fns (copy-sequence drgnx-persist-state-functions))
         (after-fns (copy-sequence drgnx-persist-after-restore-functions))
         (drgnx-keys-test--later-stages t)
         (drgnx-keys-test--strict t))
     (drgnx-keys-test--with-core-commands (ignore))
-    (should (equal (bound-and-true-p drgnx-layouts-pane-fillers) fillers))
+    (should (equal (mapcar #'car drgnx-pane--kinds) kinds))
     (should (equal (bound-and-true-p drgnx-layouts-shapes) shapes))
     (should (equal drgnx-persist-state-functions state-fns))
     (should (equal drgnx-persist-after-restore-functions after-fns))))

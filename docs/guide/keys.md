@@ -23,8 +23,8 @@ The last preset puts Vim **last**: it is the later layer for editing, so Vim kee
 insert state, in panels and, on a Mac, as Cmd keys. `keys.eld` flips any single key. The `SPC` leader keys stay in
 this stack for every command, next to VS Code's own keys (see Leader keys below).
 
-A stack with the VS Code profile also indents with spaces, as VS Code does (`indent-tabs-mode` defaults to nil; a file's own
-indentation and `.editorconfig` still win). The Emacs and Vim profiles leave Emacs's default.
+Every profile indents with spaces: that is an editing default, not a key layer (Editing, "Font size, tab size and word
+wrap").
 
 With the VS Code profile, Alt pressed and released on its own opens the menu (☰), as VS Code's compact menu does;
 Alt held with another key stays that Meta key (`Alt+F` is still `M-f`). drgnx's Emacs (Nidhogg) reports the lone Alt

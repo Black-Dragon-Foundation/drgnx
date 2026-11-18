@@ -17,6 +17,10 @@ changes apply at once:
 | `drgnx-editing-tab-size` | `editor.tabSize` | 4 | Columns a tab takes, and an indent where the mode has none of its own. A mode with its own indent keeps it. |
 | `drgnx-editing-word-wrap` | `editor.wordWrap` | `on` | `on` continues a long line on the next row at a word; `off` lets it run past the edge. drgnx wraps by default (VS Code does not). Toggle Word Wrap flips it for one buffer. |
 
+Indents are made of spaces, as VS Code's `editor.insertSpaces`, in every key profile: `indent-tabs-mode` defaults to
+nil (Emacs's own default, tabs, would turn every 4-column indent into a tab now that a tab is 4 columns). A mode with tabs
+of its own (Makefile, Go), a file's own indentation and `.editorconfig` still win.
+
 ## Language support (tree-sitter)
 
 Every language is a **language pack** (`packs/` in drgnx: Python, JavaScript, TypeScript, TSX, Go, Rust, Java, C, C++,
@@ -141,6 +145,19 @@ comes; without the hub, or in a remote file without tree-sitter, there are none.
 again only when the text above the window's top changes or the hub answers. Scrolling inside the same tree-sitter
 scopes reuses their names (the scope lines are read once). **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own). It is one of the header's tail providers: add your own with
 `drgnx-chrome-add-tail-provider` (a function of a window returning a string or nil, and a depth; lowest first).
+
+**Lines instead of names.** With `drgnx-sticky-style` set to `lines` (default `names`), the scopes' first lines show
+as code, VS Code's way: up to `drgnx-sticky-max` lines (3), outermost first, with their line numbers and syntax colours,
+over the window's top rows, the popups' shadow under the last. They are a card over the text, so the text never
+moves, point stays where it is and a scroll counts the same rows. Click a line to go there; Ctrl+click folds that scope.
+The scopes come from the fold table, so sticky scroll, folding and the minimap agree (else from tree-sitter). The card
+is filled again only when the set of scopes changes, never per scroll.
+
+**Pinned regions.** **Pin Region** pins the selection, or the scope at point: it keeps a band and its name on the
+minimap (the scroll bar's pin marks, which move with your edits). **Show Pinned Region** shows a pin (the one at point,
+else one you choose from the buffer's pins) in the same card over the window's top rows, so you can read a signature
+while you write its uses elsewhere; run it again to take it off. **Unpin Region** removes one. Pins last while the
+buffer is open.
 
 ## Markdown
 

@@ -20,10 +20,12 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--stateless '(agent-mark progress card)
-  "The components that show no state (nothing to hover or select): drawn at rest only.")
+(defconst drgnx-kit-catalogue--stateless '(agent-mark progress card range-bar segmented)
+  "The components that show no state (nothing to hover or select; a segmented switch's current item is its own):
+drawn at rest only.")
 
-(defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress section-header card chip status-dot)
+(defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress section-header card chip status-dot tab
+                                         segmented range-bar)
   "The components the hub expands: their cells are drawn as hub rows.")
 
 (defconst drgnx-kit-catalogue--meters
@@ -65,7 +67,19 @@
     ('chip (let ((tone (alist-get 'tone variants)))
              (list :c "chip" :label (format "%s" tone) :tone (if (eq tone 'agent) (list :agent 3) (symbol-name tone))
                    :fill (symbol-name (alist-get 'fill variants)) :state (symbol-name state))))
+    ('range-bar (pcase (alist-get 'variant variants)
+                  ('schedule (list :c "range-bar" :variant "schedule" :from 0 :to 100 :width 160 :state "on-track"
+                                   :label "build: on track"
+                                   :spans (list :done_to 40 :p50 60 :p90 80 :baseline 30 :target 90)))
+                  ('cost (list :c "range-bar" :variant "cost" :from 0 :to 100 :width 160 :state "on-track"
+                               :spans (list :p50 40 :p90 70 :limit 90)))
+                  (_ (list :c "range-bar" :variant (list :segment "edit") :from 0 :to 10 :width 120 :state "on-track"))))
     ('status-dot (list :c "status-dot" :status (symbol-name (alist-get 'status variants)) :word t))
+    ('tab (list :c "tab" :title "main.rs" :size (symbol-name (alist-get 'size variants)) :state (symbol-name state)
+                :icon "file-code" :close t :modified :false))
+    ('segmented (list :c "segmented" :current 1
+                      :items (mapcar (lambda (l) (list l (list :kind "kit-catalogue" :args (list (downcase l)))))
+                                     '("Map" "Board" "Timeline"))))
     (_ (list :c (symbol-name id) :text (format "%s · %s" id state) :state (symbol-name state)))))
 
 (defun drgnx-kit-catalogue--hub-row (_id props scale tty state)
@@ -129,7 +143,8 @@ frame's)."
          (tty (cond (gui nil) ((drgnx-ui-ascii-frame-p frame) 'ascii) (t t)))
          (patch (drgnx-view-patch--make :view "kit-catalogue" :class "kit" :epoch 1)))
     (dolist (c (alist-get 'components (drgnx-ui-kit-components)))
-      (when (or (null component) (eq component (car c)) (and (eq component 'meter) (eq (car c) 'progress)))
+      (when (and (not (and (plist-member (cdr c) :sheet) (null (plist-get (cdr c) :sheet))))   ; hub-only: no cells
+                 (or (null component) (eq component (car c)) (and (eq component 'meter) (eq (car c) 'progress))))
         (insert (propertize (format "%s\n" (car c)) 'face 'drgnx-ui-heading) "\n")
         (dolist (variants (drgnx-kit-catalogue--combos (cdr c)))
           (when (drgnx-kit-catalogue--shown-p component (car c) variants)

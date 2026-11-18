@@ -97,6 +97,25 @@ valid: their tiles become placeholders."
     (drgnx-grid-tree--check tree 0 t (list 0))
     t))
 
+(defun drgnx-grid-tree-join (type children pxs total scale)
+  "CHILDREN (nodes) as one node of TYPE (`row' or `col'), each given its part of TOTAL frame pixels at SCALE (frame
+pixels per logical pixel): its PXS entry, nil an equal share of what the others leave; each child gets its :px
+(logical, clamped) and :share (a child taken from a root, which has none, too).  One child alone is that child."
+  (if (null (cdr children)) (car children)
+    (let* ((known (apply #'+ (delq nil (copy-sequence pxs))))
+           (rest (max 1 (- total known)))
+           (pxs (mapcar (lambda (p) (or p (max 1 (/ rest (max 1 (cl-count nil pxs)))))) pxs))
+           (sum (float (apply #'+ pxs))))
+      (append (list type :px nil :share nil)
+              (cl-mapcar (lambda (c p)
+                           (let ((sizes (list :px (max 1 (min drgnx-grid-tree-max-px (drgnx-grid-tree-to-logical p scale)))
+                                              :share (max 1e-4 (min 1.0 (/ p sum))))))
+                             (if (memq (car c) '(row col))
+                                 (append (list (car c)) sizes (nthcdr 5 c))
+                               (cons (car c) (append sizes (cl-loop for (k v) on (cdr c) by #'cddr
+                                                                    unless (memq k '(:px :share)) append (list k v)))))))
+                         children pxs)))))
+
 (defun drgnx-grid-tree-leaves (tree)
   "The leaves (`tile' and `editor' nodes) of TREE in order, top-left to bottom-right."
   (if (memq (car-safe tree) '(row col))

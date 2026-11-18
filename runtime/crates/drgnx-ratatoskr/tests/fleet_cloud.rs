@@ -541,6 +541,7 @@ mod cloud {
             keys: vec![],
             local_only: false,
             writes: vec![],
+            derived: Default::default(),
             os: Default::default(),
         };
         Submit {

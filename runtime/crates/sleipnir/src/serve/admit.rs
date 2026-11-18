@@ -7,8 +7,8 @@ use super::platform::Platform;
 use crate::linux::reserve::Reservation;
 use crate::linux::resize::{self, Head, Resize, Sized};
 use forseti::{
-    Expected, Grant, Job, JobId, JobSpec, JobState, Limits, MachineState, Priority, RunningJob,
-    WaitReason,
+    Expected, Grant, Job, JobId, JobSpec, JobState, LastStart, Limits, MachineState, Priority,
+    RunningJob, WaitReason,
 };
 
 /// How long past its timeout an attempt's reservation counts, should nothing remove it.
@@ -58,10 +58,12 @@ pub struct Offer<'a> {
     pub spec: &'a JobSpec,
     pub priority: Priority,
     pub expected: Option<Expected>,
+    /// The machine's timing island and the timing job on it (`serve --island`); none: no timing lane.
+    pub island: Option<forseti::Island>,
 }
 
 /// Admits OFFER on the machine of PLATFORM at NOW under LIMITS for SCHEDULER, whose running jobs are OURS and whose
-/// last start was LAST_START. Under the machine's admission lock it reads the machine (the others' live reservations
+/// last start was LAST. Under the machine's admission lock it reads the machine (the others' live reservations
 /// included), asks `forseti::admit`, sizes the grant and writes the reservation, held by this process (PID with its
 /// start time) until the attempt's job-exec takes it over.
 pub fn admit(
@@ -69,7 +71,7 @@ pub fn admit(
     limits: &Limits,
     scheduler: &str,
     ours: &[RunningJob],
-    last_start: Option<u64>,
+    last: LastStart,
     now: u64,
     offer: &Offer,
 ) -> Result<Grant, Refused> {
@@ -79,7 +81,9 @@ pub fn admit(
             .machine(now, limits)
             .map_err(|e| Refused::because(format!("the machine can't be read: {e}")))?;
         m.running = ours.to_vec();
-        m.last_start = last_start;
+        m.last_start = last.at;
+        m.last_start_small = last.small;
+        m.island = offer.island.clone();
         let budget = forseti::budget(&m, limits);
         let job = Job {
             id: JobId(offer.id.to_string()),
@@ -241,6 +245,7 @@ mod tests {
             keys: vec![],
             local_only: false,
             writes: vec![],
+            derived: Default::default(),
         }
     }
 
@@ -297,6 +302,7 @@ mod tests {
             overcommit: 1.0,
             no_jobs_on_battery: false,
             fixed_slots: None,
+            start_gap_s: forseti::admit::START_GAP_S,
         }
     }
 
@@ -320,13 +326,14 @@ mod tests {
                     spec: &s,
                     priority: Priority::P3,
                     expected: None,
+                    island: None,
                 };
                 tx.send(admit(
                     &lp(&p2),
                     &limits(),
                     "drgnx-hubA",
                     &[],
-                    None,
+                    LastStart::default(),
                     1000,
                     &offer,
                 ))
@@ -361,13 +368,14 @@ mod tests {
             spec: &s,
             priority: Priority::P3,
             expected: None,
+            island: None,
         };
         let refused = admit(
             &lp(&other),
             &limits(),
             "drgnx-hubB",
             &[],
-            None,
+            LastStart::default(),
             1000,
             &offer,
         )
@@ -391,7 +399,7 @@ mod tests {
                 &limits(),
                 "drgnx-hubB",
                 &[],
-                None,
+                LastStart::default(),
                 1000,
                 &offer
             )
@@ -414,8 +422,18 @@ mod tests {
             spec: &s,
             priority: Priority::P3,
             expected: None,
+            island: None,
         };
-        let grant = admit(&lp(&p), &limits(), "drgnx-hubA", &[], None, 1000, &offer).unwrap();
+        let grant = admit(
+            &lp(&p),
+            &limits(),
+            "drgnx-hubA",
+            &[],
+            LastStart::default(),
+            1000,
+            &offer,
+        )
+        .unwrap();
         assert_eq!((grant.mem_cap_mib, grant.reserve_mib), (4096, 2048));
         // long past its start, it uses 3,600 of its 4,096 cap
         let now = 5000;
@@ -485,8 +503,18 @@ mod tests {
             spec: &s,
             priority: Priority::P3,
             expected: None,
+            island: None,
         };
-        admit(&lp(&p), &limits(), "drgnx-hubA", &[], None, 1000, &offer).unwrap();
+        admit(
+            &lp(&p),
+            &limits(),
+            "drgnx-hubA",
+            &[],
+            LastStart::default(),
+            1000,
+            &offer,
+        )
+        .unwrap();
         // started at 1000, expected to take an hour: it ends at 4600
         let now = 2000;
         let ours = [RunningJob {
@@ -556,27 +584,54 @@ mod tests {
             spec: &small,
             priority: Priority::P3,
             expected: None,
+            island: None,
         };
         let facts = |json: &str| fs::write(d.path().join("test-machine.json"), json).unwrap();
         let quiet = r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "io_full10": 0.0, "app_mem_some10": null},
                         "disk_free_gb": 400, "disk_total_gb": 475, "mem_available_mib": 8192}"#;
         facts(quiet);
         assert_eq!(
-            admit(&lp(&p), &real, "drgnx-hubA", &[], None, 1000, &offer("q1")).map(|_| ()),
+            admit(
+                &lp(&p),
+                &real,
+                "drgnx-hubA",
+                &[],
+                LastStart::default(),
+                1000,
+                &offer("q1")
+            )
+            .map(|_| ()),
             Ok(()),
             "the host's pressure or disk reached a test build"
         );
         // the facts are the machine: low disk in them is refused under the profile's floor, as on a real runner
         facts(&quiet.replace("400", "44"));
         assert_eq!(
-            admit(&lp(&p), &real, "drgnx-hubA", &[], None, 1000, &offer("q2"))
-                .unwrap_err()
-                .reason,
+            admit(
+                &lp(&p),
+                &real,
+                "drgnx-hubA",
+                &[],
+                LastStart::default(),
+                1000,
+                &offer("q2")
+            )
+            .unwrap_err()
+            .reason,
             Some(WaitReason::DiskLow)
         );
         // a broken facts file is a loud refusal, never the host's figures
         facts("{");
-        let e = admit(&lp(&p), &real, "drgnx-hubA", &[], None, 1000, &offer("q3")).unwrap_err();
+        let e = admit(
+            &lp(&p),
+            &real,
+            "drgnx-hubA",
+            &[],
+            LastStart::default(),
+            1000,
+            &offer("q3"),
+        )
+        .unwrap_err();
         assert!(e.why.contains("test-machine.json"), "{e:?}");
         // and mains power is in them too (the host's `power_supply` may show a battery): a workstation on battery
         // admits nothing
@@ -595,7 +650,16 @@ mod tests {
             "\"mem_available_mib\": 8192",
             "\"mem_available_mib\": 8192, \"on_ac\": false",
         ));
-        let e = admit(&lp(&wp), &ws, "drgnx-hubA", &[], None, 1000, &offer("q4")).unwrap_err();
+        let e = admit(
+            &lp(&wp),
+            &ws,
+            "drgnx-hubA",
+            &[],
+            LastStart::default(),
+            1000,
+            &offer("q4"),
+        )
+        .unwrap_err();
         assert_eq!(e.reason, Some(WaitReason::OnBattery), "{e:?}");
     }
 }

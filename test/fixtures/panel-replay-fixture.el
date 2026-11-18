@@ -275,6 +275,9 @@ measure with no draw or no patch measured nothing: an error, as a premise that f
     (signal-process drgnx-panel-replay--hub 'term)
     (unless (drgnx-panel-replay--wait 10 (lambda () (not (process-live-p drgnx-panel-replay--hub))))
       (signal-process drgnx-panel-replay--hub 'kill)))
+  ;; an exited process stays in `process-list' until Emacs next reports its status; deleted here, it is gone now (a
+  ;; file's leak census read it there at once)
+  (when drgnx-panel-replay--hub (delete-process drgnx-panel-replay--hub))
   (when (and drgnx-panel-replay--hub (buffer-live-p (process-buffer drgnx-panel-replay--hub)))
     (kill-buffer (process-buffer drgnx-panel-replay--hub)))
   (when (buffer-live-p drgnx-panel-replay--panel) (kill-buffer drgnx-panel-replay--panel))

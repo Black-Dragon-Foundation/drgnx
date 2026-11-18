@@ -15,6 +15,10 @@ struct Calls {
     launched: Vec<(String, PathBuf)>,
     killed: Vec<String>,
     cleanups: usize,
+    /// The island set on (its CPUs) or off, in order.
+    islands: Vec<Option<String>>,
+    /// Each launched attempt's environment.
+    envs: Vec<Vec<(String, String)>>,
 }
 
 struct Fake {
@@ -41,10 +45,12 @@ impl Platform for Fake {
             disk_total_gb: 1000,
             on_ac: true,
             last_start: None,
+            last_start_small: false,
             running: vec![],
             features: vec![],
             reachable: true,
             others: vec![],
+            island: None,
         })
     }
     fn limits(&self, profile: Profile) -> Limits {
@@ -80,6 +86,7 @@ impl Platform for Fake {
             .borrow_mut()
             .launched
             .push((req.meta.r.job.clone(), req.src.to_path_buf()));
+        self.calls.borrow_mut().envs.push(req.env.to_vec());
         // what job-exec would leave: its log and its result
         fs::write(req.dir.join(LOG), b"hello from the fake\n").unwrap();
         ResultJson {
@@ -129,6 +136,13 @@ impl Platform for Fake {
     }
     fn hand_key(&self, _dir: &Path, _name: &str, _value: &[u8]) -> io::Result<()> {
         Err(io::ErrorKind::NotFound.into())
+    }
+    fn island_check(&self, _island: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn island(&self, on: Option<&str>) -> Result<(), String> {
+        self.calls.borrow_mut().islands.push(on.map(str::to_string));
+        Ok(())
     }
     fn cleanup(&self, _root: &Path, _owner: &cleanup::Owner) {
         self.calls.borrow_mut().cleanups += 1;
@@ -188,6 +202,22 @@ fn serve_reserving(
     pressure: Rc<Cell<Option<Level>>>,
     reserve_mib: Option<u64>,
 ) -> (Serve<Out>, Out, Rc<RefCell<Calls>>, Up) {
+    serve_full(d, profile, pressure, reserve_mib, None)
+}
+
+/// A dedicated [`serve`] with `--island ISLAND`.
+fn serve_island(d: &Path, island: &str) -> (Serve<Out>, Out, Rc<RefCell<Calls>>, Up) {
+    serve_full(d, Profile::Dedicated, Rc::default(), None, Some(island))
+}
+
+/// [`serve_reserving`], with `--island`.
+fn serve_full(
+    d: &Path,
+    profile: Profile,
+    pressure: Rc<Cell<Option<Level>>>,
+    reserve_mib: Option<u64>,
+    island: Option<&str>,
+) -> (Serve<Out>, Out, Rc<RefCell<Calls>>, Up) {
     let calls = Rc::new(RefCell::new(Calls::default()));
     let up = Rc::new(RefCell::new(BTreeSet::new()));
     let runtime = d.join("run");
@@ -207,6 +237,7 @@ fn serve_reserving(
         watchdog: None,
         allow: Default::default(),
         reserve_mib,
+        island: island.map(str::to_string),
     };
     let out = Out::default();
     let s = Serve::with_platform(cfg, out.clone(), Box::new(fake)).unwrap();
@@ -354,6 +385,35 @@ fn an_attempt_runs_through_the_platform() {
     assert!(calls.borrow().cleanups >= 1);
 }
 
+/// [D] The cleanup runs every ten minutes from the serve loop's tick, besides `serve`'s start and every job's end, so
+/// an orphan container never outlives ten minutes plus its sweep (the clock: the last cleanup's time, backdated).
+#[test]
+fn the_cleanup_runs_every_ten_minutes() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut s, out, calls, _) = serve(d.path());
+    s.handle(Frame::Hello {
+        version: PROTO_VERSION,
+        hub_id: "hubA".into(),
+    });
+    out.take();
+    let before = calls.borrow().cleanups;
+    assert!(s.tick() == Next::Go);
+    assert_eq!(calls.borrow().cleanups, before, "not before ten minutes");
+    s.last_cleanup = Instant::now() - CLEANUP_EVERY + Duration::from_secs(5);
+    assert!(s.tick() == Next::Go);
+    assert_eq!(calls.borrow().cleanups, before, "five seconds early");
+    s.last_cleanup = Instant::now() - CLEANUP_EVERY;
+    assert!(s.tick() == Next::Go);
+    assert_eq!(calls.borrow().cleanups, before + 1);
+    assert!(s.tick() == Next::Go);
+    assert_eq!(
+        calls.borrow().cleanups,
+        before + 1,
+        "the timer starts again"
+    );
+    assert_eq!(CLEANUP_EVERY, Duration::from_secs(600));
+}
+
 fn offer(s: &mut Serve<Out>) {
     s.handle(Frame::Offer {
         r: jr(),
@@ -406,4 +466,103 @@ fn the_platforms_pressure_event_sets_the_ladder() {
         crate::linux::jobexec::read_kill_reason(&dir).as_deref(),
         Some(crate::linux::jobexec::EVICTED)
     );
+}
+
+/// Offers timing job ID (attempt 1) to S.
+fn offer_timing(s: &mut Serve<Out>, id: &str) -> JobRef {
+    let r = JobRef {
+        job: id.into(),
+        ..jr()
+    };
+    let mut spec = super::tests_spec();
+    spec.lane = forseti::Lane::Timing { pinned: Some(0) };
+    s.handle(Frame::Offer {
+        r: r.clone(),
+        spec: Box::new(spec),
+        priority: forseti::Priority::P3,
+        expected: None,
+        input_key: String::new(),
+        grant_hint: None,
+    });
+    r
+}
+
+/// [D] (design §5.6) A timing attempt takes the island before it starts (work moves to the rest) and knows it
+/// (`DRGNX_PERF_ISLAND`); a second waits `IslandBusy` while it runs; at its end the work gets every CPU again.
+#[test]
+fn the_work_slice_moves_off_the_island_and_back() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut s, out, calls, up) = serve_island(d.path(), "0-5,12-17");
+    s.handle(Frame::Hello {
+        version: PROTO_VERSION,
+        hub_id: "hubA".into(),
+    });
+    out.take();
+    calls.borrow_mut().islands.clear();
+    let r = offer_timing(&mut s, "t1");
+    s.handle(Frame::Start {
+        r: r.clone(),
+        image: Some("img".into()),
+        env: vec![],
+        net_hosts: vec![],
+        pins: vec![],
+        parser: String::new(),
+    });
+    assert_eq!(calls.borrow().islands, vec![Some("0-5,12-17".to_string())]);
+    assert!(
+        calls.borrow().envs[0].contains(&("DRGNX_PERF_ISLAND".into(), "0-5,12-17".into())),
+        "{:?}",
+        calls.borrow().envs
+    );
+    out.take();
+    offer_timing(&mut s, "t2");
+    let frames = out.take();
+    assert!(
+        matches!(
+            frames.first(),
+            Some(Frame::Refuse {
+                reason: Some(forseti::WaitReason::IslandBusy),
+                ..
+            })
+        ),
+        "{frames:?}"
+    );
+    up.borrow_mut().clear();
+    assert_eq!(s.pump(&("t1".to_string(), 1), true), Ok(true));
+    assert!(s.tick() == Next::Go);
+    assert_eq!(
+        calls.borrow().islands,
+        vec![Some("0-5,12-17".to_string()), None]
+    );
+}
+
+/// [D] (design §5.6, plan risk 4) `serve` killed mid-timing: at its next start, with the timing job gone, the work
+/// slice gets every CPU back before anything else.
+#[test]
+fn a_restart_restores_the_work_slices_cpus() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut s, out, calls, up) = serve_island(d.path(), "0-5,12-17");
+    s.handle(Frame::Hello {
+        version: PROTO_VERSION,
+        hub_id: "hubA".into(),
+    });
+    out.take();
+    let r = offer_timing(&mut s, "t1");
+    s.handle(Frame::Start {
+        r,
+        image: Some("img".into()),
+        env: vec![],
+        net_hosts: vec![],
+        pins: vec![],
+        parser: String::new(),
+    });
+    assert_eq!(
+        calls.borrow().islands.last(),
+        Some(&Some("0-5,12-17".to_string()))
+    );
+    // killed: nothing of it runs on, and the job went with it
+    drop(s);
+    up.borrow_mut().clear();
+    let (_s2, _, calls2, _) = serve_island(d.path(), "0-5,12-17");
+    assert_eq!(calls2.borrow().islands, vec![None]);
 }

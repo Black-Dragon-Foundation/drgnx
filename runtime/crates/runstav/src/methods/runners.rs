@@ -101,6 +101,10 @@ pub struct SetParams {
     /// profile or reserve change reconnects the runner, so it applies at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reserve_mib: Option<u64>,
+    /// The timing island (`--island`): a CPU list of whole L3 groups (`0-5,12-17`) timing jobs run on; empty removes
+    /// it. A change reconnects the runner, whose `serve` checks it against the machine's caches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub island: Option<Bounded<String, 64>>,
 }
 
 /// `runners/remove`'s params: `confirm` must be true.

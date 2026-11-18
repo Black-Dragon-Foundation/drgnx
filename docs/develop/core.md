@@ -1660,7 +1660,18 @@ lists at each publish.
   and `:file`, the file's true name, which keys the hub's `labels` layer in Sjá. The buffer's line model gets the MARK
   expression (`nidhogg-lines-set-section-regexp`, `drgnx-minimap-mark-regexp`, Rust regex syntax) and finds the MARK
   sections itself; the hub is told the file is shown (`minimap/watch`, once per change of file) and sends the
-  definitions. Nidhogg draws the rest (Glitnir's minimap layer: tiles, labels, the pointer).
+  definitions. Nidhogg draws the rest (Glitnir's minimap layer: tiles, labels, the pointer). A buffer with pinned
+  regions (`editor/sticky`'s `drgnx-pin-region`) adds `:pin-kind` (the line model's `pin` kind, `drgnx-ruler-kinds`),
+  `:pin` (the face `drgnx-marks-pin`) and `:pin-names` (a vector, buffer order): the bands are the scroll bar's `pin`
+  marks (owner `pins`, each with its END), which the line model moves with edits, so the spec never carries positions.
+- **Sticky lines.** `editor/sticky` with `drgnx-sticky-style` `lines` draws the scope start lines in a pooled child
+  frame per window over its top rows (`drgnx-sticky--cards`), its window and frame marked `drgnx-minimap-exclude`. The
+  header's memo `sticky-segment` (once per window start, text change above it, or hub answer) works out the scopes
+  from `drgnx-fold-ranges` (else tree-sitter) and asks for a refill (a 0 s debounce: no frame change inside a
+  redisplay) only when the set differs from the card's; a scroll inside the same scopes runs nothing.
+  The store's `pane-resized` and `windows-changed` events (a `now` subscription that arms a 0 s timer) move the cards
+  with their windows. `drgnx-pin-show` fills the same card with a pin's
+  lines and keeps it there until toggled off.
 - **Folding.** `editor/fold` (`modules/editor/drgnx-fold.el`) reads the line model's one fold table (`nidhogg-lines-folds`,
   `nidhogg-lines-fold-at`: `(BEG END KIND DEPTH SOURCE)`, BEG the first line's start, END the last line's end). Its
   sources are numbers: 0 tree-sitter, 1 the hub, 2 headings and 4 indentation (the model finds those itself, again
@@ -3364,6 +3375,26 @@ undo stack and saved layouts, and it is applied by rebuilding windows, never by 
 part of its parent, in (0, 1]. `(drgnx-grid-tree-to-logical PX SCALE)` and `(drgnx-grid-tree-from-logical LOGICAL
 SCALE)` convert, rounded half up as `drgnx-px` rounds, so logical → pixels → logical is exact at any scale.
 
+**A scale change, a window resize.** The docks (the side bar, the panel, the right side) keep their logical px and
+the editors take the difference, as VS Code's side bar keeps its width: `drgnx-grid-keep-dock-sizes` runs at each
+window size change and at Nidhogg's scale change (`nidhogg-frame-scale-change-functions`), with the scale
+`drgnx-pixels-scale` (display × UI scale). While the grid root keeps its size and scale, a dock's size is noted as its
+logical size; when either changed (a monitor of another scale, the UI scale, the window resized, the echo area grown
+with the font), each shown dock is given its logical size in the new pixels and a hidden one's `:sizes` intent is
+moved to it. A dock never squeezes the editors below their least size (`drgnx-grid-min-px` per tile, summed along a
+row): it gives way, and keeps the size it wants, so it is that size again once there is room. Other windows are not
+touched. A windowed frame keeps its logical size across a scale change (Nidhogg); a maximized one is its monitor's
+size, smaller in logical px at a larger scale. The resize step and `drgnx-grid-min-px` are logical (`drgnx-px` at the
+frame's scale). `test/ui/grid-scales-gui-test.el` moves the session's monitor through mutter (`gdctl`) from 1.25 to 2
+and back.
+
+**Terminal frames.** `(drgnx-grid-home-size DOCK FRACTION MINIMUM &optional FRAME)` gives a dock FRACTION of the
+frame's columns (lines for `bottom`), at least MINIMUM of them: its tile now, when it shows, and the size it comes back
+at (the `:sizes` intent, by `auto`). ui/terminal-layout sizes its docks with it (`drgnx-tty-layout--homes`). The side
+bar's leaf keeps its sections' heights (`:state` `:parts`, logical, top to bottom), so a side bar made again by
+`drgnx-grid-apply-tree` (full size and back, a layout) has them as before. `test/tty/grid-test.el` runs six tiles in
+tmux: resizes, a drag through SGR mouse reports, full size, the status row and a C locale.
+
 **Validation.** `(drgnx-grid-valid-tree-p TREE)` is t or nil, and nothing is built from a tree it refuses. It refuses a
 non-list, an object that cannot be written and read back (a buffer, marker, window or frame, also inside a tile's
 `:state`), a depth over 16, more than 64 leaves, a non-symbol kind, a `:px` that is not an integer in 1–20000, a
@@ -3490,6 +3521,31 @@ their chrome again.
 Tests: `test/unit/grid-snapshot-test.el` (`drgnx-grid-snapshot/`: the stack, one frame; batch cannot make a second
 frame) and `test/ui/grid-snapshot-gui-test.el` (`drgnx-ui-grid-snapshot/`: aux frames made, closed and restored).
 
+**Monitor fold-in and return** (`wb/drgnx-monitors.el`). `drgnx-monitors--monitors-changed`
+(`display-monitors-changed-functions`) notes, at the first change of a burst, each aux frame's monitor key and
+FRAME-SNAP (`drgnx-monitors--fold-seen`: the window manager may move a frame off a monitor that went away before the
+burst ends), and debounces `drgnx-monitors--fold-settle` to 1 s of idleness (key `monitors-fold`; idle, as the
+refresh is, so it never runs inside a command or a follow). Settled, each noted key that
+`drgnx-monitors--present-p` (`display-monitor-attributes-list`, by name, else geometry) no longer finds is folded
+(the frames on it matched with `drgnx-monitors--same-p`),
+and each folded key that is present again comes back.
+- `(drgnx-monitors--fold KEY &optional SEEN)` pushes `fold-in`, then for each aux frame on KEY: its editors' buffers go
+  first in the main frame's last-used editor's tabs (`drgnx-grid--fold-buffers`), the tool kinds of its tiles that the
+  main frame lacks are shown there (`drgnx-grid-show`: their dock's tile, or a new one), the entry `(:snap FRAME-SNAP
+  :tabs NAMES :kinds KINDS)` (what the main frame did not have) goes under KEY in `drgnx-monitors--folded`, and the
+  frame is deleted. Nothing is killed, saved or asked.
+- `(drgnx-monitors--unfold KEY)`: the main frame gives back each entry's tabs and kinds (a kind in front is hidden,
+  one behind is taken off its stack), then `drgnx-grid-restore` makes the frames again from a snapshot of now plus
+  the entries' FRAME-SNAPs: their buffers as they are now, each at its geometry.
+- `drgnx-grid-restore` folds an aux FRAME-SNAP whose `:monitor` is absent instead of making it
+  (`drgnx-monitors--fold-snap`); a restart's restore of a window whose monitor is gone folds it
+  (`drgnx-monitors--placing`). `drgnx-monitors--folded` is saved with the main frame (`:monitors-folded`, checked by
+  `drgnx-monitors--folded-p` when read back) and checked again a second after the restore.
+
+Tests: `test/unit/wb-monitors-fold-test.el` (`drgnx-monitors/`: the debounce, a restore folding, the saved list) and
+`test/ui/monitors-fold-gui-test.el` (`drgnx-ui-monitors-fold/`: fold and return of live frames, monitors faked;
+`fold-and-return` unplugs a real monitor under sway, `:compositor`).
+
 **Move to New Window** (`wb/drgnx-grid-frames.el`). `(drgnx-grid-move-to-new-frame &optional WINDOW)` pushes
 `tear-out` and lets the tile leave its frame as a move does (`drgnx-grid--delete-tile`; a frame's last editor stays,
 empty). In a new aux frame (`drgnx-frames--new`) it is the only tile, with a fresh id and no dock: an editor as its
@@ -3521,7 +3577,11 @@ then by monitor and position; child frames and the daemon's initial frame left o
 `drgnx-switcher-assign` letters them by rank and reading order (`drgnx-grid-letters`); `drgnx-switcher-neighbour
 ITEMS FROM DIRECTION` is the nearest centre in that half-plane, across frames; `drgnx-switcher-cards` picks the 12
 largest of graphical frames. Cards are pooled child frames (`drgnx-switcher--pool`, made on first use, hidden on close,
-deleted by the teardown), centred on the tile; the rest get an overlay letter (`before-string`, inverse video, the
+deleted by the teardown), centred on the tile, each a kit card (`drgnx-ui-kit-card-lines`: `selected` for the current
+item, else `plain`; the letter's row gives up the columns the large letter takes); the echo area holds
+`drgnx-switcher-hint` (the letters and keys as kit key hints, cleared on close when still shown), as Resize Tiles holds
+`drgnx-grid-resize-hint`; a tile placeholder's line is a kit row in the selected state (`drgnx-ui-kit-row-face`,
+remapped by focus) with its keys as key hints; the rest get an overlay letter (`before-string`, inverse video, the
 overlay's `window` the tile's). Keys go through a transient map whose default binding is `drgnx-switcher-key`, left by every close (its exit
 function is kept in the state) (`drgnx-switcher-handle EVENT` returns `closed`, `quit`, `picked`, `swapped`, `moved` or `replayed`); a replayed key is put on
 `unread-command-events`. The gate: `:ready` is set by the layer timer `(switcher . ready)` after
@@ -3537,7 +3597,8 @@ an event itself:
   when it closed nothing (`drgnx-close--closed`).
 - `drgnx-esc--map` at the front of `emulation-mode-map-alists` (placed by `drgnx-modal-order-alists` right after the
   modules' `drgnx-modal-front-alists`: after Close Pane's and quick help's, before the modal engine's) binds `<escape>` to `drgnx-esc`: within `drgnx-esc-double-tap` of a
-  cancel (`drgnx-esc-cancel-commands`) it opens the switcher, else it runs what `<escape>` means without the map
+  cancel (`drgnx-esc-cancel-commands`) it opens the switcher (never for an Esc a keyboard macro replays: its keys are
+  not taps, so Vim's `q a A ! Esc j q @ a` leaves insert state), else it runs what `<escape>` means without the map
   (`key-binding` with `drgnx-esc--on` nil), or gives an unbound Esc back as ESC. In a buffer of
   `drgnx-esc-process-modes` it runs the major mode's own binding every time (so a terminal tile gets its Esc ahead of
   evil's).
@@ -3668,6 +3729,33 @@ so moving an atom goes through its state (`window-state-get` on the root). Test:
   `:px` become MEMORY's `:sizes`. Other versions are ignored. Tests: `test/unit/grid-persist-test.el`,
   `wb-persist-test.el`, `wb-persist-edge-test.el`.
 
+### Layouts on the grid (`modules/tools/drgnx-layouts.el`)
+
+A layout is a way to build a grid TREE; applying one is `drgnx-grid-push 'preset` (so Restore Previous undoes it)
+then putting a tree back, never deleting windows by hand. User guide: `docs/guide/layouts.md`.
+
+- `drgnx-layouts` holds the built-ins as plists: `:left` (a side-bar view, or nil), `:right` and `:panel` (an area
+  tab or pane kind, `keep` for the current dock, nil for none), `:editor` (a shape) and `:px` (sizes, a number or
+  `(logical N)`, `drgnx-layouts--px`). `:frames (A B)` (Work + Code) builds A in this window and B in a second one
+  on the second monitor (`drgnx-layouts--apply-frames`, reusing the window marked `drgnx-layouts-second`); a user's
+  `:tree` is copied as it is, an old `:windows` entry is read through `drgnx-persist--grid-from-v2`.
+- A shape (`drgnx-layouts-define-shape NAME FN`) is a function of (EDITOR WIDTH HEIGHT SCALE) returning the editor
+  part of the tree from the current editor area: `drgnx-layouts--beside EDITOR KINDS` puts pane-kind tiles to its
+  right. `drgnx-layouts--build-tree` joins the side bar, the editor part, the panel and the right side with
+  `drgnx-grid-tree-join`; a dock's tile keeps its current id when the layout keeps it, so its buffer is not remade.
+- A pane (agent, browser, …) is a pane kind with a `:fill` (`drgnx-layouts-define-pane KIND FILL TITLE` →
+  `drgnx-pane-define-kind`): a kind a module defines goes with the module, and its tile shows the kind's placeholder
+  until it is defined again, when it fills in place.
+- Each frame remembers each layout's last arrangement (`(:tree :full)`, frame parameter `drgnx-layouts-state`);
+  coming back puts it back (`drgnx-layouts--put`, visiting each editor's files). Reset Tiles (`tile-reset`) builds the
+  current layout fresh.
+- The arrangements live per project in `$XDG_STATE_HOME/drgnx/layouts/PROJECT.eld` (`drgnx-layouts-store-file`;
+  PROJECT is the work-space id when tools/work-space runs, else `global`): written 2 s after a change
+  (`drgnx-layouts--save-soon`), with the workbench's save, and on exit; read when a frame's project changes
+  (`drgnx-layouts--load-project`), keeping only valid arrangements. The workbench's state keeps only `:layout`.
+- Tests: `test/unit/layouts-grid-test.el`, `mod-layouts-test.el`, `mod-layouts-persist-test.el`,
+  `layouts-eld-test.el`; two windows on two monitors: `test/ui/layouts-presets-gui-test.el`.
+
 ## The UI kit (`drgnx-ui-kit.el`)
 
 What every surface that draws a mark or a button shares. It is in core and requires only the registry and the
@@ -3789,6 +3877,32 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   (the edge's width, and where Glitnir draws, its radius and open sides; `drgnx-ui-kit-theme-specs` takes a GLITNIR
   flag).
 
+### Tabs and the segmented switch (Task 16)
+
+- `tab` (variant `size` editor, panel): an editor tab is 34 px with 10 px before and 8 px after, the shown tab on the
+  editor's surface in the body text's colour (`drgnx-kit-tab-current`; a shown tab of another group muted,
+  `drgnx-kit-tab-current-inactive`), the others muted on the row (`drgnx-kit-tab`); a panel tab (an area's tab row) is
+  30 px with 9 px each side, the shown one a pill on the quiet selection (`drgnx-kit-tab-panel-current`). The area's
+  row is 32 px with the tabs' text in its middle, and under Glitnir the shown tab's pill is 24 px of it (a box fit to
+  its text, `drgnx-area--tab-row-parts`); the tabs' text takes the kit face's size as an absolute height, since the
+  header line's relative UI size would otherwise apply twice. Neither is
+  ever bold. Its parts: the icon (14 px, an image where the frame draws SVG icons, else its glyph and a space), the
+  title, then with a close mark the gap and an 18 px slot: 2 px, the `x` icon (the `close` glyph on a terminal; the
+  `dot` glyph, muted, when the file is modified), 2 px. The close mark is hidden (`drgnx-control-hidden`) on a tab
+  that is not shown, except on a terminal or under the pointer. The tab's own face is the state face for the shown
+  states; other states' faces go above it. Its accessible text is the title (", modified").
+- `segmented` (no variants): one 24 px track in a 1 px `border` ring inside its line, radius 6, its items 10 px each
+  side, the current one on the quiet selection in the body text's colour (`drgnx-kit-segmented-current`); each item its
+  own action, its accessible text "LABEL" or "LABEL, selected".
+- On a terminal the themes draw the shown tab and the current item in inverse video and a shown tab of another group
+  underlined (the state table's terminal forms; `drgnx-theme--terminal-faces`).
+- `(drgnx-ui-kit-tab TITLE SIZE STATE ICON CLOSE WHERE &optional MODIFIED FRAME)` and `(drgnx-ui-kit-segmented ITEMS
+  CURRENT WHERE &optional FRAME)` (ITEMS `((LABEL . ACTION)...)`, ACTION as a button's) build them as strings. The
+  editor's tab line (`drgnx-chrome--tab`), an area's tab row (`drgnx-area`), the Detail island's title and the Work lens
+  bar (`drgnx-work-lens-string`) draw with them; `drgnx-wb-tab*`, `drgnx-chrome-tab`, `-active`, `-current` and the
+  `drgnx-work-lens-*` faces are aliases of the kit faces once `ui/look` is on. The action kind `ui-window-button`
+  selects the clicked window before it runs its action (a lens item switches the lens of the window it is in).
+
 ### Actions and focus-visible
 
 - A component's action is the property `drgnx-action` = `(KIND ARGS...)` (on the wire `[kind, args...]`). Both dress
@@ -3879,7 +3993,7 @@ Outline dock (`drgnx-outline--index`: "This file is too large for an outline", a
 the status bar (`position` shows `Col N` without the line number, `indent` shows nothing, and the memo's key reads
 `tab-width` instead of scanning the first lines). **A new producer that reads or scans the buffer checks the flag
 too** and returns early. The callers that visit files bind `drgnx-large-file-open`: Persist (`drgnx-persist--visit`)
-and layouts (`drgnx-layouts--put-main`) bind `auto`; Replace's two visits and AI apply-hunk bind `whole`; the agent
+and layouts (`drgnx-layouts--visit`, through Persist's) bind `auto`; Replace's two visits and AI apply-hunk bind `whole`; the agent
 edit review sets it to `whole` in its diff buffer, where diff-mode visits the copy. They keep their
 `(large-file-warning-threshold nil)`: with the module off, Emacs's own question would come back at start.
 A caller that needs the whole file's lines and columns also checks the buffer it is handed: the door reuses an open

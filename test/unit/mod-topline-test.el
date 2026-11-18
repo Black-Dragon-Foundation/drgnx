@@ -282,7 +282,7 @@ a leading space unless told to keep it)."
   (cl-letf (((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 2.0))
             ((symbol-function 'drgnx-topline--svg-p) (lambda () t)))
     (let ((svg (plist-get (cdr (get-text-property 0 'display (drgnx-topline--chip '("main" (" ↑2" . shadow))
-                                                                                  'drgnx-chip-quiet 20 4)))
+                                                                                  'drgnx-kit-chip-neutral-soft 20 4)))
                           :data)))
       (should (string-match-p "xml:space=\"preserve\"" svg)))
     ;; the icons too: sized in whole pixels with `:scale' 1, or an image takes `image-scaling-factor', a guess from the font

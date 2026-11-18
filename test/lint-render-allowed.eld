@@ -5,6 +5,7 @@
 ;; migrate (a live view; :until names the task that rewrites it), recovery (the view core's own reset).
 ;; Counts can only fall: the task that rewrites a site deletes its entry.  A branch merged later adds its sites.
 (
+ (:file "modules/editor/drgnx-sticky.el" :in drgnx-sticky--fill :what erase-buffer :kind document :why "a card of a few scope lines (at most `drgnx-sticky-max', or a third of the window for a shown pin), drawn whole only when the window's set of scopes changes or a pin is shown")
  (:file "wb/drgnx-switcher.el" :in drgnx-switcher--fill-card :what erase-buffer :kind document :why "a pooled card is two lines (a letter and a title), drawn whole when the user opens Switch Tile or moves its highlight")
  (:file "wb/drgnx-grid.el" :in drgnx-grid-tile-placeholder :what erase-buffer :kind document :why "a tile placeholder is one line (what waits there and its keys), written when its kind's module goes off or on, and only when the line changes")
  (:file "modules/ui/drgnx-kit-catalogue.el" :in drgnx-kit-catalogue-open :what erase-buffer :kind document :why "the component catalogue is drawn whole when the user opens it (Design: Component Catalogue)")

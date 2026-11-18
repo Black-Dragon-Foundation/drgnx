@@ -495,6 +495,19 @@ its advice off `timer-event-handler' and the hub batch."
     (should (assq 'minimap-baseline (drgnx-perf-run--workloads)))
     (should (assq 'minimap-scroll (drgnx-perf-run--workloads)))))
 
+(ert-deftest drgnx-perf-run/the-sticky-lines-are-judged-against-the-same-scroll-without-them ()
+  ;; the sticky lines' card (design §8, F6): the same scroll with 2 sticky lines over the window, by the ruler's rule
+  (let ((fails (lambda (m mb)
+                 (seq-some (lambda (l) (string-search "sticky-lines-scroll input p50" l))
+                           (drgnx-perf-run--relative-fails
+                            `((sticky-lines-scroll :input (:p50 ,m)) (sticky-lines-baseline :input (:p50 ,mb))))))))
+    (should-not (funcall fails 4.7 4.4))
+    (should (funcall fails 4.8 4.4))
+    (should-not (funcall fails 10.4 10.0))
+    (should (funcall fails 10.6 10.0))
+    (should (assq 'sticky-lines-baseline (drgnx-perf-run--workloads)))
+    (should (assq 'sticky-lines-scroll (drgnx-perf-run--workloads)))))
+
 (ert-deftest drgnx-perf-run/the-line-model-is-judged-against-the-same-typing-without-it ()
   ;; design §8: typing with the line model on is at most 0.3 ms p95 over the same typing with it off (10,000 lines and
   ;; the density limit); 20 models open add at most 1 ms to the GC pauses' p95 over 20 plain buffers

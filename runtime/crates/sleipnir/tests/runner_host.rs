@@ -268,6 +268,7 @@ fn podman_run(id: &str, source: &Path, target: &Path, memory: &str, cmd: &[&str]
             writes_tree: false,
             target: target.to_path_buf(),
             caches: vec![],
+            cargo_jobs: 0,
         }),
     };
     let ra = RunnerArgs::runner(PREFIX, "hubtest", &slices::job_slice(ROOT, id).unwrap());
@@ -431,6 +432,8 @@ fn spec(id: &str, j: &JobDir, argv: Vec<String>) -> JobExec {
             reserve_mib: 128,
         },
         timeout_s: 300,
+        stall_s: None,
+        silent_s: None,
         helper: None,
     }
 }
@@ -538,6 +541,49 @@ fn slice_tree_takes_the_container() {
         &[("MemoryMax", "infinity".into())],
     )
     .unwrap();
+}
+
+/// [C] The island on a real delegated cpuset (design §5.6): a work job running in its slice moves off the island at
+/// once, a timing job's slice is on it, and both come back to every CPU when it is off. Needs two usable CPUs.
+#[test]
+#[ignore = "runner-host"]
+fn the_island_moves_running_work_and_back() {
+    let j = job_dir();
+    slices::ensure_tree(ROOT, forseti::Profile::Dedicated).unwrap();
+    let p = probe();
+    let cpus = p.cpus_usable().unwrap();
+    assert!(cpus.len() >= 2, "two usable CPUs: {cpus:?}");
+    let (island, rest) = (slices::cpu_list(&cpus[..1]), slices::cpu_list(&cpus[1..]));
+    let all = slices::cpu_list(&cpus);
+    let by_systemd = p.cpuset_by_systemd().unwrap();
+    let said = std::sync::atomic::AtomicBool::new(false);
+    unit::start(&unit_req(
+        "sltest-i1-1",
+        "i1",
+        &j.dir.join("i1.log"),
+        vec!["sleep".into(), "600".into()],
+    ))
+    .unwrap();
+    let pid = main_pid("sltest-i1-1.service");
+    assert_eq!(status_field(pid, "Cpus_allowed_list"), all);
+    let part =
+        slices::island_on(&p.manager, ROOT, Some((&island, &rest)), by_systemd, &said).unwrap();
+    assert!(part.is_some(), "the timing slice's partition");
+    assert_eq!(
+        status_field(pid, "Cpus_allowed_list"),
+        rest,
+        "work moved off the island"
+    );
+    let timing = p.slice_dir(&slices::timing_slice(ROOT, &island).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(timing.join("cpuset.cpus.effective"))
+            .unwrap()
+            .trim(),
+        island
+    );
+    slices::island_on(&p.manager, ROOT, None, by_systemd, &said).unwrap();
+    assert_eq!(status_field(pid, "Cpus_allowed_list"), all, "and back");
+    slices::stop(&slices::job_slice(ROOT, "i1").unwrap()).unwrap();
 }
 
 /// [C] The cap's step against a job that holds memory it can't give back (tmpfs, no swap), as jobq spike 3 measured
@@ -709,6 +755,157 @@ fn oom_in_a_job_is_oom() {
         (!unit::active("sltest-o1-1.service")).then_some(())
     });
     stopped_with_its_slice("sltest-run-o1");
+}
+
+/// [C] A hub's own container job (laptop-shaped: the hub's `systemd-run --user --scope --slice=drgnx-job-<id>.slice`
+/// and the shared argv with the hub's local placement, `--cgroup-parent=drgnx-job-<id>.slice`) lands in its job's
+/// slice, beside the scope, so the slice's files are the job's whole use.
+#[test]
+#[ignore = "runner-host"]
+fn a_container_job_lands_in_its_slice() {
+    let j = job_dir();
+    let slice = "drgnx-job-h1.slice";
+    let req = ContainerReq {
+        image: "base".into(),
+        argv: vec!["sleep".into(), "600".into()],
+        worktree: j.source.clone(),
+        subdir: PathBuf::new(),
+        job: "h1".into(),
+        net: false,
+        keys: None,
+        runner: None,
+    };
+    let mut ra = RunnerArgs::local("0a1b2c3d");
+    ra.cgroup_parent = Some(slice.into());
+    let argv: Vec<String> = podman::argv(&req, &caps("256M"), &ra)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.into_string().unwrap())
+        .collect();
+    let mut scope = Command::new("systemd-run")
+        .args(["--user", "--scope", "--quiet", "--collect"])
+        .arg(format!("--slice={slice}"))
+        .arg("--unit=drgnx-job-h1")
+        .arg("podman")
+        .args(&argv)
+        .spawn()
+        .unwrap();
+    let pid = running_pid("drgnx-job-h1");
+    let cg = cgroup_of(pid);
+    assert!(cg.contains(&format!("/{slice}/libpod-")), "{cg}");
+    let client = scope.id();
+    assert!(
+        cgroup_of(client).ends_with(&format!("/{slice}/drgnx-job-h1.scope")),
+        "{}",
+        cgroup_of(client)
+    );
+    slices::stop(slice).unwrap();
+    let _ = scope.wait();
+    stopped_with_its_slice("drgnx-job-h1");
+}
+
+/// The guard's job SCRIPT with the host rows' short limits (stall 20 s, silent 40 s: test settings, read every 5 s).
+fn guarded(id: &str, j: &JobDir, script: &str) -> JobExec {
+    let mut s = spec(id, j, vec!["sh".into(), "-c".into(), script.into()]);
+    s.stall_s = Some(20);
+    s.silent_s = Some(40);
+    s
+}
+
+/// A stopped job's verdict, `stuck.txt` and log line, for RULE; its unit and slice are gone.
+fn stopped_as_stuck(name: &str, s: &JobExec, j: &JobDir, rule: &str) {
+    let r = result_of(j);
+    assert_eq!(
+        r.verdict,
+        forseti::Verdict::Infra(format!("stuck ({rule})")),
+        "{r:?}"
+    );
+    assert_eq!(
+        r.infra.as_deref(),
+        Some(format!("infra: stuck ({rule})").as_str())
+    );
+    let report = std::fs::read_to_string(j.dir.join("stuck.txt")).unwrap();
+    assert!(
+        report.starts_with(&format!("stuck ({rule}): no progress for ")),
+        "{report}"
+    );
+    for section in [
+        "== processes",
+        "== containers",
+        "== log (last 60 lines)",
+        "== memory.events",
+    ] {
+        assert!(report.contains(section), "{section}: {report}");
+    }
+    let log = std::fs::read_to_string(&s.log).unwrap();
+    assert!(
+        log.lines().last().is_some_and(|l| l
+            .starts_with(&format!("=== stopped as stuck ({rule}, "))
+            && l.ends_with(" min): not a test result")),
+        "{log}"
+    );
+    skuld::wait_until("the job's unit stopped", 120, || {
+        (!unit::active(&format!("{name}.service"))).then_some(())
+    });
+}
+
+/// [C] A busy loop that prints nothing is never stalled (it uses a core) but stops at silent, as `infra: stuck`.
+#[test]
+#[ignore = "runner-host"]
+fn progress_silent_but_busy_stops_at_silent() {
+    let j = job_dir();
+    slices::ensure_tree(ROOT, forseti::Profile::Dedicated).unwrap();
+    let s = guarded("g1", &j, "while :; do :; done");
+    let t0 = std::time::Instant::now();
+    start_job("sltest-g1-1", &s, &j);
+    stopped_as_stuck("sltest-g1-1", &s, &j, "silent");
+    assert!(t0.elapsed().as_secs() >= 40, "{:?}", t0.elapsed());
+}
+
+/// [C] `sleep 600`: no output, no CPU, no IO stops at stall, as `infra: stuck`.
+#[test]
+#[ignore = "runner-host"]
+fn progress_idle_sleep_stops_at_stall() {
+    let j = job_dir();
+    slices::ensure_tree(ROOT, forseti::Profile::Dedicated).unwrap();
+    let s = guarded("g2", &j, "sleep 600");
+    let t0 = std::time::Instant::now();
+    start_job("sltest-g2-1", &s, &j);
+    stopped_as_stuck("sltest-g2-1", &s, &j, "stall");
+    let took = t0.elapsed().as_secs();
+    assert!((20..40).contains(&took), "{took}");
+}
+
+/// [C] A job that prints every 5 s for 90 s, longer than both limits, is never stopped; its command sees its
+/// deadline in `DRGNX_JOB_DEADLINE` (epoch seconds: its start plus its time box).
+#[test]
+#[ignore = "runner-host"]
+fn progress_slow_but_printing_is_not_stopped() {
+    let j = job_dir();
+    slices::ensure_tree(ROOT, forseti::Profile::Dedicated).unwrap();
+    let s = guarded(
+        "g3",
+        &j,
+        "echo deadline=$DRGNX_JOB_DEADLINE; i=0; while [ $i -lt 18 ]; do echo .; sleep 5; i=$((i+1)); done",
+    );
+    let start = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    start_job("sltest-g3-1", &s, &j);
+    let r = result_of(&j);
+    assert_eq!(r.verdict, forseti::Verdict::Pass, "{r:?}");
+    assert!(!j.dir.join("stuck.txt").exists());
+    let log = std::fs::read_to_string(&s.log).unwrap();
+    let deadline: u64 = log
+        .lines()
+        .find_map(|l| l.strip_prefix("deadline="))
+        .and_then(|d| d.parse().ok())
+        .unwrap_or_else(|| panic!("no deadline: {log}"));
+    assert!(
+        (start + 300..=start + 310).contains(&deadline),
+        "{deadline} vs start {start}"
+    );
 }
 
 /// [C] A keyed job refuses to start unless its service can't swap: started without `MemorySwapMax=0` it is

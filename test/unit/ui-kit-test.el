@@ -212,6 +212,41 @@
   (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :pad) '(7 . 7)))
   (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :radius) 4)))
 
+(ert-deftest drgnx-ui-kit/range-bar-states-carry-words ()
+  ;; a terminal has no colour to say a bar is late: the cap and the word do (ASCII `!' and the word)
+  (let ((drgnx-face-glyphs drgnx-ui--default-glyphs)
+        (props '(:c "range-bar" :variant "schedule" :from 0 :to 100 :width 80 :state "late"
+                    :spans (:done_to 30 :p50 50 :p90 100))))
+    (should (equal (plist-get (drgnx-ui-kit-expand 'range-bar props 1.0 t) :text) "███▓▓░░░░░▌ late"))
+    (should (equal (plist-get (drgnx-ui-kit-expand 'range-bar props 1.0 'ascii) :text) "###==-----! late"))
+    (should (equal (plist-get (drgnx-ui-kit-expand 'range-bar (plist-put (copy-sequence props) :state "on-track") 1.0 t)
+                              :text)
+                   "███▓▓░░░░░"))))
+
+(ert-deftest drgnx-ui-kit/segment-letters-in-hc-and-tty ()
+  (let ((drgnx-face-glyphs drgnx-ui--default-glyphs))
+    (dolist (c '(("wait-you" 32 "Y███") ("read" 32 "R███") ("stalled" 32 "!███") ("think" 16 "·█")))
+      (should (equal (plist-get (drgnx-ui-kit-expand 'range-bar
+                                                     (list :c "range-bar" :variant (list :segment (car c)) :from 0 :to 10
+                                                           :width (cadr c) :state "on-track")
+                                                     1.0 t)
+                                :text)
+                     (nth 2 c))))
+    ;; thinking's letter is a dot in ASCII
+    (should (equal (plist-get (drgnx-ui-kit-expand 'range-bar '(:c "range-bar" :variant (:segment "think") :from 0 :to 10
+                                                                   :width 16 :state "on-track")
+                                                   1.0 'ascii)
+                              :text)
+                   ".#"))))
+
+(ert-deftest drgnx-ui-kit/seg-faces-are-aliases ()
+  ;; the Timeline's segment faces inherit the kit's (kept until their callers move)
+  (dolist (pair '((drgnx-work-seg-read . drgnx-kit-range-bar-seg-read) (drgnx-work-seg-edit . drgnx-kit-range-bar-seg-edit)
+                  (drgnx-work-seg-tool . drgnx-kit-range-bar-seg-test) (drgnx-work-seg-think . drgnx-kit-range-bar-seg-think)
+                  (drgnx-work-seg-job . drgnx-kit-range-bar-seg-job) (drgnx-work-seg-wait . drgnx-kit-range-bar-seg-wait)))
+    (should (assq (car pair) (plist-get (drgnx-ui-kit-component 'range-bar) :replaces)))
+    (should (eq (cdr pair) (cdr (assq (car pair) (plist-get (drgnx-ui-kit-component 'range-bar) :replaces)))))))
+
 (ert-deftest drgnx-ui-kit/conformance ()
   ;; each case through `drgnx-ui-kit-expand' equals the hub's expansion of it, as expected.json holds it (the hub's at
   ;; the comfortable density, its default)
@@ -805,6 +840,8 @@
 (defvar nhwl-menu-row-height)
 (defvar nhwl-menu-row-padding)
 (defvar nhwl-menu-separator-height)
+(defvar nhwl-menu-selection-inset)
+(defvar nhwl-menu-selection-radius)
 (defvar nhwl-menu-frame-parameters)
 (defvar drgnx-look-density-changed-hook)
 
@@ -812,10 +849,10 @@
   "ui/face's part for Nidhogg's menus sets their options from `drgnx-ui-kit-menu-values' (220 px, the density's row,
 12 px either end, radius 8) and their faces, and follows a change of density or theme; its teardown puts every option,
 face spec and hook back as Nidhogg had them."
-  (skip-unless (and (require 'nhwl-menu nil t) (boundp 'nhwl-menu-separator-height)))
+  (skip-unless (and (require 'nhwl-menu nil t) (boundp 'nhwl-menu-selection-inset)))
   (require 'drgnx-menu-look (expand-file-name "modules/ui/drgnx-menu-look" drgnx-dir))
   (let* ((vars '(nhwl-menu-min-width nhwl-menu-row-height nhwl-menu-row-padding nhwl-menu-separator-height
-                                     nhwl-menu-frame-parameters))
+                                     nhwl-menu-selection-inset nhwl-menu-selection-radius nhwl-menu-frame-parameters))
          (faces '(nhwl-menu nhwl-menu-selected nhwl-menu-key))
          (before (mapcar #'default-value vars))
          (specs (mapcar (lambda (f) (get f 'face-defface-spec)) faces))
@@ -830,6 +867,8 @@ face spec and hook back as Nidhogg had them."
           (should (equal nhwl-menu-row-height (plist-get (drgnx-ui-kit-menu-values) :row-height)))
           (should (equal nhwl-menu-row-padding '(12 . 12)))
           (should (eql nhwl-menu-separator-height 9))
+          (should (eql nhwl-menu-selection-inset 4))
+          (should (eql nhwl-menu-selection-radius 6))
           (should (eql (alist-get 'corner-radius nhwl-menu-frame-parameters) 8))
           (should (alist-get 'drgnx-minimap-exclude nhwl-menu-frame-parameters))   ; no scroll bar strip
           (should (equal (get 'nhwl-menu-key 'face-defface-spec) '((t :inherit (drgnx-text-subtle drgnx-code-small)))))
@@ -837,7 +876,8 @@ face spec and hook back as Nidhogg had them."
           (should (memq #'drgnx-menu-look--refeed (default-value 'drgnx-look-density-changed-hook)))
           ;; a change the feed follows (here a row height the density gives): set again, as the module
           (cl-letf (((symbol-function 'drgnx-ui-kit-menu-values)
-                     (lambda (&optional _) (list :min-width 220 :row-height 30 :row-padding '(12 . 12) :separator-height 9 :radius 8 :shadow t))))
+                     (lambda (&optional _) (list :min-width 220 :row-height 30 :row-padding '(12 . 12) :separator-height 9 :selection-inset 4
+                                                 :selection-radius 6 :radius 8 :shadow t))))
             (drgnx-menu-look--refeed))
           (should (eql nhwl-menu-row-height 30)))
       (should-not (drgnx-modules--unwind 'test/menu-look)))
@@ -846,6 +886,45 @@ face spec and hook back as Nidhogg had them."
     (should-not (memq #'drgnx-menu-look--refeed enable-theme-functions))
     (should-not (memq #'drgnx-menu-look--refeed (default-value 'drgnx-look-density-changed-hook)))
     (should-not drgnx-menu-look--door)))
+
+(ert-deftest drgnx-ui-kit/tab-line-is-the-kit ()
+  "Every tab row draws the kit's tab (design §4 tabs): the shown editor tab is on the editor's surface in the body text's
+colour and never bold, a panel's shown tab on the quiet selection; the Work lens bar is the kit's tab and segmented
+switch."
+  (let* ((tok (lambda (token) (symbol-name token)))
+         (specs (drgnx-ui-kit-theme-specs tok nil nil))
+         (cur (cdr (assq 'drgnx-kit-tab-current specs)))
+         (panel (cdr (assq 'drgnx-kit-tab-panel-current specs))))
+    (should (equal '("editor" "fg" nil) (list (plist-get cur :background) (plist-get cur :foreground) (plist-get cur :weight))))
+    (should (equal "sel-quiet" (plist-get panel :background))))
+  ;; the expansion of a shown tab names no bold face and no weight
+  (dolist (size '("editor" "panel"))
+    (let* ((e (drgnx-ui-kit-expand 'tab (list :c "tab" :title "a.el" :size size :state "selected" :close t) 1.0 nil))
+           (faces (mapcar (lambda (r) (aref r 2)) (plist-get e :runs))))
+      (should (member (if (equal size "editor") "drgnx-kit-tab-current" "drgnx-kit-tab-panel-current") faces))
+      (should-not (seq-some (lambda (f) (string-match-p "bold" f)) faces))))
+  ;; the callers: the editor's tab line, an area's tab row and the Work lens bar
+  (require 'drgnx-work-map (expand-file-name "modules/tools/drgnx-work-map" drgnx-dir))
+  (let ((s (drgnx-work-lens-string 'map "x")))
+    (should (eq 'drgnx-kit-tab-current (get-text-property (string-search "Work" s) 'face s)))
+    (should (memq 'drgnx-kit-segmented (ensure-list (get-text-property (string-search "Board" s) 'face s)))))
+  (let ((s (drgnx-ui-kit-tab "a.el" 'editor 'selected nil t 'tab-line)))
+    (should (eq 'drgnx-kit-tab-current (get-text-property (string-search "a.el" s) 'face s)))
+    (should-not (memq 'bold (ensure-list (get-text-property (string-search "a.el" s) 'face s)))))
+  ;; a tool tile's tab row (its stack): the kit's panel tabs, the shown one selected and never bold
+  (require 'drgnx-grid)
+  (let ((w (selected-window)) (old (window-parameter (selected-window) 'drgnx-pane-stack)))
+    (unwind-protect
+        (progn
+          (set-window-parameter w 'drgnx-pane-stack '(kit-test-shown kit-test-other))
+          (let ((row (drgnx-grid--tab-row w))
+                (kit (lambda (title state) (let ((s (drgnx-ui-kit-tab title 'panel state nil nil 'tab-line)))
+                                             (get-text-property (string-search title s) 'face s)))))
+            (dolist (c '(("Kit-Test-Shown" selected) ("Kit-Test-Other" rest)))
+              (let ((face (get-text-property (string-search (car c) row) 'face row)))
+                (should (equal face (funcall kit (car c) (cadr c))))
+                (should-not (memq 'bold (ensure-list face)))))))
+      (set-window-parameter w 'drgnx-pane-stack old))))
 
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

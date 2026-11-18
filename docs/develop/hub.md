@@ -1440,7 +1440,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
-| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, os?: "linux" \| "macos", priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
+| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", lane?: "work" \| "timing", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, needs?: [Id], network?: boolean, nice?: integer, no_timebox?: boolean, os?: "linux" \| "macos", priority?: natnum, rows?: {listed: [string], parser: string}, silent_s?: natnum, stall_s?: natnum, timebox_s?: natnum, whole_machine?: boolean, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
@@ -1590,7 +1590,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |
 | `runners/probe-host` | user | `{host: string}` | `{effective: Effective, facts?: HostFacts, missing?: [Missing]}` | no |
 | `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
-| `runners/set` | user | `{accept?: "all" \| "heavy", name: Id, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/set` | user | `{accept?: "all" \| "heavy", island?: string, name: Id, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/unbench` | user | `{name: Id}` | `Runner` | yes |
 | `say/end` | user | `{id: Id}` | `boolean` | yes |
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
@@ -3065,8 +3065,10 @@ repository) for the Explorer's marks (`explorer/subscribe`, "Git marks").
 Once read for a connection, a repository is **watched** until the connection goes or its view closes
 (`view/close`): its gitdir (the index, `HEAD`, `packed-refs`; a linked worktree's own and the common dir) and the
 common dir's `refs`, not recursive except `refs`. A commit, checkout, `git add` or branch move from a terminal reads
-the status again once its burst is quiet for 50 ms (at most 250 ms after its first change) and sends what changed; a
-lock file's events and reads (the hub's own `git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
+the status again once its burst is quiet for 50 ms (at most 250 ms after its first change) and git holds no lock it
+took (a commit stalled on its ref's fsync is still one burst; at most 2 s after its first change, for a lock a dead git
+left or a commit waiting in an editor), and sends what changed; a lock file's events and reads (the hub's own
+`git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
 Explorer listing that its watch relisted (a name made or removed outside Emacs) also reads its repositories again.
 
 ### Ranked file names as rows (`search/files`)

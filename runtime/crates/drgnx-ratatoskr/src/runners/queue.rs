@@ -158,6 +158,10 @@ pub struct Placement {
     /// The features it needs: for a Mac job, `xcode-clt` and a `brew:NAME` for each of its project's
     /// `drgnx-runners-mac-tools`.
     pub features: Vec<String>,
+    /// The jobs it needs (`exec/start`'s `needs`): it starts once each passed, and ends as infra if one did not.
+    pub needs: Vec<String>,
+    /// The lane (`exec/start`'s `lane` and `whole_machine`): work, or a timing run on the island or the whole machine.
+    pub lane: forseti::Lane,
 }
 
 /// What a command takes in place of the selector of the rows an attempt runs (`forseti::split::selector`, an Emacs
@@ -194,6 +198,8 @@ impl Default for Placement {
             net_hosts: vec![],
             os: Os::Linux,
             features: vec![],
+            needs: vec![],
+            lane: forseti::Lane::Work,
         }
     }
 }
@@ -245,6 +251,7 @@ pub fn blank_spec(name: &str) -> JobSpec {
         keys: vec![],
         local_only: false,
         writes: vec![],
+        derived: Default::default(),
     }
 }
 
@@ -315,6 +322,8 @@ pub enum Outcome {
 pub struct Ticked {
     pub starts: Vec<String>,
     pub outcomes: Vec<Outcome>,
+    /// Jobs here evicted for a whole-machine run's drain: the job layer stops each and starts it again.
+    pub evict: Vec<String>,
 }
 
 /// A job's row as the queue knows it.
@@ -502,11 +511,21 @@ enum Db {
     Flush(tokio::sync::oneshot::Sender<()>),
 }
 
+/// The ends the queue keeps for jobs that need them ([`St::ended`]).
+const ENDED_KEPT: usize = 4096;
+
 #[derive(Default)]
 struct St {
     jobs: BTreeMap<String, QJob>,
     local_running: BTreeMap<String, RunningJob>,
-    last_local_start: Option<u64>,
+    last_local_start: forseti::LastStart,
+    /// How the jobs that left the queue ended (their order of ending, verdict), so a job that needs one knows; the
+    /// oldest go past [`ENDED_KEPT`].
+    ended: BTreeMap<String, (u64, forseti::Verdict)>,
+    ended_seq: u64,
+    /// The jobs here whose slice couldn't be read, said once each; and how many times that was said.
+    unread: BTreeSet<String>,
+    unread_said: u32,
     drr: Drr,
     attempts: attempts::Core,
     runners: BTreeMap<String, Remote>,
@@ -531,6 +550,17 @@ struct St {
     /// The machine each session's next jobs go to, as the user moved the session (`machines/move`); kept in
     /// `asession.machine` and restored with the rest ([`Kept`]).
     prefs: BTreeMap<String, Machine>,
+    /// This tick's drains (design §5.6): each machine a whole-machine timing run has, while it waits to start there
+    /// or runs; no other job starts on it. The highest P1–P2 priority pending, while that holds every drain back.
+    drains: BTreeMap<String, String>,
+    drain_behind: Option<Priority>,
+    /// When each machine's drain began (`forseti::drain_abandon`'s and `drain_may_evict_p5`'s start); until when a
+    /// drain that gave up stays off; this tick's whole-machine runs whose drain gave up; and the jobs a drain evicted
+    /// (once each).
+    drain_since: BTreeMap<String, u64>,
+    drain_off: BTreeMap<String, u64>,
+    drain_gave_up: BTreeSet<String>,
+    drain_evicted: BTreeSet<String>,
 }
 
 impl St {
@@ -556,6 +586,60 @@ impl St {
             .get(key)
             .map(|m| m.values().flatten().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Job ID ended with VERDICT (its first end counts: a later release keeps it).
+    fn ended(&mut self, id: &str, verdict: forseti::Verdict) {
+        if self.ended.contains_key(id) {
+            return;
+        }
+        self.ended_seq += 1;
+        self.ended.insert(id.to_string(), (self.ended_seq, verdict));
+        while self.ended.len() > ENDED_KEPT {
+            let Some(oldest) = self
+                .ended
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            self.ended.remove(&oldest);
+        }
+    }
+
+    /// Where the needs of SPEC stand: a need in the queue is live, one that left it ended as it did.
+    fn need_state(&self, spec: &JobSpec) -> forseti::NeedState {
+        forseti::need_state(&spec.needs, &|n| {
+            if self.jobs.contains_key(&n.0) {
+                forseti::NeedSeen::Live
+            } else if let Some((_, v)) = self.ended.get(&n.0) {
+                forseti::NeedSeen::Ended(v.clone())
+            } else {
+                forseti::NeedSeen::Unknown
+            }
+        })
+    }
+
+    /// What SPEC's history expects on MACHINE: its runs there, else its runs elsewhere (`forseti::expected`); unknown
+    /// without any. Admission sizes the grant and the start gap from it.
+    fn expected_on(&self, spec: &JobSpec, machine: &str) -> Expected {
+        let (here, other): (Vec<HistRow>, Vec<HistRow>) = self
+            .history_of(&forseti::history_key(spec))
+            .into_iter()
+            .partition(|r| r.machine == machine);
+        forseti::expected(&here, &other, 1.0, None)
+    }
+
+    /// The time box SPEC is offered with on MACHINE: its own, capped at three times its p95 wall time there (else
+    /// elsewhere's), design §5.7.
+    fn timeout_on(&self, spec: &JobSpec, machine: &str) -> u64 {
+        let (here, other): (Vec<HistRow>, Vec<HistRow>) = self
+            .history_of(&forseti::history_key(spec))
+            .into_iter()
+            .partition(|r| r.machine == machine);
+        let p95 = forseti::history::wall_p95_s(&here, &other, 1.0);
+        sleipnir::linux::progress::wall_limit(spec.timeout_s, p95)
     }
 }
 
@@ -769,7 +853,13 @@ pub struct Queue {
     keys: Arc<Keys>,
     /// The logs of keyed attempts, redacted as they are written (by attempt).
     redact: Mutex<HashMap<(String, u32), Redacting>>,
+    /// What each job here uses (MiB), read at each tick ([`Queue::read_local_use`]); none: the jobs here count as
+    /// using nothing beyond their reservations.
+    local_use: Mutex<Option<LocalUse>>,
 }
+
+/// The reader of a job's use on this machine, by job id: its slice's memory less page cache, in MiB.
+pub type LocalUse = Box<dyn Fn(&str) -> Option<u64> + Send + Sync>;
 
 /// The log file of attempt R of a job whose current attempt is CURRENT.
 fn log_file(root: &std::path::Path, r: &JobRef, late: bool) -> PathBuf {
@@ -900,6 +990,9 @@ pub fn wait_text(r: &WaitReason) -> String {
             format!("{} is held by job {holder}", dir.display())
         }
         WaitReason::IslandBusy => "the timing island is busy".into(),
+        WaitReason::NoIsland => {
+            "its machine has no timing island (a whole-machine run asks for whole_machine)".into()
+        }
         WaitReason::DrainWaits => "the machine is draining".into(),
         WaitReason::DesktopUnreachable { .. } => "its runner can't be reached".into(),
         WaitReason::SpillIn { minutes } => format!("may go to a runner in {minutes} min"),
@@ -983,6 +1076,7 @@ impl Queue {
             wake: tokio::sync::Notify::new(),
             keys: Arc::default(),
             redact: Mutex::default(),
+            local_use: Mutex::default(),
         };
         (Arc::new(q), rx)
     }
@@ -1604,6 +1698,82 @@ impl Queue {
         }
     }
 
+    /// The cores job ID was granted here, while it runs here.
+    pub fn local_cores(&self, id: &str) -> Option<u32> {
+        self.lock().local_running.get(id).map(|rj| rj.cores)
+    }
+
+    /// Count what each job here uses from now on, as READ says (design §0.3 R2, C1): the hub gives its jobs' slices.
+    pub fn read_local_use(&self, read: LocalUse) {
+        *self.local_use.lock().unwrap() = Some(read);
+    }
+
+    /// Each running job here counts what its slice uses now: a job whose slice can't be read counts its whole
+    /// reservation, and the queue says so once for it.
+    fn count_local_use(&self, st: &mut St) {
+        let read = self.local_use.lock().unwrap();
+        let Some(read) = read.as_ref() else { return };
+        let St {
+            local_running,
+            unread,
+            unread_said,
+            ..
+        } = st;
+        for (id, rj) in local_running.iter_mut() {
+            rj.current_mib = match read(id) {
+                Some(mib) => mib,
+                None => {
+                    if unread.insert(id.clone()) {
+                        *unread_said += 1;
+                        tracing::warn!(
+                            "runners: job {id}'s slice can't be read; it counts its whole reservation"
+                        );
+                    }
+                    rj.reserve_mib
+                }
+            };
+        }
+        unread.retain(|id| local_running.contains_key(id));
+    }
+
+    /// Whether a job of SPEC (its name the job's id) may need what it names: each a job the queue holds or saw end,
+    /// and none that waits on it (a cycle, named in order from the new job). The error is in the user's words.
+    pub fn check_needs(&self, spec: &JobSpec) -> Result<(), String> {
+        if spec.needs.is_empty() {
+            return Ok(());
+        }
+        let st = self.lock();
+        if let Some(n) = spec
+            .needs
+            .iter()
+            .find(|n| !st.jobs.contains_key(&n.0) && !st.ended.contains_key(&n.0))
+        {
+            return Err(format!("it needs job {n}, which the queue doesn't know"));
+        }
+        let mut jobs: Vec<Job> = st.jobs.values().map(Self::forseti_job).collect();
+        // the new job too, so a cycle through it shows
+        let new = Submit {
+            id: spec.name.clone(),
+            session: None,
+            own: Priority::P3,
+            spec: spec.clone(),
+            place: Placement::default(),
+            pending: Value::Null,
+            inputs: None,
+        };
+        jobs.push(Self::forseti_job(&QJob::new(new, 0, QState::Queued, 0)));
+        forseti::check_no_cycle(&jobs, spec).map_err(|mut cycle| {
+            if let Some(i) = cycle.iter().position(|j| j.0 == spec.name) {
+                cycle.rotate_left(i);
+            }
+            if let Some(first) = cycle.first().cloned() {
+                cycle.push(first);
+            }
+            let names: Vec<String> = cycle.iter().map(|j| j.0.clone()).collect();
+            format!("its needs make a cycle: {}", names.join(" → "))
+        })
+    }
+
     /// A job enters the queue at NOW, and the queue's tick is woken. With frozen inputs, its trust is theirs (design
     /// §6.6: from what the public origin has, and the keys it names), whatever the spec said, and they are kept in
     /// `rq_input`.
@@ -1630,6 +1800,8 @@ impl Queue {
         }
         if let Some(f) = &s.inputs {
             s.spec.trust = f.trust(&s.place.keys);
+            // the tree's size class keys the job's history (design §5.3 item 5)
+            s.spec.derived.tree_bucket = Some(forseti::tree_bucket(f.tree_bytes));
             self.put_input(f, now);
         }
         let j = QJob::new(s, now, QState::Queued, 0);
@@ -1740,10 +1912,14 @@ impl Queue {
         else {
             return;
         };
+        if let Some(v) = verdict_of(result) {
+            st.ended(id, v);
+        }
         self.record_run(&mut st, &spec, LOCAL, result, now);
     }
 
-    /// Job ID ended here, or never started: it leaves the queue and frees its room.
+    /// Job ID ended here, or never started: it leaves the queue and frees its room. One that left without a verdict
+    /// ([`Queue::ran_here`]: stopped, timed out, never started) ended cancelled for the jobs that need it.
     pub fn release(&self, id: &str) {
         let mut st = self.lock();
         let ran_here = st.local_running.remove(id).is_some();
@@ -1752,7 +1928,9 @@ impl Queue {
             .get(id)
             .is_some_and(|j| matches!(j.state, QState::Remote(_)));
         if !remote {
-            st.jobs.remove(id);
+            if st.jobs.remove(id).is_some() {
+                st.ended(id, forseti::Verdict::Cancelled);
+            }
             st.attempts.forget(id);
             drop(st);
             self.drop_job(id);
@@ -1769,6 +1947,7 @@ impl Queue {
         match st.jobs.get(id).map(|j| j.state.clone()) {
             Some(QState::Queued) => {
                 st.jobs.remove(id);
+                st.ended(id, forseti::Verdict::Cancelled);
                 drop(st);
                 self.drop_job(id);
                 (true, vec![])
@@ -1938,7 +2117,13 @@ impl Queue {
         let q = st.jobs.get_mut(id).expect("the job");
         q.s.place.machine = to;
         q.s.place.by_user = true;
-        let effects = st.attempts.step(now, AEvent::Move { job: id.into() });
+        let effects = st.attempts.step(
+            now,
+            AEvent::Move {
+                job: id.into(),
+                reason: attempts::MOVED,
+            },
+        );
         let mut out = vec![];
         self.apply(&mut st, effects, now, &mut out);
         drop(st);
@@ -2005,6 +2190,8 @@ impl Queue {
     pub fn tick(&self, now: u64) -> Ticked {
         let mut st = self.lock();
         let mut t = Ticked::default();
+        // what the jobs here use now, from their slices: admission's budget and eviction read it
+        self.count_local_use(&mut st);
         for (job, attempt) in st.attempts.graces_due(now) {
             let effects = st.attempts.step(
                 now,
@@ -2020,22 +2207,68 @@ impl Queue {
         for name in names {
             self.health(&mut st, &name, now);
         }
-        let queued: Vec<Job> = st
+        // a job's needs before anything else (design §5.2 item 2): one whose need failed ends as infra, never run; one
+        // whose need hasn't ended waits and holds nothing (no slot, no reservation, no offer)
+        let mut queued: Vec<Job> = vec![];
+        let mut failed: Vec<(String, u32, JobId)> = vec![];
+        for j in st.jobs.values().filter(|j| j.state == QState::Queued) {
+            match st.need_state(&j.s.spec) {
+                forseti::NeedState::Met => queued.push(Self::forseti_job(j)),
+                forseti::NeedState::Waiting(_) => {}
+                forseti::NeedState::Failed { job, .. } => {
+                    failed.push((j.s.id.clone(), j.attempt, job))
+                }
+            }
+        }
+        for (id, attempt, need) in failed {
+            let verdict = forseti::Verdict::Infra(format!("needed job {need} failed"));
+            st.jobs.remove(&id);
+            st.attempts.forget(&id);
+            st.ended(&id, verdict.clone());
+            self.drop_job(&id);
+            t.outcomes.push(Outcome::Done {
+                id,
+                attempt,
+                result: json!({ "verdict": verdict }),
+                shared: None,
+                machine: None,
+                back: None,
+            });
+        }
+        let waits: Vec<(String, JobId)> = st
             .jobs
             .values()
             .filter(|j| j.state == QState::Queued)
-            .map(Self::forseti_job)
+            .filter_map(|j| match st.need_state(&j.s.spec) {
+                forseti::NeedState::Waiting(n) => Some((j.s.id.clone(), n)),
+                _ => None,
+            })
             .collect();
+        for (id, n) in waits {
+            if let Some(j) = st.jobs.get_mut(&id) {
+                j.waiting = Some(wait_text(&WaitReason::Needs(n)));
+            }
+        }
+        // a consumer lifts what it needs, queued or running: eviction reads a running job's priority
+        let all: Vec<Job> = st.jobs.values().map(Self::forseti_job).collect();
+        let eff = forseti::effective_priorities(&all, &[], &[]);
+        for (id, rj) in st.local_running.iter_mut() {
+            if let Some(&p) = eff.get(&JobId(id.clone())) {
+                rj.priority = rj.priority.max(p);
+            }
+        }
+        Self::drains(&mut st, &eff, now);
+        t.evict = self.drain_evict(&mut st, &eff, now, &mut t.outcomes);
         if queued.is_empty() {
             Self::tell_head(&mut st, None);
             return t;
         }
-        let eff = forseti::effective_priorities(&queued, &[], &[]);
-        let exp = |_: &JobId| Expected {
-            minutes: forseti::history::DEFAULT_MINUTES,
-            cpu: 1.0,
-            mem_p95_mib: None,
-        };
+        // the order reads each job's history (its runs on this machine, else anywhere)
+        let expected: HashMap<JobId, Expected> = queued
+            .iter()
+            .map(|j| (j.id.clone(), st.expected_on(&j.spec, LOCAL)))
+            .collect();
+        let exp = |id: &JobId| expected[id];
         let order = forseti::queue_order(&queued, &eff, &exp, now);
         let project: HashMap<JobId, String> = queued
             .iter()
@@ -2064,6 +2297,126 @@ impl Queue {
         Self::tell_head(&mut st, need);
         st.reservation = None;
         t
+    }
+
+    /// This tick's drains (design §5.6, `forseti::drain`): a whole-machine timing run waits while any P1–P2 job is
+    /// queued or running (EFF: the effective priorities); otherwise its named machine drains for it until it ends. A P1
+    /// arrival before it starts holds the drain back again, and admission there reopens. A drain whose machine hasn't
+    /// emptied in its bound (`forseti::drain_abandon`) gives up: admission there reopens, and the drain starts again
+    /// a bound later.
+    fn drains(st: &mut St, eff: &HashMap<JobId, Priority>, now: u64) {
+        let prio = |j: &QJob| eff.get(&JobId(j.s.id.clone())).copied().unwrap_or(j.s.own);
+        let whole = |j: &QJob| j.s.spec.lane == forseti::Lane::Timing { pinned: None };
+        st.drain_behind = st
+            .jobs
+            .values()
+            .filter(|j| !whole(j))
+            .map(prio)
+            .chain(st.local_running.values().map(|r| r.priority))
+            .filter(|p| *p >= Priority::P2)
+            .max();
+        let may_start = forseti::drain_may_start(st.drain_behind.is_some());
+        let wanted: Vec<(String, String, bool)> = st
+            .jobs
+            .values()
+            .filter(|j| whole(j) && (may_start || j.state != QState::Queued))
+            .filter_map(|j| {
+                let on = match &j.s.place.machine {
+                    Machine::Local => LOCAL.to_string(),
+                    Machine::Runner(n) => n.clone(),
+                    Machine::Auto => return None,
+                };
+                Some((on, j.s.id.clone(), j.state == QState::Queued))
+            })
+            .collect();
+        let (mut drains, mut gave_up, mut since) =
+            (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
+        for (on, id, queued) in wanted {
+            // a run that started has its machine: nothing to give up
+            if !queued {
+                drains.insert(on, id);
+                continue;
+            }
+            if st.drain_off.get(&on).is_some_and(|&until| until > now) {
+                gave_up.insert(id);
+                continue;
+            }
+            let began = st.drain_since.get(&on).copied().unwrap_or(now);
+            if forseti::drain_abandon(began, now) {
+                st.drain_off
+                    .insert(on, now + forseti::drain::DRAIN_ABANDON_S);
+                gave_up.insert(id);
+                continue;
+            }
+            since.insert(on.clone(), began);
+            drains.insert(on, id);
+        }
+        st.drain_off.retain(|_, until| *until > now);
+        st.drains = drains;
+        st.drain_gave_up = gave_up;
+        st.drain_since = since;
+        if st.drain_since.is_empty() {
+            st.drain_evicted.clear();
+        }
+    }
+
+    /// A drain past its eviction time (`forseti::drain_may_evict_p5`) evicts the running P5 restartable work on its
+    /// machine, once each: a job here is returned for the job layer to stop and start again; one on a runner has its
+    /// attempt cancelled there and goes back to the queue ([`attempts::EVICTED`]), what ended into OUT.
+    fn drain_evict(
+        &self,
+        st: &mut St,
+        eff: &HashMap<JobId, Priority>,
+        now: u64,
+        out: &mut Vec<Outcome>,
+    ) -> Vec<String> {
+        let due: Vec<(String, String)> = st
+            .drain_since
+            .iter()
+            .filter(|(_, began)| forseti::drain_may_evict_p5(**began, now))
+            .map(|(on, _)| (on.clone(), st.drains[on].clone()))
+            .collect();
+        let upkeep = |st: &St, id: &str| {
+            !st.drain_evicted.contains(id)
+                && st.jobs.get(id).is_some_and(|j| {
+                    j.s.spec.restartable
+                        && eff.get(&JobId(id.to_owned())).copied().unwrap_or(j.s.own)
+                            == Priority::P5
+                })
+        };
+        let mut here = vec![];
+        for (on, whole) in due {
+            let victims: Vec<String> = if on == LOCAL {
+                st.local_running
+                    .keys()
+                    .filter(|k| **k != whole && upkeep(st, k))
+                    .cloned()
+                    .collect()
+            } else {
+                st.on
+                    .iter()
+                    .filter(|(k, o)| o.machine == on && **k != whole && upkeep(st, k))
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            };
+            for id in victims {
+                st.drain_evicted.insert(id.clone());
+                if on == LOCAL {
+                    here.push(id);
+                    continue;
+                }
+                let effects = st.attempts.step(
+                    now,
+                    AEvent::Move {
+                        job: id.clone(),
+                        reason: attempts::EVICTED,
+                    },
+                );
+                self.apply(st, effects, now, out);
+                self.put_attempts(st, &id);
+            }
+        }
+        here
     }
 
     /// The head still waits after this tick's placing, reserved on a runner (NEED: its need): that runner hears it in
@@ -2245,10 +2598,20 @@ impl Queue {
     /// machine against a job that wouldn't end before the head's start there; that job may still go elsewhere.
     fn place(&self, st: &mut St, job: &Job, eff: Priority, now: u64, starts: &mut Vec<String>) {
         let id = job.id.0.clone();
+        if let Some(why) = Self::whole_machine_waits(st, job) {
+            if let Some(q) = st.jobs.get_mut(&id) {
+                q.waiting = Some(why);
+            }
+            return;
+        }
         let Some(q) = st.jobs.get(&id) else {
             return;
         };
         let (mut cands, held_off, no_room) = Self::candidates(st, job, q, true);
+        // a drained machine takes no job but its whole-machine run
+        let before = cands.len();
+        cands.retain(|c| st.drains.get(&c.name).is_none_or(|j| *j == id));
+        let drained = (cands.len() < before).then_some(WaitReason::DrainWaits);
         let place = q.s.place.clone();
         let all = cands.clone();
         let ctx = PlaceCtx {
@@ -2287,9 +2650,10 @@ impl Queue {
                     }
                     let e = expect(c);
                     let running: Vec<RunningJob> = st.local_running.values().cloned().collect();
+                    let exp = st.expected_on(&job.spec, LOCAL);
                     match self
                         .local
-                        .admit(job, eff, &running, st.last_local_start, now)
+                        .admit(job, eff, &exp, &running, st.last_local_start, now)
                     {
                         Ok(g) => break Placed::Here(g, e),
                         Err(r) => {
@@ -2314,7 +2678,11 @@ impl Queue {
                     break Placed::There(n, expect(c), warm);
                 }
                 Pick::Wait(r) => {
-                    let why = kept.take().or(here.take()).or(no_room.clone());
+                    let why = kept
+                        .take()
+                        .or(here.take())
+                        .or(drained.clone())
+                        .or(no_room.clone());
                     break Placed::Wait(why.unwrap_or(r));
                 }
             }
@@ -2345,7 +2713,10 @@ impl Queue {
                 let mut rj = running(&id, eff, now, g.reserve_mib, g.cores);
                 rj.expected.minutes = e / 60.0;
                 st.local_running.insert(id.clone(), rj);
-                st.last_local_start = Some(now);
+                st.last_local_start = forseti::LastStart {
+                    at: Some(now),
+                    small: forseti::admit::small(&st.expected_on(&job.spec, LOCAL)),
+                };
                 self.put_job(&j, eff);
                 starts.push(id);
             }
@@ -2364,6 +2735,33 @@ impl Queue {
                 }
             }
         }
+    }
+
+    /// Why whole-machine run JOB waits before placing: behind P1–P2 work while its drain can't start, then while
+    /// anything else still runs on its machine, or while its drain is off after giving up. None for any other job,
+    /// and once its machine is empty.
+    fn whole_machine_waits(st: &St, job: &Job) -> Option<String> {
+        if job.spec.lane != (forseti::Lane::Timing { pinned: None }) {
+            return None;
+        }
+        let id = &job.id.0;
+        if st.drain_gave_up.contains(id) {
+            let min = forseti::drain::DRAIN_ABANDON_S / 60;
+            return Some(format!(
+                "its machine didn't empty in {min} min: the drain gave up, and starts again in {min} min"
+            ));
+        }
+        let Some((on, _)) = st.drains.iter().find(|(_, j)| *j == id) else {
+            return Some(wait_text(&WaitReason::Behind(
+                st.drain_behind.unwrap_or(Priority::P2),
+            )));
+        };
+        let busy = if on == LOCAL {
+            st.local_running.keys().any(|k| k != id)
+        } else {
+            st.on.iter().any(|(k, o)| o.machine == *on && k != id)
+        };
+        busy.then(|| wait_text(&WaitReason::DrainWaits))
     }
 
     /// Offers JOB to runner NAME, where it is expected to take EXPECTED_S (from a WARM start or not): a new attempt
@@ -2424,7 +2822,9 @@ impl Queue {
         );
         if let Some(rr) = st.runners.get(name) {
             // a requeue of a job whose suite selects rows runs only the rows without a result
-            let spec = attempt_spec(&job.spec, j.s.place.suite.as_ref(), st.rows.get(&id));
+            let mut spec = attempt_spec(&job.spec, j.s.place.suite.as_ref(), st.rows.get(&id));
+            // the progress guard's wall: the job's time box, at most three times its p95 there
+            spec.timeout_s = st.timeout_on(&job.spec, name);
             rr.session.send(Frame::Offer {
                 r: r.clone(),
                 spec: Box::new(spec),
@@ -2436,7 +2836,8 @@ impl Queue {
                     .map(|f| f.input_key.clone())
                     .unwrap_or_default(),
                 grant_hint: None,
-                expected: None,
+                // the runner sizes the grant and its start gap from the job's history there
+                expected: Some(st.expected_on(&job.spec, name)).filter(Expected::known),
             });
         }
         self.put_job(&j, eff);
@@ -3305,6 +3706,26 @@ impl Queue {
 
     /// Carries out the attempt state machine's EFFECTS.
     fn apply(&self, st: &mut St, effects: Vec<Effect>, now: u64, out: &mut Vec<Outcome>) {
+        let from = out.len();
+        self.apply_effects(st, effects, now, out);
+        // how each job that left ended, for the jobs that need it
+        for o in &out[from..] {
+            match o {
+                Outcome::Done { id, result, .. } => {
+                    let v =
+                        verdict_of(result).unwrap_or(forseti::Verdict::Infra("no verdict".into()));
+                    st.ended(id, v);
+                }
+                Outcome::Lost { id } => st.ended(
+                    id,
+                    forseti::Verdict::Infra(forseti::classify::infra::RUNNER_LOST.into()),
+                ),
+                Outcome::Late { .. } => {}
+            }
+        }
+    }
+
+    fn apply_effects(&self, st: &mut St, effects: Vec<Effect>, now: u64, out: &mut Vec<Outcome>) {
         for e in effects {
             let mut was_on = None;
             // an attempt that ended, or went back to the queue, syncs no more (its bundle file goes), and holds nothing
@@ -3618,10 +4039,12 @@ fn runner_state(name: &str, now: u64, running: Vec<RunningJob>) -> forseti::Mach
         disk_total_gb: 0,
         on_ac: true,
         last_start: None,
+        last_start_small: false,
         running,
         features: vec![],
         reachable: true,
         others: vec![],
+        island: None,
     }
 }
 
@@ -3957,6 +4380,332 @@ mod tests {
         let st = again.lock();
         assert_eq!(st.learned, live);
         assert_eq!(st.history_of(&forseti::history_key(&spec)).len(), 2);
+    }
+
+    // [D] pure (design §0.3 R6): admission reads the job's history. A runner's offer carries what the job's runs there
+    // expect (else its runs elsewhere); a job with no runs anywhere is offered with nothing known.
+    #[test]
+    fn an_offer_carries_the_jobs_history_on_that_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        let spec = blank_spec("x1");
+        let ran = |peak: u64| json!({"verdict": "Pass", "wall_s": 60.0, "cpu_s": 60.0, "mem_peak_mib": peak});
+        let mut st = q.lock();
+        assert_eq!(st.expected_on(&spec, "r1").mem_p95_mib, None);
+        q.record_run(&mut st, &spec, "r1", &ran(600), 10);
+        q.record_run(&mut st, &spec, "r1", &ran(600), 20);
+        q.record_run(&mut st, &spec, "r2", &ran(3000), 30);
+        assert_eq!(st.expected_on(&spec, "r1").mem_p95_mib, Some(600));
+        assert_eq!(st.expected_on(&spec, "r2").mem_p95_mib, Some(3000));
+        assert!(st.expected_on(&spec, "r3").known(), "runs elsewhere count");
+        assert!(forseti::admit::small(&st.expected_on(&spec, "r1")));
+        assert!(!forseti::admit::small(&st.expected_on(&spec, "r2")));
+    }
+
+    // [D] pure (design §5.7): the time box a runner is offered is the pack's, capped at three times the job's p95 wall
+    // time there (else elsewhere's); a job with no runs keeps the pack's
+    #[test]
+    fn an_offer_caps_the_time_box_at_three_p95() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        let mut spec = blank_spec("x1");
+        spec.timeout_s = 3600;
+        let ran = |wall: f64| json!({"verdict": "Pass", "wall_s": wall, "cpu_s": 1.0, "mem_peak_mib": 100});
+        let mut st = q.lock();
+        assert_eq!(st.timeout_on(&spec, "r1"), 3600);
+        q.record_run(&mut st, &spec, "r1", &ran(300.0), 10);
+        q.record_run(&mut st, &spec, "r1", &ran(400.0), 20);
+        assert_eq!(st.timeout_on(&spec, "r1"), 1200);
+        // a long job keeps the pack's maximum
+        q.record_run(&mut st, &spec, "r1", &ran(3000.0), 30);
+        assert_eq!(st.timeout_on(&spec, "r1"), 3600);
+        // elsewhere's runs count on a runner with none
+        assert!(st.timeout_on(&spec, "r9") <= 3600);
+    }
+
+    // [D] pure (a cgroup tree in a folder, as `slices.rs`'s rows): a job here counts what its slice uses (design §0.3
+    // R2, C1): `memory.current` 3 GiB less 0.5 GiB of page cache is 2,560 MiB, read at each tick
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_local_job_counts_what_its_slice_uses() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = dir.path().join("cg");
+        let slice = crate::exec::unit::job_slice_name("x1");
+        let at = manager.join(sleipnir::linux::probe::slice_path(&slice));
+        std::fs::create_dir_all(&at).unwrap();
+        std::fs::write(at.join("memory.current"), format!("{}\n", 3u64 << 30)).unwrap();
+        std::fs::write(
+            at.join("memory.stat"),
+            format!("anon 1\nfile {}\n", 512u64 << 20),
+        )
+        .unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        q.read_local_use(Box::new(move |id| {
+            super::super::local::slice_used_mib(&manager, &crate::exec::unit::job_slice_name(id))
+        }));
+        q.submit(job("x1", Priority::P3, 4096), 100);
+        assert_eq!(q.tick(100).starts, vec!["x1".to_string()]);
+        q.tick(101);
+        assert_eq!(q.lock().local_running["x1"].current_mib, 2560);
+    }
+
+    // [D] pure: a slice that can't be read counts the job's whole reservation as used, and the queue says so once
+    #[test]
+    fn an_unreadable_slice_counts_its_reserve_and_says_so_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        q.read_local_use(Box::new(|_| None));
+        q.submit(job("x1", Priority::P3, 4096), 100);
+        q.tick(100);
+        q.tick(101);
+        q.tick(102);
+        let st = q.lock();
+        let rj = &st.local_running["x1"];
+        assert_eq!(rj.current_mib, rj.reserve_mib);
+        assert_eq!(st.unread_said, 1, "said once, not per tick");
+    }
+
+    /// Job ID (see [`job`]) that needs the jobs NEEDS.
+    fn needing(id: &str, own: Priority, needs: &[&str]) -> Submit {
+        let mut s = job(id, own, 64);
+        s.spec.needs = needs.iter().map(|n| JobId((*n).into())).collect();
+        s
+    }
+
+    // [D] pure (design §5.6, `forseti::drain_may_start`): a whole-machine timing run waits while P1–P2 work is
+    // pending; then its machine drains (no new work starts there), it starts once the machine is empty, and the
+    // machine stays its own until it ends
+    #[test]
+    fn whole_machine_drains_and_waits_for_p1_p2() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = Queue::new(QueueCfg {
+            hub_id: "h".into(),
+            exec_root: dir.path().to_path_buf(),
+            local: LocalRunner::new(super::super::local::Admission::Fixed(4), dir.path()),
+            db: None,
+        });
+        let ran = |q: &Queue, id: &str, at: u64| {
+            q.ran_here(id, &json!({"verdict": "Pass", "wall_s": 5.0}), at);
+            q.release(id);
+        };
+        q.submit(job("w1", Priority::P3, 64), 100);
+        assert_eq!(q.tick(100).starts, vec!["w1".to_string()]);
+        let mut t = job("t", Priority::P3, 64);
+        t.spec.lane = forseti::Lane::Timing { pinned: None };
+        t.place.machine = Machine::Local;
+        q.submit(t, 101);
+        q.submit(job("p2", Priority::P2, 64), 101);
+        // P2 work goes first, and other work isn't held while the drain can't start
+        let started = q.tick(101).starts;
+        assert!(started.contains(&"p2".to_string()), "{started:?}");
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some("behind priority 2 work")
+        );
+        q.submit(job("w2", Priority::P3, 64), 102);
+        assert_eq!(q.tick(102).starts, vec!["w2".to_string()]);
+        // the P2 result is in: the drain starts, new work waits, and the run waits for the machine to empty
+        ran(&q, "p2", 110);
+        q.submit(job("w3", Priority::P3, 64), 111);
+        assert!(q.tick(111).starts.is_empty());
+        assert_eq!(
+            q.row("w3").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+        ran(&q, "w1", 120);
+        ran(&q, "w2", 121);
+        assert_eq!(q.tick(122).starts, vec!["t".to_string()]);
+        assert!(
+            q.tick(123).starts.is_empty(),
+            "the machine is the run's while it runs"
+        );
+        ran(&q, "t", 130);
+        assert_eq!(q.tick(131).starts, vec!["w3".to_string()]);
+    }
+
+    /// A queue whose machine admits four jobs at once, and a whole-machine timing run T pinned to MACHINE.
+    fn drain_queue(dir: &std::path::Path) -> Arc<Queue> {
+        Queue::new(QueueCfg {
+            hub_id: "h".into(),
+            exec_root: dir.to_path_buf(),
+            local: LocalRunner::new(super::super::local::Admission::Fixed(4), dir),
+            db: None,
+        })
+        .0
+    }
+
+    fn whole_run(machine: Machine) -> Submit {
+        let mut t = job("t", Priority::P3, 64);
+        t.spec.lane = forseti::Lane::Timing { pinned: None };
+        t.place.machine = machine;
+        t
+    }
+
+    // [D] pure (design §5.6, `forseti::drain_abandon`): a drain that hasn't emptied its machine within its bound is
+    // given up, the run says so and admission there reopens; the drain starts again a bound later
+    #[test]
+    fn a_drain_that_cannot_finish_is_abandoned_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = drain_queue(dir.path());
+        q.submit(job("w1", Priority::P3, 64), 100);
+        assert_eq!(q.tick(100).starts, vec!["w1".to_string()]);
+        q.submit(whole_run(Machine::Local), 100);
+        q.tick(100);
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+        let gave_up = 100 + forseti::drain::DRAIN_ABANDON_S;
+        q.submit(job("w2", Priority::P3, 64), gave_up);
+        assert_eq!(
+            q.tick(gave_up).starts,
+            vec!["w2".to_string()],
+            "admission reopens"
+        );
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some(
+                "its machine didn't empty in 30 min: the drain gave up, and starts again in 30 min"
+            )
+        );
+        let again = gave_up + forseti::drain::DRAIN_ABANDON_S;
+        q.submit(job("w3", Priority::P3, 64), again);
+        assert!(q.tick(again).starts.is_empty());
+        assert_eq!(
+            q.row("w3").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+    }
+
+    // [D] pure (design §5.6, `forseti::drain_may_evict_p5`): once a drain has gone its eviction time, running P5
+    // restartable work on its machine is evicted for it, once each: here for the job layer to stop and start again,
+    // on a runner requeued; other work runs on
+    #[test]
+    fn p5_upkeep_is_evicted_for_the_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = drain_queue(dir.path());
+        q.submit(job("p5", Priority::P5, 64), 100);
+        q.submit(job("w", Priority::P4, 64), 100);
+        assert_eq!(q.tick(100).starts.len(), 2);
+        q.submit(whole_run(Machine::Local), 100);
+        assert!(q.tick(100).evict.is_empty());
+        let late = 100 + forseti::drain::DRAIN_EVICT_P5_S;
+        assert!(q.tick(late - 1).evict.is_empty(), "not before its time");
+        assert_eq!(q.tick(late).evict, vec!["p5".to_string()]);
+        assert!(q.tick(late + 1).evict.is_empty(), "once");
+    }
+
+    // [D] pure (a link fed by hand): the same on a runner: its P5 attempt is cancelled there and the job requeued,
+    // saying why; its P4 work runs on
+    #[tokio::test]
+    async fn p5_upkeep_on_a_runner_is_requeued_for_the_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        for (id, p) in [("p5", Priority::P5), ("w", Priority::P4)] {
+            let mut s = job(id, p, 64);
+            s.place.machine = Machine::Runner("r1".into());
+            q.submit(s, 100);
+        }
+        q.tick(100);
+        for id in ["p5", "w"] {
+            let r = current(&q, id);
+            admitted(&q, "r1", &r, 64, 101);
+            started(&q, "r1", &r, 102);
+        }
+        q.submit(whole_run(Machine::Runner("r1".into())), 103);
+        q.tick(103);
+        let late = 103 + forseti::drain::DRAIN_EVICT_P5_S;
+        q.tick(late);
+        let row = q.row("p5").unwrap();
+        assert_eq!(row.machine, None, "{row:?}");
+        assert!(
+            row.waiting
+                .as_deref()
+                .is_some_and(|w| w.contains("evicted for a whole-machine run")),
+            "{row:?}"
+        );
+        assert_eq!(q.row("w").unwrap().machine.as_deref(), Some("r1"));
+    }
+
+    // [D] pure (design §5.2 item 2): a job waits for its needs as `needs`, holding no slot and no reservation; it is
+    // placed once they pass
+    #[test]
+    fn a_consumer_waits_as_needs_and_holds_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        // the consumer first: on its own it would take the one slot
+        q.submit(needing("use", Priority::P3, &["img"]), 100);
+        q.submit(job("img", Priority::P3, 64), 101);
+        let t = q.tick(102);
+        assert_eq!(t.starts, vec!["img".to_string()]);
+        let row = q.row("use").unwrap();
+        assert_eq!(row.waiting.as_deref(), Some("waits for job img"), "{row:?}");
+        assert!(!q.lock().local_running.contains_key("use"));
+        q.ran_here("img", &json!({"verdict": "Pass", "wall_s": 5.0}), 110);
+        q.release("img");
+        assert_eq!(q.tick(111).starts, vec!["use".to_string()]);
+    }
+
+    // [D] pure: a P1 job lifts the job it needs to P1, queued or running, so eviction and order see the P1 behind it
+    #[test]
+    fn a_p1_consumer_lifts_its_need_to_p1() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        q.submit(job("img", Priority::P4, 64), 100);
+        assert_eq!(q.tick(100).starts, vec!["img".to_string()]);
+        q.submit(needing("use", Priority::P1, &["img"]), 101);
+        q.tick(101);
+        // what eviction reads: the running job's priority
+        assert_eq!(q.lock().local_running["img"].priority, Priority::P1);
+    }
+
+    // [D] pure: a need that ends without passing ends its consumer, never run, as infra naming the need
+    #[test]
+    fn a_need_that_fails_ends_its_consumer_as_infra() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        q.submit(job("img", Priority::P3, 64), 100);
+        q.tick(100);
+        q.submit(needing("use", Priority::P3, &["img"]), 101);
+        q.ran_here("img", &json!({"verdict": "Red", "wall_s": 5.0}), 110);
+        q.release("img");
+        let t = q.tick(111);
+        assert!(t.starts.is_empty());
+        let [Outcome::Done { id, result, .. }] = &t.outcomes[..] else {
+            panic!("{:?}", t.outcomes)
+        };
+        assert_eq!(id, "use");
+        assert_eq!(
+            verdict_of(result),
+            Some(forseti::Verdict::Infra("needed job img failed".into()))
+        );
+        assert!(q.row("use").is_none());
+    }
+
+    // [D] pure: a job may need only jobs the queue knows, and never one that waits on it
+    #[test]
+    fn a_cycle_is_refused_at_submit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        q.submit(needing("b", Priority::P3, &["a"]), 100);
+        let err = q
+            .check_needs(&needing("a", Priority::P3, &["b"]).spec)
+            .unwrap_err();
+        assert!(err.contains("a → b → a"), "{err}");
+        let err = q
+            .check_needs(&needing("c", Priority::P3, &["nope"]).spec)
+            .unwrap_err();
+        assert!(err.contains("nope"), "{err}");
+        assert!(
+            q.check_needs(&needing("d", Priority::P3, &["b"]).spec)
+                .is_ok()
+        );
     }
 
     use super::super::transport::{Channel, Channels, LinkError, Login, Transport};
@@ -4430,7 +5179,9 @@ mod tests {
             q.record_run(&mut st, &short.spec, "r1", &ran, 50);
         }
         q.submit(job("xh", Priority::P1, 3500), 400);
-        q.submit(job("xs", Priority::P4, 512), 400);
+        // the order reads history, so xs2 (100 s) is placed before xs; xs is small enough to fit after it, so only
+        // the head's room keeps it waiting
+        q.submit(job("xs", Priority::P4, 256), 400);
         q.submit(short, 400);
         q.tick(400);
         let row = |id: &str| q.row(id).unwrap();
@@ -4552,6 +5303,7 @@ mod tests {
             not_on_origin: 0,
             visibility: sync::Visibility::Private,
             shared_overlay: false,
+            tree_bytes: 0,
         }
     }
 

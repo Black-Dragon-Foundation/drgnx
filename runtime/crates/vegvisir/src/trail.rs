@@ -386,7 +386,10 @@ fn conclusion_rows(
             if i == 0 {
                 put_icon(&mut b, env, &c.kind, images);
                 b.push(&format!(" {name} "), Some(FaceId::WorkTitle.name()))
-                    .push(&format!(" {} ", c.n), Some(FaceId::ChipSolid.name()))
+                    .push(
+                        &format!(" {} ", c.n),
+                        Some(FaceId::KitChipAccentSolid.name()),
+                    )
                     .push(&format!(" {}", c.text), Some(FaceId::WorkTitle.name()));
                 if new {
                     // `new`, plain text at the card's right: a box of its own would break the ring
@@ -398,7 +401,7 @@ fn conclusion_rows(
                     &format!("   based on {based}{unmatched} · "),
                     Some(FaceId::TextMuted.name()),
                 )
-                .push(" l ", Some(FaceId::ChipQuiet.name()))
+                .push(" l ", Some(FaceId::KitChipNeutralSoft.name()))
                 .push(" light them · ↵ sources", Some(FaceId::TextMuted.name()));
             }
             // the card runs to the tile's right edge: a stop, in the card's face
@@ -554,17 +557,20 @@ impl SegKind {
         }
     }
 
-    /// Its face (today's map faces, until the kit's segment tokens).
+    /// Its face: the kit's range bar segment faces (`drgnx-kit-range-bar-seg-*`; the old `drgnx-work-seg-*` faces are
+    /// aliases of them until their callers move).
     fn face(self) -> &'static str {
         match self {
-            SegKind::Read | SegKind::Search | SegKind::Web => FaceId::WorkSegRead.name(),
-            SegKind::Edit => FaceId::WorkSegEdit.name(),
-            SegKind::Think => FaceId::WorkSegThink.name(),
-            SegKind::Job => FaceId::WorkSegJob.name(),
+            SegKind::Read => FaceId::KitRangeBarSegRead.name(),
+            SegKind::Search => FaceId::KitRangeBarSegSearch.name(),
+            SegKind::Web => FaceId::KitRangeBarSegWeb.name(),
+            SegKind::Edit => FaceId::KitRangeBarSegEdit.name(),
+            SegKind::Think => FaceId::KitRangeBarSegThink.name(),
+            SegKind::Job => FaceId::KitRangeBarSegJob.name(),
             SegKind::WaitYou | SegKind::WaitMachine | SegKind::Paused | SegKind::Stalled => {
-                FaceId::WorkSegWait.name()
+                FaceId::KitRangeBarSegWait.name()
             }
-            SegKind::Tool => FaceId::WorkSegTool.name(),
+            SegKind::Tool => FaceId::KitRangeBarSegTest.name(),
         }
     }
 }

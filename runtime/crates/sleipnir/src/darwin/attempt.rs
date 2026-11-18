@@ -212,11 +212,10 @@ mod tests {
         let kept = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let (k, o) = (kept.as_raw_fd(), other.as_raw_fd());
-        let out = d.path().join("out");
-        let script = format!(
-            "for n in {k} {o}; do if [ -e /dev/fd/$n ]; then echo $n; fi; done > '{0}.tmp'; mv '{0}.tmp' '{0}'",
-            out.display()
-        );
+        // the shell opens nothing while it looks (no redirection: a redirected loop's file, or the shell's saved copy
+        // of its stdout, could take the other socket's free number in the child); it prints to its log, read once it
+        // has ended
+        let script = format!("for n in {k} {o}; do if [ -e /dev/fd/$n ]; then echo $n; fi; done");
         launch(
             d.path(),
             Path::new("/bin/sh"),
@@ -225,7 +224,8 @@ mod tests {
             Some(kept.as_fd()),
         )
         .unwrap();
-        let seen = skuld::wait_until("the fds job-exec has", 30, || fs::read_to_string(&out).ok());
+        skuld::wait_until("job-exec ends", 30, || (!active(d.path())).then_some(()));
+        let seen = fs::read_to_string(d.path().join(EXEC_LOG)).unwrap();
         assert_eq!(seen, format!("{k}\n"));
     }
 

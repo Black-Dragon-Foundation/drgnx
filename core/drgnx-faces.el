@@ -67,21 +67,11 @@ subtle does not (3.8:1 on the dark selection, 4.3 on the light); in high contras
 
 ;;;; Chips: a label on a tint (design §3.8); high contrast rings them in their own colour
 
-(defface drgnx-chip-quiet '((t :inherit drgnx-kit-chip-neutral-soft))
-  "A quiet chip: the branch, a model, a count." :group 'drgnx-look)
 (defface drgnx-chip-attention '((t :inherit (drgnx-status-attention drgnx-selected-quiet)))
   "A chip of what waits for you, on the attention tint." :group 'drgnx-look)
-(defface drgnx-chip-accent '((t :inherit drgnx-kit-chip-accent-soft))
-  "A chip in the accent, on its tint: the agents at work, a mode." :group 'drgnx-look)
-(defface drgnx-chip-ok '((t :inherit drgnx-kit-chip-ok-soft))
-  "A chip of something fine, on the ok tint: a remote branch, DONE." :group 'drgnx-look)
-(defface drgnx-chip-warn '((t :inherit drgnx-kit-chip-warn-soft))
-  "A chip to look at, on the warn tint: a tag, a warning." :group 'drgnx-look)
 (defface drgnx-tint-warn '((t :inherit drgnx-selected-quiet))
   "A warning callout's background, the warn tint, under text in its own colour (look.css `.warn')."
   :group 'drgnx-look)
-(defface drgnx-chip-error '((t :inherit drgnx-kit-chip-error-soft))
-  "A chip of something wrong, on the error tint: an error." :group 'drgnx-look)
 
 ;;;; Controls (design §3.5): a button and a keycap.  Their rings take colours, so the themes give them (a box's
 ;;;; colour is not inherited); here they are the standard faces' fill and a ring in the text colour.

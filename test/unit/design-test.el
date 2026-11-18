@@ -144,9 +144,10 @@
     (dolist (c (alist-get 'components table))
       (let ((text (cdr (assoc (format "components/%s.md" (car c)) pages))))
         (should text)
-        (dolist (theme '("dark" "light" "hc"))
-          (should (string-search (format "](../img/kit-%s-%s.png)" (car c) theme) text))
-          (should (file-exists-p (expand-file-name (format "docs/design/img/kit-%s-%s.png" (car c) theme) drgnx-dir))))
+        (unless (and (plist-member (cdr c) :sheet) (null (plist-get (cdr c) :sheet))) ; hub-only: no sheet
+          (dolist (theme '("dark" "light" "hc"))
+            (should (string-search (format "](../img/kit-%s-%s.png)" (car c) theme) text))
+            (should (file-exists-p (expand-file-name (format "docs/design/img/kit-%s-%s.png" (car c) theme) drgnx-dir)))))
         (should (string-search "## Geometry" text))
         (should (string-search "| selected-inactive |" text))))
     (let ((row (cdr (assoc "components/row.md" pages))))

@@ -212,7 +212,7 @@ key as one keycap (it opens the palette), and the attention and agents chips pil
         (should (string-match-p "3 need you" (substring-no-properties (nth 2 (car (drgnx-topline--pills 3 0))))))
         (should (memq 'drgnx-chip-attention (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-attention))))
         (should (string-match-p "2 agents" (funcall text 'drgnx-topline-agents)))
-        (should (memq 'drgnx-chip-accent (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-agents))))
+        (should (memq 'drgnx-kit-chip-accent-soft (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-agents))))
         ;; the hint of the terminal line is gone from a graphical one
         (should-not (assq 'drgnx-topline-go-quick-open items))))))
 

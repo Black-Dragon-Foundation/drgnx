@@ -119,7 +119,7 @@ foreground and background are the same colour on this terminal, in the default t
       (should (= (drgnx-tty-colours-test--cells s) cells))
       ;; the faces the groups of states are made of are loaded, so the check is not empty
       (should (drgnx-tty-colours-test--in-client
-               s '(seq-every-p #'facep '(drgnx-git-modified drgnx-review-critical drgnx-chrome-tab
+               s '(seq-every-p #'facep '(drgnx-git-modified drgnx-review-critical drgnx-kit-tab
                                                             drgnx-explorer-file))))
       (pcase-let ((`(,seen ,bad) (drgnx-tty-colours-test--in-client s drgnx-tty-colours-test--invisible)))
         (should (> seen 25))
@@ -196,10 +196,10 @@ foreground and background are the same colour on this terminal, in the default t
       (should (equal (drgnx-tty-colours-test--in-client
                       s `(mapcar (lambda (f)
                                    (seq-some (lambda (a)
-                                               (not (equal (face-attribute 'drgnx-chrome-tab a nil t)
+                                               (not (equal (face-attribute 'drgnx-kit-tab a nil t)
                                                            (face-attribute f a nil t))))
                                              ',drgnx-tty-colours-test--attributes))
-                                 '(drgnx-chrome-tab-current drgnx-chrome-tab-active)))
+                                 '(drgnx-kit-tab-current-inactive drgnx-kit-tab-current)))
                      '(t t)))
       ;; ignored files have no letter: their face differs from the default in an attribute that is not a colour
       (should (equal (drgnx-tty-colours-test--in-client

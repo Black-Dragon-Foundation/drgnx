@@ -45,7 +45,7 @@ pub fn author(a: &Value) -> Option<String> {
 
 fn action(r: &mut RowBuilder, label: &str, act: &str, help: &str) {
     let at = r.pos();
-    r.push(label, Some(FaceId::ChipAccent.name()));
+    r.push(label, Some(FaceId::KitChipAccentSoft.name()));
     let end = r.pos();
     r.prop(at, end, "drgnx-debug-bisect-action", json!(act));
     r.prop(at, end, "help-echo", json!(help));

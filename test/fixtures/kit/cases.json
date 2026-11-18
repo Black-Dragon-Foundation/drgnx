@@ -112,6 +112,25 @@
     {"name": "card-selected-single", "comp": {"c": "card", "kind": "selected", "shape": "single", "text": "Review"}},
     {"name": "card-selected-top", "comp": {"c": "card", "kind": "selected", "shape": "top", "text": "Review"}},
     {"name": "card-selected-mid", "comp": {"c": "card", "kind": "selected", "shape": "mid", "text": "Review"}},
-    {"name": "card-selected-bottom", "comp": {"c": "card", "kind": "selected", "shape": "bottom", "text": "Review"}}
+    {"name": "card-selected-bottom", "comp": {"c": "card", "kind": "selected", "shape": "bottom", "text": "Review"}},
+    {"name": "range-schedule", "comp": {"c": "range-bar", "variant": "schedule", "from": 0, "to": 100, "spans": {"done_to": 40, "p50": 60, "p90": 80, "baseline": 30, "target": 90}, "state": "on-track", "width": 200, "label": "Build: on track, forecast finish 60 to 80"}},
+    {"name": "range-schedule-late", "comp": {"c": "range-bar", "variant": "schedule", "from": 0, "to": 100, "spans": {"done_to": 50, "p50": 70, "p90": 95, "target": 60}, "state": "late", "width": 200}},
+    {"name": "range-schedule-waiting", "comp": {"c": "range-bar", "variant": "schedule", "from": 0, "to": 100, "spans": {"done_to": 20, "p50": 40, "p90": 60}, "state": "waiting", "width": 200}},
+    {"name": "range-schedule-done", "comp": {"c": "range-bar", "variant": "schedule", "from": 0, "to": 100, "spans": {"done_to": 100}, "state": "done", "width": 200}},
+    {"name": "range-schedule-forecast", "comp": {"c": "range-bar", "variant": "schedule", "from": 0, "to": 100, "spans": {"p50": 50, "p90": 75}, "state": "forecast", "width": 200}},
+    {"name": "range-schedule-at-risk", "comp": {"c": "range-bar", "variant": "schedule", "from": 0, "to": 100, "spans": {"done_to": 30, "p50": 50, "p90": 70, "target": 65}, "state": "at-risk", "width": 200}},
+    {"name": "range-cost", "comp": {"c": "range-bar", "variant": "cost", "from": 0, "to": 100, "spans": {"p50": 40, "p90": 70, "limit": 90}, "state": "on-track", "width": 160}},
+    {"name": "range-segment-edit", "comp": {"c": "range-bar", "variant": {"segment": "edit"}, "from": 0, "to": 10, "spans": {}, "state": "on-track", "width": 120}},
+    {"name": "range-segment-think", "comp": {"c": "range-bar", "variant": {"segment": "think"}, "from": 0, "to": 10, "spans": {}, "state": "on-track", "width": 48}},
+    {"name": "range-segment-wait-you", "comp": {"c": "range-bar", "variant": {"segment": "wait-you"}, "from": 0, "to": 10, "spans": {}, "state": "on-track", "width": 96}},
+    {"name": "range-tiny", "comp": {"c": "range-bar", "variant": "cost", "from": 0, "to": 1000, "spans": {"p50": 1}, "state": "on-track", "width": 100}},
+    {"name": "tab-rest", "comp": {"c": "tab", "title": "main.rs", "close": true}},
+    {"name": "tab-hover", "comp": {"c": "tab", "title": "main.rs", "state": "hover", "close": true}},
+    {"name": "tab-selected", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "close": true}},
+    {"name": "tab-selected-inactive", "comp": {"c": "tab", "title": "main.rs", "state": "selected-inactive", "close": true}},
+    {"name": "tab-modified", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "close": true, "modified": true}},
+    {"name": "tab-panel", "comp": {"c": "tab", "title": "Terminal", "size": "panel"}},
+    {"name": "tab-panel-selected", "comp": {"c": "tab", "title": "Debug Console", "size": "panel", "state": "selected", "action": {"kind": "ui-button", "args": ["area-show"]}}},
+    {"name": "segmented", "comp": {"c": "segmented", "current": 1, "items": [["Map", {"kind": "ui-button", "args": ["map"]}], ["Board", {"kind": "ui-button", "args": ["board"]}], ["Flow", {"kind": "ui-button", "args": ["flow"]}]]}}
   ]
 }

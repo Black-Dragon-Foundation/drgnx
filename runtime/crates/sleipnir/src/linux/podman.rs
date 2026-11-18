@@ -113,6 +113,8 @@ pub struct RunnerMounts {
     /// The slot's target dir.
     pub target: PathBuf,
     pub caches: Vec<CacheMount>,
+    /// `CARGO_BUILD_JOBS` from the job's grant (`forseti::admit::cargo_jobs`); 0: not set.
+    pub cargo_jobs: u32,
 }
 
 /// A cache the job's suite declares: a folder under the runner's `cache/<project>/<trust>/`, at its path inside.
@@ -158,10 +160,16 @@ pub struct RunnerArgs {
     /// Who owns the containers: the data-dir tag of a hub (8 hex), or `<prefix>/<hub id>` on a runner. A hub's
     /// containers carry it as `drgnx.owner`, and its sidecar's name.
     pub owner: String,
+    /// The hub's own job: `CARGO_BUILD_JOBS` from its grant (a runner's job carries it in [`RunnerMounts`]); 0: not
+    /// set.
+    pub cargo_jobs: u32,
     /// The job container carries the owner's labels (`drgnx.owner` or `drgnx.runner`, and `drgnx.job`), so a sweep
     /// finds exactly its own.
     pub job_labels: bool,
 }
+
+/// The variable that holds a job's deadline, in epoch seconds.
+pub const DEADLINE_ENV: &str = "DRGNX_JOB_DEADLINE";
 
 impl RunnerArgs {
     /// The hub's own container jobs: `drgnx-job-<id>`, no parent slice, labelled with OWNER_TAG.
@@ -172,6 +180,7 @@ impl RunnerArgs {
             name_prefix: LOCAL_PREFIX.to_string(),
             owner: owner_tag.to_string(),
             job_labels: true,
+            cargo_jobs: 0,
         }
     }
 
@@ -183,6 +192,7 @@ impl RunnerArgs {
             name_prefix: format!("{prefix}-"),
             owner: format!("{prefix}/{hub_id}"),
             job_labels: true,
+            cargo_jobs: 0,
         }
     }
 }
@@ -477,10 +487,20 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
         }
         .into(),
     );
+    // a job's deadline passes through from the podman client's environment (job-exec's, the hub's job), so a harness
+    // can dump its state before its time box ends (design §5.7)
+    if ra.job_labels {
+        a.push("-e".into());
+        a.push(DEADLINE_ENV.into());
+    }
     match &req.runner {
         None => {
             a.push("-v".into());
             a.push(format!("{source}:{WORK}:Z").into());
+            if ra.cargo_jobs > 0 {
+                a.push("-e".into());
+                a.push(format!("CARGO_BUILD_JOBS={}", ra.cargo_jobs).into());
+            }
         }
         Some(m) => {
             a.push("-v".into());
@@ -498,6 +518,10 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
             a.push(format!("{}:{TARGET}:rw,Z", mount_source(&m.target)?).into());
             a.push("-e".into());
             a.push(format!("CARGO_TARGET_DIR={TARGET}").into());
+            if m.cargo_jobs > 0 {
+                a.push("-e".into());
+                a.push(format!("CARGO_BUILD_JOBS={}", m.cargo_jobs).into());
+            }
             for c in &m.caches {
                 let inside = &c.inside;
                 if !inside.starts_with('/')
@@ -901,6 +925,7 @@ mod tests {
                     host: "/r/cache/p/public/cargo".into(),
                     inside: "/cache/cargo".into(),
                 }],
+                cargo_jobs: 2,
             }),
             keys: Some(KeyMounts {
                 helper: "/r/bin/0.1.0/drgnx-key".into(),
@@ -1127,6 +1152,8 @@ mod tests {
             "--label",
             "drgnx.job=x1a",
             "--network=none",
+            "-e",
+            "DRGNX_JOB_DEADLINE",
             "-v",
             "/work/tree:/work:Z",
             "-w",
@@ -1240,6 +1267,16 @@ mod tests {
         assert!(
             a.windows(2)
                 .any(|w| w == ["-e", "CARGO_TARGET_DIR=/target"])
+        );
+        // cargo builds as many units at once as the grant allows (design §3 #4)
+        assert!(
+            a.windows(2).any(|w| w == ["-e", "CARGO_BUILD_JOBS=2"]),
+            "{a:?}"
+        );
+        // the job's deadline passes through from job-exec's environment (design §5.7)
+        assert!(
+            a.windows(2).any(|w| w == ["-e", "DRGNX_JOB_DEADLINE"]),
+            "{a:?}"
         );
         assert!(!a.iter().any(|s| s.starts_with("--mount")
             || s.starts_with("--volume")
@@ -1404,6 +1441,8 @@ mod tests {
         let net = format!("--network=container:{sidecar}");
         v.push(&net);
         v.extend([
+            "-e",
+            "DRGNX_JOB_DEADLINE",
             "-v",
             "/work/tree:/work:Z",
             "-w",
@@ -1478,7 +1517,16 @@ mod tests {
             ["drgnx.owner=0a1b2c3d", "drgnx.job=x1a"],
             "unused",
         );
-        want.retain(|s| s != "-e" && !s.contains("PROXY") && !s.contains("_proxy"));
+        // the proxy variables go, each with its `-e`
+        let proxy = |s: &String| s.contains("PROXY") || s.contains("_proxy");
+        let mut i = 0;
+        while i + 1 < want.len() {
+            if want[i] == "-e" && proxy(&want[i + 1]) {
+                want.drain(i..i + 2);
+            } else {
+                i += 1;
+            }
+        }
         let at = want
             .iter()
             .position(|s| s.starts_with("--network"))
@@ -1490,7 +1538,8 @@ mod tests {
         ra.job_labels = false;
         let b = argv(&req(&["ls", "-l"]), &none, &ra).map(strs).unwrap();
         assert!(!b.iter().any(|s| s.starts_with("drgnx.")));
-        assert_eq!(b.len() + 4, a.len());
+        // no labels and no deadline
+        assert_eq!(b.len() + 6, a.len());
     }
 
     /// [D] The proxy variables never exempt the reserved name the host's grants use: that name goes through the proxy.

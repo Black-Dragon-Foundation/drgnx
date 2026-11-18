@@ -22,12 +22,12 @@
 
 ;;;; Faces
 
-(defface drgnx-chip '((t :inherit (drgnx-ui-caption drgnx-chip-quiet) :box (:line-width (1 . 2) :style flat-button)))
+(defface drgnx-chip '((t :inherit (drgnx-ui-caption drgnx-kit-chip-neutral-soft) :box (:line-width (1 . 2) :style flat-button)))
   "A small rounded label inside text (design §3.5 `.chip'): the quiet chip's tint, room inside it (a flat box in its
 own background, never a ring in the text colour), radius 4 where the compositor rounds." :group 'drgnx-decor)
-(defface drgnx-badge '((t :inherit (drgnx-ui-caption drgnx-chip-accent) :box (:line-width (1 . 2) :style flat-button)))
+(defface drgnx-badge '((t :inherit (drgnx-ui-caption drgnx-kit-chip-accent-soft) :box (:line-width (1 . 2) :style flat-button)))
   "A pill: an accent chip with the largest radius." :group 'drgnx-decor)
-(defface drgnx-chip-solid '((t :inherit drgnx-kit-chip-accent-solid))
+(defface drgnx-kit-chip-accent-solid '((t :inherit drgnx-kit-chip-accent-solid))
   "A chip on the accent's solid fill with its text colour (the theme sets the colours): a trail step's number."
   :group 'drgnx-decor)
 (defface drgnx-button '((t :inherit (drgnx-ui-text drgnx-control)))
@@ -96,7 +96,6 @@ buttons are not here: their ring and radius are `drgnx-control''s, from the them
   '(drgnx-chip drgnx-badge drgnx-focus-ring drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single
                drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom drgnx-card-sel-single
                drgnx-hover drgnx-focus drgnx-control drgnx-control-primary drgnx-pill drgnx-pill-on region isearch lazy-highlight
-               drgnx-wb-tab drgnx-wb-tab-current
                diff-refine-added diff-refine-removed diff-refine-changed
                ;; the Search view's preview and sheet: a diff line's rounded tint and its words'
                drgnx-replace-preview-del drgnx-replace-preview-add drgnx-replace-preview-word-old

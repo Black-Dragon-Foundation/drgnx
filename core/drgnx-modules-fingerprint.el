@@ -51,7 +51,7 @@ symbol with one line; the FULL scan finds the rest.")
 (defvar drgnx-modules-fingerprint-registries
   '(drgnx-commands--table drgnx-wb--sections drgnx-wb--areas drgnx-rules--table drgnx-rules--places
                           (drgnx-signal--subscribers . :functions) drgnx-surfaces-contexts drgnx-layouts-shapes
-                          drgnx-layouts-pane-fillers drgnx-config--defs drgnx-memo--watched
+                          drgnx-config--defs drgnx-memo--watched
                           drgnx-view--types (drgnx-state--now . :functions) (drgnx-state--idle . :functions)
                           drgnx-state--roles drgnx-pane--kinds drgnx-modal-engines
                           drgnx-notice--sources drgnx-statusbar--segments drgnx-ui-kit--actions)

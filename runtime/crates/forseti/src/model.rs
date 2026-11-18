@@ -75,11 +75,15 @@ impl PartialOrd for Priority {
     }
 }
 
-/// Which lane a job runs in: ordinary work, or a timing run (pinned to `pinned` cores when given).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Which lane a job runs in: ordinary work, or a timing run: on the runner's timing island (`pinned: Some(n)`, the n
+/// CPUs its harness pins there, 0 when the harness picks), or the whole machine (`None`, design §5.6).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Lane {
+    #[default]
     Work,
-    Timing { pinned: Option<u8> },
+    Timing {
+        pinned: Option<u8>,
+    },
 }
 
 /// Heavy or light. A job is heavy only when it is marked so; [`JobSpec::heavy`] reads it.
@@ -205,6 +209,27 @@ pub struct JobSpec {
     pub local_only: bool,
     /// The paths the job writes back to the tree.
     pub writes: Vec<String>,
+    /// What the hub derives for the job or its pack declares beyond the starter's request.
+    #[serde(default)]
+    pub derived: Derived,
+}
+
+/// A job's derived fields ([`JobSpec::derived`]): the hub fills them at submit, from the frozen tree and the pack.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Derived {
+    /// `floor(log2(MiB))` of the frozen tree the job reads ([`tree_bucket`]): a history key class, so a tree ten times
+    /// bigger keeps its own expected time and memory.
+    pub tree_bucket: Option<u8>,
+    /// The progress guard's stall and silent limits in seconds, when the starter or the pack names them (none: the
+    /// defaults, `sleipnir::linux::progress`).
+    pub stall_s: Option<u64>,
+    pub silent_s: Option<u64>,
+}
+
+/// The history class of a tree of BYTES: `floor(log2(MiB))`, 0 below 2 MiB.
+pub fn tree_bucket(bytes: u64) -> u8 {
+    let mib = (bytes >> 20).max(1);
+    (63 - mib.leading_zeros()) as u8
 }
 
 impl JobSpec {
@@ -290,6 +315,14 @@ pub struct RunningJob {
     pub long_build: bool,
 }
 
+/// A machine's last start: when, and whether its job was small ([`crate::admit::small`]: two small jobs in a row need
+/// no gap between their starts). The scheduler keeps it; [`MachineState`] carries it into admission.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastStart {
+    pub at: Option<u64>,
+    pub small: bool,
+}
+
 /// One machine as its probe read it at `now`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MachineState {
@@ -304,12 +337,25 @@ pub struct MachineState {
     pub disk_total_gb: u64,
     pub on_ac: bool,
     pub last_start: Option<u64>,
+    /// The job started at `last_start` was small ([`crate::admit::small`]): a small job after it needs no gap.
+    #[serde(default)]
+    pub last_start_small: bool,
     pub running: Vec<RunningJob>,
     pub features: Vec<String>,
     pub reachable: bool,
     /// Other schedulers' reservations on this machine (jobq's legacy slot reservations among them). The probe drops
     /// those whose process is gone; the budget counts the rest by [`crate::count_others`].
     pub others: Vec<Reservation>,
+    /// The runner's timing island (its profile's `island`) and the timing job on it; none on a machine without one.
+    #[serde(default)]
+    pub island: Option<Island>,
+}
+
+/// A runner's timing island (design §5.6): CPUS of its own (a whole L3 group), and the timing job that holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Island {
+    pub cpus: u32,
+    pub busy: Option<JobId>,
 }
 
 /// How a job ended.
@@ -360,6 +406,8 @@ pub enum WaitReason {
         holder: JobId,
     },
     IslandBusy,
+    /// A timing run pinned to an island, on a machine without one: it never takes the whole machine unasked.
+    NoIsland,
     DrainWaits,
     DesktopUnreachable {
         since: u64,
@@ -449,6 +497,13 @@ pub struct Limits {
     pub no_jobs_on_battery: bool,
     /// Admission by count only (a hub with no Linux probe): at most this many jobs.
     pub fixed_slots: Option<u32>,
+    /// The least time between two starts, unless both are small ([`crate::admit::small`]).
+    #[serde(default = "default_start_gap_s")]
+    pub start_gap_s: u64,
+}
+
+fn default_start_gap_s() -> u64 {
+    crate::admit::START_GAP_S
 }
 
 impl Limits {
@@ -478,6 +533,7 @@ impl Limits {
                 overcommit: 1.5,
                 no_jobs_on_battery: false,
                 fixed_slots: None,
+                start_gap_s: crate::admit::START_GAP_S,
             },
             Profile::Workstation => Limits {
                 floor_mib: 1536,
@@ -495,6 +551,7 @@ impl Limits {
                 overcommit: 1.0,
                 no_jobs_on_battery: true,
                 fixed_slots: None,
+                start_gap_s: crate::admit::START_GAP_S,
             },
         }
     }
@@ -544,6 +601,7 @@ impl Limits {
             overcommit: 1.0,
             no_jobs_on_battery: false,
             fixed_slots: Some(n),
+            start_gap_s: crate::admit::START_GAP_S,
         }
     }
 }

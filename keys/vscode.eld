@@ -3,7 +3,6 @@
 (:name "VS Code"
        :doc "Visual Studio Code's default keys"
        :mac-cmd t
-       :indent-tabs-mode nil   ; VS Code indents with spaces (the default Emacs would give Lisp files tabs of 8)
        :lone-modifiers (alt)   ; Alt pressed and released alone is `lone-alt' (Nidhogg): the menu, as VS Code's
        :bind ((palette "C-S-p" "<f1>")
               (keys-sheet "C-k C-r")
@@ -227,6 +226,9 @@
               (toggle-indent-guides :none "the palette")
               (toggle-smooth-scrolling :none "the palette")
               (toggle-sticky-scroll :none "the palette")
+              (pin-region :none "the palette")
+              (unpin-region :none "the palette")
+              (pin-show :none "the palette")
               (markdown-preview "C-S-v")
               (diff-working :none "the palette")
               (diff-staged :none "the palette")
@@ -682,6 +684,11 @@
               (layout-editor :none "Next Layout (C-k l) cycles; the palette")
               (layout-zen :none "C-k z is still Zen Mode (view-zen); the palette")
               (layout-browser :none "Next Layout (C-k l) cycles; the palette")
+              (layout-work :none "Next Layout (C-k l) cycles; View › Layout; the palette")
+              (layout-code :none "Next Layout (C-k l) cycles; View › Layout; the palette")
+              (layout-work-and-code :none "Next Layout (C-k l) cycles; View › Layout; the palette")
+              (layout-review :none "Next Layout (C-k l) cycles; View › Layout; the palette")
+              (tile-reset :none "the palette")
               (layout-save :none "the palette")
               (layout-pick :none "the palette")
               (layout-restore-previous "C-k C-z")

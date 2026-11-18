@@ -58,7 +58,7 @@
   '(drgnx-status-ok drgnx-status-warn drgnx-status-fail drgnx-status-info drgnx-status-attention))
 
 (defconst drgnx-lint-contrast--chips
-  '(drgnx-chip-quiet drgnx-chip-attention drgnx-chip-accent drgnx-chip-ok drgnx-chip-warn drgnx-chip-error)
+  '(drgnx-kit-chip-neutral-soft drgnx-chip-attention drgnx-kit-chip-accent-soft drgnx-kit-chip-ok-soft drgnx-kit-chip-warn-soft drgnx-kit-chip-error-soft)
   "The chips' faces: a status colour on its own tint (high contrast has no tints, so no chip fill to measure there).")
 
 (defconst drgnx-lint-contrast--agents
@@ -183,7 +183,10 @@ reach 4.5:1 on the editor, the panel and raised surfaces, and the panel stands o
                       (push (format "%s: %s on %s: %.2f, needs %s" variant fg bg ratio bar) fails)))))
         (check 'button-primary-fg 'button-primary-bg (if (eq variant 'hc) 7.0 4.5))
         (dolist (edge '(button-edge key-hint-edge card-needs-you-edge))
-          (check edge 'panel 3.0))))
+          (check edge 'panel 3.0))
+        ;; a range bar's tail (the p50 to p90 tint) and the time axis' now stop (the focus colour) stand 3:1 off the surface
+        (dolist (mark '(range-tail focus))
+          (check mark 'editor 3.0))))
     (when fails (ert-fail (string-join (nreverse fails) "\n")))))
 
 (defun drgnx-lint-contrast--cycle (face kind &optional path)

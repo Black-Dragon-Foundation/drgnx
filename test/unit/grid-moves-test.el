@@ -167,6 +167,34 @@
           (should (= (nth 2 (window-pixel-edges root)) (nth 0 (window-pixel-edges editor))))
           (should-not (window-parameter moved 'drgnx-tile-dock)))))))
 
+(defun drgnx-grid-moves-test--key-hints (s)
+  "The keys of the kit key hints in string S, in order (their `help-echo' is \"key KEYS\")."
+  (let ((i 0) out)
+    (while (< i (length s))
+      (let ((h (get-text-property i 'help-echo s)) (next (next-single-property-change i 'help-echo s (length s))))
+        (when (and (stringp h) (string-prefix-p "key " h)) (push (substring h 4) out))
+        (setq i next)))
+    (nreverse out)))
+
+(ert-deftest drgnx-grid-moves/resize-hint-is-the-kit ()
+  "Resize Tiles' hint names the arrows as kit key hints."
+  (should (string-prefix-p "Resize Tiles: " (drgnx-grid-resize-hint)))
+  (should (equal (drgnx-grid-moves-test--key-hints (drgnx-grid-resize-hint)) '("←" "→" "↑" "↓"))))
+
+(ert-deftest drgnx-grid-moves/placeholder-row-is-the-kit ()
+  "A tile placeholder's line is a kit row in the selected state (`drgnx-row-selected', which follows the tile's
+focus), its keys kit key hints; its words stay."
+  (let ((b (drgnx-grid-tile-placeholder 'g-not-defined)))
+    (unwind-protect
+        (with-current-buffer b
+          (should (string-match-p "\\`g-not-defined · waits for its module · .* choose · .* close\\'" (buffer-string)))
+          (should (equal (drgnx-grid-moves-test--key-hints (buffer-string)) '("↵" "x")))
+          (should (equal (get-text-property (point-min) 'face) (drgnx-ui-kit-row-face 'selected)))
+          ;; written again unchanged: still the kit's
+          (drgnx-grid-tile-placeholder 'g-not-defined)
+          (should (equal (drgnx-grid-moves-test--key-hints (buffer-string)) '("↵" "x"))))
+      (kill-buffer b))))
+
 (ert-deftest drgnx-grid-moves/resize-mode-steps-and-replays-the-other-key ()
   (drgnx-grid-test--with
     (let* ((one (selected-window)) (two (drgnx-groups-split-right)) (b (get-buffer-create "*g-typed*")))

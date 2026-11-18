@@ -146,11 +146,12 @@ high contrast, where tints are black, they are ringed in their own colour."
 quiet selection in the text colour; the other tabs are muted text."
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
+      ;; the kit's panel tab (etc/ui/components.eld `tab')
       (should (equal (list (drgnx-look-token 'fg variant) (drgnx-look-token 'sel-quiet variant))
-                     (list (drgnx-face-color 'drgnx-wb-tab-current :foreground 'gui)
-                           (drgnx-face-color 'drgnx-wb-tab-current :background 'gui))))
-      (should (plist-get (drgnx-faces--clause-plist 'drgnx-wb-tab-current 'gui) :box))
-      (should (equal (drgnx-look-token 'muted variant) (drgnx-face-color 'drgnx-wb-tab :foreground 'gui))))))
+                     (list (drgnx-face-color 'drgnx-kit-tab-panel-current :foreground 'gui)
+                           (drgnx-face-color 'drgnx-kit-tab-panel-current :background 'gui))))
+      (should (plist-get (drgnx-faces--clause-plist 'drgnx-kit-tab-panel-current 'gui) :box))
+      (should (equal (drgnx-look-token 'muted variant) (drgnx-face-color 'drgnx-kit-tab :foreground 'gui))))))
 
 ;; The manager's ruling (look step 5b): the inactive selection is clearly visible
 (ert-deftest drgnx-themes/the-inactive-selection-stands-off-the-panel ()
@@ -384,8 +385,10 @@ takes each text run's own foreground, so a card whose runs differ (a state dot, 
         (let ((box (plist-get (drgnx-faces--clause-plist face 'gui) :box)))
           (should (equal (list face (drgnx-look-token 'border-strong variant) '(-1 . -1))
                          (list face (plist-get box :color) (plist-get box :line-width))))
+          ;; a theme that knows nothing of drgnx draws the ring's fill through the defface's `secondary-selection'
+          ;; (drgnx's own themes keep only a coloured binding's font faces: `drgnx-ui-kit-theme-specs')
           (should (memq 'secondary-selection
-                        (ensure-list (plist-get (drgnx-faces--clause-plist face 'gui) :inherit)))))))))
+                        (ensure-list (plist-get (cdar (get face 'face-defface-spec)) :inherit)))))))))
 
 (ert-deftest drgnx-themes/the-selected-card-s-ring-is-the-accent ()
   "work-space-dark.html `.card.sel': the hub draws the selected card in `drgnx-kit-card-selected-*': a 2 px ring inside the line in the focus colour (the accent),
@@ -397,7 +400,8 @@ in every theme, on the same fill as the others."
         (let* ((spec (drgnx-faces--clause-plist face 'gui)) (box (plist-get spec :box)))
           (should (equal (list face (drgnx-look-token 'focus variant) '(-2 . -2))
                          (list face (plist-get box :color) (plist-get box :line-width))))
-          (should (memq 'secondary-selection (ensure-list (plist-get spec :inherit)))))))))
+          (should (memq 'secondary-selection
+                        (ensure-list (plist-get (cdar (get face 'face-defface-spec)) :inherit)))))))))
 
 (ert-deftest drgnx-themes/the-permission-card-keeps-its-attention-ring ()
   "agent-panel.html: the permission card is ringed in the attention colour.  A card's ring has a colour of its own now
@@ -408,11 +412,14 @@ in every theme, on the same fill as the others."
         (should (equal (list (drgnx-look-token 'attention variant) 1)
                        (list (plist-get box :color) (plist-get box :line-width))))))))
 
-(ert-deftest drgnx-themes/the-lens-shown-has-a-ring ()
-  "work-space-dark.html `.lens .on': the lens shown is a raised pill with a 1 px ring in the strong border, in every theme."
+(ert-deftest drgnx-themes/the-segmented-switch-is-one-ringed-track ()
+  "The kit's segmented switch (the Work lens bar's): one track in a 1 px ring of the border's colour, inside its line,
+the current item on the quiet selection in the body text's colour, in every theme."
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
-      (let* ((spec (drgnx-faces--clause-plist 'drgnx-work-lens-current 'gui)) (box (plist-get spec :box)))
-        (should (equal (list (drgnx-look-token 'border-strong variant) 1)
-                       (list (plist-get box :color) (plist-get box :line-width))))
-        (should (memq 'drgnx-pill-on (ensure-list (plist-get spec :inherit))))))))
+      (let ((box (plist-get (drgnx-faces--clause-plist 'drgnx-kit-segmented 'gui) :box)))
+        (should (equal (list (drgnx-look-token 'border variant) '(-1 . -1))
+                       (list (plist-get box :color) (plist-get box :line-width)))))
+      (should (equal (list (drgnx-look-token 'fg variant) (drgnx-look-token 'sel-quiet variant))
+                     (list (drgnx-face-color 'drgnx-kit-segmented-current :foreground 'gui)
+                           (drgnx-face-color 'drgnx-kit-segmented-current :background 'gui)))))))

@@ -18643,6 +18643,14 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
             "type": "string"
           },
+          "JobLane": {
+            "description": "The lane a job runs in: `work` (the default) or `timing` (a measurement: on a runner's timing island, or with\n`whole_machine` the whole machine; never joined, never cached).",
+            "enum": [
+              "work",
+              "timing"
+            ],
+            "type": "string"
+          },
           "JobOs": {
             "description": "The OS a job needs: `linux` (the default; this machine and Linux runners) or `macos` (a Mac runner's host job: it\nwaits for one and never runs on this machine).",
             "enum": [
@@ -18755,6 +18763,17 @@
               }
             ]
           },
+          "lane": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JobLane"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The lane (default `work`): a `timing` job runs on its runner's timing island while no other timing job holds it\n(a machine without an island refuses it)."
+          },
           "local_only": {
             "description": "The job runs on this machine only.",
             "type": [
@@ -18786,6 +18805,17 @@
             "maxLength": 128,
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "needs": {
+            "description": "The jobs (ids) this one needs: it waits, holding nothing, until each passed, and ends as infra if one did not\n(at most 64; each one the queue knows, and no cycle).",
+            "items": {
+              "$ref": "#/$defs/Id"
+            },
+            "maxItems": 64,
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -18845,12 +18875,37 @@
             ],
             "description": "A test job whose suite selects rows: its argv holds `{rows}` where the selector of the rows to run goes (an\nEmacs regexp of the names). Every row runs at first; a job a lost runner sends back runs only the rows that have\nno result yet."
           },
+          "silent_s": {
+            "description": "The progress guard's silent limit: seconds with no output, whatever the CPU, before the job ends\n`infra: stuck (silent)` (1 to 86400; default 2700).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stall_s": {
+            "description": "The progress guard's stall limit: seconds with no output, CPU under a tenth of a core and no IO before the job\nends `infra: stuck (stall)` (1 to 86400; default 1200).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "timebox_s": {
             "description": "Seconds before it is ended: 1 to 86400 (default 3600).",
             "format": "uint64",
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "whole_machine": {
+            "description": "A `timing` job that takes the whole machine instead of the island: it needs a named `machine`, waits while P1–P2\nwork is pending, then drains the machine (no new work starts there) and starts once it is empty.",
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -37945,6 +38000,14 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "island": {
+            "description": "The timing island (`--island`): a CPU list of whole L3 groups (`0-5,12-17`) timing jobs run on; empty removes\nit. A change reconnects the runner, whose `serve` checks it against the machine's caches.",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
             ]
           },
           "name": {

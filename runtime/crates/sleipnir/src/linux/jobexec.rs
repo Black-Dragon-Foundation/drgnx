@@ -10,7 +10,9 @@
 //! evicted it (its red is then `Suspect`), and `result.json`.
 
 use super::parse::{self, Parser, RowVerdict};
+use super::podman::DEADLINE_ENV;
 use super::probe::CgroupStat;
+use super::progress::{self, GuardLimits, Tracker};
 use super::result::{ResultJson, RowResult};
 use super::slices;
 use forseti::classify::{ExitEvidence, infra};
@@ -58,6 +60,11 @@ pub struct JobExec {
     pub expect: Expect,
     pub grant: Grant,
     pub timeout_s: u64,
+    /// The progress guard's stall and silent limits in seconds (`linux::progress`); none: the defaults.
+    #[serde(default)]
+    pub stall_s: Option<u64>,
+    #[serde(default)]
+    pub silent_s: Option<u64>,
     /// The job's helper (keys, network, the disk watch), started before the command; none: the job has no helper.
     #[serde(default)]
     pub helper: Option<HelperSpec>,
@@ -301,10 +308,32 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
         },
         _ => None,
     };
+    // the progress guard over the job's slice and logs, read every `period_s`
+    let limits = guard_limits(spec);
+    let period = progress::period_s(&limits);
+    let logs: Vec<PathBuf> = std::iter::once(spec.log.clone())
+        .chain(spec.state_logs.iter().cloned())
+        .collect();
+    let slice_dir = slice.as_ref().ok().map(PathBuf::as_path);
+    let mut tracker = Tracker::new(progress::read(
+        Duration::ZERO,
+        slice_dir,
+        &logs,
+        &progress::Reading::default(),
+    ));
+    let mut last = progress::Reading::default();
+    let period = Duration::from_secs(period);
+    let mut next = period;
     if seen.setup.is_none() {
         let mut cmd = Command::new(&spec.argv[0]);
+        let deadline = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            + spec.timeout_s;
         cmd.args(&spec.argv[1..])
             .envs(spec.env.iter().map(|(k, v)| (k, v)))
+            .env(DEADLINE_ENV, deadline.to_string())
             .stdin(Stdio::null());
         if let Some(c) = &spec.cwd {
             cmd.current_dir(c);
@@ -337,6 +366,15 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
                     seen.timed_out = true;
                     break;
                 }
+                let at = t0.elapsed();
+                if at >= next {
+                    next = at + period;
+                    last = progress::read(at, slice_dir, &logs, &last);
+                    if let Some(stop) = tracker.see(last, &limits) {
+                        // the report and the log line first, then the reason: the kill below names it
+                        stuck(dir, spec, &stop, slice_dir);
+                    }
+                }
                 if dir.join(KILL_REASON).exists() {
                     // the scheduler or the disk watch stops the job: its reason is written, the verdict names it
                     seen.stopped = true;
@@ -363,12 +401,37 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
     let stop_slice = seen.oom || seen.timed_out || seen.stopped;
     let result = judge_run(dir, spec, &seen, &before, &after, t0.elapsed());
     let _ = result.write(dir);
+    // the limits set on the job's slice at launch go with the job (one runtime drop-in per job otherwise)
+    let _ = slices::revert(&spec.slice);
     if stop_slice {
         // the job is one OOM group: the rest of it (its other containers, the podman client) goes with it, and
         // job-exec with them, now that the verdict is written
         let _ = slices::stop(&spec.slice);
     }
     result
+}
+
+/// The progress guard's limits for SPEC: its stall and silent limits or the defaults; the wall is its time box (the
+/// timeout above ends it first, as `timeout`).
+fn guard_limits(spec: &JobExec) -> GuardLimits {
+    GuardLimits {
+        stall_s: spec.stall_s.unwrap_or(progress::STALL_S),
+        silent_s: spec.silent_s.unwrap_or(progress::SILENT_S),
+        ..GuardLimits::defaults(spec.timeout_s.max(1))
+    }
+}
+
+/// The progress guard stops the job for STOP: `stuck.txt`, the log's line, then the kill reason `infra: stuck
+/// (<rule>)`, which ends the job and its slice.
+fn stuck(dir: &Path, spec: &JobExec, stop: &progress::Stop, slice: Option<&Path>) {
+    use std::io::Write;
+    if let Err(e) = progress::stuck_report(dir, stop, slice, &spec.log) {
+        eprintln!("sleipnir job-exec: the stuck report: {e}");
+    }
+    if let Ok(mut f) = fs::OpenOptions::new().append(true).open(&spec.log) {
+        let _ = writeln!(f, "{}", progress::log_line(stop));
+    }
+    let _ = kill_reason(dir, &format!("infra: {}", progress::verdict_text(stop)));
 }
 
 fn judge_run(
@@ -471,6 +534,8 @@ mod tests {
                 reserve_mib: 256,
             },
             timeout_s: 60,
+            stall_s: None,
+            silent_s: None,
             helper: None,
         }
     }

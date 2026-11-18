@@ -19,6 +19,7 @@
 (require 'drgnx-wb)
 (require 'drgnx-state-intent)
 (require 'tab-line)                     ; the tab faces we inherit
+(require 'drgnx-ui-kit)                 ; the tabs: `drgnx-ui-kit-tab'
 
 (defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
 (defface drgnx-wb-tab-current '((t :inherit tab-line-tab-current)) "The shown tab in an area's tab row." :group 'drgnx)
@@ -249,6 +250,33 @@ makes one."
   "Non-nil in a buffer that draws its own title row (the Work space's tiles): an area shows no tab row over it.  A
 string is the title the area draws itself, in its row with the area's close, in place of the tabs.")
 
+(defconst drgnx-area--tab-row-px 32 "An area's tab row height in logical pixels (debugging.html `.ptabs').")
+(defconst drgnx-area--pill-px 24 "The shown panel tab's pill height in logical pixels (debugging.html `.pt').")
+
+(declare-function drgnx-theme--box-fit-pad-p "drgnx-theme-gen")
+
+(defun drgnx-area--tab-row-parts (frame)
+  "(SPACER TEXT PILL) for a tab row on a graphical FRAME, else nil.  SPACER is the one-pixel character that makes the
+row `drgnx-area--tab-row-px' tall with the tabs' text in its middle.  TEXT, laid over every tab, gives their text the
+kit face's own size as an absolute height: the header line's face is the UI font's relative height already, and the
+tab's face, relative too, would scale it again (25 px text for 26 at scale 2), so the text would not be the font
+measured here.  PILL, where boxes fit their text with a pad (Glitnir), the face that fits the shown tab's box and
+fill to `drgnx-area--pill-px' round its text: the kit face's box (its width and radius) drawn in the face's own
+background (the kit's ring is in that colour), else nil."
+  (when-let* (((display-graphic-p frame))
+              (face 'drgnx-kit-tab-panel-current)
+              (extent (drgnx-pixels-font-extent face frame)))
+    (let* ((row (drgnx-px drgnx-area--tab-row-px frame))
+           (box (face-attribute face :box frame t)))
+      (list (drgnx-pixels-spacer 'drgnx-wb-bar row (+ (cdr extent) (drgnx-pixels-box-height face row frame)) frame)
+            (list :height (face-attribute face :height frame 'default))
+            (and (consp box) (fboundp 'drgnx-theme--box-fit-pad-p) (drgnx-theme--box-fit-pad-p)
+                 (list :box (append (cl-loop for (k v) on box by #'cddr unless (memq k '(:color :style :fit))
+                                             append (list k v))
+                                    (list :style 'flat-button
+                                          :fit (cons 'text (drgnx-pixels-box-height
+                                                            face (drgnx-px drgnx-area--pill-px frame) frame))))))))))
+
 (defun drgnx-area--tab-row (area &optional frame)
   "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes.
 Its pads are in the pixels of FRAME (default the workbench's), the frame the row is drawn in.
@@ -262,21 +290,27 @@ its own title (`drgnx-area-own-title')."
             (and (plist-get (alist-get area drgnx-wb--areas) :lone) (drgnx-area--lone-p area)))
         (let ((own (and w (buffer-local-value 'drgnx-area-own-title (window-buffer w)))))
           (if (stringp own) (drgnx-area--row-with-close own area frame) 'none))
-      (drgnx-area--row-with-close
-       (concat
-        ;; under the grid the area is a docked tile: its grip drags it (`drgnx-grid-drag')
-        (if (and (bound-and-true-p drgnx-grid-mode) (fboundp 'drgnx-grid--grip)) (drgnx-grid--grip (and w (window-frame w))) "")
-        (mapconcat (lambda (tab)
-                     (let ((face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab))
-                           (icon (plist-get (cdr tab) :icon)))
-                       ;; debugging.html `.pt': the icon is `.i.sm', 14 px, coloured as the title
-                       (propertize (concat " " (if icon (concat (drgnx-look-icon icon face 14) " ") "")
-                                           (plist-get (cdr tab) :title) " ")
-                                   'face face 'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
-                                   'local-map drgnx-area--tab-map 'help-echo "Show this tab")))
-                   (seq-filter (lambda (tab) (drgnx-area--tab-listed-p area (car tab) shown)) tabs) " ")
-        (drgnx-area--actions actions area frame))
-       area frame))))
+      (let ((parts (drgnx-area--tab-row-parts (or frame (drgnx-wb-frame)))))
+        (drgnx-area--row-with-close
+         (concat
+          ;; the row's height (32 px, the tabs' text in its middle)
+          (or (car parts) "")
+          ;; under the grid the area is a docked tile: its grip drags it (`drgnx-grid-drag')
+          (if (and (bound-and-true-p drgnx-grid-mode) (fboundp 'drgnx-grid--grip)) (drgnx-grid--grip (and w (window-frame w))) "")
+          (mapconcat (lambda (tab)
+                       ;; the kit's panel tab (debugging.html `.pt'): the icon at 14 px, coloured as the title, the shown
+                       ;; one a 24 px pill on the quiet selection in the 32 px row
+                       (let ((s (drgnx-ui-kit-tab (plist-get (cdr tab) :title) 'panel (if (eq (car tab) shown) 'selected 'rest)
+                                                  (plist-get (cdr tab) :icon) nil 'header-line nil (or frame (drgnx-wb-frame)))))
+                         (add-text-properties 0 (length s) (list 'drgnx-tab (cons area (car tab)) 'mouse-face 'drgnx-hover
+                                                                 'local-map drgnx-area--tab-map 'help-echo "Show this tab")
+                                              s)
+                         (when (nth 1 parts) (add-face-text-property 0 (length s) (nth 1 parts) nil s))
+                         (when (and (eq (car tab) shown) (nth 2 parts)) (add-face-text-property 0 (length s) (nth 2 parts) nil s))
+                         s))
+                     (seq-filter (lambda (tab) (drgnx-area--tab-listed-p area (car tab) shown)) tabs) " ")
+          (drgnx-area--actions actions area frame))
+         area frame)))))
 
 (defun drgnx-area--close (area)
   "AREA's close on its tab row: the kit's close button (face, click, help), drawn as the Lucide x at 16 px
@@ -670,7 +704,7 @@ given) instead of selecting the placeholder: it makes one, which the rules show 
   (when-let* ((w (drgnx-wb-area-window 'panel)) (buf (window-buffer w))
               ((memq buf (drgnx-wb-output-channels))))
     (propertize (concat " " (string-trim (buffer-name buf) "[ *]+" "[ *]+") " " (drgnx-look-icon 'chevron-down nil 14) " ")
-                'face 'drgnx-chip-quiet 'mouse-face 'highlight
+                'face 'drgnx-kit-chip-neutral-soft 'mouse-face 'highlight
                 'help-echo "The Output channel shown: click for another" 'local-map drgnx-area--channel-map)))
 
 (defun drgnx-area--problems-content ()

@@ -118,10 +118,12 @@ impl Platform for DarwinPlatform {
             disk_total_gb: gb(disk.f_blocks),
             on_ac: probe::on_ac(&batt),
             last_start: None,
+            last_start_small: false,
             running: vec![],
             features: vec![],
             reachable: true,
             others,
+            island: None,
         })
     }
 
@@ -272,6 +274,8 @@ impl Platform for DarwinPlatform {
             expect: meta.spec.expect,
             grant: meta.grant,
             timeout_s: meta.spec.timeout_s,
+            stall_s: None,
+            silent_s: None,
             helper: net.as_ref().map(|(l, port)| HelperSpec {
                 hub_allow: Some(dir.join(proxy::ALLOW)),
                 proxy_fd: Some(l.as_raw_fd()),
@@ -352,6 +356,7 @@ impl Platform for DarwinPlatform {
             units: vec![],
             folders: attempts::scan(root, &|unit: &str| attempt::active(Path::new(unit))),
             bundles: cleanup::bundles(root),
+            slices: None,
         };
         cleanup::apply(root, &cleanup::plan(owner, &seen));
     }

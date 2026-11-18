@@ -126,6 +126,7 @@ fn spec(script: &str) -> JobSpec {
         keys: vec![],
         local_only: false,
         writes: vec![],
+        derived: Default::default(),
         os: Default::default(),
     }
 }

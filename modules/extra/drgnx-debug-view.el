@@ -39,9 +39,9 @@
   "A value that changed since the last stop." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-error '((t :inherit drgnx-status-fail)) "A watch that failed." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-link '((t :inherit link)) "Something to click: `(…)', Load more frames." :group 'drgnx-debug-view)
-(defface drgnx-debug-view-chip '((t :inherit (drgnx-ui-caption drgnx-chip-warn))) "A thread's state (`.st2')."
+(defface drgnx-debug-view-chip '((t :inherit (drgnx-ui-caption drgnx-kit-chip-warn-soft))) "A thread's state (`.st2')."
   :group 'drgnx-debug-view)
-(defface drgnx-debug-view-chip-quiet '((t :inherit (drgnx-ui-caption drgnx-chip-quiet))) "A running thread's state (`.st2.run')."
+(defface drgnx-debug-view-chip-quiet '((t :inherit (drgnx-ui-caption drgnx-kit-chip-neutral-soft))) "A running thread's state (`.st2.run')."
   :group 'drgnx-debug-view)
 (defface drgnx-debug-view-place '((t :inherit (drgnx-ui-caption drgnx-text-subtle)))
   "A frame's place, a breakpoint's line: at the row's right edge (debugging.html `.loc', `.bpl')." :group 'drgnx-debug-view)

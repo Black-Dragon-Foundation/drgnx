@@ -392,14 +392,15 @@ asks the hub nothing and its keys say the same."
   (should (equal '(("selected") ("chain") ("dim")) drgnx-work-map--nav-faces)))
 
 (ert-deftest drgnx-work-map-rows/the-lens-bar-is-pills-and-keycaps ()
-  ;; work-space-dark.html `.lens': the lens shown is a raised pill (the face inherits the pill that is on), the others
-  ;; quiet, and the map's own keys (focus f, overlaps o) chips with a keycap each
+  ;; the lens switch is the kit's segmented switch: the lens shown its current item, the others on the track; the map's
+  ;; own keys (focus f, overlaps o) chips with a keycap each
   (let* ((s (drgnx-work-lens-string 'map "drgnx" drgnx-work-map--lens-keys))
-         (face-at (lambda (word) (get-text-property (string-match word s) 'face s))))
-    (should (eq 'drgnx-work-lens-current (funcall face-at "Map")))
-    (should (memq 'drgnx-pill-on (ensure-list (face-attribute 'drgnx-work-lens-current :inherit))))
-    (should-not (eq 'drgnx-work-lens-current (funcall face-at "Board")))
-    (should (eq 'drgnx-work-chip (funcall face-at "focus")))
+         (face-at (lambda (word) (ensure-list (get-text-property (string-match word s) 'face s)))))
+    (should (equal '(drgnx-kit-segmented-current drgnx-kit-segmented) (funcall face-at "Map")))
+    (should (equal '(drgnx-kit-segmented) (funcall face-at "Board")))
+    (should (equal "Map, selected" (get-text-property (string-match "Map" s) 'help-echo s)))
+    (should (eq 'ui-window-button (car (get-text-property (string-match "Board" s) 'drgnx-action s))))
+    (should (equal '(drgnx-work-chip) (funcall face-at "focus")))
     (should (eq 'drgnx-work-lens-key (get-text-property (1+ (string-match " f " s)) 'face s)))
     (should (string-match-p "overlaps" s))))
 
@@ -480,10 +481,10 @@ asks the hub nothing and its keys say the same."
       (progn
         (should (facep 'drgnx-work-step-number))
         (should (equal (face-attribute 'drgnx-work-step-number :background nil t)
-                       (face-attribute 'drgnx-chip-solid :background nil t)))
+                       (face-attribute 'drgnx-kit-chip-accent-solid :background nil t)))
         (should (stringp (face-attribute 'drgnx-work-step-number :background nil t)))
         (should (equal (face-attribute 'drgnx-work-step-number :foreground nil t)
-                       (face-attribute 'drgnx-chip-solid :foreground nil t))))
+                       (face-attribute 'drgnx-kit-chip-accent-solid :foreground nil t))))
     (disable-theme 'drgnx-dark)))
 
 (ert-deftest drgnx-work-map-rows/the-status-line-names-the-agents-what-needs-you-and-the-view ()

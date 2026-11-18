@@ -38,7 +38,7 @@
 
 (defmacro drgnx-modal-panels-test--with (&rest body)
   "BODY with evil running in the Vim stack, all startup modules run, in a temp configuration and state dir.
-`find-file', `revert-buffer' and the focus commands are recorded in `drgnx-modal-panels-test--calls'; Emacs cannot quit."
+Open File (`drgnx-basics-open-file'), `revert-buffer' and the focus commands are recorded in `drgnx-modal-panels-test--calls'; Emacs cannot quit."
   (declare (indent 0))
   `(drgnx-modal-test-with-evil
      (let* ((dir (file-name-as-directory (make-temp-file "drgnx-modal-panels" t)))
@@ -68,8 +68,8 @@
              (should (eq drgnx-modal-running 'evil))
              (cl-letf (((symbol-function 'kill-emacs) (lambda (&rest _) (ert-fail "kill-emacs was called")))
                        ((symbol-function 'save-buffers-kill-terminal) (lambda (&rest _) (ert-fail "Emacs was quit")))
-                       ((symbol-function 'find-file)
-                        (lambda (&rest args) (interactive) (push (cons 'find-file args) drgnx-modal-panels-test--calls)))
+                       ((symbol-function 'drgnx-basics-open-file)
+                        (lambda () (interactive) (push '(open-file) drgnx-modal-panels-test--calls)))
                        ((symbol-function 'drgnx-wb-focus-editor)
                         (lambda () (interactive) (push '(focus-editor) drgnx-modal-panels-test--calls)))
                        ((symbol-function 'drgnx-wb-focus-right)
@@ -333,7 +333,7 @@
   (drgnx-modal-panels-test--with
     (drgnx-modal-panels-test--explorer root
       (drgnx-modal-panels-test--press "SPC f f")
-      (should (equal (drgnx-modal-panels-test--calls) '((find-file))))
+      (should (equal (drgnx-modal-panels-test--calls) '((open-file))))
       (drgnx-modal-panels-test--press "C-w l")
       (should (equal (drgnx-modal-panels-test--calls) '((focus-right)))))))
 

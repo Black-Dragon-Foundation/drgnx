@@ -57,14 +57,15 @@ foot shows only in part)."
 \(`agent' has no face of its own)."
   (mapcar (lambda (v) (if (eq v 'agent) 'neutral v)) variants))
 
-(defun drgnx-kit-sheet--bg (id variants)
+(defun drgnx-kit-sheet--bg (id variants &optional theme)
   "The fill token component ID's binding for VARIANTS (values) gives its own face, or nil: the most specific binding
-whose values VARIANTS all have."
+whose values VARIANTS all have.  In THEME `hc' a binding marked `:hc-ring' has no fill (a ring instead): nil."
   (let (best (n -1))
     (dolist (b (plist-get (drgnx-ui-kit-component id) :bind))
       (when (and (cl-every (lambda (v) (memq v (drgnx-kit-sheet--face-variants variants))) (car b)) (> (length (car b)) n))
         (setq best b n (length (car b)))))
-    (plist-get (cdr best) :bg)))
+    (and (not (and (eq theme 'hc) (plist-get (cdr best) :hc-ring)))
+         (plist-get (cdr best) :bg))))
 
 (defun drgnx-kit-sheet--edge (id variants)
   "The ring token of component ID's binding for VARIANTS (see `drgnx-kit-sheet--bg'), or nil."
@@ -73,6 +74,15 @@ whose values VARIANTS all have."
       (when (and (cl-every (lambda (v) (memq v variants)) (car b)) (> (length (car b)) n))
         (setq best b n (length (car b)))))
     (plist-get (cdr best) :edge)))
+
+(defun drgnx-kit-sheet--tab-fill (id variants state)
+  "A shown tab's fill token (its own, not the state table's `sel'): an editor tab's the editor's surface, a panel tab's
+the quiet selection; nil for any other cell."
+  (and (eq id 'tab) (memq state '(selected selected-inactive))
+       (plist-get (cdr (assq (if (equal variants '(panel)) 'panel-current 'current)
+                             (mapcar (lambda (b) (cons (car-safe (car b)) (cdr b)))
+                                     (plist-get (drgnx-ui-kit-component 'tab) :bind))))
+                  :bg)))
 
 (defvar drgnx-kit-sheet--edges nil
   "Non-nil while a sheet also checks that hovered and selected cells have no edge (`drgnx-kit-sheet/state-table').")
@@ -98,6 +108,30 @@ the baseline (`:ascent 100') is drawn at the line's end in the fill's face, its 
             (1+ (or (cl-loop for y from (+ top h -1) downto top when (equal want (drgnx-uitest-pixel snap x y)) return y)
                     (error "No baseline marker drawn at %s" at)))))
       (save-excursion (goto-char at) (delete-char 1)))))
+
+(defun drgnx-kit-sheet--check-range (what e s edges snap beg variant)
+  "The range bar E (an expansion) drawn at BEG: down the column halfway into each part, the part's colour (its face's
+foreground; the tail's is the `range-tail' token of VARIANT, the bar's colour tinted over the surface, not the full
+colour) fills the bar's height (`drgnx-ui-kit-range-bar-heights' by the density, logical px) in device px of the cell's
+line."
+  (let* ((top (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point beg)))))))
+         (h (round (* s (save-excursion (goto-char beg) (line-pixel-height))))))
+    (dolist (sp (append (plist-get e :spaces) nil))
+      (when-let* ((run (cl-find-if (lambda (r) (and (<= (aref r 0) (aref sp 0)) (< (aref sp 0) (aref r 1)))) (plist-get e :runs)))
+                  ((> (or (aref sp 2) 0) 0))             ; a gap between parts has no part colour
+                  (face (intern (aref run 2))))
+        (let* ((colour (drgnx-kit-sheet--rgb (if (eq face 'drgnx-kit-range-bar-tail)
+                                                 (drgnx-look-token 'range-tail variant)
+                                               (face-foreground face nil t))))
+               (xm (+ (drgnx-kit-sheet--x (+ beg (aref sp 0)) s edges) (/ (aref sp 1) 2)))
+               (rows (cl-loop for y from (max 0 (- top h)) below (+ top h h) ; the whole neighbourhood of the line: the bar is the only thing in the part's colour in this column
+                              when (equal colour (drgnx-uitest-pixel snap xm y)) collect y)))
+          (should (equal (list what face 'range-bar-height (aref sp 2) nil)
+                         ;; on a mismatch, where and what was read
+                         (list what face 'range-bar-height (length rows)
+                               (unless (= (length rows) (aref sp 2))
+                                 (list :colour colour :xm xm :top top :h h :found rows
+                                       :column (mapcar (lambda (y) (drgnx-uitest-pixel snap xm y)) (number-sequence top (+ top 12)))))))))))))
 
 (defun drgnx-kit-sheet--check-fill (what fill track want total height snap beg s edges)
   "The bar drawn at BEG (WHAT the cell, for the failures), TOTAL device px wide: down the column halfway into its
@@ -219,8 +253,10 @@ Returns the number of cells checked."
         ;; the start and end pads, and between them the text (its icons and their gaps drawn as they are); a meter
         ;; ends in its text, not a pad
         (when (and spaces (not (equal variants '(meter))))
-          (let ((pads (+ (aref (car spaces) 1) (aref (car (last spaces)) 1)))
-                (text (round (* s (string-pixel-width (buffer-substring (1+ beg) (1- end)))))))
+          (let ((pads (if (eq id 'range-bar)   ; a bar is its parts and nothing else: its width is theirs
+                          (apply #'+ (mapcar (lambda (sp) (aref sp 1)) spaces))
+                        (+ (aref (car spaces) 1) (aref (car (last spaces)) 1))))
+                (text (if (eq id 'range-bar) 0 (round (* s (string-pixel-width (buffer-substring (1+ beg) (1- end))))))))
             (should (equal (list what 'width (+ pads text))
                            (list what 'width (- (drgnx-kit-sheet--x end s edges) (drgnx-kit-sheet--x beg s edges)))))))
         ;; (a') a row the expansion gives a height (`:height (density tree-row)'; an inline component, a chip, gives none)
@@ -230,8 +266,9 @@ Returns the number of cells checked."
                          (list what 'height (round (* s (save-excursion (goto-char beg) (line-pixel-height))))))))
         ;; (b) the fill inside the start pad, halfway in (clear of a focus ring and of a rounded corner): the state's,
         ;; the component's own, an agent mark's its agent's colour (a bar's is checked on its own row, below)
-        (when (and spaces (not (eq id 'progress)))
-          (let* ((token (or (plist-get (drgnx-ui-kit-state state) :fill) (drgnx-kit-sheet--bg id variants)
+        (when (and spaces (not (memq id '(progress range-bar))))
+          (let* ((token (or (drgnx-kit-sheet--tab-fill id variants state)
+                            (plist-get (drgnx-ui-kit-state state) :fill) (drgnx-kit-sheet--bg id variants variant)
                             (and (eq id 'agent-mark)
                                  (intern (format "a%d" (plist-get (drgnx-kit-sheet--props id variants state) :slot))))
                             'editor))
@@ -251,6 +288,10 @@ Returns the number of cells checked."
         ;; fill's colour, then the track's colour
         (when (and (eq id 'progress) (equal variants '(bar)))
           (drgnx-kit-sheet--check-bar what (drgnx-kit-sheet--props id variants state) variant scale snap beg s edges))
+        ;; (b4) a range bar: down the column halfway into its first part, that part's colour is the bar's height
+        ;; (10 logical px, 8 compact, 12 roomy) in device px
+        (when (and (eq id 'range-bar) spaces)
+          (drgnx-kit-sheet--check-range what e s edges snap beg variant))
         ;; (b3) a meter: its bar, tick and span, or no bar
         (when (and (eq id 'progress) (equal variants '(meter)))
           (drgnx-kit-sheet--check-meter what (drgnx-kit-sheet--props id variants state) variant scale snap beg s edges))
@@ -320,6 +361,12 @@ and density."
   "The agent mark's sheet: its handle between exact pads on its agent's colour, in every theme and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'agent-mark))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/range-bar ()
+  "The range bar's sheet: its three variants, each part's space exact and its colour the bar's height tall, in every
+theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'range-bar))
 
 (drgnx-look-gui-deftest drgnx-kit-sheet/progress ()
   "Progress's sheet: a bar (its fill VALUE of its width, then the track) and a ring, in every theme and density."
@@ -394,7 +441,7 @@ are the card's fill), and closed on its top edge."
           (drgnx-test-wait-presented)
           (let* ((s (drgnx-uitest-device-scale (selected-frame))) (snap (drgnx-uitest-snapshot))
                  (edges (window-inside-pixel-edges))
-                 (ring (drgnx-kit-sheet--rgb (drgnx-look-token 'border 'dark)))
+                 (ring (drgnx-kit-sheet--rgb (drgnx-look-token 'border-strong 'dark)))
                  (fill (drgnx-kit-sheet--rgb (drgnx-look-token 'panel 'dark)))
                  (x (round (* s (+ (car edges) 24))))
                  (top (round (* s (cadr edges))))
@@ -415,6 +462,95 @@ are the card's fill), and closed on its top edge."
   "The status dot's sheet: its two variants x 7 states in every theme and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'status-dot))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/tab ()
+  "The tab's sheet: editor and panel x 7 states, each pad exact (its 18 px close slot too), the shown tab on its own
+fill (an editor tab the editor's surface, a panel tab the quiet selection), the others on the row, in every theme and
+density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'tab))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/segmented ()
+  "The segmented switch's sheet: one track in its ring (the border's colour at its left edge), each pad exact, the first
+item on the surface, in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'segmented))
+
+(declare-function drgnx-wb-area-show "drgnx-wb")
+(declare-function drgnx-wb-area-hide "drgnx-wb")
+(declare-function drgnx-wb-area-window "drgnx-wb")
+(declare-function drgnx-state-mode "drgnx-state")
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/panel-tab-pill ()
+  "The panel's tab row (debugging.html `.ptabs' and `.pt.on'): the row is 32 px tall and the shown tab's pill on the
+quiet selection is 24 px of it, 4 above and 4 below (one device px of rounding allowed), read down a column 7 px
+past the pill's left edge: inside its start pad, clear of its rounded corners.  Red first: the pill was as tall as the row's text line."
+  (skip-unless (and (display-graphic-p) (fboundp 'glitnir-active-p) (glitnir-active-p)))
+  (require 'drgnx-area)
+  (require 'drgnx-state)
+  (let* ((root (drgnx-uitest-root-frame))
+         (config (with-selected-frame root (current-window-configuration)))
+         (saved (mapcar (lambda (p) (cons p (frame-parameter root p))) '(drgnx-wb-areas drgnx-wb-panel-px)))
+         (main (get-buffer-create "*panel-pill main*")))
+    (unwind-protect
+        (with-selected-frame root
+          (drgnx-uitest-bare-frame)
+          (load-theme 'drgnx-dark t)
+          (delete-other-windows)
+          (switch-to-buffer main)
+          (drgnx-state-mode 1)
+          (set-frame-parameter root 'drgnx-wb-areas nil)
+          (set-frame-parameter root 'drgnx-wb-panel-px nil)
+          (drgnx-wb-area-show 'panel 'results)
+          (drgnx-test-wait-presented)
+          (let* ((w (drgnx-wb-area-window 'panel)) (edges (window-pixel-edges w)) (top (nth 1 edges))
+                 (s (drgnx-uitest-device-scale root)) (row (window-header-line-height w))
+                 (mid (+ top (/ row 2))) (x (nth 0 edges)) (at nil))
+            (should (equal (list 'row (drgnx-px 32 root)) (list 'row row)))
+            ;; the shown tab's first pixel, from what lies under the header line
+            (while (and (not at) (< x (nth 2 edges)))
+              (let* ((posn (posn-at-x-y x mid root)) (str (and posn (posn-string posn))))
+                (when (and str (stringp (car str))
+                           (equal (cdr-safe (get-text-property (cdr str) 'drgnx-tab (car str))) 'results))
+                  (setq at x)))
+              (setq x (1+ x)))
+            (should at)
+            (let* ((snap (drgnx-uitest-snapshot root)) (fill (drgnx-kit-sheet--argb 'drgnx-kit-tab-panel-current))
+                   ;; the pill's left edge: its first fill pixel across the row's middle (the tab's string may start
+                   ;; with the gap before it)
+                   (left (cl-loop for dx from (round (* s at)) below (round (* s (nth 2 edges)))
+                                  when (equal fill (drgnx-uitest-pixel snap dx (round (* s mid)))) return dx))
+                   ;; past its 6 px corner, before its 9 px pad ends
+                   (col (+ (or left 0) (round (* s (drgnx-px 7 root)))))
+                   ;; the row's own colour, at its top (4 px above the pill)
+                   (bar (drgnx-uitest-pixel snap col (round (* s top))))
+                   ;; the pill: what is not the row's colour down the column (its ring and its fill)
+                   (ys (cl-loop for y from (round (* s top)) below (round (* s (+ top row)))
+                                unless (equal bar (drgnx-uitest-pixel snap col y)) collect y))
+                   (pill (drgnx-px 24 root)) (dev (lambda (n) (round (* s n)))))
+              (ert-info ((format "pill rows %S, left %S, col %d, row %d, ring %S, fill %S" ys left col row
+                                 (and ys (drgnx-uitest-pixel snap col (car ys))) fill))
+                (should left)
+                (should ys)
+                ;; the tab's text in the kit face's own size: the header line's relative height is not applied twice
+                (let* ((st (posn-string (posn-at-x-y (+ at 20) mid root)))
+                       (size (lambda (font) (aref (font-info font root) 2))))
+                  (should (equal (funcall size (font-at (cdr st) w (car st)))
+                                 (funcall size (face-font 'drgnx-kit-tab-panel-current root ?x)))))
+                ;; filled with the quiet selection in its middle
+                (should (equal fill (drgnx-uitest-pixel snap col (nth (/ (length ys) 2) ys))))
+                ;; one run, 24 px (or one short), in the row's middle
+                (should (= (length ys) (1+ (- (car (last ys)) (car ys)))))
+                (should (<= (1- (funcall dev pill)) (length ys) (funcall dev pill)))
+                (should (<= (abs (- (- (car ys) (funcall dev top))
+                                    (- (funcall dev (+ top row)) (1+ (car (last ys))))))
+                            1))))))
+      (ignore-errors (with-selected-frame root (drgnx-wb-area-hide 'panel)))
+      (drgnx-state-mode -1)
+      (pcase-dolist (`(,p . ,v) saved) (set-frame-parameter root p v))
+      (with-selected-frame root (set-window-configuration config))
+      (kill-buffer main)
+      (mapc #'disable-theme custom-enabled-themes))))
 
 (drgnx-look-gui-deftest drgnx-kit-sheet/state-table ()
   "The state table's rows in every theme and density: each state's fill, and no edge round a hovered or selected row."

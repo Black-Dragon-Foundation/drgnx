@@ -93,6 +93,15 @@
     (should-not (drgnx-switcher-open-p))
     (should (equal drgnx-esc-test--ran '(cancel cancel cancel)))))
 
+(ert-deftest drgnx-esc/an-esc-a-keyboard-macro-replays-is-no-double-tap ()
+  ;; Vim's `q a A ! Esc j q @ a': the replayed Esc follows the recorded one within the window and must cancel again
+  (drgnx-esc-test--with #'drgnx-esc-test--cancel
+    (drgnx-esc-test--press 'escape)
+    (drgnx-test-advance 0.1)
+    (execute-kbd-macro [escape])
+    (should-not (drgnx-switcher-open-p))
+    (should (equal drgnx-esc-test--ran '(cancel cancel)))))
+
 (ert-deftest drgnx-esc/a-cancel-from-a-front-map-counts ()
   ;; Close Pane's map is in front of the detector; with nothing to close its Esc is a cancel all the same
   (drgnx-esc-test--with nil

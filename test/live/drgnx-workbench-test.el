@@ -27,10 +27,10 @@
           (let ((first (drgnx-ui-call sess probe)))
             (should (= (plist-get first :n) 3))                       ; Buffers, Explorer, Outline
             (should (eq (plist-get first :selected-dock) :false))
-            ;; open sections draw their title in a header line; the Outline starts folded to its header, drawn as its
-            ;; one-line buffer
+            ;; open sections draw their title in a header line; Open editors (the UX audit's E2: as VS Code's) and the
+            ;; Outline start folded to their headers, drawn as their one-line buffers
             (should (seq-every-p (lambda (h) (> h 0)) (plist-get first :headers)))
-            (should (= (length (plist-get first :folded)) 1))
+            (should (= (length (plist-get first :folded)) 2))
             (should (seq-every-p (lambda (s) (string-match-p "[[:alpha:]]" s)) (plist-get first :folded)))
             (should (seq-every-p (lambda (v) (eq v :false)) (plist-get first :scrollbars)))
             (dotimes (_ 10)

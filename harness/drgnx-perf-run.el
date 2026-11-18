@@ -2474,6 +2474,24 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :check "(and (featurep 'glitnir) (vectorp (window-parameter nil 'glitnir--minimap)) t)"   ; Nidhogg resolved it
        :teardown ,(concat "(progn (set-window-parameter nil 'glitnir-minimap nil)"
                           " (with-current-buffer (window-buffer) (widen)) " kill-fixture " t)"))
+      ;; sticky-lines-scroll's baseline: the same narrowed file and scroll as minimap-baseline, no sticky card
+      (sticky-lines-baseline
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (narrow-to-region (point-min) (progn (forward-line 10000) (point))) (goto-char (point-min)) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(not (seq-some (lambda (f) (frame-parameter f 'drgnx-sticky-card)) (visible-frame-list)))"
+       :teardown ,(concat "(progn (with-current-buffer (window-buffer) (widen)) " kill-fixture " t)"))
+      ;; the sticky lines (design §8, F6): the same scroll with a card of 2 sticky lines over the window's top rows (a
+      ;; child frame; it is filled once and a scroll runs no Lisp of its own), judged against sticky-lines-baseline
+      (sticky-lines-scroll
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (narrow-to-region (point-min) (progn (forward-line 10000) (point))) (goto-char (point-min))"
+                      " (require 'drgnx-sticky)"
+                      " (setq drgnx-sticky--pin-shown (list (cons (selected-window) 'perf)))"
+                      " (drgnx-sticky--fill (selected-window) (list (point-min) (save-excursion (forward-line 1) (point)))) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(and (seq-some (lambda (f) (and (frame-parameter f 'drgnx-sticky-card) (frame-visible-p f))) (frame-list)) t)"
+       :teardown ,(concat "(progn (drgnx-sticky--hide-all t) (with-current-buffer (window-buffer) (widen)) " kill-fixture " t)"))
       ;; the line model (design §8): typing in a 10,000-line file (the fixture's first 10,000 lines) with the model off
       ;; and on, the second within 0.3 ms p95 of the first; the same in the whole fixture (about 250k lines, the
       ;; density limit); 20 models open against 20 plain buffers (GC pauses); the first build of 1 MB; its memory a line
@@ -3171,6 +3189,8 @@ pairs below, each judged only when both sides were measured."
         (ruler-base (drgnx-perf--get results 'debug-ruler-baseline '(:input :p50)))
         (minimap (drgnx-perf--get results 'minimap-scroll '(:input :p50)))
         (minimap-base (drgnx-perf--get results 'minimap-baseline '(:input :p50)))
+        (sticky (drgnx-perf--get results 'sticky-lines-scroll '(:input :p50)))
+        (sticky-base (drgnx-perf--get results 'sticky-lines-baseline '(:input :p50)))
         (mtype (drgnx-perf--get results 'minimap-type '(:input :p95)))
         (mtype-base (drgnx-perf--get results 'minimap-type-baseline '(:input :p95)))
         (mtype250 (drgnx-perf--get results 'minimap-type-250k '(:input :p95)))
@@ -3200,6 +3220,12 @@ pairs below, each judged only when both sides were measured."
        (list (format "minimap-scroll input p50 %s ms is %s%% (%s ms) over minimap-baseline's %s ms (the minimap may add at most 5 %% or 0.3 ms)"
                      (drgnx-perf--round minimap) (round (* 100 (- (/ minimap minimap-base) 1)))
                      (drgnx-perf--round (- minimap minimap-base)) (drgnx-perf--round minimap-base))))
+     ;; the sticky lines' card (design §8, F6), by the same rule, against the same scroll without it
+     (when (and (numberp sticky) (numberp sticky-base)
+                (> sticky (+ (max (* 1.05 sticky-base) (+ sticky-base 0.3)) 1e-6)))
+       (list (format "sticky-lines-scroll input p50 %s ms is %s%% (%s ms) over sticky-lines-baseline's %s ms (the sticky lines may add at most 5 %% or 0.3 ms)"
+                     (drgnx-perf--round sticky) (round (* 100 (- (/ sticky sticky-base) 1)))
+                     (drgnx-perf--round (- sticky sticky-base)) (drgnx-perf--round sticky-base))))
      ;; the line model while typing (design §8): p95 within 0.3 ms of the same typing with the model off, at 10,000
      ;; lines and at the density limit
      (cl-loop for (row base name) in (list (list mtype mtype-base "minimap-type") (list mtype250 mtype250-base "minimap-type-250k"))
@@ -3488,7 +3514,7 @@ version and the commit, as JSON in FILE."
                                     debug-console-flood
                                     debug-bisect-typing view-remove-above view-select-dim))
     ,@(mapcar (lambda (w) (cons w "the minimap: its allocation, CPU and rows are set from three pinned runs on the desktop island"))
-              '(minimap-baseline minimap-scroll minimap-type-baseline minimap-type minimap-type-250k-baseline
+              '(minimap-baseline minimap-scroll sticky-lines-baseline sticky-lines-scroll minimap-type-baseline minimap-type minimap-type-250k-baseline
                                  minimap-type-250k lines-gc-baseline lines-gc))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))

@@ -70,8 +70,10 @@ the terminal's own (the fallback layer's F6 reads its key through it).")
        (not (and (eq cmd 'drgnx-close-pane) (bound-and-true-p drgnx-close--closed)))))
 
 (defun drgnx-esc--double-p ()
-  "Non-nil when an Esc now is the second of a double tap: the last Esc was a cancel, within the window."
-  (and drgnx-esc-double-tap drgnx-esc--last
+  "Non-nil when an Esc now is the second of a double tap: the last Esc was a cancel, within the window.  An Esc a
+keyboard macro replays is never one: its keys are not taps (Vim's `A ! Esc j' replayed right after it was recorded
+left insert state, it did not open the switcher)."
+  (and drgnx-esc-double-tap drgnx-esc--last (not executing-kbd-macro)
        (< (- (drgnx-timer-now) (car drgnx-esc--last)) drgnx-esc-double-tap)
        (drgnx-esc--cancel-p (cdr drgnx-esc--last))))
 

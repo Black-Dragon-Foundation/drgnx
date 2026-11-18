@@ -272,7 +272,7 @@ let-binds the registries the module touches:
 
 ```elisp
 (drgnx-test-with-modules '(tools/browser) :strict t
-  (should (assq 'browser drgnx-layouts-pane-fillers)))
+  (should (plist-get (drgnx-pane-kind 'browser) :fill)))
 ```
 
 The first argument is a list of module names (evaluated): their files are loaded, and so are the modules they
@@ -716,7 +716,9 @@ How it works:
   most 300 px) and wider (300 px), and put back. At each width the env goes out at once and the rows settle: a `ping`
   round trip on the subscribed connection (the hub handles a connection's lines in order, so its patches for the env
   came before the answer), the patches drawn, again until a round trip changes nothing (10 s at most, else an error).
-  Each row (a line starting at a row key) is measured with `window-text-pixel-size`, and one wider than the body is an
+  Each row (a line starting at a row key) is measured with `window-text-pixel-size` (from where the invisible text
+  before it starts, `drgnx-look-scene--px`: a row after a hidden line, such as the Explorer's first under its hidden
+  root, starts mid screen line, and measured from its own start an image there is left out), and one wider than the body is an
   error naming the view, its buffer, its class, the width and an example. **No row cut where its full text fits:** a
   `…` at the drawn or narrow width is checked against the same row at the wide width; the text it cut off (measured
   in the buffer with its faces), less the `…`, plus the hub's 10 px slack, must not fit the px free after the `…`
@@ -850,7 +852,7 @@ one of its members names the run directory (a stale `pgid` file may point at a r
 signalled), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
 current state root — run directories, plus live units whose command line points into it — and leaves sessions
 of other state roots alone. Units also end on their own after 30 minutes (`RuntimeMaxSec=1800`) and are
-capped at 3 GB (`MemoryMax`). A detached session (no systemd: a container, or `DRGNX_UI_LAUNCHER=detached`) has the same time cap, from `timeout -k 10` (also `DRGNX_UI_MAX_RUNTIME`), and a 16 GB virtual-memory `ulimit` (generous on purpose: a GL stack maps a lot; it is a limit per process, not a cap on the whole group like `MemoryMax`). A systemd stop kills what is left after 10 s (`TimeoutStopSec`; systemd's default is 90). A test process that is ended (`DRGNX_UI_STOP_ON_EXIT`) first tells all its units to stop without waiting (`systemctl stop --no-block`), then stops each session in turn, so the stops overlap; one session takes 18 s at the very most (asking Emacs to exit: 8 s, then the unit: 10 s), within the 25 s `bin/drgnx check` gives an ended job. The slow exit seen under load (more than 45 s) was not reproduced on a quiet machine; this bounds it, it does not explain it. A failed `drgnx test --ui` or `--scenario` run keeps its run directory
+capped at 3 GB (`MemoryMax`). A detached session (no systemd: a container, or `DRGNX_UI_LAUNCHER=detached`) has the same time cap, from `timeout -k 10` (also `DRGNX_UI_MAX_RUNTIME`), and a 16 GB virtual-memory `ulimit` (generous on purpose: a GL stack maps a lot; it is a limit per process, not a cap on the whole group like `MemoryMax`). A systemd stop kills what is left after 10 s (`TimeoutStopSec`; systemd's default is 90). A test process that is ended (`DRGNX_UI_STOP_ON_EXIT`) first tells all its units to stop without waiting (`systemctl stop --no-block`), then stops each session in turn, so the stops overlap (that `kill-emacs-hook` entry is there only while the process has a session of its own, so a test file that merely loads `drgnx-ui` for its progress clock leaves no hook behind); one session takes 18 s at the very most (asking Emacs to exit: 8 s, then the unit: 10 s), within the 25 s `bin/drgnx check` gives an ended job. The slow exit seen under load (more than 45 s) was not reproduced on a quiet machine; this bounds it, it does not explain it. A failed `drgnx test --ui` or `--scenario` run keeps its run directory
 (`drgnx-ui-test-N-HEX`, or the older `drgnx-ui-test-PID-N`, with `session.log`) for debugging, for 7 days: `reap` and the next test run delete older
 ones.
 
