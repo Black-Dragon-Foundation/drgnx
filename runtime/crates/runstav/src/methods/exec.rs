@@ -31,6 +31,15 @@ pub enum JobOs {
     Macos,
 }
 
+/// The lane a job runs in: `work` (the default) or `timing` (a measurement: on a runner's timing island, or with
+/// `whole_machine` the whole machine; never joined, never cached).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum JobLane {
+    Work,
+    Timing,
+}
+
 /// Where a job is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -178,6 +187,14 @@ pub struct StartParams {
     /// The OS it needs (default `linux`); a `macos` job needs a Mac runner with its project's Homebrew packages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os: Option<JobOs>,
+    /// The lane (default `work`): a `timing` job runs on its runner's timing island while no other timing job holds it
+    /// (a machine without an island refuses it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<JobLane>,
+    /// A `timing` job that takes the whole machine instead of the island: it needs a named `machine`, waits while P1–P2
+    /// work is pending, then drains the machine (no new work starts there) and starts once it is empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole_machine: Option<bool>,
     /// The job's priority, 1 (highest) to 5: the user's connections only (a session's request is refused).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<u8>,

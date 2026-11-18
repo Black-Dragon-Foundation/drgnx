@@ -302,7 +302,8 @@ Whether a job still makes progress, as pure policy over readings once a minute (
 or above `cpu_floor` (10 %) of one core over the minute, or new IO bytes. The rules, first hit wins: **stall** — no
 progress of any kind for `stall_s` (20 min); **silent** — no output for `silent_s` (45 min), whatever the CPU (a
 livelock); **wall** — `wall_s` since the start, `wall_limit(pack max, p95)` = `min(pack max, 3 × p95)`, or the pack's
-maximum without history. A stop's verdict reason is `stuck (<rule>)`, so `forseti::classify` makes it
+maximum without history (the hub offers a runner the job's time box capped this way over its runs there, else
+elsewhere, `forseti::history::wall_p95_s`). A stop's verdict reason is `stuck (<rule>)`, so `forseti::classify` makes it
 `infra: stuck (<rule>)`: never red, never rerun; the log gets `=== stopped as stuck (<rule>, <N> min): not a test
 result`.
 
@@ -735,14 +736,22 @@ and the value is zeroed when the frame drops.
 
 ```
 sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR]
-               [--allow-own-account] [--allow-admin] [--reserve-mib N]
+               [--allow-own-account] [--allow-admin] [--reserve-mib N] [--island CPUS]
 ```
 
 The runner's end of the hub's control channel. On a cloud machine `--watchdog DIR` names the watchdog's folder ("The
 watchdog"). `--allow-own-account` and `--allow-admin` are what the user allowed at `runner add` (kept in the runner's
 record): the Mac contract reads them; Linux takes an administrator's login without them. `--reserve-mib N` is a
 workstation's reserve for its user (`forseti::Limits::with_reserve`; `serve` refuses to start below 1024 or on a dedicated
-runner). It lives on stdin and stdout and exits at their end, at `bye`, or
+runner). `--island CPUS` is the timing island (design §5.6): `serve` refuses to start unless it is whole L3 groups
+(`slices::island_whole_l3` over `/sys/devices/system/cpu/cpu*/cache/index3/shared_cpu_list`) of the CPUs it may use,
+with CPUs left for work. A timing job (`Lane::Timing{pinned: Some(_)}`) is admitted while no other holds the island
+(`IslandBusy`; admission reads `MachineState.island`). Before it starts, `slices::island_on` starts
+`<prefix>-timing.slice` on the island (an isolated partition where the kernel takes it, else root, else a plain member
+with `AllowedCPUs` only, said once) and moves `<prefix>-work.slice` to the rest; the job's own slice is
+`<prefix>-timing-<id>.slice`, and its environment has `DRGNX_PERF_ISLAND`, which the perf harness checks against its
+`Cpus_allowed_list` before it measures. When no timing job holds the island (its end, a kill, a restart: `serve` sets it
+at every start) the work slice gets every CPU back. It lives on stdin and stdout and exits at their end, at `bye`, or
 after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Nothing is installed or enabled: between
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.

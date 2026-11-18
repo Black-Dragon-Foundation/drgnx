@@ -58,6 +58,8 @@ pub struct Offer<'a> {
     pub spec: &'a JobSpec,
     pub priority: Priority,
     pub expected: Option<Expected>,
+    /// The machine's timing island and the timing job on it (`serve --island`); none: no timing lane.
+    pub island: Option<forseti::Island>,
 }
 
 /// Admits OFFER on the machine of PLATFORM at NOW under LIMITS for SCHEDULER, whose running jobs are OURS and whose
@@ -81,6 +83,7 @@ pub fn admit(
         m.running = ours.to_vec();
         m.last_start = last.at;
         m.last_start_small = last.small;
+        m.island = offer.island.clone();
         let budget = forseti::budget(&m, limits);
         let job = Job {
             id: JobId(offer.id.to_string()),
@@ -323,6 +326,7 @@ mod tests {
                     spec: &s,
                     priority: Priority::P3,
                     expected: None,
+                    island: None,
                 };
                 tx.send(admit(
                     &lp(&p2),
@@ -364,6 +368,7 @@ mod tests {
             spec: &s,
             priority: Priority::P3,
             expected: None,
+            island: None,
         };
         let refused = admit(
             &lp(&other),
@@ -417,6 +422,7 @@ mod tests {
             spec: &s,
             priority: Priority::P3,
             expected: None,
+            island: None,
         };
         let grant = admit(
             &lp(&p),
@@ -497,6 +503,7 @@ mod tests {
             spec: &s,
             priority: Priority::P3,
             expected: None,
+            island: None,
         };
         admit(
             &lp(&p),
@@ -577,6 +584,7 @@ mod tests {
             spec: &small,
             priority: Priority::P3,
             expected: None,
+            island: None,
         };
         let facts = |json: &str| fs::write(d.path().join("test-machine.json"), json).unwrap();
         let quiet = r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "io_full10": 0.0, "app_mem_some10": null},

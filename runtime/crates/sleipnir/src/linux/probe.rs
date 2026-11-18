@@ -114,6 +114,7 @@ impl Probe {
             features: vec![],
             reachable: true,
             others,
+            island: None,
         };
         #[cfg(feature = "test-hooks")]
         let m = self.test_machine(m)?;
@@ -144,6 +145,7 @@ impl Probe {
                 features: vec![],
                 reachable: true,
                 others: vec![],
+                island: None,
             };
             m = self.test_machine(m)?;
             d.free_gb = m.disk_free_gb;

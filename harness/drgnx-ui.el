@@ -2490,6 +2490,8 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
       ("test-bench" (require 'drgnx-bench) (let ((drgnx-ui-session-tier 'bench)) (drgnx-bench-run)))
       ("test-perf" (require 'drgnx-perf-run)
+       ;; a timing job off its island measures nothing (runners design §5.6)
+       (drgnx-perf-check-island)
        (let ((drgnx-ui-session-tier 'perf))
          (cond
           ((getenv "DRGNX_PERF_AB")

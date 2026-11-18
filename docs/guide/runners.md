@@ -51,7 +51,11 @@ drgnx runner remove desktop --yes                # stops our units and container
 sits at the machine), `--accept all|heavy`, `--root DIR` (the one folder drgnx keeps there, an absolute path on the runner: no `~`; default `.drgnx-runner` in its home)
 and `--prefix` (what its units and containers are named after, default `drgnx`). A workstation keeps 4096 MiB for you
 and a floor of 1536 MiB that jobs never get; `--reserve-mib N` sets a smaller or larger reserve (at least 1024; refused on
-a dedicated runner, which keeps none). `drgnx runner profile NAME dedicated|workstation [--reserve-mib N]` changes either
+a dedicated runner, which keeps none). `drgnx runner profile NAME dedicated|workstation [--reserve-mib N] [--island CPUS]` changes either
+later; the runner reconnects with it at once, and a new profile without `--reserve-mib` takes its own. `--island CPUS`
+(such as `0-5,12-17`, one CCD of a Ryzen with its SMT siblings) gives the runner a timing island for timing jobs
+(`lane: "timing"`, "Timing runs" in the jobs guide): while one runs, other work moves to the other CPUs. The runner
+refuses an island that splits an L3 cache group; `--island ""` removes it.|workstation [--reserve-mib N]` changes either
 later; the runner reconnects with it at once, and a new profile without `--reserve-mib` takes its own. Two more widen which account a
 runner may run as, each your own yes (**Add Runner…** asks for them with a prefix argument):
 

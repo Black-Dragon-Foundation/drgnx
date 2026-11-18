@@ -2536,3 +2536,37 @@ fn the_guard_limits_reach_the_job_and_a_runner() {
         assert!(decode(&v).is_err(), "{v}");
     }
 }
+
+/// [D] `lane` and `whole_machine` on `exec/start` (design §5.6): a timing run is an island run unless it asks for the
+/// whole machine, which needs the timing lane and a named machine; the lane reaches the job's spec.
+#[test]
+fn the_lane_reaches_the_spec() {
+    let lane = |v| lane_of(&params(v));
+    assert_eq!(lane(json!({})).unwrap(), forseti::Lane::Work);
+    assert_eq!(
+        lane(json!({"lane": "timing"})).unwrap(),
+        forseti::Lane::Timing { pinned: Some(0) }
+    );
+    assert_eq!(
+        lane(json!({"lane": "timing", "whole_machine": true, "machine": "desktop"})).unwrap(),
+        forseti::Lane::Timing { pinned: None }
+    );
+    for bad in [
+        json!({"whole_machine": true, "machine": "desktop"}),
+        json!({"lane": "timing", "whole_machine": true}),
+        json!({"lane": "timing", "whole_machine": true, "machine": "auto"}),
+    ] {
+        assert!(lane(bad.clone()).is_err(), "{bad}");
+    }
+    let mut s = spec(
+        Starter::User,
+        Path::new("/p"),
+        "true",
+        Duration::from_secs(5),
+    );
+    s.place.lane = forseti::Lane::Timing { pinned: None };
+    assert_eq!(
+        s.forseti_spec("x1", "1G").lane,
+        forseti::Lane::Timing { pinned: None }
+    );
+}

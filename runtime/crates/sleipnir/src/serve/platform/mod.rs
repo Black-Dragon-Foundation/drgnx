@@ -90,4 +90,16 @@ pub trait Platform {
     fn pressure(&self) -> Option<forseti::safety::Level> {
         None
     }
+    /// Whether ISLAND (`--island`) may be this machine's timing island: whole L3 groups. A platform without a timing
+    /// lane refuses any.
+    fn island_check(&self, island: &str) -> Result<(), String> {
+        Err(format!(
+            "this platform has no timing lane (--island {island})"
+        ))
+    }
+    /// The island on (its CPU list: timing jobs there, work on the rest) or off (work on every CPU again).
+    fn island(&self, on: Option<&str>) -> Result<(), String> {
+        let _ = on;
+        Ok(())
+    }
 }

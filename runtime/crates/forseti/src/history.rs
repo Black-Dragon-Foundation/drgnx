@@ -172,6 +172,23 @@ pub fn expected(
     }
 }
 
+/// The p95 of the wall time, in seconds, of the last 5 undisturbed `rows` (this machine's), else of `other` machines'
+/// × `speed_ratio`; none without history. The progress guard's wall is three of it, capped by the pack
+/// (`sleipnir::linux::progress::wall_limit`).
+pub fn wall_p95_s(rows: &[HistRow], other: &[HistRow], speed_ratio: f64) -> Option<u64> {
+    let (runs, ratio) = match last_undisturbed(rows) {
+        own if !own.is_empty() => (own, 1.0),
+        _ => (last_undisturbed(other), speed_ratio),
+    };
+    let mut walls: Vec<f64> = runs.iter().map(|r| r.wall_s).collect();
+    if walls.is_empty() {
+        return None;
+    }
+    walls.sort_by(f64::total_cmp);
+    let rank = (walls.len() * 95).div_ceil(100).max(1);
+    Some((walls[rank - 1] * ratio).ceil() as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +211,24 @@ mod tests {
             at,
             warm: true,
         }
+    }
+
+    /// [D] pure (design §5.7, the wall): the p95 of the last 5 undisturbed runs' wall time here, else elsewhere's ×
+    /// the speed ratio, else none (no history: the pack's limit alone).
+    #[test]
+    fn wall_p95_comes_from_the_last_undisturbed_runs() {
+        let rows = [
+            row(100.0, 1.0, 1, 1, false), // older than the last 5
+            row(10.0, 1.0, 1, 2, false),
+            row(12.0, 1.0, 1, 3, false),
+            row(500.0, 1.0, 1, 4, true), // disturbed
+            row(11.0, 1.0, 1, 5, false),
+            row(30.0, 1.0, 1, 6, false),
+            row(9.0, 1.0, 1, 7, false),
+        ];
+        assert_eq!(wall_p95_s(&rows, &[], 2.0), Some(1800));
+        assert_eq!(wall_p95_s(&[], &rows, 2.0), Some(3600));
+        assert_eq!(wall_p95_s(&[], &[], 2.0), None);
     }
 
     #[test]

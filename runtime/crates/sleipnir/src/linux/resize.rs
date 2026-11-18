@@ -310,6 +310,7 @@ mod tests {
             features: vec![],
             reachable: true,
             others: vec![],
+            island: None,
         };
         let ending = RunningJob {
             id: JobId("r1".into()),
