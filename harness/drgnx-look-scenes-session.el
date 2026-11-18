@@ -270,6 +270,7 @@ DRGNX_LOOK_BT=1 its backtrace follows)."
 (declare-function drgnx-view-patch-sja "drgnx-view")
 (declare-function drgnx-view-sja-row-start "drgnx-view-sja")
 (defvar drgnx-view-patch)
+(defvar drgnx-view-env--views)
 
 (defvar drgnx-look-scene-rows-wait 20
   "Seconds a step waits for the hub's rows of the views it shows (`drgnx-look-scene--unfed'), as the editor's scene
@@ -277,15 +278,18 @@ waits for the Explorer's.")
 
 (defun drgnx-look-scene--unfed-views ()
   "The hub-fed views a window of the selected frame shows without the hub's rows: ((VIEW BUFFER CLASSES) ...).  A
-view with no env sent (CLASSES nil), or with no version and an empty buffer, has none."
+view the env registry knows (`drgnx-view-env--views') with no env sent (CLASSES nil), or any view with no version and
+an empty buffer, has none.  A view fed through its own channel (the terminal's `term/open') is never in the registry,
+so its rows alone (a version or text) count."
   (let ((seen nil) (out nil))
     (dolist (w (window-list nil 'never))
       (let* ((b (window-buffer w)) (state (buffer-local-value 'drgnx-view-patch b))
              (view (and state (drgnx-view-patch-view state))))
         (when (and view (not (member view seen)))
           (push view seen)
-          (let ((classes (and (fboundp 'drgnx-view-env-classes) (drgnx-view-env-classes view))))
-            (unless (and classes (or (drgnx-view-patch-version state) (> (buffer-size b) 0)))
+          (let* ((registered (and (boundp 'drgnx-view-env--views) (gethash view drgnx-view-env--views)))
+                 (classes (and (fboundp 'drgnx-view-env-classes) (drgnx-view-env-classes view))))
+            (unless (and (or classes (not registered)) (or (drgnx-view-patch-version state) (> (buffer-size b) 0)))
               (push (list view b classes) out))))))
     (nreverse out)))
 
