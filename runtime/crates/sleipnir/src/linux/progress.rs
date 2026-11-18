@@ -105,10 +105,6 @@ impl Tracker {
 
     /// Takes reading R; the stop when a rule of L is hit.
     pub fn see(&mut self, r: Reading, l: &GuardLimits) -> Option<Stop> {
-        let r = Reading {
-            at: Duration::from_secs(r.at.as_secs()),
-            ..r
-        };
         let window_usec = r.at.saturating_sub(self.last.at).as_micros() as u64;
         let cpu = r.cpu_usec.saturating_sub(self.last.cpu_usec);
         let output = r.log_bytes > self.last.log_bytes || r.rows > self.last.rows;
