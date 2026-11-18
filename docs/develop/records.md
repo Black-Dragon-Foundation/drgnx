@@ -47,7 +47,9 @@ All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well und
 `ratatoskr graph import-records --root DIR [--only specs|plans|ledgers|decisions|deferred|build-board|board]
 [--dry-run]` (method `records/import`; `records/status` lists the files and their conflicted records). The importer
 finds `docs/specs/**/*.md`, `docs/plans/**/*.md` (ledgers end in `.ledger.md`), `docs/decisions/**/*.md`,
-`docs/adr/**/*.md`, `DEFERRED.md` and `BUILD-BOARD.md` under DIR; `board.org` only with `--only board`.
+`docs/adr/**/*.md`, `DEFERRED.md` and `BUILD-BOARD.md` under DIR; `board.org` only with `--only board`. A spec a
+plan's `**Spec:**` line names (`.md` or `.org`, anywhere) is read too, by its plain path (`a/../b` as `b`), unless the
+privacy deny-list refuses it: a file under `~/org` is read only when the user opted it in (`personal-notes-allow.json`).
 
 - **Backup first.** Before anything is imported, every file is copied to `<state>/hub/records-backup/<date>/` (a
   second import on the same day gets `<date>-2`, never overwriting); a file outside DIR (a spec a plan names elsewhere)
