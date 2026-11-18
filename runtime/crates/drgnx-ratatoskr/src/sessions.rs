@@ -93,6 +93,18 @@ impl Tool<Ctx> for AfterTool {
                 }
             };
             let mut args = args;
+            let stages = match &ctx.1 {
+                Identity::Session { sid, .. } => Some(crate::stages::Stages::new(
+                    "tool call",
+                    format!("{sid} {}", self.0.name()),
+                )),
+                _ => None,
+            };
+            let at = |stage| {
+                if let Some(s) = &stages {
+                    s.at(stage);
+                }
+            };
             if let Identity::Session { sid, .. } = &ctx.1 {
                 let asked = args.clone();
                 match ctx
@@ -119,10 +131,13 @@ impl Tool<Ctx> for AfterTool {
                     return r;
                 }
             }
+            at("the before-tool hooks");
             let r = self.0.call(ctx, args).await;
+            at("the call");
             note(&r);
             if let Identity::Session { sid, .. } = &ctx.1 {
                 ctx.0.hub().after_tool(sid, self.0.name()).await;
+                at("its writes linked (after-tool)");
             }
             r
         })

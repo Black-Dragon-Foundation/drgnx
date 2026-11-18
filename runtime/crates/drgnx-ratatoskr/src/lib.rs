@@ -134,6 +134,7 @@ pub mod sessions;
 pub mod settings;
 pub mod shape;
 pub mod shell_env;
+pub mod stages;
 pub mod stall;
 pub mod store;
 pub mod store_cli;
