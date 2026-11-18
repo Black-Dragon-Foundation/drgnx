@@ -571,7 +571,7 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   starts with the conclusion's number in a filled accent circle (`drgnx-work-step-number`, the solid chip
   `drgnx-chip-solid` in the badge's pill), the
   others keep the room; the newest conclusion's card says `new` while it is stamped on one of the last three steps.
-- **Cards, Detail and trail as the mockup draws them.** The trail is the panel's Trail tab, the lens switch is a rail with the shown lens raised on it (`drgnx-work-lens-rail`). A card line is as tall as its layout row says (a row's
+- **Cards, Detail and trail as the mockup draws them.** The trail is the panel's Trail tab, the lens switch is the kit's segmented switch (`drgnx-ui-kit-segmented`), the shown lens on the quiet selection. A card line is as tall as its layout row says (a row's
   `height` unit, px: `drgnx-view-patch` sets `line-height` from it; a row with no unit is that many default lines).
   An agent's initial is a filled circle of its colour (`drgnx-work-who-N`), the going line is the UI font with its
   numbers in the code font, the flag line carries the branch's totals (`edits N (+P −M)`, `Fields::edits` of an
@@ -589,9 +589,10 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   `N agents` chips the counts of the map's model (`drgnx-look-scene--work-selected`).
 - **The lens bar's right** (`drgnx-work-lens--controls`): the grip (drawn; the tile layout's drag is not wired), maximise
   (`drgnx-work-lens-maximize`: hides the Detail island and the trail, again shows them) and ⋯ (shown while the bar is hovered; its menu is the four lenses and the keys sheet). The lens
-  shown is a pill in a ring (the themes give `drgnx-work-lens-current` its box). Each lens name and each key chip
-  carries a keymap (`drgnx-work-lens--click`): a click on the tab line or a header line selects the bar's window and
-  runs the registered command (`work-view-*`, the chips' by `drgnx-work-lens--chip-commands`), UX audit W2.
+  shown is the segmented switch's current item (`drgnx-kit-segmented-current`). Each lens name carries the kit action
+  `ui-window-button`, each key chip a keymap (`drgnx-work-lens--click`): a click on the tab line or a header line selects
+  the bar's window and runs the registered command (`work-view-*`, the chips' by `drgnx-work-lens--chip-commands`), UX
+  audit W2.
 - **UX audit W1, W3, W4** (2026-11-16): `drgnx-work-map--require-sja` names Sjá only in a map of an Emacs without it
   (outside a map it says to open the Work space, a map waiting for its rows says it is loading); the strip's load
   chips leave out the machines the scene draws (`view_rows`, test `a_machine_on_the_map_is_not_repeated_on_the_strip`);

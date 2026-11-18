@@ -19,6 +19,7 @@
 (require 'drgnx-wb)
 (require 'drgnx-state-intent)
 (require 'tab-line)                     ; the tab faces we inherit
+(require 'drgnx-ui-kit)                 ; the tabs: `drgnx-ui-kit-tab'
 
 (defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
 (defface drgnx-wb-tab-current '((t :inherit tab-line-tab-current)) "The shown tab in an area's tab row." :group 'drgnx)
@@ -267,13 +268,14 @@ its own title (`drgnx-area-own-title')."
         ;; under the grid the area is a docked tile: its grip drags it (`drgnx-grid-drag')
         (if (and (bound-and-true-p drgnx-grid-mode) (fboundp 'drgnx-grid--grip)) (drgnx-grid--grip (and w (window-frame w))) "")
         (mapconcat (lambda (tab)
-                     (let ((face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab))
-                           (icon (plist-get (cdr tab) :icon)))
-                       ;; debugging.html `.pt': the icon is `.i.sm', 14 px, coloured as the title
-                       (propertize (concat " " (if icon (concat (drgnx-look-icon icon face 14) " ") "")
-                                           (plist-get (cdr tab) :title) " ")
-                                   'face face 'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
-                                   'local-map drgnx-area--tab-map 'help-echo "Show this tab")))
+                     ;; the kit's panel tab (debugging.html `.pt'): the icon at 14 px, coloured as the title, the shown
+                     ;; one a pill on the quiet selection
+                     (let ((s (drgnx-ui-kit-tab (plist-get (cdr tab) :title) 'panel (if (eq (car tab) shown) 'selected 'rest)
+                                                (plist-get (cdr tab) :icon) nil 'header-line nil (or frame (drgnx-wb-frame)))))
+                       (add-text-properties 0 (length s) (list 'drgnx-tab (cons area (car tab)) 'mouse-face 'drgnx-hover
+                                                               'local-map drgnx-area--tab-map 'help-echo "Show this tab")
+                                            s)
+                       s))
                    (seq-filter (lambda (tab) (drgnx-area--tab-listed-p area (car tab) shown)) tabs) " ")
         (drgnx-area--actions actions area frame))
        area frame))))

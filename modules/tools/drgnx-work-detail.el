@@ -13,6 +13,7 @@
 (require 'subr-x)
 (require 'text-property-search)
 (require 'drgnx-view)
+(require 'drgnx-ui-kit)                 ; the Detail's title: a kit panel tab
 (require 'drgnx-work-client)
 (unless (featurep 'drgnx-work-map)
   (load (expand-file-name "drgnx-work-map" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -43,7 +44,6 @@ when it has several)."
 ;;;; The panel
 
 (defvar drgnx-area-own-title)
-(declare-function drgnx-face-glyph "drgnx-ui-kit")
 
 (defvar-local drgnx-work-detail--map nil "The map buffer a detail buffer shows the selection of.")
 
@@ -56,8 +56,7 @@ when it has several)."
   "The Work space's side panel: why the selected item exists, what it touches, its conclusions and what you can do."
   ;; work-space-dark.html `.det': the island's header is "Detail", drawn by the tile (the right dock's tabs stay off it)
   (setq-local truncate-lines nil cursor-type nil
-              drgnx-area-own-title (propertize (concat " " (or (drgnx-face-glyph 'panel-right) "") " Detail ")
-                                               'face 'drgnx-wb-tab-current)))
+              drgnx-area-own-title (drgnx-ui-kit-tab "Detail" 'panel 'selected 'panel-right nil 'header-line)))
 
 (declare-function drgnx-view-env-register "drgnx-view-env")
 

@@ -124,5 +124,7 @@
     - [Progress (kit)](design/components/progress.md)
     - [Chip (kit)](design/components/chip.md)
     - [Status dot (kit)](design/components/status-dot.md)
+    - [Tab (kit)](design/components/tab.md)
+    - [Segmented switch (kit)](design/components/segmented.md)
 - [The app icon](design/app-icon.md)
 - [Writing a theme for drgnx](design/theme-authors.md)

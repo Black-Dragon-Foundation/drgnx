@@ -32,7 +32,6 @@
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-work-space--show-detail "drgnx-work-space")
-(declare-function drgnx-face-glyph "drgnx-ui-kit")
 
 (defvar-local drgnx-work-space--view nil
   "The id of the map view this buffer shows (`drgnx-work-client-open'), or nil for an empty map.")
@@ -592,19 +591,15 @@ switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their
          (bar
           (concat ;; a row of its own, 34 px high (the design's tab row), so the strip below does not touch it
            (propertize " " 'display `(space :width (1) :height (,(drgnx-px 34))))
-           (propertize (concat " " (or (drgnx-face-glyph 'layers) "") " " (if name (concat "Work · " name) "Work") " ")
-                       'face 'drgnx-work-lens-title)
+           ;; the Work space's tab: the kit's shown editor tab
+           (drgnx-ui-kit-tab (if name (concat "Work · " name) "Work") 'editor 'selected 'layers nil 'tab-line)
            "  "
-           ;; the lens switch: a rail (the gap's colour) holding the labels, the shown one raised (look.css `.lens')
-           (propertize " " 'face 'drgnx-work-lens-rail)
-           (mapconcat (lambda (v)
-                        (propertize (format " %s " (cdr v))
-                                    'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-lens-seg)
-                                    'keymap (drgnx-work-lens--click (intern (format "work-view-%s" (car v))))
-                                    'pointer 'hand 'help-echo (format "Show the %s" (cdr v))))
-                      '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow"))
-                      (propertize " " 'face 'drgnx-work-lens-rail))
-           (propertize " " 'face 'drgnx-work-lens-rail)
+           ;; the lens switch: the kit's segmented switch, each lens a click on its registered command in this window
+           (let ((lenses '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow"))))
+             (drgnx-ui-kit-segmented (mapcar (lambda (v) (cons (cdr v) (list 'ui-window-button
+                                                                             (intern (format "work-view-%s" (car v))))))
+                                             lenses)
+                                     (or (seq-position (mapcar #'car lenses) current) 0) 'tab-line))
            (mapconcat (lambda (k)
                         (let ((id (cdr (assoc (car k) drgnx-work-lens--chip-commands))))
                           (apply #'propertize

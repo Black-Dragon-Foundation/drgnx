@@ -75,6 +75,15 @@ whose values VARIANTS all have.  In THEME `hc' a binding marked `:hc-ring' has n
         (setq best b n (length (car b)))))
     (plist-get (cdr best) :edge)))
 
+(defun drgnx-kit-sheet--tab-fill (id variants state)
+  "A shown tab's fill token (its own, not the state table's `sel'): an editor tab's the editor's surface, a panel tab's
+the quiet selection; nil for any other cell."
+  (and (eq id 'tab) (memq state '(selected selected-inactive))
+       (plist-get (cdr (assq (if (equal variants '(panel)) 'panel-current 'current)
+                             (mapcar (lambda (b) (cons (car-safe (car b)) (cdr b)))
+                                     (plist-get (drgnx-ui-kit-component 'tab) :bind))))
+                  :bg)))
+
 (defvar drgnx-kit-sheet--edges nil
   "Non-nil while a sheet also checks that hovered and selected cells have no edge (`drgnx-kit-sheet/state-table').")
 
@@ -232,7 +241,8 @@ Returns the number of cells checked."
         ;; (b) the fill inside the start pad, halfway in (clear of a focus ring and of a rounded corner): the state's,
         ;; the component's own, an agent mark's its agent's colour (a bar's is checked on its own row, below)
         (when (and spaces (not (eq id 'progress)))
-          (let* ((token (or (plist-get (drgnx-ui-kit-state state) :fill) (drgnx-kit-sheet--bg id variants variant)
+          (let* ((token (or (drgnx-kit-sheet--tab-fill id variants state)
+                            (plist-get (drgnx-ui-kit-state state) :fill) (drgnx-kit-sheet--bg id variants variant)
                             (and (eq id 'agent-mark)
                                  (intern (format "a%d" (plist-get (drgnx-kit-sheet--props id variants state) :slot))))
                             'editor))
@@ -416,6 +426,19 @@ are the card's fill), and closed on its top edge."
   "The status dot's sheet: its two variants x 7 states in every theme and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'status-dot))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/tab ()
+  "The tab's sheet: editor and panel x 7 states, each pad exact (its 18 px close slot too), the shown tab on its own
+fill (an editor tab the editor's surface, a panel tab the quiet selection), the others on the row, in every theme and
+density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'tab))
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/segmented ()
+  "The segmented switch's sheet: one track in its ring (the border's colour at its left edge), each pad exact, the first
+item on the surface, in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'segmented))
 
 (drgnx-look-gui-deftest drgnx-kit-sheet/state-table ()
   "The state table's rows in every theme and density: each state's fill, and no edge round a hovered or selected row."

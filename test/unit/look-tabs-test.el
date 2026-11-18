@@ -21,20 +21,26 @@
     (nreverse out)))
 
 (defun drgnx-look-tabs-test--close-face (tabs buffer)
-  "The face of the close mark in BUFFER's tab: the character with the help text \"Close this tab\"."
+  "The face of the close mark in BUFFER's tab: the first named face of the first character with the help text \"Close
+this tab\" that has one (the row's paint, an anonymous face, may be above it)."
   (seq-some (lambda (i) (and (equal (get-text-property i 'help-echo tabs) "Close this tab")
-                             (let ((f (get-text-property i 'face tabs))) (if (listp f) (car f) f))))
+                             (let ((f (get-text-property i 'face tabs)))
+                               (and (memq (seq-find #'symbolp (ensure-list f)) '(drgnx-control-hidden drgnx-ui-close))
+                                    (seq-find #'symbolp (ensure-list f))))))
             (drgnx-look-tabs-test--positions tabs buffer)))
 
 (ert-deftest drgnx-look-tabs/inactive-close-is-hidden-active-is-real ()
   "Pattern D: on a graphical frame the close mark of a tab that is not shown is drawn in the hidden face, and the
-shown tab's in its real one."
+shown tab's in its real one (the kit's tab decides it, as its frame draws it: the graphical display stubbed)."
   (drgnx-chrome-test--with dir
     (drgnx-look-tabs-test--as 'gui
       (let* ((a (drgnx-chrome-test--open dir "a.txt")) (b (drgnx-chrome-test--open dir "b.txt"))
-             (tabs (window-parameter (selected-window) 'tab-line-format)))
-        (should (eq 'drgnx-control-hidden (drgnx-look-tabs-test--close-face tabs a)))
-        (should (eq 'drgnx-ui-close (drgnx-look-tabs-test--close-face tabs b)))))))
+             (w (selected-window)))
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                  ((symbol-function 'drgnx-pixels-font-extent) (lambda (&rest _) '(12 . 4))))
+          (let ((tabs (drgnx-chrome--tab-line-make w)))
+            (should (eq 'drgnx-control-hidden (drgnx-look-tabs-test--close-face tabs a)))
+            (should (eq 'drgnx-ui-close (drgnx-look-tabs-test--close-face tabs b)))))))))
 
 (ert-deftest drgnx-look-tabs/whole-tab-has-the-mouse-face ()
   "Pattern D: every character of a tab that is not shown, its close mark included, has the mouse face
@@ -59,7 +65,9 @@ tab; the shown tab has none."
 preview: the scratch buffer) is in italics."
   (drgnx-chrome-test--with dir
     (drgnx-look-tabs-test--as 'gui
-      (let* ((a (drgnx-chrome-test--open dir "a.txt")) (tabs nil))
+      ;; the dot in both forms (a batch frame is a terminal, an ASCII one where the locale is C)
+      (let* ((drgnx-face-glyphs (cons '(dot "●" . "●") drgnx-face-glyphs))
+             (a (drgnx-chrome-test--open dir "a.txt")) (tabs nil))
         (with-current-buffer a (insert "more") )
         (drgnx-chrome-apply nil t)
         (setq tabs (window-parameter (selected-window) 'tab-line-format))
@@ -136,11 +144,13 @@ density change (another box) makes them again.  The measures are printed."
 
 (ert-deftest drgnx-look-tabs/the-close-is-decided-by-the-tab-s-frame ()
   "Pattern D: whether a tab's close mark is hidden is decided by the frame of the tab's window, never the selected
-frame: a terminal frame's tabs keep their × when a graphical frame refreshes every tab line."
+frame: a terminal frame's tabs keep their × when a graphical frame refreshes every tab line (the kit's tab is given
+the tab's frame)."
   (drgnx-chrome-test--with dir
-    (let ((asked nil) (orig (symbol-function 'drgnx-look-hover-control)))
-      (cl-letf (((symbol-function 'drgnx-look-hover-control)
-                 (lambda (s &optional selected frame) (push frame asked) (funcall orig s selected frame))))
+    (let ((asked nil) (orig (symbol-function 'drgnx-ui-kit-tab)))
+      (cl-letf (((symbol-function 'drgnx-ui-kit-tab)
+                 (lambda (title size state icon close where &optional modified frame)
+                   (push frame asked) (funcall orig title size state icon close where modified frame))))
         (drgnx-chrome-test--open dir "a.txt")
         (drgnx-chrome-test--open dir "b.txt")
         (setq asked nil)
@@ -157,7 +167,7 @@ frame: a terminal frame's tabs keep their × when a graphical frame refreshes ev
   "Pattern D: the tabs' faces and the bars' (`drgnx-wb-bar': the header lines) name no float `:height'.  A relative
 height of 1.0 scales by one, so it changed nothing on screen, and Emacs copied a font spec at every run of the tab line
 and the header line for it."
-  (dolist (face '(drgnx-chrome-tab drgnx-chrome-tab-current drgnx-chrome-tab-active drgnx-wb-bar))
+  (dolist (face '(drgnx-kit-tab drgnx-kit-tab-current drgnx-kit-tab-current-inactive drgnx-wb-bar))
     (should (equal (list face nil)
                    (list face (floatp (plist-get (face-spec-choose (face-default-spec face)) :height)))))))
 

@@ -1106,11 +1106,23 @@ pub enum FaceId {
     KitStatusDotIdle,
     /// `drgnx-kit-status-dot-error`
     KitStatusDotError,
+    /// `drgnx-kit-tab`
+    KitTab,
+    /// `drgnx-kit-tab-current`
+    KitTabCurrent,
+    /// `drgnx-kit-tab-current-inactive`
+    KitTabCurrentInactive,
+    /// `drgnx-kit-tab-panel-current`
+    KitTabPanelCurrent,
+    /// `drgnx-kit-segmented`
+    KitSegmented,
+    /// `drgnx-kit-segmented-current`
+    KitSegmentedCurrent,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 549] = [
+    pub const ALL: [FaceId; 555] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1660,6 +1672,12 @@ impl FaceId {
         FaceId::KitStatusDotNeedsYou,
         FaceId::KitStatusDotIdle,
         FaceId::KitStatusDotError,
+        FaceId::KitTab,
+        FaceId::KitTabCurrent,
+        FaceId::KitTabCurrentInactive,
+        FaceId::KitTabPanelCurrent,
+        FaceId::KitSegmented,
+        FaceId::KitSegmentedCurrent,
     ];
 
     /// The face's Emacs name.
@@ -2214,6 +2232,12 @@ impl FaceId {
             FaceId::KitStatusDotNeedsYou => "drgnx-kit-status-dot-needs-you",
             FaceId::KitStatusDotIdle => "drgnx-kit-status-dot-idle",
             FaceId::KitStatusDotError => "drgnx-kit-status-dot-error",
+            FaceId::KitTab => "drgnx-kit-tab",
+            FaceId::KitTabCurrent => "drgnx-kit-tab-current",
+            FaceId::KitTabCurrentInactive => "drgnx-kit-tab-current-inactive",
+            FaceId::KitTabPanelCurrent => "drgnx-kit-tab-panel-current",
+            FaceId::KitSegmented => "drgnx-kit-segmented",
+            FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
         }
     }
 
@@ -2769,6 +2793,12 @@ impl FaceId {
             "drgnx-kit-status-dot-needs-you" => FaceId::KitStatusDotNeedsYou,
             "drgnx-kit-status-dot-idle" => FaceId::KitStatusDotIdle,
             "drgnx-kit-status-dot-error" => FaceId::KitStatusDotError,
+            "drgnx-kit-tab" => FaceId::KitTab,
+            "drgnx-kit-tab-current" => FaceId::KitTabCurrent,
+            "drgnx-kit-tab-current-inactive" => FaceId::KitTabCurrentInactive,
+            "drgnx-kit-tab-panel-current" => FaceId::KitTabPanelCurrent,
+            "drgnx-kit-segmented" => FaceId::KitSegmented,
+            "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
             _ => return None,
         })
     }

@@ -1007,6 +1007,87 @@ slot) at SCALE, or on a terminal: (TEXT RUNS PROPS SPACES HEIGHT), see `drgnx-ui
          (text (if word (concat mark " " word) mark)))
     (list text (and face (list (list 0 (length text) face))) nil nil nil)))
 
+(defconst drgnx-ui-kit-tab-icon-px 14 "A tab's icon size, logical px (the hub's `kit::TAB_ICON_PX').")
+(defconst drgnx-ui-kit-tab-close-pad-px 2
+  "The room each side of a tab's close mark in its 18 px slot, logical px (the hub's `kit::TAB_CLOSE_PAD_PX').")
+
+(defun drgnx-ui-kit--b-mark (image glyph mark-face face)
+  "A mark on the builder: IMAGE (or nil) else the string GLYPH, in MARK-FACE above FACE."
+  (let ((at drgnx-ui-kit--bpos))
+    (if image
+        (progn (push (list at (1+ at) 'display image) drgnx-ui-kit--bprops)
+               (drgnx-ui-kit--b-push " " nil)
+               (push (list at (1+ at) mark-face) drgnx-ui-kit--bruns))
+      (drgnx-ui-kit--b-push glyph mark-face))
+    (drgnx-ui-kit--b-under at drgnx-ui-kit--bpos face)))
+
+(defun drgnx-ui-kit--tab (props scale tty)
+  "The `tab' component of PROPS (:title :size :state :icon :close :modified :action) at SCALE, see
+`drgnx-ui-kit--expand' and the hub's `kit::tab'."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'tab))
+           (size (drgnx-ui-kit--name props :size 'editor)) (state (drgnx-ui-kit--name props :state 'rest))
+           (chosen (drgnx-ui-kit--chosen entry (list size)))
+           (g (plist-get entry :geometry)) (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0))
+           (pad (drgnx-ui-kit--value (plist-get g :pad) chosen)) (gap (drgnx-ui-kit--value (plist-get g :gap) chosen))
+           (shown (memq state '(selected selected-inactive)))
+           (face (pcase (cons size state)
+                   ('(editor . selected) 'drgnx-kit-tab-current)
+                   ('(editor . selected-inactive) 'drgnx-kit-tab-current-inactive)
+                   ((or '(panel . selected) '(panel . selected-inactive)) 'drgnx-kit-tab-panel-current)
+                   (_ (drgnx-ui-kit--face 'tab chosen))))
+           (title (or (plist-get props :title) ""))
+           (icon (plist-get props :icon)) (modified (eq (plist-get props :modified) t))
+           (close (eq (plist-get props :close) t)))
+      (drgnx-ui-kit--b-pad (car pad) tty-pad face)
+      (when icon
+        (let* ((name (intern icon))
+               (img (and drgnx-ui-kit--icons (not tty) (funcall drgnx-ui-kit--icons name drgnx-ui-kit-tab-icon-px)))
+               (mark (drgnx-ui-kit--glyph name tty)))
+          (cond (img (drgnx-ui-kit--b-mark img nil face nil) (drgnx-ui-kit--b-pad gap 0 face))
+                ((and mark (not (string-empty-p mark))) (drgnx-ui-kit--b-push (concat mark " ") face)))))
+      (drgnx-ui-kit--b-push title face)
+      (when (or close modified)
+        (drgnx-ui-kit--b-pad gap 1 face)
+        (drgnx-ui-kit--b-pad drgnx-ui-kit-tab-close-pad-px 0 face)
+        (drgnx-ui-kit--b-mark (and (not modified) drgnx-ui-kit--icons (not tty)
+                                   (funcall drgnx-ui-kit--icons 'x drgnx-ui-kit-tab-icon-px))
+                              (drgnx-ui-kit--glyph (if modified 'dot 'close) tty)
+                              (cond (modified 'drgnx-text-muted)
+                                    ((or shown (eq state 'hover) tty) 'drgnx-ui-close)
+                                    (t 'drgnx-control-hidden))
+                              face)
+        (drgnx-ui-kit--b-pad drgnx-ui-kit-tab-close-pad-px 0 face))
+      (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+      (drgnx-ui-kit--b-finish
+       (and (not shown) (plist-get (drgnx-ui-kit-state state) :face)) 0 drgnx-ui-kit--bpos
+       (append (drgnx-ui-kit--b-action (plist-get props :action) 0)
+               (list (list 0 drgnx-ui-kit--bpos 'help-echo
+                           (if modified (format "%s, %s" title (drgnx-ui-kit--value (plist-get entry :label) chosen))
+                             title))))
+       nil))))
+
+(defun drgnx-ui-kit--segmented (props scale tty)
+  "The `segmented' component of PROPS (:items ((LABEL ACTION)...) :current N) at SCALE, see `drgnx-ui-kit--expand' and
+the hub's `kit::segmented'."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'segmented)) (g (plist-get entry :geometry)) (pad (plist-get g :pad))
+           (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0))
+           (track (drgnx-ui-kit--face 'segmented nil)) (word (plist-get entry :label))
+           (current (or (plist-get props :current) 0)) (i 0) (props-out nil))
+      (dolist (item (plist-get props :items))
+        (let* ((label (elt item 0)) (on (= i current)) (face (and on 'drgnx-kit-segmented-current))
+               (at drgnx-ui-kit--bpos))
+          (drgnx-ui-kit--b-pad (car pad) tty-pad face)
+          (drgnx-ui-kit--b-push label face)
+          (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+          (setq props-out (append props-out (drgnx-ui-kit--b-action (elt item 1) at)
+                                  (list (list at drgnx-ui-kit--bpos 'help-echo
+                                              (if on (format "%s, %s" label word) label))))
+                i (1+ i))))
+      (drgnx-ui-kit--b-under 0 drgnx-ui-kit--bpos track)
+      (drgnx-ui-kit--b-finish nil 0 0 props-out nil))))
+
 (defun drgnx-ui-kit--expand (component props scale tty)
   "COMPONENT (a symbol) with PROPS at SCALE (TTY: on a terminal, `ascii' for ASCII glyphs) as (TEXT RUNS PROPS
 SPACES HEIGHT): RUNS ((FROM TO FACE)...), PROPS ((FROM TO NAME VALUE)...), SPACES ((POS WIDTH HEIGHT)...) in device
@@ -1022,6 +1103,8 @@ px, HEIGHT the row's line height in device px or nil (one text line)."
     ('meter (drgnx-ui-kit--meter props scale tty))
     ('chip (drgnx-ui-kit--chip props scale tty))
     ('status-dot (drgnx-ui-kit--status-dot props scale tty))
+    ('tab (drgnx-ui-kit--tab props scale tty))
+    ('segmented (drgnx-ui-kit--segmented props scale tty))
     (_ (error "drgnx-ui-kit: no component %s" component))))
 
 (defun drgnx-ui-kit--wire (v)
@@ -1235,6 +1318,15 @@ with ARGS (transformed when a key of KIND's own ran it).  A KIND not defined is 
 
 (drgnx-ui-kit-define-action 'ui-button #'drgnx-ui-kit--run-button '(("RET" . identity)))
 
+(defun drgnx-ui-kit--run-window-button (args)
+  "The action kind `ui-window-button': select the window that was clicked (a click on a line of another window), then
+run the button's own ACTION (the one element of ARGS) as `ui-button' does."
+  (let* ((ev last-input-event) (w (and (consp ev) (posn-window (event-start ev)))))
+    (when (and (windowp w) (window-live-p w)) (select-window w))
+    (drgnx-ui-kit-run (car args))))
+
+(drgnx-ui-kit-define-action 'ui-window-button #'drgnx-ui-kit--run-window-button '(("RET" . identity)))
+
 (defun drgnx-ui-kit--action-spec (action)
   "ACTION as the props' action plist (:kind :args): a kit action (KIND . ARGS) as it is, anything else (a registry id, a
 command, a function of no arguments) as the kind `ui-button' holding it.  Nil is no action."
@@ -1275,6 +1367,27 @@ hint or nil.  Its `help-echo' and accessible text are LABEL."
     (put-text-property 0 (length s) 'help-echo
                        (if collapsible (format "%s, %s" title (if collapsed "collapsed" "expanded")) title) s)
     s))
+
+(defun drgnx-ui-kit-tab (title size state icon close where &optional modified frame)
+  "TITLE as a kit tab on WHERE (`text', `header-line', `mode-line' or `tab-line') of FRAME (nil: the selected one).
+SIZE is `editor' (34 px row) or `panel' (30); STATE one of the state table's: `selected' is the shown tab,
+`selected-inactive' the shown tab of a group that is not the active one, `rest' another.  ICON is an icon name (a
+symbol, the file kind's) or nil; CLOSE non-nil draws the close mark after the title (hidden in the row's colour until
+the tab is shown or hovered), MODIFIED a modified file's dot in its place.  No action: the caller puts its own keymap
+on the tab.  Its `help-echo' and accessible text are TITLE, with \"modified\" after it."
+  (drgnx-ui-kit-string 'tab (list :c "tab" :title title :size (symbol-name (or size 'editor))
+                                  :state (symbol-name (or state 'rest)) :icon (and icon (symbol-name icon))
+                                  :close (if close t :false) :modified (if modified t :false))
+                       where frame))
+
+(defun drgnx-ui-kit-segmented (items current where &optional frame)
+  "ITEMS, ((LABEL . ACTION)...), as a kit segmented switch on WHERE of FRAME (nil: the selected one), the CURRENT one
+\(an index) shown.  Each ACTION is what `drgnx-ui-kit-button' takes: a registry id, a command, a function of no
+arguments, or (KIND . ARGS) of a kit action.  Each item's `help-echo' is its LABEL, \"LABEL, selected\" for the current."
+  (drgnx-ui-kit-string 'segmented
+                       (list :c "segmented" :current current
+                             :items (mapcar (lambda (i) (list (car i) (drgnx-ui-kit--action-spec (cdr i)))) items))
+                       where frame))
 
 (defun drgnx-ui-kit-card-lines (lines kind width)
   "LINES (strings) as the rows of one card of KIND (`plain', `needs-you' or `selected') WIDTH columns wide, one string.

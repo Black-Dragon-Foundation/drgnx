@@ -3866,6 +3866,29 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   (the edge's width, and where Glitnir draws, its radius and open sides; `drgnx-ui-kit-theme-specs` takes a GLITNIR
   flag).
 
+### Tabs and the segmented switch (Task 16)
+
+- `tab` (variant `size` editor, panel): an editor tab is 34 px with 10 px before and 8 px after, the shown tab on the
+  editor's surface in the body text's colour (`drgnx-kit-tab-current`; a shown tab of another group muted,
+  `drgnx-kit-tab-current-inactive`), the others muted on the row (`drgnx-kit-tab`); a panel tab (an area's tab row) is
+  30 px with 9 px each side, the shown one a pill on the quiet selection (`drgnx-kit-tab-panel-current`). Neither is
+  ever bold. Its parts: the icon (14 px, an image where the frame draws SVG icons, else its glyph and a space), the
+  title, then with a close mark the gap and an 18 px slot: 2 px, the `x` icon (the `close` glyph on a terminal; the
+  `dot` glyph, muted, when the file is modified), 2 px. The close mark is hidden (`drgnx-control-hidden`) on a tab
+  that is not shown, except on a terminal or under the pointer. The tab's own face is the state face for the shown
+  states; other states' faces go above it. Its accessible text is the title (", modified").
+- `segmented` (no variants): one 24 px track in a 1 px `border` ring inside its line, radius 6, its items 10 px each
+  side, the current one on the quiet selection in the body text's colour (`drgnx-kit-segmented-current`); each item its
+  own action, its accessible text "LABEL" or "LABEL, selected".
+- On a terminal the themes draw the shown tab and the current item in inverse video and a shown tab of another group
+  underlined (the state table's terminal forms; `drgnx-theme--terminal-faces`).
+- `(drgnx-ui-kit-tab TITLE SIZE STATE ICON CLOSE WHERE &optional MODIFIED FRAME)` and `(drgnx-ui-kit-segmented ITEMS
+  CURRENT WHERE &optional FRAME)` (ITEMS `((LABEL . ACTION)...)`, ACTION as a button's) build them as strings. The
+  editor's tab line (`drgnx-chrome--tab`), an area's tab row (`drgnx-area`), the Detail island's title and the Work lens
+  bar (`drgnx-work-lens-string`) draw with them; `drgnx-wb-tab*`, `drgnx-chrome-tab`, `-active`, `-current` and the
+  `drgnx-work-lens-*` faces are aliases of the kit faces once `ui/look` is on. The action kind `ui-window-button`
+  selects the clicked window before it runs its action (a lens item switches the lens of the window it is in).
+
 ### Actions and focus-visible
 
 - A component's action is the property `drgnx-action` = `(KIND ARGS...)` (on the wire `[kind, args...]`). Both dress

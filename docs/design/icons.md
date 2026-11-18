@@ -43,7 +43,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `eye` | `core/drgnx-palette.el` |
 | `file` | `core/drgnx-icons.el`, `core/drgnx-palette.el`, `core/drgnx-quick-open.el`, `modules/tools/drgnx-replace.el`, `modules/ui/drgnx-kit-catalogue.el`, `wb/drgnx-wb.el` |
 | `file-archive` | file kind: 0 names, 15 extensions |
-| `file-code` | file kind: 27 names, 114 extensions, `core/drgnx-palette.el` |
+| `file-code` | file kind: 27 names, 114 extensions, `core/drgnx-palette.el`, `modules/ui/drgnx-kit-catalogue.el` |
 | `file-cog` | file kind: 25 names, 32 extensions |
 | `file-image` | file kind: 0 names, 22 extensions |
 | `file-text` | file kind: 14 names, 22 extensions |
@@ -108,4 +108,4 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `variable` | - |
 | `wand` | - |
 | `workflow` | `modules/extra/drgnx-debug-heap.el` |
-| `x` | `modules/ui/drgnx-topline.el`, `wb/drgnx-area.el`, `wb/drgnx-chrome.el` |
+| `x` | `core/drgnx-ui-kit.el`, `modules/ui/drgnx-topline.el`, `wb/drgnx-area.el` |

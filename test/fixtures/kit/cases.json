@@ -112,6 +112,14 @@
     {"name": "card-selected-single", "comp": {"c": "card", "kind": "selected", "shape": "single", "text": "Review"}},
     {"name": "card-selected-top", "comp": {"c": "card", "kind": "selected", "shape": "top", "text": "Review"}},
     {"name": "card-selected-mid", "comp": {"c": "card", "kind": "selected", "shape": "mid", "text": "Review"}},
-    {"name": "card-selected-bottom", "comp": {"c": "card", "kind": "selected", "shape": "bottom", "text": "Review"}}
+    {"name": "card-selected-bottom", "comp": {"c": "card", "kind": "selected", "shape": "bottom", "text": "Review"}},
+    {"name": "tab-rest", "comp": {"c": "tab", "title": "main.rs", "close": true}},
+    {"name": "tab-hover", "comp": {"c": "tab", "title": "main.rs", "state": "hover", "close": true}},
+    {"name": "tab-selected", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "close": true}},
+    {"name": "tab-selected-inactive", "comp": {"c": "tab", "title": "main.rs", "state": "selected-inactive", "close": true}},
+    {"name": "tab-modified", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "close": true, "modified": true}},
+    {"name": "tab-panel", "comp": {"c": "tab", "title": "Terminal", "size": "panel"}},
+    {"name": "tab-panel-selected", "comp": {"c": "tab", "title": "Debug Console", "size": "panel", "state": "selected", "action": {"kind": "ui-button", "args": ["area-show"]}}},
+    {"name": "segmented", "comp": {"c": "segmented", "current": 1, "items": [["Map", {"kind": "ui-button", "args": ["map"]}], ["Board", {"kind": "ui-button", "args": ["board"]}], ["Flow", {"kind": "ui-button", "args": ["flow"]}]]}}
   ]
 }
