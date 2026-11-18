@@ -834,17 +834,18 @@ form on a terminal that is not UTF-8 (`drgnx-face-glyph'); \"\" when `drgnx-grid
       (with-selected-frame (window-frame w) (drgnx-grid-hide (car (window-parameter w 'drgnx-pane-stack)))))))
 
 (defun drgnx-grid--tab-row (window)
-  "Tool tile WINDOW's tab row: its kinds in their definition order, the shown one current, then the ✕."
+  "Tool tile WINDOW's tab row: its kinds in their definition order as the kit's panel tabs (`drgnx-ui-kit-tab'), the
+shown one selected, then the ✕."
   (let* ((stack (window-parameter window 'drgnx-pane-stack)) (shown (car stack))
          (kinds (seq-filter (lambda (k) (member k stack)) (append (drgnx-pane-kinds) stack))))
     (concat
      (drgnx-grid--grip (window-frame window))
      (mapconcat (lambda (k)
-                  (let ((title (drgnx-grid--title k)))
-                    (propertize (concat " " title " ")
-                                'face (if (equal k shown) 'tab-line-tab-current 'tab-line-tab-inactive)
-                                'drgnx-grid-kind k 'mouse-face 'highlight 'local-map drgnx-grid--tab-map
-                                'help-echo "Show this tab")))
+                  (let ((s (drgnx-ui-kit-tab (drgnx-grid--title k) 'panel (if (equal k shown) 'selected 'rest)
+                                             nil nil 'tab-line nil (window-frame window))))
+                    (add-text-properties 0 (length s) (list 'drgnx-grid-kind k 'mouse-face 'drgnx-hover
+                                                            'local-map drgnx-grid--tab-map 'help-echo "Show this tab")
+                                         s)                    s))
                 (delete-dups kinds) " ")
      (propertize " " 'display '(space :align-to (- right 3)))
      (if (fboundp 'drgnx-wb-close-button)
