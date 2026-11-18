@@ -3932,6 +3932,30 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   `drgnx-work-lens-*` faces are aliases of the kit faces once `ui/look` is on. The action kind `ui-window-button`
   selects the clicked window before it runs its action (a lens item switches the lens of the window it is in).
 
+### The text input (flow Task 22a)
+
+- `text-input` (variants `lines` single, multi and `shape` single, top, mid, bottom, as a card's): the field the
+  composer, the paragraph-comment input and the review screen's Request changes draw round their real buffer text. The
+  kit draws the frame, the context chips and the placeholder; the text between is the buffer's own and is never drawn
+  by the kit. A single field is one 28 px line, a multi-line one at least two text lines (rows in a card's shapes, the
+  ring open where the field goes on); 8 px each side, radius 6, a 1 px `border` ring on the editor's surface
+  (`drgnx-kit-text-input`, `-multi-top`, `-multi-mid`, `-multi-bottom`). A terminal draws `[ ` and ` ]` round it. The
+  focus ring (2 px, inset, `focus`) is the state table's `focus-visible`, shown only after a key event
+  (`drgnx-ui-kit-focus-visible-p`); a disabled field is the state table's `disabled`. Its accessible text is the
+  placeholder, or "text field" without one.
+- Hub: `Comp::TextInput { text, placeholder, lines, chips, focused, state }`, `InputChip { label, tone, remove }`. The
+  hub expands it with `expand_rows` (keys `KEY/0`, `KEY/1`...); `expand` draws the first row. On the first row the chips
+  come first, each a soft kit chip with a close mark (the Lucide x where icons are drawn, else the `close` glyph); a
+  click or RET on the mark runs `remove`, an action of any kind (the composer's is the kit action kind
+  `composer-chip-remove`, defined by the composer's module). An empty first row shows the placeholder in the muted role.
+- Lisp: `(drgnx-ui-kit-text-input PLACEHOLDER LINES CHIPS WIDTH WHERE &optional FOCUSED FRAME)` returns one
+  `(HEAD . TAIL)` per line for the buffer to put before and after its text (a `line-prefix` and an `after-string`, or
+  an overlay): HEAD is the left edge and, on the first line, the chips; TAIL stretches to column WIDTH and closes the
+  right edge. Both are at canonical-character widths in `text` and px at the frame's scale on a line. CHIPS is
+  `((LABEL TONE ACTION)...)`. The first HEAD carries the placeholder as its `drgnx-placeholder` property.
+  `drgnx-ui-kit-expand 'text-input` is the first row, equal to the hub's (the conformance fixture has ten cases; the
+  hub's other rows are the fixture's `more`).
+
 ### Actions and focus-visible
 
 - A component's action is the property `drgnx-action` = `(KIND ARGS...)` (on the wire `[kind, args...]`). Both dress

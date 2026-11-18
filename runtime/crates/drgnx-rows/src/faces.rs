@@ -1132,11 +1132,19 @@ pub enum FaceId {
     KitSegmented,
     /// `drgnx-kit-segmented-current`
     KitSegmentedCurrent,
+    /// `drgnx-kit-text-input`
+    KitTextInput,
+    /// `drgnx-kit-text-input-multi-top`
+    KitTextInputMultiTop,
+    /// `drgnx-kit-text-input-multi-mid`
+    KitTextInputMultiMid,
+    /// `drgnx-kit-text-input-multi-bottom`
+    KitTextInputMultiBottom,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 562] = [
+    pub const ALL: [FaceId; 566] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1699,6 +1707,10 @@ impl FaceId {
         FaceId::KitTabPreview,
         FaceId::KitSegmented,
         FaceId::KitSegmentedCurrent,
+        FaceId::KitTextInput,
+        FaceId::KitTextInputMultiTop,
+        FaceId::KitTextInputMultiMid,
+        FaceId::KitTextInputMultiBottom,
     ];
 
     /// The face's Emacs name.
@@ -2266,6 +2278,10 @@ impl FaceId {
             FaceId::KitTabPreview => "drgnx-kit-tab-preview",
             FaceId::KitSegmented => "drgnx-kit-segmented",
             FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
+            FaceId::KitTextInput => "drgnx-kit-text-input",
+            FaceId::KitTextInputMultiTop => "drgnx-kit-text-input-multi-top",
+            FaceId::KitTextInputMultiMid => "drgnx-kit-text-input-multi-mid",
+            FaceId::KitTextInputMultiBottom => "drgnx-kit-text-input-multi-bottom",
         }
     }
 
@@ -2834,6 +2850,10 @@ impl FaceId {
             "drgnx-kit-tab-preview" => FaceId::KitTabPreview,
             "drgnx-kit-segmented" => FaceId::KitSegmented,
             "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
+            "drgnx-kit-text-input" => FaceId::KitTextInput,
+            "drgnx-kit-text-input-multi-top" => FaceId::KitTextInputMultiTop,
+            "drgnx-kit-text-input-multi-mid" => FaceId::KitTextInputMultiMid,
+            "drgnx-kit-text-input-multi-bottom" => FaceId::KitTextInputMultiBottom,
             _ => return None,
         })
     }
