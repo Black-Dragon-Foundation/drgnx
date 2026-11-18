@@ -150,7 +150,7 @@ chip of the session the input evaluates in (a click picks another; none without 
   (when on
     (setq drgnx-debug-console--hint-overlay (make-overlay (point-min) (point-min) nil t))
     (overlay-put drgnx-debug-console--hint-overlay 'before-string
-                 (propertize (concat drgnx-debug-console-empty "\n") 'face 'shadow))))
+                 (concat (drgnx-ui-kit-empty-state drgnx-debug-console-empty nil 'text) "\n"))))
 
 (defun drgnx-debug-console--prompt ()
   "The input's prompt after the output: read-only, not to be typed before."

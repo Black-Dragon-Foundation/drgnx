@@ -37,6 +37,8 @@ pub enum CompId {
     Segmented,
     /// `diff-block`
     DiffBlock,
+    /// `empty-state`
+    EmptyState,
 }
 
 /// A state of the state table (on the wire, its name: `"selected-inactive"`).
@@ -698,6 +700,18 @@ const DIFF_BLOCK_GEOM: [[Geom; 3]; 5] = [
 const DIFF_BLOCK_LABEL: [Option<&str>; 5] = [Some("diff"), Some("diff"), Some("diff"), Some("diff"), Some("diff")];
 const DIFF_BLOCK_FACE: [FaceId; 5] = [FaceId::KitDiffBlockHead, FaceId::KitDiffBlockHunk, FaceId::KitDiffBlockCtx, FaceId::KitDiffBlockAdd, FaceId::KitDiffBlockDel];
 
+const EMPTY_STATE_AXES: &[&[&str]] = &[];
+const EMPTY_STATE_DEFAULTS: &[usize] = &[];
+const EMPTY_STATE_GEOM: [[Geom; 3]; 1] = [
+    [
+        Geom { height: 0, pad: (0, 0), gap: 8, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 8, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (0, 0), gap: 8, boxed: false, radius: 0, hit: 0, indent: 0, tty_pad: 0, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const EMPTY_STATE_LABEL: [Option<&str>; 1] = [None];
+const EMPTY_STATE_FACE: [FaceId; 1] = [FaceId::KitEmptyState];
+
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {
     match id {
@@ -757,6 +771,10 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(DIFF_BLOCK_AXES, DIFF_BLOCK_DEFAULTS, variant);
             DIFF_BLOCK_GEOM[i][d]
         }
+        CompId::EmptyState => {
+            let (i, d) = index(EMPTY_STATE_AXES, EMPTY_STATE_DEFAULTS, variant);
+            EMPTY_STATE_GEOM[i][d]
+        }
     }
 }
 
@@ -777,6 +795,7 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::Tab => TAB_LABEL[index(TAB_AXES, TAB_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_LABEL[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
         CompId::DiffBlock => DIFF_BLOCK_LABEL[index(DIFF_BLOCK_AXES, DIFF_BLOCK_DEFAULTS, variant).0],
+        CompId::EmptyState => EMPTY_STATE_LABEL[index(EMPTY_STATE_AXES, EMPTY_STATE_DEFAULTS, variant).0],
     }
 }
 
@@ -797,5 +816,6 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::Tab => TAB_FACE[index(TAB_AXES, TAB_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_FACE[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
         CompId::DiffBlock => DIFF_BLOCK_FACE[index(DIFF_BLOCK_AXES, DIFF_BLOCK_DEFAULTS, variant).0],
+        CompId::EmptyState => EMPTY_STATE_FACE[index(EMPTY_STATE_AXES, EMPTY_STATE_DEFAULTS, variant).0],
     }
 }

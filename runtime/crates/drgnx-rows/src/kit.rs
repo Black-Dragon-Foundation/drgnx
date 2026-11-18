@@ -823,6 +823,12 @@ pub enum Comp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         width: Option<u32>,
     },
+    /// An empty state: TEXT, and after it, when there is an ACTION, a quiet small button labelled so.
+    EmptyState {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<(String, Action)>,
+    },
     /// One row of a diff block's body: TEXT in PART (`hunk`, `ctx`, `add` or `del`) with the block's room each side.
     DiffLine { part: String, text: String },
     /// One line of a card of KIND in SHAPE: TEXT with the card's room each side.
@@ -1587,6 +1593,29 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 );
             }
             pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), head);
+        }
+        Comp::EmptyState { text, action } => {
+            let variant = [env.density.name()];
+            let g: Geom = kit_gen::geom(CompId::EmptyState, &variant);
+            let face = comp_face(kit_gen::face(CompId::EmptyState, &variant));
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+            b.push(text, face);
+            if let Some((label, a)) = action {
+                pad(b, env, px(g.gap, env.scale), 1, face);
+                expand(
+                    b,
+                    env,
+                    &Comp::Button {
+                        label: label.clone(),
+                        style: ButtonStyle::Quiet,
+                        size: Size::Sm,
+                        state: State::Rest,
+                        key: None,
+                        action: Some(a.clone()),
+                    },
+                );
+            }
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
         }
         Comp::DiffLine { part, text } => {
             let variant = [part.as_str(), env.density.name()];

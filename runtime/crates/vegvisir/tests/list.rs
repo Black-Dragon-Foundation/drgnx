@@ -243,4 +243,6 @@ fn an_empty_workspace_draws_a_line_that_says_so() {
         !rows[0].props.iter().any(|p| p.2 == "drgnx-work-id"),
         "the line is no item"
     );
+    // the kit's empty state face
+    assert!(rows[0].runs.iter().any(|r| r.2 == "drgnx-kit-empty-state"));
 }

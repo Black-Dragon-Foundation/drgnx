@@ -604,6 +604,19 @@ is whole.  Every character is 8 px wide here."
         (should-not (string-match-p "core" none)) (should (string-match-p "Accept" none)))
       (should (string-match-p (regexp-quote name) (plist-get (drgnx-ui-kit-expand 'diff-block (list :c "diff-block" :file name :added 2 :removed 1) 1 nil) :text))))))
 
+(ert-deftest drgnx-ui-kit/empty-state-is-inert-and-labelled ()
+  "An empty state is its text in the kit's face, inert (no row selects it), its help text the text itself; with a button
+the button is after the text and a `button.el' button."
+  (let* ((fired nil) (s (drgnx-ui-kit-empty-state "No agents yet" (list "Start one" "start an agent" (lambda () (setq fired t))) 'text)))
+    (should (string-prefix-p "No agents yet" s))
+    (should (get-text-property 0 'drgnx-row-inert s))
+    (should (equal "No agents yet" (get-text-property 0 'help-echo s)))
+    (should (eq 'drgnx-kit-empty-state (car (ensure-list (get-text-property 0 'face s)))))
+    (let ((pos (string-match "Start one" s)))
+      (should (get-text-property pos 'button s))
+      (funcall (get-text-property pos 'action s) nil)
+      (should fired))))
+
 (ert-deftest drgnx-ui-kit/card-line-forms ()
   (let ((e (drgnx-ui-kit-expand 'card '(:c "card" :kind "selected" :shape "mid" :text "Go") 1.0 nil)))
     (should (equal (plist-get e :text) " Go "))

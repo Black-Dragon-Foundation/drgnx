@@ -20,11 +20,11 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--stateless '(agent-mark progress card range-bar segmented diff-block)
+(defconst drgnx-kit-catalogue--stateless '(agent-mark progress card range-bar segmented diff-block empty-state)
   "The components that show no state (nothing to hover or select; a segmented switch's current item is its own):
 drawn at rest only.")
 
-(defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress section-header card diff-block chip status-dot tab
+(defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress section-header card diff-block empty-state chip status-dot tab
                                          segmented range-bar)
   "The components the hub expands: their cells are drawn as hub rows.")
 
@@ -58,6 +58,7 @@ drawn at rest only.")
                            :collapsible (if (eq (alist-get 'collapsible variants) 'yes) t :false)))
     ('card (list :c "card" :kind (symbol-name (alist-get 'kind variants)) :shape (symbol-name (alist-get 'shape variants))
                  :text "Card" :state (symbol-name state)))
+    ('empty-state (list :c "empty-state" :text "Nothing here yet"))
     ('diff-block (let ((part (alist-get 'part variants)))
                    (if (eq part 'head)
                        (list :c "diff-block" :file "src/main.rs" :added 3 :removed 1)

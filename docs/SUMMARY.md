@@ -121,6 +121,7 @@
     - [Section header (kit)](design/components/section-header.md)
     - [Card (kit)](design/components/card.md)
     - [Diff block (kit)](design/components/diff-block.md)
+    - [Empty state (kit)](design/components/empty-state.md)
     - [Agent mark (kit)](design/components/agent-mark.md)
     - [Progress (kit)](design/components/progress.md)
     - [Chip (kit)](design/components/chip.md)

@@ -836,6 +836,22 @@ head leaves.  The rows of the hunks are `drgnx-ui-kit-diff-block''s."
       (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
       (drgnx-ui-kit--b-finish nil 0 0 nil nil))))
 
+(defun drgnx-ui-kit--empty-state (props scale tty)
+  "The `empty-state' component of PROPS (:text :action [LABEL ACTION]) at SCALE, see `drgnx-ui-kit--expand'."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'empty-state)) (face (drgnx-ui-kit--face 'empty-state nil))
+           (g (plist-get entry :geometry)) (pad (plist-get g :pad))
+           (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0)) (height nil) (action (plist-get props :action)))
+      (drgnx-ui-kit--b-pad (car pad) tty-pad face)
+      (drgnx-ui-kit--b-push (or (plist-get props :text) "") face)
+      (when action
+        (drgnx-ui-kit--b-pad (plist-get g :gap) 1 face)
+        (setq height (drgnx-ui-kit--b-splice
+                      (drgnx-ui-kit--button (list :label (elt action 0) :style "quiet" :size "sm" :action (elt action 1))
+                                            scale tty))))
+      (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+      (drgnx-ui-kit--b-finish nil 0 0 nil height))))
+
 (defun drgnx-ui-kit--round (x)
   "X rounded half up, as the hub rounds (`drgnx-px')."
   (floor (+ x 0.5 1e-9)))
@@ -1337,6 +1353,7 @@ px, HEIGHT the row's line height in device px or nil (one text line)."
     ('card (drgnx-ui-kit--card props scale tty))
     ('diff-block (drgnx-ui-kit--diff-block props scale tty))
     ('diff-line (drgnx-ui-kit--diff-line props scale tty))
+    ('empty-state (drgnx-ui-kit--empty-state props scale tty))
     ('agent-mark (drgnx-ui-kit--agent-mark props scale tty))
     ('progress (drgnx-ui-kit--progress props scale tty))
     ('meter (drgnx-ui-kit--meter props scale tty))
@@ -1673,6 +1690,16 @@ removed\"."
       (let ((s (apply #'concat (nreverse out))))
         (put-text-property 0 (length s) 'help-echo (format "%s, %d added, %d removed" file added removed) s)
         s))))
+
+(defun drgnx-ui-kit-empty-state (text button where)
+  "TEXT as a kit empty state on WHERE, with BUTTON, (LABEL HELP FN) or nil, as a quiet small kit button after it.  The
+text is inert (`drgnx-row-inert'); its accessible text is TEXT."
+  (let ((s (drgnx-ui-kit-string 'empty-state (list :c "empty-state" :text text) where nil)))
+    (when button
+      (setq s (concat s (propertize " " 'face 'default)
+                      (drgnx-ui-kit-text-button (nth 0 button) (nth 2 button) (nth 1 button) 'quiet 'sm))))
+    (add-text-properties 0 (length s) (list 'drgnx-row-inert t 'help-echo text) s)
+    s))
 
 (defun drgnx-ui-kit-card-lines (lines kind width)
   "LINES (strings) as the rows of one card of KIND (`plain', `needs-you' or `selected') WIDTH columns wide, one string.

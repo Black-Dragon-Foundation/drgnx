@@ -1142,11 +1142,13 @@ pub enum FaceId {
     KitDiffBlockAdd,
     /// `drgnx-kit-diff-block-del`
     KitDiffBlockDel,
+    /// `drgnx-kit-empty-state`
+    KitEmptyState,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 567] = [
+    pub const ALL: [FaceId; 568] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1714,6 +1716,7 @@ impl FaceId {
         FaceId::KitDiffBlockCtx,
         FaceId::KitDiffBlockAdd,
         FaceId::KitDiffBlockDel,
+        FaceId::KitEmptyState,
     ];
 
     /// The face's Emacs name.
@@ -2286,6 +2289,7 @@ impl FaceId {
             FaceId::KitDiffBlockCtx => "drgnx-kit-diff-block-ctx",
             FaceId::KitDiffBlockAdd => "drgnx-kit-diff-block-add",
             FaceId::KitDiffBlockDel => "drgnx-kit-diff-block-del",
+            FaceId::KitEmptyState => "drgnx-kit-empty-state",
         }
     }
 
@@ -2859,6 +2863,7 @@ impl FaceId {
             "drgnx-kit-diff-block-ctx" => FaceId::KitDiffBlockCtx,
             "drgnx-kit-diff-block-add" => FaceId::KitDiffBlockAdd,
             "drgnx-kit-diff-block-del" => FaceId::KitDiffBlockDel,
+            "drgnx-kit-empty-state" => FaceId::KitEmptyState,
             _ => return None,
         })
     }

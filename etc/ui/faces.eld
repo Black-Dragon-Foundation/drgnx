@@ -567,4 +567,5 @@
  drgnx-kit-diff-block-hunk
  drgnx-kit-diff-block-ctx
  drgnx-kit-diff-block-add
- drgnx-kit-diff-block-del)
+ drgnx-kit-diff-block-del
+ drgnx-kit-empty-state)

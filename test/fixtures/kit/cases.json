@@ -138,6 +138,8 @@
     {"name": "diff-block-buttons", "comp": {"c": "diff-block", "file": "src/main.rs", "added": 3, "removed": 1, "buttons": [["Reject", {"kind": "card", "args": ["reject", "src/main.rs", 0]}], ["Accept", {"kind": "card", "args": ["accept", "src/main.rs", 0]}]]}},
     {"name": "diff-block-icon", "comp": {"c": "diff-block", "file": "src/main.rs", "added": 3, "removed": 1, "icon": "file-unknown"}},
     {"name": "diff-line-add", "comp": {"c": "diff-line", "part": "add", "text": "  12 + let x = 1;"}},
-    {"name": "diff-line-hunk", "comp": {"c": "diff-line", "part": "hunk", "text": "@@ -10,3 +10,4 @@"}}
+    {"name": "diff-line-hunk", "comp": {"c": "diff-line", "part": "hunk", "text": "@@ -10,3 +10,4 @@"}},
+    {"name": "empty-state", "comp": {"c": "empty-state", "text": "Nothing here yet"}},
+    {"name": "empty-state-action", "comp": {"c": "empty-state", "text": "No agents", "action": ["Start one", {"kind": "kit-test", "args": ["start"]}]}}
   ]
 }

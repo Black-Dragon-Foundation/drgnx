@@ -557,6 +557,11 @@ past the pill's left edge: inside its start pad, clear of its rounded corners.  
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'diff-block))
 
+(drgnx-look-gui-deftest drgnx-kit-sheet/empty-state ()
+  "The empty state's sheet: its text on the surface, in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'empty-state))
+
 (drgnx-look-gui-deftest drgnx-kit-sheet/state-table ()
   "The state table's rows in every theme and density: each state's fill, and no edge round a hovered or selected row."
   (skip-unless (display-graphic-p))

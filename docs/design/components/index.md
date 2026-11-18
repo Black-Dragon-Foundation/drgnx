@@ -23,6 +23,7 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Key hint (kit)](key-hint.md) | the keys of an action in the code font, in a small box |
 | [Section header (kit)](section-header.md) | a section's title, with a twisty when it folds and an optional count |
 | [Diff block (kit)](diff-block.md) | a file's head row (path, +N −M, buttons) over each hunk's rows in the code font, in the card's ring |
+| [Empty state (kit)](empty-state.md) | what a list or console says while it holds nothing, with an optional quiet button |
 | [Card (kit)](card.md) | the rows of one card: a ring inside the line, open where the card goes on |
 | [Agent mark (kit)](agent-mark.md) | the agent mark's numbers (generated from `etc/ui/components.eld`) |
 | [Progress (kit)](progress.md) | progress's numbers (generated from `etc/ui/components.eld`) |

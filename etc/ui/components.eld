@@ -236,4 +236,11 @@
                      ((del) :bg del-bg :fg del-fg :inherit (drgnx-code-small diff-removed secondary-selection) :font (drgnx-code-small)))
               :replaces ((drgnx-agent-panel-added . drgnx-kit-diff-block-add) (drgnx-agent-panel-removed . drgnx-kit-diff-block-del)
                          (drgnx-agent-panel-context . drgnx-kit-diff-block-ctx))
-              :helpers nil :lint t)))
+              :helpers nil :lint t)
+  ;; an empty state: what a list, tree or console says while it holds nothing: centred-or-leading muted text in the UI
+  ;; font, and optionally one quiet kit button after it; inert (no row selects it), its label is its text
+  (empty-state :variants () :defaults ()
+               :geometry (:height 0 :pad (0 . 0) :gap 8 :box nil :radius 0 :hit 0)
+               :tty (:pad 0) :label nil
+               :bind ((() :fg muted :inherit (drgnx-text-muted drgnx-ui-text) :font (drgnx-ui-text)))
+               :replaces nil :helpers nil :lint nil)))
