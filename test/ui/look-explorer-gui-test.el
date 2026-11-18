@@ -98,29 +98,28 @@ row that is not its background, scanning the row from the window's right edge in
 (defvar drgnx-scrollbar-mode)
 (declare-function drgnx-scrollbar-mode "drgnx-ruler" (&optional arg))
 
-(drgnx-look-gui-deftest drgnx-ui-look-explorer/no-row-runs-under-the-scroll-strip ()
-  "With the scroll bar's strip in the window's right fringe (12 px more fringe), every row of a narrow Explorer ends
-inside the body: the hub fits the rows to the body the strip leaves, so Emacs cuts none and draws no truncation glyph
-at its end.  Each row's end (the newline after its tail) is in sight."
+;; the scenes' badge: two agents' marks (`drgnx-explorer-badge-functions'), a run of text in the row's own face
+(defun drgnx-ui-look-explorer--badge (_ordinals _dirp) "  ●●")
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-badge-keeps-the-row-inside-the-body ()
+  "A row with a who-is-here badge (after its name) ends inside the body, as every other row: the badge comes before
+the tail, whose stretch then ends the row at the body's edge.  Drawn after the tail, the badge runs past the edge by
+its own width (under the scroll bar's strip: Glitnir's truncation arrow in the fringe; the tiling scene's `test' row)."
   (skip-unless (and (display-graphic-p) (featurep 'glitnir-ruler)))
   (require 'drgnx-ruler)
   (drgnx-ui-look-explorer--with root
-    (let* ((w (selected-window)) (other (split-window w (drgnx-px 170) 'left t)))
+    (let* ((w (selected-window)) (other (split-window w (drgnx-px 170) 'left t))
+           (drgnx-explorer-badge-functions (list #'drgnx-ui-look-explorer--badge)))
       (unwind-protect
           (progn
-            ;; as the side bar's Explorer: a dock window; the strip comes as the scroll bar mode places it, and the
-            ;; hub hears of the narrower body only through the env's own hooks (nothing here sends it)
+            ;; as the side bar's Explorer: a dock window with the strip in its right fringe
             (set-window-parameter w 'drgnx-role 'dock)
             (drgnx-scrollbar-mode 1)
             (drgnx-test-wait (lambda () (window-parameter w 'drgnx-ruler-fringe)) :secs 5 :what "the strip's fringe")
-            ;; narrowed as the scenes' widths check narrows the side bar's Explorer (226 to 154 px of body), the frame's
-            ;; preserved sizes ignored
-            (redisplay t)
-            (window-resize w (- (drgnx-px 154) (window-body-width w t)) t t t)
-            (let ((rows 0) (cut nil))
-              (cl-flet ((measure ()
-                          (redisplay t)
-                          (setq rows 0 cut nil)
+            (cl-flet ((over ()
+                        ;; the visible rows wider than the body: (TEXT WIDTH)...
+                        (redisplay t)
+                        (let ((body (window-body-width w t)) (out nil) (rows 0))
                           (with-current-buffer (window-buffer w)
                             (save-excursion
                               (goto-char (point-min))
@@ -129,20 +128,23 @@ at its end.  Each row's end (the newline after its tail) is in sight."
                                   (when (and (stringp (ignore-errors (drgnx-view-key-at bol))) (not (invisible-p bol))
                                              (pos-visible-in-window-p bol w))
                                     (setq rows (1+ rows))
-                                    (unless (pos-visible-in-window-p eol w)
-                                      (push (list (buffer-substring-no-properties bol eol)
-                                                  (car (window-text-pixel-size w bol (min (point-max) (1+ eol)))))
-                                            cut))))
+                                    (let ((px (car (window-text-pixel-size w bol eol 10000 nil t))))
+                                      (when (> px body) (push (list (buffer-substring-no-properties bol eol) px) out)))))
                                 (forward-line 1))))
-                          (and (> rows 2) (null cut))))
-                ;; the hub's rows for the width the strip leaves: they come once it has the env
-                (condition-case nil
-                    (drgnx-test-wait #'measure :secs 5 :what "every row inside the body")
-                  (ert-test-failed
-                   (ert-fail (list "rows cut at the window's edge" cut :rows rows :body (window-body-width w t)
-                                   :fringes (window-fringes w)
-                                   :env (mapcar (lambda (c) (plist-get (cdr c) :width_px))
-                                                (drgnx-view-env--envs drgnx-explorer-hub-view-name)))))))))
+                          (cons rows out))))
+              ;; the hub's rows for the body the strip leaves, none over it
+              (drgnx-test-wait (lambda () (let ((o (over))) (and (> (car o) 2) (null (cdr o)))))
+                               :secs 5 :what "the rows fitted to the body")
+              (with-current-buffer (window-buffer w)
+                (save-excursion
+                  (goto-char (point-min))
+                  (re-search-forward "a\\.txt")
+                  (drgnx-explorer--rows-badge (drgnx-view-key-at (pos-bol)) (pos-eol) '(1 2))))
+              (let ((o (over)))
+                (should (= 1 (with-current-buffer (window-buffer w) (hash-table-count drgnx-explorer--badges))))
+                (unless (null (cdr o))
+                  (ert-fail (list "rows over the body" (cdr o) :body (window-body-width w t)
+                                  :fringes (window-fringes w)))))))
         (drgnx-scrollbar-mode -1)
         ;; Nidhogg's own record of the strip, and the role, go with it
         (dolist (p '(glitnir--ruler glitnir--ruler-key drgnx-role)) (set-window-parameter w p nil))
