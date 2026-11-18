@@ -3883,6 +3883,12 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   under the runs of each row of a card the hub built; `(drgnx-ui-kit-card-lines LINES KIND WIDTH)` is the Lisp
   chrome's: each row its own box run (text filled to WIDTH, a boxed `(space :align-to)` stretch, an unboxed newline).
   The old `drgnx-card-*` faces are aliases of the plain and selected faces.
+- `diff-block` (parts head, hunk, ctx, add, del; code font; add and del on the diff tints): `Comp::DiffBlock { file,
+  added, removed, hunks, buttons }` expands to its head row (`expand`: the file, `+N −M`, the buttons as Quiet small kit
+  buttons) and, through `expand_rows`, to the whole block (head, each hunk's `@@` row and its numbered lines) in the plain
+  card's ring. Lisp: the head row is `drgnx-ui-kit-expand`'s (conformance, buttons included); `(drgnx-ui-kit-diff-block
+  FILE ADDED REMOVED HUNKS WIDTH &optional BUTTONS)` is the chrome's whole block, each row its own box run. The old
+  `drgnx-agent-panel-added`, `-removed` and `-context` faces are aliases of the add, del and ctx faces.
 - Bindings gained `:attrs` (raw face attributes, in the defface and the theme's spec) and `:ring (WIDTH RADIUS OPEN...)`
   (the edge's width, and where Glitnir draws, its radius and open sides; `drgnx-ui-kit-theme-specs` takes a GLITNIR
   flag).

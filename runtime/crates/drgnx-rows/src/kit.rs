@@ -12,6 +12,7 @@
 //!   `hit` px of extra padding each side (none on a terminal).
 
 use crate::builder::RowBuilder;
+use crate::fit;
 use crate::faces::FaceId;
 use crate::kit_gen::{self, Geom, STATES};
 use crate::row::{ImageId, Row};
@@ -815,6 +816,12 @@ pub enum Comp {
         hunks: Vec<Hunk>,
         #[serde(default)]
         buttons: Vec<(String, Action)>,
+        /// An icon (a name) before the file, as the section header's twisty is drawn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
+        /// The head's room in logical px: [`diff_block_rows`] fits the file's name to what the rest of the head leaves.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
     },
     /// One line of a card of KIND in SHAPE: TEXT with the card's room each side.
     Card {
@@ -1532,6 +1539,7 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             added,
             removed,
             buttons,
+            icon,
             ..
         } => {
             let part = |p: &'static str| {
@@ -1541,6 +1549,19 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             let g: Geom = kit_gen::geom(CompId::DiffBlock, &["head", env.density.name()]);
             let head = part("head");
             pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), head);
+            if let Some(name) = icon {
+                let alt = if env.ascii { "#" } else { "\u{25a4}" };
+                let mark = Some(glyph(env, name)).filter(|m| !m.is_empty()).unwrap_or(alt);
+                match env
+                    .icons
+                    .filter(|_| !env.tty)
+                    .and_then(|i| (i.0)(name, px(ICON_PX, env.scale)))
+                {
+                    Some(id) => b.image(id, alt),
+                    None => b.push(mark, head),
+                };
+                b.push(" ", head);
+            }
             b.push(file, head);
             pad(b, env, px(g.gap, env.scale), 1, head);
             b.push(&format!("+{added}"), part("add"));
@@ -1986,6 +2007,62 @@ pub fn expand_rows(env: &KitEnv, key: &str, c: &Comp) -> Vec<Row> {
         }
     }
     card_rows(env, CardKind::Plain, rows)
+}
+
+/// What of a diff block's head the file's name leaves room for, in device px: the head's WIDTH (logical px) less its pads,
+/// the icon, the counts and each button, measured by M.
+fn diff_head_room(env: &KitEnv, m: &dyn fit::Measure, c: &Comp, width: u32) -> f32 {
+    let Comp::DiffBlock {
+        added,
+        removed,
+        buttons,
+        icon,
+        ..
+    } = c
+    else {
+        return 0.0;
+    };
+    let d = env.density.name();
+    let g: Geom = kit_gen::geom(CompId::DiffBlock, &["head", d]);
+    let face = |p: &str| comp_face(kit_gen::face(CompId::DiffBlock, &[p, d]));
+    let w = |f: Option<&str>, t: &str| fit::width_in(m, f, t);
+    let mut used = (px(g.pad.0, env.scale) + px(g.pad.1, env.scale) + px(g.gap, env.scale)) as f32
+        + w(face("add"), &format!("+{added}"))
+        + w(face("head"), " ")
+        + w(face("del"), &format!("\u{2212}{removed}"));
+    if icon.is_some() {
+        used += px(ICON_PX, env.scale) as f32 + w(face("head"), " ");
+    }
+    let bg: Geom = kit_gen::geom(CompId::Button, &["quiet", "sm", d]);
+    let bf = comp_face(kit_gen::face(CompId::Button, &["quiet", "sm", d]));
+    for (label, _) in buttons {
+        used += (px(g.gap, env.scale) + px(bg.pad.0, env.scale) + px(bg.pad.1, env.scale)) as f32 + w(bf, label);
+    }
+    px(u16::try_from(width).unwrap_or(u16::MAX), env.scale) as f32 - used
+}
+
+/// [`expand_rows`] of a diff block with a `width`: the file's name fitted (an ellipsis, or nothing when the room is
+/// gone) to the room the head's other parts leave, measured by M, so the buttons stay inside the edge.
+pub fn diff_block_rows(env: &KitEnv, key: &str, c: &Comp, m: &dyn fit::Measure) -> Vec<Row> {
+    let mut c = c.clone();
+    if let Comp::DiffBlock {
+        file,
+        width: Some(width),
+        ..
+    } = &c
+    {
+        let room = diff_head_room(env, m, &c, *width);
+        let head = comp_face(kit_gen::face(CompId::DiffBlock, &["head", env.density.name()]));
+        let fitted = if room > 0.0 {
+            fit::fit_in(m, head, file, room)
+        } else {
+            String::new()
+        };
+        if let Comp::DiffBlock { file, .. } = &mut c {
+            *file = fitted;
+        }
+    }
+    expand_rows(env, key, &c)
 }
 
 /// ROWS as the rows of one card of KIND: each row's text under the card's ring face of its shape (single, top, mid,
@@ -2505,6 +2582,8 @@ mod tests {
                     args: vec![],
                 },
             )],
+            icon: None,
+            width: None,
         };
         let rows = expand_rows(&env, "d", &block);
         assert_eq!(rows.len(), 5);
@@ -2527,6 +2606,70 @@ mod tests {
         assert_eq!(ring(0), FaceId::KitCardPlainTop.name());
         assert_eq!(ring(2), FaceId::KitCardPlainMid.name());
         assert_eq!(ring(4), FaceId::KitCardPlainBottom.name());
+    }
+
+    struct Mono;
+    impl fit::Measure for Mono {
+        fn advance(&self, _role: &str, _ch: char) -> Option<f32> {
+            Some(8.0)
+        }
+        fn fallback(&self, _role: &str) -> f32 {
+            8.0
+        }
+    }
+
+    fn head_block(file: &str, width: Option<u32>) -> Comp {
+        Comp::DiffBlock {
+            file: file.into(),
+            added: 2,
+            removed: 1,
+            hunks: vec![],
+            buttons: ["Reject", "Accept"]
+                .iter()
+                .map(|l| {
+                    (
+                        (*l).to_owned(),
+                        Action {
+                            kind: "kit-test".into(),
+                            args: vec![],
+                        },
+                    )
+                })
+                .collect(),
+            icon: Some("file-code".into()),
+            width,
+        }
+    }
+
+    #[test]
+    fn diff_block_head_has_an_icon_and_fits_its_name_to_the_room() {
+        let image = |_: &str, _: u32| Some(ImageId { hash: 7, epoch: 1 });
+        let mut env = KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            density: Density::Comfortable,
+            icons: None,
+            ascii: false,
+        };
+        let name = "core/a-long-directory/drgnx-gateway.el";
+        // no icon image: the glyph; room enough: the whole name
+        let wide = diff_block_rows(&env, "d", &head_block(name, Some(600)), &Mono);
+        assert!(wide[0].text.contains(name) && wide[0].text.contains('\u{25a4}'));
+        // an icon image: the row names it
+        env.icons = Some(Icons(&image));
+        let wide = diff_block_rows(&env, "d", &head_block(name, Some(600)), &Mono);
+        assert_eq!(wide[0].images.len(), 1);
+        // a narrow window: the name gives way (an ellipsis), the counts and both buttons stay
+        let narrow = diff_block_rows(&env, "d", &head_block(name, Some(300)), &Mono);
+        let t = &narrow[0].text;
+        assert!(!t.contains(name) && t.contains('\u{2026}'), "{t}");
+        assert!(t.contains("+2") && t.contains("Reject") && t.contains("Accept"), "{t}");
+        // no room at all: no name, the buttons stay
+        let none = diff_block_rows(&env, "d", &head_block(name, Some(100)), &Mono);
+        assert!(!none[0].text.contains("core") && none[0].text.contains("Accept"));
+        // no width: the whole name, as `expand` draws it
+        assert!(diff_block_rows(&env, "d", &head_block(name, None), &Mono)[0].text.contains(name));
     }
 
     #[test]

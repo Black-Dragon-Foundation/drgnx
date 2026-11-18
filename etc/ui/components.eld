@@ -234,4 +234,6 @@
                      ((ctx) :bg panel :fg muted :inherit (drgnx-code-small drgnx-text-muted) :font (drgnx-code-small))
                      ((add) :bg add-bg :fg add-fg :inherit (drgnx-code-small diff-added) :font (drgnx-code-small))
                      ((del) :bg del-bg :fg del-fg :inherit (drgnx-code-small diff-removed) :font (drgnx-code-small)))
-              :replaces nil :helpers nil :lint nil)))
+              :replaces ((drgnx-agent-panel-added . drgnx-kit-diff-block-add) (drgnx-agent-panel-removed . drgnx-kit-diff-block-del)
+                         (drgnx-agent-panel-context . drgnx-kit-diff-block-ctx))
+              :helpers nil :lint t)))

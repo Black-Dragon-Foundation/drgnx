@@ -597,9 +597,9 @@ fn hunk_rows(idx: usize, key: &str, diffs: &[(String, String, String)]) -> Vec<R
             )];
             for change in h.iter_changes() {
                 let (sign, face) = match change.tag() {
-                    similar::ChangeTag::Insert => ("+", Some(FaceId::AgentPanelAdded.name())),
-                    similar::ChangeTag::Delete => ("-", Some(FaceId::AgentPanelRemoved.name())),
-                    similar::ChangeTag::Equal => (" ", Some(FaceId::AgentPanelContext.name())),
+                    similar::ChangeTag::Insert => ("+", Some(FaceId::KitDiffBlockAdd.name())),
+                    similar::ChangeTag::Delete => ("-", Some(FaceId::KitDiffBlockDel.name())),
+                    similar::ChangeTag::Equal => (" ", Some(FaceId::KitDiffBlockCtx.name())),
                 };
                 let text = change.value().trim_end_matches('\n');
                 lines.push((format!("    {sign}{text}"), face));

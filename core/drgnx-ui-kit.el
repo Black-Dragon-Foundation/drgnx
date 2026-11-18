@@ -743,22 +743,86 @@ chip's face (the part of `drgnx-ui-kit--chip' a component draws inside its own r
       (drgnx-ui-kit--b-push (or (plist-get props :text) "") face)
       (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
       (drgnx-ui-kit--b-finish nil 0 0 nil nil))))
+(defun drgnx-ui-kit--b-splice (expansion)
+  "EXPANSION, a component's (TEXT RUNS PROPS SPACES HEIGHT), at the end of the builder (the hub's nested `expand'); its
+HEIGHT."
+  (let ((at drgnx-ui-kit--bpos))
+    (drgnx-ui-kit--b-push (nth 0 expansion) nil)
+    (dolist (r (nth 1 expansion))
+      (setq drgnx-ui-kit--bruns (drgnx-ui-kit--run drgnx-ui-kit--bruns (+ at (nth 0 r)) (+ at (nth 1 r)) (nth 2 r))))
+    (dolist (p (nth 2 expansion))
+      (push (cons (+ at (nth 0 p)) (cons (+ at (nth 1 p)) (nthcdr 2 p))) drgnx-ui-kit--bprops))
+    (dolist (sp (nth 3 expansion)) (push (cons (+ at (nth 0 sp)) (cdr sp)) drgnx-ui-kit--bspaces))
+    (nth 4 expansion)))
+
+(defun drgnx-ui-kit--text-width (text face)
+  "TEXT's width in device px drawn in FACE (its box's ends included)."
+  (string-pixel-width (propertize text 'face face)))
+
+(defun drgnx-ui-kit--fit-px (text face px)
+  "TEXT drawn in FACE kept to PX device px: the whole of it, or the head of it and an ellipsis, or nothing when PX is
+gone (the hub's `fit::fit_in').  Less the same slack the hub keeps."
+  (let ((room (- px 10)))
+    (cond ((<= room 0) "")
+          ((<= (drgnx-ui-kit--text-width text face) room) text)
+          (t (let ((n (length text)))
+               (while (and (> n 0) (> (drgnx-ui-kit--text-width (concat (substring text 0 n) "\u2026") face) room))
+                 (setq n (1- n)))
+               (if (> n 0) (concat (substring text 0 n) "\u2026") ""))))))
+
+(defun drgnx-ui-kit--diff-head-room (props scale entry)
+  "What of the diff block's head the file's name leaves room for, in device px: PROPS' :width (logical px) less the
+pads, the icon, the counts and each button (the hub's `diff_head_room')."
+  (let* ((face (lambda (part) (drgnx-ui-kit--face 'diff-block (drgnx-ui-kit--chosen entry (list part)))))
+         (g (plist-get entry :geometry)) (pad (plist-get g :pad)) (head (funcall face 'head))
+         (button (drgnx-ui-kit-component 'button)) (chosen (drgnx-ui-kit--chosen button '(quiet sm)))
+         (bpad (drgnx-ui-kit--value (plist-get (plist-get button :geometry) :pad) chosen))
+         (bface (drgnx-ui-kit--face 'button chosen))
+         (used (+ (drgnx-px (car pad) nil scale) (drgnx-px (cdr pad) nil scale) (drgnx-px (plist-get g :gap) nil scale)
+                  (drgnx-ui-kit--text-width (format "+%d" (or (plist-get props :added) 0)) (funcall face 'add))
+                  (drgnx-ui-kit--text-width " " head)
+                  (drgnx-ui-kit--text-width (format "\u2212%d" (or (plist-get props :removed) 0)) (funcall face 'del)))))
+    (when (plist-get props :icon)
+      (setq used (+ used (drgnx-px drgnx-ui-kit-icon-px nil scale) (drgnx-ui-kit--text-width " " head))))
+    (seq-doseq (b (plist-get props :buttons))
+      (setq used (+ used (drgnx-px (plist-get g :gap) nil scale) (drgnx-px (car bpad) nil scale)
+                    (drgnx-px (cdr bpad) nil scale) (drgnx-ui-kit--text-width (elt b 0) bface))))
+    (- (drgnx-px (plist-get props :width) nil scale) used)))
+
 (defun drgnx-ui-kit--diff-block (props scale tty)
-  "The `diff-block' component of PROPS (:file :added :removed): its head row at SCALE, see `drgnx-ui-kit--expand'.  The
-hub's buttons after the counts are not drawn here: `drgnx-ui-kit-diff-block' puts text buttons after the head."
+  "The `diff-block' component of PROPS (:file :added :removed :buttons ([LABEL ACTION]...) :icon :width): its head row
+at SCALE, see `drgnx-ui-kit--expand'.  With a :width (logical px) the file's name is fitted to the room the rest of the
+head leaves.  The rows of the hunks are `drgnx-ui-kit-diff-block''s."
   (drgnx-ui-kit--building scale tty
     (let* ((entry (drgnx-ui-kit-component 'diff-block))
            (face (lambda (part) (drgnx-ui-kit--face 'diff-block (drgnx-ui-kit--chosen entry (list part)))))
            (g (plist-get entry :geometry)) (pad (plist-get g :pad)) (head (funcall face 'head))
-           (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0)))
+           (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0)) (height nil) (icon (and (plist-get props :icon) (intern (plist-get props :icon))))
+           (file (or (plist-get props :file) "")))
+      (when (and (plist-get props :width) (not tty))
+        (setq file (drgnx-ui-kit--fit-px file head (drgnx-ui-kit--diff-head-room props scale entry))))
       (drgnx-ui-kit--b-pad (car pad) tty-pad head)
-      (drgnx-ui-kit--b-push (or (plist-get props :file) "") head)
+      (when icon
+        (let ((img (and drgnx-ui-kit--icons (not tty) (funcall drgnx-ui-kit--icons icon drgnx-ui-kit-icon-px)))
+              (mark (let ((m (drgnx-ui-kit--glyph icon tty)))
+                      (if (and m (not (string-empty-p m))) m (if (eq tty 'ascii) "#" "\u25a4")))))
+          (if img
+              (progn (push (list drgnx-ui-kit--bpos (1+ drgnx-ui-kit--bpos) 'display img) drgnx-ui-kit--bprops)
+                     (drgnx-ui-kit--b-push " " nil))
+            (drgnx-ui-kit--b-push mark head))
+          (drgnx-ui-kit--b-push " " head)))
+      (drgnx-ui-kit--b-push file head)
       (drgnx-ui-kit--b-pad (plist-get g :gap) 1 head)
       (drgnx-ui-kit--b-push (format "+%d" (or (plist-get props :added) 0)) (funcall face 'add))
       (drgnx-ui-kit--b-push " " head)
       (drgnx-ui-kit--b-push (format "\u2212%d" (or (plist-get props :removed) 0)) (funcall face 'del))
+      (seq-doseq (b (plist-get props :buttons))
+        (drgnx-ui-kit--b-pad (plist-get g :gap) 1 head)
+        (setq height (drgnx-ui-kit--b-splice
+                      (drgnx-ui-kit--button (list :label (elt b 0) :style "quiet" :size "sm" :action (elt b 1))
+                                            scale tty))))
       (drgnx-ui-kit--b-pad (cdr pad) tty-pad head)
-      (drgnx-ui-kit--b-finish nil 0 0 nil nil))))
+      (drgnx-ui-kit--b-finish nil 0 0 nil height))))
 
 (defun drgnx-ui-kit--round (x)
   "X rounded half up, as the hub rounds (`drgnx-px')."

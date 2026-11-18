@@ -8,12 +8,14 @@
 //! the keys (`a`, `D`, `RET`, `A`) read at point.
 
 use super::icons;
+use super::kit_env;
 use crate::agents::session::rows::one_line;
 use drgnx_rows::faces::FaceId;
-use drgnx_rows::fit::{self, FontSet};
+use drgnx_rows::fit::FontSet;
+use drgnx_rows::kit::{self, Action, Comp, DiffLine, Hunk as KitHunk};
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::agents::{Permission, RpcId};
-use runstav::methods::view::{Display, ViewEnv};
+use runstav::methods::view::ViewEnv;
 use serde_json::{Value, json};
 
 /// The most files that get diff cards, and the most lines of a hunk a card shows.
@@ -78,14 +80,6 @@ fn px(env: &ViewEnv, v: f32) -> u32 {
     (f64::from(v) * f64::from(scale) + 0.5 + 1e-9).floor() as u32
 }
 
-/// TEXT's width drawn in FACE (none: the panel's default), in the font the editor says FACE draws in.
-fn text_width(i: &In, face: Option<&str>, text: &str) -> u32 {
-    match i.env.display {
-        Display::Gui => fit::width_in(i.fonts, face, text).ceil() as u32,
-        Display::Tty => text.chars().count() as u32 * i.env.cell.0.max(1),
-    }
-}
-
 /// TEXT kept to COLS chars (the last an ellipsis): a bound on a row's size, not its fit (the hub fits each row to its
 /// window, in the fonts it draws in).
 fn cut(text: &str, cols: usize) -> String {
@@ -103,18 +97,6 @@ fn id_of(id: &Option<RpcId>) -> String {
         Some(RpcId::Int(n)) => n.to_string(),
         Some(RpcId::Str(s)) => s.clone(),
         None => String::new(),
-    }
-}
-
-fn shape(n: usize, i: usize) -> &'static str {
-    if n == 1 {
-        FaceId::CardSingle.name()
-    } else if i == 0 {
-        FaceId::CardTop.name()
-    } else if i + 1 == n {
-        FaceId::CardBottom.name()
-    } else {
-        FaceId::CardMid.name()
     }
 }
 
@@ -141,157 +123,114 @@ fn icon(
     b.face(start, end, face);
 }
 
-/// A diff card's header: the file's icon and name, which lines and hunk, Reject and Accept at the right.  In a narrow
-/// panel the name gives way, then the label, so the buttons stay inside the edge.
-fn diff_header(
-    i: &In,
-    images: &mut Vec<(ImageId, String)>,
-    path: &str,
-    n: usize,
-    total: usize,
-    h: &Hunk,
-    key: String,
-) -> Row {
-    let env = i.env;
-    let (start, len) = range(&h.header, '+');
-    let label = format!(
-        "{start}–{} · hunk {} of {total}",
-        start + len.saturating_sub(1),
-        n + 1
-    );
-    let icon_px = px(env, 16.0);
-    let mut b = RowBuilder::new(key);
-    b.push(" ", None);
-    icon(
-        &mut b,
-        images,
-        icons::file_icon(path.rsplit('/').next().unwrap_or(path)),
-        "▤",
-        icon_px,
-        FaceId::TextMuted.name(),
-    );
-    b.push(" ", None);
-    let button = Some(FaceId::KitButtonSecondary.name());
-    let actions_w = text_width(i, button, " Reject ")
-        + text_width(i, None, " ")
-        + text_width(i, button, " Accept ");
-    // what is left for the name and the label: the icon, then the buttons and 20 px of margin
-    let room = i64::from(env.width_px)
-        - i64::from(icon_px)
-        - i64::from(text_width(i, None, "   "))
-        - i64::from(actions_w)
-        - i64::from(px(env, 20.0));
-    let name = one_line(path, 50);
-    let both = text_width(i, Some("bold"), &name)
-        + text_width(i, None, " ")
-        + text_width(i, Some(FaceId::AgentPanelSubtle.name()), &label);
-    let (name, label) = if env.width_px == 0 || i64::from(both) <= room {
-        (name, label)
-    } else if room > 0 {
-        let name = if i64::from(text_width(i, Some("bold"), &name)) <= room {
-            name
-        } else {
-            fit::fit_in(i.fonts, Some("bold"), &name, room as f32)
-        };
-        (name, String::new())
-    } else {
-        (String::new(), String::new())
-    };
-    b.push(&name, Some("bold"));
-    b.push(" ", None);
-    b.push(&label, Some(FaceId::AgentPanelSubtle.name()));
-    b.stop(
-        env.width_px
-            .saturating_sub(actions_w + px(env, 20.0))
-            .max(1),
-    );
-    let r = b.pos();
-    b.push(" Reject ", Some(FaceId::KitButtonSecondary.name()));
-    let r_end = b.pos();
-    b.prop(
-        r,
-        r_end,
-        "drgnx-agent-panel-action",
-        json!(format!("card:reject:{path}:{n}")),
-    );
-    b.prop(r, r_end, "help-echo", json!("D: take the change back"));
-    b.push(" ", None);
-    let a = b.pos();
-    b.push(" Accept ", Some(FaceId::KitButtonSecondary.name()));
-    let a_end = b.pos();
-    b.prop(
-        a,
-        a_end,
-        "drgnx-agent-panel-action",
-        json!(format!("card:accept:{path}:{n}")),
-    );
-    b.prop(a, a_end, "help-echo", json!("a: keep the change"));
-    let end = b.pos();
-    b.prop(0, end, "drgnx-agent-panel-card", json!(["diff", path, n]));
-    b.finish()
-}
-
-/// Hunk N of PATH as a card: the header over the hunk's lines, numbered (the new file's numbers, a removed line the old
-/// file's), in the panel's added, removed and context faces, each cut to the room.
+/// Hunk N of PATH as a kit diff block (`drgnx_rows::kit::Comp::DiffBlock`): the head row (the file, which hunk, the
+/// counts, Reject and Accept) over the hunk's lines, numbered (the new file's numbers, a removed line the old file's),
+/// each cut to MAX_CHARS.  The buttons keep the panel's own click props, which the editor's dispatcher reads.
 fn diff_card(
-    i: &In,
-    images: &mut Vec<(ImageId, String)>,
     path: &str,
     n: usize,
     total: usize,
     h: &Hunk,
+    i: &In,
+    images: &mut Vec<(ImageId, String)>,
 ) -> Vec<Row> {
-    let env = i.env;
-    let mut rows = vec![diff_header(
-        i,
-        images,
-        path,
-        n,
-        total,
-        h,
-        format!("c:diff:{path}:{n}:h"),
-    )];
     let (mut old, _) = range(&h.header, '-');
     let (mut new, _) = range(&h.header, '+');
-    let body: Vec<&String> = h.lines.iter().take(MAX_LINES).collect();
-    let count = body.len();
-    for (k, l) in body.into_iter().enumerate() {
-        let c = l.chars().next();
-        let num = match c {
+    let (mut added, mut removed) = (0, 0);
+    let mut lines = Vec::new();
+    for l in h.lines.iter().take(MAX_LINES) {
+        let (kind, rest, num) = match l.chars().next() {
             Some('-') => {
                 old += 1;
-                old - 1
+                removed += 1;
+                (DiffLine::Del, &l[1..], old - 1)
             }
             Some('+') => {
                 new += 1;
-                new - 1
+                added += 1;
+                (DiffLine::Add, &l[1..], new - 1)
             }
-            _ => {
+            c => {
                 old += 1;
                 new += 1;
-                new - 1
+                let rest = if c == Some(' ') { &l[1..] } else { l.as_str() };
+                (DiffLine::Ctx, rest, new - 1)
             }
         };
-        let (sign, rest, face) = match c {
-            Some('+') => ("+", &l[1..], FaceId::AgentPanelAdded.name()),
-            Some('-') => ("-", &l[1..], FaceId::AgentPanelRemoved.name()),
-            Some(' ') => (" ", &l[1..], FaceId::AgentPanelContext.name()),
-            _ => (" ", l.as_str(), FaceId::AgentPanelContext.name()),
-        };
-        let mut b = RowBuilder::new(format!("c:diff:{path}:{n}:{k}"));
-        b.push(" ", None);
-        // the line number in the muted colour, the line's tint under it
-        let gutter = b.pos();
-        b.push(&format!("{num:4} "), Some(FaceId::TextMuted.name()));
-        let gutter_end = b.pos();
-        b.face(gutter, gutter_end, face);
-        // cut at the card's edge by the row fit, which measures the line in its font
-        b.push(&format!("{sign}{}", cut(rest, MAX_CHARS)), Some(face));
-        b.stop(env.width_px.saturating_sub(px(env, 12.0)));
-        let end = b.pos();
-        b.face(0, end, shape(count, k));
-        b.prop(0, end, "drgnx-agent-panel-card", json!(["diff", path, n]));
-        rows.push(b.finish());
+        lines.push((kind, num, cut(rest, MAX_CHARS)));
+    }
+    let file = if total > 1 {
+        format!("{path} · hunk {} of {total}", n + 1)
+    } else {
+        path.to_owned()
+    };
+    let button = |label: &str, verb: &str| {
+        (
+            label.to_owned(),
+            Action {
+                kind: "card".into(),
+                args: vec![json!(verb), json!(path), json!(n)],
+            },
+        )
+    };
+    let block = Comp::DiffBlock {
+        file,
+        added,
+        removed,
+        hunks: vec![KitHunk {
+            header: h.header.clone(),
+            lines,
+        }],
+        buttons: vec![button("Reject", "reject"), button("Accept", "accept")],
+        icon: Some(icons::file_icon(path.rsplit('/').next().unwrap_or(path)).to_owned()),
+        // the head's room in logical px: the name gives way to the buttons in a narrow panel
+        width: (i.env.width_px > 0)
+            .then(|| (f64::from(i.env.width_px) / f64::from(i.env.scale.max(0.01))).round() as u32),
+    };
+    // the icons the head draws: their SVG goes with the rows
+    let drawn = std::cell::RefCell::new(Vec::new());
+    let icon_image = |name: &str, size: u32| {
+        icons::svg(name, size).map(|(id, svg)| {
+            drawn.borrow_mut().push((id, svg));
+            id
+        })
+    };
+    let env = kit::KitEnv {
+        icons: Some(kit::Icons(&icon_image)),
+        ..kit_env(i.env)
+    };
+    let mut rows = kit::diff_block_rows(&env, &format!("c:diff:{path}:{n}"), &block, i.fonts);
+    images.extend(drawn.into_inner());
+    for r in &mut rows {
+        let end = u32::try_from(r.text.chars().count()).unwrap_or(u32::MAX);
+        // the kit's button action is the panel's: `card:VERB:PATH:N`, which the editor's one dispatcher reads
+        let panel: Vec<_> = r
+            .props
+            .iter()
+            .filter(|p| p.2 == "drgnx-action" && p.3[0] == "card")
+            .map(|p| {
+                let verb = p.3[1].as_str().unwrap_or_default();
+                (p.0, p.1, format!("card:{verb}:{path}:{n}"))
+            })
+            .collect();
+        r.props.retain(|p| !(p.2 == "drgnx-action" && p.3[0] == "card"));
+        for (from, to, action) in panel {
+            let help = if action.starts_with("card:reject") {
+                "D: take the change back"
+            } else {
+                "a: keep the change"
+            };
+            r.props
+                .push((from, to, "drgnx-agent-panel-action".into(), json!(action)));
+            r.props
+                .push((from, to, "help-echo".into(), json!(help)));
+        }
+        r.props.push((
+            0,
+            end,
+            "drgnx-agent-panel-card".into(),
+            json!(["diff", path, n]),
+        ));
     }
     rows
 }
@@ -389,7 +328,7 @@ pub fn rows(i: &In) -> (Vec<Row>, Vec<(ImageId, String)>) {
     for (path, diff) in i.diffs.iter().take(MAX_FILES) {
         let hunks = parse_hunks(diff);
         for (n, h) in hunks.iter().enumerate() {
-            out.extend(diff_card(i, &mut images, path, n, hunks.len(), h));
+            out.extend(diff_card(path, n, hunks.len(), h, i, &mut images));
         }
     }
     for p in i.permissions {

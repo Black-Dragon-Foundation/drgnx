@@ -583,6 +583,27 @@ rows; the head carries the counts and the buttons; its help-echo says the file a
       (push-button pos)
       (should fired))))
 
+(ert-deftest drgnx-ui-kit/diff-block-head-fits-its-name-to-the-room ()
+  "With a :width the head's file name gives way (an ellipsis, or nothing) to the counts and the buttons; without one it
+is whole.  Every character is 8 px wide here."
+  (cl-letf (((symbol-function 'drgnx-ui-kit--text-width) (lambda (text _face) (* 8 (length text)))))
+    (let* ((name "core/a-long-directory/drgnx-gateway.el")
+           (head (lambda (width)
+                   (plist-get (drgnx-ui-kit-expand
+                               'diff-block (list :c "diff-block" :file name :added 2 :removed 1 :icon "file-code"
+                                                 :width width
+                                                 :buttons (vector (vector "Reject" '(:kind "kit-test" :args [])) (vector "Accept" '(:kind "kit-test" :args []))))
+                               1 nil) :text))))
+      (should (string-match-p (regexp-quote name) (funcall head 600)))
+      (should (string-match-p "\u25a4" (funcall head 600)))
+      (let ((narrow (funcall head 300)))
+        (should-not (string-match-p (regexp-quote name) narrow))
+        (should (string-match-p "\u2026" narrow))
+        (should (string-match-p "Reject" narrow)) (should (string-match-p "Accept" narrow)))
+      (let ((none (funcall head 100)))
+        (should-not (string-match-p "core" none)) (should (string-match-p "Accept" none)))
+      (should (string-match-p (regexp-quote name) (plist-get (drgnx-ui-kit-expand 'diff-block (list :c "diff-block" :file name :added 2 :removed 1) 1 nil) :text))))))
+
 (ert-deftest drgnx-ui-kit/card-line-forms ()
   (let ((e (drgnx-ui-kit-expand 'card '(:c "card" :kind "selected" :shape "mid" :text "Go") 1.0 nil)))
     (should (equal (plist-get e :text) " Go "))
