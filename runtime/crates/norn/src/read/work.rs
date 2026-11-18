@@ -46,10 +46,7 @@ pub const READS_MAX: i64 = 1 << 16;
 /// The `read` steps' line ranges of a file, under any of PATHS (the names a step's detail may give it: absolute or
 /// relative to its worktree), newest first: (first line, last line, the step's agent) each; at most [`READS_MAX`].
 /// The minimap's agent-read heat layer.
-pub fn reads_of(
-    conn: &Tx,
-    paths: &[&str],
-) -> Result<Vec<Read>, CoordError> {
+pub fn reads_of(conn: &Tx, paths: &[&str]) -> Result<Vec<Read>, CoordError> {
     let mut st = conn.prepare(
         "select d.line_start, d.line_end, s.agent from step_detail d join step s on s.id = d.step \
          where d.kind = 'read' and d.path = ?1 order by d.step desc limit ?2",
