@@ -4017,14 +4017,20 @@ mod tests {
         .unwrap();
         let titles: Vec<String> =
             f.db.read(|c| {
-                let mut q = c.prepare("select title from entity where retired_tx is null")?;
+                // a piece without a title (a step, a body) is null: the spec's text would be in either column
+                let mut q = c.prepare(
+                    "select coalesce(title, '') || ' ' || coalesce(body, '') from entity where retired_tx is null",
+                )?;
                 Ok(q.query_map([], |r| r.get::<_, String>(0))?
                     .collect::<Result<_, _>>()?)
             })
             .await
             .unwrap();
         assert!(titles.iter().all(|t| !t.contains("Secret")), "{titles:?}");
-        assert!(titles.iter().any(|t| t == "Names it"), "{titles:?}");
+        assert!(
+            titles.iter().any(|t| t.starts_with("Names it ")),
+            "{titles:?}"
+        );
     }
 
     /// The one file of `~/org` the product reads is `board.org` (named by `only: board`): its items are imported,
@@ -4108,7 +4114,8 @@ mod tests {
         let steps: i64 =
             f.db.read(|c| {
                 Ok(c.query_row(
-                    "select count(*) from entity where kind = 'step' and retired_tx is null \
+                    "select coalesce(sum(json_array_length(data, '$.steps')), 0) from entity \
+                     where kind = 'task' and retired_tx is null \
                      and json_extract(data, '$.records.file') like '%/heads.md'",
                     [],
                     |r| r.get(0),
