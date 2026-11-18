@@ -1153,7 +1153,10 @@ budget chain; the forecast line the user saw is the editor's).
   the source tree's documents as they were at the step: `History::fork` at the record the step anchors
   (`step.history_op`), else the newest record the session caused by the step's end. A step whose record holds none of
   the source's documents (the history has none of its files yet) starts the branch from its base. Either way there
-  is one `fork` record. A conversation that cannot start removes the tree again and freezes the branch. A Codex fork
+  is one `fork` record. The project's history is opened on a blocking thread (`branches::trees`: its sqlite store,
+  which a busy disk can stall for seconds, never on an async worker; a test-hooks hub with
+  `RATATOSKR_TEST_HISTORY_OFF_RUNTIME` refuses it there). A conversation that cannot start removes the tree again and
+  freezes the branch. A Codex fork
   marks its new tree untrusted, as every Codex launch marks its folder (`projects."<cwd>".trust_level`).
 - **`history/fork/drop {id}`** (a session linked `forked_from` another): its agent stopped, its tree removed (only a
   tree the hub made for this fork, `fork-<sid8>`: `git worktree remove --force` and `worktree prune` in the trusted
