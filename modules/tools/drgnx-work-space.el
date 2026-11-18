@@ -627,6 +627,15 @@ which the hub's wheel protocol drives.  It has no key of its own."
 
 ;;;; The module
 
+(defun drgnx-work-space--run-command (args)
+  "The action kind `work-command' (the hub's buttons, e.g. the Flow detail's): select the window that was clicked, then
+run the registry command named by the one element of ARGS.  The name is looked up, never interned from the hub's word."
+  (let* ((ev last-input-event) (w (and (consp ev) (posn-window (event-start ev))))
+         (id (and (stringp (car args)) (intern-soft (car args)))))
+    (unless (and id (drgnx-commands-get id)) (user-error "Work: no command %s" (car args)))
+    (when (and (windowp w) (window-live-p w)) (select-window w))
+    (drgnx-ui-kit-run id)))
+
 (defun drgnx-work-space--setup ()
   "tools/work-space's setup: the hub client's connection and disconnection reach the map client; the map follows the
 windows; the commands."
@@ -645,6 +654,7 @@ windows; the commands."
   (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
   (drgnx-module-hook 'find-file-hook live-file () (drgnx-work-live-file--maybe))
   (drgnx-module-hook 'drgnx-view-selected-functions follow-trail (buffer id) (drgnx-work-space--follow-trail buffer id))
+  (drgnx-ui-kit-define-action 'work-command #'drgnx-work-space--run-command '(("RET" . identity)))
   (drgnx-command-define 'work-take-wheel :category "Work" :title "Take the Wheel from the Agent"
                         :command #'drgnx-work-take-wheel :map 'drgnx-work-live-file-mode-map
                         :doc "Pause the agent that is editing here and make this file editable; saving tells the agent")

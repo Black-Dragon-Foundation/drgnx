@@ -319,8 +319,7 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   (11 px). A task's row lights under the pointer (`mouse-face` `drgnx-hover`);
 - the columns fit the window, titles before chips: each gate column wants its widest cell or heading in the table's
   font (the hub measures with the env's `caption` role), the agent's is its widest agent, and the task column wants its widest
-  title, up to a third of the window. When both don't fit, the widest gate columns give way first (their cells and
-  headings cut with an ellipsis, down to 44 px a column), and only then the titles (down to 96 px);
+  title, up to a third of the window. When both don't fit, the widest gate columns give way first (their cells cut with an ellipsis, down to 44 px a column; a heading that no longer fits shows its icon alone, its word the icon's `help-echo`, never a stub like "B…"), and only then the titles (down to 96 px);
 - under them the batch being checked: its heading with an "affected groups g/n" chip (the groups the groups gate
   listed at the combined tree, green of them, red in the error face), a row per member (its title, its tip, what the
   queue said to it last: "trial merge clean", or why it waits, the job's tasks named by their labels; then what the
@@ -376,8 +375,7 @@ checks (base .. tip, then each commit with its short sha, `tests` for red first'
 subject: the job data's `commits`, which `orch::gates::before_merge` records each time it looks, and `bases`); the
 evidence so far as a table, a label column (`brief`, `tests`, `green`, `red`, then any `waiver`) and each newest
 record's job, machine and counts, "none recorded" in the attention face where there is none; and the actions as the kit's buttons (`Comp::Button`: the first primary, filled; its key the kit's key hint inside it, after the
-button's gap), one row of them wrapping to the tile's width by the width the kit's expansion measures at. Each row of buttons is 30 logical px
-high (the mockup's 24 px buttons, 6 px apart), so a button's box has room for its pad. `r` (**Run the red** for a red-first hold, else **Check again**:
+button's gap), one row of them wrapping to the tile's width by the width the kit's expansion measures at. The buttons are the kit's small size (22 logical px; the mockup's are 24); each row of them is that high (its box fills the row) with a 6 px row between two rows and above the note under them. A click on one runs its registered command (the action kind `work-command`, which `tools/work-space` defines: the registry id of the key's command, in the window clicked), as the key does. `r` (**Run the red** for a red-first hold, else **Check again**:
 the card's `merge`), `s` (**Tell the agent**: `retry`) and `w` (**Waive once**: `waive`, asking for the reason) answer
 the card with `job/card` as the user; the hub takes the waiver only from the user's connection. The tile shows in the
 right dock where the map's side panel was, and the panel comes back when the lens leaves the Flow.
