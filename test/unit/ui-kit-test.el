@@ -910,7 +910,21 @@ switch."
     (should (memq 'drgnx-kit-segmented (ensure-list (get-text-property (string-search "Board" s) 'face s)))))
   (let ((s (drgnx-ui-kit-tab "a.el" 'editor 'selected nil t 'tab-line)))
     (should (eq 'drgnx-kit-tab-current (get-text-property (string-search "a.el" s) 'face s)))
-    (should-not (memq 'bold (ensure-list (get-text-property (string-search "a.el" s) 'face s))))))
+    (should-not (memq 'bold (ensure-list (get-text-property (string-search "a.el" s) 'face s)))))
+  ;; a tool tile's tab row (its stack): the kit's panel tabs, the shown one selected and never bold
+  (require 'drgnx-grid)
+  (let ((w (selected-window)) (old (window-parameter (selected-window) 'drgnx-pane-stack)))
+    (unwind-protect
+        (progn
+          (set-window-parameter w 'drgnx-pane-stack '(kit-test-shown kit-test-other))
+          (let ((row (drgnx-grid--tab-row w))
+                (kit (lambda (title state) (let ((s (drgnx-ui-kit-tab title 'panel state nil nil 'tab-line)))
+                                             (get-text-property (string-search title s) 'face s)))))
+            (dolist (c '(("Kit-Test-Shown" selected) ("Kit-Test-Other" rest)))
+              (let ((face (get-text-property (string-search (car c) row) 'face row)))
+                (should (equal face (funcall kit (car c) (cadr c))))
+                (should-not (memq 'bold (ensure-list face)))))))
+      (set-window-parameter w 'drgnx-pane-stack old))))
 
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here
