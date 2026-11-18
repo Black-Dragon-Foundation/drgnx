@@ -1701,8 +1701,8 @@ lists at each publish.
 - **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler`, or in a terminal
   (`drgnx-ruler-available-p`).
 - **Checks.** `ruler-test.el` and `marks-test.el` (batch); the look scenes check every scrollable window of every
-  scene (`drgnx-look-scene-scrollbars`: the strip is set, and drawn exactly when the content runs past the window; a strip under the palette's child frame is not
-  judged, one under any other child frame, a toast say, is an error);
+  scene (`drgnx-look-scene-scrollbars`: the strip is set, and drawn exactly when the content runs past the window; a strip under the palette's child frame or a
+  tile switcher's card is not judged, one under any other child frame, a toast say, is an error);
   Nidhogg's `glitnir-gui/the-ruler-*` rows check the pixels.
 - **Perf.** `debug-ruler-scroll` (10,000 lines, 200 marks) against `debug-ruler-baseline`, the same scroll with the
   ruler off (docs/develop/perf.md, "The overview ruler"). The margin version this

@@ -706,6 +706,11 @@ How it works:
   agents on the map and cannot share a hub, so these scenes carry `:seed "map"` in `drgnx-look-scenes`: a run draws
   them in a second session of their own (with its own setup), after the other scenes, and its hub seeds the map's
   graph (`drgnx-look-scene-seed`). Each selects the first agent (its chain lit, the cards off it dimmed, its detail in the side panel) and waits for its rows.
+- **The tiling scenes** (`tiling`, `tiling-resize`, `tiling-full`; mockup `tiling.html`) build its six tiles
+  (`drgnx-look-scene--six-tiles`): the Explorer, the gateway file's editor (current), an editor of three tabs beside
+  it, the mock agent's panel in the right dock, the panel's terminal under the editors and the Work map in a tile under
+  the agent. Their keys then open the switcher (`C-<escape>`), Resize Tiles with one step (`C-k r <right>`) or full
+  size (`C-k C-m`), and close it after the shot. The switcher's cards are child frames the scrollbar check expects.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
   modules, the visible child frames, `:palette` while a minibuffer is open (whether the palette floats and why: its
   category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
