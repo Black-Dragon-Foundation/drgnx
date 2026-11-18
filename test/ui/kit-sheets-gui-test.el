@@ -440,6 +440,82 @@ item on the surface, in every theme and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'segmented))
 
+(declare-function drgnx-wb-area-show "drgnx-wb")
+(declare-function drgnx-wb-area-hide "drgnx-wb")
+(declare-function drgnx-wb-area-window "drgnx-wb")
+(declare-function drgnx-state-mode "drgnx-state")
+
+(drgnx-look-gui-deftest drgnx-kit-sheet/panel-tab-pill ()
+  "The panel's tab row (debugging.html `.ptabs' and `.pt.on'): the row is 32 px tall and the shown tab's pill on the
+quiet selection is 24 px of it, 4 above and 4 below (one device px of rounding allowed), read down a column 7 px
+past the pill's left edge: inside its start pad, clear of its rounded corners.  Red first: the pill was as tall as the row's text line."
+  (skip-unless (and (display-graphic-p) (fboundp 'glitnir-active-p) (glitnir-active-p)))
+  (require 'drgnx-area)
+  (require 'drgnx-state)
+  (let* ((root (drgnx-uitest-root-frame))
+         (config (with-selected-frame root (current-window-configuration)))
+         (saved (mapcar (lambda (p) (cons p (frame-parameter root p))) '(drgnx-wb-areas drgnx-wb-panel-px)))
+         (main (get-buffer-create "*panel-pill main*")))
+    (unwind-protect
+        (with-selected-frame root
+          (drgnx-uitest-bare-frame)
+          (load-theme 'drgnx-dark t)
+          (delete-other-windows)
+          (switch-to-buffer main)
+          (drgnx-state-mode 1)
+          (set-frame-parameter root 'drgnx-wb-areas nil)
+          (set-frame-parameter root 'drgnx-wb-panel-px nil)
+          (drgnx-wb-area-show 'panel 'results)
+          (drgnx-test-wait-presented)
+          (let* ((w (drgnx-wb-area-window 'panel)) (edges (window-pixel-edges w)) (top (nth 1 edges))
+                 (s (drgnx-uitest-device-scale root)) (row (window-header-line-height w))
+                 (mid (+ top (/ row 2))) (x (nth 0 edges)) (at nil))
+            (should (equal (list 'row (drgnx-px 32 root)) (list 'row row)))
+            ;; the shown tab's first pixel, from what lies under the header line
+            (while (and (not at) (< x (nth 2 edges)))
+              (let* ((posn (posn-at-x-y x mid root)) (str (and posn (posn-string posn))))
+                (when (and str (stringp (car str))
+                           (equal (cdr-safe (get-text-property (cdr str) 'drgnx-tab (car str))) 'results))
+                  (setq at x)))
+              (setq x (1+ x)))
+            (should at)
+            (let* ((snap (drgnx-uitest-snapshot root)) (fill (drgnx-kit-sheet--argb 'drgnx-kit-tab-panel-current))
+                   ;; the pill's left edge: its first fill pixel across the row's middle (the tab's string may start
+                   ;; with the gap before it)
+                   (left (cl-loop for dx from (round (* s at)) below (round (* s (nth 2 edges)))
+                                  when (equal fill (drgnx-uitest-pixel snap dx (round (* s mid)))) return dx))
+                   ;; past its 6 px corner, before its 9 px pad ends
+                   (col (+ (or left 0) (round (* s (drgnx-px 7 root)))))
+                   ;; the row's own colour, at its top (4 px above the pill)
+                   (bar (drgnx-uitest-pixel snap col (round (* s top))))
+                   ;; the pill: what is not the row's colour down the column (its ring and its fill)
+                   (ys (cl-loop for y from (round (* s top)) below (round (* s (+ top row)))
+                                unless (equal bar (drgnx-uitest-pixel snap col y)) collect y))
+                   (pill (drgnx-px 24 root)) (dev (lambda (n) (round (* s n)))))
+              (ert-info ((format "pill rows %S, left %S, col %d, row %d, ring %S, fill %S" ys left col row
+                                 (and ys (drgnx-uitest-pixel snap col (car ys))) fill))
+                (should left)
+                (should ys)
+                ;; the tab's text in the kit face's own size: the header line's relative height is not applied twice
+                (let* ((st (posn-string (posn-at-x-y (+ at 20) mid root)))
+                       (size (lambda (font) (aref (font-info font root) 2))))
+                  (should (equal (funcall size (font-at (cdr st) w (car st)))
+                                 (funcall size (face-font 'drgnx-kit-tab-panel-current root ?x)))))
+                ;; filled with the quiet selection in its middle
+                (should (equal fill (drgnx-uitest-pixel snap col (nth (/ (length ys) 2) ys))))
+                ;; one run, 24 px (or one short), in the row's middle
+                (should (= (length ys) (1+ (- (car (last ys)) (car ys)))))
+                (should (<= (1- (funcall dev pill)) (length ys) (funcall dev pill)))
+                (should (<= (abs (- (- (car ys) (funcall dev top))
+                                    (- (funcall dev (+ top row)) (1+ (car (last ys))))))
+                            1))))))
+      (ignore-errors (with-selected-frame root (drgnx-wb-area-hide 'panel)))
+      (drgnx-state-mode -1)
+      (pcase-dolist (`(,p . ,v) saved) (set-frame-parameter root p v))
+      (with-selected-frame root (set-window-configuration config))
+      (kill-buffer main)
+      (mapc #'disable-theme custom-enabled-themes))))
+
 (drgnx-look-gui-deftest drgnx-kit-sheet/state-table ()
   "The state table's rows in every theme and density: each state's fill, and no edge round a hovered or selected row."
   (skip-unless (display-graphic-p))
