@@ -49,7 +49,7 @@
               (should (equal (frame-position frame) (cons (nth 0 edges) (nth 1 edges))))
               (should (= (frame-pixel-width frame) (- (nth 2 edges) (nth 0 edges))))
               (should (equal (with-current-buffer (aref card 1) (buffer-substring-no-properties (point-min) (point-max)))
-                             "1 (defun drgnx-ui-sticky-fn ()\n3   (let ((x 1))"))
+                             "(defun drgnx-ui-sticky-fn ()\n  (let ((x 1))"))
               ;; no reflow: the window's start, and a row's place under the card, are as before
               (should (= (window-start w) start))
               (should (= (drgnx-ui-sticky--y (drgnx-ui-sticky--line 45)) y))
@@ -61,6 +61,45 @@
               (should (equal (aref card 2) (list (drgnx-ui-sticky--line 1) (drgnx-ui-sticky--line 3)))))))
       (drgnx-sticky--hide-all t)
       (kill-buffer b))))
+
+(defun drgnx-ui-sticky--text-x (w pos)
+  "The x, in W's frame, where POS's character starts in window W."
+  (+ (car (window-inside-pixel-edges w)) (car (posn-x-y (posn-at-point pos w)))))
+
+(ert-deftest drgnx-ui-sticky-lines/the-cards-columns-line-up-with-the-editors ()
+  "★14 (design 2026-11-18 §3.4e): with line numbers on, the card's text starts at the editor's text column and its
+numbers are padded to the editor's digits, in a file of 9 lines and one of 1000+, and at a larger text scale."
+  (skip-unless (display-graphic-p))
+  (pcase-dolist (`(,lines ,scale) '((9 0) (1200 0) (1200 2)))
+    (let ((b (generate-new-buffer "sticky-lines-columns")) (w (selected-window)))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer b)
+            (insert "(defun drgnx-ui-sticky-fn ()\n  (let ((x 1))\n")
+            (dotimes (i (- lines 3)) (insert (format "    (message \"line %d\")\n" i)))
+            (insert "    x))")
+            (emacs-lisp-mode)
+            (text-scale-set scale)
+            (display-line-numbers-mode 1)
+            ;; near the end: the window's numbers have the file's digits (Emacs pads to the numbers shown)
+            (set-window-start w (drgnx-ui-sticky--line (max 2 (- lines 40))))
+            (redisplay t)
+            (drgnx-sticky--fill w (list (drgnx-ui-sticky--line 1) (drgnx-ui-sticky--line 2)))
+            (redisplay t)
+            (let* ((card (cdr (assq w drgnx-sticky--cards))) (frame (aref card 0)) (cw (frame-root-window frame))
+                   (digits (with-selected-window w (line-number-display-width)))
+                   (card-x (+ (car (frame-position frame))
+                              (car (window-inside-pixel-edges cw))
+                              (car (posn-x-y (posn-at-point (with-current-buffer (aref card 1) (1+ (point-min))) cw))))))
+              (should (frame-visible-p frame))
+              ;; the first character after the margin's string, `(', against the editor's line 1's `('
+              (should (= card-x (drgnx-ui-sticky--text-x w (with-current-buffer b (drgnx-ui-sticky--line 1)))))
+              (should (equal (substring-no-properties
+                              (cadr (with-current-buffer (aref card 1) (get-text-property (point-min) 'display))))
+                             (format (format "%%%dd " (1+ digits)) 1)))))
+        (drgnx-sticky--hide-all t)
+        (kill-buffer b)))))
 
 (ert-deftest drgnx-ui-sticky-lines/the-card-leaves-the-minimap-in-sight ()
   (skip-unless (display-graphic-p))

@@ -1691,6 +1691,13 @@ lists at each publish.
   The store's `pane-resized` and `windows-changed` events (a `now` subscription that arms a 0 s timer) move the cards
   with their windows. `drgnx-pin-show` fills the same card with a pin's
   lines and keeps it there until toggled off.
+  - **Columns** (design 2026-11-18 §3.4e). The card takes the editor's font (frame parameter) and its buffer's
+    `face-remapping-alist` (text-scale). Numbers, only when the editor shows them, sit in the card's left margin
+    (a `(margin left-margin)` display string), padded to the editor's `line-number-display-width`, not to the card's
+    last line. The margin is whole columns, so `drgnx-sticky--margin` sizes it to the string's pixel width rounded up
+    and moves the card left by the remainder (`drgnx-sticky--shift`). The text then starts at the editor's text column,
+    and the margin does not scroll sideways. The card's window carries `nidhogg-hscroll-of` WINDOW, from which
+    Nidhogg copies the editor's hscroll in pixels.
 - **Folding.** `editor/fold` (`modules/editor/drgnx-fold.el`) reads the line model's one fold table (`nidhogg-lines-folds`,
   `nidhogg-lines-fold-at`: `(BEG END KIND DEPTH SOURCE)`, BEG the first line's start, END the last line's end). Its
   sources are numbers: 0 tree-sitter, 1 the hub, 2 headings and 4 indentation (the model finds those itself, again
