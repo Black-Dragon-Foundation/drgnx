@@ -5152,21 +5152,21 @@ mod tests {
         assert_eq!(placed(&q, 101).as_deref(), Some("r1"));
     }
 
-    // [D] pure: `kvm` on a `shared` runner needs the hub's opt-in and the runner's own, both naming the job's project
+    // [D] pure: `kvm` on a `my-cloud` runner (a `shared` one takes no private job at all) needs the hub's opt-in and the runner's own, both naming the job's project
     #[tokio::test]
     async fn kvm_on_a_shared_runner_needs_both_opt_ins() {
         // the hub's opt-in only
         let (_d, q) = feature_queue(&["podman", "kvm"], &["kvm"], "drgnx");
-        q.set_runner("r1", RunnerTrust::Shared, Accept::All);
+        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
         enable(&q, &[(Feature::Kvm, "drgnx")]);
         assert_eq!(placed(&q, 100), None, "hub only");
         // the runner's only
         let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:drgnx"], &["kvm"], "drgnx");
-        q.set_runner("r1", RunnerTrust::Shared, Accept::All);
+        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
         assert_eq!(placed(&q, 100), None, "runner only");
         // the runner's names another project
         let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:other"], &["kvm"], "drgnx");
-        q.set_runner("r1", RunnerTrust::Shared, Accept::All);
+        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
         enable(&q, &[(Feature::Kvm, "drgnx")]);
         assert_eq!(
             placed(&q, 100),
@@ -5175,7 +5175,7 @@ mod tests {
         );
         // both
         let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:drgnx"], &["kvm"], "drgnx");
-        q.set_runner("r1", RunnerTrust::Shared, Accept::All);
+        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
         enable(&q, &[(Feature::Kvm, "drgnx")]);
         assert_eq!(placed(&q, 100).as_deref(), Some("r1"), "both");
     }

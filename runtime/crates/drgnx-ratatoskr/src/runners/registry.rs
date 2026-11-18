@@ -415,8 +415,8 @@ fn serve_flags(r: &Record) -> Vec<String> {
     if let Some(cpus) = &r.island {
         f.extend(["--island".to_string(), cpus.clone()]);
     }
-    // a `mine` runner's `kvm` is a probe fact offered to every project: its serve gets it for all (`*`)
-    if r.trust == Trust::Mine {
+    // a `mine` Linux runner's `kvm` is a probe fact offered to every project: its serve gets it for all (`*`)
+    if r.trust == Trust::Mine && !r.os.starts_with("macos") {
         f.extend(["--feature".to_string(), "*:kvm".to_string()]);
     }
     for (feature, project) in &r.enabled {
@@ -1519,10 +1519,12 @@ mod tests {
             serve_flags(&r)[6..],
             ["--feature".to_string(), "drgnx:render".to_string()]
         );
-        // a `mine` runner's kvm is a fact for every project; another trust sends none
+        // a `mine` Linux runner's kvm is a fact for every project; a Mac or another trust sends none
         assert!(!serve_flags(&r).contains(&"*:kvm".to_string()));
-        r.trust = Trust::Mine;
+        r.os = "fedora 45".into();
         assert!(serve_flags(&r).contains(&"*:kvm".to_string()));
+        r.trust = Trust::MyCloud;
+        assert!(!serve_flags(&r).contains(&"*:kvm".to_string()));
     }
 
     // [D] pure: a feature is on per project and runner, off again by name; an unknown one or a project key that could
