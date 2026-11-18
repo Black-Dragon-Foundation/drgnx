@@ -1558,6 +1558,7 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-console debug-console-history-previous debug-console-history-next ; the console
                               debug-memory-next debug-memory-previous debug-memory-write ; the memory view
                               debug-heap-select ; the heap graph's RET
+                              face-toggle-wrap ; group 21e: the word-wrap toggle got M-z (VS Code's Alt+Z)
                               scm-open scm-stage scm-unstage scm-discard scm-toggle ; the Source Control view's own
                               scm-commit-message ; its commit box's Ctrl+Enter
                               menu-bar-open-file menu-bar-open-edit menu-bar-open-selection menu-bar-open-view
