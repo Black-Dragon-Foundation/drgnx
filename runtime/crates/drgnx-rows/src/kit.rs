@@ -327,6 +327,10 @@ impl SegKind {
             SegKind::WaitMachine => Some('M'),
             SegKind::WaitPermission => Some('P'),
             SegKind::Stalled => Some('!'),
+        }
+    }
+}
+
 /// A tab's size: an editor's tab row (34 px) or a panel's (30 px).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
