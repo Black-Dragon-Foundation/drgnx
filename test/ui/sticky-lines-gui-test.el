@@ -93,8 +93,9 @@ numbers are padded to the editor's digits, in a file of 9 lines and one of 1000+
                               (car (window-inside-pixel-edges cw))
                               (car (posn-x-y (posn-at-point (with-current-buffer (aref card 1) (1+ (point-min))) cw))))))
               (should (frame-visible-p frame))
-              ;; the first character after the margin's string, `(', against the editor's line 1's `('
-              (should (= card-x (drgnx-ui-sticky--text-x w (with-current-buffer b (drgnx-ui-sticky--line 1)))))
+              ;; the card's first character after the margin's string against the first character of the editor's top
+              ;; row (line 1 is scrolled out of sight; every row's text starts in that column)
+              (should (= card-x (drgnx-ui-sticky--text-x w (window-start w))))
               (should (equal (substring-no-properties
                               (cadr (with-current-buffer (aref card 1) (get-text-property (point-min) 'display))))
                              (format (format "%%%dd " (1+ digits)) 1)))))
