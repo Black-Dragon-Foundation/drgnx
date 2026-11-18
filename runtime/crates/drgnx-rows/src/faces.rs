@@ -222,24 +222,12 @@ pub enum FaceId {
     UiButtonPrimary,
     /// `drgnx-ui-close`
     UiClose,
-    /// `drgnx-wb-tab`
-    WbTab,
-    /// `drgnx-wb-tab-current`
-    WbTabCurrent,
     /// `drgnx-buffers-close`
     BuffersClose,
     /// `drgnx-buffers-modified`
     BuffersModified,
     /// `drgnx-buffers-active`
     BuffersActive,
-    /// `drgnx-chrome-tab`
-    ChromeTab,
-    /// `drgnx-chrome-tab-current`
-    ChromeTabCurrent,
-    /// `drgnx-chrome-tab-active`
-    ChromeTabActive,
-    /// `drgnx-chrome-tab-preview`
-    ChromeTabPreview,
     /// `drgnx-chrome-crumb`
     ChromeCrumb,
     /// `drgnx-explorer-root`
@@ -1128,6 +1116,10 @@ pub enum FaceId {
     KitTabPanelCurrent,
     /// `drgnx-kit-tab-preview`
     KitTabPreview,
+    /// `drgnx-kit-question-card`
+    KitQuestionCard,
+    /// `drgnx-kit-question-card-head`
+    KitQuestionCardHead,
     /// `drgnx-kit-segmented`
     KitSegmented,
     /// `drgnx-kit-segmented-current`
@@ -1144,7 +1136,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 566] = [
+    pub const ALL: [FaceId; 562] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1252,15 +1244,9 @@ impl FaceId {
         FaceId::UiButton,
         FaceId::UiButtonPrimary,
         FaceId::UiClose,
-        FaceId::WbTab,
-        FaceId::WbTabCurrent,
         FaceId::BuffersClose,
         FaceId::BuffersModified,
         FaceId::BuffersActive,
-        FaceId::ChromeTab,
-        FaceId::ChromeTabCurrent,
-        FaceId::ChromeTabActive,
-        FaceId::ChromeTabPreview,
         FaceId::ChromeCrumb,
         FaceId::ExplorerRoot,
         FaceId::ExplorerDirectory,
@@ -1705,6 +1691,8 @@ impl FaceId {
         FaceId::KitTabCurrentInactive,
         FaceId::KitTabPanelCurrent,
         FaceId::KitTabPreview,
+        FaceId::KitQuestionCard,
+        FaceId::KitQuestionCardHead,
         FaceId::KitSegmented,
         FaceId::KitSegmentedCurrent,
         FaceId::KitTextInput,
@@ -1823,15 +1811,9 @@ impl FaceId {
             FaceId::UiButton => "drgnx-ui-button",
             FaceId::UiButtonPrimary => "drgnx-ui-button-primary",
             FaceId::UiClose => "drgnx-ui-close",
-            FaceId::WbTab => "drgnx-wb-tab",
-            FaceId::WbTabCurrent => "drgnx-wb-tab-current",
             FaceId::BuffersClose => "drgnx-buffers-close",
             FaceId::BuffersModified => "drgnx-buffers-modified",
             FaceId::BuffersActive => "drgnx-buffers-active",
-            FaceId::ChromeTab => "drgnx-chrome-tab",
-            FaceId::ChromeTabCurrent => "drgnx-chrome-tab-current",
-            FaceId::ChromeTabActive => "drgnx-chrome-tab-active",
-            FaceId::ChromeTabPreview => "drgnx-chrome-tab-preview",
             FaceId::ChromeCrumb => "drgnx-chrome-crumb",
             FaceId::ExplorerRoot => "drgnx-explorer-root",
             FaceId::ExplorerDirectory => "drgnx-explorer-directory",
@@ -2276,6 +2258,8 @@ impl FaceId {
             FaceId::KitTabCurrentInactive => "drgnx-kit-tab-current-inactive",
             FaceId::KitTabPanelCurrent => "drgnx-kit-tab-panel-current",
             FaceId::KitTabPreview => "drgnx-kit-tab-preview",
+            FaceId::KitQuestionCard => "drgnx-kit-question-card",
+            FaceId::KitQuestionCardHead => "drgnx-kit-question-card-head",
             FaceId::KitSegmented => "drgnx-kit-segmented",
             FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
             FaceId::KitTextInput => "drgnx-kit-text-input",
@@ -2395,15 +2379,9 @@ impl FaceId {
             "drgnx-ui-button" => FaceId::UiButton,
             "drgnx-ui-button-primary" => FaceId::UiButtonPrimary,
             "drgnx-ui-close" => FaceId::UiClose,
-            "drgnx-wb-tab" => FaceId::WbTab,
-            "drgnx-wb-tab-current" => FaceId::WbTabCurrent,
             "drgnx-buffers-close" => FaceId::BuffersClose,
             "drgnx-buffers-modified" => FaceId::BuffersModified,
             "drgnx-buffers-active" => FaceId::BuffersActive,
-            "drgnx-chrome-tab" => FaceId::ChromeTab,
-            "drgnx-chrome-tab-current" => FaceId::ChromeTabCurrent,
-            "drgnx-chrome-tab-active" => FaceId::ChromeTabActive,
-            "drgnx-chrome-tab-preview" => FaceId::ChromeTabPreview,
             "drgnx-chrome-crumb" => FaceId::ChromeCrumb,
             "drgnx-explorer-root" => FaceId::ExplorerRoot,
             "drgnx-explorer-directory" => FaceId::ExplorerDirectory,
@@ -2848,6 +2826,8 @@ impl FaceId {
             "drgnx-kit-tab-current-inactive" => FaceId::KitTabCurrentInactive,
             "drgnx-kit-tab-panel-current" => FaceId::KitTabPanelCurrent,
             "drgnx-kit-tab-preview" => FaceId::KitTabPreview,
+            "drgnx-kit-question-card" => FaceId::KitQuestionCard,
+            "drgnx-kit-question-card-head" => FaceId::KitQuestionCardHead,
             "drgnx-kit-segmented" => FaceId::KitSegmented,
             "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
             "drgnx-kit-text-input" => FaceId::KitTextInput,

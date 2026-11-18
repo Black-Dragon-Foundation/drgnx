@@ -88,6 +88,10 @@
     (sticky-lines :mockup minimap-folding)
     (minimap-heat :mockup minimap-layers)
     (minimap-diff :mockup minimap-layers)
+    ;; the grid's look: the switcher, Resize Tiles and full size, each closed after its shot
+    (tiling :agent t :keys "C-<escape>" :then "<escape>")
+    (tiling-resize :agent t :mockup tiling :keys "C-k r <right>" :then "<escape>")
+    (tiling-full :agent t :mockup tiling :keys "C-k C-m" :then "C-k C-m")
     (work-space-dark :seed "map")
     (work-space-light :seed "map")
     (work-space-hc :seed "map"))

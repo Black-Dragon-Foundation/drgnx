@@ -298,12 +298,34 @@ does what it does.")
   (concat "Resize Tiles: " (mapconcat (lambda (k) (drgnx-ui-kit-key-hint k nil 'text)) '("←" "→" "↑" "↓") " ")
           " grow or shrink · any other key ends"))
 
+(defvar drgnx-grid--resizing nil "The tile's main window while Resize Tiles is on, else nil.")
+
+(defun drgnx-grid-resize-note (frame)
+  "The note Resize Tiles puts at the start of the tile's tab row (tiling.html's `.resize-chip'): a kit accent chip,
+\"Resize · Esc\" led by the move icon."
+  (drgnx-ui-kit-string 'chip (list :c "chip" :label "Resize · Esc" :tone "accent" :icon "move") 'tab-line frame))
+
+(defun drgnx-grid--resize-end ()
+  "Resize Tiles ends: its note and hint go."
+  (when-let* ((w drgnx-grid--resizing))
+    (setq drgnx-grid--resizing nil)
+    (when (window-live-p w)
+      (set-window-parameter w 'drgnx-grid-mode-note nil)
+      (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply (window-frame w)))))
+  (message nil))
+
 (defun drgnx-grid-resize-mode ()
   "Resize Tiles: the arrows grow the selected tile toward them (or shrink it at the grid's edge), one step each; any
-other key ends it and does what it does.  The hint is in the echo area (`drgnx-grid-resize-hint')."
+other key ends it and does what it does.  The tile's tab row says so (`drgnx-grid-resize-note') and the hint is in the
+echo area (`drgnx-grid-resize-hint')."
   (interactive)
+  (drgnx-grid--resize-end)
+  (let ((w (drgnx-grid-tile-main (selected-window))))
+    (setq drgnx-grid--resizing w)
+    (set-window-parameter w 'drgnx-grid-mode-note (drgnx-grid-resize-note (window-frame w)))
+    (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply (window-frame w))))
   (message "%s" (drgnx-grid-resize-hint))
-  (set-transient-map drgnx-grid-resize-map t (lambda () (message nil))))
+  (set-transient-map drgnx-grid-resize-map t #'drgnx-grid--resize-end))
 
 ;;;; Drag and drop inside a frame (`drgnx-grid-drag')
 

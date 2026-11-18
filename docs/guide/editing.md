@@ -157,8 +157,10 @@ scopes reuses their names (the scope lines are read once). **Toggle Sticky Scrol
 `drgnx-chrome-add-tail-provider` (a function of a window returning a string or nil, and a depth; lowest first).
 
 **Lines instead of names.** With `drgnx-sticky-style` set to `lines` (default `names`), the scopes' first lines show
-as code, VS Code's way: up to `drgnx-sticky-max` lines (3), outermost first, with their line numbers and syntax colours,
-over the window's top rows, the popups' shadow under the last. They are a card over the text, so the text never
+as code, VS Code's way: up to `drgnx-sticky-max` lines (3), outermost first, in syntax colours, over the window's top
+rows, the popups' shadow under the last. When the editor shows line numbers, so do the lines, padded as the editor's,
+and their text starts in the editor's text column, in its font and text size, so the columns line up (also while the
+editor is scrolled sideways). They are a card over the text, so the text never
 moves, point stays where it is and a scroll counts the same rows. Click a line to go there; Ctrl+click folds that scope.
 The scopes come from the fold table, so sticky scroll, folding and the minimap agree (else from tree-sitter). The card
 is filled again only when the set of scopes changes, never per scroll. Each window with sticky scroll gets its card,

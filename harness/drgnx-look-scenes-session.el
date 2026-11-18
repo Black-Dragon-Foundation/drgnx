@@ -270,6 +270,7 @@ DRGNX_LOOK_BT=1 its backtrace follows)."
 (declare-function drgnx-view-patch-sja "drgnx-view")
 (declare-function drgnx-view-sja-row-start "drgnx-view-sja")
 (defvar drgnx-view-patch)
+(defvar drgnx-view-env--views)
 
 (defvar drgnx-look-scene-rows-wait 20
   "Seconds a step waits for the hub's rows of the views it shows (`drgnx-look-scene--unfed'), as the editor's scene
@@ -277,15 +278,18 @@ waits for the Explorer's.")
 
 (defun drgnx-look-scene--unfed-views ()
   "The hub-fed views a window of the selected frame shows without the hub's rows: ((VIEW BUFFER CLASSES) ...).  A
-view with no env sent (CLASSES nil), or with no version and an empty buffer, has none."
+view the env registry knows (`drgnx-view-env--views') with no env sent (CLASSES nil), or any view with no version and
+an empty buffer, has none.  A view fed through its own channel (the terminal's `term/open') is never in the registry,
+so its rows alone (a version or text) count."
   (let ((seen nil) (out nil))
     (dolist (w (window-list nil 'never))
       (let* ((b (window-buffer w)) (state (buffer-local-value 'drgnx-view-patch b))
              (view (and state (drgnx-view-patch-view state))))
         (when (and view (not (member view seen)))
           (push view seen)
-          (let ((classes (and (fboundp 'drgnx-view-env-classes) (drgnx-view-env-classes view))))
-            (unless (and classes (or (drgnx-view-patch-version state) (> (buffer-size b) 0)))
+          (let* ((registered (and (boundp 'drgnx-view-env--views) (gethash view drgnx-view-env--views)))
+                 (classes (and (fboundp 'drgnx-view-env-classes) (drgnx-view-env-classes view))))
+            (unless (and (or classes (not registered)) (or (drgnx-view-patch-version state) (> (buffer-size b) 0)))
               (push (list view b classes) out))))))
     (nreverse out)))
 
@@ -1020,18 +1024,23 @@ from the event's handlers before or after the counting one, by their order.")
 (with-eval-after-load 'drgnx-view-env
   (add-function :around drgnx-view-env-send-function #'drgnx-look-scene--answer-sent))
 
+(defun drgnx-look-scene--panel-strings (buffers)
+  "What BUFFERS draw, text and properties: a buffer the hub re-sent the same rows to (or Sjá drew again) changes its
+modification tick and not what the shot shows, so the rounds compare these, not the ticks."
+  (mapcar (lambda (b) (with-current-buffer b (buffer-string))) buffers))
+
 (defun drgnx-look-scene--hub-round (buffers)
   "One round trip to the hub (`drgnx-look-scene--hub-caught-up') and what it sent drawn in BUFFERS, Sjá views; non-nil
-when the round trip changed none of their texts and no ask of the hub's is still unanswered
+when the round trip changed none of their texts (with properties) and no ask of the hub's is still unanswered
 \(`drgnx-look-scene--asks-open': an answer sent later, on a timer, comes after the ping, and so does its refit),
 `no-answer' when the hub did not answer."
-  (let ((ticks (mapcar #'buffer-chars-modified-tick buffers)))
+  (let ((before (drgnx-look-scene--panel-strings buffers)))
     (if (not (drgnx-look-scene--hub-caught-up)) 'no-answer
       (accept-process-output nil 0.05)
       (dolist (b buffers) (when (drgnx-view-sja-p b) (drgnx-view-sja-draw-now b)))
       (redisplay t)
       (and (<= drgnx-look-scene--asks-open 0)
-           (equal ticks (mapcar #'buffer-chars-modified-tick buffers))))))
+           (equal-including-properties before (drgnx-look-scene--panel-strings buffers))))))
 
 (defun drgnx-look-scene--panel-buffers (buffer)
   "The live buffers of the agent panel BUFFER's windows: the transcript, the header and the composer shown with it."
@@ -1057,14 +1066,14 @@ what changed: the buffers whose text did, each window's body width before and af
   (let* ((buffers (drgnx-look-scene--panel-buffers buffer))
          (widths (lambda () (mapcar (lambda (b) (let ((w (get-buffer-window b))) (and w (window-body-width w t))))
                                     buffers)))
-         (ticks (mapcar #'buffer-chars-modified-tick buffers))
          (before (funcall widths))
+         (texts (drgnx-look-scene--panel-strings buffers))
          (r (drgnx-look-scene--hub-round buffers)))
     (unless (eq r t)
       (push (if (eq r 'no-answer) "agent-panel: the hub did not answer a ping"
               (format "agent-panel: one more hub round trip changed the panel's rows: the shot shows the hub's first fit (changed %S, widths %S then %S, asks open %d)"
-                      (delq nil (cl-mapcar (lambda (b tick) (and (/= tick (buffer-chars-modified-tick b)) (buffer-name b)))
-                                           buffers ticks))
+                      (delq nil (cl-mapcar (lambda (b old new) (and (not (equal-including-properties old new)) (buffer-name b)))
+                                           buffers texts (drgnx-look-scene--panel-strings buffers)))
                       before (funcall widths) drgnx-look-scene--asks-open))
             drgnx-look-scene--errors))))
 
@@ -3017,6 +3026,7 @@ chrome faces, frame metrics, windows, modules."
 ;;;; The scroll bar on every surface (docs/guide/minimap.md)
 
 (declare-function drgnx-uitest-snapshot "drgnx-uitest" (&optional frame))
+(declare-function drgnx-uitest-pixel "drgnx-uitest" (snap x y))
 (declare-function drgnx-uitest-region-equal-p "drgnx-uitest" (a b rect &rest keys))
 (declare-function drgnx-scrollbar-window-p "drgnx-ruler" (window))
 (defvar drgnx-ruler-span-function)
@@ -3063,10 +3073,11 @@ chrome faces, frame metrics, windows, modules."
             (frame-list)))
 
 (defun drgnx-look-scene--expected-cover-p (f covers)
-  "Whether child frame F is one the scene opens on purpose: the floating palette, or a frame whose buffer's name
-COVERS (a regexp, the scene's :covers in `drgnx-look-scenes': its menu, card or drop-down) matches.  Any other cover,
-a toast say, is an error, so an unexpected child frame still fails the scene."
+  "Whether child frame F is one the scene opens on purpose: the floating palette, the tile switcher's cards, or a
+frame whose buffer's name COVERS (a regexp, the scene's :covers in `drgnx-look-scenes': its menu, card or drop-down)
+matches.  Any other cover, a toast say, is an error, so an unexpected child frame still fails the scene."
   (or (and (boundp 'drgnx-palette-frame--frame) (eq f drgnx-palette-frame--frame))
+      (frame-parameter f 'drgnx-switcher-card)
       (and covers (string-match-p covers (buffer-name (window-buffer (frame-root-window f)))))))
 
 (defun drgnx-look-scene--ruler-set (window spec minimap)
@@ -3122,6 +3133,15 @@ error).  What was seen goes to FILE."
                              :span-now (with-current-buffer (window-buffer w)
                                          (and drgnx-ruler-span-function (funcall drgnx-ruler-span-function)))
                              :resolved (and (window-parameter w 'glitnir--ruler) t)
+                             :rect (and spec (drgnx-look-scene--strip-rect w))
+                             :maxdiff (and spec without (not child)
+                                           (let ((r (drgnx-look-scene--strip-rect w)) (m 0))
+                                             (cl-loop for y from (nth 1 r) below (nth 3 r)
+                                                      do (cl-loop for x from (nth 0 r) below (nth 2 r)
+                                                                  do (setq m (max m (apply #'max (cl-mapcar (lambda (a b) (abs (- a b)))
+                                                                                                            (cdr (drgnx-uitest-pixel with x y))
+                                                                                                            (cdr (drgnx-uitest-pixel without x y))))))))
+                                             m))
                              :drawn (cond (covered 'covered) ((and without (not child)) drawn) (t 'unchecked)))))
             (push fact log)
             (cond ((not spec)
@@ -3309,6 +3329,67 @@ labelled, the minimap held open, dark."
         (unless (length> (plist-get (drgnx-minimap--spec w) :hunk-labels) 0)
           (push "minimap-diff: no hunk labels in the spec" drgnx-look-scene--errors))
         (drgnx-look-scene--minimap-hold w))))
+  (drgnx-look-scene--answer))
+
+;;; Tiling (tiling.html): six tiles; the switcher, Resize Tiles and full size are the scenes' keys
+
+(declare-function drgnx-groups-list "drgnx-groups")
+(declare-function drgnx-pane-hide "drgnx-panes")
+(declare-function drgnx-pane-window "drgnx-panes")
+(declare-function drgnx-grid-split-tile "drgnx-grid" (window side))
+(declare-function drgnx-grid--make-editor "drgnx-grid" (window))
+(defvar drgnx-look-scene--term nil "The tiling scenes' terminal (the panel's tile j).")
+
+(defun drgnx-look-scene--six-tiles ()
+  "tiling.html's six tiles, dark: the Explorer (a), the gateway file (s, current), an editor with three tabs (d), the
+agent panel (f), the panel's terminal under the editors (j) and the Work map under the agent (k)."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "six tiles"
+    (unless (buffer-live-p drgnx-look-scene--panel) (error "No agent panel (the mock agent did not run)"))
+    ;; one editor to start from: the other groups an earlier scene left go (`delete-other-windows' keeps tiles)
+    (let ((keep (car (drgnx-groups-list))))  ; the first in reading order: the editor area's, not the one under the agent
+      (dolist (g (drgnx-groups-list)) (unless (eq g keep) (delete-window g)))
+      (select-window keep))
+    (let ((map (drgnx-work-space-open nil t)))
+      (unless (get-buffer-window drgnx-look-scene--panel)
+        (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel))
+      (if (buffer-live-p drgnx-look-scene--term)
+          (unless (get-buffer-window drgnx-look-scene--term) (pop-to-buffer drgnx-look-scene--term))
+        (setq drgnx-look-scene--term (save-selected-window (drgnx-terminal-new))))
+      (let* ((s (progn (drgnx-wb-focus-editor) (selected-window)))
+             (d (drgnx-grid-split-tile s 'right))
+             (k (drgnx-grid-split-tile (get-buffer-window drgnx-look-scene--panel) 'below)))
+        (drgnx-grid--make-editor d)
+        (dolist (file '("README.md" "test/unit/hub-test.el" "test/unit/gateway-test.el"))
+          ;; the agent edited gateway-test.el and the setup left it changed: its buffer, not `find-file''s question
+          (let ((f (expand-file-name file drgnx-look-scene--project)))
+            (switch-to-buffer (or (get-file-buffer f) (find-file-noselect f)))))
+        (drgnx-grid--make-editor k)
+        (switch-to-buffer map)
+        (select-window s)
+        (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201))
+      (setq drgnx-look-scene--windows-rearranged t)
+      (drgnx-look-scene--until 15 "the Work map tile's rows" (lambda () (with-current-buffer map (drgnx-look-scene--row-ids ""))))
+      ;; the map shows its Detail in the right dock once its rows come: the agent's tile is the mockup's there
+      (when (drgnx-pane-window 'work-detail) (drgnx-pane-hide 'work-detail))
+      (unless (get-buffer-window drgnx-look-scene--panel)
+        (save-selected-window (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel)))
+      (drgnx-look-scene--settle-frame))))
+
+(defun drgnx-look-scene-tiling ()
+  "Six tiles with the switcher open (its keys, C-<escape>): a letter card on every tile."
+  (drgnx-look-scene--six-tiles)
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-tiling-resize ()
+  "Six tiles in Resize Tiles (its keys, C-k r), one step to the right taken."
+  (drgnx-look-scene--six-tiles)
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-tiling-full ()
+  "The gateway file's tile at full size (its keys, C-k C-m); the same keys bring the tree back."
+  (drgnx-look-scene--six-tiles)
   (drgnx-look-scene--answer))
 
 (provide 'drgnx-look-scenes-session)

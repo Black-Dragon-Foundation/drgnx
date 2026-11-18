@@ -108,15 +108,9 @@
  drgnx-ui-button
  drgnx-ui-button-primary
  drgnx-ui-close
- drgnx-wb-tab
- drgnx-wb-tab-current
  drgnx-buffers-close
  drgnx-buffers-modified
  drgnx-buffers-active
- drgnx-chrome-tab
- drgnx-chrome-tab-current
- drgnx-chrome-tab-active
- drgnx-chrome-tab-preview
  drgnx-chrome-crumb
  drgnx-explorer-root
  drgnx-explorer-directory
@@ -561,6 +555,8 @@
  drgnx-kit-tab-current-inactive
  drgnx-kit-tab-panel-current
  drgnx-kit-tab-preview
+ drgnx-kit-question-card
+ drgnx-kit-question-card-head
  drgnx-kit-segmented
  drgnx-kit-segmented-current
  drgnx-kit-text-input

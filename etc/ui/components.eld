@@ -155,7 +155,9 @@
               :replaces nil :helpers nil :lint t)
   ;; a range bar: a span of time or money on an axis, in the row's own width (`width' logical px).  `schedule': done
   ;; solid, to p50 light, p50 to p90 the tail, a baseline tick, the target's mark; `cost': p50 solid, p50 to p90 the
-  ;; tail, the limit a rule; `segment': one span in its kind's colour, its letter inside on a terminal.  The bar is
+  ;; tail, the limit a rule; `segment': one span in its kind's colour, its letter inside on a terminal (its faces inherit
+  ;; standard faces of a foreground only: an `ansi-color-*' face has the colour as its background too, and the letter
+  ;; in it would be invisible).  The bar is
   ;; 10 px tall (8 compact, 12 roomy), never under 2 device px wide; a terminal draws a cell per 8 px as `█' `▓' `░'
   ;; (ASCII `#' `=' `-'), the forecast alone `┄' (`.'), a late cap `▌' and the word late (`!').  Each part is a binding
   ;; named by its part, a text colour (the editor draws the part's space as an image in it)
@@ -168,13 +170,13 @@
                     ((tail) :fg range-tail :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption))
                     ((late) :fg range-late :inherit (drgnx-ui-caption error) :font (drgnx-ui-caption))
                     ((wait) :fg range-wait :inherit (drgnx-ui-caption warning) :font (drgnx-ui-caption))
-                    ((seg-read) :fg seg-read :inherit (drgnx-ui-caption ansi-color-blue) :font (drgnx-ui-caption))
+                    ((seg-read) :fg seg-read :inherit (drgnx-ui-caption font-lock-function-name-face) :font (drgnx-ui-caption))
                     ((seg-search) :fg seg-search :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption))
-                    ((seg-web) :fg seg-web :inherit (drgnx-ui-caption ansi-color-cyan) :font (drgnx-ui-caption))
+                    ((seg-web) :fg seg-web :inherit (drgnx-ui-caption font-lock-constant-face) :font (drgnx-ui-caption))
                     ((seg-think) :fg seg-think :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption))
-                    ((seg-edit) :fg seg-edit :inherit (drgnx-ui-caption ansi-color-green) :font (drgnx-ui-caption))
-                    ((seg-test) :fg seg-test :inherit (drgnx-ui-caption ansi-color-yellow) :font (drgnx-ui-caption))
-                    ((seg-job) :fg seg-job :inherit (drgnx-ui-caption ansi-color-magenta) :font (drgnx-ui-caption))
+                    ((seg-edit) :fg seg-edit :inherit (drgnx-ui-caption success) :font (drgnx-ui-caption))
+                    ((seg-test) :fg seg-test :inherit (drgnx-ui-caption font-lock-variable-name-face) :font (drgnx-ui-caption))
+                    ((seg-job) :fg seg-job :inherit (drgnx-ui-caption font-lock-keyword-face) :font (drgnx-ui-caption))
                     ((seg-wait) :fg seg-wait :inherit (drgnx-ui-caption warning) :font (drgnx-ui-caption)))
              :replaces ((drgnx-work-seg-read . drgnx-kit-range-bar-seg-read) (drgnx-work-seg-edit . drgnx-kit-range-bar-seg-edit)
                         (drgnx-work-seg-tool . drgnx-kit-range-bar-seg-test) (drgnx-work-seg-think . drgnx-kit-range-bar-seg-think)
@@ -207,11 +209,17 @@
               ((panel-current) :bg sel-quiet :fg fg :edge sel-quiet :ring (1 6)
                :inherit (drgnx-ui-text drgnx-selected-quiet tab-line-tab-current) :font (drgnx-ui-text))
               ((preview) :attrs (:slant italic)))
-       :replaces ((drgnx-chrome-tab . drgnx-kit-tab) (drgnx-chrome-tab-active . drgnx-kit-tab-current)
-                  (drgnx-chrome-tab-current . drgnx-kit-tab-current-inactive) (drgnx-wb-tab . drgnx-kit-tab)
-                  (drgnx-wb-tab-current . drgnx-kit-tab-panel-current) (drgnx-work-lens-title . drgnx-kit-tab-current)
-                  (drgnx-chrome-tab-preview . drgnx-kit-tab-preview))
+       :replaces ((drgnx-work-lens-title . drgnx-kit-tab-current))
        :helpers nil :lint t)
+  ;; a question card: a needs-you card of a head (the needs-you status dot and the title on the attention tint), the body's
+  ;; wrapped text and the choices' row (kit buttons, the first primary, each with its key hint).  `kind' sets the choices'
+  ;; keys (permission y a n, question 1..9, sign-off y n); a block of rows: the hub's `expand_rows', Lisp's `drgnx-ui-kit-question-card' (lines), no inline form
+  (question-card :variants ((kind permission question sign-off)) :defaults (kind permission)
+                 :geometry (:height 0 :pad (8 . 8) :gap 8 :box t :radius 8 :hit 0)
+                 :tty (:pad 1) :label "needs you"
+                 :bind ((() :inherit (drgnx-ui-text))
+                        ((head) :bg attention-tint :inherit (drgnx-ui-text drgnx-selected-quiet) :font (drgnx-ui-text)))
+                 :replaces nil :helpers nil :lint t)
   ;; a segmented switch: its items in one track (a 1 px ring in the border's colour, radius 6), the current one on the
   ;; quiet selection in the body text's colour, the others muted; each item an action.  The current item's label is
   ;; "LABEL, selected"

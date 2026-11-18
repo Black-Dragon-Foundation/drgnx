@@ -263,25 +263,43 @@ that start above it: from the fold table (sticky, folds and the minimap agree), 
                    (and (drgnx-sticky--treesit-p) (drgnx-sticky--treesit-scopes start)))))
     (seq-take scopes drgnx-sticky-max)))
 
-(defun drgnx-sticky--line (pos width)
-  "POS's line as a sticky line: its number (WIDTH columns) in `line-number', then its text with the buffer's faces,
-the whole line carrying `drgnx-sticky-pos' POS (where a click goes)."
+(defun drgnx-sticky--number (n digits)
+  "Line number N as the editor draws it with DIGITS digits (`line-number-display-width'): right-aligned in DIGITS + 1
+columns and a blank after, in `line-number'."
+  (propertize (format (format "%%%dd " (1+ digits)) n) 'face 'line-number))
+
+(defun drgnx-sticky--line (pos digits)
+  "POS's line as a sticky line: its text with the buffer's faces, the whole line carrying `drgnx-sticky-pos' POS
+\(where a click goes); with DIGITS, its number padded to them in the left margin (the card's text keeps the editor's
+columns under a sideways scroll), nil: no number (the editor shows none)."
   (save-excursion
     (goto-char pos)
     (let ((b (line-beginning-position)) (e (line-end-position)))
       (when (fboundp 'font-lock-ensure) (font-lock-ensure b e))
-      (let ((s (concat (propertize (format (format "%%%dd " width) (line-number-at-pos b)) 'face 'line-number)
-                       (buffer-substring b e))))
+      (let ((s (buffer-substring b e)))
         (add-face-text-property 0 (length s) 'drgnx-sticky-line t s)
+        (when digits
+          (setq s (concat (propertize " " 'display (list '(margin left-margin)
+                                                         (drgnx-sticky--number (line-number-at-pos b) digits)))
+                          s)))
         (add-text-properties 0 (length s) (list 'drgnx-sticky-pos b 'mouse-face 'highlight 'keymap drgnx-sticky-line-map
                                                 'help-echo "mouse-1: go there; C-mouse-1: fold it")
                              s)
         s))))
 
-(defun drgnx-sticky--text-of (positions)
-  "The card's text for POSITIONS (line beginnings of the current buffer): one sticky line each, numbers aligned."
-  (let ((width (length (number-to-string (line-number-at-pos (car (last positions)))))))
-    (mapconcat (lambda (p) (drgnx-sticky--line p width)) positions "\n")))
+(defun drgnx-sticky--text-of (positions &optional digits)
+  "The card's text for POSITIONS (line beginnings of the current buffer): one sticky line each, with DIGITS (the
+editor's) their numbers in the margin."
+  (mapconcat (lambda (p) (drgnx-sticky--line p digits)) positions "\n"))
+
+(defun drgnx-sticky--digits (w)
+  "The digits window W pads its line numbers to (`line-number-display-width'), or nil when it shows none."
+  (with-selected-window w
+    (and display-line-numbers (> (line-number-display-width t) 0) (line-number-display-width))))
+
+(defvar-local drgnx-sticky--shift 0
+  "In a card's buffer: how many px the card sits left of its window's text, so that its margin (whole columns) ends
+where the window's line numbers do.")
 
 (defun drgnx-sticky--want (w positions)
   "Window W should show POSITIONS in its card (nil: no card): when that differs from what it shows, the card is filled
@@ -300,7 +318,10 @@ the minimap and the ruler."
       (skip-taskbar . t) (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t) (border-width . 0)
       (internal-border-width . 0) (child-frame-border-width . 0) (menu-bar-lines . 0) (tool-bar-lines . 0)
       (tab-bar-lines . 0) (left-fringe . 0) (right-fringe . 0) (vertical-scroll-bars) (horizontal-scroll-bars)
-      (cursor-type . nil) (visibility . nil) ,@chrome)))
+      (cursor-type . nil) (visibility . nil)
+      ;; the editor's font: the card's columns are its columns
+      ,@(let ((font (frame-parameter parent 'font))) (and font (list (cons 'font font))))
+      ,@chrome)))
 
 (defun drgnx-sticky--card (w)
   "Window W's card, [FRAME BUFFER CONTENT], made on first use."
@@ -317,6 +338,8 @@ the minimap and the ruler."
         (set-window-buffer (frame-root-window frame) buf)
         (set-window-dedicated-p (frame-root-window frame) t)
         (set-window-parameter (frame-root-window frame) 'drgnx-minimap-exclude t)
+        ;; Nidhogg copies W's sideways scroll to the card, in pixels (design 2026-11-18 §3.4e)
+        (set-window-parameter (frame-root-window frame) 'nidhogg-hscroll-of w)
         (setq card (vector frame buf nil))
         (setq drgnx-sticky--cards (cons (cons w card) (assq-delete-all w drgnx-sticky--cards)))))
     card))
@@ -327,10 +350,23 @@ minimap stays in sight when it opens), as tall as its lines."
   (let* ((frame (aref card 0)) (edges (window-inside-pixel-edges w))
          (minimap (plist-get (window-parameter w 'glitnir-minimap) :width))
          (lines (with-current-buffer (aref card 1) (count-lines (point-min) (point-max))))
+         (shift (buffer-local-value 'drgnx-sticky--shift (aref card 1)))
          (height (* (max 1 lines) (with-selected-window w (default-line-height)))))
-    (set-frame-size frame (max 1 (- (nth 2 edges) (nth 0 edges) (if minimap (drgnx-px minimap (window-frame w)) 0)))
+    (set-frame-size frame (max 1 (- (+ (nth 2 edges) shift) (nth 0 edges)
+                                    (if minimap (drgnx-px minimap (window-frame w)) 0)))
                     height t)
-    (set-frame-position frame (nth 0 edges) (nth 1 edges))))
+    (set-frame-position frame (- (nth 0 edges) shift) (nth 1 edges))))
+
+(defun drgnx-sticky--margin (card)
+  "Size CARD's left margin to its numbers (whole columns of its frame) and record the px left over as its shift."
+  (let* ((frame (aref card 0)) (col (frame-char-width frame))
+         (num (with-current-buffer (aref card 1)
+                (let ((d (get-text-property (point-min) 'display)))
+                  (and (consp d) (equal (car d) '(margin left-margin)) (cadr d)))))
+         (px (if num (string-pixel-width num (aref card 1)) 0))
+         (cols (if num (ceiling px (float col)) 0)))
+    (with-current-buffer (aref card 1) (setq drgnx-sticky--shift (- (* cols col) px)))
+    (set-window-margins (frame-root-window frame) cols)))
 
 (defun drgnx-sticky--fill (w positions)
   "Show POSITIONS of window W's buffer in its card (the debounce's end); nil hides it."
@@ -338,9 +374,14 @@ minimap stays in sight when it opens), as tall as its lines."
     (if (or (null positions) (not (display-graphic-p (window-frame w))))
         (drgnx-sticky--hide w)
       (let* ((card (drgnx-sticky--card w))
-             (text (with-current-buffer (window-buffer w) (drgnx-sticky--text-of positions))))
+             (digits (drgnx-sticky--digits w))
+             (text (with-current-buffer (window-buffer w) (drgnx-sticky--text-of positions digits)))
+             ;; the editor's text-scale and other remaps: the card's columns are the editor's
+             (remap (buffer-local-value 'face-remapping-alist (window-buffer w))))
         (with-current-buffer (aref card 1)
+          (setq-local face-remapping-alist remap)
           (let ((inhibit-read-only t)) (erase-buffer) (insert text) (goto-char (point-min))))
+        (drgnx-sticky--margin card)
         (aset card 2 positions)
         (drgnx-sticky--place w card)
         (unless (frame-visible-p (aref card 0)) (make-frame-visible (aref card 0)))))))

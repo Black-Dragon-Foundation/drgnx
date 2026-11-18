@@ -373,4 +373,27 @@ own and the detail tile patches no keycap images in after the hub's rows."
     (should-not (cl-some (lambda (f) (and (symbolp f) (string-match-p "keycap" (symbol-name f))))
                          drgnx-view-patch-patched-functions))))
 
+
+(defun drgnx-work-flow-test--click-detail-button (id)
+  "Activate, as a RET on it does, a button carrying the hub's action (\"work-command\" ID)."
+  (with-temp-buffer
+    (insert (propertize "x" 'drgnx-action (list "work-command" id)))
+    (goto-char 1)
+    (let ((last-input-event ?\r)) (call-interactively #'drgnx-ui-kit-activate))))
+
+(ert-deftest drgnx-work-flow/a-click-on-a-detail-button-runs-its-registered-command ()
+  "The detail's buttons are the hub's kit buttons: each carries the action (\"work-command\" ID), as it comes in JSON (a
+string kind and a string id).  A click on it runs the registry command in the window clicked; an id that names no
+command runs nothing and is not interned; with the module off the kind is gone."
+  (let (ran)
+    (drgnx-test-with-modules '(tools/work-space)
+      (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran))))
+        (dolist (id '("work-flow-run-red" "work-flow-tell-agent" "work-flow-waive" "work-flow-evidence"))
+          (setq ran nil)
+          (drgnx-work-flow-test--click-detail-button id)
+          (should (equal ran (list (intern id))))))
+      (should-error (drgnx-work-flow-test--click-detail-button "no-such-command-zzz") :type 'user-error)
+      (should-not (intern-soft "no-such-command-zzz")))
+    (should-error (drgnx-work-flow-test--click-detail-button "work-flow-run-red") :type 'user-error)))
+
 ;;; work-flow-test.el ends here
