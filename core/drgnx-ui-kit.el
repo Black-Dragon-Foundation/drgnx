@@ -34,7 +34,7 @@
     (plus "+" . "+") (minus "−" . "-") (ellipsis "…" . "...") (x "×" . "x") (check "✓" . "+") (replace-all "⇗" . "/")
     (git-branch "⑂" . "Y") (git-merge "⑃" . "Y") (git-pull-request "⇄" . "<>") (git-commit-horizontal "○" . "o")
     (circle-x "✕" . "X") (triangle-alert "⚠" . "!") (circle-check "✓" . "+") (circle-alert "!" . "!")
-    (layers "☰" . "=") (grip-vertical "⠿" . "::") (maximize-2 "▢" . "[]") (minimize-2 "–" . "-")
+    (layers "☰" . "=") (grip-vertical "⠿" . "::") (maximize-2 "▢" . "[]") (move "✥" . "+") (minimize-2 "–" . "-")
     (message-square "▭" . "m") (scroll-text "≣" . "=") (list-checks "☑" . "x")
     (monitor "▭" . "M") (laptop "▭" . "L") (server "☰" . "S") (globe "◍" . "@") (brain "◉" . "B")
     (lightbulb "◌" . "i") (pencil "✎" . "e") (clock "◷" . "t") (bot "◈" . "b") (pin "⌖" . "p")

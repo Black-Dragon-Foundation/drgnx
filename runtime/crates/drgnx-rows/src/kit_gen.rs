@@ -133,7 +133,7 @@ pub const GLYPHS: [(&str, &str, &str); 29] = [
 
 /// The whole standard glyph table (`drgnx-ui--default-glyphs`): `(name, Unicode, ASCII)`. A tab's icon is looked
 /// up here when the env has no glyph of its name, as the Lisp kit's tab does; other components keep [`GLYPHS`].
-pub const ALL_GLYPHS: [(&str, &str, &str); 150] = [
+pub const ALL_GLYPHS: [(&str, &str, &str); 151] = [
     ("handle", "⠿", "::"),
     ("close", "×", "x"),
     ("branch", "⑂", "Y"),
@@ -228,6 +228,7 @@ pub const ALL_GLYPHS: [(&str, &str, &str); 150] = [
     ("layers", "☰", "="),
     ("grip-vertical", "⠿", "::"),
     ("maximize-2", "▢", "[]"),
+    ("move", "✥", "+"),
     ("minimize-2", "–", "-"),
     ("message-square", "▭", "m"),
     ("scroll-text", "≣", "="),

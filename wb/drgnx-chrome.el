@@ -268,9 +268,17 @@ buttons' keymaps and pixel measure cost more than all its tabs.  Weak on the fra
 buttons (the debug toolbar docked), or nil.  It runs when the tab line is made and answers from cached state; its
 string is part of the line's key (`drgnx-chrome--tab-line-key'), so a new one is drawn at the next `drgnx-chrome-apply'.")
 
+(defun drgnx-chrome--grid-chips (w)
+  "The grid's chips on tile W, or nil: Resize Tiles' (`drgnx-grid-mode-note') and full size's (`drgnx-grid-full-note')."
+  (let ((mode (window-parameter w 'drgnx-grid-mode-note)) (full (window-parameter w 'drgnx-grid-full-note)))
+    (cond ((and mode full) (concat mode " " full)) (t (or mode full)))))
+
 (defun drgnx-chrome--tab-row-extra (w)
-  "What `drgnx-chrome-tab-row-function' puts in W's tab row, or nil."
-  (and drgnx-chrome-tab-row-function (funcall drgnx-chrome-tab-row-function w)))
+  "What W's tab row shows at its right before the buttons (tiling.html's `.tools'): the grid's chips
+(`drgnx-chrome--grid-chips') and what `drgnx-chrome-tab-row-function' puts there, or nil."
+  (let ((chips (drgnx-chrome--grid-chips w))
+        (fn (and drgnx-chrome-tab-row-function (funcall drgnx-chrome-tab-row-function w))))
+    (cond ((and chips fn) (concat chips " " fn)) (t (or chips fn)))))
 
 (defun drgnx-chrome--tab-buttons (w rows rule)
   "The split and more buttons at the right end of W's tab line on a graphical frame (ROWS: `drgnx-chrome--tab-rows';
@@ -806,9 +814,10 @@ it, so without this the next redisplay may keep the old line (the window's text 
     (with-current-buffer (window-buffer w) (force-mode-line-update))))
 
 (defun drgnx-chrome--full (w value)
-  "W's tab line VALUE after the grid's note on a tile shown full size (`drgnx-grid-full-note'), when it has one."
-  (if-let* ((full (window-parameter w 'drgnx-grid-full-note)))
-      (if (memq value '(nil none)) full (list full value))
+  "W's tab line VALUE after the grid's chips (`drgnx-chrome--grid-chips'), when it has any: a tile whose row has no
+right end of the chrome's (a tool tile, the side bar, an editor's own tab line) shows them first."
+  (if-let* ((chips (drgnx-chrome--grid-chips w)))
+      (if (memq value '(nil none)) chips (list chips value))
     value))
 
 (defun drgnx-chrome--apply-window (w note)
@@ -816,10 +825,13 @@ it, so without this the next redisplay may keep the old line (the window's text 
     ('editor
      (when note (drgnx-chrome--note w))
      (drgnx-chrome--set w 'tab-line-format
-                        (drgnx-chrome--full
-                         w (if (buffer-local-value 'drgnx-chrome-own-tab-line (window-buffer w))
-                               drgnx-chrome--own-tab-line
-                             (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s)))))
+                        ;; the grid's chips: at the right of the chrome's row on a graphical frame
+                        ;; (`drgnx-chrome--tab-row-extra'), first in a buffer's own row or a terminal's
+                        (let* ((own (buffer-local-value 'drgnx-chrome-own-tab-line (window-buffer w)))
+                               (line (if own
+                                         drgnx-chrome--own-tab-line
+                                       (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s)))))
+                          (if (or own (not (display-graphic-p (window-frame w)))) (drgnx-chrome--full w line) line)))
      (drgnx-chrome--set w 'header-line-format
                         (with-current-buffer (window-buffer w)
                           (cond ((and (local-variable-p 'header-line-format) header-line-format)

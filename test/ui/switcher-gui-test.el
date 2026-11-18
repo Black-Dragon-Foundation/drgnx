@@ -1,7 +1,8 @@
 ;;; switcher-gui-test.el --- GUI test: the tile switcher's cards (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: det
 ;; Switch Tile on a frame of its own with three tiles: each tile gets a card, a child frame centred on it, its letter
-;; first; closing hides the cards (they stay in the pool).  Run at each scale (ui1, ui2).
+;; first; closing hides the cards (they stay in the pool); the current tile's card carries the focus ring.  Run at each
+;; scale (ui1, ui2).
 
 (require 'ert)
 (require 'cl-lib)
@@ -19,6 +20,7 @@
 (require 'drgnx-groups)
 (require 'drgnx-grid-ops)
 (require 'drgnx-switcher)
+(load (expand-file-name "themes/drgnx-theme-gen" drgnx-ui-switcher--repo) nil t) ; drgnx-dark: the focus colour
 
 (ert-deftest drgnx-ui-switcher/cards-centre-on-tiles ()
   (skip-unless (display-graphic-p))
@@ -60,60 +62,64 @@
       (dolist (f (frame-list)) (unless (memq f frames) (delete-frame f t)))
       (when (frame-live-p selected) (select-frame selected)))))
 
-(defun drgnx-ui-switcher--card-kind (entry)
-  "The kit card kind (`plain', `selected', …) card ENTRY's buffer is drawn in, from the face of its first row."
-  (with-current-buffer (cdr entry)
-    (let ((face (get-text-property (point-min) 'face)))
-      (and (symbolp face) (string-match "\\`drgnx-kit-card-\\([a-z-]+\\)-\\(single\\|top\\|mid\\|bottom\\)\\'"
-                                        (symbol-name face))
-           (intern (match-string 1 (symbol-name face)))))))
+(defun drgnx-ui-switcher--ring (entry)
+  "The colour of card ENTRY's ring: its frame's own `child-frame-border' background."
+  (face-background 'child-frame-border (car entry) t))
 
-(ert-deftest drgnx-ui-switcher/highlighted-card-is-the-selected-card ()
-  "Each card is a kit card: the current tile's is the `selected' card (the focus ring), the others `plain'; the
-selected card follows the highlight."
+(ert-deftest drgnx-ui-switcher/one-card-ringed-on-the-current-tile ()
+  "Each card is one popup (tiling.html's `.letter'): no kit card drawn inside it, its text fits its window (nothing cut
+at the edge), and the current tile's card has the focus colour's ring, which follows the highlight."
   (skip-unless (display-graphic-p))
-  (let ((frames (frame-list)) (selected (selected-frame))
+  (let ((frames (frame-list)) (selected (selected-frame)) (themes custom-enabled-themes)
         (frame (make-frame '((width . 160) (height . 50)))))
     (unwind-protect
         (with-selected-frame frame
+          (load-theme 'drgnx-dark t)
           (drgnx-grid-test--with
             (drgnx-test-wait (lambda () (redisplay t) (frame-visible-p frame)) :secs 10 :what "the frame mapped")
             (drgnx-groups-split-right)
             (redisplay t)
             (unwind-protect
-                (let ((kinds (lambda ()
-                               (sort (mapcar #'drgnx-ui-switcher--card-kind
-                                             (seq-filter (lambda (e) (and (frame-visible-p (car e))
-                                                                          (eq (frame-parent (car e)) frame)))
-                                                         drgnx-switcher--pool))
-                                     (lambda (a b) (string< (symbol-name a) (symbol-name b))))))
-                      (current (lambda ()
-                                 (let ((it (plist-get drgnx-switcher--state :current)))
-                                   (drgnx-ui-switcher--card-kind
-                                    (seq-find (lambda (e) (and (frame-visible-p (car e)) (eq (frame-parent (car e)) frame)
-                                                               (with-current-buffer (cdr e)
-                                                                 (goto-char (point-min)) (skip-chars-forward " ")
-                                                                 (eq (char-after) (plist-get it :letter)))))
-                                              drgnx-switcher--pool))))))
+                (let* ((focus (face-foreground 'drgnx-focus-line frame t))
+                       (mine (lambda () (seq-filter (lambda (e) (and (frame-visible-p (car e)) (eq (frame-parent (car e)) frame)))
+                                                    drgnx-switcher--pool)))
+                       (card-of (lambda (it)
+                                  (seq-find (lambda (e) (with-current-buffer (cdr e)
+                                                          (string-search (string (plist-get it :letter)) (buffer-string))))
+                                            (funcall mine))))
+                       (ringed (lambda () (mapcar (lambda (e) (equal (drgnx-ui-switcher--ring e) focus)) (funcall mine)))))
+                  (should (stringp focus))
                   (drgnx-switcher-open)
-                  (drgnx-test-wait (lambda () (redisplay t) (= 2 (length (funcall kinds)))) :secs 10 :what "two cards")
-                  (should (equal (list (funcall kinds) (eq (plist-get (plist-get drgnx-switcher--state :current) :frame) frame))
-                                 (list '(plain selected) t)))
-                  (should (eq (funcall current) 'selected))
+                  (drgnx-test-wait (lambda () (redisplay t) (= 2 (length (funcall mine)))) :secs 10 :what "two cards")
+                  (dolist (e (funcall mine))
+                    (with-current-buffer (cdr e)
+                      (should-not (text-property-search-forward
+                                   'face nil (lambda (_ f) (let ((fs (if (listp f) f (list f))))
+                                                             (seq-some (lambda (x) (and (symbolp x) (string-prefix-p "drgnx-kit-card-" (symbol-name x))))
+                                                                       fs))))))
+                    (let ((w (frame-root-window (car e))))
+                      (should (<= (car (window-text-pixel-size w nil nil t)) (window-body-width w t)))
+                      ;; each line's last character is drawn whole: nothing cut, no truncation glyph
+                      (with-current-buffer (cdr e)
+                        (goto-char (point-min))
+                        (while (not (eobp))
+                          (let ((v (pos-visible-in-window-p (1- (line-end-position)) w t)))
+                            (should (and v (= 2 (length v)))))
+                          (forward-line 1)))))
+                  (should (equal (sort (funcall ringed) (lambda (a _) a)) '(t nil)))
+                  (should (equal (drgnx-ui-switcher--ring (funcall card-of (plist-get drgnx-switcher--state :current))) focus))
                   (let ((before (plist-get drgnx-switcher--state :current)))
-                    ;; the highlight on this frame's other tile (an arrow may cross to another frame's tile, the
-                    ;; nearest in that direction, whose card is not this frame's)
                     (plist-put drgnx-switcher--state :current
                                (seq-find (lambda (it) (and (eq (plist-get it :frame) frame) (not (eq it before))))
                                          (plist-get drgnx-switcher--state :items)))
                     (drgnx-switcher--draw)
-                    (should (plist-get drgnx-switcher--state :current))
-                    (should-not (eq before (plist-get drgnx-switcher--state :current))))
-                  (redisplay t)
-                  (should (equal (funcall kinds) '(plain selected)))
-                  (should (eq (funcall current) 'selected)))
+                    (redisplay t)
+                    (should (equal (drgnx-ui-switcher--ring (funcall card-of (plist-get drgnx-switcher--state :current))) focus))
+                    (should-not (equal (drgnx-ui-switcher--ring (funcall card-of before)) focus))))
               (drgnx-switcher-close))))
       (drgnx-switcher-delete-pool)
+      (mapc #'disable-theme custom-enabled-themes)
+      (dolist (th (reverse themes)) (enable-theme th))
       (dolist (f (frame-list)) (unless (memq f frames) (delete-frame f t)))
       (when (frame-live-p selected) (select-frame selected)))))
 
