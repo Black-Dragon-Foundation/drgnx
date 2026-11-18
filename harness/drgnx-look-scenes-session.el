@@ -2584,6 +2584,24 @@ sizes ignored (a dock's side window keeps its width otherwise); the pixels it mo
     (unless (zerop d) (window-resize window d t t t))
     (- (window-pixel-width window) from)))
 
+(defun drgnx-look-scene--widths-save ()
+  "The selected frame's windows with their pixel widths, to put back after a window's resize."
+  (mapcar (lambda (w) (cons w (window-pixel-width w))) (window-list nil 'nomini)))
+
+(defun drgnx-look-scene--widths-restore (sizes)
+  "Give each window of SIZES (`drgnx-look-scene--widths-save') its width back.  A resize takes the pixels from a
+neighbour, so giving one window back its width moves another: pass again until none moves (at most four passes).
+Without this each checked window leaves its neighbours (the Explorer too) wider or narrower for the next one."
+  (let ((window-resize-pixelwise t) (n 0))
+    (while (and (< n 4)
+                (let ((moved nil))
+                  (pcase-dolist (`(,w . ,px) sizes)
+                    (when (and (window-live-p w) (/= px (window-pixel-width w)))
+                      (ignore-errors (window-resize w (- px (window-pixel-width w)) t t t))
+                      (setq moved t)))
+                  moved))
+      (setq n (1+ n)))))
+
 (defconst drgnx-look-scene-widths-slack 10
   "The px the hub keeps short of a segment's end (`drgnx_rows::fit::SLACK').")
 
@@ -2763,7 +2781,7 @@ resized again.  What was measured goes to FILE."
           (setq cuts (drgnx-look-scene--cut-rows w "settled")))
         (unless (gethash key drgnx-look-scene--widths-seen)
           (puthash key t drgnx-look-scene--widths-seen)
-          (let ((moved 0) (wide nil))
+          (let ((moved 0) (wide nil) (sizes (drgnx-look-scene--widths-save)))
             (unwind-protect
                 (pcase-dolist (`(,how . ,delta) (list (cons "narrow" (- (min 300 (/ (window-body-width w t) 3))))
                                                       (cons "wide" 300)))
@@ -2782,6 +2800,7 @@ to resize a fed window, or name it in `drgnx-look-scene-widths-fixed')" view (bu
                     (if (equal how "wide") (setq wide (drgnx-look-scene--row-texts w))
                       (setq cuts (append cuts (drgnx-look-scene--cut-rows w how))))))
               (unless (zerop moved) (window-resize w (- moved) t t t))
+              (drgnx-look-scene--widths-restore sizes)
               (drgnx-look-scene--rows-settle buffer "back"))
             (when wide
               (let ((over (delq nil (mapcar (lambda (c) (drgnx-look-scene--over-cut c wide buffer)) cuts))))
