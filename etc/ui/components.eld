@@ -55,8 +55,7 @@
                  ((quiet) :inherit (drgnx-ui-text drgnx-text-muted))
                  ((danger) :bg error-tint :fg error :inherit (drgnx-ui-caption error drgnx-selected-quiet) :font (drgnx-ui-text)))
           :replaces ((drgnx-ui-button . drgnx-kit-button-secondary) (drgnx-ui-button-primary . drgnx-kit-button-primary)
-                     (drgnx-button . drgnx-kit-button-secondary) (drgnx-work-flow-button . drgnx-kit-button-secondary)
-                     (drgnx-work-flow-button-primary . drgnx-kit-button-primary))
+                     (drgnx-button . drgnx-kit-button-secondary))
           :helpers nil :lint t)
   ;; a key hint: the keys in the code font in a 4 px box; `menu' is the text alone (a menu's shortcut column)
   (key-hint :variants ((variant cap menu)) :defaults (variant cap)
@@ -64,8 +63,7 @@
             :tty (:pad 0) :label "key"
             :bind (((cap) :edge key-hint-edge :inherit (drgnx-code-small drgnx-control) :font (drgnx-code-small))
                    ((menu) :inherit (drgnx-code-small drgnx-text-subtle)))
-            :replaces ((drgnx-keycap . drgnx-kit-key-hint-cap) (drgnx-work-flow-button-key . drgnx-kit-key-hint-cap)
-                       (drgnx-work-flow-key-primary . drgnx-kit-key-hint-cap))
+            :replaces ((drgnx-keycap . drgnx-kit-key-hint-cap))
             :helpers nil :lint t)
   ;; an agent's mark: its handle (one or two letters) on its colour (the colour's face `drgnx-agent-N' drawn
   ;; inverse), about 18 px square (the caption's line, 5 px each side of a letter), radius 4 where Glitnir rounds; a

@@ -375,13 +375,8 @@ mockup's 12.5 px). It goes on: for a held task why it is held (the card's words 
 checks (base .. tip, then each commit with its short sha, `tests` for red first's test commit or `code`, and its
 subject: the job data's `commits`, which `orch::gates::before_merge` records each time it looks, and `bases`); the
 evidence so far as a table, a label column (`brief`, `tests`, `green`, `red`, then any `waiver`) and each newest
-record's job, machine and counts, "none recorded" in the attention face where there is none; and the actions as buttons (`drgnx-work-flow-button`, the controls' ring; the first `drgnx-work-flow-button-primary`,
-filled; where boxes fit their text, padded 4 px above and below it, `:fit (text . 4)`, else text-height), each with
-its key as a keycap inside it after a gap (`drgnx-work-flow-button-key`, the primary's `drgnx-work-flow-key-primary`: on
-the button's background, padded by a space each side and 2 px above and below). On a graphical frame the tile draws
-each key as a keycap image in that face's font and ring (`drgnx-work-flow--keycaps`, after every patch) and gives its
-text the button's face, so the button's ring runs around the key as one box; a key with its own face box broke the
-ring in two. Each row of buttons is 30 logical px
+record's job, machine and counts, "none recorded" in the attention face where there is none; and the actions as the kit's buttons (`Comp::Button`: the first primary, filled; its key the kit's key hint inside it, after the
+button's gap), one row of them wrapping to the tile's width by the width the kit's expansion measures at. Each row of buttons is 30 logical px
 high (the mockup's 24 px buttons, 6 px apart), so a button's box has room for its pad. `r` (**Run the red** for a red-first hold, else **Check again**:
 the card's `merge`), `s` (**Tell the agent**: `retry`) and `w` (**Waive once**: `waive`, asking for the reason) answer
 the card with `job/card` as the user; the hub takes the waiver only from the user's connection. The tile shows in the
