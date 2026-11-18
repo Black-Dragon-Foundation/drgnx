@@ -165,7 +165,7 @@ fn a_request_is_a_kit_question_card_over_allow_always_and_deny() {
     assert!(rows.iter().all(|r| {
         r.props
             .iter()
-            .any(|(_, _, n, v)| n == "drgnx-agent-panel-card" && *v == json!(["perm", 7]))
+            .any(|(_, _, n, v)| n == "drgnx-agent-panel-card" && *v == json!(["perm", "7"]))
     }));
 }
 
