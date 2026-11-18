@@ -101,6 +101,9 @@ pub struct ContainerReq {
     pub keys: Option<KeyMounts>,
     /// A runner job's mounts besides the source; none: a local job.
     pub runner: Option<RunnerMounts>,
+    /// The opt-in features the job needs (`sandbox`, `udmabuf`, `render`, `kvm`), each mapped to its podman argument only
+    /// when the runner allows it ([`RunnerArgs::allowed`]); otherwise the job is refused.
+    pub features: Vec<Feature>,
 }
 
 /// A runner job's mount set, exactly: the source `ro,z` (`rw,Z` for a `writes_tree` copy), the slot's
@@ -166,6 +169,10 @@ pub struct RunnerArgs {
     /// The job container carries the owner's labels (`drgnx.owner` or `drgnx.runner`, and `drgnx.job`), so a sweep
     /// finds exactly its own.
     pub job_labels: bool,
+    /// The features this runner allows the job's project (the user's opt-in, per runner and per project).
+    pub allowed: Vec<Feature>,
+    /// The render node a `render` job gets (`/dev/dri/renderD128`): the one the probe found; none: `render` is refused.
+    pub render_node: Option<String>,
 }
 
 /// The variable that holds a job's deadline, in epoch seconds.
@@ -181,6 +188,8 @@ impl RunnerArgs {
             owner: owner_tag.to_string(),
             job_labels: true,
             cargo_jobs: 0,
+            allowed: vec![],
+            render_node: None,
         }
     }
 
@@ -193,6 +202,8 @@ impl RunnerArgs {
             owner: format!("{prefix}/{hub_id}"),
             job_labels: true,
             cargo_jobs: 0,
+            allowed: vec![],
+            render_node: None,
         }
     }
 }
@@ -405,6 +416,136 @@ fn ok_memory(m: &str) -> bool {
         && !m.starts_with('0')
 }
 
+/// An opt-in feature of a runner's container (runners design D2): a thing a job may ask for that the user must have
+/// allowed, per runner and per project. The names are the placement features.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum Feature {
+    /// `--security-opt=unmask=ALL`: bwrap and other namespace sandboxes run inside the job.
+    Sandbox,
+    /// `--device=/dev/udmabuf`.
+    Udmabuf,
+    /// `--device=<the render node>`.
+    Render,
+    /// Network for an artifact build (Task 16): never on a `podman run`.
+    BuildNet,
+    /// `--device=/dev/kvm`.
+    Kvm,
+}
+
+impl Feature {
+    pub fn parse(s: &str) -> Option<Feature> {
+        Some(match s {
+            "sandbox" => Feature::Sandbox,
+            "udmabuf" => Feature::Udmabuf,
+            "render" => Feature::Render,
+            "build-net" => Feature::BuildNet,
+            "kvm" => Feature::Kvm,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Feature::Sandbox => "sandbox",
+            Feature::Udmabuf => "udmabuf",
+            Feature::Render => "render",
+            Feature::BuildNet => "build-net",
+            Feature::Kvm => "kvm",
+        }
+    }
+}
+
+/// What a runner allows a job of PROJECT: the hub's `--feature` rows for PROJECT or for every project (`*`, a `mine`
+/// runner's `kvm` fact), except that a `kvm` row for PROJECT alone also needs the runner's own opt-in, `KVM_PROJECTS`
+/// (its `runner.conf`, [`kvm_projects`]): a shared or my-cloud machine's owner says which projects may have `/dev/kvm`.
+pub fn allowed_for(
+    project: &str,
+    rows: &[(String, Feature)],
+    kvm_projects: &[String],
+) -> Vec<Feature> {
+    let mut out: Vec<Feature> = vec![];
+    for (p, f) in rows {
+        let ok = match (p.as_str(), f) {
+            ("*", _) => true,
+            (p, Feature::Kvm) => p == project && kvm_projects.iter().any(|k| k == project),
+            (p, _) => p == project,
+        };
+        if ok && !out.contains(f) {
+            out.push(*f);
+        }
+    }
+    out
+}
+
+/// The projects a runner's own config lets use `/dev/kvm`: the `kvm = ["a", "b"]` line under `[features]` of its
+/// `runner.conf`. Only that one shape is read (a TOML subset); anything else is ignored.
+pub fn kvm_projects(text: &str) -> Vec<String> {
+    let mut in_features = false;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_features = line == "[features]";
+        } else if in_features
+            && let Some(list) = line
+                .strip_prefix("kvm")
+                .map(str::trim_start)
+                .and_then(|r| r.strip_prefix('='))
+                .map(str::trim)
+                .and_then(|r| r.strip_prefix('['))
+                .and_then(|r| r.strip_suffix(']'))
+        {
+            return list
+                .split(',')
+                .map(|p| p.trim().trim_matches('"'))
+                .filter(|p| {
+                    !p.is_empty()
+                        && p.bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+                })
+                .map(str::to_string)
+                .collect();
+        }
+    }
+    vec![]
+}
+
+/// The `podman run` arguments for the features REQ asks for: each only when RA allows it, else a refusal.
+fn feature_args(req: &ContainerReq, ra: &RunnerArgs) -> Result<Vec<OsString>, Refusal> {
+    let mut a: Vec<OsString> = vec![];
+    for f in &req.features {
+        if !ra.allowed.contains(f) {
+            return Err(refuse(format!(
+                "this job needs {:?}, which this runner does not allow for its project",
+                f.name()
+            )));
+        }
+        a.push(match f {
+            Feature::Sandbox => "--security-opt=unmask=ALL".into(),
+            Feature::Udmabuf => "--device=/dev/udmabuf".into(),
+            Feature::Kvm => "--device=/dev/kvm".into(),
+            Feature::Render => {
+                let node = ra
+                    .render_node
+                    .as_deref()
+                    .filter(|n| {
+                        n.strip_prefix("/dev/dri/renderD")
+                            .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+                    })
+                    .ok_or_else(|| refuse("this runner has no render node to give"))?;
+                format!("--device={node}").into()
+            }
+            Feature::BuildNet => {
+                return Err(refuse(
+                    "build-net is for an artifact build, never a container job",
+                ));
+            }
+        });
+    }
+    Ok(a)
+}
+
 /// The `podman run` arguments (without the program) for REQ under CAPS, placed by RA.
 pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsString>, Refusal> {
     if req.argv.is_empty() || req.argv[0].is_empty() {
@@ -480,6 +621,7 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
         a.push("--label".into());
         a.push(format!("drgnx.runner={hub}").into());
     }
+    a.extend(feature_args(req, ra)?);
     a.push(
         match sidecar {
             Some(s) => format!("--network=container:{s}"),
@@ -904,6 +1046,7 @@ mod tests {
 
     fn req(argv: &[&str]) -> ContainerReq {
         ContainerReq {
+            features: vec![],
             image: "tools".into(),
             argv: argv.iter().map(|s| s.to_string()).collect(),
             worktree: "/work/tree".into(),
@@ -1222,6 +1365,104 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    fn with_feature(f: Feature, allowed: &[Feature]) -> Result<Vec<String>, Refusal> {
+        let mut r = req(&["ls"]);
+        r.features = vec![f];
+        let mut ra = RunnerArgs::local(TAG);
+        ra.allowed = allowed.to_vec();
+        ra.render_node = Some("/dev/dri/renderD128".into());
+        argv(&r, &caps(), &ra).map(strs)
+    }
+
+    /// [D] pure: each opt-in feature a runner allows becomes its podman argument; the same feature not allowed is
+    /// refused, and so is one for a node that is not a render node.
+    #[test]
+    fn a_feature_maps_when_allowed_and_is_refused_otherwise() {
+        for (f, arg) in [
+            (Feature::Sandbox, "--security-opt=unmask=ALL"),
+            (Feature::Udmabuf, "--device=/dev/udmabuf"),
+            (Feature::Render, "--device=/dev/dri/renderD128"),
+            (Feature::Kvm, "--device=/dev/kvm"),
+        ] {
+            let a = with_feature(f, &[f]).unwrap();
+            assert!(a.iter().any(|s| s == arg), "{f:?}: {a:?}");
+            let e = with_feature(f, &[]).unwrap_err();
+            assert!(e.message.contains(f.name()), "{e:?}");
+            // another feature's allowance is no allowance
+            let other = if f == Feature::Kvm {
+                Feature::Sandbox
+            } else {
+                Feature::Kvm
+            };
+            assert!(with_feature(f, &[other]).is_err(), "{f:?}");
+        }
+        let mut r = req(&["ls"]);
+        r.features = vec![Feature::Render];
+        let mut ra = RunnerArgs::local(TAG);
+        ra.allowed = vec![Feature::Render];
+        for bad in [
+            None,
+            Some("/dev/sda"),
+            Some("/dev/dri/renderD1 --privileged"),
+        ] {
+            ra.render_node = bad.map(str::to_string);
+            assert!(argv(&r, &caps(), &ra).is_err(), "{bad:?}");
+        }
+        assert_eq!(Feature::parse("udmabuf"), Some(Feature::Udmabuf));
+        assert_eq!(Feature::parse("gpu"), None);
+        for f in [Feature::BuildNet, Feature::Sandbox] {
+            assert_eq!(Feature::parse(f.name()), Some(f));
+        }
+    }
+
+    /// [D] pure: the hub's rows allow a project its own features and every project's `*` rows; `kvm` for one project
+    /// also needs the runner's own list naming it.
+    #[test]
+    fn a_runner_allows_what_the_hub_and_its_own_config_both_say() {
+        let rows = |v: &[(&str, Feature)]| -> Vec<(String, Feature)> {
+            v.iter().map(|(p, f)| (p.to_string(), *f)).collect()
+        };
+        let own = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).collect() };
+        let r = rows(&[
+            ("a", Feature::Render),
+            ("b", Feature::Sandbox),
+            ("a", Feature::Kvm),
+        ]);
+        assert_eq!(allowed_for("a", &r, &[]), [Feature::Render]);
+        assert_eq!(allowed_for("a", &r, &own(&["b"])), [Feature::Render]);
+        assert_eq!(
+            allowed_for("a", &r, &own(&["a"])),
+            [Feature::Render, Feature::Kvm]
+        );
+        assert_eq!(allowed_for("c", &r, &own(&["c"])), []);
+        // a `mine` runner's kvm for every project needs nothing of the runner's
+        assert_eq!(
+            allowed_for("c", &rows(&[("*", Feature::Kvm)]), &[]),
+            [Feature::Kvm]
+        );
+    }
+
+    /// [D] pure: `runner.conf` names the projects that may have kvm; other lines, sections and bad names are ignored.
+    #[test]
+    fn the_runner_conf_lists_the_kvm_projects() {
+        let t = "# a runner\n[other]\nkvm = [\"x\"]\n[features]\nkvm = [\"a\", \"b-1\" , \"bad name\", \"\"]\n";
+        assert_eq!(kvm_projects(t), ["a", "b-1"]);
+        assert!(kvm_projects("[features]\nrender = [\"a\"]\n").is_empty());
+        assert!(kvm_projects("").is_empty());
+    }
+
+    /// [D] pure: the network feature belongs to an artifact build; a container job that names it is refused even
+    /// when allowed, and a job that names no feature gets no device and no unmask.
+    #[test]
+    fn build_net_is_never_a_container_job_feature() {
+        assert!(with_feature(Feature::BuildNet, &[Feature::BuildNet]).is_err());
+        let a = local(&req(&["ls"]), &caps()).unwrap();
+        assert!(
+            !a.iter()
+                .any(|s| s.starts_with("--device") || s.contains("unmask"))
+        );
     }
 
     /// [D] Locally the worktree is the one mount.

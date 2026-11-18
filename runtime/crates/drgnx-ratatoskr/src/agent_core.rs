@@ -232,6 +232,7 @@ pub async fn serve(
         Params::HistoryProvenance(p) => answer(crate::history::hunk::provenance(f, c, p).await),
         Params::HistoryRevertHunk(p) => answer(crate::history::hunk::revert_hunk(f, c, p).await),
         Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),
+        Params::RunnersFeature(p) => answer(runners::methods::feature(f, c, p).await),
         Params::RunnersRemove(p) => answer(runners::methods::remove(f, c, p).await),
         Params::PluginsList(p) => answer(crate::plugins::list(f, c, p).await),
         Params::PluginsApprove(p) => answer(crate::plugins::approve(f, c, p).await),

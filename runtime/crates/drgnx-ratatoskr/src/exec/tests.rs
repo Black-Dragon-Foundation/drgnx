@@ -1036,6 +1036,7 @@ async fn a_session_job_outside_its_worktree_is_refused() {
 #[test]
 fn a_container_job_in_a_subfolder_mounts_the_worktree() {
     let mut req = container::ContainerReq {
+        features: vec![],
         image: "tools".into(),
         argv: vec!["ls".into()],
         worktree: "/work/tree".into(),

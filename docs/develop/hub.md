@@ -1588,6 +1588,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
 | `runners/bench` | user | `{name: Id}` | `Runner` | yes |
 | `runners/check` | user | `{name: Id}` | `Runner` | yes |
+| `runners/feature` | user | `{feature: string, name: Id, on: boolean, project: string}` | `Runner` | yes |
 | `runners/keys` | user | `{keys: RunnerKeys}` | `boolean` | no |
 | `runners/keys-held` | user | `{}` | `{names?: [KeyName]}` | no |
 | `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |

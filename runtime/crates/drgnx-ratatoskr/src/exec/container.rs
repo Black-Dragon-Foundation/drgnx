@@ -255,6 +255,7 @@ mod tests {
 
     fn req(argv: &[&str]) -> ContainerReq {
         ContainerReq {
+            features: vec![],
             image: "tools".into(),
             argv: argv.iter().map(|s| s.to_string()).collect(),
             worktree: "/work/tree".into(),
