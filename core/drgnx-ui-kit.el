@@ -824,6 +824,18 @@ head leaves.  The rows of the hunks are `drgnx-ui-kit-diff-block''s."
       (drgnx-ui-kit--b-pad (cdr pad) tty-pad head)
       (drgnx-ui-kit--b-finish nil 0 0 nil height))))
 
+(defun drgnx-ui-kit--diff-line (props scale tty)
+  "The `diff-line' component of PROPS (:part :text): one row of a diff block's body at SCALE, see
+`drgnx-ui-kit--expand'."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'diff-block))
+           (face (drgnx-ui-kit--face 'diff-block (drgnx-ui-kit--chosen entry (list (drgnx-ui-kit--name props :part 'ctx)))))
+           (pad (plist-get (plist-get entry :geometry) :pad)) (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0)))
+      (drgnx-ui-kit--b-pad (car pad) tty-pad face)
+      (drgnx-ui-kit--b-push (or (plist-get props :text) "") face)
+      (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+      (drgnx-ui-kit--b-finish nil 0 0 nil nil))))
+
 (defun drgnx-ui-kit--round (x)
   "X rounded half up, as the hub rounds (`drgnx-px')."
   (floor (+ x 0.5 1e-9)))
@@ -1324,6 +1336,7 @@ px, HEIGHT the row's line height in device px or nil (one text line)."
     ('section-header (drgnx-ui-kit--section-header props scale tty))
     ('card (drgnx-ui-kit--card props scale tty))
     ('diff-block (drgnx-ui-kit--diff-block props scale tty))
+    ('diff-line (drgnx-ui-kit--diff-line props scale tty))
     ('agent-mark (drgnx-ui-kit--agent-mark props scale tty))
     ('progress (drgnx-ui-kit--progress props scale tty))
     ('meter (drgnx-ui-kit--meter props scale tty))

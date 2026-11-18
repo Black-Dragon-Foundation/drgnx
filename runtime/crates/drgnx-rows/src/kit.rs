@@ -823,6 +823,8 @@ pub enum Comp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         width: Option<u32>,
     },
+    /// One row of a diff block's body: TEXT in PART (`hunk`, `ctx`, `add` or `del`) with the block's room each side.
+    DiffLine { part: String, text: String },
     /// One line of a card of KIND in SHAPE: TEXT with the card's room each side.
     Card {
         #[serde(default)]
@@ -1586,6 +1588,14 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             }
             pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), head);
         }
+        Comp::DiffLine { part, text } => {
+            let variant = [part.as_str(), env.density.name()];
+            let g: Geom = kit_gen::geom(CompId::DiffBlock, &variant);
+            let face = comp_face(kit_gen::face(CompId::DiffBlock, &variant));
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+            b.push(text, face);
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+        }
         Comp::Card { kind, shape, text } => {
             let variant = [kind.name(), shape.name(), env.density.name()];
             let g: Geom = kit_gen::geom(CompId::Card, &variant);
@@ -1965,47 +1975,21 @@ pub fn expand_rows(env: &KitEnv, key: &str, c: &Comp) -> Vec<Row> {
         return vec![head];
     };
     // the whole block: the head, then each hunk's `@@` row and its lines (gutter number, sign, text), in the card's ring
-    let g: Geom = kit_gen::geom(CompId::DiffBlock, &["ctx", env.density.name()]);
-    let face = |p: &str| comp_face(kit_gen::face(CompId::DiffBlock, &[p, env.density.name()]));
     let mut rows = vec![head];
-    for (hi, h) in hunks.iter().enumerate() {
-        let mut b = RowBuilder::new(format!("{key}/h{hi}"));
-        let f = face("hunk");
-        pad(
-            &mut b,
-            env,
-            px(g.pad.0, env.scale),
-            usize::from(g.tty_pad),
-            f,
-        );
-        b.push(&h.header, f);
-        pad(
-            &mut b,
-            env,
-            px(g.pad.1, env.scale),
-            usize::from(g.tty_pad),
-            f,
-        );
+    let mut line = |id: String, part: &str, text: String| {
+        let mut b = RowBuilder::new(id);
+        let c = Comp::DiffLine {
+            part: part.to_owned(),
+            text,
+        };
+        expand(&mut b, env, &c);
         rows.push(b.finish());
+    };
+    for (hi, h) in hunks.iter().enumerate() {
+        line(format!("{key}/h{hi}"), "hunk", h.header.clone());
         for (li, (kind, n, text)) in h.lines.iter().enumerate() {
-            let mut b = RowBuilder::new(format!("{key}/h{hi}/{li}"));
-            let f = face(kind.part());
-            pad(
-                &mut b,
-                env,
-                px(g.pad.0, env.scale),
-                usize::from(g.tty_pad),
-                f,
-            );
-            b.push(&format!("{n:>4} {} {text}", kind.sign()), f);
-            pad(
-                &mut b,
-                env,
-                px(g.pad.1, env.scale),
-                usize::from(g.tty_pad),
-                f,
-            );
-            rows.push(b.finish());
+            let text = format!("{n:>4} {} {text}", kind.sign());
+            line(format!("{key}/h{hi}/{li}"), kind.part(), text);
         }
     }
     card_rows(env, CardKind::Plain, rows)

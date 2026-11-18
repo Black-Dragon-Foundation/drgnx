@@ -579,8 +579,8 @@ rows; the head carries the counts and the buttons; its help-echo says the file a
                    (get-text-property 0 'face (nth 4 rows))))
     (should (equal "a.rs, 1 added, 1 removed" (get-text-property 0 'help-echo s)))
     (let ((pos (string-match "Accept" s)))
-      (should (button-at pos))
-      (push-button pos)
+      (should (get-text-property pos 'button s))
+      (funcall (get-text-property pos 'action s) nil)
       (should fired))))
 
 (ert-deftest drgnx-ui-kit/diff-block-head-fits-its-name-to-the-room ()
@@ -590,9 +590,9 @@ is whole.  Every character is 8 px wide here."
     (let* ((name "core/a-long-directory/drgnx-gateway.el")
            (head (lambda (width)
                    (plist-get (drgnx-ui-kit-expand
-                               'diff-block (list :c "diff-block" :file name :added 2 :removed 1 :icon "file-code"
+                               'diff-block (list :c "diff-block" :file name :added 2 :removed 1 :icon "file-unknown"
                                                  :width width
-                                                 :buttons (vector (vector "Reject" '(:kind "kit-test" :args [])) (vector "Accept" '(:kind "kit-test" :args []))))
+                                                 :buttons (vector (vector "Reject" '(:kind "kit-test" :args nil)) (vector "Accept" '(:kind "kit-test" :args nil))))
                                1 nil) :text))))
       (should (string-match-p (regexp-quote name) (funcall head 600)))
       (should (string-match-p "\u25a4" (funcall head 600)))

@@ -99,7 +99,7 @@ fn review_diff_is_a_kit_diff_block() {
     // the removed line has the old number, the added the new: 215 - and 215 +, then the context 216, the add 217
     assert!(text(&rows[2]).contains("215 -   (when p"));
     assert!(text(&rows[3]).contains("215 +   (if p"));
-    assert!(text(&rows[4]).contains("216      (send p)"));
+    assert!(text(&rows[4]).contains("216       (send p)"));
     assert!(text(&rows[5]).contains("217 +     (queue p)"));
     let has = |r: &Row, f: FaceId| r.runs.iter().any(|(_, _, g)| g == f.name());
     assert!(has(&rows[0], FaceId::KitDiffBlockHead));
