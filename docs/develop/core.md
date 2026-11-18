@@ -3608,7 +3608,7 @@ and the agent panel's cards centre on all their windows), each one popup card (t
 surface (`drgnx-surface-overlay`, remapped on the card's buffer and its frame's background), the letter in
 `drgnx-ui-heading` at 42 logical px over the caption in `drgnx-text-muted` and `drgnx-ui-caption`, each line centred by pixel spaces with 18 px at the sides, and a 2 px `child-frame-border` ring, its
 colour per card frame: `drgnx-focus-line`'s on the current item, else the popups' own ring (high contrast) or the
-surface's. The caption (`drgnx-switcher--tile-title`) is an editor's shown tab and "editor" ("(current)" on yours, "a
+surface's. A card's frame is `drgnx-minimap-exclude`: no scroll bar strip, which would widen its right fringe by 12 px, cut each line's last characters and draw a truncation glyph there (the look scenes' `drgnx-look-scene-cards-fit` fails a card whose text is wider than its window). The caption (`drgnx-switcher--tile-title`) is an editor's shown tab and "editor" ("(current)" on yours, "a
 stack of N" for several tabs), a tool tile's kind (with "· a stack of N"), the side bar's view; the echo area holds
 `drgnx-switcher-hint` (the letters and keys as kit key hints, cleared on close when still shown), as Resize Tiles holds
 `drgnx-grid-resize-hint`; a tile placeholder's line is a kit row in the selected state (`drgnx-ui-kit-row-face`,

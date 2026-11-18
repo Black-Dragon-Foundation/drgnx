@@ -3392,5 +3392,22 @@ labelled, the minimap held open, dark."
         (drgnx-look-scene--minimap-hold w))))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene-cards-fit ()
+  "No tile switcher card cuts its text: in each visible card's window nothing is scrolled off (`window-hscroll' 0)
+and the text is no wider than the window's body (`window-text-pixel-size' with no limit against
+`window-body-width')."
+  (drgnx-look-scene--try "cards"
+    (dolist (f (frame-list))
+      (when (and (frame-parameter f 'drgnx-switcher-card) (frame-visible-p f))
+        (let* ((w (frame-root-window f)) (buf (window-buffer w)) (body (window-body-width w t))
+               (text (car (window-text-pixel-size w nil nil 10000 nil t))))
+          (when (or (> text body) (/= 0 (window-hscroll w)))
+            (push (format "cards: the switcher card %S is cut: its text is %d px, its window shows %d (hscroll %d, frame text width %d, fringes %S, margins %S, truncate-lines %S)"
+                          (with-current-buffer buf (string-trim (buffer-substring-no-properties (point-min) (point-max))))
+                          text body (window-hscroll w) (frame-text-width f) (window-fringes w) (window-margins w)
+                          (buffer-local-value 'truncate-lines buf))
+                  drgnx-look-scene--errors))))))
+  (drgnx-look-scene--answer))
+
 (provide 'drgnx-look-scenes-session)
 ;;; drgnx-look-scenes-session.el ends here

@@ -165,6 +165,9 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
     `((parent-frame . ,parent) (minibuffer . nil) (name . "drgnx-switcher-card") (drgnx-switcher-card . t)
       (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t) (skip-taskbar . t)
       (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t) (border-width . 0)
+      ;; no scroll bar strip: it widens the right fringe by 12 px, which cuts each line's last characters and draws a
+      ;; truncation glyph there (the card's width is its text's own)
+      (drgnx-minimap-exclude . t)
       (internal-border-width . ,(drgnx-pixels-border-width (drgnx-px 8 parent) parent))
       ;; the ring, inside the card's edge (tiling.html's `.letter.hi': inset 2 px of the focus colour)
       (child-frame-border-width . ,(drgnx-pixels-border-width (drgnx-px-line 2 parent) parent))
@@ -232,7 +235,8 @@ card has one size."
            (ring (cond (highlighted (face-foreground 'drgnx-focus-line parent t))
                        (popup-ring (face-background 'child-frame-border parent t))
                        (t bg))))
-      (unless (equal (frame-parameter frame 'background-color) bg) (set-frame-parameter frame 'background-color bg))
+      (when (and (stringp bg) (not (equal (frame-parameter frame 'background-color) bg)))
+        (set-frame-parameter frame 'background-color bg))
       (when (stringp ring) (set-face-background 'child-frame-border ring frame)))
     ;; the height fits the two lines; the width is the text's own, so no line is cut at the edge
     (let ((window-min-height 1) (window-min-width 1))
