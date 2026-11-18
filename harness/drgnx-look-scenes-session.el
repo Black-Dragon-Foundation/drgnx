@@ -3296,6 +3296,8 @@ the window's top rows, dark."
 (declare-function drgnx-pane-window "drgnx-panes")
 (declare-function drgnx-grid-split-tile "drgnx-grid" (window side))
 (declare-function drgnx-grid--make-editor "drgnx-grid" (window))
+(declare-function drgnx-grid-tiles "drgnx-grid" (&optional frame filter))
+(declare-function drgnx-chrome-tabs "drgnx-chrome" (w))
 (defvar drgnx-look-scene--term nil "The tiling scenes' terminal (the panel's tile j).")
 
 (defun drgnx-look-scene--six-tiles ()
