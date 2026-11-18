@@ -1790,11 +1790,16 @@ impl Inner {
         let logs = vec![self.dir(id).join("log")];
         let t0 = crate::clock::now();
         let period = Duration::from_secs(pguard::period_s(&l));
-        let mut last = pguard::read(0, slice.as_deref(), &logs, &pguard::Reading::default());
+        let mut last = pguard::read(
+            Duration::ZERO,
+            slice.as_deref(),
+            &logs,
+            &pguard::Reading::default(),
+        );
         let mut t = pguard::Tracker::new(last);
         loop {
             crate::clock::sleep(period).await;
-            let at = (crate::clock::now() - t0).as_secs();
+            let at = crate::clock::now() - t0;
             last = pguard::read(at, slice.as_deref(), &logs, &last);
             if let Some(s) = t.see(last, &l) {
                 return s;
