@@ -1693,19 +1693,17 @@ lists at each publish.
     turns off before a new major mode or a kill drops its locals.
 - **Marks and thumb.** Marks sit at their position's fraction of the buffer (of the view with a span), by characters,
   as Emacs's scroll bar measures. The thumb is computed by C from the window's start and end. So a scroll runs no Lisp.
-- **When it is set.** `glitnir-ruler` is set only when its value changes (`drgnx-ruler--set`), and the window is then
-  marked for redisplay (`force-window-update`): Glitnir resolves the parameter in `pre-redisplay-functions`, which
-  runs only for the windows redisplay passes, so a strip changed on a frame that is not selected (the editor's while
-  the palette or a card has the focus) once stayed as it was. Glitnir resolves the faces again on a theme change.
+- **When it is set.** `glitnir-ruler` is set only when its value changes. Glitnir resolves the faces again on a theme
+  change.
 - **Mouse.** A press on the strip (`<right-fringe> <down-mouse-1>`, `drgnx-ruler-press`) goes to the place under the
   pointer, centred, and a drag follows the pointer until the button comes up: one `recenter` per motion, the one
   place Lisp runs per pointer move. `drgnx-ruler-click` serves buffers whose marks show without the scroll bar.
 - **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler`, or in a terminal
   (`drgnx-ruler-available-p`).
-- **Checks.** `ruler-test.el` and `marks-test.el` (batch); `ruler-gui-test.el` (a strip changed while a child frame
-  has the focus is resolved at the next redisplay); the look scenes check every scrollable window of every
+- **Checks.** `ruler-test.el` and `marks-test.el` (batch); the look scenes check every scrollable window of every
   scene (`drgnx-look-scene-scrollbars`: the strip is set, and on the root frame drawn exactly when the content runs
-  past the window, from two snapshots of the root frame with and without the strips; a child frame's own strips are
+  past the window, from two snapshots of the root frame with and without the strips (the checker marks each window
+  it toggles with `force-window-update`, so the root is redrawn while a popup has the focus); a child frame's own strips are
   not judged for drawing; a strip under the palette's child frame or under a popup the scene opens on purpose, its
   `:covers` in `drgnx-look-scenes`, is not judged, one under any other child frame, a toast say, is an error);
   Nidhogg's `glitnir-gui/the-ruler-*` rows check the pixels.

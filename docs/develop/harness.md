@@ -625,10 +625,11 @@ How it works:
   for the Explorer's Files rows, which come from the hub: without it the section is empty. Every scene starts from
   the frame as the setup left it (`drgnx-look-scene-begin`, called before each): the editor layout, its tiles and
   the editors' shown buffers put back from the arrangement the setup recorded, the minimap scenes' hold released and
-  the setup's sticky style restored. A scene may leave another layout, or open views inside the editor layout (the
+  the setup's sticky style restored, the cards a scene leaves open (Send Run, the inbox's drop-down) closed and the
+  debug session ended unless the scene is marked `:debug` (the debugging scenes share one stopped session). A scene may leave another layout, or open views inside the editor layout (the
   Work Flow's map, Detail and Rules tiles), whose `one` shape keeps the editor area as it is, and under the grid
   `delete-other-windows` keeps the editor tiles: so a layout switch alone does not reset it. After putting it back,
-  begin compares the layout, the tiles, the sticky style and the minimap hold with the setup's and reports any
+  begin compares the layout, the tiles, the sticky style, the minimap hold and the root's visible popups with the setup's and reports any
   difference as an error ("begin: the scene before left …"), so no scene's state reaches the next unnoticed. A scene
   in another layout applies it itself. The start page and notebook scenes report an error when their buffers
   are not shown in the editor layout. The setup writes the notebook scenes' kernelspec and its environment

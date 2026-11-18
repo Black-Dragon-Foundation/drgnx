@@ -215,14 +215,6 @@ RADIUS [END])."
      (and span (list :span span))
      (list :marks (mapcar (lambda (m) (drgnx-ruler--mark m frame)) (and drgnx-ruler-mode drgnx-ruler--marks))))))
 
-(defun drgnx-ruler--set (window spec)
-  "WINDOW's `glitnir-ruler' SPEC, and WINDOW marked for the next redisplay.  Glitnir resolves the parameter in
-`pre-redisplay-functions', which redisplay runs only for the windows it passes: a parameter alone marks nothing, so a
-strip changed on a frame that is not selected (the editor's, while the palette or a card has the focus) stayed as it
-was until something else redrew that frame."
-  (set-window-parameter window 'glitnir-ruler spec)
-  (force-window-update window))
-
 (defun drgnx-ruler--show (window)
   "Give WINDOW the strip: its right fringe widened by the strip (once), and the spec, set only when it changed."
   (let* ((fr (window-fringes window))
@@ -234,7 +226,7 @@ was until something else redrew that frame."
       (set-window-fringes window (car fr) (+ own width) (nth 2 fr)))
     (let ((spec (with-current-buffer (window-buffer window) (drgnx-ruler--spec window))))
       (unless (equal spec (window-parameter window 'glitnir-ruler))
-        (drgnx-ruler--set window spec)))))
+        (set-window-parameter window 'glitnir-ruler spec)))))
 
 (defun drgnx-ruler--hide (window)
   "Take the strip from WINDOW: the marks, and its fringe back to its own width."
@@ -244,7 +236,7 @@ was until something else redrew that frame."
         (set-window-fringes window (car fr) own (nth 2 fr)))
       (set-window-parameter window 'drgnx-ruler-fringe nil))
     (when (window-parameter window 'glitnir-ruler)
-      (drgnx-ruler--set window nil))))
+      (set-window-parameter window 'glitnir-ruler nil))))
 
 (defvar drgnx-ruler-place-functions nil
   "Functions called with WINDOW and whether it shows the strip, each time its strip is placed (the minimap widens

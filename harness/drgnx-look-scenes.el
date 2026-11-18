@@ -65,17 +65,17 @@
     (search-ask :mockup search-view :then "<escape>" :covers "\\*drgnx ask an agent\\*")
     (search-handed :mockup search-view)
     (search-kinds :mockup search-view)
-    (debugging)
-    (debug-extras)
-    (debug-extras-light)
-    (debug-extras-views)
-    (debug-extras-views-light)
-    (send-run :covers "\\*Send Run\\*")
-    (send-run-code :mockup send-run :covers "\\*Send Run\\*")
-    (send-run-light :mockup send-run :covers "\\*Send Run\\*")
-    (send-run-code-light :mockup send-run :covers "\\*Send Run\\*")
-    (heap-graph :mockup debugging-extras)
-    (heap-graph-light :mockup debugging-extras)
+    (debugging :debug t)
+    (debug-extras :debug t)
+    (debug-extras-light :debug t)
+    (debug-extras-views :debug t)
+    (debug-extras-views-light :debug t)
+    (send-run :debug t :covers "\\*Send Run\\*")
+    (send-run-code :mockup send-run :debug t :covers "\\*Send Run\\*")
+    (send-run-light :mockup send-run :debug t :covers "\\*Send Run\\*")
+    (send-run-code-light :mockup send-run :debug t :covers "\\*Send Run\\*")
+    (heap-graph :mockup debugging-extras :debug t)
+    (heap-graph-light :mockup debugging-extras :debug t)
     ;; their hub seeds the map's graph, which no other scene's hub can share: a session of their own
     (scrollbars-editor :mockup minimap-folding)
     (scrollbars-panel :mockup minimap-folding)
@@ -95,7 +95,8 @@ components' spec and the tokens) and the session's `drgnx-look-scene-NAME' sets 
 agent first; :keys and :type are typed after the setup and before the shot, :then after it; :seed (default \"1\") is
 what the session's hub seeds (`drgnx-look-scene-seed'): the scenes of another seed are drawn in a session of their
 own; :covers a regexp naming the buffers of the child frames the scene opens on purpose (its menu, card or
-drop-down), whose cover of a scroll bar's strip is not an error (`drgnx-look-scene-scrollbars').")
+drop-down), whose cover of a scroll bar's strip is not an error (`drgnx-look-scene-scrollbars'); :debug t keeps the
+debug session the scene before started (`drgnx-look-scene-begin' ends it for the others).")
 
 (defun drgnx-look-scenes--only ()
   "The scenes to draw: those whose name matches $DRGNX_LOOK_ONLY (a regexp), or all of them."
@@ -142,7 +143,8 @@ OUT at SCALE (TAG: `s1', `s2'); return (SHOTS . ERRORS), each in drawing order, 
                                                           out)))
             (push (cons (if (equal seed "1") 'setup (intern (format "setup-%s" seed))) errs) errors))
           (pcase-dolist (`(,name . ,plist) scenes)
-            (let ((errs (drgnx-look-scenes--call sess "(drgnx-look-scene-begin)"))   ; the editor layout again
+            (let ((errs (drgnx-look-scenes--call    ; the editor layout again
+                         sess (format "(drgnx-look-scene-begin %s)" (drgnx-ui-el (plist-get plist :debug))) 60))
                   (png (expand-file-name (format "%s-%s.png" name tag) out)))
               (when (plist-get plist :agent)
                 (setq errs (append errs (drgnx-look-scenes--call

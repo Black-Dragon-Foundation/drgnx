@@ -580,12 +580,25 @@ to split).  Left held, the sticky-lines scene drew the minimap the hover scenes 
                         (substring (symbol-name key) 1) (plist-get now key) (plist-get want key))
                 drgnx-look-scene--errors))))))
 
-(defun drgnx-look-scene-begin ()
+(defvar drgnx-debug--sessions)
+
+(defun drgnx-look-scene--debug-end ()
+  "The scenes' debug sessions ended (a scene with :debug in `drgnx-look-scenes' keeps them: the debugging scenes
+share one stopped session).  Left running, the debug toolbar's child frame stayed over every later scene."
+  (when (bound-and-true-p drgnx-debug--sessions)
+    (dolist (s drgnx-debug--sessions)
+      (drgnx-hub-call-sync "debug/control" (list :session (plist-get s :id) :op "stop") 5))
+    (drgnx-look-scene--until 15 "the debug sessions' end" (lambda () (null drgnx-debug--sessions)))))
+
+(defun drgnx-look-scene-begin (&optional debug)
   "Before each scene (`drgnx-look-scenes-run'): the editor layout, whatever the scene before left, then the frame as
 the setup left it (`drgnx-look-scene--start-again'), checked.  A scene in another layout (the Work map's) applies it
-itself; without this the scenes after it drew in its layout (the start page and the notebooks showed the Work map)."
+itself; without this the scenes after it drew in its layout (the start page and the notebooks showed the Work map).
+DEBUG (the scene's :debug) keeps the debug session a scene before it started; without it the session ends."
   (drgnx-look-scene--try "begin"
-    (drgnx-look-scene--close-popups) (drgnx-look-scene--editor-layout) (drgnx-look-scene--start-again))
+    (drgnx-look-scene--close-popups)
+    (unless debug (drgnx-look-scene--debug-end))
+    (drgnx-look-scene--editor-layout) (drgnx-look-scene--start-again))
   ;; not `drgnx-look-scene--answer': the scene's own answer checks its views, once it has shown them
   (prog1 (drgnx-uitest--json (list :errors (vconcat (nreverse drgnx-look-scene--errors))))
     (setq drgnx-look-scene--errors nil)))
