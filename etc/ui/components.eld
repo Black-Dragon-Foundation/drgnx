@@ -161,7 +161,8 @@
   ;; hovered (a terminal always shows it).  An editor tab is window-dark.html's `.tab': muted on the row, the shown tab
   ;; on the editor's colour (`current'; in a group that is not the active one, still muted: `current-inactive'); a
   ;; panel tab is debugging.html's `.pt': the shown one a rounded pill on the quiet selection (`panel-current').  Its
-  ;; label is its title, with "modified" after it when its file is
+  ;; label is its title, with "modified" after it when its file is.  A tab that is only there while it is shown (a
+  ;; preview, the scratch buffer) is italic: the part `preview', laid over the tab's own face
   (tab :variants ((size editor panel)) :defaults (size editor)
        :geometry (:height (:by size (editor 34) (panel 30)) :pad (:by size (editor (10 . 8)) (panel (9 . 9)))
                           :gap (:by size (editor 7) (panel 6)) :box nil :radius (:by size (editor 7) (panel 6)) :hit 0)
@@ -171,10 +172,12 @@
               ((current-inactive) :bg editor :fg muted :inherit (drgnx-ui-text drgnx-text-muted tab-line-tab-current tab-line)
                :font (drgnx-ui-text))
               ((panel-current) :bg sel-quiet :fg fg :edge sel-quiet :ring (1 6)
-               :inherit (drgnx-ui-text drgnx-selected-quiet tab-line-tab-current) :font (drgnx-ui-text)))
+               :inherit (drgnx-ui-text drgnx-selected-quiet tab-line-tab-current) :font (drgnx-ui-text))
+              ((preview) :attrs (:slant italic)))
        :replaces ((drgnx-chrome-tab . drgnx-kit-tab) (drgnx-chrome-tab-active . drgnx-kit-tab-current)
                   (drgnx-chrome-tab-current . drgnx-kit-tab-current-inactive) (drgnx-wb-tab . drgnx-kit-tab)
-                  (drgnx-wb-tab-current . drgnx-kit-tab-panel-current) (drgnx-work-lens-title . drgnx-kit-tab-current))
+                  (drgnx-wb-tab-current . drgnx-kit-tab-panel-current) (drgnx-work-lens-title . drgnx-kit-tab-current)
+                  (drgnx-chrome-tab-preview . drgnx-kit-tab-preview))
        :helpers nil :lint t)
   ;; a segmented switch: its items in one track (a 1 px ring in the border's colour, radius 6), the current one on the
   ;; quiet selection in the body text's colour, the others muted; each item an action.  The current item's label is

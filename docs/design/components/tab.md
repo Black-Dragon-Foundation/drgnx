@@ -41,6 +41,7 @@ The kit's `tab` component: one definition in `etc/ui/components.eld`, expanded t
 | current | `drgnx-kit-tab-current` | editor | fg | - |
 | current-inactive | `drgnx-kit-tab-current-inactive` | editor | muted | - |
 | panel-current | `drgnx-kit-tab-panel-current` | sel-quiet | fg | sel-quiet |
+| preview | `drgnx-kit-tab-preview` | - | - | - |
 
 ## States
 

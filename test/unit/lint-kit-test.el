@@ -121,7 +121,8 @@ in a comment, a raw string or a lifetime's neighbour does not."
 
 ;; A component's entry in etc/ui/components.eld with `:lint t' (each component's task sets it) turns its role on.  In
 ;; core/, wb/ and modules/ (not core/drgnx-ui-kit.el, the kit itself) each file's count of the role's forms only falls:
-;; a new `defface' whose name matches the role's FACES (domain faces, `drgnx-lint-kit--domain', never match), a use of
+;; a new `defface' whose name matches the role's FACES (domain faces, `drgnx-lint-kit--domain', and the old faces the
+;; entry `:replaces', aliases of its kit faces, never count), a use of
 ;; a face the entry `:replaces' or of a function it lists in `:helpers', a string holding one of the role's LITERALS;
 ;; and in Rust (but drgnx-rows' kit.rs and the generated enum) a use of a replaced face's `FaceId' variant.
 
@@ -142,20 +143,20 @@ in a comment, a raw string or a lifetime's neighbour does not."
 (defconst drgnx-lint-kit--not-yet
   '(;; row (Task 9): the state faces themselves, and selections and hovers no task has moved onto the kit yet
     ("core/drgnx-faces.el" row 7) ("modules/tools/drgnx-replace.el" row 1) ("modules/tools/drgnx-term.el" row 1)
-    ("modules/tools/drgnx-work-space.el" row 1) ("modules/ui/drgnx-decor.el" row 1) ("modules/ui/drgnx-statusbar.el" row 1)
+    ("modules/ui/drgnx-decor.el" row 1) ("modules/ui/drgnx-statusbar.el" row 1)
     ("modules/ui/drgnx-topline.el" row 1) ("runtime/crates/drgnx-ratatoskr/src/notebook/views.rs" row 1)
-    ("runtime/crates/drgnx-ratatoskr/src/notebook/views/tests.rs" row 2) ("wb/drgnx-chrome.el" row 1)
-    ("wb/drgnx-explorer.el" row 3) ("wb/drgnx-view-nav.el" row 1) ("wb/drgnx-view.el" row 1)
-    ;; button and key-hint (Task 12): `drgnx-keycap' itself; the Flow tile's button and key faces (its keys are drawn by
+    ("runtime/crates/drgnx-ratatoskr/src/notebook/views/tests.rs" row 2)
+    ("wb/drgnx-explorer.el" row 2) ("wb/drgnx-view-nav.el" row 1)
+    ;; button and key-hint (Task 12): the Flow tile's button and key faces (its keys are drawn by
     ;; the hub in the Flow's own key faces and a Lisp pass maps them to their buttons, work-flow.el, flow.rs); decor's
     ;; buttons (Task 15 moves them out)
-    ("core/drgnx-palette.el" key-hint 1) ("modules/tools/drgnx-work-flow.el" button 7)
-    ("modules/tools/drgnx-work-flow.el" key-hint 3) ("modules/ui/drgnx-decor.el" button 5)
+    ("modules/tools/drgnx-work-flow.el" button 5)
+    ("modules/tools/drgnx-work-flow.el" key-hint 3) ("modules/ui/drgnx-decor.el" button 4)
     ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" button 2)
     ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" key-hint 2)
     ;; chip and status-dot (Task 14): the sites not moved onto the kit yet, each falling as its site moves
     ("core/drgnx-agent-identity.el" status-dot 1)
-    ("core/drgnx-faces.el" chip 10)
+    ("core/drgnx-faces.el" chip 5)
     ("core/drgnx-freezes.el" status-dot 2)
     ("core/drgnx-history-revert.el" status-dot 3)
     ("core/drgnx-modules.el" status-dot 5)
@@ -177,7 +178,7 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("modules/tools/drgnx-work-flow.el" chip 9)
     ("modules/tools/drgnx-work-map.el" status-dot 2)
     ("modules/tools/drgnx-work-space.el" chip 2)
-    ("modules/ui/drgnx-decor.el" chip 5)
+    ("modules/ui/drgnx-decor.el" chip 4)
     ("modules/ui/drgnx-inbox.el" status-dot 1)
     ("modules/ui/drgnx-look-bridge.el" chip 5)
     ("modules/ui/drgnx-topline.el" chip 2)
@@ -190,7 +191,7 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("runtime/crates/vegvisir/tests/trail.rs" chip 2)
     ("wb/drgnx-area.el" chip 1)
     ("wb/drgnx-buffers.el" status-dot 1)
-    ("wb/drgnx-chrome.el" status-dot 3)
+    ("wb/drgnx-chrome.el" status-dot 1)
     ("wb/drgnx-explorer.el" status-dot 2)
     ;; section-header and card (Task 18): the heading and card faces still drawn where they were; decor's card rows
     ("core/drgnx-history-compare.el" section-header 1) ("core/drgnx-history-revert.el" section-header 1)
@@ -199,7 +200,7 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("modules/tools/drgnx-agent-settings.el" section-header 1) ("modules/tools/drgnx-plugins-ui.el" section-header 1)
     ("modules/tools/drgnx-shortcuts.el" section-header 1) ("modules/tools/drgnx-work-flow.el" card 5) ("modules/tools/drgnx-work-map.el" card 13)
     ("modules/tools/drgnx-work-flow.el" section-header 2) ("modules/tools/drgnx-work-space.el" card 1)
-    ("modules/ui/drgnx-decor.el" card 28)
+    ("modules/ui/drgnx-decor.el" card 20)
     ("runtime/crates/drgnx-ratatoskr/src/view/extensions.rs" section-header 1)
     ("runtime/crates/drgnx-ratatoskr/src/view/extensions/tests.rs" section-header 1)
     ;; the hub's card rows name the old card faces (aliases of the kit's; decor draws their rings outside the line, scaled)
@@ -248,7 +249,9 @@ files' counts in its merge commit.")
                          (let* ((head (car x)) (doc (cdr (assq head drgnx-lint-kit--doc-at))) (i 0) (skip nil))
                            (when (and (eq head 'defface) (symbolp (cadr x)))
                              (let ((name (symbol-name (cadr x))))
-                               (when (and faces (string-match-p faces name)
+                               ;; an old face the entry `:replaces' is an alias: it inherits its kit face
+                               ;; (`drgnx-ui-kit-define-aliases'), and its `defface' stays for a user's customization
+                               (when (and faces (string-match-p faces name) (not (memq (cadr x) old))
                                           (not (string-match-p drgnx-lint-kit--domain name)))
                                  (cl-incf n)))
                              (setq skip 1))
@@ -344,6 +347,8 @@ count once while their component's `:lint' is on, and none while it is off; a do
           (make-directory (expand-file-name "runtime/crates/x/src" root) t)
           (with-temp-file (expand-file-name "modules/x/a.el" root)
             (insert "(defface drgnx-foo-button '((t)) \"A button.\")\n"
+                    ;; an alias of the kit face (`:replaces'): it inherits it, no draw of its own
+                    "(defface drgnx-ui-button '((t)) \"The old button.\")\n"
                     "(defun f () \"Draws ● in prose.\" (drgnx-decor-chip \"x\") (insert \"●\"))\n"
                     "(defface drgnx-debug-button '((t)) \"A domain face.\")\n"))
           (with-temp-file (expand-file-name "wb/b.el" (progn (make-directory (expand-file-name "wb" root)) root))
