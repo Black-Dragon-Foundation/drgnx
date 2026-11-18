@@ -38,6 +38,9 @@
   (load (expand-file-name "drgnx-look-echo" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-look-bridge)
   (load (expand-file-name "drgnx-look-bridge" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+;; and the layout A rail
+(unless (featurep 'drgnx-rail)
+  (load (expand-file-name "drgnx-rail" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 ;; and the component catalogue (Design: Component Catalogue)
 (unless (featurep 'drgnx-kit-catalogue)
   (load (expand-file-name "drgnx-kit-catalogue" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -47,6 +50,9 @@
 (defvar drgnx-look-density-changed-hook)
 (declare-function drgnx-look-follow-on "drgnx-look-follow" ())
 (declare-function drgnx-look-follow-off "drgnx-look-follow" ())
+(declare-function drgnx-rail-define-commands "drgnx-rail" ())
+(declare-function drgnx-rail-on "drgnx-rail" ())
+(declare-function drgnx-rail-off "drgnx-rail" ())
 (declare-function drgnx-look-follow-apply "drgnx-look-follow" ())
 (defvar drgnx-look-follow--loading)
 (declare-function drgnx-look-derive-on "drgnx-look-derive" ())
@@ -735,6 +741,10 @@ leaving it puts every tile back as it was."
                                              :command #'drgnx-ui-kit-activate :map 'drgnx-ui-kit-action-base-map
                                              :when (lambda () (get-text-property (point) 'drgnx-action))
                                              :doc "Run the action of the button, row or card at point (its `drgnx-action')")
+                       ;; the layout A rail: a side window of places beside the side bar (the grid backend's)
+                       (drgnx-rail-define-commands)
+                       (drgnx-modules-push-undo "the rail" #'drgnx-rail-off)
+                       (drgnx-rail-on)
                        (drgnx-command-define 'design-component-catalogue :category "Design"
                                              :title "Component Catalogue" :command #'drgnx-kit-catalogue-open
                                              :doc "Every kit component in every variant and state, as drgnx draws it")

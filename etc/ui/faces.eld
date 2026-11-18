@@ -562,4 +562,7 @@
  drgnx-kit-tab-panel-current
  drgnx-kit-tab-preview
  drgnx-kit-segmented
- drgnx-kit-segmented-current)
+ drgnx-kit-segmented-current
+ drgnx-kit-rail-item
+ drgnx-kit-rail-item-current
+ drgnx-kit-rail-item-dot)

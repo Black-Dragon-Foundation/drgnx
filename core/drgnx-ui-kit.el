@@ -1232,6 +1232,42 @@ the hub's `kit::segmented'."
       (drgnx-ui-kit--b-under 0 drgnx-ui-kit--bpos track)
       (drgnx-ui-kit--b-finish nil 0 0 props-out nil))))
 
+;; The rail item's icon, logical px (sidebars.html `.rb': a 14 px glyph in a 32 px square, drawn here at the kit's 16)
+(defconst drgnx-ui-kit-rail-icon-px 16 "A rail item's icon size, logical px (the hub's `kit::RAIL_ICON_PX').")
+
+(defun drgnx-ui-kit--rail-item (props scale tty)
+  "The `rail-item' component of PROPS (:place :icon :state :dot :action) at SCALE, see `drgnx-ui-kit--expand' and the
+hub's `kit::rail_item'.  :place is the place's name (the item's label), :dot t when the place changed."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'rail-item)) (g (plist-get entry :geometry))
+           (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0))
+           (state (drgnx-ui-kit--name props :state 'rest))
+           (shown (memq state '(selected selected-inactive)))
+           (face (if shown 'drgnx-kit-rail-item-current (drgnx-ui-kit--face 'rail-item nil)))
+           (name (or (plist-get props :place) "")) (icon (plist-get props :icon))
+           (dot (eq (plist-get props :dot) t)))
+      ;; the surface's inset, then the cell: its icon inset (the cell is 32 px, the icon 16), the icon, the dot or the inset
+      (drgnx-ui-kit--b-pad (car (plist-get g :pad)) 0 nil)
+      (let ((from drgnx-ui-kit--bpos))
+        (drgnx-ui-kit--b-pad (plist-get g :gap) tty-pad face)
+        (when icon
+          (let* ((sym (intern icon))
+                 (img (and drgnx-ui-kit--icons (not tty) (funcall drgnx-ui-kit--icons sym drgnx-ui-kit-rail-icon-px)))
+                 (mark (drgnx-ui-kit--glyph sym tty)))
+            (cond (img (drgnx-ui-kit--b-mark img nil face nil))
+                  ((and mark (not (string-empty-p mark))) (drgnx-ui-kit--b-push mark face)))))
+        (if dot
+            (drgnx-ui-kit--b-mark nil (drgnx-ui-kit--glyph 'dot tty) 'drgnx-kit-rail-item-dot face)
+          (drgnx-ui-kit--b-pad (plist-get g :gap) tty-pad face))
+        (let ((to drgnx-ui-kit--bpos))
+          (drgnx-ui-kit--b-pad (cdr (plist-get g :pad)) 0 nil)
+          (drgnx-ui-kit--b-finish
+           (and (not shown) (plist-get (drgnx-ui-kit-state state) :face)) from to
+           (append (drgnx-ui-kit--b-action (plist-get props :action) from)
+                   (list (list 0 drgnx-ui-kit--bpos 'help-echo
+                               (if dot (format "%s, %s" name (plist-get entry :label)) name))))
+           (and (not tty) (> (plist-get g :height) 0) (drgnx-px (plist-get g :height) nil scale))))))))
+
 (defun drgnx-ui-kit--expand (component props scale tty)
   "COMPONENT (a symbol) with PROPS at SCALE (TTY: on a terminal, `ascii' for ASCII glyphs) as (TEXT RUNS PROPS
 SPACES HEIGHT): RUNS ((FROM TO FACE)...), PROPS ((FROM TO NAME VALUE)...), SPACES ((POS WIDTH HEIGHT)...) in device
@@ -1250,6 +1286,7 @@ px, HEIGHT the row's line height in device px or nil (one text line)."
     ('status-dot (drgnx-ui-kit--status-dot props scale tty))
     ('tab (drgnx-ui-kit--tab props scale tty))
     ('segmented (drgnx-ui-kit--segmented props scale tty))
+    ('rail-item (drgnx-ui-kit--rail-item props scale tty))
     (_ (error "drgnx-ui-kit: no component %s" component))))
 
 (defun drgnx-ui-kit--wire (v)
@@ -1591,6 +1628,18 @@ arguments, or (KIND . ARGS) of a kit action.  Each item's `help-echo' is its LAB
   (drgnx-ui-kit-string 'segmented
                        (list :c "segmented" :current current
                              :items (mapcar (lambda (i) (list (car i) (drgnx-ui-kit--action-spec (cdr i)))) items))
+                       where frame))
+
+(defun drgnx-ui-kit-rail-item (place icon label state dot where &optional frame action)
+  "PLACE's rail item on WHERE (`text', `header-line', `mode-line' or `tab-line') of FRAME (nil: the selected one):
+ICON (an icon name, a symbol) in the cell, LABEL the place's name (its `help-echo' and spoken text, with \"changed\"
+after it when DOT).  STATE is one of the state table's (`selected' the current place), DOT non-nil draws the warn dot.
+ACTION is what `drgnx-ui-kit-button' takes, or nil.  PLACE is its id (not drawn)."
+  (ignore place)
+  (drgnx-ui-kit-string 'rail-item
+                       (list :c "rail-item" :place label :icon (and icon (symbol-name icon))
+                             :state (symbol-name (or state 'rest)) :dot (if dot t :false)
+                             :action (and action (drgnx-ui-kit--action-spec action)))
                        where frame))
 
 (defun drgnx-ui-kit-card-lines (lines kind width)

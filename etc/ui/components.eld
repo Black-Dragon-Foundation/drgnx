@@ -225,4 +225,16 @@
                     ((current) :bg sel-quiet :fg fg :inherit (drgnx-ui-text drgnx-selected-quiet) :font (drgnx-ui-text)))
              :replaces ((drgnx-work-lens-rail . drgnx-kit-segmented) (drgnx-work-lens-seg . drgnx-kit-segmented)
                         (drgnx-work-lens-current . drgnx-kit-segmented-current))
-             :helpers nil :lint t)))
+             :helpers nil :lint t)
+  ;; a rail item (the layout A rail, sidebars.html `.rb'): a 44 px cell, its 32 px square (the 6 px of surface each side) a
+  ;; 6-radius fill in the state's colour, the place's icon (16 px) centred in it, and, when the place changed, a dot in
+  ;; the warn colour right of the icon.  The current place is the quiet selection with the body text's colour, the
+  ;; others muted.  Its label is the place's name, with "changed" after it when it has the dot
+  (rail-item :variants nil :defaults nil
+             :geometry (:height 32 :pad (6 . 6) :gap 8 :box nil :radius 6 :hit 0)
+             :tty (:pad 1 :glyphs (dot)) :label "changed"
+             :bind ((() :fg muted :inherit (drgnx-ui-text drgnx-text-muted) :font (drgnx-ui-text))
+                    ((current) :bg sel-quiet :fg fg :edge sel-quiet :ring (1 6)
+                     :inherit (drgnx-ui-text drgnx-selected-quiet) :font (drgnx-ui-text))
+                    ((dot) :fg warn :inherit (drgnx-ui-caption warning) :font (drgnx-ui-caption)))
+             :replaces nil :helpers nil :lint t)))

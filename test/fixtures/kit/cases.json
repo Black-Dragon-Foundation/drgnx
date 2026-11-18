@@ -133,6 +133,12 @@
     {"name": "tab-panel-selected", "comp": {"c": "tab", "title": "Debug Console", "size": "panel", "state": "selected", "action": {"kind": "ui-button", "args": ["area-show"]}}},
     {"name": "tab-icon", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "icon": "file-code", "close": true}},
     {"name": "tab-panel-icon", "comp": {"c": "tab", "title": "Debug Console", "size": "panel", "state": "selected", "icon": "terminal"}},
-    {"name": "segmented", "comp": {"c": "segmented", "current": 1, "items": [["Map", {"kind": "ui-button", "args": ["map"]}], ["Board", {"kind": "ui-button", "args": ["board"]}], ["Flow", {"kind": "ui-button", "args": ["flow"]}]]}}
+    {"name": "segmented", "comp": {"c": "segmented", "current": 1, "items": [["Map", {"kind": "ui-button", "args": ["map"]}], ["Board", {"kind": "ui-button", "args": ["board"]}], ["Flow", {"kind": "ui-button", "args": ["flow"]}]]}},
+    {"name": "rail-rest", "comp": {"c": "rail-item", "place": "Files", "icon": "folder"}},
+    {"name": "rail-hover", "comp": {"c": "rail-item", "place": "Files", "icon": "folder", "state": "hover"}},
+    {"name": "rail-current", "comp": {"c": "rail-item", "place": "Search", "icon": "search", "state": "selected", "action": {"kind": "ui-button", "args": ["place-search"]}}},
+    {"name": "rail-current-inactive", "comp": {"c": "rail-item", "place": "Search", "icon": "search", "state": "selected-inactive"}},
+    {"name": "rail-dot", "comp": {"c": "rail-item", "place": "Changes", "icon": "git-branch", "dot": true}},
+    {"name": "rail-no-icon", "comp": {"c": "rail-item", "place": "Run"}}
   ]
 }

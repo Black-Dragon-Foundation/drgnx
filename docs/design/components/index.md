@@ -27,6 +27,7 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Progress (kit)](progress.md) | progress's numbers (generated from `etc/ui/components.eld`) |
 | [Tab (kit)](tab.md) | an editor tab or a panel's tab, its icon, title and close mark |
 | [Segmented switch (kit)](segmented.md) | one ringed track of choices, the current one on the quiet selection |
+| [Rail item (kit)](rail-item.md) | a place of the rail: its icon in a 32 px square, the current place on the quiet selection, a warn dot when it changed |
 
 ## How to read a page
 

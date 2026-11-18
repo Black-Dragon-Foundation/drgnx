@@ -275,6 +275,23 @@ rows take the new tree row, every editor's tab row the new tab row and every sta
 in the pixels of the frame that shows them, again when its scale changes (a frame moved to a ×2 monitor), and a
 sidebar made before any graphical frame (a daemon's) gets its rows when a graphical frame first shows it.
 
+## The rail
+
+A 44 px column of places on the left edge of the window, beside the side bar and always there: **Work, Files, Search,
+Changes, Run, Machines, Extensions**. Each place is a button (its icon in a 32 px square, six px in from the edges);
+the current place is on the quiet selection, a place where something changed has a small warn dot after its icon, and
+the dot goes when you go there. Hover a place for its name.
+
+- **Go to Work / Files / Search / Changes / Run / Machines / Extensions** (`place-work` ... `place-extensions`, in the
+  palette under View) show the place. Files, Search, Changes and Run show their view in the side bar; clicking the
+  current place hides the side bar instead (a second click closes what the first opened). Work, Machines and
+  Extensions open in the editor area, and the rail marks them current until you choose another place. `C-S-e`,
+  `C-S-f` and `C-S-g` in the VS Code profile still open Files, Search and Source Control.
+- The rail is a window beside the grid, not a tile of it: it lives under the grid backend (the default). The status
+  bar still runs across the whole window, under the rail. In a terminal it is three columns of glyphs.
+- **Hide or show it** with the shell toggle of the window (`drgnx-shell-toggle-rail`): a window that shows only Work
+  and its Detail, or one conversation, opens without a rail. It follows the UI scale and the density.
+
 ## UI scale
 
 `drgnx-look-scale` makes everything bigger on top of the display's own scale: every size above and every font, from

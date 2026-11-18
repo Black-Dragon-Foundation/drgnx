@@ -1132,11 +1132,17 @@ pub enum FaceId {
     KitSegmented,
     /// `drgnx-kit-segmented-current`
     KitSegmentedCurrent,
+    /// `drgnx-kit-rail-item`
+    KitRailItem,
+    /// `drgnx-kit-rail-item-current`
+    KitRailItemCurrent,
+    /// `drgnx-kit-rail-item-dot`
+    KitRailItemDot,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 562] = [
+    pub const ALL: [FaceId; 565] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1699,6 +1705,9 @@ impl FaceId {
         FaceId::KitTabPreview,
         FaceId::KitSegmented,
         FaceId::KitSegmentedCurrent,
+        FaceId::KitRailItem,
+        FaceId::KitRailItemCurrent,
+        FaceId::KitRailItemDot,
     ];
 
     /// The face's Emacs name.
@@ -2266,6 +2275,9 @@ impl FaceId {
             FaceId::KitTabPreview => "drgnx-kit-tab-preview",
             FaceId::KitSegmented => "drgnx-kit-segmented",
             FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
+            FaceId::KitRailItem => "drgnx-kit-rail-item",
+            FaceId::KitRailItemCurrent => "drgnx-kit-rail-item-current",
+            FaceId::KitRailItemDot => "drgnx-kit-rail-item-dot",
         }
     }
 
@@ -2834,6 +2846,9 @@ impl FaceId {
             "drgnx-kit-tab-preview" => FaceId::KitTabPreview,
             "drgnx-kit-segmented" => FaceId::KitSegmented,
             "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
+            "drgnx-kit-rail-item" => FaceId::KitRailItem,
+            "drgnx-kit-rail-item-current" => FaceId::KitRailItemCurrent,
+            "drgnx-kit-rail-item-dot" => FaceId::KitRailItemDot,
             _ => return None,
         })
     }

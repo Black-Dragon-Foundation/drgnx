@@ -35,6 +35,8 @@ pub enum CompId {
     Tab,
     /// `segmented`
     Segmented,
+    /// `rail-item`
+    RailItem,
 }
 
 /// A state of the state table (on the wire, its name: `"selected-inactive"`).
@@ -664,6 +666,18 @@ const SEGMENTED_GEOM: [[Geom; 3]; 1] = [
 const SEGMENTED_LABEL: [Option<&str>; 1] = [Some("selected")];
 const SEGMENTED_FACE: [FaceId; 1] = [FaceId::KitSegmented];
 
+const RAIL_ITEM_AXES: &[&[&str]] = &[];
+const RAIL_ITEM_DEFAULTS: &[usize] = &[];
+const RAIL_ITEM_GEOM: [[Geom; 3]; 1] = [
+    [
+        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const RAIL_ITEM_LABEL: [Option<&str>; 1] = [Some("changed")];
+const RAIL_ITEM_FACE: [FaceId; 1] = [FaceId::KitRailItem];
+
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {
     match id {
@@ -719,6 +733,10 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant);
             SEGMENTED_GEOM[i][d]
         }
+        CompId::RailItem => {
+            let (i, d) = index(RAIL_ITEM_AXES, RAIL_ITEM_DEFAULTS, variant);
+            RAIL_ITEM_GEOM[i][d]
+        }
     }
 }
 
@@ -738,6 +756,7 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::TimeAxis => TIME_AXIS_LABEL[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
         CompId::Tab => TAB_LABEL[index(TAB_AXES, TAB_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_LABEL[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
+        CompId::RailItem => RAIL_ITEM_LABEL[index(RAIL_ITEM_AXES, RAIL_ITEM_DEFAULTS, variant).0],
     }
 }
 
@@ -757,5 +776,6 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::TimeAxis => TIME_AXIS_FACE[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
         CompId::Tab => TAB_FACE[index(TAB_AXES, TAB_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_FACE[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
+        CompId::RailItem => RAIL_ITEM_FACE[index(RAIL_ITEM_AXES, RAIL_ITEM_DEFAULTS, variant).0],
     }
 }

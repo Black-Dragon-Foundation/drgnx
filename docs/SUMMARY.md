@@ -128,5 +128,6 @@
     - [Time axis (kit)](design/components/time-axis.md)
     - [Tab (kit)](design/components/tab.md)
     - [Segmented switch (kit)](design/components/segmented.md)
+    - [Rail item (kit)](design/components/rail-item.md)
 - [The app icon](design/app-icon.md)
 - [Writing a theme for drgnx](design/theme-authors.md)
