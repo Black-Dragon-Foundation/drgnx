@@ -724,7 +724,8 @@ How it works:
   in the buffer with its faces), less the `…`, plus the hub's 10 px slack, must not fit the px free after the `…`
   (blanks, a stop's space, the body past the row's end). A blank in a block's face (a box or a background of its own:
   a card's fill, a chip) ends the count: when the row ends in that block, only its end pad less the row's start pad in
-  that face counts (the block's own padding, kept on both sides), never the px past the block. When a text follows
+  that face counts (the block's own padding, kept on both sides), never the px past the block. A `…` in hidden text
+  is not counted (the Explorer's root row is cut as any row, but it is hidden: its name is the side bar's title). When a text follows
   on the row, the view's gap from it (10 logical px: a column's, a place's at the right edge) is not free. The `…` is measured
   with its faces as the cut text is (`window-text-pixel-size` of a char past the body's edge gives the whole
   line's). The drawn width is measured as the shot drew it, then
