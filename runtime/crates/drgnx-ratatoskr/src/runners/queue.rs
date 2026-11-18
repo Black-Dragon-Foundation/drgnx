@@ -618,8 +618,12 @@ impl St {
     /// The time box SPEC is offered with on MACHINE: its own, capped at three times its p95 wall time there (else
     /// elsewhere's), design §5.7.
     fn timeout_on(&self, spec: &JobSpec, machine: &str) -> u64 {
-        let _ = machine;
-        spec.timeout_s
+        let (here, other): (Vec<HistRow>, Vec<HistRow>) = self
+            .history_of(&forseti::history_key(spec))
+            .into_iter()
+            .partition(|r| r.machine == machine);
+        let p95 = forseti::history::wall_p95_s(&here, &other, 1.0);
+        sleipnir::linux::progress::wall_limit(spec.timeout_s, p95)
     }
 }
 
@@ -2630,7 +2634,9 @@ impl Queue {
         );
         if let Some(rr) = st.runners.get(name) {
             // a requeue of a job whose suite selects rows runs only the rows without a result
-            let spec = attempt_spec(&job.spec, j.s.place.suite.as_ref(), st.rows.get(&id));
+            let mut spec = attempt_spec(&job.spec, j.s.place.suite.as_ref(), st.rows.get(&id));
+            // the progress guard's wall: the job's time box, at most three times its p95 there
+            spec.timeout_s = st.timeout_on(&job.spec, name);
             rr.session.send(Frame::Offer {
                 r: r.clone(),
                 spec: Box::new(spec),

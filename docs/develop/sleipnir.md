@@ -302,7 +302,8 @@ Whether a job still makes progress, as pure policy over readings once a minute (
 or above `cpu_floor` (10 %) of one core over the minute, or new IO bytes. The rules, first hit wins: **stall** — no
 progress of any kind for `stall_s` (20 min); **silent** — no output for `silent_s` (45 min), whatever the CPU (a
 livelock); **wall** — `wall_s` since the start, `wall_limit(pack max, p95)` = `min(pack max, 3 × p95)`, or the pack's
-maximum without history. A stop's verdict reason is `stuck (<rule>)`, so `forseti::classify` makes it
+maximum without history (the hub offers a runner the job's time box capped this way over its runs there, else
+elsewhere, `forseti::history::wall_p95_s`). A stop's verdict reason is `stuck (<rule>)`, so `forseti::classify` makes it
 `infra: stuck (<rule>)`: never red, never rerun; the log gets `=== stopped as stuck (<rule>, <N> min): not a test
 result`.
 

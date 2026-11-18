@@ -176,8 +176,17 @@ pub fn expected(
 /// × `speed_ratio`; none without history. The progress guard's wall is three of it, capped by the pack
 /// (`sleipnir::linux::progress::wall_limit`).
 pub fn wall_p95_s(rows: &[HistRow], other: &[HistRow], speed_ratio: f64) -> Option<u64> {
-    let _ = (rows, other, speed_ratio);
-    None
+    let (runs, ratio) = match last_undisturbed(rows) {
+        own if !own.is_empty() => (own, 1.0),
+        _ => (last_undisturbed(other), speed_ratio),
+    };
+    let mut walls: Vec<f64> = runs.iter().map(|r| r.wall_s).collect();
+    if walls.is_empty() {
+        return None;
+    }
+    walls.sort_by(f64::total_cmp);
+    let rank = (walls.len() * 95).div_ceil(100).max(1);
+    Some((walls[rank - 1] * ratio).ceil() as u64)
 }
 
 #[cfg(test)]
