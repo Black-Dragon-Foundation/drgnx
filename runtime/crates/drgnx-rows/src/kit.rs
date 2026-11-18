@@ -757,7 +757,7 @@ pub enum Comp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
     },
-    /// A section's header: TITLE (a twisty before it when COLLAPSIBLE, open unless COLLAPSED) and an optional COUNT.
+    /// A section's header: TITLE (a twisty before it when COLLAPSIBLE, open unless COLLAPSED) and an optional COUNT (a neutral soft chip).
     SectionHeader {
         title: String,
         #[serde(default)]
@@ -1456,7 +1456,19 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             b.push(title, face);
             if let Some(n) = count {
                 pad(b, env, px(g.gap, env.scale), 1, face);
-                b.push(&n.to_string(), Some(FaceId::TextSubtle.name()));
+                // the count is a neutral soft chip, as the design draws it
+                expand(
+                    b,
+                    env,
+                    &Comp::Chip {
+                        label: n.to_string(),
+                        tone: Tone::Neutral,
+                        fill: ChipFill::Soft,
+                        icon: None,
+                        state: State::Rest,
+                        action: None,
+                    },
+                );
             }
             pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
             let to = b.pos();

@@ -410,10 +410,6 @@
  drgnx-work-flow-agent
  drgnx-work-flow-label
  drgnx-work-flow-key
- drgnx-work-flow-button
- drgnx-work-flow-button-primary
- drgnx-work-flow-key-primary
- drgnx-work-flow-button-key
  drgnx-work-flow-heading
  drgnx-work-flow-chip-ok
  drgnx-work-flow-chip-run

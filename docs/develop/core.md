@@ -3862,7 +3862,7 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   build them as strings for WHERE as `drgnx-ui-kit-string` does. ACTION is a registry id, a command, a function of no
   arguments (all run through the kit action kind `ui-button`, i.e. `drgnx-ui-kit-run`) or `(KIND . ARGS)` of a kit
   action. `drgnx-ui-button` keeps its `&key` signature for callers off per-row paths; its faces `drgnx-ui-button` and
-  `drgnx-ui-button-primary` (and `drgnx-button`, `drgnx-work-flow-button*`, `drgnx-keycap`) are aliases of the kit
+  `drgnx-ui-button-primary` (and `drgnx-button`, `drgnx-keycap`) are aliases of the kit
   faces once `ui/look` is on.
 - A binding may name `:font` (faces with no colours: the UI or code font): a drgnx theme's spec for a face with
   colours keeps only those of its `:inherit`, while a third-party theme styles it through the whole `:inherit`.
@@ -3872,7 +3872,8 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
 - `section-header` (variant `collapsible` yes/no): 26 px, 6 px each side, the title in the UI font at 12 px, semibold,
   muted (`drgnx-kit-section-header`, with `:attrs (:weight semibold)`); collapsible: the twisty (`chevron-down` open,
   `chevron-right` collapsed, an icon image where the frame draws SVG icons, else its glyph) and a space; an optional
-  count after a 4 px gap in the subtle role (a plain number until the chip lands in the header, Task 14). A state's
+  count after a 4 px gap, drawn as a neutral soft chip (`drgnx-ui-kit--b-chip`, the builder form of the chip; the hub's
+  `Comp::Chip` inline). A state's
   face is above it. `(drgnx-ui-kit-section-header TITLE COLLAPSIBLE COLLAPSED COUNT WHERE)`; `drgnx-wb-section-header`
   (the dock sections) is built on it; its accessible text is "TITLE, collapsed|expanded".
 - `card` (variants `kind` plain, needs-you, selected; `shape` single, top, mid, bottom): the panel's fill and a ring

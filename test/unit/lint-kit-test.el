@@ -147,13 +147,8 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("modules/ui/drgnx-topline.el" row 1) ("runtime/crates/drgnx-ratatoskr/src/notebook/views.rs" row 1)
     ("runtime/crates/drgnx-ratatoskr/src/notebook/views/tests.rs" row 2)
     ("wb/drgnx-explorer.el" row 2) ("wb/drgnx-view-nav.el" row 1)
-    ;; button and key-hint (Task 12): the Flow tile's button and key faces (its keys are drawn by
-    ;; the hub in the Flow's own key faces and a Lisp pass maps them to their buttons, work-flow.el, flow.rs); decor's
-    ;; buttons (Task 15 moves them out)
-    ("modules/tools/drgnx-work-flow.el" button 5)
-    ("modules/tools/drgnx-work-flow.el" key-hint 3) ("modules/ui/drgnx-decor.el" button 4)
-    ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" button 2)
-    ("runtime/crates/drgnx-ratatoskr/src/work/trail/flow.rs" key-hint 2)
+    ;; button and key-hint (Task 12): decor's buttons (Task 15 moves them out); the Flow's `g 1' key badge on a held chip
+    ("modules/tools/drgnx-work-flow.el" key-hint 1) ("modules/ui/drgnx-decor.el" button 4)
     ;; chip and status-dot (Task 14): the sites not moved onto the kit yet, each falling as its site moves
     ("core/drgnx-agent-identity.el" status-dot 1)
     ("core/drgnx-faces.el" chip 5)

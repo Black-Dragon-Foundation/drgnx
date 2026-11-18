@@ -513,16 +513,13 @@
 ;;;; Section headers and cards (Task 18)
 
 (ert-deftest drgnx-ui-kit/section-header-forms ()
-  ;; 26 px, 6 px each side; collapsible: the twisty glyph and a space (open: down, collapsed: right); a count in the
-  ;; subtle role after a 4 px gap; a terminal has its characters
+  ;; 26 px, 6 px each side; collapsible: the twisty glyph and a space (open: down, collapsed: right); a count is a
+  ;; chip (the next test); a terminal has its characters
   (let ((e (drgnx-ui-kit-expand 'section-header '(:c "section-header" :title "Files") 1.0 nil)))
     (should (equal (plist-get e :text) " Files "))
     (should (equal (plist-get e :spaces) [[0 6 0] [6 6 0]]))
     (should (equal (plist-get e :height) '(:lines 1 :unit 26)))
     (should (equal (plist-get e :runs) [[0 7 "drgnx-kit-section-header"]])))
-  (let ((e (drgnx-ui-kit-expand 'section-header '(:c "section-header" :title "Changes" :collapsible t :count 12) 1.0 nil)))
-    (should (equal (plist-get e :text) " ⌄ Changes 12 "))
-    (should (equal (plist-get e :spaces) [[0 6 0] [10 4 0] [13 6 0]])))
   (should (equal (plist-get (drgnx-ui-kit-expand 'section-header '(:c "section-header" :title "Staged" :collapsible t :collapsed t)
                                                  1.0 'ascii)
                             :text)
@@ -531,6 +528,19 @@
   (ui-kit-test--gui 1.0
     (should (equal (get-text-property 0 'help-echo (drgnx-ui-kit-section-header "Staged" t t nil 'header-line)) "Staged, collapsed"))
     (should (equal (get-text-property 0 'help-echo (drgnx-ui-kit-section-header "Staged" t nil nil 'header-line)) "Staged, expanded"))))
+
+(ert-deftest drgnx-ui-kit/section-header-count-is-a-chip ()
+  ;; the count after the title is a neutral soft chip (its pads and its digits in the chip's face), not subtle text
+  (dolist (tty '(nil t ascii))
+    (let* ((e (drgnx-ui-kit-expand 'section-header '(:c "section-header" :title "Changes" :collapsible t :count 12)
+                                   1.0 tty))
+           (text (plist-get e :text)) (at (string-search "12" text))
+           (runs (append (plist-get e :runs) nil)))
+      (should at)
+      (should (cl-some (lambda (r) (and (<= (aref r 0) at) (>= (aref r 1) (+ at 2))
+                                        (equal (aref r 2) "drgnx-kit-chip-neutral-soft")))
+                       runs))
+      (should-not (cl-some (lambda (r) (equal (aref r 2) "drgnx-text-subtle")) runs)))))
 
 (ert-deftest drgnx-ui-kit/card-lines-have-no-gaps ()
   ;; a 3-line card: top, mid, bottom shapes, each row's text, its closing stretch and nothing else in the row's face; the
