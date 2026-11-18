@@ -303,7 +303,7 @@ fn the_edits_filter_keeps_only_edits() {
         faces(TrailFilter::Edits),
         [
             ("R".to_owned(), dim.clone()),
-            ("E".to_owned(), FaceId::WorkSegEdit.name().to_owned()),
+            ("E".to_owned(), FaceId::KitRangeBarSegEdit.name().to_owned()),
             ("Y".to_owned(), dim.clone()),
         ]
     );
@@ -312,7 +312,7 @@ fn the_edits_filter_keeps_only_edits() {
         [
             ("R".to_owned(), dim.clone()),
             ("E".to_owned(), dim),
-            ("Y".to_owned(), FaceId::WorkSegWait.name().to_owned()),
+            ("Y".to_owned(), FaceId::KitRangeBarSegWait.name().to_owned()),
         ]
     );
 }

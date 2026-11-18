@@ -716,7 +716,9 @@ How it works:
   most 300 px) and wider (300 px), and put back. At each width the env goes out at once and the rows settle: a `ping`
   round trip on the subscribed connection (the hub handles a connection's lines in order, so its patches for the env
   came before the answer), the patches drawn, again until a round trip changes nothing (10 s at most, else an error).
-  Each row (a line starting at a row key) is measured with `window-text-pixel-size`, and one wider than the body is an
+  Each row (a line starting at a row key) is measured with `window-text-pixel-size` (from where the invisible text
+  before it starts, `drgnx-look-scene--px`: a row after a hidden line, such as the Explorer's first under its hidden
+  root, starts mid screen line, and measured from its own start an image there is left out), and one wider than the body is an
   error naming the view, its buffer, its class, the width and an example. **No row cut where its full text fits:** a
   `…` at the drawn or narrow width is checked against the same row at the wide width; the text it cut off (measured
   in the buffer with its faces), less the `…`, plus the hub's 10 px slack, must not fit the px free after the `…`

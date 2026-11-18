@@ -124,6 +124,8 @@
     - [Progress (kit)](design/components/progress.md)
     - [Chip (kit)](design/components/chip.md)
     - [Status dot (kit)](design/components/status-dot.md)
+    - [Range bar (kit)](design/components/range-bar.md)
+    - [Time axis (kit)](design/components/time-axis.md)
     - [Tab (kit)](design/components/tab.md)
     - [Segmented switch (kit)](design/components/segmented.md)
 - [The app icon](design/app-icon.md)

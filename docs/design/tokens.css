@@ -75,6 +75,19 @@ html.ayu {
   --drgnx-meter-reached: #f47a72;
   --drgnx-meter-tick: #a2a5b2;
   --drgnx-meter-span: #46484f;
+  --drgnx-range-done: #7aa5ff;
+  --drgnx-range-forecast: #4d6598;
+  --drgnx-range-tail: #5c7aba;
+  --drgnx-range-late: #f47a72;
+  --drgnx-range-wait: #e9bc5c;
+  --drgnx-seg-read: #6fc6ea;
+  --drgnx-seg-search: #7aa5ff;
+  --drgnx-seg-web: #7fd6d1;
+  --drgnx-seg-think: #a2a5b2;
+  --drgnx-seg-edit: #62d394;
+  --drgnx-seg-test: #e9bc5c;
+  --drgnx-seg-job: #c6a0ff;
+  --drgnx-seg-wait: #ff9566;
 }
 /* light */
 :root[data-theme="light"],
@@ -150,6 +163,19 @@ html.rust {
   --drgnx-meter-reached: #c22f28;
   --drgnx-meter-tick: #545866;
   --drgnx-meter-span: #c3c5c9;
+  --drgnx-range-done: #2c5fd4;
+  --drgnx-range-forecast: #8ba7e7;
+  --drgnx-range-tail: #6b8fe1;
+  --drgnx-range-late: #c22f28;
+  --drgnx-range-wait: #8a5d00;
+  --drgnx-seg-read: #0b6f99;
+  --drgnx-seg-search: #2c5fd4;
+  --drgnx-seg-web: #0b7470;
+  --drgnx-seg-think: #545866;
+  --drgnx-seg-edit: #1a7d44;
+  --drgnx-seg-test: #8a5d00;
+  --drgnx-seg-job: #7a3ccf;
+  --drgnx-seg-wait: #b8461a;
 }
 /* hc */
 :root[data-theme="hc"] {
@@ -224,6 +250,19 @@ html.rust {
   --drgnx-meter-reached: #ff9a92;
   --drgnx-meter-tick: #ffffff;
   --drgnx-meter-span: #d6d8de;
+  --drgnx-range-done: #a8c6ff;
+  --drgnx-range-forecast: #d6d8de;
+  --drgnx-range-tail: #d6d8de;
+  --drgnx-range-late: #ff9a92;
+  --drgnx-range-wait: #ffd36b;
+  --drgnx-seg-read: #8fdcff;
+  --drgnx-seg-search: #a8c6ff;
+  --drgnx-seg-web: #96ece6;
+  --drgnx-seg-think: #d6d8de;
+  --drgnx-seg-edit: #7ff0ad;
+  --drgnx-seg-test: #ffd36b;
+  --drgnx-seg-job: #dcc0ff;
+  --drgnx-seg-wait: #ffb38a;
 }
 /* a reader whose system asks for more contrast, unless the page chose */
 @media (prefers-contrast: more) {
@@ -300,5 +339,18 @@ html.rust {
     --drgnx-meter-reached: #ff9a92;
     --drgnx-meter-tick: #ffffff;
     --drgnx-meter-span: #d6d8de;
+    --drgnx-range-done: #a8c6ff;
+    --drgnx-range-forecast: #d6d8de;
+    --drgnx-range-tail: #d6d8de;
+    --drgnx-range-late: #ff9a92;
+    --drgnx-range-wait: #ffd36b;
+    --drgnx-seg-read: #8fdcff;
+    --drgnx-seg-search: #a8c6ff;
+    --drgnx-seg-web: #96ece6;
+    --drgnx-seg-think: #d6d8de;
+    --drgnx-seg-edit: #7ff0ad;
+    --drgnx-seg-test: #ffd36b;
+    --drgnx-seg-job: #dcc0ff;
+    --drgnx-seg-wait: #ffb38a;
   }
 }
