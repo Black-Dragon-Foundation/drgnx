@@ -549,7 +549,10 @@ the card's frame (\"Window is dedicated to *Send Run*\") and the heap graph drew
   (let ((root (drgnx-uitest-root-frame)))
     (unless (eq (selected-frame) root) (select-frame-set-input-focus root))))
 
-(defun drgnx-look-scene--start-again ()
+(defconst drgnx-look-scene--debug-popups '(" *drgnx-debug-toolbar*")
+  "The popups a live debug session shows: allowed at the begin of a scene with :debug, which keeps the session.")
+
+(defun drgnx-look-scene--start-again (&optional debug)
   "The frame as the setup left it (`drgnx-look-scene--start'): its layout's name and arrangement (the tiles, the
 editors' tabs and shown buffers), what the minimap scenes hold released (the hold's advice and window marks) and the
 sticky style the setup had.  A scene that opens its views in the editor layout (the Work Flow's map, Flow, Detail and
@@ -574,6 +577,8 @@ to split).  Left held, the sticky-lines scene drew the minimap the hover scenes 
     ;; the check: anything a scene left that this did not put back is an error of the next scene's begin
     (redisplay t)
     (let ((now (drgnx-look-scene--start-state)) (want (cdr drgnx-look-scene--start)))
+      (when debug                       ; the session the scene keeps shows its toolbar
+        (setq now (plist-put now :popups (seq-difference (plist-get now :popups) drgnx-look-scene--debug-popups))))
       (dolist (key '(:layout :tiles :sticky :minimap-held :minimap-open :popups))
         (unless (equal (plist-get now key) (plist-get want key))
           (push (format "begin: the scene before left %s %S, not the setup's %S"
@@ -598,7 +603,7 @@ DEBUG (the scene's :debug) keeps the debug session a scene before it started; wi
   (drgnx-look-scene--try "begin"
     (drgnx-look-scene--close-popups)
     (unless debug (drgnx-look-scene--debug-end))
-    (drgnx-look-scene--editor-layout) (drgnx-look-scene--start-again))
+    (drgnx-look-scene--editor-layout) (drgnx-look-scene--start-again debug))
   ;; not `drgnx-look-scene--answer': the scene's own answer checks its views, once it has shown them
   (prog1 (drgnx-uitest--json (list :errors (vconcat (nreverse drgnx-look-scene--errors))))
     (setq drgnx-look-scene--errors nil)))
