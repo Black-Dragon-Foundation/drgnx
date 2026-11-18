@@ -21,8 +21,8 @@ use urdr::graph::{OpenOutcome, Writer, WriterHandle, WriterOpts};
 use urdr::graph::{TxMeta, WriteError};
 use urdr::{Handle, Mode, Store, StoreSpec};
 
-/// The schema the store writes (schema 14).
-pub const SCHEMA: u32 = crate::migrate14::SCHEMA;
+/// The schema the store writes (schema 15).
+pub const SCHEMA: u32 = crate::migrate15::SCHEMA;
 
 /// What a read closure sees: the connection (read-only).
 pub type Tx = urdr::Connection;
@@ -342,9 +342,16 @@ pub(crate) mod tests {
         .unwrap();
     }
 
-    /// A fresh in-memory database as the opening rule leaves it (schema 14) for a writer's unit tests (`tx_of`
+    /// A fresh in-memory database as the opening rule leaves it (schema 15) for a writer's unit tests (`tx_of`
     /// makes the transaction).  The name is from schema 7.
     pub(crate) fn db7() -> urdr::Connection {
+        let mut c = db14();
+        assert!(crate::migrate15::upgrade(&mut c).unwrap());
+        c
+    }
+
+    /// A fresh in-memory database at schema 14, before the `node` view lists the importer's tasks.
+    pub(crate) fn db14() -> urdr::Connection {
         let mut c = db13();
         assert!(crate::migrate14::upgrade(&mut c).unwrap());
         c
@@ -520,7 +527,7 @@ pub(crate) mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(kv, "14");
+        assert_eq!(kv, "15");
         let other = dir.path().join("other").join("work.db");
         std::fs::create_dir_all(other.parent().unwrap()).unwrap();
         make(&other, 6);

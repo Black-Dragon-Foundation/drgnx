@@ -133,7 +133,7 @@
   ;; the commit for the task, as the in-process turn end did
   (drgnx-hub-client-test--with-ratatoskr
     (let* ((mock (expand-file-name "ratatoskr-mock" (file-name-directory (drgnx-hub-client-test--bin))))
-           (repo (concat root "repo/")) (task (concat "task:" repo "docs/plans/p.md#1"))
+           (repo (concat root "repo/")) (task nil)
            (drgnx-projects-board-file (concat root "none.org"))
            (drgnx-agents--sessions nil) (drgnx-work--tasks nil) (drgnx-hub-event-functions nil) (drgnx-work-db--handles nil))
       (skip-unless (file-executable-p mock))
@@ -144,6 +144,12 @@
       (drgnx-work-rec--commit repo "base")
       ;; the hub knows the task once the plan is scanned (it refuses commits for a task it does not have)
       (with-output-to-string (should (eql (drgnx-work-cli-run (list "scan" repo)) 0)))
+      ;; the importer's task, as the Work tab lists it (its id is the importer's own, `task:rec-…')
+      (let ((nodes (drgnx-work-nodes 'task)))
+        (should (equal (mapcar (lambda (n) (plist-get n :title)) nodes) '("1 one")))
+        (setq task (plist-get (car nodes) :id))
+        ;; under its plan (`drgnx work status', the Work tab's tree)
+        (should (equal (plist-get (drgnx-work-counts (plist-get (car (drgnx-work-nodes 'plan)) :id)) :tasks) '(0 . 1))))
       (drgnx-test-write-settings (concat root "config/settings.el") 'drgnx-agents-profiles
                                  (list (list "rmock" :provider 'claude :command (list mock "acp" "--as" "claude"))))
       (unwind-protect
@@ -217,10 +223,14 @@
                  (lambda (method params &optional _)
                    (push (cons method params) calls)
                    (if (equal (plist-get params :root) (directory-file-name repo))
-                       (signal 'error (list "the work tracker never reads a project inside ~/org (personal notes)"))
+                       ;; as `drgnx-hub-call-sync' signals the hub's error
+                       (error "drgnx hub: %s" "the work tracker never reads a project inside ~/org (personal notes)")
                      (list :dry_run :false :files (vector (list :path "board.org" :kind "org" :entities 1 :ops 1)))))))
         (let ((out (with-output-to-string (should (eql (drgnx-work-cli-run (list "scan" repo)) 0)))))
-          (should (string-match-p "refused: .* (.*personal notes" out)))
+          ;; the hub's own words, as the privacy canary reads them
+          (should (string-match-p (concat "^refused: " (regexp-quote (directory-file-name repo))
+                                          " (the work tracker never reads a project inside ~/org (personal notes))$")
+                                  out)))
         (setq calls (nreverse calls))
         (should (equal (mapcar #'car calls) '("records/import" "records/import")))
         (should (equal (plist-get (cdr (car calls)) :root) (directory-file-name repo)))

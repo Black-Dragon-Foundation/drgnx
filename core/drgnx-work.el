@@ -338,8 +338,8 @@ nothing to record."
 \(`drgnx-projects-board-file', the one file of ~/org the product reads: `records/import' with only=board) — the importer
 that adopts specs, plans, ledgers and the board's plan links — and collect ended jobs.  In a batch command
 \(`drgnx-work--sync') it waits and answers (:files N :refused LIST): N the files the hub's imports list, LIST the roots
-it refused (a project inside ~/org: the user's personal notes are never read), each (:source (:path ROOT) :why TEXT);
-elsewhere the calls are asynchronous and it answers nil."
+it refused (a project inside ~/org: the user's personal notes are never read), each (:source (:path ROOT) :why TEXT),
+TEXT the hub's own words; elsewhere the calls are asynchronous and it answers nil."
   (let ((files 0) (refused nil)
         (board (drgnx-projects-board-file)))
     (dolist (call (append (mapcar (lambda (r) (list :root (directory-file-name r))) (or roots (drgnx-work-default-roots)))
@@ -349,7 +349,9 @@ elsewhere the calls are asynchronous and it answers nil."
       (if drgnx-work--sync
           (condition-case err
               (cl-incf files (length (plist-get (drgnx-hub-call-sync "records/import" call 60) :files)))
-            (error (push (list :source (list :path (plist-get call :root)) :why (error-message-string err)) refused)))
+            (error (push (list :source (list :path (plist-get call :root))
+                               :why (string-remove-prefix "drgnx hub: " (error-message-string err)))
+                         refused)))
         (drgnx-work--hub "records/import" call)))
     (drgnx-work-collect-jobs)
     (and drgnx-work--sync (list :files files :refused (nreverse refused)))))

@@ -40,7 +40,7 @@ use urdr::graph::{Class, OpenOutcome, OpenRule, Tx, TxMeta, WriteError};
 use crate::deny::{DenyList, Source, Verdict};
 use crate::kinds;
 use crate::project::{self, ProjectCache};
-use crate::{migrate8, migrate9, migrate10, migrate11, migrate12, migrate13, migrate14};
+use crate::{migrate8, migrate9, migrate10, migrate11, migrate12, migrate13, migrate14, migrate15};
 
 #[cfg(test)]
 mod tests;
@@ -159,7 +159,7 @@ type Upgrade = fn(&mut Connection) -> Result<bool, urdr::SqliteError>;
 fn open(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome {
     // schema 7, 8 or 9 now (made, migrated or already): the step table moves it to 8 (`migrate8`), the hub's facts
     // to 9 (`migrate9`), the keyed vector table to 10 (`migrate10`), the forecast tables to 11 (`migrate11`), the
-    // step's conversation, head and history columns to 12 (`migrate12`), its machine and slots to 13 (`migrate13`), the forecasts' finish times to 14 (`migrate14`)
+    // step's conversation, head and history columns to 12 (`migrate12`), its machine and slots to 13 (`migrate13`), the forecasts' finish times to 14 (`migrate14`), the `node` view's tasks to 15 (`migrate15`)
     let step = |conn: &mut Connection, to: u32, f: Upgrade| match f(conn) {
         Ok(_) => None,
         Err(e) => {
@@ -172,7 +172,7 @@ fn open(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome {
             })
         }
     };
-    let steps: [(u32, Upgrade); 7] = [
+    let steps: [(u32, Upgrade); 8] = [
         (migrate8::SCHEMA, migrate8::upgrade),
         (migrate9::SCHEMA, migrate9::upgrade),
         (migrate10::SCHEMA, migrate10::upgrade),
@@ -180,9 +180,10 @@ fn open(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome {
         (migrate12::SCHEMA, migrate12::upgrade),
         (migrate13::SCHEMA, migrate13::upgrade),
         (migrate14::SCHEMA, migrate14::upgrade),
+        (migrate15::SCHEMA, migrate15::upgrade),
     ];
     match open7(conn, path, opts) {
-        OpenOutcome::Ready { schema } if schema < migrate14::SCHEMA => {
+        OpenOutcome::Ready { schema } if schema < migrate15::SCHEMA => {
             for (to, f) in steps {
                 if to > schema
                     && let Some(out) = step(conn, to, f)
@@ -191,7 +192,7 @@ fn open(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome {
                 }
             }
             OpenOutcome::Ready {
-                schema: migrate14::SCHEMA,
+                schema: migrate15::SCHEMA,
             }
         }
         other => other,
@@ -237,7 +238,10 @@ fn open7(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> OpenOutcome 
         Ok(migrate14::SCHEMA) => OpenOutcome::Ready {
             schema: migrate14::SCHEMA,
         },
-        Ok(s) if s > migrate14::SCHEMA => OpenOutcome::ReadOnly { schema: s },
+        Ok(migrate15::SCHEMA) => OpenOutcome::Ready {
+            schema: migrate15::SCHEMA,
+        },
+        Ok(s) if s > migrate15::SCHEMA => OpenOutcome::ReadOnly { schema: s },
         Ok(6) => match migrate(conn, path, opts) {
             Ok(report) => {
                 tracing::info!(report = %report.to_json(), "work.db moved to schema 7");
