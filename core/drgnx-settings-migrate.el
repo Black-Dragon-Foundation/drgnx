@@ -32,6 +32,10 @@
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (declare-function drgnx-settings-area-has-entry-p "drgnx-settings-area" (var))
 (declare-function drgnx-settings-area-set "drgnx-settings-area" (changes))
+(declare-function drgnx-settings-workspace--roots "drgnx-settings-workspace" (doc))
+(declare-function drgnx-settings-workspace--private-files "drgnx-settings-workspace" ())
+(declare-function drgnx-lisp-index--default-files "drgnx-lisp-index" ())
+(defvar drgnx-settings-workspace-shared-file)
 
 (defconst drgnx-settings-migrate-names '(agents ai keys modules large-files session speed)
   "The config files that fold into settings.el (design §5.4; speed.eld, the GC census's, by the manager's ruling
