@@ -1358,6 +1358,7 @@ impl Inner {
             (t, a.claimed.remove(&id))
         };
         self.queue.wake_tick();
+        self.evict(t.evict);
         let mut mine = claimed.then(|| self.queue.slot(&id));
         for s in t.starts {
             if s == id {
@@ -1532,7 +1533,41 @@ impl Inner {
         for id in t.starts {
             self.spawn_queued(id);
         }
+        self.evict(t.evict);
         self.outcomes(t.outcomes);
+    }
+
+    /// The jobs here a whole-machine run's drain evicted (design §5.6): each is stopped and its request started
+    /// again, so it waits in the queue until the run is done.
+    fn evict(self: &Arc<Self>, ids: Vec<String>) {
+        for id in ids {
+            let Some(spec) = self
+                .queue
+                .pending(&id)
+                .and_then(|v| serde_json::from_value::<Pending>(v).ok())
+            else {
+                tracing::warn!(
+                    "job {id}: evicted for a whole-machine run, but its start request is gone"
+                );
+                continue;
+            };
+            let me = self.clone();
+            tokio::spawn(async move {
+                if let Err(e) = me.clone().stop(&id).await {
+                    tracing::warn!(
+                        "job {id}: evicted for a whole-machine run, but not stopped: {}",
+                        e.message
+                    );
+                    return;
+                }
+                if let Err(e) = me.start(spec.into_spec()).await {
+                    tracing::warn!(
+                        "job {id}: evicted for a whole-machine run, but not started again: {}",
+                        e.message
+                    );
+                }
+            });
+        }
     }
 
     fn spawn_queued(self: &Arc<Self>, id: String) {
