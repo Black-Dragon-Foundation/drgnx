@@ -270,6 +270,67 @@
     (should (= i (length want)))
     (should-not (nreverse fails))))
 
+(defun ui-kit-test--merged-height (faces base)
+  "The height Emacs gives text in FACES (a `face' property value) over the line face BASE: a probe face inheriting
+FACES then BASE (an anonymous face in FACES becomes a face of its own), on `default'."
+  (let ((inherit nil) (k 0))
+    (dolist (f (if (and (consp faces) (not (keywordp (car faces)))) faces (list faces)))
+      (cond ((and f (symbolp f)) (push f inherit))
+            ((consp f) (let ((anon (intern (format "ui-kit-test--anon-%d" (setq k (1+ k))))))
+                         (make-face anon)
+                         (face-spec-set anon `((t ,@f)))
+                         (push anon inherit)))))
+    (make-face 'ui-kit-test--probe)
+    (face-spec-set 'ui-kit-test--probe `((t :inherit ,(nreverse (cons base inherit)))))
+    (face-attribute 'ui-kit-test--probe :height nil 'default)))
+
+(defun ui-kit-test--font-of (face)
+  "The type face kit FACE takes its size from, read from the components file: its binding's `:font', else the first
+type face in its `:inherit'; nil for a face that only colours."
+  (let ((b (nth 2 (assq face (drgnx-ui-kit-face-bindings)))))
+    (cl-find-if (lambda (x) (memq x '(drgnx-ui-text drgnx-ui-heading drgnx-ui-caption drgnx-ui-title drgnx-code-small)))
+                (or (plist-get b :font) (plist-get b :inherit)))))
+
+(ert-deftest drgnx-ui-kit/line-text-scales-once ()
+  ;; a mode, header or tab line's face is under the kit's text; drgnx's themes give the header line the UI font's
+  ;; relative size, and a kit face inheriting the UI font's relative size scaled it again (the panel tab's text 25 px
+  ;; for 26 at scale 2); so would a kit face inheriting a standard face with a size (`tab-line', 0.9).  Every fixture
+  ;; component on each line, over that line's face, with and without drgnx's theme: each character a kit face sizes
+  ;; is its type face's size on `default', once, as Emacs merges the faces.  Red first: 0.963 twice.
+  (require 'drgnx-look-density (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir))
+  (require 'tab-line)                   ; the tab's faces inherit its faces: undefined, the merge gives up
+  (let ((drgnx-look-density 'comfortable) (drgnx-face-glyphs drgnx-ui--default-glyphs)
+        (cases (plist-get (ui-kit-test--json "cases.json" 'list) :comps))
+        (code (face-attribute 'default :height nil t)) (checked 0) (fails nil))
+    (unwind-protect
+        (dolist (theme '(nil drgnx-dark))
+          (mapc #'disable-theme custom-enabled-themes)
+          (when theme (load-theme theme t))
+          (set-face-attribute 'default nil :height 135)
+          ;; drgnx's header line scales: the case the check is for
+          (when theme (should (/= 135 (face-attribute 'header-line :height nil 'default))))
+          (dolist (where '(header-line tab-line mode-line))
+            (dolist (c cases)
+              (let* ((comp (plist-get c :comp))
+                     ;; as on a graphical frame at scale 2 (the theme is loaded outside: it reads real colours)
+                     (s (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                                  ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 2.0)))
+                          (drgnx-ui-kit-string (intern (plist-get comp :c)) comp where nil))))
+                (dotimes (i (length s))
+                  (let* ((faces (get-text-property i 'face s))
+                         (font (cl-some (lambda (f) (and f (symbolp f) (ui-kit-test--font-of f)))
+                                        (if (and (consp faces) (not (keywordp (car faces)))) faces (list faces)))))
+                    (when font
+                      (setq checked (1+ checked))
+                      (let ((want (face-attribute font :height nil 'default))
+                            (got (ui-kit-test--merged-height faces where)))
+                        (unless (equal want got)
+                          (push (list theme where (plist-get c :name) i font want got) fails))))))))))
+      (mapc #'disable-theme custom-enabled-themes)
+      (when (integerp code) (set-face-attribute 'default nil :height code)))
+    (should (> checked 0))
+    (should-not (seq-take (nreverse fails) 12))))
+
 (ert-deftest drgnx-ui-kit/buffer-text-uses-canonical-widths ()
   ;; in buffer text a pad is a width in canonical characters, so one buffer is right at two scales
   (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))

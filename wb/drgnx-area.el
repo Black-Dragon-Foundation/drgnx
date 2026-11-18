@@ -256,15 +256,13 @@ string is the title the area draws itself, in its row with the area's close, in 
 (declare-function drgnx-theme--box-fit-pad-p "drgnx-theme-gen")
 
 (defun drgnx-area--tab-row-parts (frame)
-  "(SPACER TEXT PILL RULE) for a tab row on a graphical FRAME, else nil.  SPACER is the one-pixel character that makes
-the row `drgnx-area--tab-row-px' tall with the tabs' text in its middle.  TEXT, laid over every tab, gives their text
-the kit face's own size as an absolute height: the header line's face is the UI font's relative height already, and the
-tab's face, relative too, would scale it again (25 px text for 26 at scale 2), so the text would not be the font
-measured here.  PILL, where boxes fit their text with a pad (Glitnir), the face that fits the shown tab's box and fill
-to `drgnx-area--pill-px' round its text: the kit face's box (its width and radius) drawn in the face's own background
-(the kit's ring is in that colour), else nil.  RULE, laid over the whole row, the hairline under it (debugging.html
-`.ptabs' border-bottom): an underline in `drgnx-border-subtle' on the row's last pixels, or nil when the theme gives
-that face no colour."
+  "(SPACER PILL RULE) for a tab row on a graphical FRAME, else nil.  SPACER is the one-pixel character that makes the
+row `drgnx-area--tab-row-px' tall with the tabs' text in its middle (the kit gives that text its own size once,
+`drgnx-ui-kit--line-sizes').  PILL, where boxes fit their text with a pad (Glitnir), the face that fits the shown
+tab's box and fill to `drgnx-area--pill-px' round its text: the kit face's box (its width and radius) drawn in the
+face's own background (the kit's ring is in that colour), else nil.  RULE, laid over the whole row, the hairline
+under it (debugging.html `.ptabs' border-bottom): an underline in `drgnx-border-subtle' on the row's last pixels, or
+nil when the theme gives that face no colour."
   (when-let* (((display-graphic-p frame))
               (face 'drgnx-kit-tab-panel-current)
               (extent (drgnx-pixels-font-extent face frame)))
@@ -272,7 +270,6 @@ that face no colour."
            (box (face-attribute face :box frame t))
            (rule (face-foreground 'drgnx-border-subtle frame t)))
       (list (drgnx-pixels-spacer 'drgnx-wb-bar row (+ (cdr extent) (drgnx-pixels-box-height face row frame)) frame)
-            (list :height (face-attribute face :height frame 'default))
             (and (consp box) (fboundp 'drgnx-theme--box-fit-pad-p) (drgnx-theme--box-fit-pad-p)
                  (list :box (append (cl-loop for (k v) on box by #'cddr unless (memq k '(:color :style :fit))
                                              append (list k v))
@@ -310,12 +307,11 @@ its own title (`drgnx-area-own-title')."
                          (add-text-properties 0 (length s) (list 'drgnx-tab (cons area (car tab)) 'mouse-face 'drgnx-hover
                                                                  'local-map drgnx-area--tab-map 'help-echo "Show this tab")
                                               s)
-                         (when (nth 1 parts) (add-face-text-property 0 (length s) (nth 1 parts) nil s))
-                         (when (and (eq (car tab) shown) (nth 2 parts)) (add-face-text-property 0 (length s) (nth 2 parts) nil s))
+                         (when (and (eq (car tab) shown) (nth 1 parts)) (add-face-text-property 0 (length s) (nth 1 parts) nil s))
                          s))
                      (seq-filter (lambda (tab) (drgnx-area--tab-listed-p area (car tab) shown)) tabs) " ")
           (drgnx-area--actions actions area frame))
-         area frame (nth 3 parts))))))
+         area frame (nth 2 parts))))))
 
 (defun drgnx-area--close (area)
   "AREA's close on its tab row: the kit's close button (face, click, help), drawn as the Lucide x at 16 px
