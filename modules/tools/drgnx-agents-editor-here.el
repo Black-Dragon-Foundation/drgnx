@@ -25,6 +25,7 @@
 (require 'drgnx-hub-client)
 
 (declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
+(declare-function drgnx-look-pixel-width "drgnx-pixels")
 (declare-function drgnx-work-space-workspace "drgnx-work-space")
 (declare-function drgnx-work-code--session "drgnx-work-code")
 (declare-function drgnx-agent-session-name "drgnx-agents")
@@ -126,10 +127,30 @@ by its mode in MODES ((SESSION . MODE)...), as `● Claude editing'; several age
 
 ;;;; The Explorer badge and the status segment
 
+(defconst drgnx-agents-editor-here--explorer-limits '(3 . 6)
+  "(FILE . FOLDER): how many marks an Explorer badge shows on a file's row and on a folder's before its \"+N\".")
+
 (defun drgnx-agents-editor-here--explorer-badge (ordinals dirp)
   "`drgnx-explorer-badge-functions': the badge of the agents ORDINALS on an Explorer row of the hub's (DIRP: a
 folder, six marks; a file: three, each with its agent's initial)."
-  (drgnx-agents-editor-here--badge ordinals (if dirp 6 3) (not dirp)))
+  (drgnx-agents-editor-here--badge ordinals (if dirp (cdr drgnx-agents-editor-here--explorer-limits)
+                                              (car drgnx-agents-editor-here--explorer-limits))
+                                   (not dirp)))
+
+(defun drgnx-agents-editor-here--explorer-badge-widths (window)
+  "`drgnx-explorer-badge-width-functions': how wide the Explorer's badges are drawn in WINDOW, as the env's `badge'
+says it: per agent shown a space and the widest mark (a file's with the widest initial, W or M), each kind's limit, and
+\" +99\" for the rest.  Never less than a badge drawn, so the hub's room is enough; measured when the env is made."
+  (with-selected-frame (window-frame window)
+    (let* ((graphic (display-graphic-p))
+           (px (lambda (s) (ceiling (if graphic (drgnx-look-pixel-width s 'drgnx-ui-text) (string-width s)))))
+           (mark (apply #'max (mapcar (lambda (m) (funcall px (drgnx-agent-identity--glyph m (selected-frame))))
+                                      drgnx-agent-identity-marks)))
+           (space (funcall px " "))
+           (initial (max (funcall px "W") (funcall px "M"))))
+      (vector (vector (+ space mark initial) (car drgnx-agents-editor-here--explorer-limits))
+              (vector (+ space mark) (cdr drgnx-agents-editor-here--explorer-limits))
+              (funcall px " +99")))))
 
 (defun drgnx-agents-editor-here--segment ()
   "The `agents-here' segment: the marks of the agents in this project."
@@ -401,6 +422,7 @@ agent's row is among them, the agents and the status segment; a reset makes ever
     (drgnx-command-define id :category "Agents" :title title :command fn :doc doc
                           :map 'drgnx-agents-here-mode-map :when (lambda () (derived-mode-p 'drgnx-agents-here-mode))))
   (add-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
+  (add-hook 'drgnx-explorer-badge-width-functions #'drgnx-agents-editor-here--explorer-badge-widths)
   (eval-after-load 'drgnx-statusbar
     (drgnx-modules-with-owner
       (drgnx-statusbar-define-segment 'agents-here :fn #'drgnx-agents-editor-here--segment :click 'drgnx-agents-editor-here
@@ -412,6 +434,7 @@ agent's row is among them, the agents and the status segment; a reset makes ever
 (defun drgnx-agents-editor-here-teardown ()
   "Take the badges out of the Explorer and forget the cached presence."
   (remove-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
+  (remove-hook 'drgnx-explorer-badge-width-functions #'drgnx-agents-editor-here--explorer-badge-widths)
   (clrhash drgnx-agents-editor-here--badges)
   (clrhash drgnx-agents-editor-here--initials)
   (when-let* ((b (get-buffer drgnx-agents-here-buffer-name))) (kill-buffer b))
