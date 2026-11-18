@@ -156,11 +156,6 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ;; chip and status-dot (Task 14): the sites not moved onto the kit yet, each falling as its site moves
     ("core/drgnx-agent-identity.el" status-dot 1)
     ("core/drgnx-faces.el" chip 10)
-    ("core/drgnx-freezes.el" status-dot 2)
-    ("core/drgnx-history-revert.el" status-dot 3)
-    ("core/drgnx-modules.el" status-dot 5)
-    ("core/drgnx-notices.el" status-dot 1)
-    ("core/drgnx-onboard.el" status-dot 1)
     ("modules/editor/drgnx-fold.el" chip 2)
     ("modules/extra/drgnx-debug-console.el" chip 2)
     ("modules/extra/drgnx-debug-disassembly.el" chip 1)
