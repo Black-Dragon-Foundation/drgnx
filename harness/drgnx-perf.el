@@ -1237,6 +1237,13 @@ differ, (:verdict no-regression) when all agree, (:verdict not-comparable) when 
           ((seq-some (lambda (p) (not (equal (car p) (cdr p)))) pairs) (list :verdict 'regressed :why 'digest))
           (t (list :verdict 'no-regression)))))
 
+(defun drgnx-perf-check-island (&optional island allowed)
+  "Nil when this process runs on its timing ISLAND, else an error before anything is measured (runners design §5.6).
+ISLAND is a CPU list, by default $DRGNX_PERF_ISLAND (set by a runner for a job in the timing lane; none or empty: no
+island, nothing to check); ALLOWED is the CPUs this process may use, by default its `Cpus_allowed_list'."
+  (ignore island allowed)
+  nil)
+
 (defun drgnx-perf-cpuset-args (cpus &optional topology)
   "The container run arguments that give the lab CPUS cores (\"2\" or \"4\", $DRGNX_PERF_CPUS; review M14):
 `--cpuset-cpus' with the first thread of each of the first CPUS physical cores, so a machine that numbers a core's two

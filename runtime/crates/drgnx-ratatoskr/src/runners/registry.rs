@@ -162,6 +162,9 @@ pub struct Record {
     /// start.
     #[serde(default)]
     pub reserve_mib: Option<u64>,
+    /// The timing island (`--island`, a CPU list); `serve` gets it at every start.
+    #[serde(default)]
+    pub island: Option<String>,
     /// The memory the host had available at its last probe, MiB: the runner list's room for jobs until the runner's
     /// first ready.
     #[serde(default)]
@@ -863,6 +866,7 @@ impl Registry {
             allow_own_account: own_account,
             allow_admin: admin,
             reserve_mib: None,
+            island: None,
             mem_available_mib: None,
         };
         let probe = self.probe_serve(&rec).await?;
@@ -1428,6 +1432,12 @@ mod tests {
                 "--reserve-mib",
                 "2048"
             ]
+        );
+        // the timing island reaches `serve` at every start
+        r.island = Some("0-5,12-17".into());
+        assert_eq!(
+            serve_flags(&r)[4..],
+            ["--island".to_string(), "0-5,12-17".to_string()]
         );
     }
 

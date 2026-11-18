@@ -83,6 +83,9 @@ pub struct Config {
     pub allow: crate::darwin::probe::Allow,
     /// A workstation's reserve for its user, MiB (`--reserve-mib`); none: the profile's.
     pub reserve_mib: Option<u64>,
+    /// The timing island (`--island`, a CPU list of whole L3 groups): timing jobs run on it, work on the rest while one
+    /// runs (design §5.6). None: no timing lane here.
+    pub island: Option<String>,
 }
 
 /// Letters, digits and `-`, not at either end: a prefix and a hub id are parts of unit, slice, container and file
@@ -99,7 +102,7 @@ impl Config {
     /// [--allow-admin] [--reserve-mib N]` (a workstation's, at least [`forseti::MIN_RESERVE_MIB`]).
     pub fn parse(args: &[&str]) -> Result<Config, String> {
         let (mut root, mut prefix, mut hub_id, mut profile) = (None, None, None, None);
-        let (mut watchdog, mut reserve_mib) = (None, None);
+        let (mut watchdog, mut reserve_mib, mut island) = (None, None, None);
         let mut allow = crate::darwin::probe::Allow::default();
         let mut it = args.iter();
         while let Some(a) = it.next() {
@@ -128,6 +131,7 @@ impl Config {
                 }
                 "--allow-own-account" => allow.own_account = true,
                 "--allow-admin" => allow.admin = true,
+                "--island" => island = Some(val()?),
                 "--reserve-mib" => {
                     let v = val()?;
                     reserve_mib = Some(
@@ -161,6 +165,7 @@ impl Config {
             watchdog,
             allow,
             reserve_mib,
+            island,
         })
     }
 

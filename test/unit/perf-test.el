@@ -384,3 +384,13 @@ workload's typed keys), and the report names what allocated in between."
       (when (file-exists-p file) (delete-file file)))))
 
 ;;; perf-test.el ends here
+
+(ert-deftest drgnx-perf/refuses-off-island ()
+  "A timing job checks its own CPUs before measuring (runners design §5.6): off its island, it fails."
+  (should-error (drgnx-perf-check-island "0-1" "0-23") :type 'error)
+  (should (equal (cadr (should-error (drgnx-perf-check-island "0-5,12-17" "0-5"))) "perf: not on the island 0-5,12-17 (this process may use 0-5)"))
+  ;; the same CPUs written another way, and no island at all, pass
+  (should-not (drgnx-perf-check-island "0-5,12-17" "12-17,0-5"))
+  (should-not (drgnx-perf-check-island "0,1,2" "0-2"))
+  (should-not (drgnx-perf-check-island nil "0-23"))
+  (should-not (drgnx-perf-check-island "" "0-23")))

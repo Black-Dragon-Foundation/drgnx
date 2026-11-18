@@ -638,6 +638,14 @@ mod tests {
         );
         assert!(p(&["add", "mac", "--trust", "mine", "--reserve-mib", "lots"]).is_err());
         assert!(p(&["profile", "mac", "big"]).is_err());
+        // the timing island, as the user names it (the runner checks it against its caches)
+        assert_eq!(
+            p(&["profile", "desk", "dedicated", "--island", "0-5,12-17"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/set",
+                params: json!({"name": "desk", "profile": "dedicated", "island": "0-5,12-17"}),
+            })
+        );
         assert_eq!(
             p(&["trust", "desk", "shared"]),
             Ok(RunnerCommand::Call {

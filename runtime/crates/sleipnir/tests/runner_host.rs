@@ -543,6 +543,49 @@ fn slice_tree_takes_the_container() {
     .unwrap();
 }
 
+/// [C] The island on a real delegated cpuset (design §5.6): a work job running in its slice moves off the island at
+/// once, a timing job's slice is on it, and both come back to every CPU when it is off. Needs two usable CPUs.
+#[test]
+#[ignore = "runner-host"]
+fn the_island_moves_running_work_and_back() {
+    let j = job_dir();
+    slices::ensure_tree(ROOT, forseti::Profile::Dedicated).unwrap();
+    let p = probe();
+    let cpus = p.cpus_usable().unwrap();
+    assert!(cpus.len() >= 2, "two usable CPUs: {cpus:?}");
+    let (island, rest) = (slices::cpu_list(&cpus[..1]), slices::cpu_list(&cpus[1..]));
+    let all = slices::cpu_list(&cpus);
+    let by_systemd = p.cpuset_by_systemd().unwrap();
+    let said = std::sync::atomic::AtomicBool::new(false);
+    unit::start(&unit_req(
+        "sltest-i1-1",
+        "i1",
+        &j.dir.join("i1.log"),
+        vec!["sleep".into(), "600".into()],
+    ))
+    .unwrap();
+    let pid = main_pid("sltest-i1-1.service");
+    assert_eq!(status_field(pid, "Cpus_allowed_list"), all);
+    let part =
+        slices::island_on(&p.manager, ROOT, Some((&island, &rest)), by_systemd, &said).unwrap();
+    assert!(part.is_some(), "the timing slice's partition");
+    assert_eq!(
+        status_field(pid, "Cpus_allowed_list"),
+        rest,
+        "work moved off the island"
+    );
+    let timing = p.slice_dir(&slices::timing_slice(ROOT, &island).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(timing.join("cpuset.cpus.effective"))
+            .unwrap()
+            .trim(),
+        island
+    );
+    slices::island_on(&p.manager, ROOT, None, by_systemd, &said).unwrap();
+    assert_eq!(status_field(pid, "Cpus_allowed_list"), all, "and back");
+    slices::stop(&slices::job_slice(ROOT, "i1").unwrap()).unwrap();
+}
+
 /// [C] The cap's step against a job that holds memory it can't give back (tmpfs, no swap), as jobq spike 3 measured
 /// it: `MemoryHigh` drops at once, `MemoryMax` comes down a step at a time, and the step that crosses the job's use
 /// ends in a kernel OOM (`oom_kill` grows: the verdict is `oom`), while the slice's pressure stays below oomd's 80 %.

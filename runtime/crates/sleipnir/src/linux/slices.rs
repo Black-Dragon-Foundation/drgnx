@@ -17,6 +17,7 @@ use super::run;
 use forseti::Profile;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A slice root, a job id: plain words, so the slice names nest as systemd reads them.
 fn plain(s: &str) -> bool {
@@ -121,6 +122,64 @@ pub fn direct_cpus(manager: &Path, slice: &str, cpus: &str) -> Result<(), String
     fs::write(&file, format!("{cpus}\n")).map_err(|e| format!("{}: {e}", file.display()))
 }
 
+/// The timing slice under ROOT, `<root>-timing.slice`, for ISLAND (a kernel CPU list: the runner profile's `island`).
+/// A timing job's own slice is `<root>-timing-<id>.slice` ([`timing_job_slice`]), so it runs on the island while the
+/// work slice runs on the rest (design §5.6).
+pub fn timing_slice(root: &str, island: &str) -> Result<String, String> {
+    let _ = (root, island);
+    Err("not yet".into())
+}
+
+/// The slice of timing job ID under ROOT: `<root>-timing-<id>.slice`.
+pub fn timing_job_slice(root: &str, id: &str) -> Result<String, String> {
+    let _ = (root, id);
+    Err("not yet".into())
+}
+
+/// CPUS as a kernel CPU list, ranges joined (`6-11,18-23`).
+pub fn cpu_list(cpus: &[u32]) -> String {
+    let _ = cpus;
+    String::new()
+}
+
+/// What the timing slice became: an isolated partition (no scheduler balancing across it), a root partition, or a
+/// plain member that only has `AllowedCPUs` (a user manager's delegated subtree has no partition root above it: the
+/// expected case, design §0.3 R4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Partition {
+    Isolated,
+    Root,
+    Member,
+}
+
+/// Makes SLICE (under the user manager's cgroup MANAGER) an isolated partition, else a root one, else leaves it a
+/// member; a fallback is said once per runner (SAID).
+pub fn set_partition(manager: &Path, slice: &str, said: &AtomicBool) -> Partition {
+    let _ = (manager, slice, said);
+    Partition::Isolated
+}
+
+/// Whether ISLAND (a CPU list) is whole L3 groups as CPU_DIR (`/sys/devices/system/cpu`) reads them: every CPU of an
+/// L3 group it touches is in it, so the island never shares a cache with the work.
+pub fn island_whole_l3(cpu_dir: &Path, island: &str) -> Result<(), String> {
+    let _ = (cpu_dir, island);
+    Ok(())
+}
+
+/// The island on or off: on (ISLAND, REST), the timing slice gets the island's CPUs (and its partition, said once
+/// through SAID) and the work slice the rest, so every running work job moves at once; off, the work slice gets
+/// every CPU again. BY_SYSTEMD as [`set_cpus`].
+pub fn island_on(
+    manager: &Path,
+    root: &str,
+    on: Option<(&str, &str)>,
+    by_systemd: bool,
+    said: &AtomicBool,
+) -> Result<Option<Partition>, String> {
+    let _ = (manager, root, on, by_systemd, said);
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +198,79 @@ mod tests {
         assert_eq!(
             job_props(8192, 6144)[0],
             ("MemoryHigh", "6144M".to_string())
+        );
+    }
+
+    /// [D] pure (design §5.6, a fixture sysfs of a 7900X: CCD0 is CPUs 0-5 and 12-17): an island is whole L3 groups,
+    /// else `runner check` refuses it and names the group it splits
+    #[test]
+    fn an_island_that_splits_an_l3_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        for cpu in 0..24u32 {
+            let l3 = if cpu % 12 < 6 {
+                "0-5,12-17"
+            } else {
+                "6-11,18-23"
+            };
+            let dir = d.path().join(format!("cpu{cpu}/cache/index3"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("shared_cpu_list"), format!("{l3}\n")).unwrap();
+        }
+        assert_eq!(island_whole_l3(d.path(), "0-5,12-17"), Ok(()));
+        assert_eq!(island_whole_l3(d.path(), "6-11,18-23"), Ok(()));
+        let e = island_whole_l3(d.path(), "0-5").unwrap_err();
+        assert!(e.contains("0-5,12-17"), "{e}");
+        assert!(island_whole_l3(d.path(), "0-6,12-17").is_err());
+        assert!(island_whole_l3(d.path(), "0-5,12-x").is_err());
+        assert!(
+            island_whole_l3(d.path(), "30").is_err(),
+            "a CPU the machine hasn't"
+        );
+        assert_eq!(
+            timing_slice("drgnx-runner", "0-5,12-17").unwrap(),
+            "drgnx-runner-timing.slice"
+        );
+        assert!(timing_slice("drgnx-runner", "0-5;rm").is_err());
+        assert_eq!(
+            timing_job_slice("drgnx-runner", "a3f").unwrap(),
+            "drgnx-runner-timing-a3f.slice"
+        );
+        assert_eq!(
+            cpu_list(&[6, 7, 8, 9, 10, 11, 18, 19, 20, 21, 22, 23]),
+            "6-11,18-23"
+        );
+        assert_eq!(cpu_list(&[0, 2, 3]), "0,2-3");
+    }
+
+    /// [D] pure (design §0.3 R4, a fixture cgroup tree): the timing slice becomes an isolated partition where the
+    /// kernel takes it; where it takes neither isolated nor root (here: the file can't be written), it stays a member
+    /// with `AllowedCPUs` only, and the runner says so once
+    #[test]
+    fn partition_falls_back_and_says_once() {
+        let d = tempfile::tempdir().unwrap();
+        let said = AtomicBool::new(false);
+        let at = |s: &str| d.path().join(super::super::probe::slice_path(s));
+        fs::create_dir_all(at("t-timing.slice")).unwrap();
+        fs::write(
+            at("t-timing.slice").join("cpuset.cpus.partition"),
+            "member\n",
+        )
+        .unwrap();
+        assert_eq!(
+            set_partition(d.path(), "t-timing.slice", &said),
+            Partition::Isolated
+        );
+        assert!(!said.load(Ordering::Relaxed));
+        // a directory where the file is: no write takes
+        fs::create_dir_all(at("u-timing.slice").join("cpuset.cpus.partition")).unwrap();
+        assert_eq!(
+            set_partition(d.path(), "u-timing.slice", &said),
+            Partition::Member
+        );
+        assert!(said.load(Ordering::Relaxed), "said");
+        assert_eq!(
+            set_partition(d.path(), "u-timing.slice", &said),
+            Partition::Member
         );
     }
 
