@@ -3364,12 +3364,18 @@ undo stack and saved layouts, and it is applied by rebuilding windows, never by 
 part of its parent, in (0, 1]. `(drgnx-grid-tree-to-logical PX SCALE)` and `(drgnx-grid-tree-from-logical LOGICAL
 SCALE)` convert, rounded half up as `drgnx-px` rounds, so logical → pixels → logical is exact at any scale.
 
-**A scale change.** A window moved to a monitor of another scale, or given another UI scale, keeps its tiles' shares
-(within 0.005): Emacs resizes its windows in proportion, and the grid's preserved sizes do not hold a tile's pixels
-against it. Other windows are not touched. The window keeps its frame pixels, so its logical size, and each tile's,
-changes by the scales' ratio; the next tree records the new logical sizes. The resize step and `drgnx-grid-min-px`
-are logical (`drgnx-px` at the frame's scale). `test/ui/grid-scales-gui-test.el` moves the session's monitor through
-mutter (`gdctl`) from 1.25 to 2.
+**A scale change, a window resize.** The docks (the side bar, the panel, the right side) keep their logical px and
+the editors take the difference, as VS Code's side bar keeps its width: `drgnx-grid-keep-dock-sizes` runs at each
+window size change and at Nidhogg's scale change (`nidhogg-frame-scale-change-functions`), with the scale
+`drgnx-pixels-scale` (display × UI scale). While the grid root keeps its size and scale, a dock's size is noted as its
+logical size; when either changed (a monitor of another scale, the UI scale, the window resized, the echo area grown
+with the font), each shown dock is given its logical size in the new pixels and a hidden one's `:sizes` intent is
+moved to it. A dock never squeezes the editors below their least size (`drgnx-grid-min-px` per tile, summed along a
+row): it gives way, and keeps the size it wants, so it is that size again once there is room. Other windows are not
+touched. A windowed frame keeps its logical size across a scale change (Nidhogg); a maximized one is its monitor's
+size, smaller in logical px at a larger scale. The resize step and `drgnx-grid-min-px` are logical (`drgnx-px` at the
+frame's scale). `test/ui/grid-scales-gui-test.el` moves the session's monitor through mutter (`gdctl`) from 1.25 to 2
+and back.
 
 **Terminal frames.** `(drgnx-grid-home-size DOCK FRACTION MINIMUM &optional FRAME)` gives a dock FRACTION of the
 frame's columns (lines for `bottom`), at least MINIMUM of them: its tile now, when it shows, and the size it comes back

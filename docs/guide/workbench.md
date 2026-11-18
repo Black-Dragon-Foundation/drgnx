@@ -360,7 +360,10 @@ to do it, or press Esc or `C-g` to stop. A tab dragged off its row moves only th
 still shows it): onto another group's middle it joins that group's tabs, onto an edge it is a group of its own there;
 a group's only tab moves the whole group. A drop on the tile itself, on no tile or
 where there is no room changes nothing and says "Nothing moved"; panes stack only onto a tile that is no dock (move
-the docked one off its dock first). The dividers between tiles still drag to resize. `drgnx-grid-drag` set to nil
+the docked one off its dock first). The dividers between tiles still drag to resize. The side bar, the panel and the
+right side keep the size you gave them when the window is resized, moved to a monitor of another scale or given another
+UI scale: the editors take the difference, and a dock gives way only to leave the editors their least width (it comes
+back to its size once there is room). `drgnx-grid-drag` set to nil
 draws no grip and turns dragging off. **Restore Previous Layout** (`C-k C-z` · `C-x w u` · `SPC l u`) puts back the
 layout before the last change to it — a move, a stack, a drop, or a package that collapsed the tiles behind the
 workbench's back — across every window: a window it had that you closed opens again, one it lacked closes, its files

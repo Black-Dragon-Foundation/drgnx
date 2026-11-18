@@ -368,6 +368,61 @@ FRAME's pixels."
         (ignore-errors (window-resize root (- px (window-size root horizontal t)) horizontal nil t))))
     px))
 
+(defun drgnx-grid--min-along (window horizontal frame)
+  "The least width (HORIZONTAL) or height of WINDOW's tiles together: `drgnx-grid-min-size' per tile, summed along a
+combination in that direction, the largest across one."
+  (if (window-live-p window)
+      (drgnx-grid-min-size frame horizontal)
+    (let ((sizes (mapcar (lambda (c) (drgnx-grid--min-along c horizontal frame)) (drgnx-grid--children window))))
+      (if (window-combined-p (window-child window) horizontal) (apply #'+ sizes) (apply #'max sizes)))))
+
+(defun drgnx-grid--dock-to (window dock px frame)
+  "Resize DOCK's tile (main window WINDOW) on FRAME to PX pixels along its dock, but never so that the tiles beside
+it have less than their least size (`drgnx-grid--min-along'): when they have less already, the dock gives way to
+them.  Return its size after."
+  (let* ((root (drgnx-grid--tile-root window)) (horizontal (drgnx-grid--horizontal-dock-p dock))
+         (beside (drgnx-grid--beside dock frame))
+         (delta (min (- px (window-size root horizontal t))
+                     (- (window-size beside horizontal t) (drgnx-grid--min-along beside horizontal frame))))
+         (window-resize-pixelwise t))
+    (unless (zerop delta) (ignore-errors (window-resize root delta horizontal nil t)))
+    (window-size root horizontal t)))
+
+(defun drgnx-grid-keep-dock-sizes (frame)
+  "FRAME's docks (the side bar, the panel, the right side) at their logical sizes, as VS Code's side bar keeps its
+width.  Run at each window size change and scale change (`window-size-change-functions',
+`nidhogg-frame-scale-change-functions').  The scale is `drgnx-pixels-scale' (the display's times the UI scale).
+While the grid keeps its size and scale, a dock's size is its logical size, unless it is the size this function gave
+it (a dock that gave way keeps the size it wants).  When the grid's size or scale changed (a monitor of another
+scale, the UI scale, the window resized, the echo area grown with the font): each shown dock is given its logical
+size in the window's pixels now, the editors taking the difference, but never below their least size
+\(`drgnx-grid--dock-to'); a hidden dock comes back at it (its `:sizes' intent).  Kept in FRAME's parameter
+`drgnx-grid--docks': (SCALE WANTED GIVEN SIZE), WANTED dock → logical px, GIVEN dock → the pixels given at SCALE,
+SIZE the grid root's pixel size then (`drgnx-grid-root').  Nothing while a tile shows full size or a temporary window
+shows."
+  (when (and (frame-live-p frame) (display-graphic-p frame)
+             (not (frame-parameter frame 'drgnx-grid-full)) (not (drgnx-grid--temporary-windows frame)))
+    (let* ((scale (drgnx-pixels-scale frame))
+           (size (let ((root (drgnx-grid-root frame))) (cons (window-pixel-width root) (window-pixel-height root))))
+           (rec (frame-parameter frame 'drgnx-grid--docks))
+           (wanted (copy-alist (nth 1 rec))) (given nil)
+           (giving (and rec (or (/= scale (car rec)) (not (equal size (nth 3 rec)))))))
+      (if giving
+          (dolist (dock drgnx-grid-docks)
+            (when-let* ((logical (alist-get dock wanted)))
+              (if-let* ((w (drgnx-grid-dock dock frame)))
+                  (push (cons dock (drgnx-grid--dock-to w dock (drgnx-px logical frame) frame)) given)
+                (when (drgnx-state-intent frame :sizes dock)
+                  (drgnx-state-note-intent frame :sizes dock (drgnx-px logical frame) :by 'auto)))))
+        (setq given (copy-alist (nth 2 rec)))
+        (dolist (dock drgnx-grid-docks)
+          (when-let* ((w (drgnx-grid-dock dock frame)))
+            (let ((px (window-size (drgnx-grid--tile-root w) (drgnx-grid--horizontal-dock-p dock) t)))
+              (unless (eql px (alist-get dock given))
+                (setf (alist-get dock wanted) (drgnx-grid-tree-to-logical px scale)
+                      (alist-get dock given nil t) nil))))))
+      (set-frame-parameter frame 'drgnx-grid--docks (list scale wanted given size)))))
+
 ;;;; Docks
 
 (defun drgnx-grid-dock (dock &optional frame)
@@ -1403,6 +1458,9 @@ Off, they live in the docks again (`areas')."
       (progn
         (setq drgnx-pane-backend 'grid)
         (drgnx-state-subscribe 'windows-changed #'drgnx-grid--windows-changed :lane 'now)
+        ;; a monitor of another scale, the UI scale: the docks keep their logical sizes (noted at each resize)
+        (add-hook 'nidhogg-frame-scale-change-functions #'drgnx-grid-keep-dock-sizes)
+        (add-hook 'window-size-change-functions #'drgnx-grid-keep-dock-sizes)
         (advice-add 'balance-windows :around #'drgnx-grid--balance-editors-only)
         (unless (eq (bound-and-true-p ediff-window-setup-function) #'drgnx-grid-ediff-setup)
           (setq drgnx-grid--ediff-previous (and (boundp 'ediff-window-setup-function) (list ediff-window-setup-function)))
@@ -1414,6 +1472,8 @@ Off, they live in the docks again (`areas')."
       (setq drgnx-grid--ediff-previous nil))
     (setq drgnx-pane-backend 'areas)
     (drgnx-state-unsubscribe 'windows-changed #'drgnx-grid--windows-changed)
+    (remove-hook 'nidhogg-frame-scale-change-functions #'drgnx-grid-keep-dock-sizes)
+    (remove-hook 'window-size-change-functions #'drgnx-grid-keep-dock-sizes)
     (advice-remove 'balance-windows #'drgnx-grid--balance-editors-only)
     (dolist (f (frame-list)) (drgnx-grid--release f))))
 
@@ -1427,7 +1487,7 @@ once no tile is left the frame's grid bookkeeping is emptied (a frame parameter 
       (when (eq (window-parameter w 'delete-window) #'drgnx-grid--delete-editor)
         (set-window-parameter w 'delete-window nil))))
   (unless (seq-some (lambda (w) (window-parameter w 'drgnx-tile-id)) (window-list frame 'nomini))
-    (dolist (p '(drgnx-grid-next-id drgnx-grid--good drgnx-grid-memory drgnx-grid-full))
+    (dolist (p '(drgnx-grid-next-id drgnx-grid--good drgnx-grid-memory drgnx-grid-full drgnx-grid--docks))
       (when (frame-parameter frame p) (set-frame-parameter frame p nil)))))
 
 (provide 'drgnx-grid)

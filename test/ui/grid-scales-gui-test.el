@@ -1,11 +1,11 @@
 ;;; grid-scales-gui-test.el --- GUI test: the grid's sizes when a window's scale changes (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: det
-;; A window moved to a monitor of another scale keeps its tiles' shares.  The move is the session's own mutter putting
-;; its monitor at another scale (`gdctl set', as scale-move-test.el does: every frame on it changes scale, as a frame
-;; moved to another monitor does); other compositors skip.  Each row starts at 1.25 and puts the session's scale back
-;; at the end.  Every size is read after the frame took the new scale and `drgnx-test-wait-presented'.
-;; Shares, not logical pixels: the window keeps its frame pixels across the change (Nidhogg's shell), so its logical
-;; size, and every tile's, shrinks by the scales' ratio; what the grid keeps is each tile's part of it.
+;; A window moved to a monitor of another scale: its docks (side bar, panel, right side) keep their logical px and the
+;; editors take the difference.  The move is the session's own mutter putting its monitor at another scale (`gdctl
+;; set', as scale-move-test.el does: every frame on it changes scale, as a frame moved to another monitor does); other
+;; compositors skip.  Each row starts at 1.25 and puts the session's scale back at the end.  Every size is read after
+;; the frame took the new scale and `drgnx-test-wait-presented'.  A windowed frame keeps its logical size (Nidhogg); a
+;; maximized one is its monitor's size, smaller in logical px at a larger scale, which is what the dock rows use.
 
 (require 'ert)
 (require 'cl-lib)
@@ -84,15 +84,6 @@ frames BODY made and the mode as they were after."
     (drgnx-grid-show 'g-term)
     (drgnx-test-wait-presented :frame frame)))
 
-(ert-deftest drgnx-ui-grid-scales/a-frame-moved-to-scale-2-keeps-shares ()
-  "1.25 → 2: the side bar and the bottom tile keep their share of the window, not their pixels."
-  (drgnx-ui-grid-scales--with
-    (drgnx-ui-grid-scales--tiled (selected-frame))
-    (let ((before (drgnx-grid-tree)))
-      (should (= 3 (length (drgnx-grid-tree-leaves before))))
-      (drgnx-ui-grid-scales--scale 2)
-      (drgnx-ui-grid-scales--same-shares before (drgnx-grid-tree)))))
-
 (ert-deftest drgnx-ui-grid-scales/a-torn-out-tile-on-the-other-monitor-keeps-its-logical-size ()
   "A tile torn out into a window of its own, a side bar beside it there: that window at 2 keeps its shares."
   (drgnx-ui-grid-scales--with
@@ -118,16 +109,74 @@ windows and pixels, and its last good arrangement is not taken again."
       (drgnx-ui-grid-scales--tiled b)
       (let ((edges (mapcar (lambda (w) (cons w (window-pixel-edges w))) (window-list b 'nomini)))
             (good (frame-parameter b 'drgnx-grid--good))
-            (before (drgnx-grid-tree a)))
+            (before (with-selected-frame a (butlast (drgnx-ui-grid-scales--sizes)))))
         (unwind-protect
             (progn
               (drgnx-pixels-set-ui-scale a 1.5)
               (run-hook-with-args 'nidhogg-frame-scale-change-functions a)
               (drgnx-test-wait-presented)
-              (drgnx-ui-grid-scales--same-shares before (drgnx-grid-tree a)))
+              ;; A's docks keep their logical px at its new UI scale
+              (should-not (let ((after (with-selected-frame a (butlast (drgnx-ui-grid-scales--sizes)))))
+                            (unless (drgnx-ui-grid-scales--near after before) (list :before before :after after)))))
           (drgnx-pixels-set-ui-scale a 1))
         (should (eq good (frame-parameter b 'drgnx-grid--good)))
         (should (equal edges (mapcar (lambda (w) (cons w (window-pixel-edges w))) (window-list b 'nomini))))))))
+
+(defun drgnx-ui-grid-scales--logical (window horizontal)
+  "WINDOW's tile's width (HORIZONTAL) or height in logical px at its frame's scale."
+  (drgnx-grid-tree-to-logical (window-size (drgnx-grid--tile-root window) horizontal t)
+                              (drgnx-pixels-scale (window-frame window))))
+
+(defun drgnx-ui-grid-scales--sizes ()
+  "The selected frame's side bar width, panel height and editor width, in logical px."
+  (list (drgnx-ui-grid-scales--logical (drgnx-grid-dock 'left) t)
+        (drgnx-ui-grid-scales--logical (drgnx-grid-dock 'bottom) nil)
+        (drgnx-ui-grid-scales--logical (car (drgnx-grid-tiles nil 'editor)) t)))
+
+(defun drgnx-ui-grid-scales--maximized-with-side-bar (px)
+  "The selected frame maximized, tiled, its side bar PX logical px wide; return `drgnx-ui-grid-scales--sizes'."
+  (set-frame-parameter nil 'fullscreen 'maximized)
+  (drgnx-ui-grid-scales--tiled (selected-frame))
+  (let ((root (drgnx-grid--tile-root (drgnx-grid-dock 'left))) (window-resize-pixelwise t))
+    (window-resize root (- (drgnx-px px) (window-size root t t)) t nil t))
+  (drgnx-test-wait-presented)
+  (drgnx-ui-grid-scales--sizes))
+
+(defun drgnx-ui-grid-scales--near (a b)
+  "A and B, lists of logical px, within 1 of each other."
+  (and (= (length a) (length b)) (cl-every (lambda (x y) (<= (abs (- x y)) 1)) a b)))
+
+(ert-deftest drgnx-ui-grid-scales/docks-keep-their-logical-size ()
+  "A maximized window whose monitor goes 1.25 → 2 → 1.25: it is the monitor's size, so smaller in logical px at 2.
+The side bar (240) and the panel keep their logical px and the editor takes the difference, as VS Code's side bar
+does; they kept their share instead (the side bar 150 at 2)."
+  (drgnx-ui-grid-scales--with
+    (let ((before (drgnx-ui-grid-scales--maximized-with-side-bar 240)) at-2 back)
+      (should (= (car before) 240))
+      (drgnx-ui-grid-scales--scale 2)
+      (setq at-2 (drgnx-ui-grid-scales--sizes))
+      (drgnx-ui-grid-scales--scale 1.25)
+      (setq back (drgnx-ui-grid-scales--sizes))
+      ;; a failure shows the three (side bar, panel, editor)
+      (should-not (unless (and (drgnx-ui-grid-scales--near (butlast at-2) (butlast before))
+                               (< (nth 2 at-2) (nth 2 before))
+                               (drgnx-ui-grid-scales--near back before))
+                    (list :before before :at-2 at-2 :back back))))))
+
+(ert-deftest drgnx-ui-grid-scales/a-dock-gives-way-to-the-editor-minimum ()
+  "A side bar too wide to keep its logical px at 2 (1100 of a 1280 px window at 1.25; the window is 800 at 2): it gets
+what leaves the editor its least width (`drgnx-grid-min-px'), and its own width again when the scale goes back."
+  (drgnx-ui-grid-scales--with
+    (let ((before (drgnx-ui-grid-scales--maximized-with-side-bar 1100)) at-2 back)
+      (drgnx-ui-grid-scales--scale 2)
+      (setq at-2 (drgnx-ui-grid-scales--sizes))
+      (drgnx-ui-grid-scales--scale 1.25)
+      (setq back (drgnx-ui-grid-scales--sizes))
+      (should-not (unless (and (= (car before) 1100)
+                               (<= (abs (- (nth 2 at-2) drgnx-grid-min-px)) 1)
+                               (< (car at-2) 1100)
+                               (= (car back) 1100))
+                    (list :before before :at-2 at-2 :back back))))))
 
 (provide 'grid-scales-gui-test)
 ;;; grid-scales-gui-test.el ends here
