@@ -229,9 +229,9 @@
   (diff-block :variants ((part head hunk ctx add del)) :defaults (part ctx)
               :geometry (:height 0 :pad (10 . 10) :gap 8 :box t :radius 8 :hit 0)
               :tty (:pad 1) :label "diff"
-              :bind (((head) :bg panel :fg fg :inherit (drgnx-code-small) :font (drgnx-code-small))
-                     ((hunk) :bg panel :fg subtle :inherit (drgnx-code-small drgnx-text-subtle) :font (drgnx-code-small))
-                     ((ctx) :bg panel :fg muted :inherit (drgnx-code-small drgnx-text-muted) :font (drgnx-code-small))
+              :bind (((head) :bg panel :fg fg :inherit (drgnx-code-small secondary-selection) :font (drgnx-code-small))
+                     ((hunk) :bg panel :fg subtle :inherit (drgnx-code-small drgnx-text-subtle secondary-selection) :font (drgnx-code-small))
+                     ((ctx) :bg panel :fg muted :inherit (drgnx-code-small drgnx-text-muted secondary-selection) :font (drgnx-code-small))
                      ((add) :bg add-bg :fg add-fg :inherit (drgnx-code-small diff-added) :font (drgnx-code-small))
                      ((del) :bg del-bg :fg del-fg :inherit (drgnx-code-small diff-removed) :font (drgnx-code-small)))
               :replaces ((drgnx-agent-panel-added . drgnx-kit-diff-block-add) (drgnx-agent-panel-removed . drgnx-kit-diff-block-del)
