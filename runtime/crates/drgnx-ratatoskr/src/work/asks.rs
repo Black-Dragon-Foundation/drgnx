@@ -809,6 +809,15 @@ pub async fn run(front: Arc<Front>) {
         ids: BTreeMap::new(),
         seen: None,
     };
+    // `RATATOSKR_TEST_ASKS_MARK_DELAY_MS` (test-hooks): the shell's first look at the log comes that late, as on a
+    // loaded machine
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = std::env::var("RATATOSKR_TEST_ASKS_MARK_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        crate::clock::sleep(std::time::Duration::from_millis(ms)).await;
+    }
     // the mark first: what was written before this start is not linked again
     sh.tail(&front).await;
     asks.tx.running.store(true, Ordering::SeqCst);
