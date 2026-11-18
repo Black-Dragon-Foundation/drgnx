@@ -62,4 +62,47 @@
       (drgnx-sticky--hide-all t)
       (kill-buffer b))))
 
+(ert-deftest drgnx-ui-sticky-lines/the-card-leaves-the-minimap-in-sight ()
+  (skip-unless (display-graphic-p))
+  (let ((b (generate-new-buffer "sticky-lines-minimap")) (w (selected-window)))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer b)
+          (insert "(defun f ()\n  1)\n")
+          (set-window-parameter w 'glitnir-minimap '(:width 100))
+          (redisplay t)
+          (drgnx-sticky--fill w (list (point-min)))
+          (redisplay t)
+          (let ((frame (aref (cdr (assq w drgnx-sticky--cards)) 0)) (edges (window-inside-pixel-edges w)))
+            (should (frame-visible-p frame))
+            (should (= (+ (car (frame-position frame)) (frame-pixel-width frame))
+                       (- (nth 2 edges) (drgnx-px 100 (window-frame w)))))))
+      (set-window-parameter w 'glitnir-minimap nil)
+      (drgnx-sticky--hide-all t)
+      (kill-buffer b))))
+
+(ert-deftest drgnx-ui-sticky-lines/a-window-gets-its-hidden-card-in-the-lines-style-and-it-goes-with-the-window ()
+  (skip-unless (display-graphic-p))
+  (let ((b (generate-new-buffer "sticky-lines-premake")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (let ((drgnx-sticky-style 'lines) (w (split-window)))
+            (with-current-buffer b (insert "(defun f ()\n  1)\n") (emacs-lisp-mode) (drgnx-sticky-mode 1))
+            (set-window-buffer w b)
+            (drgnx-sticky--resized (window-frame w))             ; the window change's subscriber
+            (let ((card (cdr (assq w drgnx-sticky--cards))))
+              (should card)
+              (should (frame-live-p (aref card 0)))
+              (should-not (frame-visible-p (aref card 0)))
+              (should-not (aref card 2))
+              (delete-window w)
+              (drgnx-sticky--resized (selected-frame))
+              (should-not (assq w drgnx-sticky--cards))
+              (should-not (frame-live-p (aref card 0)))
+              (should-not (buffer-live-p (aref card 1))))))
+      (drgnx-sticky--hide-all t)
+      (kill-buffer b))))
+
 ;;; sticky-lines-gui-test.el ends here

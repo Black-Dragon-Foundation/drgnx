@@ -1615,6 +1615,16 @@ lists at each publish.
   `drgnx-ruler-update`, which sets the parameter only when the span moved. A press outside the rows held goes to
   `drgnx-ruler-goto-fraction-function`, which asks the hub for the window around that row (`view/window`) and goes
   there after the draw.
+- **The horizontal strip** (`glitnir-hstrip`, design 2026-11-18 §3.1). `drgnx-minimap--place` gives it to the windows
+  `drgnx-minimap-hstrip-window-p` names: editors (no `drgnx-role`, not a popup or a child frame's, a file's or a text
+  buffer that is not a view or a special mode), and any surface whose buffer sets `drgnx-hscrollbar`. The spec is in
+  device px: `:height` 12, `:lane` 8 (the hit height, the strip's bottom), `:thumb-inset`, `:radius`, `:least` (the
+  thumb's least length) and `:band`, the vertical thumb's face and opacity. C decides when it shows (the window cuts
+  its lines and a line is wider than the text). A press or drag reaches Lisp as the special event
+  `(glitnir-hstrip WINDOW HSCROLL)`, one per frame, HSCROLL in WINDOW's columns; `drgnx-minimap-hstrip-scroll` calls
+  `set-window-hscroll` and leaves point and the selected window alone. The sideways wheel, tilt and Shift-wheel go
+  to `drgnx-hscroll-wheel`, which does nothing over a window that wraps its lines and else calls `mwheel-scroll`;
+  the module turns `mouse-wheel-tilt-scroll` on.
 - **Producers.** One owner draws; producers hand it marks. A producer calls `(drgnx-ruler-source OWNER FUNCTION)` in a
   buffer. FUNCTION returns `(POS LANE FACE PRIORITY [SHAPE END])` marks, LANE `left`, `middle`, `right` or `full`,
   SHAPE nil or `dot` (6 px round, a breakpoint), END a position the mark runs down to (a run of changed lines).
@@ -1653,7 +1663,7 @@ lists at each publish.
   test loads the same file.
 - **The minimap.** `editor/minimap` hooks `drgnx-ruler-place-functions` (run with each window and whether it shows
   the strip, when its strip is placed: no Lisp per scroll). An editor window (`drgnx-minimap-window-p`: the strip
-  shown, `drgnx-minimap` on, a file or a `prog-mode`/`text-mode` buffer that is neither a Sjá view nor a special mode)
+  shown, `drgnx-minimap` on, a file or a `prog-mode`/`text-mode`/`diff-mode` buffer that is neither a Sjá view nor a special mode)
   gets the window parameter `glitnir-minimap`: `:width` (`drgnx-minimap-width`, 80–200), the colours, `:nesting`,
   and with `drgnx-minimap-labels` the labels' `:labels` (`t` or `marks-only`), their colours (`:label`, `:sub` for a
   nested definition, `:accent` for the one under the pointer, `:mark` for a MARK section), `:label-face` (the font)
@@ -1664,6 +1674,15 @@ lists at each publish.
   regions (`editor/sticky`'s `drgnx-pin-region`) adds `:pin-kind` (the line model's `pin` kind, `drgnx-ruler-kinds`),
   `:pin` (the face `drgnx-marks-pin`) and `:pin-names` (a vector, buffer order): the bands are the scroll bar's `pin`
   marks (owner `pins`, each with its END), which the line model moves with edits, so the spec never carries positions.
+  With a heat layer (`drgnx-minimap-layer`, design X3) the spec adds `:heat` (the layer's name: Sjá's `heat:NAME` of
+  `:file`, which is then sent with labels off too) and the ramp's ends `:heat-low` (`drgnx-border-strong`) and
+  `:heat-high` (`drgnx-agent-2`); the watch asks the hub for that layer (`minimap/watch`'s `heat`, with `coverage`,
+  the places of `drgnx-minimap-coverage-files`, or `profile`, `drgnx-minimap-profile-file`), again when the layer or
+  its inputs change. A diff buffer (no file needed: `diff-mode` gets the minimap) or a file with `drgnx-hunks-mode`
+  adds `:hunk-labels`, a vector of `[LINE TEXT]` (lines from 1, `hunk N · +A −R`), and `:hunk` (`drgnx-text-muted`):
+  `drgnx-marks-hunks` counts a diff buffer's @@ hunks once per text change and reads a file's from `drgnx-hunks--data`;
+  the lines are not moved by C, the next placement (the ruler's debounced refresh after an edit, or the change marks'
+  redraw) sends them again. `drgnx-marks-next-change` goes by those hunks there (`drgnx-marks-step-hunk`).
 - **Sticky lines.** `editor/sticky` with `drgnx-sticky-style` `lines` draws the scope start lines in a pooled child
   frame per window over its top rows (`drgnx-sticky--cards`), its window and frame marked `drgnx-minimap-exclude`. The
   header's memo `sticky-segment` (once per window start, text change above it, or hub answer) works out the scopes
@@ -1701,8 +1720,11 @@ lists at each publish.
 - **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler`, or in a terminal
   (`drgnx-ruler-available-p`).
 - **Checks.** `ruler-test.el` and `marks-test.el` (batch); the look scenes check every scrollable window of every
-  scene (`drgnx-look-scene-scrollbars`: the strip is set, and drawn exactly when the content runs past the window; a strip under the palette's child frame or a
-  tile switcher's card is not judged, one under any other child frame, a toast say, is an error);
+  scene (`drgnx-look-scene-scrollbars`: the strip is set, and on the root frame drawn exactly when the content runs
+  past the window, from two snapshots of the root frame with and without the strips (the checker marks each window
+  it toggles with `force-window-update`, so the root is redrawn while a popup has the focus); a child frame's own strips are
+  not judged for drawing; a strip under the palette's child frame, a tile switcher's card or under a popup the scene opens on purpose, its
+  `:covers` in `drgnx-look-scenes`, is not judged, one under any other child frame, a toast say, is an error);
   Nidhogg's `glitnir-gui/the-ruler-*` rows check the pixels.
 - **Perf.** `debug-ruler-scroll` (10,000 lines, 200 marks) against `debug-ruler-baseline`, the same scroll with the
   ruler off (docs/develop/perf.md, "The overview ruler"). The margin version this
@@ -3843,7 +3865,14 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   `(space :width N)` with N = px / `frame-char-width`, canonical characters, so one buffer is right on frames of two
   scales; on a line it is `(space :width (PX))`, the spec made once per width (`drgnx-ui-kit--pads`, bounded by the
   pad widths at the scales seen). Per-row path: positional arguments, no `&key`, no `apply`, no closures; after a
-  warm-up a call allocates no vector (`drgnx-ui-kit/row-call-allocates-no-closure`).
+  warm-up a call allocates no vector (`drgnx-ui-kit/row-call-allocates-no-closure`). On a graphical line each run a
+  kit face sizes gets the absolute height of that face's type face on `default` (`drgnx-ui-kit--line-sizes`; the type
+  face is the binding's `:font`, else the first type face in its `:inherit`): the line's own face lies under the text,
+  and drgnx's themes give the header and tab lines the UI font's relative size, so a relative kit size would apply
+  twice (the panel tab's text was 25 px for 26 at scale 2), as would a kit face inheriting a standard face with a size
+  (Emacs's `tab-line`, 0.9), or a state face above it that inherits `default` under another theme (the code size); the
+  size sits right above the run's first face that has one. `drgnx-ui-kit/line-text-scales-once` checks every fixture component on each line, as
+  Emacs merges the faces, with and without drgnx's theme.
 
 ### Buttons and key hints (Task 12)
 
@@ -3862,7 +3891,7 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   build them as strings for WHERE as `drgnx-ui-kit-string` does. ACTION is a registry id, a command, a function of no
   arguments (all run through the kit action kind `ui-button`, i.e. `drgnx-ui-kit-run`) or `(KIND . ARGS)` of a kit
   action. `drgnx-ui-button` keeps its `&key` signature for callers off per-row paths; its faces `drgnx-ui-button` and
-  `drgnx-ui-button-primary` (and `drgnx-button`, `drgnx-work-flow-button*`, `drgnx-keycap`) are aliases of the kit
+  `drgnx-ui-button-primary` (and `drgnx-button`, `drgnx-keycap`) are aliases of the kit
   faces once `ui/look` is on.
 - A binding may name `:font` (faces with no colours: the UI or code font): a drgnx theme's spec for a face with
   colours keeps only those of its `:inherit`, while a third-party theme styles it through the whole `:inherit`.
@@ -3872,7 +3901,8 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
 - `section-header` (variant `collapsible` yes/no): 26 px, 6 px each side, the title in the UI font at 12 px, semibold,
   muted (`drgnx-kit-section-header`, with `:attrs (:weight semibold)`); collapsible: the twisty (`chevron-down` open,
   `chevron-right` collapsed, an icon image where the frame draws SVG icons, else its glyph) and a space; an optional
-  count after a 4 px gap in the subtle role (a plain number until the chip lands in the header, Task 14). A state's
+  count after a 4 px gap, drawn as a neutral soft chip (`drgnx-ui-kit--b-chip`, the builder form of the chip; the hub's
+  `Comp::Chip` inline). A state's
   face is above it. `(drgnx-ui-kit-section-header TITLE COLLAPSIBLE COLLAPSED COUNT WHERE)`; `drgnx-wb-section-header`
   (the dock sections) is built on it; its accessible text is "TITLE, collapsed|expanded".
 - `card` (variants `kind` plain, needs-you, selected; `shape` single, top, mid, bottom): the panel's fill and a ring
@@ -3892,10 +3922,9 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   editor's surface in the body text's colour (`drgnx-kit-tab-current`; a shown tab of another group muted,
   `drgnx-kit-tab-current-inactive`), the others muted on the row (`drgnx-kit-tab`); a panel tab (an area's tab row) is
   30 px with 9 px each side, the shown one a pill on the quiet selection (`drgnx-kit-tab-panel-current`). The area's
-  row is 32 px with the tabs' text in its middle, and under Glitnir the shown tab's pill is 24 px of it (a box fit to
-  its text, `drgnx-area--tab-row-parts`); the tabs' text takes the kit face's size as an absolute height, since the
-  header line's relative UI size would otherwise apply twice. Neither is
-  ever bold. Its parts: the icon (14 px, an image where the frame draws SVG icons, else its glyph and a space), the
+  row is 32 px with the tabs' text in its middle and the `drgnx-border-subtle` hairline on its last pixels, and under
+  Glitnir the shown tab's pill is 24 px of it (a box fit to its text, `drgnx-area--tab-row-parts`). Neither is ever
+  bold. Its parts: the icon (14 px, an image where the frame draws SVG icons, else its glyph and a space), the
   title, then with a close mark the gap and an 18 px slot: 2 px, the `x` icon (the `close` glyph on a terminal; the
   `dot` glyph, muted, when the file is modified), 2 px. The close mark is hidden (`drgnx-control-hidden`) on a tab
   that is not shown, except on a terminal or under the pointer. The tab's own face is the state face for the shown
@@ -3911,6 +3940,30 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   bar (`drgnx-work-lens-string`) draw with them; `drgnx-wb-tab*`, `drgnx-chrome-tab`, `-active`, `-current` and the
   `drgnx-work-lens-*` faces are aliases of the kit faces once `ui/look` is on. The action kind `ui-window-button`
   selects the clicked window before it runs its action (a lens item switches the lens of the window it is in).
+
+### The text input (flow Task 22a)
+
+- `text-input` (variants `lines` single, multi and `shape` single, top, mid, bottom, as a card's): the field the
+  composer, the paragraph-comment input and the review screen's Request changes draw round their real buffer text. The
+  kit draws the frame, the context chips and the placeholder; the text between is the buffer's own and is never drawn
+  by the kit. A single field is one 28 px line, a multi-line one at least two text lines (rows in a card's shapes, the
+  ring open where the field goes on); 8 px each side, radius 6, a 1 px `border` ring on the editor's surface
+  (`drgnx-kit-text-input`, `-multi-top`, `-multi-mid`, `-multi-bottom`). A terminal draws `[ ` and ` ]` round it. The
+  focus ring (2 px, inset, `focus`) is the state table's `focus-visible`, shown only after a key event
+  (`drgnx-ui-kit-focus-visible-p`); a disabled field is the state table's `disabled`. Its accessible text is the
+  placeholder, or "text field" without one.
+- Hub: `Comp::TextInput { text, placeholder, lines, chips, focused, state }`, `InputChip { label, tone, remove }`. The
+  hub expands it with `expand_rows` (keys `KEY/0`, `KEY/1`...); `expand` draws the first row. On the first row the chips
+  come first, each a soft kit chip with a close mark (the Lucide x where icons are drawn, else the `close` glyph); a
+  click or RET on the mark runs `remove`, an action of any kind (the composer's is the kit action kind
+  `composer-chip-remove`, defined by the composer's module). An empty first row shows the placeholder in the muted role.
+- Lisp: `(drgnx-ui-kit-text-input PLACEHOLDER LINES CHIPS WIDTH WHERE &optional FOCUSED FRAME)` returns one
+  `(HEAD . TAIL)` per line for the buffer to put before and after its text (a `line-prefix` and an `after-string`, or
+  an overlay): HEAD is the left edge and, on the first line, the chips; TAIL stretches to column WIDTH and closes the
+  right edge. Both are at canonical-character widths in `text` and px at the frame's scale on a line. CHIPS is
+  `((LABEL TONE ACTION)...)`. The first HEAD carries the placeholder as its `drgnx-placeholder` property.
+  `drgnx-ui-kit-expand 'text-input` is the first row, equal to the hub's (the conformance fixture has ten cases; the
+  hub's other rows are the fixture's `more`).
 
 ### Actions and focus-visible
 

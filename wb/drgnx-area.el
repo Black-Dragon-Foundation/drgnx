@@ -256,26 +256,28 @@ string is the title the area draws itself, in its row with the area's close, in 
 (declare-function drgnx-theme--box-fit-pad-p "drgnx-theme-gen")
 
 (defun drgnx-area--tab-row-parts (frame)
-  "(SPACER TEXT PILL) for a tab row on a graphical FRAME, else nil.  SPACER is the one-pixel character that makes the
-row `drgnx-area--tab-row-px' tall with the tabs' text in its middle.  TEXT, laid over every tab, gives their text the
-kit face's own size as an absolute height: the header line's face is the UI font's relative height already, and the
-tab's face, relative too, would scale it again (25 px text for 26 at scale 2), so the text would not be the font
-measured here.  PILL, where boxes fit their text with a pad (Glitnir), the face that fits the shown tab's box and
-fill to `drgnx-area--pill-px' round its text: the kit face's box (its width and radius) drawn in the face's own
-background (the kit's ring is in that colour), else nil."
+  "(SPACER PILL RULE) for a tab row on a graphical FRAME, else nil.  SPACER is the one-pixel character that makes the
+row `drgnx-area--tab-row-px' tall with the tabs' text in its middle (the kit gives that text its own size once,
+`drgnx-ui-kit--line-sizes').  PILL, where boxes fit their text with a pad (Glitnir), the face that fits the shown
+tab's box and fill to `drgnx-area--pill-px' round its text: the kit face's box (its width and radius) drawn in the
+face's own background (the kit's ring is in that colour), else nil.  RULE, laid over the whole row, the hairline
+under it (debugging.html `.ptabs' border-bottom): an underline in `drgnx-border-subtle' on the row's last pixels, or
+nil when the theme gives that face no colour."
   (when-let* (((display-graphic-p frame))
               (face 'drgnx-kit-tab-panel-current)
               (extent (drgnx-pixels-font-extent face frame)))
     (let* ((row (drgnx-px drgnx-area--tab-row-px frame))
-           (box (face-attribute face :box frame t)))
+           (box (face-attribute face :box frame t))
+           (rule (face-foreground 'drgnx-border-subtle frame t)))
       (list (drgnx-pixels-spacer 'drgnx-wb-bar row (+ (cdr extent) (drgnx-pixels-box-height face row frame)) frame)
-            (list :height (face-attribute face :height frame 'default))
             (and (consp box) (fboundp 'drgnx-theme--box-fit-pad-p) (drgnx-theme--box-fit-pad-p)
                  (list :box (append (cl-loop for (k v) on box by #'cddr unless (memq k '(:color :style :fit))
                                              append (list k v))
                                     (list :style 'flat-button
                                           :fit (cons 'text (drgnx-pixels-box-height
-                                                            face (drgnx-px drgnx-area--pill-px frame) frame))))))))))
+                                                            face (drgnx-px drgnx-area--pill-px frame) frame))))))
+            ;; `:position' 0: on the row's last pixels (as the editor's tab row, `drgnx-chrome--tab-paint')
+            (and (stringp rule) (list :underline `(:color ,rule :position 0)))))))
 
 (defun drgnx-area--tab-row (area &optional frame)
   "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes.
@@ -305,12 +307,11 @@ its own title (`drgnx-area-own-title')."
                          (add-text-properties 0 (length s) (list 'drgnx-tab (cons area (car tab)) 'mouse-face 'drgnx-hover
                                                                  'local-map drgnx-area--tab-map 'help-echo "Show this tab")
                                               s)
-                         (when (nth 1 parts) (add-face-text-property 0 (length s) (nth 1 parts) nil s))
-                         (when (and (eq (car tab) shown) (nth 2 parts)) (add-face-text-property 0 (length s) (nth 2 parts) nil s))
+                         (when (and (eq (car tab) shown) (nth 1 parts)) (add-face-text-property 0 (length s) (nth 1 parts) nil s))
                          s))
                      (seq-filter (lambda (tab) (drgnx-area--tab-listed-p area (car tab) shown)) tabs) " ")
           (drgnx-area--actions actions area frame))
-         area frame)))))
+         area frame (nth 2 parts))))))
 
 (defun drgnx-area--close (area)
   "AREA's close on its tab row: the kit's close button (face, click, help), drawn as the Lucide x at 16 px
@@ -319,15 +320,18 @@ its own title (`drgnx-area-own-title')."
         (icon (drgnx-look-icon 'x 'drgnx-ui-close 16)))
     (if-let* ((img (get-text-property 0 'display icon))) (propertize b 'display img) b)))
 
-(defun drgnx-area--row-with-close (title area &optional frame)
-  "TITLE, then AREA's close at the right edge, 8 px in (`.ptabs' padding), on the bar.  The pads are FRAME's pixels."
-  (let ((close (drgnx-area--close area)))
-    (drgnx-wb-bar (concat title (propertize " " 'display `(space :align-to (- right (,(drgnx-area--close-px close frame)))))
-                          ;; the pad is the button's too: a click at the row's edge closes
-                          close (apply #'propertize " " 'display `(space :width (,(drgnx-area--pad 8 frame)))
-                                       (cl-loop for (k v) on (text-properties-at 0 close) by #'cddr
-                                                unless (eq k 'display) append (list k v))))
-                  t)))
+(defun drgnx-area--row-with-close (title area &optional frame rule)
+  "TITLE, then AREA's close at the right edge, 8 px in (`.ptabs' padding), on the bar.  The pads are FRAME's pixels.
+RULE, a face or nil, is laid over the whole row, the close and the filler too (the tab row's hairline)."
+  (let* ((close (drgnx-area--close area))
+         (row (drgnx-wb-bar (concat title (propertize " " 'display `(space :align-to (- right (,(drgnx-area--close-px close frame)))))
+                                    ;; the pad is the button's too: a click at the row's edge closes
+                                    close (apply #'propertize " " 'display `(space :width (,(drgnx-area--pad 8 frame)))
+                                                 (cl-loop for (k v) on (text-properties-at 0 close) by #'cddr
+                                                          unless (eq k 'display) append (list k v))))
+                            t)))
+    (when rule (add-face-text-property 0 (length row) rule nil row))
+    row))
 
 (defun drgnx-area--pad (px &optional frame)
   "PX logical pixels in FRAME's pixels (default the workbench's frame) on a graphical frame, else one column."

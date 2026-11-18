@@ -6,9 +6,11 @@
 //! The model is the lens's own: a `task` node per task with the `flow` form's links (up and down), the lists `tasks`
 //! and `held` (the tasks a gate holds: the needs-you chips).
 
+use crate::view::kit_env;
 use crate::view::model::Doc;
 use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::Measure;
+use drgnx_rows::kit::{self, ButtonStyle, Comp, Size, State as KitState};
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::view::{Display, ViewEnv};
 use serde_json::{Map, Value, json};
@@ -55,13 +57,10 @@ const AGENT: &str = FaceId::WorkFlowAgent.name();
 const HOVER: &str = FaceId::Hover.name();
 /// A key's badge (the keycap).
 const KEY: &str = FaceId::WorkFlowKey.name();
-/// The detail's actions (`.btn`), the first one primary (`.btn.pri`) with its key in its colour.
-const BUTTON: &str = FaceId::WorkFlowButton.name();
-const BUTTON_PRI: &str = FaceId::WorkFlowButtonPrimary.name();
-const KEY_PRI: &str = FaceId::WorkFlowKeyPrimary.name();
-const BUTTON_KEY: &str = FaceId::WorkFlowButtonKey.name();
-/// The detail's action rows, logical px (`.detail .acts`: 24 px buttons, 6 px apart).
-const ACT_ROW: f32 = 30.0;
+/// The detail's action rows, logical px: as tall as the kit's button (md, 26; its box fills the row) and the mockup's 6 px
+/// between two rows (`.detail .acts`).
+const ACT_ROW: f32 = 26.0;
+const ACT_GAP: f32 = 6.0;
 /// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
 const CARD: &str = FaceId::WorkFlowCard.name();
 const CARD_TEXT: &str = FaceId::WorkFlowCardText.name();
@@ -1217,57 +1216,103 @@ fn wrap(fonts: &dyn Measure, face: Option<&str>, text: &str, px: u32) -> Vec<Str
     out
 }
 
-/// A button in B: LABEL with its KEY as a keycap badge inside it, as in the mockup; PRIMARY: the filled one.
-fn button(b: &mut RowBuilder, label: &str, key: &str, primary: bool) {
-    let (face, kface) = if primary {
-        (BUTTON_PRI, KEY_PRI)
-    } else {
-        (BUTTON, BUTTON_KEY)
-    };
-    // the label's last space is the gap before the key; the key's own spaces pad it inside its ring
-    b.push(&format!(" {label} "), Some(face))
-        .push(&format!(" {key} "), Some(kface))
-        .push(" ", Some(face));
+/// A button in B: the kit's (`Comp::Button`, its key a `KeyHint`); PRIMARY: the filled one.
+fn button(b: &mut RowBuilder, env: &ViewEnv, label: &str, key: &str, primary: bool) {
+    kit::expand(b, &kit_env(env), &kit_button(label, key, primary));
 }
 
-/// [`button`]'s width in device px, as M measures its faces.
-fn button_px(m: &dyn Measure, label: &str, key: &str, primary: bool) -> u32 {
-    let (face, kface) = if primary {
-        (BUTTON_PRI, KEY_PRI)
-    } else {
-        (BUTTON, BUTTON_KEY)
-    };
-    text_px(m, face, &format!(" {label} "))
-        + text_px(m, kface, &format!(" {key} "))
-        + text_px(m, face, " ")
+fn kit_button(label: &str, key: &str, primary: bool) -> Comp {
+    Comp::Button {
+        label: label.to_owned(),
+        style: if primary {
+            ButtonStyle::Primary
+        } else {
+            ButtonStyle::Secondary
+        },
+        size: Size::Md,
+        state: KitState::Rest,
+        key: Some(key.to_owned()),
+        action: None,
+    }
+}
+
+/// [`button`]'s width in device px, as M measures what the kit expands it to: each stretch of text in its face, each
+/// pad as wide as the kit made it.
+fn button_px(m: &dyn Measure, env: &ViewEnv, label: &str, key: &str, primary: bool) -> u32 {
+    let mut b = RowBuilder::new("measure");
+    button(&mut b, env, label, key, primary);
+    row_px(m, &b.finish())
+}
+
+/// ROW's width in device px: its pads their own width, the rest each run's text in its face (the last run over a
+/// char wins, as an overlay does).
+fn row_px(m: &dyn Measure, row: &drgnx_rows::Row) -> u32 {
+    let mut total = 0.0f32;
+    let mut piece = String::new();
+    let mut face: Option<&str> = None;
+    for (i, c) in row.text.chars().enumerate() {
+        let i = i as u32;
+        let pad = row.spaces.iter().find(|s| s.0 == i).map(|s| s.1);
+        let f = row
+            .runs
+            .iter()
+            .rev()
+            .find(|r| r.0 <= i && i < r.1)
+            .map(|r| r.2.as_str());
+        if pad.is_some() || f != face {
+            if !piece.is_empty() {
+                total += drgnx_rows::fit::width_in(m, face, &piece);
+                piece.clear();
+            }
+            face = f;
+        }
+        match pad {
+            Some(w) => total += w as f32,
+            None => piece.push(c),
+        }
+    }
+    if !piece.is_empty() {
+        total += drgnx_rows::fit::width_in(m, face, &piece);
+    }
+    total.ceil() as u32
+}
+
+/// The blank row between two rows of buttons (`ACT_GAP`; none on a terminal), keyed `d:gap` and what follows `d:` in KEY.
+fn act_gap(key: &str, env: &ViewEnv) -> Row {
+    let mut b = RowBuilder::new(format!("d:gap{}", key.trim_start_matches("d:")));
+    strut(&mut b, env, ACT_GAP);
+    b.finish()
 }
 
 /// The rows of buttons (label, key, primary) keyed KEY, KEY:2, …: side by side, a gap between, as many to a row as
-/// ENV's width holds (a narrow tile drew two buttons 3 px past its edge).
+/// ENV's width holds (a narrow tile drew two buttons 3 px past its edge), a gap row between rows.
 fn buttons(key: &str, list: &[(&str, &str, bool)], env: &ViewEnv, fonts: &dyn Measure) -> Vec<Row> {
     let gap = text_px(fonts, LABEL, " ");
     let mut rows = Vec::new();
     let mut row: Option<(RowBuilder, u32)> = None;
+    let mut made = 0;
     for &(label, k, primary) in list {
-        let w = button_px(fonts, label, k, primary);
+        let w = button_px(fonts, env, label, k, primary);
         match &mut row {
             // the slack a fit keeps: the sum may run a few px short of what the editor draws
             Some((b, x)) if *x + gap + w + drgnx_rows::fit::SLACK as u32 <= env.width_px => {
                 b.push(" ", None);
-                button(b, label, k, primary);
+                button(b, env, label, k, primary);
                 *x += gap + w;
             }
             _ => {
                 if let Some((b, _)) = row.take() {
                     rows.push(b.finish());
+                    rows.push(act_gap(&format!("{key}:{made}"), env));
                 }
-                let mut b = RowBuilder::new(if rows.is_empty() {
+                made += 1;
+                let mut b = RowBuilder::new(if made == 1 {
                     key.to_owned()
                 } else {
-                    format!("{key}:{}", rows.len() + 1)
+                    format!("{key}:{made}")
                 });
                 strut(&mut b, env, ACT_ROW);
-                button(&mut b, label, k, primary);
+                button(&mut b, env, label, k, primary);
                 row = Some((b, w));
             }
         }
@@ -1603,6 +1648,9 @@ pub(crate) fn detail_tile(
     } else {
         &[("Evidence", "e", false)]
     };
+    if t.card.is_some() {
+        out.push(act_gap("d:act", env));
+    }
     out.extend(buttons("d:act2", waive, env, fonts));
     if t.card.is_some() {
         for (i, l) in wrap(
@@ -2583,7 +2631,7 @@ mod tests {
         ] {
             assert!(all.contains(want), "no {want:?} in\n{all}");
         }
-        // each button's key is a keycap badge (the key face) inside the button
+        // each button's key is the kit's key hint (its cap face) inside the button
         for button in [
             "Run the red  r",
             "Tell the agent  s",
@@ -2603,7 +2651,7 @@ mod tests {
             assert!(
                 row.runs
                     .iter()
-                    .any(|r| r.0 <= at && at < r.1 && (r.2 == BUTTON_KEY || r.2 == KEY_PRI)),
+                    .any(|r| r.0 <= at && at < r.1 && r.2 == FaceId::KitKeyHintCap.name()),
                 "{button}: {:?}",
                 row.runs
             );
@@ -2633,8 +2681,8 @@ mod tests {
     fn the_detail_tile_s_buttons_wrap_to_its_width() {
         let f = flow();
         let m = fonts();
-        let one = button_px(&m, "Run the red", "r", true);
-        let two = button_px(&m, "Tell the agent", "s", false);
+        let one = button_px(&m, &env(1.0), "Run the red", "r", true);
+        let two = button_px(&m, &env(1.0), "Tell the agent", "s", false);
         let gap = text_px(&m, LABEL, " ");
         let keys = |w: u32| {
             let mut tile = env(1.0);
@@ -2708,20 +2756,30 @@ mod tests {
         assert!(rows[0].text.ends_with("Detail"), "{}", rows[0].text);
     }
 
-    /// [D] The detail's action rows are the mockup's (`.detail .acts`: 24 px buttons, 6 px apart): 30 logical px each,
-    /// by a strut first on the row, so the buttons' boxes have room for their pad; a terminal has none.
+    /// [D] The detail's action rows are the mockup's (`.detail .acts`: buttons 6 px apart): each as tall as the kit's
+    /// button (26 logical px, a strut first on the row; its box fills the row, so a taller row drew a taller button),
+    /// with a 6 px row of its own between two rows of buttons (the boxes abutted); a terminal has none.
     #[test]
-    fn the_detail_s_action_rows_are_tall_enough_for_the_buttons() {
+    fn the_detail_s_action_rows_are_as_tall_as_the_buttons_with_a_gap_between() {
         for scale in [1.0, 2.0] {
             let (rows, _) = detail_tile(&flow(), "task:J#5", &env(scale), &fonts());
             for key in ["d:act", "d:act2"] {
                 let r = rows.iter().find(|r| r.key == key).expect(key);
                 assert_eq!(
                     r.spaces.first().copied(),
-                    Some((0, 1, (30.0 * scale).round() as u32)),
+                    Some((0, 1, (26.0 * scale).round() as u32)),
                     "{key} at scale {scale}"
                 );
             }
+            let at = |key: &str| rows.iter().position(|r| r.key == key).expect(key);
+            let gap = &rows[at("d:act") + 1];
+            assert_eq!(gap.key, "d:gapact", "scale {scale}");
+            assert_eq!(
+                gap.spaces.first().copied(),
+                Some((0, 1, (6.0 * scale).round() as u32)),
+                "scale {scale}"
+            );
+            assert_eq!(at("d:act2"), at("d:act") + 2, "scale {scale}");
         }
         let mut tty = env(1.0);
         tty.display = Display::Tty;
@@ -2735,35 +2793,21 @@ mod tests {
 
     #[test]
     fn the_detail_s_actions_are_buttons_the_first_one_primary() {
-        // hub-orchestration.html `.acts`: `.btn.pri` Run the red, then `.btn`s; the primary's key in its own colour
+        // hub-orchestration.html `.acts`: `.btn.pri` Run the red, then `.btn`s: the kit's buttons, the key of each its
+        // key hint, their pads the kit's spaces
         let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0), &fonts());
-        // the row's faces after its strut (the 1 px space in the text's face)
-        let faces = |key: &str| -> Vec<&str> {
+        let has = |key: &str, face: &str| {
             let r = rows.iter().find(|r| r.key == key).expect(key);
-            r.runs.iter().skip(1).map(|r| r.2.as_str()).collect()
+            r.runs.iter().any(|r| r.2 == face)
         };
-        let act = faces("d:act");
-        assert_eq!(act[..3], [BUTTON_PRI, KEY_PRI, BUTTON_PRI], "{act:?}");
-        assert!(
-            act[3..].iter().all(|f| [BUTTON, BUTTON_KEY].contains(f)),
-            "{act:?}"
-        );
-        let act2 = faces("d:act2");
-        assert!(
-            act2.iter().all(|f| [BUTTON, BUTTON_KEY].contains(f)) && act2.contains(&BUTTON),
-            "{act2:?}"
-        );
-        // the keycap (`.btn .k`): padded inside its ring, a gap before it in the button's face
+        assert!(has("d:act", FaceId::KitButtonPrimary.name()));
+        assert!(has("d:act", FaceId::KitButtonSecondary.name()));
+        assert!(has("d:act", FaceId::KitKeyHintCap.name()));
+        assert!(has("d:act2", FaceId::KitButtonSecondary.name()));
+        assert!(!has("d:act2", FaceId::KitButtonPrimary.name()));
         let row = rows.iter().find(|r| r.key == "d:act").expect("d:act");
-        let key = row
-            .runs
-            .iter()
-            .find(|r| r.2 == KEY_PRI)
-            .expect("the primary's key");
-        let text: Vec<char> = row.text.chars().collect();
-        let at = |a: u32, b: u32| text[a as usize..b as usize].iter().collect::<String>();
-        assert_eq!(at(key.0, key.1), " r ");
-        assert_eq!(at(key.0 - 1, key.0), " ", "{}", row.text);
+        assert!(row.text.contains("Run the red  r"), "{}", row.text);
+        assert!(!row.spaces.is_empty(), "the kit's pads are spaces");
     }
 
     /// [D] The detail tile as the mockup (hub-orchestration.html `.detail`): the head is the agent's avatar (a 16 px

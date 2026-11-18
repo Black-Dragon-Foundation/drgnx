@@ -21,6 +21,17 @@ Settings, Keyboard Shortcuts, Extensions and the Work views. It is a map as well
 - **Mouse:** press on the strip to go to that place; drag to scroll with the pointer.
 - In a terminal frame there is no strip yet (it arrives with the terminal column).
 
+### Horizontal scroll bar
+
+An editor that cuts its long lines (word wrap `off`, see Editing) gets a thin strip along the bottom of the text
+while some line is wider than the window: it starts after the line numbers, lies over the text (nothing moves) and
+has only a thumb, no marks. Press on it to jump there; drag the thumb to scroll sideways. Point stays where it is
+until you move it.
+
+The sideways wheel, a tilted wheel and Shift with the wheel scroll an editor that cuts its lines. Over a buffer that
+wraps them they do nothing, so the buffer keeps wrapping (`C-x <` and `C-x >` still scroll it, and cut its lines, as
+in Emacs). Lists that end a long row with `…` get no strip. Turn the strip off with `drgnx-minimap-hstrip`.
+
 ## The minimap
 
 Rest the pointer on an editor's scroll bar and it widens into a map of the whole file, drawn over the right edge of
@@ -40,6 +51,25 @@ its name as a label, labels on or off.
 
 Definitions are named for files up to 8 MiB (they come from the same outline as the Outline view); MARK sections
 are found in files of any size.
+
+### Heat layers
+
+**Minimap Heat Layer…** (palette; Vim `SPC u h`) recolours the bars by one of four things, on a scale from your
+theme's border colour (cold) to its second agent colour (hot). Marks stay on top. Choose **None** to go back to the
+colours by kind.
+
+| Layer | Hot lines | Where it comes from |
+|---|---|---|
+| Blame age | the newest (lines not committed yet are hottest) | git's blame of the file, including your unsaved typing |
+| Coverage | the covered lines (uncovered ones are cold) | the newest report your test run left at one of `drgnx-minimap-coverage-files`: lcov (`lcov.info`), Cobertura XML (`coverage.xml`) or llvm-cov JSON. A new report is picked up as soon as it is written |
+| Profile | the lines with the most samples of their own | a profile you choose: pprof (`.pb.gz`), `perf script -F +srcline` output, or a speedscope `.json` |
+| Lines agents read | the lines agents read most | the files agents read, as the Work space's timeline records them |
+
+### Diffs
+
+In a diff (a `*vc-diff*` buffer, a `.patch` file) the bars take the diff's added and removed colours, and each hunk
+gets a label such as `hunk 2 · +4 −2`, counted from its lines. In a file with its change marks on, each change against
+the last commit is labelled the same way. **Next / Previous Change** go from hunk to hunk there.
 
 ## Going from mark to mark
 
@@ -64,9 +94,12 @@ says where it is in the echo area, for example `error 2 of 7: unused variable, l
 | `drgnx-minimap-ruler` | on | The scroll bar on every scrollable surface. Off: only buffers with marks of their own (a debugger's breakpoints) show it. |
 | `drgnx-minimap-hide-short` | on | Hide the scroll bar while the content fits the window. |
 | `drgnx-marks-kinds` | all | The kinds of marks shown and visited: changes, errors, warnings, notes, search hits, breakpoints, bookmarks, symbol uses, agent edits, pinned regions, and any other producer's. |
+| `drgnx-minimap-hstrip` | on | The horizontal scroll bar of an editor that cuts its lines. |
 | `drgnx-minimap` | on | The scroll bar of an editor widens into the minimap when the pointer rests on it. |
 | `drgnx-minimap-width` | 120 | The minimap's width in pixels, 80 to 200. |
 | `drgnx-minimap-labels` | on | Names over the minimap: definitions and MARK sections, MARK sections only, or none. |
+| `drgnx-minimap-layer` | none | The heat layer: blame age, coverage, profile, lines agents read, or none. |
+| `drgnx-minimap-coverage-files` | `lcov.info`, `coverage/*.info`, `coverage.xml`, `coverage.json`, … | Where coverage reports are, relative to the project (`*` and `?` match in the last part). |
 | `drgnx-minimap-mark-regexp` | MARK comments, regions, `;;;;`, `# %%` | Which comment lines are MARK sections: a regular expression in Rust's syntax, matched against each line; the name is its group `name`, else its first group. |
 | `drgnx-marks-symbol-uses` | off | Mark every use of the symbol under the cursor, 400 ms after you stop moving. |
 

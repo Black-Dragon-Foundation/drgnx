@@ -266,9 +266,8 @@ kill ring, so a hung owner or a terminal that refuses the read costs its timeout
 
 (defvar drgnx-editing-tab-size)
 (defvar drgnx-editing-word-wrap)
+(defvar drgnx-editing-word-wrap-column)
 (declare-function drgnx-look-fonts--settings-apply "drgnx-look-fonts")
-(defvar drgnx-face-line-wrap)
-(declare-function drgnx-face--apply-line-wrap "drgnx-face")
 
 ;;;; The Editor settings a VS Code user looks for first
 
@@ -304,17 +303,110 @@ editor.tabSize).  A change applies at once.  A mode that sets its own indent kee
   :type 'integer :group 'drgnx :scope 'global :agents 'never :apply #'drgnx-editing--apply-tab-size
   :schema '(pred drgnx-editing--tab-size-p "a number of columns from 1 to 16"))
 
-(defun drgnx-editing--apply-word-wrap ()
-  "`:apply' of `drgnx-editing-word-wrap': `drgnx-face-line-wrap' follows it (`on' is `word', `off' is `truncate')."
-  (when (featurep 'drgnx-face)
-    (customize-set-variable 'drgnx-face-line-wrap (if (eq drgnx-editing-word-wrap 'on) 'word 'truncate))))
+;;;; Word wrap (the wrap addendum §3.3)
 
-(drgnx-defsetting drgnx-editing-word-wrap 'on
-  "Whether a line longer than its window continues on the next row, breaking at a word (`on'), or runs off the edge
-(`off'), as VS Code's editor.wordWrap.  drgnx wraps by default.  Toggle Word Wrap flips it for one buffer.  A change
-applies at once."
-  :type '(choice (const on) (const off)) :group 'drgnx :scope 'global :agents 'never
-  :apply #'drgnx-editing--apply-word-wrap :schema '(enum on off))
+;; Resolved per buffer when its major mode is set (`after-change-major-mode-hook'), and again once its file and
+;; directory locals are in (`hack-local-variables-hook': a workspace file's value counts; a file's own
+;; `truncate-lines' or `word-wrap' wins).  Only buffers of a code, data or text mode are touched: special buffers set
+;; their own.  The mode is buffer-local state: `off' cuts (`truncate-lines'), `on' wraps at a word, `column' and
+;; `bounded' wrap at `drgnx-editing-word-wrap-column' (Nidhogg's `nidhogg-wrap-column'; at the window's edge when it
+;; is narrower).
+
+(defconst drgnx-editing-wrap-auto-cut
+  '(yaml-mode yaml-ts-mode toml-ts-mode conf-toml-mode nxml-mode sgml-mode html-mode mhtml-mode html-ts-mode css-mode
+              css-ts-mode json-ts-mode js-json-mode)
+  "Data and markup modes `auto' cuts: checked first, since several derive from `text-mode'.")
+
+(defconst drgnx-editing-wrap-auto-prose
+  '(markdown-mode markdown-ts-mode gfm-mode org-mode rst-mode adoc-mode tex-mode latex-mode LaTeX-mode git-commit-mode
+                  log-edit-mode message-mode)
+  "Prose modes `auto' wraps (plain `text-mode' too, matched exactly).")
+
+(defvar-local drgnx-editing--wrap-shown nil
+  "The wrap mode drgnx gave this buffer (`off', `on', `column', `bounded'), or nil when it left the buffer alone.")
+
+(defvar-local drgnx-editing--wrap-toggled nil
+  "Non-nil when Toggle Word Wrap set this buffer's wrap: it stays until the buffer is killed (no session keeps it).")
+
+(defvar nidhogg-wrap-column)
+
+(defun drgnx-editing--wrap-p (v) "Non-nil when V is a wrap mode." (memq v '(off on column bounded auto)))
+(defun drgnx-editing--wrap-column-p (v) "Non-nil when V is a wrap column." (and (integerp v) (<= 20 v 1000)))
+
+(defun drgnx-editing-wrap-resolve (&optional value)
+  "The wrap mode VALUE (default `drgnx-editing-word-wrap' here) gives the current buffer: `off', `on', `column' or
+`bounded'; nil for a buffer of another kind (left alone).  `auto' goes by the major mode: the data and markup list
+cuts, the prose list (and plain `text-mode') wraps, code and configuration cut, other text modes wrap."
+  (let ((value (or value drgnx-editing-word-wrap)))
+    (cond ((apply #'derived-mode-p drgnx-editing-wrap-auto-cut) (if (eq value 'auto) 'off value))
+          ((or (apply #'derived-mode-p drgnx-editing-wrap-auto-prose) (eq major-mode 'text-mode))
+           (if (eq value 'auto) 'on value))
+          ((derived-mode-p 'prog-mode 'conf-mode) (if (eq value 'auto) 'off value))
+          ((derived-mode-p 'text-mode) (if (eq value 'auto) 'on value)))))
+
+(defun drgnx-editing--wrap-set (mode)
+  "Give the current buffer wrap MODE (`off', `on', `column', `bounded'), buffer-locally."
+  (setq drgnx-editing--wrap-shown mode)
+  ;; narrow windows too: Emacs cuts a window under 50 columns whatever `truncate-lines' says
+  (setq-local truncate-lines (eq mode 'off) word-wrap (not (eq mode 'off)) truncate-partial-width-windows nil)
+  (setq-local nidhogg-wrap-column (and (memq mode '(column bounded)) drgnx-editing-word-wrap-column))
+  ;; a line wrapped at a word shows no continuation arrows (VS Code draws none: audit G4)
+  (setq-local fringe-indicator-alist
+              (if (eq mode 'off) (default-value 'fringe-indicator-alist)
+                (cons '(continuation nil nil)
+                      (assq-delete-all 'continuation (copy-alist (default-value 'fringe-indicator-alist)))))))
+
+(defun drgnx-editing--wrap-clear ()
+  "Take back what `drgnx-editing--wrap-set' gave the current buffer."
+  (when drgnx-editing--wrap-shown
+    (dolist (v '(truncate-lines word-wrap truncate-partial-width-windows nidhogg-wrap-column fringe-indicator-alist))
+      (kill-local-variable v))
+    (setq drgnx-editing--wrap-shown nil drgnx-editing--wrap-toggled nil)))
+
+(defun drgnx-editing--wrap-buffer ()
+  "`after-change-major-mode-hook' and `hack-local-variables-hook': the current buffer's wrap from the setting.  A file
+or directory's own `truncate-lines' or `word-wrap' wins, and so does Toggle Word Wrap."
+  (unless (or drgnx-editing--wrap-toggled
+              (assq 'truncate-lines file-local-variables-alist) (assq 'word-wrap file-local-variables-alist)
+              (assq 'truncate-lines dir-local-variables-alist) (assq 'word-wrap dir-local-variables-alist))
+    (let ((mode (drgnx-editing-wrap-resolve)))
+      (if mode (drgnx-editing--wrap-set mode) (drgnx-editing--wrap-clear)))))
+
+(defun drgnx-editing--apply-word-wrap ()
+  "`:apply' of the wrap settings: every open buffer again."
+  (dolist (b (buffer-list))
+    (with-current-buffer b (drgnx-editing--wrap-buffer))))
+
+(defun drgnx-editing--wrap-org ()
+  "Under `auto' and `on', drgnx owns Org's wrapping: `org-startup-truncated' nil (Org sets `truncate-lines' from it
+itself), as the module's claim (`drgnx-module-set'): a value the user set in settings.el, custom.el or their Lisp
+wins over it, and the module's undo drops it.  A buffer's wrap is resolved after Org's own mode body, so a later
+change of the setting reaches Org buffers through the hook."
+  (when (memq (default-value 'drgnx-editing-word-wrap) '(auto on))
+    (drgnx-module-set 'org-startup-truncated nil)))
+
+(drgnx-defsetting drgnx-editing-word-wrap 'auto
+  "What a line longer than its window does, as VS Code's editor.wordWrap: `off' runs it off the edge, `on' continues it
+on the next row at a word, `column' wraps it at `drgnx-editing-word-wrap-column' (VS Code's wordWrapColumn),
+`bounded' at that column or the window's edge, whichever comes first.  `auto' (the default) wraps prose (Markdown,
+Org, plain text) and cuts code, configuration and data (YAML, HTML, JSON).  Buffers of other kinds keep their own.
+A `(:mode MODE …)' entry gives one language another; Toggle Word Wrap flips one buffer.  A change applies at once."
+  :type '(choice (const auto) (const on) (const off) (const column) (const bounded)) :group 'drgnx :scope 'buffer
+  :agents 'never :apply #'drgnx-editing--apply-word-wrap :schema '(enum off on column bounded auto))
+
+(drgnx-defsetting drgnx-editing-word-wrap-column 80
+  "The column long lines wrap at when `drgnx-editing-word-wrap' is `column' or `bounded' (VS Code's
+editor.wordWrapColumn); the other modes ignore it.  A change applies at once."
+  :type 'integer :group 'drgnx :scope 'buffer :agents 'never :apply #'drgnx-editing--apply-word-wrap
+  :schema '(pred drgnx-editing--wrap-column-p "a column from 20 to 1000"))
+
+(defun drgnx-editing-toggle-word-wrap ()
+  "Wrap long lines at a word, or cut them at the window's edge, in this buffer only (until it is killed)."
+  (interactive)
+  (drgnx-editing--wrap-set (if truncate-lines 'on 'off))
+  (setq drgnx-editing--wrap-toggled t)
+  (force-mode-line-update)
+  (message "Word wrap %s" (if truncate-lines "off" "on")))
 
 (drgnx-module-define 'editor/editing
                      :doc "Change case, expand and shrink the selection, go to line."
@@ -355,10 +447,18 @@ applies at once."
                                         (edit-paste "Paste" drgnx-editing-paste "Paste the last copy, replacing the selection")))
                          (drgnx-command-define id :category (if (string-prefix-p "go-" (symbol-name id)) "Go" "Edit") :title title
                                                :command fn :scope 'editing :doc doc))
+                       (drgnx-command-define 'face-toggle-wrap :category "View" :title "Toggle Word Wrap" :menu '("View")
+                                             :command #'drgnx-editing-toggle-word-wrap
+                                             :doc "Wrap long lines at a word, or cut them at the window's edge, in this buffer")
                        (drgnx-editing--apply-tab-size)
+                       (add-hook 'after-change-major-mode-hook #'drgnx-editing--wrap-buffer)
+                       (add-hook 'hack-local-variables-hook #'drgnx-editing--wrap-buffer)
+                       (drgnx-editing--apply-word-wrap)
+                       (drgnx-editing--wrap-org)
                        (add-to-list 'emulation-mode-map-alists 'drgnx-editing--region-alist))
                      :teardown
                      (lambda ()
+                       (dolist (b (buffer-list)) (with-current-buffer b (drgnx-editing--wrap-clear)))
                        (when drgnx-editing--tab-saved
                          (setq-default tab-width (nth 0 drgnx-editing--tab-saved)
                                        standard-indent (nth 1 drgnx-editing--tab-saved)

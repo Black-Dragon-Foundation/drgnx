@@ -183,7 +183,8 @@ impl Platform for DarwinPlatform {
         if !req.env.is_empty() {
             return Err("a Mac job has no extra variables".into());
         }
-        // a networked job's proxy port, bound here so the profile names it and job-exec inherits it (darwin::proxy)
+        // a networked job's proxy port, bound here on both loopbacks so the profile names it and job-exec inherits it
+        // (darwin::proxy)
         let net = if req.net_hosts.is_empty() {
             None
         } else {
@@ -219,7 +220,7 @@ impl Platform for DarwinPlatform {
             tools_dir: &tools_dir,
             tools: &records,
             bin: &bin,
-            proxy_port: net.as_ref().map(|(_, port)| *port),
+            proxy_port: net.as_ref().map(|n| n.port),
         });
         let env = spec.env.clone();
         let ctx = gleipnir::Context {
@@ -276,10 +277,11 @@ impl Platform for DarwinPlatform {
             timeout_s: meta.spec.timeout_s,
             stall_s: None,
             silent_s: None,
-            helper: net.as_ref().map(|(l, port)| HelperSpec {
+            helper: net.as_ref().map(|n| HelperSpec {
                 hub_allow: Some(dir.join(proxy::ALLOW)),
-                proxy_fd: Some(l.as_raw_fd()),
-                proxy_port: Some(*port),
+                proxy_fd: Some(n.v4.as_raw_fd()),
+                proxy_v6_fd: n.v6.as_ref().map(|l| l.as_raw_fd()),
+                proxy_port: Some(n.port),
                 ..HelperSpec::default()
             }),
         }
@@ -295,7 +297,9 @@ impl Platform for DarwinPlatform {
             } else {
                 0
             },
-            net.as_ref().map(|(l, _)| l.as_fd()),
+            &net.iter()
+                .flat_map(|n| std::iter::once(n.v4.as_fd()).chain(n.v6.as_ref().map(|l| l.as_fd())))
+                .collect::<Vec<_>>(),
         )
         .map_err(|e| format!("job-exec: {e}"))?;
         Ok((dir.display().to_string(), pid))

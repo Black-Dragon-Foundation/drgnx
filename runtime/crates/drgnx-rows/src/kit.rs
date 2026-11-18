@@ -204,6 +204,36 @@ impl ChipFill {
     }
 }
 
+/// A text input's lines: `single` is one 28 px line, `multi` at least two text lines (rows in the shapes of a card).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputLines {
+    #[default]
+    Single,
+    Multi,
+}
+
+impl InputLines {
+    fn name(self) -> &'static str {
+        match self {
+            InputLines::Single => "single",
+            InputLines::Multi => "multi",
+        }
+    }
+}
+
+/// A context chip of a text input: LABEL in TONE (soft), with a close mark that runs REMOVE.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct InputChip {
+    pub label: String,
+    #[serde(default)]
+    pub tone: Tone,
+    pub remove: Action,
+}
+
+/// A text input's least number of rows when it is `multi`.
+pub const INPUT_MULTI_MIN_ROWS: usize = 2;
+
 /// A status dot's status.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -757,7 +787,7 @@ pub enum Comp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
     },
-    /// A section's header: TITLE (a twisty before it when COLLAPSIBLE, open unless COLLAPSED) and an optional COUNT.
+    /// A section's header: TITLE (a twisty before it when COLLAPSIBLE, open unless COLLAPSED) and an optional COUNT (a neutral soft chip).
     SectionHeader {
         title: String,
         #[serde(default)]
@@ -826,6 +856,22 @@ pub enum Comp {
         modified: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
+    },
+    /// A text input: TEXT (the first row's line; more lines after a newline) or, when empty, PLACEHOLDER, with CHIPS
+    /// before the first line. `Multi` has at least two rows. FOCUSED draws the focus ring; STATE is the state table's.
+    TextInput {
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        placeholder: String,
+        #[serde(default)]
+        lines: InputLines,
+        #[serde(default)]
+        chips: Vec<InputChip>,
+        #[serde(default)]
+        focused: bool,
+        #[serde(default)]
+        state: State,
     },
     /// A segmented switch: ITEMS (a label and its action each) in one track, CURRENT the one shown.
     Segmented {
@@ -1456,7 +1502,19 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             b.push(title, face);
             if let Some(n) = count {
                 pad(b, env, px(g.gap, env.scale), 1, face);
-                b.push(&n.to_string(), Some(FaceId::TextSubtle.name()));
+                // the count is a neutral soft chip, as the design draws it
+                expand(
+                    b,
+                    env,
+                    &Comp::Chip {
+                        label: n.to_string(),
+                        tone: Tone::Neutral,
+                        fill: ChipFill::Soft,
+                        icon: None,
+                        state: State::Rest,
+                        action: None,
+                    },
+                );
             }
             pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
             let to = b.pos();
@@ -1599,6 +1657,13 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             action.as_ref(),
         ),
         Comp::Segmented { items, current } => segmented(b, env, items, *current),
+        Comp::TextInput { lines, text, .. } => {
+            let n = match lines {
+                InputLines::Single => 1,
+                InputLines::Multi => text_input_rows(text),
+            };
+            text_input_row(b, env, c, 0, n);
+        }
         Comp::Progress { kind, value, width } => progress(b, env, *kind, *value, *width),
         Comp::Meter {
             spent,
@@ -1839,9 +1904,156 @@ fn progress(b: &mut RowBuilder, env: &KitEnv, kind: ProgressKind, value: f64, wi
     }
 }
 
+/// The rows of a multi-line input's TEXT: its lines, at least [`INPUT_MULTI_MIN_ROWS`].
+fn text_input_rows(text: &str) -> usize {
+    text.split('\n').count().max(INPUT_MULTI_MIN_ROWS)
+}
+
+/// A context chip of a text input onto B (`drgnx-ui-kit--b-input-chip`): the chip's pads and label, then its close mark
+/// (the Lucide x where the env draws icons, else the `close` glyph) in the chip's face; a click or RET on the mark runs
+/// the chip's `remove` and its label (`help-echo`) is "remove LABEL".
+fn input_chip(b: &mut RowBuilder, env: &KitEnv, chip: &InputChip) {
+    let variant = [chip.tone.name(), "soft", env.density.name()];
+    let g: Geom = kit_gen::geom(CompId::Chip, &variant);
+    let face = match chip.tone {
+        Tone::Agent(_) => comp_face(kit_gen::face(
+            CompId::Chip,
+            &["neutral", "soft", env.density.name()],
+        )),
+        _ => comp_face(kit_gen::face(CompId::Chip, &variant)),
+    };
+    pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+    let text_from = b.pos();
+    b.push(&chip.label, face);
+    let text_to = b.pos();
+    pad(b, env, px(g.gap, env.scale), 1, face);
+    let at = b.pos();
+    match env
+        .icons
+        .filter(|_| !env.tty)
+        .and_then(|i| (i.0)("x", px(TAB_ICON_PX, env.scale)))
+    {
+        Some(id) => {
+            b.image(id, glyph(env, "close"));
+            if let Some(f) = face {
+                b.face(at, at + 1, f);
+            }
+        }
+        None => {
+            b.push(glyph(env, "close"), face);
+        }
+    }
+    let to = b.pos();
+    pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+    if let Some(a) = match chip.tone {
+        Tone::Agent(n) => usize::from(n)
+            .checked_sub(1)
+            .and_then(|i| AGENT_FACES.get(i)),
+        _ => None,
+    } {
+        b.face(text_from, text_to, a.name());
+    }
+    put_action(b, at, to, &chip.remove);
+    b.prop(
+        at,
+        to,
+        "help-echo",
+        Value::String(format!("remove {}", chip.label)),
+    );
+}
+
+/// Row I of N of the text input C onto B (`drgnx-ui-kit--text-input` draws row 0): the field's pads (a terminal's `[ `
+/// and ` ]`), on the first row the chips and then the text or, when it is empty, the placeholder in the muted role; the
+/// field's face of its shape under all of it (the ring is open where the field goes on), the state above.
+fn text_input_row(b: &mut RowBuilder, env: &KitEnv, c: &Comp, i: usize, n: usize) {
+    let Comp::TextInput {
+        text,
+        placeholder,
+        lines,
+        chips,
+        focused,
+        state,
+    } = c
+    else {
+        return;
+    };
+    let shape = CardShape::of(i, n);
+    let variant = [lines.name(), shape.name(), env.density.name()];
+    let g: Geom = kit_gen::geom(CompId::TextInput, &variant);
+    let face = comp_face(kit_gen::face(CompId::TextInput, &variant));
+    let from = b.pos();
+    if env.tty {
+        b.push("[ ", None);
+    } else {
+        pad(b, env, px(g.pad.0, env.scale), 0, None);
+    }
+    if i == 0 {
+        for chip in chips {
+            input_chip(b, env, chip);
+            pad(b, env, px(g.gap, env.scale), 1, None);
+        }
+    }
+    let line = text.split('\n').nth(i).unwrap_or("");
+    let text_from = b.pos();
+    if i == 0 && text.is_empty() {
+        b.push(placeholder, Some(FaceId::TextMuted.name()));
+    } else {
+        b.push(line, None);
+    }
+    let text_to = b.pos();
+    if env.tty {
+        b.push(" ]", None);
+    } else {
+        pad(b, env, px(g.pad.1, env.scale), 0, None);
+    }
+    let to = b.pos();
+    if let Some(f) = face {
+        b.face(from, to, f);
+    }
+    // the focus ring is the state table's: the field has colours of its own, so a state is above them
+    let shown = if *focused {
+        State::FocusVisible
+    } else {
+        *state
+    };
+    if let Some(f) = state_face(shown) {
+        b.face_over(from, to, f.name());
+    }
+    if !env.tty && g.height > 0 {
+        b.height(1, px(g.height, env.scale));
+    }
+    if i == 0 {
+        let word = kit_gen::label(CompId::TextInput, &variant).unwrap_or_default();
+        let spoken = if text.is_empty() && !placeholder.is_empty() {
+            placeholder.as_str()
+        } else {
+            word
+        };
+        b.prop(
+            text_from,
+            text_to,
+            "help-echo",
+            Value::String(spoken.to_owned()),
+        );
+    }
+}
+
 /// C as whole rows, keys `KEY/0`, `KEY/1`…: a block component's rows (cards, toasts…, in later tasks), an inline one's
 /// one row.
 pub fn expand_rows(env: &KitEnv, key: &str, c: &Comp) -> Vec<Row> {
+    if let Comp::TextInput { lines, text, .. } = c {
+        let n = match lines {
+            InputLines::Single => 1,
+            InputLines::Multi => text_input_rows(text),
+        };
+        return (0..n)
+            .map(|i| {
+                let mut b = RowBuilder::new(format!("{key}/{i}"));
+                text_input_row(&mut b, env, c, i, n);
+                b.finish()
+            })
+            .collect();
+    }
     let mut b = RowBuilder::new(format!("{key}/0"));
     expand(&mut b, env, c);
     vec![b.finish()]
@@ -2134,6 +2346,7 @@ mod tests {
             glyphs: &[],
             density: Density::Comfortable,
             icons: None,
+            ascii: false,
         }
     }
 
@@ -2436,5 +2649,85 @@ mod tests {
         assert_eq!(r.text, "$12 · no limit");
         let r = meter_at(1.0, 31.0, Some(40.0), MeterState::Ok, "31 % wk");
         assert!(r.text.ends_with(" 31 % wk"), "{}", r.text);
+    }
+    fn input(lines: InputLines, text: &str) -> Comp {
+        Comp::TextInput {
+            text: text.into(),
+            placeholder: "Request changes".into(),
+            lines,
+            chips: Vec::new(),
+            focused: false,
+            state: State::Rest,
+        }
+    }
+
+    fn plain_env() -> KitEnv<'static> {
+        KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            ascii: false,
+            density: Density::Comfortable,
+            icons: None,
+        }
+    }
+
+    #[test]
+    fn text_input_multi_line_is_rows() {
+        let env = plain_env();
+        // one line of text still has two rows; three lines have three, in a card's shapes, keys KEY/0, KEY/1…
+        let two = expand_rows(&env, "k", &input(InputLines::Multi, "a"));
+        assert_eq!(
+            two.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+            ["k/0", "k/1"]
+        );
+        let three = expand_rows(&env, "k", &input(InputLines::Multi, "a\nb\nc"));
+        let faces: Vec<&str> = three
+            .iter()
+            .map(|r| r.runs.last().expect("the field's face").2.as_str())
+            .collect();
+        assert_eq!(
+            faces,
+            [
+                FaceId::KitTextInputMultiTop.name(),
+                FaceId::KitTextInputMultiMid.name(),
+                FaceId::KitTextInputMultiBottom.name()
+            ]
+        );
+        assert!(three[1].text.contains('b') && three[2].text.contains('c'));
+        // a single field is one row, 28 px tall
+        let one = expand_rows(&env, "k", &input(InputLines::Single, "a\nb"));
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].height, Some(crate::RowHeight { lines: 1, unit: 28 }));
+    }
+
+    #[test]
+    fn text_input_chip_close_carries_remove() {
+        let remove = Action {
+            kind: "composer-chip-remove".into(),
+            args: vec![Value::String("kit.rs".into())],
+        };
+        let c = Comp::TextInput {
+            text: String::new(),
+            placeholder: "Ask".into(),
+            lines: InputLines::Single,
+            chips: vec![InputChip {
+                label: "kit.rs".into(),
+                tone: Tone::Neutral,
+                remove: remove.clone(),
+            }],
+            focused: false,
+            state: State::Rest,
+        };
+        let r = &expand_rows(&plain_env(), "k", &c)[0];
+        let (from, to, _, v) = r
+            .props
+            .iter()
+            .find(|p| p.2 == "drgnx-action")
+            .expect("the close mark's action");
+        assert_eq!(v, &serde_json::json!(["composer-chip-remove", "kit.rs"]));
+        // the action covers the close mark alone: one character, the last of the chip's label run
+        assert_eq!(to - from, 1);
+        assert_eq!(r.text.chars().nth(*from as usize), Some('×'));
     }
 }

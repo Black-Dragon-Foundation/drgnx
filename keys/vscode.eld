@@ -788,6 +788,7 @@
               (bookmark-go :none "the palette")
               (agent-edit-next :none "the palette")
               (agent-edit-previous :none "the palette")
+              (minimap-layer :none "the palette")
               (fold-toggle "C-k C-l")
               (fold-recursive "C-k [")   ; VS Code's Ctrl+K Ctrl+[: C-[ is ESC, and C-k ESC would take the ESC every terminal key starts with (F6, arrows, Alt+x)
               (unfold-recursive "C-k C-]")
@@ -806,7 +807,7 @@
               (fold-previous :none "the palette")
               (modal-toggle :none "with Vim keys")
               (face-toggle-menu-bar :none "the palette; F10 opens the menu as text while the bar is hidden")
-              (face-toggle-wrap :none "the palette")
+              (face-toggle-wrap "M-z")
               ;; the menu bar's mnemonics, as VS Code's window.enableMenuBarMnemonics (the Emacs and Vim profiles keep Alt)
               (menu-bar-open-file "M-f" :mac ())   ; macOS: the system menu bar
               (menu-bar-open-edit "M-e" :mac ())   ; macOS: the system menu bar

@@ -67,7 +67,7 @@ impl Exclude {
 }
 
 /// Whether NAME matches the glob PAT (`*` any run, `?` one byte, else itself).
-fn glob(pat: &[u8], name: &[u8]) -> bool {
+pub(crate) fn glob(pat: &[u8], name: &[u8]) -> bool {
     let (mut p, mut n, mut star, mut mark) = (0, 0, None, 0);
     while n < name.len() {
         if p < pat.len() && (pat[p] == b'?' || pat[p] == name[n]) {

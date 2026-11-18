@@ -1,0 +1,24 @@
+<?xml version="1.0" ?>
+<coverage line-rate="0.5" version="7.4">
+  <sources><source>/r</source></sources>
+  <packages>
+    <package name="src">
+      <classes>
+        <class name="b.py" filename="src/b.py">
+          <lines>
+            <line number="1" hits="0"/>
+            <line number="2" hits="4"/>
+          </lines>
+        </class>
+        <class name="a.rs" filename="src/a.rs" line-rate="0.5">
+          <methods/>
+          <lines>
+            <line number="1" hits="2"/>
+            <line number="2" hits="0"/>
+            <line number="4" hits="1" branch="true" condition-coverage="50% (1/2)"/>
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>

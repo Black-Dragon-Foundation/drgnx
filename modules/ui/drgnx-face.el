@@ -98,7 +98,6 @@ module is turned off.  Made by the setup.")
     ('drgnx-face-line-numbers-modes (drgnx-face--apply-line-numbers))
     ('drgnx-face-inline-problems (drgnx-face--apply-inline-problems))
     ('drgnx-face-line-spacing (drgnx-face--apply-line-spacing))
-    ('drgnx-face-line-wrap (drgnx-face--apply-line-wrap))
     ('drgnx-face-frame-title (drgnx-face--apply-frame-title))
     ((or 'drgnx-face-title-bar 'drgnx-face-gtk-theme) (drgnx-face--apply-title-all))))
 
@@ -137,13 +136,6 @@ Toggle for this session with the command Toggle Emacs's Menu Bar.  drgnx's own m
   :set #'drgnx-face--set :group 'drgnx-face)
 (make-obsolete-variable 'drgnx-face-line-spacing
                         "the code font role's :line-height (`drgnx-look-font-code') or `drgnx-look-density'" "6")
-
-(defcustom drgnx-face-line-wrap 'word
-  "What a line longer than its window does: `word' (continue on the next row, breaking at a space, never in the middle
-of a word; narrow windows too), `truncate' (one row, the rest is off the edge) or nil (leave Emacs's own setting).
-The command Toggle Word Wrap flips it for one buffer.  Buffers that set their own (the Explorer, tables) keep it."
-  :type '(choice (const :tag "Word wrap" word) (const :tag "Truncate" truncate) (const :tag "Emacs's own" nil))
-  :set #'drgnx-face--set :group 'drgnx-face)
 
 (defcustom drgnx-face-frame-title t
   "Non-nil: a frame's title is `FILE — PROJECT — drgnx' (the buffer's name when it has no file;
@@ -582,46 +574,6 @@ display specs (an image, a pixel space) Emacs does not draw."
          (setq-default line-spacing (car drgnx-face--line-spacing-saved))
          (setq drgnx-face--line-spacing-saved nil))))
 
-;;;; Line wrap
-
-(defvar drgnx-face--wrap-saved nil
-  "(WORD-WRAP TRUNCATE-LINES TRUNCATE-PARTIAL-WIDTH-WINDOWS FRINGE-INDICATOR-ALIST) the defaults this module replaced,
-to give back.")
-
-(defun drgnx-face--no-continuation-arrows (alist)
-  "ALIST (a `fringe-indicator-alist') with no arrow for a wrapped line in either fringe (VS Code draws none: audit G4)."
-  (cons '(continuation nil nil) (assq-delete-all 'continuation (copy-alist alist))))
-
-(defun drgnx-face--apply-line-wrap ()
-  "The setting into the default values of `word-wrap', `truncate-lines' and `truncate-partial-width-windows': one
-policy for every window, narrow ones included (Emacs cuts below 50 columns, and wraps in the middle of a word above).
-Lines wrapped at a word show no continuation arrows in the fringes (`fringe-indicator-alist').  nil gives back what
-it replaced."
-  (when (and drgnx-face-line-wrap (not drgnx-face--wrap-saved))
-    (setq drgnx-face--wrap-saved (list (default-value 'word-wrap) (default-value 'truncate-lines)
-                                       (default-value 'truncate-partial-width-windows)
-                                       (default-value 'fringe-indicator-alist))))
-  (pcase drgnx-face-line-wrap
-    ('word (setq-default word-wrap t truncate-lines nil truncate-partial-width-windows nil
-                         fringe-indicator-alist (drgnx-face--no-continuation-arrows (nth 3 drgnx-face--wrap-saved))))
-    ('truncate (setq-default truncate-lines t truncate-partial-width-windows nil
-                             fringe-indicator-alist (nth 3 drgnx-face--wrap-saved)))
-    (_ (when drgnx-face--wrap-saved
-         (setq-default word-wrap (nth 0 drgnx-face--wrap-saved) truncate-lines (nth 1 drgnx-face--wrap-saved)
-                       truncate-partial-width-windows (nth 2 drgnx-face--wrap-saved)
-                       fringe-indicator-alist (nth 3 drgnx-face--wrap-saved))
-         (setq drgnx-face--wrap-saved nil)))))
-
-(defun drgnx-face-toggle-wrap ()
-  "Wrap long lines at a word or cut them at the window's edge, in this buffer only."
-  (interactive)
-  (setq-local truncate-lines (not truncate-lines))
-  (unless truncate-lines
-    (setq-local word-wrap t)
-    (setq-local fringe-indicator-alist (drgnx-face--no-continuation-arrows (default-value 'fringe-indicator-alist))))
-  (force-mode-line-update)
-  (message "Word wrap %s" (if truncate-lines "off" "on")))
-
 ;;;; The frame's title
 
 (defvar drgnx-face--title-last (make-vector 7 nil)
@@ -698,9 +650,6 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-command-define 'face-toggle-menu-bar :category "View" :title "Toggle Emacs's Menu Bar" :menu '("View")
                         :command #'drgnx-face-toggle-menu-bar
                         :doc "Show or hide Emacs's menu bar for this session (hidden, F10 opens the menu as text)")
-  (drgnx-command-define 'face-toggle-wrap :category "View" :title "Toggle Word Wrap" :menu '("View")
-                        :command #'drgnx-face-toggle-wrap
-                        :doc "Wrap long lines at a word, or cut them at the window's edge, in this buffer")
   (drgnx-command-define 'face-menu :category "View" :title "Open the Menu" :command #'drgnx-face-menu
                         :doc "Open the menu: the menu bar when it is shown, else the same menu as text in the minibuffer (F10)")
   (drgnx-command-define 'face-preferences :category "Preferences" :title "Look and Layout Settings…" :menu '("Options")
@@ -734,13 +683,12 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-face--apply-inlay-hints)
   (drgnx-face--apply-inline-problems)
   (drgnx-face--apply-line-spacing)
-  (drgnx-face--apply-line-wrap)
   (drgnx-face--apply-frame-title))
 
 (defun drgnx-face--teardown ()
   "ui/face's `:teardown': what its cleanup stack cannot see — the parts' own state (the top line's tab bar and
 frame parameters, quick help's card, the start page's hooks), the title bar of the open frames, line numbers in the
-open buffers, and the defaults it keeps a saved value of (line spacing, line wrap, the frame title).  The stack then
+open buffers, and the defaults it keeps a saved value of (line spacing, the frame title).  The stack then
 puts back its options, `default-frame-alist' keys, face specs, the F10 remap, hooks and modes, the open frames' menu
 bar and scroll bars, and the status bar's segments and commands.  Idempotent."
   (setq drgnx-face--active nil drgnx-face--as-module nil drgnx-face--flymake-waiting nil
@@ -759,11 +707,9 @@ bar and scroll bars, and the status bar's segments and commands.  Idempotent."
         (setq drgnx-face--numbers-p nil)
         (drgnx-face--numbers-gap-off)
         (display-line-numbers-mode -1))))
-  (let ((drgnx-face-dividers nil) (drgnx-face-line-spacing nil) (drgnx-face-line-wrap nil)
-        (drgnx-face-frame-title nil))
+  (let ((drgnx-face-dividers nil) (drgnx-face-line-spacing nil) (drgnx-face-frame-title nil))
     (drgnx-face--apply-dividers)         ; the mode off, if the module turned it on
     (drgnx-face--apply-line-spacing)
-    (drgnx-face--apply-line-wrap)
     (drgnx-face--apply-frame-title))
   (force-mode-line-update t))
 
@@ -777,7 +723,6 @@ bar and scroll bars, and the status bar's segments and commands.  Idempotent."
                                  (drgnx-face-line-numbers-modes . "modes whose files show line numbers")
                                  (drgnx-face-inline-problems . "nil, short (default) or t: problems at the end of the line")
                                  (drgnx-face-line-spacing . "extra pixels between lines")
-                                 (drgnx-face-line-wrap . "word (default), truncate or nil: what a long line does")
                                  (drgnx-face-frame-title . "the frame's title: FILE — PROJECT — drgnx")
                                  (drgnx-face-title-bar . "auto (default: drawn on GNOME with Nidhogg, else dark), dark, system or drgnx: the window's title bar")
                                  (drgnx-face-gtk-theme . "the GTK theme whose dark variant the title bar uses")

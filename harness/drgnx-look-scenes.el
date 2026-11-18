@@ -34,10 +34,10 @@
     (window-light)
     (window-hc)
     (title-row-dark)
-    (menu-list :keys "<f20> <down>" :then "<escape>")
-    (context-menu :keys "S-<f10> <down>" :then "<escape>")
+    (menu-list :keys "<f20> <down>" :then "<escape>" :covers "nhwl-menu-")
+    (context-menu :keys "S-<f10> <down>" :then "<escape>" :covers "nhwl-menu-")
     (title-row-light)
-    (inbox-dropdown)
+    (inbox-dropdown :covers "\\*drgnx inbox\\*")
     (inbox-pinned)
     (magit)
     (org :mockup magit)
@@ -61,21 +61,21 @@
     (extensions-hc)
     (extensions-builtin-open)
     (search-preview :mockup search-view)
-    (search-sheet :mockup search-view :then "<escape>")
-    (search-ask :mockup search-view :then "<escape>")
+    (search-sheet :mockup search-view :then "<escape>" :covers "\\*drgnx replace all\\*")
+    (search-ask :mockup search-view :then "<escape>" :covers "\\*drgnx ask an agent\\*")
     (search-handed :mockup search-view)
     (search-kinds :mockup search-view)
-    (debugging)
-    (debug-extras)
-    (debug-extras-light)
-    (debug-extras-views)
-    (debug-extras-views-light)
-    (send-run)
-    (send-run-code :mockup send-run)
-    (send-run-light :mockup send-run)
-    (send-run-code-light :mockup send-run)
-    (heap-graph :mockup debugging-extras)
-    (heap-graph-light :mockup debugging-extras)
+    (debugging :debug t)
+    (debug-extras :debug t)
+    (debug-extras-light :debug t)
+    (debug-extras-views :debug t)
+    (debug-extras-views-light :debug t)
+    (send-run :debug t :covers "\\*Send Run\\*")
+    (send-run-code :mockup send-run :debug t :covers "\\*Send Run\\*")
+    (send-run-light :mockup send-run :debug t :covers "\\*Send Run\\*")
+    (send-run-code-light :mockup send-run :debug t :covers "\\*Send Run\\*")
+    (heap-graph :mockup debugging-extras :debug t)
+    (heap-graph-light :mockup debugging-extras :debug t)
     ;; their hub seeds the map's graph, which no other scene's hub can share: a session of their own
     (scrollbars-editor :mockup minimap-folding)
     (scrollbars-panel :mockup minimap-folding)
@@ -89,6 +89,8 @@
     (tiling :agent t :keys "C-<escape>" :then "<escape>")
     (tiling-resize :agent t :mockup tiling :keys "C-k r <right>" :then "<escape>")
     (tiling-full :agent t :mockup tiling :keys "C-k C-m" :then "C-k C-m")
+    (minimap-heat :mockup minimap-layers)
+    (minimap-diff :mockup minimap-layers)
     (work-space-dark :seed "map")
     (work-space-light :seed "map")
     (work-space-hc :seed "map"))
@@ -98,7 +100,9 @@ start page, the highlights, the focused Explorer and the Extensions list have no
 components' spec and the tokens) and the session's `drgnx-look-scene-NAME' sets it up.  :agent t starts the mock
 agent first; :keys and :type are typed after the setup and before the shot, :then after it; :seed (default \"1\") is
 what the session's hub seeds (`drgnx-look-scene-seed'): the scenes of another seed are drawn in a session of their
-own.")
+own; :covers a regexp naming the buffers of the child frames the scene opens on purpose (its menu, card or
+drop-down), whose cover of a scroll bar's strip is not an error (`drgnx-look-scene-scrollbars'); :debug t keeps the
+debug session the scene before started (`drgnx-look-scene-begin' ends it for the others).")
 
 (defun drgnx-look-scenes--only ()
   "The scenes to draw: those whose name matches $DRGNX_LOOK_ONLY (a regexp), or all of them."
@@ -145,7 +149,8 @@ OUT at SCALE (TAG: `s1', `s2'); return (SHOTS . ERRORS), each in drawing order, 
                                                           out)))
             (push (cons (if (equal seed "1") 'setup (intern (format "setup-%s" seed))) errs) errors))
           (pcase-dolist (`(,name . ,plist) scenes)
-            (let ((errs (drgnx-look-scenes--call sess "(drgnx-look-scene-begin)"))   ; the editor layout again
+            (let ((errs (drgnx-look-scenes--call    ; the editor layout again
+                         sess (format "(drgnx-look-scene-begin %s)" (drgnx-ui-el (plist-get plist :debug))) 60))
                   (png (expand-file-name (format "%s-%s.png" name tag) out)))
               (when (plist-get plist :agent)
                 (setq errs (append errs (drgnx-look-scenes--call
@@ -163,9 +168,10 @@ OUT at SCALE (TAG: `s1', `s2'); return (SHOTS . ERRORS), each in drawing order, 
                                                     name))))
               ;; every scrollable surface has the scroll bar, drawn exactly when its content runs past it
               (setq errs (append errs (drgnx-look-scenes--call
-                                       sess (format "(drgnx-look-scene-scrollbars %s)"
+                                       sess (format "(drgnx-look-scene-scrollbars %s %s)"
                                                     (drgnx-ui-el (expand-file-name (format "%s-%s-scrollbars.eld" name tag)
-                                                                                   out)))
+                                                                                   out))
+                                                    (drgnx-ui-el (plist-get plist :covers)))
                                        60)))
               ;; no hub-fed row wider than its window, as drawn, narrower and wider (after the shot: it resizes)
               (setq errs (append errs (drgnx-look-scenes--call

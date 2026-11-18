@@ -289,6 +289,180 @@ at all, and no MARK expression in the model."
       (should-not (plist-get (window-parameter (selected-window) 'glitnir-minimap) :labels))
       (should-not (nidhogg-lines-sections nil)))))
 
+(defvar drgnx-minimap-layer)
+(defvar drgnx-minimap-coverage-files)
+(defvar drgnx-minimap-profile-file)
+(defvar drgnx-hunks-mode)
+(defvar drgnx-hunks--data)
+
+(ert-deftest drgnx-minimap/the-heat-layer-is-in-the-spec-and-the-watch ()
+  "A heat layer (X3): the spec names it with the ramp's two faces and the file, labels on or off; the hub's watch asks
+for it with the coverage reports' places or the profile; back to none, the watch asks for none, once."
+  (skip-unless (fboundp 'nidhogg-lines-set-section-regexp))
+  (ruler-test--with-minimap
+    (let ((truename (file-truename file)) (w (selected-window)))
+      (let ((drgnx-minimap-layer 'coverage) (drgnx-minimap-coverage-files '("coverage/*.info"))
+            (drgnx-minimap-labels nil))
+        (drgnx-ruler--place w)
+        (let ((spec (window-parameter w 'glitnir-minimap)))
+          (should (equal (plist-get spec :heat) "coverage"))
+          (should (eq (plist-get spec :heat-low) 'drgnx-border-strong))
+          (should (eq (plist-get spec :heat-high) 'drgnx-agent-2))
+          (should (equal (plist-get spec :file) truename)))
+        (should (equal (car (last calls))
+                       (list "minimap/watch" (list :file truename :on t :heat "coverage" :coverage ["coverage/*.info"])))))
+      (let ((drgnx-minimap-layer 'profile) (drgnx-minimap-profile-file "/p/cpu.pprof"))
+        (drgnx-ruler--place w)
+        (should (equal (car (last calls))
+                       (list "minimap/watch" (list :file truename :on t :heat "profile" :profile "/p/cpu.pprof")))))
+      (drgnx-ruler--place w)
+      (should (equal (car (last calls)) (list "minimap/watch" (list :file truename :on t))))
+      (should-not (plist-get (window-parameter w 'glitnir-minimap) :heat))
+      (let ((n (length calls)))
+        (drgnx-ruler--place w)
+        (should (= (length calls) n))))))
+
+(defconst ruler-test--diff
+  (concat "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,3 +1,4 @@\n a\n-b\n+B\n+C\n c\n@@ -10,2 +11,0 @@\n-y\n-z\n"
+          "--- a/q\n+++ b/q\n@@ -1 +1 @@\n-q\n+Q\n")
+  "A diff of three hunks: at lines 4 (+2 -1), 10 (+0 -2, then the next file's header) and 15 (+1 -1).")
+
+(ert-deftest drgnx-minimap/a-diff-buffer-gets-a-label-at-each-hunk-and-goes-by-hunk ()
+  "A diff buffer with no file gets the minimap with a label at each @@ hunk, its added and removed lines counted from
+the text (X6); the change commands go by hunk, wrapping."
+  (skip-unless (fboundp 'nidhogg-lines-set-section-regexp))
+  (ruler-test--with-minimap
+    (let* ((w (selected-window)) (was (window-buffer w)) (b (generate-new-buffer " *ruler-test-diff*" t)))
+      (unwind-protect
+          (progn
+            (with-current-buffer b (insert ruler-test--diff) (diff-mode) (goto-char (point-min)))
+            (set-window-buffer w b)
+            (drgnx-ruler--place w)
+            (should (equal (plist-get (window-parameter w 'glitnir-minimap) :hunk-labels)
+                           [[4 "hunk 1 · +2 −1"] [10 "hunk 2 · +0 −2"] [15 "hunk 3 · +1 −1"]]))
+            (should (eq (plist-get (window-parameter w 'glitnir-minimap) :hunk) 'drgnx-text-muted))
+            (with-current-buffer b
+              (let ((line (lambda () (line-number-at-pos))))
+                (drgnx-marks-next-change)
+                (should (= (funcall line) 4))
+                (drgnx-marks-next-change)
+                (should (= (funcall line) 10))
+                (drgnx-marks-next-change)
+                (drgnx-marks-next-change)
+                (should (= (funcall line) 4))
+                (drgnx-marks-previous-change)
+                (should (= (funcall line) 15))))
+            ;; labels off: none
+            (let ((drgnx-minimap-labels nil))
+              (should-not (plist-member (drgnx-minimap--spec w) :hunk-labels))))
+        (set-window-buffer w was)
+        (kill-buffer b)))))
+
+;;;; The horizontal strip (design 2026-11-18 §3.1, Task 21f)
+
+(defvar drgnx-minimap-hstrip)
+
+(ert-deftest drgnx-minimap/the-hstrip-spec-is-on-editors-only ()
+  "An editor window gets `glitnir-hstrip' (12 px, the 8 px hit lane, the vertical thumb's face and opacity); the
+Explorer's (a docked special-mode list) and a popup's do not, unless the buffer sets `drgnx-hscrollbar'; the setting
+off, or the scroll bar off, takes it away."
+  (ruler-test--with-minimap
+    (let ((w (selected-window)))
+      (let ((spec (window-parameter w 'glitnir-hstrip)))
+        (should (equal (plist-get spec :height) (drgnx-px 12)))
+        (should (equal (plist-get spec :lane) (drgnx-px 8)))
+        (should (equal (plist-get spec :band) (cons 'drgnx-ruler-view drgnx-ruler--thumb-opacity))))
+      ;; the Explorer: a docked list
+      (setq buffer-file-name nil)
+      (special-mode)
+      (set-window-parameter w 'drgnx-role 'dock)
+      (drgnx-ruler--place w)
+      (should (window-parameter w 'glitnir-ruler))
+      (should-not (window-parameter w 'glitnir-hstrip))
+      ;; a docked buffer that asks for it
+      (setq-local drgnx-hscrollbar t)
+      (drgnx-ruler--place w)
+      (should (window-parameter w 'glitnir-hstrip))
+      (kill-local-variable 'drgnx-hscrollbar)
+      (set-window-parameter w 'drgnx-role nil)
+      ;; a popup's text buffer
+      (text-mode)
+      (set-window-parameter w 'drgnx-popup t)
+      (drgnx-ruler--place w)
+      (should-not (window-parameter w 'glitnir-hstrip))
+      (set-window-parameter w 'drgnx-popup nil)
+      (drgnx-ruler--place w)
+      (should (window-parameter w 'glitnir-hstrip))
+      (let ((drgnx-minimap-hstrip nil))
+        (drgnx-ruler--place w)
+        (should-not (window-parameter w 'glitnir-hstrip)))
+      (drgnx-ruler--place w)
+      (drgnx-scrollbar-mode -1)
+      (should-not (window-parameter w 'glitnir-hstrip)))))
+
+(ert-deftest drgnx-minimap/an-hstrip-drag-scrolls-and-keeps-point ()
+  "Nidhogg's (glitnir-hstrip WINDOW HSCROLL) event scrolls WINDOW sideways to HSCROLL columns; point, the window's
+point and the selected window stay; a dead window or a bad column is ignored."
+  (ruler-test--with-minimap
+    (let ((w (selected-window)) (other (split-window)))
+      (unwind-protect
+          (progn
+            (setq truncate-lines t)
+            (goto-char (point-min))
+            (insert (make-string 400 ?x) "\n")
+            (goto-char 10)
+            (set-window-point w 10)
+            (select-window other)
+            (drgnx-minimap-hstrip-scroll (list 'glitnir-hstrip w 30))
+            (should (= (window-hscroll w) 30))
+            (should (= (window-point w) 10))
+            (should (eq (selected-window) other))
+            (drgnx-minimap-hstrip-scroll (list 'glitnir-hstrip w -1))
+            (should (= (window-hscroll w) 30))
+            (let ((dead (split-window other)))
+              (delete-window dead)
+              (drgnx-minimap-hstrip-scroll (list 'glitnir-hstrip dead 5))))
+        (select-window w)
+        (delete-window other)
+        (set-window-hscroll w 0)))))
+
+(ert-deftest drgnx-minimap/a-sideways-wheel-in-a-wrapped-buffer-does-nothing ()
+  "★7: a sideways wheel, tilt or Shift-wheel over a window that wraps its lines leaves it wrapping at hscroll 0 (any
+scroll would cut its lines); over a window that cuts them, it scrolls sideways."
+  (ruler-test--with-minimap
+    (let ((w (selected-window)) (mouse-wheel-tilt-scroll t) (mouse-wheel-flip-direction nil))
+      (goto-char (point-min))
+      (insert (make-string 400 ?x) "\n")
+      (goto-char (point-min))
+      (setq truncate-lines nil)
+      (dolist (e '(wheel-left wheel-right S-wheel-up S-wheel-down))
+        (drgnx-hscroll-wheel (list e (list w (point) '(0 . 0) 0)))
+        (should (= (window-hscroll w) 0))
+        (should-not truncate-lines))
+      (setq truncate-lines t)
+      (unwind-protect
+          (progn
+            (drgnx-hscroll-wheel (list 'wheel-left (list w (point) '(0 . 0) 0)))
+            (should (> (window-hscroll w) 0)))
+        (set-window-hscroll w 0)))))
+
+(ert-deftest drgnx-minimap/a-files-change-hunks-are-labelled ()
+  "A file with its change marks on gets a label at each of the hub's hunks (`drgnx-hunks--data'): a deletion at the
+line before it; none without the marks."
+  (skip-unless (fboundp 'nidhogg-lines-set-section-regexp))
+  (ruler-test--with-minimap
+    (should-not (plist-member (drgnx-minimap--spec (selected-window)) :hunk-labels))
+    (setq-local drgnx-hunks-mode t)
+    (setq-local drgnx-hunks--data (list (list :old-start 3 :old-count 0 :new-start 3 :new-count 2)
+                                        (list :old-start 9 :old-count 2 :new-start 10 :new-count 0)))
+    (should (equal (plist-get (drgnx-minimap--spec (selected-window)) :hunk-labels)
+                   [[3 "hunk 1 · +2 −0"] [10 "hunk 2 · +0 −2"]]))
+    (goto-char (point-min))
+    (drgnx-marks-next-change)
+    (should (= (line-number-at-pos) 3))
+    (kill-local-variable 'drgnx-hunks-mode)
+    (kill-local-variable 'drgnx-hunks--data)))
+
 (ert-deftest drgnx-minimap/no-minimap-for-views-special-buffers-or-when-off ()
   "A Sjá view (it has a span function), a special-mode buffer and `drgnx-minimap' nil get no minimap; the strip
 stays."

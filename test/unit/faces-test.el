@@ -12,8 +12,8 @@
 
 (ert-deftest drgnx-faces/third-party-defaults-inherit-standard-faces ()
   (pcase-dolist (`(,face . ,parent)
-                 '((drgnx-surface-gap . default) (drgnx-surface-panel . default) (drgnx-surface-raised . default)
-                   (drgnx-surface-overlay . default)
+                 '((drgnx-surface-gap . nil) (drgnx-surface-panel . nil) (drgnx-surface-raised . secondary-selection)
+                   (drgnx-surface-overlay . nil)
                    (drgnx-text-muted . shadow) (drgnx-text-subtle . shadow) (drgnx-text-disabled . shadow)
                    (drgnx-border . window-divider) (drgnx-border-strong . vertical-border)
                    (drgnx-accent . link) (drgnx-hover . highlight) (drgnx-selected . region)

@@ -530,6 +530,24 @@ mod tests {
             },
         )
         .unwrap();
+        // a read step of another agent, the file named absolutely: the minimap's agent-read layer
+        tx.sql()
+            .execute_batch(
+                "insert into step (session, seq, class, start, agent) values ('session:s', 2, 'tool', 2.0, 'claude')",
+            )
+            .unwrap();
+        put_step_detail(
+            &tx,
+            StepDetail {
+                step: 2,
+                kind: Some("read".into()),
+                path: Some("/w/a/src/a.rs".into()),
+                line_start: Some(5),
+                line_end: Some(9),
+                ..detail()
+            },
+        )
+        .unwrap();
         put_base(&tx, base()).unwrap();
         put_base(
             &tx,
@@ -549,7 +567,12 @@ mod tests {
             (d.path.as_deref(), d.line_start),
             (Some("src/a.rs"), Some(3))
         );
-        assert_eq!(crate::read::work::step_detail(&c, 2).unwrap(), None);
+        assert_eq!(crate::read::work::step_detail(&c, 3).unwrap(), None);
+        // only `read` steps, by either name
+        assert_eq!(
+            crate::read::work::reads_of(&c, &["src/a.rs", "/w/a/src/a.rs"]).unwrap(),
+            [(Some(5), Some(9), Some("claude".to_string()))]
+        );
         let tx = tx_of(&mut c);
         let bad = StepDetail {
             origin: "guess".into(),

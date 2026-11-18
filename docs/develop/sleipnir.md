@@ -142,13 +142,16 @@ resize, CPU weights or keys: those methods answer none or refuse.
 with that allow-list (`crate::net`, shared with Linux's job helper: no metadata service, no address that isn't public,
 connections only to public addresses), served by its own job-exec on a loopback port for the job's life; a Mac has no
 network namespace and no relay sidecar. `launch` checks the list, writes it to the attempt's `net.allow`, binds
-`127.0.0.1:0` and starts job-exec with that listener kept open (every other descriptor is close-on-exec), naming the
-descriptor and port in `job.json`'s helper. The port is in the job's profile as its only network (outbound to
-`localhost:<port>`) and in its `HTTP(S)_PROXY` variables, `NO_PROXY` the loopback names. job-exec takes the listener
-only if it is on `127.0.0.1:<port>`, makes it close-on-exec again so the job never holds it, and serves it on a thread
-of its own. Seatbelt's `localhost` is both loopbacks, so job-exec also listens on `[::1]:<port>` (never accepting) for
-the job's life: no other process can listen there for the job to reach. `launch` picks a port free on both, and a
-`::1` port taken by then refuses the job; a proxy that can't start fails the job `infra: setup`, and a refused request is logged in
+`127.0.0.1:0` and the same port on `[::1]` (skipping a port already taken there) and starts job-exec with both
+listeners kept open (every other descriptor is close-on-exec), naming the descriptors and port in `job.json`'s helper.
+The port is in the job's profile as its only network (outbound to `localhost:<port>`) and in its `HTTP(S)_PROXY`
+variables, `NO_PROXY` the loopback names. job-exec takes the listeners only if they are on `127.0.0.1:<port>` and
+`[::1]:<port>`, makes them close-on-exec again so the job never holds them, serves the first on a thread of its own and
+holds the second (never accepting) for the job's life: Seatbelt's `localhost` is both loopbacks, so no other process can
+listen there for the job to reach. A Mac without an IPv6 loopback has no `::1` listener to pass. The `::1` port is never
+let go between `launch` and job-exec: a process another thread of `serve` forks meanwhile holds copies of the
+descriptors until it execs, so a check-then-bind again in job-exec could find its own port taken and refuse a good job.
+A proxy that can't start fails the job `infra: setup`, and a refused request is logged in
 `job-exec.log`. Binding in `serve` means no other process can take the port between the profile and the proxy. The
 loopback is the whole Mac's: while the job runs, another local process could reach the job's allow-listed hosts
 through the port, and nothing else.

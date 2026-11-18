@@ -26,6 +26,7 @@ pub mod extensions;
 pub mod files;
 pub mod fonts;
 pub mod git;
+pub mod heat;
 pub mod icons;
 pub mod minimap;
 pub mod model;

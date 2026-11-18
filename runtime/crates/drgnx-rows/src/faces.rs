@@ -826,14 +826,6 @@ pub enum FaceId {
     WorkFlowLabel,
     /// `drgnx-work-flow-key`
     WorkFlowKey,
-    /// `drgnx-work-flow-button`
-    WorkFlowButton,
-    /// `drgnx-work-flow-button-primary`
-    WorkFlowButtonPrimary,
-    /// `drgnx-work-flow-key-primary`
-    WorkFlowKeyPrimary,
-    /// `drgnx-work-flow-button-key`
-    WorkFlowButtonKey,
     /// `drgnx-work-flow-heading`
     WorkFlowHeading,
     /// `drgnx-work-flow-chip-ok`
@@ -1140,6 +1132,14 @@ pub enum FaceId {
     KitSegmented,
     /// `drgnx-kit-segmented-current`
     KitSegmentedCurrent,
+    /// `drgnx-kit-text-input`
+    KitTextInput,
+    /// `drgnx-kit-text-input-multi-top`
+    KitTextInputMultiTop,
+    /// `drgnx-kit-text-input-multi-mid`
+    KitTextInputMultiMid,
+    /// `drgnx-kit-text-input-multi-bottom`
+    KitTextInputMultiBottom,
 }
 
 impl FaceId {
@@ -1554,10 +1554,6 @@ impl FaceId {
         FaceId::WorkFlowAgent,
         FaceId::WorkFlowLabel,
         FaceId::WorkFlowKey,
-        FaceId::WorkFlowButton,
-        FaceId::WorkFlowButtonPrimary,
-        FaceId::WorkFlowKeyPrimary,
-        FaceId::WorkFlowButtonKey,
         FaceId::WorkFlowHeading,
         FaceId::WorkFlowChipOk,
         FaceId::WorkFlowChipRun,
@@ -1711,6 +1707,10 @@ impl FaceId {
         FaceId::KitTabPreview,
         FaceId::KitSegmented,
         FaceId::KitSegmentedCurrent,
+        FaceId::KitTextInput,
+        FaceId::KitTextInputMultiTop,
+        FaceId::KitTextInputMultiMid,
+        FaceId::KitTextInputMultiBottom,
     ];
 
     /// The face's Emacs name.
@@ -2125,10 +2125,6 @@ impl FaceId {
             FaceId::WorkFlowAgent => "drgnx-work-flow-agent",
             FaceId::WorkFlowLabel => "drgnx-work-flow-label",
             FaceId::WorkFlowKey => "drgnx-work-flow-key",
-            FaceId::WorkFlowButton => "drgnx-work-flow-button",
-            FaceId::WorkFlowButtonPrimary => "drgnx-work-flow-button-primary",
-            FaceId::WorkFlowKeyPrimary => "drgnx-work-flow-key-primary",
-            FaceId::WorkFlowButtonKey => "drgnx-work-flow-button-key",
             FaceId::WorkFlowHeading => "drgnx-work-flow-heading",
             FaceId::WorkFlowChipOk => "drgnx-work-flow-chip-ok",
             FaceId::WorkFlowChipRun => "drgnx-work-flow-chip-run",
@@ -2282,6 +2278,10 @@ impl FaceId {
             FaceId::KitTabPreview => "drgnx-kit-tab-preview",
             FaceId::KitSegmented => "drgnx-kit-segmented",
             FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
+            FaceId::KitTextInput => "drgnx-kit-text-input",
+            FaceId::KitTextInputMultiTop => "drgnx-kit-text-input-multi-top",
+            FaceId::KitTextInputMultiMid => "drgnx-kit-text-input-multi-mid",
+            FaceId::KitTextInputMultiBottom => "drgnx-kit-text-input-multi-bottom",
         }
     }
 
@@ -2697,10 +2697,6 @@ impl FaceId {
             "drgnx-work-flow-agent" => FaceId::WorkFlowAgent,
             "drgnx-work-flow-label" => FaceId::WorkFlowLabel,
             "drgnx-work-flow-key" => FaceId::WorkFlowKey,
-            "drgnx-work-flow-button" => FaceId::WorkFlowButton,
-            "drgnx-work-flow-button-primary" => FaceId::WorkFlowButtonPrimary,
-            "drgnx-work-flow-key-primary" => FaceId::WorkFlowKeyPrimary,
-            "drgnx-work-flow-button-key" => FaceId::WorkFlowButtonKey,
             "drgnx-work-flow-heading" => FaceId::WorkFlowHeading,
             "drgnx-work-flow-chip-ok" => FaceId::WorkFlowChipOk,
             "drgnx-work-flow-chip-run" => FaceId::WorkFlowChipRun,
@@ -2854,6 +2850,10 @@ impl FaceId {
             "drgnx-kit-tab-preview" => FaceId::KitTabPreview,
             "drgnx-kit-segmented" => FaceId::KitSegmented,
             "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
+            "drgnx-kit-text-input" => FaceId::KitTextInput,
+            "drgnx-kit-text-input-multi-top" => FaceId::KitTextInputMultiTop,
+            "drgnx-kit-text-input-multi-mid" => FaceId::KitTextInputMultiMid,
+            "drgnx-kit-text-input-multi-bottom" => FaceId::KitTextInputMultiBottom,
             _ => return None,
         })
     }

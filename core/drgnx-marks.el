@@ -35,6 +35,7 @@
 (require 'thingatpt)
 
 (defvar drgnx-hunks--marks)
+(defvar drgnx-hunks--data)
 (defvar drgnx-hunks-mode)
 (defvar isearch-string)
 (defvar isearch-regexp)
@@ -107,6 +108,69 @@ kind, one after another, is one mark from its first line to its last."
 (defun drgnx-marks--hunks-drawn (&rest _)
   "After `drgnx-hunks--draw' and `drgnx-hunks--clear': the change marks again."
   (drgnx-ruler-source 'hunks (and drgnx-hunks-mode drgnx-hunks--marks #'drgnx-marks--hunks)))
+
+;;;; Hunks (design X6): a diff buffer's, or a file's changes against the last commit
+
+(defvar-local drgnx-marks--diff-hunks nil "(TICK . HUNKS): a diff buffer's hunks when its text was at TICK.")
+
+(defun drgnx-marks--diff-hunks ()
+  "The hunks of the current diff buffer, (LINE ADDED REMOVED) each in order: LINE its @@ header's, ADDED and REMOVED
+its lines counted from the text (as many as the header's counts take)."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (let ((line 1) (at (point-min)) out)
+        (while (re-search-forward "^@@ -[0-9]+\\(?:,\\([0-9]+\\)\\)? \\+[0-9]+\\(?:,\\([0-9]+\\)\\)? @@" nil t)
+          (let ((old (if (match-beginning 1) (string-to-number (match-string 1)) 1))
+                (new (if (match-beginning 2) (string-to-number (match-string 2)) 1))
+                (added 0) (removed 0))
+            (setq line (+ line (count-lines at (line-beginning-position))) at (line-beginning-position))
+            (forward-line 1)
+            (while (and (or (> old 0) (> new 0)) (not (eobp)))
+              (pcase (char-after)
+                (?\s (setq old (1- old) new (1- new)))
+                (?- (setq old (1- old) removed (1+ removed)))
+                (?+ (setq new (1- new) added (1+ added)))
+                (?\\ nil)
+                (_ (setq old 0 new 0)))
+              (forward-line 1))
+            (push (list line added removed) out)))
+        (nreverse out)))))
+
+(defun drgnx-marks-hunks ()
+  "The current buffer's hunks, (LINE ADDED REMOVED) each in order, LINE from 1: a diff buffer's from its @@ headers
+\(counted again when its text changed), else, with change marks on, the file's changes against the last commit
+\(`drgnx-hunks--data'; a deletion is at the line before it)."
+  (cond ((derived-mode-p 'diff-mode)
+         (let ((tick (buffer-chars-modified-tick)))
+           (unless (eql (car drgnx-marks--diff-hunks) tick)
+             (setq drgnx-marks--diff-hunks (cons tick (drgnx-marks--diff-hunks))))
+           (cdr drgnx-marks--diff-hunks)))
+        ((bound-and-true-p drgnx-hunks-mode)
+         (mapcar (lambda (h) (list (max 1 (plist-get h :new-start)) (plist-get h :new-count) (plist-get h :old-count)))
+                 drgnx-hunks--data))))
+
+(defun drgnx-marks-hunk-label (n added removed)
+  "Hunk N's label: its number and its added and removed lines."
+  (format "hunk %d · +%d −%d" n added removed))
+
+(defun drgnx-marks-step-hunk (dir)
+  "Go to the next hunk after the current line (DIR > 0) or the previous one before it (`drgnx-marks-hunks'), wrapping
+at the buffer's end, and say which.  Nil when the buffer has none."
+  (let* ((hunks (drgnx-marks-hunks))
+         (n (length hunks))
+         (here (line-number-at-pos nil t))
+         (i (if (> dir 0)
+                (or (cl-position-if (lambda (h) (> (car h) here)) hunks) 0)
+              (or (cl-position-if (lambda (h) (< (car h) here)) hunks :from-end t) (1- n)))))
+    (if (zerop n)
+        (progn (message "No change in this buffer") nil)
+      (let ((h (nth i hunks)))
+        (push-mark nil t)
+        (goto-char (save-restriction (widen) (goto-char (point-min)) (forward-line (1- (car h))) (point)))
+        (message "%s of %d" (drgnx-marks-hunk-label (1+ i) (nth 1 h) (nth 2 h)) n)
+        (point)))))
 
 ;;;; Problems (Flymake)
 
@@ -449,15 +513,19 @@ buffer's end, and say where it is.  Nil when the buffer has none."
   (interactive)
   (drgnx-marks-step drgnx-marks-kinds -1))
 
+(defun drgnx-marks--by-hunk-p ()
+  "Whether the change commands go by hunk here: a diff buffer, or a file whose hunks the hub gave."
+  (or (derived-mode-p 'diff-mode) (and (bound-and-true-p drgnx-hunks-mode) drgnx-hunks--data t)))
+
 (defun drgnx-marks-next-change ()
-  "Go to the next change against the last commit."
+  "Go to the next change against the last commit: the next hunk (in a diff buffer, the next @@ hunk)."
   (interactive)
-  (drgnx-marks-step '(change) 1))
+  (if (drgnx-marks--by-hunk-p) (drgnx-marks-step-hunk 1) (drgnx-marks-step '(change) 1)))
 
 (defun drgnx-marks-previous-change ()
-  "Go to the previous change against the last commit."
+  "Go to the previous change against the last commit: the previous hunk (in a diff buffer, the previous @@ hunk)."
   (interactive)
-  (drgnx-marks-step '(change) -1))
+  (if (drgnx-marks--by-hunk-p) (drgnx-marks-step-hunk -1) (drgnx-marks-step '(change) -1)))
 
 (defun drgnx-marks-next-bookmark ()
   "Go to the next bookmark in this file."

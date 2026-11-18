@@ -845,22 +845,42 @@ editor.tabSize).  A change applies at once.  A mode that sets its own indent kee
 
 ## drgnx-editing-word-wrap
 
-Whether a line longer than its window continues on the next row, breaking at a word (`on'), or runs off the edge
-(`off'), as VS Code's editor.wordWrap.  drgnx wraps by default.  Toggle Word Wrap flips it for one buffer.  A change
-applies at once.
+What a line longer than its window does, as VS Code's editor.wordWrap: `off' runs it off the edge, `on' continues it
+on the next row at a word, `column' wraps it at `drgnx-editing-word-wrap-column' (VS Code's wordWrapColumn),
+`bounded' at that column or the window's edge, whichever comes first.  `auto' (the default) wraps prose (Markdown,
+Org, plain text) and cuts code, configuration and data (YAML, HTML, JSON).  Buffers of other kinds keep their own.
+A `(:mode MODE …)' entry gives one language another; Toggle Word Wrap flips one buffer.  A change applies at once.
 
 | Key | Value |
 | --- | --- |
-| Default | `on` |
-| Type | `(choice (const on) (const off))` |
-| `:scope` | `global` |
+| Default | `auto` |
+| Type | `(choice (const auto) (const on) (const off) (const column) (const bounded))` |
+| `:scope` | `buffer` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |
 | `:on-error` | `last-good` |
 | `:apply` | `drgnx-editing--apply-word-wrap` |
 | `:runtime` | - |
 | `:agents` | `never` |
-| `:schema` | `(enum on off)` |
+| `:schema` | `(enum off on column bounded auto)` |
+
+## drgnx-editing-word-wrap-column
+
+The column long lines wrap at when `drgnx-editing-word-wrap' is `column' or `bounded' (VS Code's
+editor.wordWrapColumn); the other modes ignore it.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `80` |
+| Type | `integer` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-editing--apply-word-wrap` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(pred drgnx-editing--wrap-column-p "a column from 20 to 1000")` |
 
 ## drgnx-extensions-check-updates
 
@@ -1516,6 +1536,25 @@ right edge, and shrinks back 600 ms after the pointer leaves.
 | `:agents` | `grantable` |
 | `:schema` | - |
 
+## drgnx-minimap-coverage-files
+
+Where the coverage heat layer finds reports, relative to the file's worktree (`*' and `?' match in the last part):
+lcov tracefiles, Cobertura XML reports and llvm-cov JSON exports.  The newest that names the file is read, and read
+again when a test run writes it.
+
+| Key | Value |
+| --- | --- |
+| Default | `("lcov.info" "coverage/lcov.info" "coverage/*.info" "coverage.xml" "coverage/cobertura*.xml" "cobertura.xml" "coverage.json" "target/llvm-cov/*.json")` |
+| Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
 ## drgnx-minimap-hide-short
 
 Non-nil: the scroll bar hides while the window shows all of its content (it comes back once the content runs
@@ -1534,6 +1573,24 @@ past the window; the text keeps its width either way).
 | `:agents` | `grantable` |
 | `:schema` | - |
 
+## drgnx-minimap-hstrip
+
+Non-nil: an editor that cuts its lines gets a horizontal scroll bar along the bottom of the text while a line is
+wider than the window (12 px over the text, from the first text column; it takes no space).  Nil: none.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
 ## drgnx-minimap-labels
 
 The names drawn over the minimap: t, each definition (from the hub's outline, for files up to 8 MiB) and each
@@ -1543,6 +1600,26 @@ MARK section; `marks-only', the MARK sections alone; nil, none.
 | --- | --- |
 | Default | `t` |
 | Type | `(choice (const :tag "Definitions and MARK sections" t) (const :tag "MARK sections only" marks-only) (const :tag "None" nil))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-layer
+
+The heat layer that recolours the minimap's bars, one at a time: `blame', each line's age (newest hottest);
+`coverage', covered lines (from the newest report `drgnx-minimap-coverage-files' names); `profile', each line's own
+samples (from the profile `minimap-layer' asks for); `agent-read', the lines agents read most; nil, none.  Marks stay
+on top.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const :tag "None" nil) (const :tag "Blame age" blame) (const :tag "Coverage" coverage) (const :tag "Profile" profile) (const :tag "Lines agents read" agent-read))` |
 | `:scope` | `global` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |

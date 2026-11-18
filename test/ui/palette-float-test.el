@@ -113,10 +113,13 @@ module stages are over first: C-g ends the read."
                         (overlays-in (point-min) (point-max)))))))
 
 (defun drgnx-palette-float-test--edges (frame)
-  "FRAME's edges (LEFT TOP RIGHT BOTTOM) in its parent, in the frames' own pixels: its position and its size.  Not
-`frame-edges': Nidhogg's Wayland shell answers a child frame's outer and native edges from (0, 0)."
-  (let ((p (frame-position frame)))
-    (list (car p) (cdr p) (+ (car p) (frame-pixel-width frame)) (+ (cdr p) (frame-pixel-height frame)))))
+  "FRAME's edges (LEFT TOP RIGHT BOTTOM) in its parent, in the frames' own pixels: its position and its size.
+`frame-edges' must start at the same place: Nidhogg's Wayland shell once answered a child frame's outer edges from
+(0, 0), which code placing or hit-testing a child frame (posframe-style packages) reads."
+  (let* ((p (frame-position frame))
+         (e (list (car p) (cdr p) (+ (car p) (frame-pixel-width frame)) (+ (cdr p) (frame-pixel-height frame)))))
+    (should (equal (seq-take (frame-edges frame 'outer-edges) 2) (seq-take e 2)))
+    e))
 
 (defun drgnx-palette-float-test--wait-shown (frame)
   "Wait until FRAME shows the candidates; a timeout says what the minibuffer buffer and its overlays held."
