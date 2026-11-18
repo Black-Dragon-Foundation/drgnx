@@ -637,6 +637,28 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
 - **Doctor:** the `settings-migrated` check (facts `:settings-leftovers`, `:settings-stayed`) warns "no longer read"
   naming each stayed file and why, else "already migrated" naming Move Old Files Away; it has no row while neither
   holds.
+- **The wrap step** (`drgnx-settings-migrate-wrap`, called right after `drgnx-settings-migrate-maybe`, safe mode too):
+  `drgnx-face-line-wrap` folds into `drgnx-editing-word-wrap` once. When it has finished, `wrap-2026-11` is in the
+  report file's `:steps` and a later start does nothing; its report is the file's `:wrap` (`:done` and `:reported`
+  items, each `:file :line :text`), shown at the end of Settings: Migration Report, and a migration report written
+  later keeps both keys. Who set a value is read from the store that holds it, never from a comparison with the
+  current value:
+  - every wrap entry of `settings.el` and of a private workspace file (W2) is the user's: it is mapped (`word`→`on`,
+    `truncate`→`off`) into `drgnx-editing-word-wrap` in the same scope, and the old entry goes. A `drgnx-editing-word-wrap`
+    entry already in that scope wins; a disagreement is reported;
+  - a shared `.drgnx/settings.el` (W1, of the roots the private files name) is the project's: reported with its line,
+    never written;
+  - `custom.el` is never written. A `drgnx-face-line-wrap` there equal to what the old applier wrote (`word` while the
+    editing setting is `on` or unset, `truncate` while it is `off`) was drgnx's own and is dropped, so `auto` applies;
+    another literal value is the user's and goes to `settings.el`;
+  - in the user's Lisp (`config.el`, `drgnx-user-lisp-files`; never edited) a literal value at top level goes to
+    `settings.el`, and the line is reported with the `setopt` form that replaces it;
+  - a value that maps to none (`nil`, Emacs's own; any other) and a computed or conditional one are reported, left as
+    they are, never guessed.
+
+  It writes only through `drgnx-settings-file-put` and `-remove`. A file that refuses (a mistake in it) is reported
+  and leaves the step undone, so the next start tries again. Anything reported is one `warn` notice (source `config`,
+  id `settings-wrap`, command Migration Report). Tests: `test/unit/settings-migrate-wrap-test.el`.
 
 ## Agents, AI and the shipped defaults (Task 15)
 

@@ -183,6 +183,7 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-ai--on-first-window)        ; the local AI runner, started again
         (let ((safe (getenv "DRGNX_SAFE")))            ; drgnx safe: the core only
           (drgnx-settings-migrate-maybe)               ; the old settings files into settings.el, once (safe mode too)
+          (drgnx-settings-migrate-wrap)                ; the old wrap setting folded into the new one, once
           (if safe
               (drgnx-settings-apply-global :owned-only t)   ; safe mode: drgnx's own settings only
             (condition-case err (drgnx-pkg-activate)
