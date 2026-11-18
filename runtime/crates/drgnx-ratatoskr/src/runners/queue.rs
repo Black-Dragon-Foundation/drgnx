@@ -5126,20 +5126,33 @@ mod tests {
         assert_eq!(placed(&q, 103).as_deref(), Some("r1"));
     }
 
-    // [D] pure: a job that needs a feature no runner offers waits with the reason `features`
+    // [D] pure: a job that needs `udmabuf` is not placed on a runner whose probe found the device until the user
+    // enables it for the job's project (the machine here is busy, so the runner is the only place it could go)
     #[tokio::test]
     async fn a_job_needing_an_unoffered_feature_waits_as_features() {
         let dir = tempfile::tempdir().unwrap();
         let (q, _rx) = test_queue(dir.path(), None, true);
         add(&q, "r1", 600);
         hello(&q, "r1", true, 100);
+        let probe = Frame::ProbeResult {
+            facts: None,
+            missing: vec![],
+            limits: None,
+            features: ["podman", "udmabuf"].map(String::from).to_vec(),
+            mem_available_mib: 16_384,
+        };
+        frame(&q, "r1", probe, 100);
         let mut s = job("x1", Priority::P3, 64);
         s.spec.features = vec!["udmabuf".into()];
+        s.spec.project = "drgnx".into();
         q.submit(s, 100);
         q.tick(100);
         let row = q.row("x1").unwrap();
         assert_eq!(row.machine, None, "{row:?}");
-        assert!(format!("{row:?}").contains("udmabuf"), "{row:?}");
+        q.set_enabled("r1", vec![("drgnx".into(), "udmabuf".into())]);
+        q.tick(101);
+        let row = q.row("x1").unwrap();
+        assert_eq!(row.machine.as_deref(), Some("r1"), "{row:?}");
     }
 
     // [D] pure: a Mac whose last `ready` said it ran on battery is `sleeping` when it goes quiet (a lid closed), not
