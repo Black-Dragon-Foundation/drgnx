@@ -126,9 +126,11 @@ are not among the kit's five statuses: they draw its `needs-you' dot, a plain `â
 status face.  The dot is the kit's `status-dot' (its glyph, its ASCII form on a terminal that is not UTF-8): a wrapper
 that keeps the severities the callers know.  An unknown SEVERITY is `info'."
   (pcase-let ((`(,_ ,status ,face) (or (assq severity drgnx-ui--severities) (assq 'info drgnx-ui--severities))))
-    (let ((dot (plist-get (drgnx-ui-kit-expand 'status-dot (list :c "status-dot" :status (symbol-name (or status 'needs-you)))
-                                               1.0 (cond ((not (drgnx-ui-ascii-frame-p)) nil) (t 'ascii)))
-                          :text)))
+    (let ((dot (car (split-string      ; the glyph alone: a terminal's expansion adds the status's word, the callers have their own
+                     (plist-get (drgnx-ui-kit-expand 'status-dot (list :c "status-dot" :status (symbol-name (or status 'needs-you)))
+                                                     1.0 (cond ((not (drgnx-ui-ascii-frame-p)) nil) (t 'ascii)))
+                                :text)
+                     " "))))
       (propertize (if text (concat dot " " text) dot) 'face face))))
 
 ;;;; Buttons

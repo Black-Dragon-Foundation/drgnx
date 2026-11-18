@@ -80,7 +80,10 @@
     (dolist (tty '(nil ascii))
       (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) (and tty t))))
         (should (equal (substring-no-properties (drgnx-ui-status sev))
-                       (plist-get (drgnx-ui-kit-expand 'status-dot (list :c "status-dot" :status status) 1.0 tty) :text)))))))
+                       ;; the glyph alone: a terminal's expansion adds the word, the caller has its own text
+                       (car (split-string (plist-get (drgnx-ui-kit-expand 'status-dot (list :c "status-dot" :status status) 1.0 tty)
+                                                     :text)
+                                          " "))))))))
 
 (ert-deftest drgnx-ui-kit/a-saved-glyph-option-still-applies ()
   ;; the option keeps its name: a value saved by customize before the move (the old 18 entries, with ok and
