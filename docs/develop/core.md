@@ -1615,6 +1615,16 @@ lists at each publish.
   `drgnx-ruler-update`, which sets the parameter only when the span moved. A press outside the rows held goes to
   `drgnx-ruler-goto-fraction-function`, which asks the hub for the window around that row (`view/window`) and goes
   there after the draw.
+- **The horizontal strip** (`glitnir-hstrip`, design 2026-11-18 §3.1). `drgnx-minimap--place` gives it to the windows
+  `drgnx-minimap-hstrip-window-p` names: editors (no `drgnx-role`, not a popup or a child frame's, a file's or a text
+  buffer that is not a view or a special mode), and any surface whose buffer sets `drgnx-hscrollbar`. The spec is in
+  device px: `:height` 12, `:lane` 8 (the hit height, the strip's bottom), `:thumb-inset`, `:radius`, `:least` (the
+  thumb's least length) and `:band`, the vertical thumb's face and opacity. C decides when it shows (the window cuts
+  its lines and a line is wider than the text). A press or drag reaches Lisp as the special event
+  `(glitnir-hstrip WINDOW HSCROLL)`, one per frame, HSCROLL in WINDOW's columns; `drgnx-minimap-hstrip-scroll` calls
+  `set-window-hscroll` and leaves point and the selected window alone. The sideways wheel, tilt and Shift-wheel go
+  to `drgnx-hscroll-wheel`, which does nothing over a window that wraps its lines and else calls `mwheel-scroll`;
+  the module turns `mouse-wheel-tilt-scroll` on.
 - **Producers.** One owner draws; producers hand it marks. A producer calls `(drgnx-ruler-source OWNER FUNCTION)` in a
   buffer. FUNCTION returns `(POS LANE FACE PRIORITY [SHAPE END])` marks, LANE `left`, `middle`, `right` or `full`,
   SHAPE nil or `dot` (6 px round, a breakpoint), END a position the mark runs down to (a run of changed lines).

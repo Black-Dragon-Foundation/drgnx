@@ -112,6 +112,10 @@ them, so the next sync gives every kind again).")
 holding rows FROM to FROM + LENGTH of TOTAL (a list the hub sends a window of), or nil when it holds them all.  The
 strip then stands for the TOTAL rows.  Whoever moves the window calls `drgnx-ruler-update' after the draw.")
 
+(defvar-local drgnx-hscrollbar nil
+  "Non-nil: this buffer's windows get the horizontal strip as an editor's do (`drgnx-minimap-hstrip'), though the
+buffer is not a file's.  Lists that cut their rows with an ellipsis leave it nil.")
+
 (defvar-local drgnx-ruler-goto-fraction-function nil
   "Nil, or a function of (WINDOW FRACTION): a press or drag on the strip of a view with a span went to FRACTION of
 the whole, outside the rows the buffer holds; it brings those rows and puts WINDOW there.")

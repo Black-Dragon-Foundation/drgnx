@@ -21,6 +21,17 @@ Settings, Keyboard Shortcuts, Extensions and the Work views. It is a map as well
 - **Mouse:** press on the strip to go to that place; drag to scroll with the pointer.
 - In a terminal frame there is no strip yet (it arrives with the terminal column).
 
+### Horizontal scroll bar
+
+An editor that cuts its long lines (word wrap `off`, see Editing) gets a thin strip along the bottom of the text
+while some line is wider than the window: it starts after the line numbers, lies over the text (nothing moves) and
+has only a thumb, no marks. Press on it to jump there; drag the thumb to scroll sideways. Point stays where it is
+until you move it.
+
+The sideways wheel, a tilted wheel and Shift with the wheel scroll an editor that cuts its lines. Over a buffer that
+wraps them they do nothing, so the buffer keeps wrapping (`C-x <` and `C-x >` still scroll it, and cut its lines, as
+in Emacs). Lists that end a long row with `…` get no strip. Turn the strip off with `drgnx-minimap-hstrip`.
+
 ## The minimap
 
 Rest the pointer on an editor's scroll bar and it widens into a map of the whole file, drawn over the right edge of
@@ -83,6 +94,7 @@ says where it is in the echo area, for example `error 2 of 7: unused variable, l
 | `drgnx-minimap-ruler` | on | The scroll bar on every scrollable surface. Off: only buffers with marks of their own (a debugger's breakpoints) show it. |
 | `drgnx-minimap-hide-short` | on | Hide the scroll bar while the content fits the window. |
 | `drgnx-marks-kinds` | all | The kinds of marks shown and visited: changes, errors, warnings, notes, search hits, breakpoints, bookmarks, symbol uses, agent edits, pinned regions, and any other producer's. |
+| `drgnx-minimap-hstrip` | on | The horizontal scroll bar of an editor that cuts its lines. |
 | `drgnx-minimap` | on | The scroll bar of an editor widens into the minimap when the pointer rests on it. |
 | `drgnx-minimap-width` | 120 | The minimap's width in pixels, 80 to 200. |
 | `drgnx-minimap-labels` | on | Names over the minimap: definitions and MARK sections, MARK sections only, or none. |

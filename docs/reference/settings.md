@@ -1573,6 +1573,24 @@ past the window; the text keeps its width either way).
 | `:agents` | `grantable` |
 | `:schema` | - |
 
+## drgnx-minimap-hstrip
+
+Non-nil: an editor that cuts its lines gets a horizontal scroll bar along the bottom of the text while a line is
+wider than the window (12 px over the text, from the first text column; it takes no space).  Nil: none.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
 ## drgnx-minimap-labels
 
 The names drawn over the minimap: t, each definition (from the hub's outline, for files up to 8 MiB) and each
