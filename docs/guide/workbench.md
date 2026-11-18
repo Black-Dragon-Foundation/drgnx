@@ -360,7 +360,10 @@ to do it, or press Esc or `C-g` to stop. A tab dragged off its row moves only th
 still shows it): onto another group's middle it joins that group's tabs, onto an edge it is a group of its own there;
 a group's only tab moves the whole group. A drop on the tile itself, on no tile or
 where there is no room changes nothing and says "Nothing moved"; panes stack only onto a tile that is no dock (move
-the docked one off its dock first). The dividers between tiles still drag to resize. `drgnx-grid-drag` set to nil
+the docked one off its dock first). The dividers between tiles still drag to resize. The side bar, the panel and the
+right side keep the size you gave them when the window is resized, moved to a monitor of another scale or given another
+UI scale: the editors take the difference, and a dock gives way only to leave the editors their least width (it comes
+back to its size once there is room). `drgnx-grid-drag` set to nil
 draws no grip and turns dragging off. **Restore Previous Layout** (`C-k C-z` · `C-x w u` · `SPC l u`) puts back the
 layout before the last change to it — a move, a stack, a drop, or a package that collapsed the tiles behind the
 workbench's back — across every window: a window it had that you closed opens again, one it lacked closes, its files
@@ -464,9 +467,9 @@ was full screen or maximized), and the other windows go back to it after a resta
 drgnx move a window (see [Several monitors](#several-windows)). Where Emacs itself knows only a window's place (on
 Wayland), drgnx asks the window manager which of its monitors is there, so the serial and name are what is
 remembered; after a move it keeps the monitor it moved the window to. The monitor is found by its serial, else its
-name, else its place, never by the number it had; if it is not connected any more, the window stays where your window
-manager opened it and drgnx says so in one message ("1 window's monitor is not connected (DELL U2720Q); the window
-manager placed it"). The main window, windows opened for `$EDITOR` (terminal and EDITOR frames) and job windows are never moved. This happens after the
+name, else its place, never by the number it had; if it is not connected any more, the window folds into the main window
+until it is (see **A monitor goes away** below) and drgnx says so in one message ("1 window's monitor is not
+connected (DELL U2720Q); its tabs are in the main window until it is"). The main window, windows opened for `$EDITOR` (terminal and EDITOR frames) and job windows are never moved. This happens after the
 layout is back, in the background, with a few seconds' limit: a window manager that does not answer costs nothing but
 one message. Where drgnx cannot tell which monitor a window is on (GNOME, other Wayland compositors, a terminal) nothing is
 saved and nothing is moved.
@@ -500,6 +503,14 @@ commands exist only in graphical windows and work on sway, i3, Hyprland, niri, K
 (on GNOME, Super+Shift+→ or ←). A window manager moves only the window that has focus, so a move is refused with a
 plain message while another app has it. None of the three has a key by default (`:none` in every profile): bind them
 in your key profile or use the palette.
+
+**A monitor goes away.** Unplug a monitor (or undock a laptop) and each window that was on it folds into the main
+window a second later: its files and buffers become tabs of the editor you used last there, its panes (an agent's
+conversation, a terminal…) join the main window's docks, and the window closes. Nothing is closed, saved or asked:
+a file with unsaved changes stays unsaved. Plug the monitor back in and the window comes back where it was, with its
+tiles as they were and its buffers as they are now; the main window gives back the tabs and panes it took. A dock
+unplugged and plugged back within the second folds nothing. The fold is one step of Restore Previous Layout, and the
+folded windows survive a restart: a window whose monitor is not there when drgnx starts folds the same way.
 
 **What each window manager allows.** drgnx finds the window manager from the window's own environment (one drgnx
 can serve windows on several desktops). `drgnx doctor` shows the row for yours ([install.md](install.md#drgnx-doctor)).

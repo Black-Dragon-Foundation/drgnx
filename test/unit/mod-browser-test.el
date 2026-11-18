@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/grid-fixture" drgnx-dir) nil t)
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-wb)
@@ -24,21 +25,27 @@
   (switch-to-buffer (get-buffer-create "*drgnx-browser-test-xwidget*")))
 
 (defmacro drgnx-browser-test--with (&rest body)
-  "BODY in a 200×60 frame with one editor window, the browser's state fresh and no real xwidgets or browser."
+  "BODY in a 200×60 frame with the grid on and one editor, the browser's kind and shape registered, its state fresh
+and no real xwidgets or browser."
   (declare (indent 0))
   `(drgnx-test-with-state
      (let* ((drgnx-wb--sections nil)
             (drgnx-browser--told nil) (drgnx-browser--buffer nil) (drgnx-browser-test--urls nil)
             (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
+            (drgnx-layouts-shapes (copy-sequence drgnx-layouts-shapes))
             (size (cons (frame-width) (frame-height))))
        (set-frame-size nil 200 60)
-       (delete-other-windows)
+       (drgnx-grid-test--reset)
+       (drgnx-grid-mode 1)
+       (drgnx-browser--register-shape)
        (switch-to-buffer (get-buffer-create "*drgnx-browser-test-code*"))
        (set-window-parameter nil 'drgnx-tabs nil)
        (unwind-protect (progn ,@body)
-         (delete-other-windows)
+         (drgnx-timer-cancel '(layouts-save . "global"))
+         (drgnx-pane-undefine-kind 'browser)
+         (drgnx-grid-mode -1)
+         (drgnx-grid-test--reset)
          (set-window-parameter nil 'drgnx-tabs nil)
-         (set-window-parameter nil 'drgnx-layouts-pane nil)
          (set-frame-size nil (car size) (cdr size))
          (switch-to-buffer "*scratch*")
          (dolist (b '("*drgnx-browser-test-code*" "*drgnx-browser-test-xwidget*" "*drgnx: browser*" "*drgnx: agent screenshot*"))
@@ -80,7 +87,7 @@
         (should (= 1 (length msgs)))
         (should (string-match-p "no WebKit" (car msgs)))
         (should (string-match-p "docs/guide/browser.md" (car msgs)))
-        (should (= 1 (length (window-list nil 'nomini))))))     ; no pane for a page the system browser shows
+        (should (= 1 (length (drgnx-grid-tiles))))))     ; no tile for a page the system browser shows
     ;; with WebKit: a pane to the right of the editor with the page, and a header line (address, back, forward, reload)
     (let ((code (selected-window)))
       (cl-letf (((symbol-function 'drgnx-browser-webkit-p) (lambda () t))
@@ -91,9 +98,9 @@
                 ((symbol-function 'browse-url) (lambda (&rest _) (error "browse-url is the fallback"))))
         (drgnx-browser-open "localhost:3000")
         (should (equal drgnx-browser-test--urls '("http://localhost:3000")))
-        (let ((pane (window-in-direction 'right code)))
+        (let ((pane (window-in-direction 'right code t)))
           (should (window-live-p pane))
-          (should (eq (window-parameter pane 'drgnx-layouts-pane) 'browser))
+          (should (memq 'browser (window-parameter pane 'drgnx-pane-stack)))
           (should (equal (buffer-name (window-buffer pane)) "*drgnx-browser-test-xwidget*"))
           (with-current-buffer (window-buffer pane)
             (should drgnx-browser-mode)
@@ -102,7 +109,7 @@
               (dolist (want '("◀" "▶" "⟳" "http://localhost:3000/")) (should (string-search want h)))))
           ;; the next page goes into the same pane
           (drgnx-browser-open "https://example.org")
-          (should (= 2 (length (window-list nil 'nomini))))
+          (should (= 2 (length (drgnx-grid-tiles))))
           (should (equal (car drgnx-browser-test--urls) "https://example.org")))))
     ;; addresses: a scheme stays, a host gets one, words are a search
     (should (equal (drgnx-browser--normalise "https://a.b/c") "https://a.b/c"))
@@ -111,15 +118,15 @@
     (should (string-prefix-p "https://duckduckgo.com/?q=emacs%20xwidgets" (drgnx-browser--normalise "emacs xwidgets")))))
 
 (ert-deftest drgnx-browser/browser-layout-shape ()
+  ;; the Browser layout: the editor and a browser tile to its right, filled with the last page (else a hint)
   (drgnx-browser-test--with
-    (let ((drgnx-layouts-shapes (copy-sequence drgnx-layouts-shapes)))
-      (drgnx-browser--register-shape)
-      (should (alist-get 'editor+browser drgnx-layouts-shapes))
-      (cl-letf (((symbol-function 'drgnx-browser-webkit-p) (lambda () nil)))
-        (let* ((code (selected-window))
-               (pane (funcall (alist-get 'editor+browser drgnx-layouts-shapes) code)))
-          (should (eq (window-in-direction 'right code) pane))
-          (should (eq (window-parameter pane 'drgnx-layouts-pane) 'browser))
+    (should (alist-get 'editor+browser drgnx-layouts-shapes))
+    (cl-letf (((symbol-function 'drgnx-browser-webkit-p) (lambda () nil)))
+      (let ((code (selected-window)))
+        (drgnx-layouts-apply 'browser)
+        (let ((pane (window-in-direction 'right code t)))
+          (should (window-live-p pane))
+          (should (memq 'browser (window-parameter pane 'drgnx-pane-stack)))
           (should (eq (selected-window) code))
           (with-current-buffer (window-buffer pane)
             (should (string-search "Browser: Open URL" (buffer-string)))
@@ -392,7 +399,7 @@ hub's log of every job is empty (`drgnx-hub-call' answers `exec/log' at once)."
                 ((symbol-function 'xwidget-webkit-browse-url) #'drgnx-browser-test--webkit))
         (drgnx-browser-open "localhost:3000" t)
         (should (eq (selected-window) code))
-        (should (window-live-p (window-in-direction 'right code)))))))
+        (should (window-live-p (window-in-direction 'right code t)))))))
 
 (ert-deftest drgnx-browser/off-cancels-the-timer-waiting-for-a-server ()
   ;; Test Report's wait is a poll made long after the setup (`:core''s): the module's :teardown cancels it.

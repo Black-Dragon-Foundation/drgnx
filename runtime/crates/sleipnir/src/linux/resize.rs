@@ -305,6 +305,7 @@ mod tests {
             disk_total_gb: 200,
             on_ac: true,
             last_start: None,
+            last_start_small: false,
             running: vec![],
             features: vec![],
             reachable: true,

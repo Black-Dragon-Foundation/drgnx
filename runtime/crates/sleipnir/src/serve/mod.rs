@@ -51,6 +51,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// `ready` this often.
 pub const READY_EVERY: Duration = Duration::from_secs(2);
+/// The cleanup runs at least this often (orphan containers, design §5.7).
+pub const CLEANUP_EVERY: Duration = Duration::from_secs(600);
 /// `ping` this often.
 pub const PING_EVERY: Duration = Duration::from_secs(10);
 /// The link is lost after this long without a frame.
@@ -284,7 +286,7 @@ pub struct Serve<W: Write> {
     bundle: String,
     live: BTreeMap<(String, u32), Live>,
     hello: bool,
-    last_start: Option<u64>,
+    last_start: forseti::LastStart,
     stop_admitting: bool,
     level2_since: Option<Instant>,
     last_kill: Option<Instant>,
@@ -300,6 +302,8 @@ pub struct Serve<W: Write> {
     last_ping: Instant,
     last_frame: Instant,
     last_units: Instant,
+    /// The last cleanup (at start, at a job's end, or by the timer: [`CLEANUP_EVERY`]).
+    last_cleanup: Instant,
     /// Where a thread of this `serve` (an origin fetch) tells the loop it ended; none: such work runs in the loop.
     events: Option<mpsc::Sender<Event>>,
     /// The images the attempts it started ran in (so present here), for `ready`.
@@ -408,7 +412,7 @@ impl<W: Write> Serve<W> {
             bundle,
             live: BTreeMap::new(),
             hello: false,
-            last_start: None,
+            last_start: forseti::LastStart::default(),
             stop_admitting: false,
             level2_since: None,
             last_kill: None,
@@ -420,6 +424,7 @@ impl<W: Write> Serve<W> {
             last_ping: now,
             last_frame: now,
             last_units: now,
+            last_cleanup: now,
             events: None,
             images: BTreeSet::new(),
             heartbeat: Default::default(),
@@ -443,7 +448,12 @@ impl<W: Write> Serve<W> {
     /// Its last start too: the gap between starts holds across `serve` processes.
     fn load_running(&mut self) {
         for f in self.ours() {
-            self.last_start = self.last_start.max(f.meta.started);
+            if f.meta.started > self.last_start.at {
+                self.last_start = forseti::LastStart {
+                    at: f.meta.started,
+                    small: f.meta.expected.as_ref().is_some_and(forseti::admit::small),
+                };
+            }
             if f.state == AttemptState::Running {
                 let key = (f.meta.r.job.clone(), f.meta.r.attempt);
                 self.live.entry(key).or_insert(Live::new(f.dir, f.meta));
@@ -999,7 +1009,10 @@ impl<W: Write> Serve<W> {
                     eprintln!("sleipnir serve: the attempt's record: {e}");
                 }
                 self.hand_reservation(&meta, pid);
-                self.last_start = Some(at);
+                self.last_start = forseti::LastStart {
+                    at: Some(at),
+                    small: meta.expected.as_ref().is_some_and(forseti::admit::small),
+                };
                 self.images.extend(ran_in);
                 if let Some(l) = self.live.get_mut(&(r.job.clone(), r.attempt)) {
                     l.meta = meta;
@@ -1594,6 +1607,11 @@ impl<W: Write> Serve<W> {
                 return Next::Stop;
             }
         }
+        // orphans (a labelled container whose job slice is gone) end within ten minutes, job ends or not
+        if self.last_cleanup.elapsed() >= CLEANUP_EVERY {
+            self.last_cleanup = Instant::now();
+            self.cleanup();
+        }
         let check_units = self.last_units.elapsed() >= READY_EVERY;
         if check_units {
             self.last_units = Instant::now();
@@ -1875,6 +1893,7 @@ pub(crate) fn tests_spec() -> forseti::JobSpec {
         keys: vec![],
         local_only: false,
         writes: vec![],
+        derived: Default::default(),
     }
 }
 

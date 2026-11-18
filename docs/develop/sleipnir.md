@@ -295,6 +295,34 @@ timeout and the row parser's judgement. The helper's `key-timeout` record (a key
 pauses or evicts a job first leaves `disturbed` in its folder (`jobexec::disturbed(dir, why)`): the result says
 `disturbed: true` (its time is no fair sample), and a red becomes `Suspect`, to be run again undisturbed.
 
+### The progress guard (`linux::progress`)
+
+Whether a job still makes progress, as pure policy over readings once a minute (`Reading`: the log's size, the slice's
+`cpu.stat usage_usec` and `io.stat` bytes, the rows parsed). Progress is output (new log bytes or a parsed row), CPU at
+or above `cpu_floor` (10 %) of one core over the minute, or new IO bytes. The rules, first hit wins: **stall** — no
+progress of any kind for `stall_s` (20 min); **silent** — no output for `silent_s` (45 min), whatever the CPU (a
+livelock); **wall** — `wall_s` since the start, `wall_limit(pack max, p95)` = `min(pack max, 3 × p95)`, or the pack's
+maximum without history. A stop's verdict reason is `stuck (<rule>)`, so `forseti::classify` makes it
+`infra: stuck (<rule>)`: never red, never rerun; the log gets `=== stopped as stuck (<rule>, <N> min): not a test
+result`.
+
+Two hosts share `progress::read` (a slice that can't be read counts a whole core, so such a job only goes silent) and
+`progress::stuck_report` (`stuck.txt`: the rule; the slice's processes with state and CPU seconds; `podman top` of
+each `libpod-<id>.scope`; the log's last 60 lines; `memory.events`). They read every `period_s`: once a minute, or a
+quarter of the shortest limit when that is shorter (the host rows' test settings, at least once a second).
+
+- **job-exec** (`JobExec.stall_s`/`silent_s` from `JobSpec.derived`, none: the defaults) watches the job slice and the
+  attempt's and state dirs' logs in its wait loop. On a stop it writes `stuck.txt`, appends the log line and writes the
+  kill reason `infra: stuck (<rule>)`, which ends the command and stops the slice. Its wall is the timeout, which
+  ends the job first as `timeout`.
+- **The hub** (`exec::Runner::guard`) watches its own jobs' `drgnx-job-<id>.slice` and `log`, as one more arm of the
+  job's watch; a stop writes the same report and line, `why` = `infra: stuck (<rule>)`, and ends the process group
+  (the slice goes at the job's end). Only jobs with a time box that name a limit, run a container or run a test suite
+  are guarded (`guard_of`).
+- **The deadline.** Both hosts put `DRGNX_JOB_DEADLINE` (epoch seconds: start plus the time box) in the command's
+  environment; the shared argv passes it into a job's container (`-e DRGNX_JOB_DEADLINE`, value from the podman
+  client's environment).
+
 ### Live resizing (`linux::resize`)
 
 The moves on a running job that never throttle it (the job scheduler's "grow and shrink while running"):
@@ -787,7 +815,10 @@ the slot's update lock: the mirror's commit, then the overlay from the blob stor
 inputs ends the attempt `infra: setup`) and runs the job on the slot, or on `slot::private_copy` in
 `tree/` when it writes the tree; it records the slot's id in `attempt.json`. Then it writes `job.json` (the shared
 podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
-slice `drgnx-runner-work-<id>.slice`) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
+slice `drgnx-runner-work-<id>.slice`, which gets `MemoryHigh` at the grant's reservation plus a fifth (at most the cap)
+and `MemoryMax` at its cap, `slices::job_props`; job-exec reverts them at the job's end; the container gets
+`CARGO_BUILD_JOBS = max(1, min(cores, cap / 2.5 GiB))`, `forseti::admit::cargo_jobs`, as a job on the hub's own machine
+does, in its environment or, for a container job, its container's `-e`, unless the job sets it) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
 `RuntimeMaxSec` = the timeout + 60 s (job-exec's own timeout writes the verdict first). The reservation passes to the
 unit's main pid, so it outlives `serve`. Then `started`. Every attempt gets its job helper (the disk watch); a keyed
 one also its key mounts and `drgnx-key exec` (its spec's key names, each into the variable of that name), and one
@@ -821,12 +852,15 @@ runner it pauses the lowest-priority long builds at `pressure` and lets them go 
 is marked `disturbed` first. After the ladder, `ready` grows the jobs near their caps and sets the CPU weights (live
 resizing, above).
 
-**The cleanup**, at start, at every job end and at every `done`, removes only what is this hub's
+**The cleanup**, at start, at every job end, at every `done` and every ten minutes (`CLEANUP_EVERY`), removes only what is this hub's
 (`serve::cleanup::plan`, pure):
 
 - containers of its prefix labelled `drgnx.runner=<hub id>` whose `drgnx.job` attempt doesn't run, the job's
   container (`<prefix>-<id>`) before its relay sidecar (`<prefix>-px-<id>`): `linux::podman::leftovers`, the sweep the
-  hub shares, over `podman ps -a --format json` (a running job's sidecar stays);
+  hub shares, over `podman ps -a --format json` (a running job's sidecar stays). An attempt counts as running only
+  while its job slice `drgnx-runner-work-<id>.slice` is up (`cleanup::slices`, from `systemctl --user list-units`;
+  when that can't be asked, the folders alone decide): a labelled container whose slice is gone is an orphan and goes.
+  A container without the label is never touched (the user's own `nidhogg-build-*`);
 - this hub's ended units (named in its own attempt records) still loaded;
 - this hub's job folders, collected or older than 24 h, whose attempt doesn't run;
 - bundles put there before its own that no process runs from and no running attempt (of any hub) started from (a

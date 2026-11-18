@@ -109,6 +109,7 @@ impl Probe {
             disk_total_gb: disk.size_gb,
             on_ac: self.power().on_ac,
             last_start: None,
+            last_start_small: false,
             running: vec![],
             features: vec![],
             reachable: true,
@@ -138,6 +139,7 @@ impl Probe {
                 disk_total_gb: d.size_gb,
                 on_ac: true,
                 last_start: None,
+                last_start_small: false,
                 running: vec![],
                 features: vec![],
                 reachable: true,
@@ -552,6 +554,8 @@ pub struct CgroupStat {
     pub oom_group_kill: u64,
     /// `cpu.stat`'s `usage_usec`.
     pub cpu_usec: u64,
+    /// `io.stat`: bytes read and written, over every device.
+    pub io_bytes: u64,
     /// `memory.pressure`.
     pub memory_pressure: Pressure,
 }
@@ -576,6 +580,7 @@ impl CgroupStat {
             oom_kill: key(&events, "oom_kill"),
             oom_group_kill: key(&events, "oom_group_kill"),
             cpu_usec: key(&read("cpu.stat").unwrap_or_default(), "usage_usec"),
+            io_bytes: io_bytes(&read("io.stat").unwrap_or_default()),
             memory_pressure: read("memory.pressure")
                 .ok()
                 .and_then(|t| parse_pressure(&t).ok())
@@ -587,6 +592,17 @@ impl CgroupStat {
     pub fn used_mib(&self) -> u64 {
         self.current.saturating_sub(self.file) / (1024 * 1024)
     }
+}
+
+/// `io.stat`'s `rbytes` and `wbytes` summed over its devices.
+fn io_bytes(text: &str) -> u64 {
+    text.split_whitespace()
+        .filter_map(|w| {
+            w.strip_prefix("rbytes=")
+                .or_else(|| w.strip_prefix("wbytes="))
+        })
+        .filter_map(|n| n.parse::<u64>().ok())
+        .sum()
 }
 
 /// A PSI trigger on a pressure file: [`PsiTrigger::wait`] wakes when the stall the spec names happens.
@@ -1133,6 +1149,10 @@ mod tests {
             ),
             ("cpu.stat", "usage_usec 2500000\nuser_usec 2000000\n"),
             (
+                "io.stat",
+                "8:0 rbytes=1000 wbytes=24 rios=1 wios=1 dbytes=7 dios=1\n259:0 rbytes=100 wbytes=900 rios=2 wios=3 dbytes=0 dios=0\n",
+            ),
+            (
                 "memory.pressure",
                 "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=60.00 avg60=0.00 avg300=0.00 total=5\n",
             ),
@@ -1153,6 +1173,8 @@ mod tests {
         );
         assert_eq!(s.used_mib(), 2);
         assert_eq!(s.memory_pressure.full.unwrap().avg10, 60.0);
+        // io.stat: read and written bytes over every device (discards are no progress)
+        assert_eq!(s.io_bytes, 2024);
 
         let probe = |sys: &Path| Probe {
             name: "m".into(),

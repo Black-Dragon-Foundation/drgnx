@@ -101,7 +101,8 @@ Your own layouts; the built-in ones are not stored.
 | `* :right` | symbol or null | no | The right area's tab |
 | `* :panel` | symbol or null | no | The panel's tab |
 | `* :editor` | symbol | no | The editor area's shape |
-| `* :windows` | any | no | The editor area's window state |
+| `* :tree` | any | no | The grid (`drgnx-grid-tree') |
+| `* :windows` | any | no | The editor area's window state (before the grid: read through the migration) |
 | `* :px` | plist | no | Sizes in pixels |
 | `* :px :left` | natnum or null | no |  |
 | `* :px :panel` | natnum or null | no |  |

@@ -70,8 +70,9 @@ ring), and the inside of the button is the theme's fill: the quiet selection, th
       (kill-buffer buf))))
 
 (drgnx-look-gui-deftest drgnx-ui-look-components/keycaps-and-buttons-are-in-the-ui-font ()
-  "In a buffer whose default font is the code font (the start page's), a keycap is drawn in the caption role's family
-and a button in the UI text role's; under Glitnir a button's corner is rounded (its corner pixel is not its fill)."
+  "In a buffer whose default font is the code font (the start page's), a keycap (the kit's key hint) is drawn in the
+small code role's family (the frontend spec §7: the code font only in code, diffs and key hints) and a button in the
+UI text role's; under Glitnir a button's corner is rounded (its corner pixel is not its fill)."
   (skip-unless (display-graphic-p))
   (drgnx-uitest-bare-frame)
   (let ((buf (get-buffer-create "*look-components-fonts*")))
@@ -90,7 +91,7 @@ and a button in the UI text role's; under Glitnir a button's corner is rounded (
                           (symbol-name (font-get (font-at (1- (point))) :family)))))
             (should (equal (list 'button (face-attribute 'drgnx-ui-text :family nil t))
                            (list 'button (funcall family "folder"))))
-            (should (equal (list 'keycap (face-attribute 'drgnx-ui-caption :family nil t))
+            (should (equal (list 'keycap (face-attribute 'drgnx-code-small :family nil t))
                            (list 'keycap (funcall family "Ctrl")))))
           (when (and (fboundp 'glitnir-active-p) (glitnir-active-p))   ; drawing, not just loaded
             (goto-char (point-min)) (search-forward "Open")

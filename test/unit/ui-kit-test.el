@@ -805,6 +805,8 @@
 (defvar nhwl-menu-row-height)
 (defvar nhwl-menu-row-padding)
 (defvar nhwl-menu-separator-height)
+(defvar nhwl-menu-selection-inset)
+(defvar nhwl-menu-selection-radius)
 (defvar nhwl-menu-frame-parameters)
 (defvar drgnx-look-density-changed-hook)
 
@@ -812,10 +814,10 @@
   "ui/face's part for Nidhogg's menus sets their options from `drgnx-ui-kit-menu-values' (220 px, the density's row,
 12 px either end, radius 8) and their faces, and follows a change of density or theme; its teardown puts every option,
 face spec and hook back as Nidhogg had them."
-  (skip-unless (and (require 'nhwl-menu nil t) (boundp 'nhwl-menu-separator-height)))
+  (skip-unless (and (require 'nhwl-menu nil t) (boundp 'nhwl-menu-selection-inset)))
   (require 'drgnx-menu-look (expand-file-name "modules/ui/drgnx-menu-look" drgnx-dir))
   (let* ((vars '(nhwl-menu-min-width nhwl-menu-row-height nhwl-menu-row-padding nhwl-menu-separator-height
-                                     nhwl-menu-frame-parameters))
+                                     nhwl-menu-selection-inset nhwl-menu-selection-radius nhwl-menu-frame-parameters))
          (faces '(nhwl-menu nhwl-menu-selected nhwl-menu-key))
          (before (mapcar #'default-value vars))
          (specs (mapcar (lambda (f) (get f 'face-defface-spec)) faces))
@@ -830,6 +832,8 @@ face spec and hook back as Nidhogg had them."
           (should (equal nhwl-menu-row-height (plist-get (drgnx-ui-kit-menu-values) :row-height)))
           (should (equal nhwl-menu-row-padding '(12 . 12)))
           (should (eql nhwl-menu-separator-height 9))
+          (should (eql nhwl-menu-selection-inset 4))
+          (should (eql nhwl-menu-selection-radius 6))
           (should (eql (alist-get 'corner-radius nhwl-menu-frame-parameters) 8))
           (should (alist-get 'drgnx-minimap-exclude nhwl-menu-frame-parameters))   ; no scroll bar strip
           (should (equal (get 'nhwl-menu-key 'face-defface-spec) '((t :inherit (drgnx-text-subtle drgnx-code-small)))))
@@ -837,7 +841,8 @@ face spec and hook back as Nidhogg had them."
           (should (memq #'drgnx-menu-look--refeed (default-value 'drgnx-look-density-changed-hook)))
           ;; a change the feed follows (here a row height the density gives): set again, as the module
           (cl-letf (((symbol-function 'drgnx-ui-kit-menu-values)
-                     (lambda (&optional _) (list :min-width 220 :row-height 30 :row-padding '(12 . 12) :separator-height 9 :radius 8 :shadow t))))
+                     (lambda (&optional _) (list :min-width 220 :row-height 30 :row-padding '(12 . 12) :separator-height 9 :selection-inset 4
+                                                 :selection-radius 6 :radius 8 :shadow t))))
             (drgnx-menu-look--refeed))
           (should (eql nhwl-menu-row-height 30)))
       (should-not (drgnx-modules--unwind 'test/menu-look)))

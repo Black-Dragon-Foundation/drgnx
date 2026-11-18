@@ -18,8 +18,11 @@ it does not depend on the agent that started it or on the editor, and it survive
   worktree or in a folder inside it: the hub resolves the `cwd` the agent names (links and `..` included) and refuses
   any other ("… is outside your worktree …"); `job_start` without a `cwd` uses the worktree. Your own jobs run with
   your rights, in the folder they name. On Linux the job is
-  a transient `systemd-run --user` scope with a memory cap (`agents-job-memory`, default 4G); without a user systemd it
-  has a session and process group of its own. `machine` is `auto` (the default: whichever allowed machine finishes it
+  a transient `systemd-run --user` scope with a memory cap (`agents-job-memory`, default 4G), in a slice of its own,
+  `drgnx-job-<id>.slice`, which also holds its containers (`--cgroup-parent`) and carries the same cap; the queue counts
+  what the slice uses (its memory less page cache) against the machine's budget at each tick, and a slice it can't
+  read counts the job's whole reservation (said once in the hub's log). The slice is stopped and its limit dropped when
+  the job ends. Without a user systemd it has a session and process group of its own. `machine` is `auto` (the default: whichever allowed machine finishes it
   first), `local`, or one of your runners by name (see `docs/guide/runners.md`); a name that is no runner is refused.
 - **Its files.** `<state>/hub/exec/<id>/` holds the log, the exit code and the result. The hub reads the same files
   after a restart: a job still running is picked up again (by its process and start time, not just its pid), one that
@@ -34,7 +37,16 @@ it does not depend on the agent that started it or on the editor, and it survive
   `infra`; the last line of its log says why (`infra: proxy: …`). The user's
   job (not an agent's) may send `no_timebox: true` instead: it has no deadline, its row has no `timebox_s`, and only
   `exec/stop` or the hub's stop ends it (with `timebox_s` it is refused). An agent that sends `no_timebox` is refused
-  with `invalid-params`, like the four fields below.
+  with `invalid-params`, like the four fields below. A job with a time box sees its deadline in `DRGNX_JOB_DEADLINE`
+  (epoch seconds; a container job gets it inside the container too), so a harness can dump its state before the end.
+- **Stuck jobs.** The progress guard stops a job that makes no progress, once a minute looking at its log, its
+  slice's CPU and its IO: **stall** is no output, under a tenth of a core and no IO for `stall_s` (default 1200),
+  **silent** is no output for `silent_s` (default 2700) whatever the CPU. Both take 1 to 86400. A stopped job is
+  `infra` (`infra: stuck (stall)`), never a failure: its folder gets `stuck.txt` (the rule, the processes with their
+  state and CPU, `podman top` of its containers, the log's last 60 lines, `memory.events`) and its log ends with
+  `=== stopped as stuck (<rule>, <N> min): not a test result`. On this machine the guard watches a job with a time
+  box that names `stall_s` or `silent_s`, runs a container or runs a test suite; your servers and plain commands are
+  never judged by their output. A runner's jobs always have it.
 - **The end.** The `exec-done` event carries the exit code and a summary: the names of the failing tests (read from
   `cargo test`, ERT and domr output, by the job's kind: `cargo`, `ert`, `domr`, `other`) and at most 20 lines of the log
   (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job
@@ -52,7 +64,11 @@ it does not depend on the agent that started it or on the editor, and it survive
   "needs 6144 MiB of memory; …", "this machine is on battery", …). Rows also say where a job runs (`machine`), its
   `priority`, and on a runner its `attempt`. A start may mark a job `heavy` (under the project's
   `drgnx-runners-send heavy`, the default, only heavy jobs may leave this machine), `local_only`, name the `keys` it
-  needs, and the `writes` it may make to the tree. A start with `os: macos` (a Naglfar build, macOS tests) runs only
+  needs, and the `writes` it may make to the tree. A start may name the jobs it `needs` (their ids, at most 64): it
+  waits ("waits for job N"), holding no slot, no memory and no runner, until each of them passed, and ends as infra
+  ("needed job N failed") without running if one did not; a need the queue doesn't know, or one that would make a
+  cycle, refuses the start. A job lifts the jobs it needs to its own priority, running ones included, so a P1 job is
+  never stuck behind a need that a lower priority would let be evicted. A start with `os: macos` (a Naglfar build, macOS tests) runs only
   on a Mac runner, as a host job (never in a container): it counts as heavy, and waits for a Mac that has its
   project's `drgnx-runners-mac-tools` and `drgnx-runners-mac-toolchains`.
 

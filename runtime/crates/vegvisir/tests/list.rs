@@ -227,3 +227,20 @@ fn list_navigation_walks_rows_and_parents() {
     assert_eq!(list::list_parent(&es, &id("plan:p1")), Some(id("spec:s1")));
     assert_eq!(list::list_parent(&es, &id("spec:s1")), None);
 }
+
+#[test]
+fn an_empty_workspace_draws_a_line_that_says_so() {
+    // the Work map of a project with nothing in it still draws: one row that is no item (no `list:N` key, no id)
+    let rows = vegvisir::render::list_rows(&[], None);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key, "empty:list");
+    assert!(
+        rows[0].text.contains("Nothing here yet"),
+        "{:?}",
+        rows[0].text
+    );
+    assert!(
+        !rows[0].props.iter().any(|p| p.2 == "drgnx-work-id"),
+        "the line is no item"
+    );
+}

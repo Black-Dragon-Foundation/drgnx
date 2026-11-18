@@ -135,6 +135,14 @@ pub struct StartParams {
     /// `exec/stop` and the hub's stop still end it.  With `timebox_s` it is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_timebox: Option<bool>,
+    /// The progress guard's stall limit: seconds with no output, CPU under a tenth of a core and no IO before the job
+    /// ends `infra: stuck (stall)` (1 to 86400; default 1200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_s: Option<u64>,
+    /// The progress guard's silent limit: seconds with no output, whatever the CPU, before the job ends
+    /// `infra: stuck (silent)` (1 to 86400; default 2700).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent_s: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<ExecKind>,
     /// A container job's image: a name on `agents-container-images` (kind container only).
@@ -154,6 +162,10 @@ pub struct StartParams {
     /// The keys the job needs, by name (never a value; at most 16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keys: Option<Bounded<Vec<Bounded<String, 128>>, 16>>,
+    /// The jobs (ids) this one needs: it waits, holding nothing, until each passed, and ends as infra if one did not
+    /// (at most 64; each one the queue knows, and no cycle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<Bounded<Vec<Id>, 64>>,
     /// The job runs on this machine only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_only: Option<bool>,
@@ -361,6 +373,11 @@ fn check_start(p: &StartParams) -> Result<(), Error> {
     }
     if p.timebox_s.is_some_and(|t| !(1..=86_400).contains(&t)) {
         return Err(invalid("timebox_s", "a time box of 1 to 86400 seconds"));
+    }
+    for (name, v) in [("stall_s", p.stall_s), ("silent_s", p.silent_s)] {
+        if v.is_some_and(|t| !(1..=86_400).contains(&t)) {
+            return Err(invalid(name, "a limit of 1 to 86400 seconds"));
+        }
     }
     if p.no_timebox == Some(true) && p.timebox_s.is_some() {
         return Err(invalid(

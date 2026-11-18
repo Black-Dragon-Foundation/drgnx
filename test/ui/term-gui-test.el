@@ -112,9 +112,10 @@ its blank, drawn past the row's text by the padding."
 (defvar drgnx-session-quit-keep)
 
 (defun drgnx-term-gui--sixel (cw ch)
-  "A printf command drawing a sixel 2 cells wide (2 × CW px) and 2 cells tall (2 × CH px, in 6-px bands): red down
-to the last whole band of its first cell row, blue below."
-  (let* ((red (/ ch 6)) (bands (/ (+ (* 2 ch) 5) 6)) (w (* 2 cw)) (band (format "!%d~" w)))
+  "A printf command drawing a sixel 2 cells wide (2 × CW px) and 2 cells tall (the whole 6-px bands of 2 × CH px:
+rounded up, a CH that is no multiple of 3 (37 at scale 2) made it 3 cells): red down to the last whole band of its
+first cell row, blue below."
+  (let* ((red (/ ch 6)) (bands (/ (* 2 ch) 6)) (w (* 2 cw)) (band (format "!%d~" w)))
     (concat "printf '\\033[H\\033[2J\\033P0;1;0q\"1;1;" (number-to-string w) ";" (number-to-string (* 6 bands))
             "#1;2;100;0;0#2;2;0;0;100"
             (mapconcat (lambda (i) (concat (if (< i red) "#1" "#2") band)) (number-sequence 0 (1- bands)) "-")
@@ -157,6 +158,8 @@ is red in its first cell row, blue in its second, and the cell after it is neith
   (let ((win (get-buffer-window b)) (cw (frame-char-width)) (ch (frame-char-height)))
     (drgnx-test-wait (lambda () (and (drgnx-term-gui--image-pos b) (member "after" (drgnx-term-gui--lines b))))
                      :secs 30 :what (concat what " and the text after it"))
+    ;; the picture is of the frame as presented: the first image of a session is in the buffer before it is on screen
+    (drgnx-test-wait-presented)
     (let* ((pos (drgnx-term-gui--image-pos b)) (snap (drgnx-uitest-snapshot))
            (top (drgnx-term-gui--px snap win pos (/ cw 2) (/ ch 4)))
            (below (with-current-buffer b (save-excursion (goto-char pos) (forward-line 1) (point))))

@@ -57,14 +57,15 @@ foot shows only in part)."
 \(`agent' has no face of its own)."
   (mapcar (lambda (v) (if (eq v 'agent) 'neutral v)) variants))
 
-(defun drgnx-kit-sheet--bg (id variants)
+(defun drgnx-kit-sheet--bg (id variants &optional theme)
   "The fill token component ID's binding for VARIANTS (values) gives its own face, or nil: the most specific binding
-whose values VARIANTS all have."
+whose values VARIANTS all have.  In THEME `hc' a binding marked `:hc-ring' has no fill (a ring instead): nil."
   (let (best (n -1))
     (dolist (b (plist-get (drgnx-ui-kit-component id) :bind))
       (when (and (cl-every (lambda (v) (memq v (drgnx-kit-sheet--face-variants variants))) (car b)) (> (length (car b)) n))
         (setq best b n (length (car b)))))
-    (plist-get (cdr best) :bg)))
+    (and (not (and (eq theme 'hc) (plist-get (cdr best) :hc-ring)))
+         (plist-get (cdr best) :bg))))
 
 (defun drgnx-kit-sheet--edge (id variants)
   "The ring token of component ID's binding for VARIANTS (see `drgnx-kit-sheet--bg'), or nil."
@@ -231,7 +232,7 @@ Returns the number of cells checked."
         ;; (b) the fill inside the start pad, halfway in (clear of a focus ring and of a rounded corner): the state's,
         ;; the component's own, an agent mark's its agent's colour (a bar's is checked on its own row, below)
         (when (and spaces (not (eq id 'progress)))
-          (let* ((token (or (plist-get (drgnx-ui-kit-state state) :fill) (drgnx-kit-sheet--bg id variants)
+          (let* ((token (or (plist-get (drgnx-ui-kit-state state) :fill) (drgnx-kit-sheet--bg id variants variant)
                             (and (eq id 'agent-mark)
                                  (intern (format "a%d" (plist-get (drgnx-kit-sheet--props id variants state) :slot))))
                             'editor))
@@ -394,7 +395,7 @@ are the card's fill), and closed on its top edge."
           (drgnx-test-wait-presented)
           (let* ((s (drgnx-uitest-device-scale (selected-frame))) (snap (drgnx-uitest-snapshot))
                  (edges (window-inside-pixel-edges))
-                 (ring (drgnx-kit-sheet--rgb (drgnx-look-token 'border 'dark)))
+                 (ring (drgnx-kit-sheet--rgb (drgnx-look-token 'border-strong 'dark)))
                  (fill (drgnx-kit-sheet--rgb (drgnx-look-token 'panel 'dark)))
                  (x (round (* s (+ (car edges) 24))))
                  (top (round (* s (cadr edges))))

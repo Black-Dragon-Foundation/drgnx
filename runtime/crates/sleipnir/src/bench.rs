@@ -105,6 +105,7 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> Result<Vec<String>, Strin
             writes_tree: false,
             target: target.to_path_buf(),
             caches: vec![],
+            cargo_jobs: 0,
         }),
     };
     let ra = RunnerArgs {
@@ -113,6 +114,7 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> Result<Vec<String>, Strin
         name_prefix: PREFIX.into(),
         owner: String::new(),
         job_labels: false,
+        cargo_jobs: 0,
     };
     podman::argv(&req, &caps, &ra)
         .map_err(|r| r.message)?
