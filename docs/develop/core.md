@@ -1660,7 +1660,18 @@ lists at each publish.
   and `:file`, the file's true name, which keys the hub's `labels` layer in Sjá. The buffer's line model gets the MARK
   expression (`nidhogg-lines-set-section-regexp`, `drgnx-minimap-mark-regexp`, Rust regex syntax) and finds the MARK
   sections itself; the hub is told the file is shown (`minimap/watch`, once per change of file) and sends the
-  definitions. Nidhogg draws the rest (Glitnir's minimap layer: tiles, labels, the pointer).
+  definitions. Nidhogg draws the rest (Glitnir's minimap layer: tiles, labels, the pointer). A buffer with pinned
+  regions (`editor/sticky`'s `drgnx-pin-region`) adds `:pin-kind` (the line model's `pin` kind, `drgnx-ruler-kinds`),
+  `:pin` (the face `drgnx-marks-pin`) and `:pin-names` (a vector, buffer order): the bands are the scroll bar's `pin`
+  marks (owner `pins`, each with its END), which the line model moves with edits, so the spec never carries positions.
+- **Sticky lines.** `editor/sticky` with `drgnx-sticky-style` `lines` draws the scope start lines in a pooled child
+  frame per window over its top rows (`drgnx-sticky--cards`), its window and frame marked `drgnx-minimap-exclude`. The
+  header's memo `sticky-segment` (once per window start, text change above it, or hub answer) works out the scopes
+  from `drgnx-fold-ranges` (else tree-sitter) and asks for a refill (a 0 s debounce: no frame change inside a
+  redisplay) only when the set differs from the card's; a scroll inside the same scopes runs nothing.
+  The store's `pane-resized` and `windows-changed` events (a `now` subscription that arms a 0 s timer) move the cards
+  with their windows. `drgnx-pin-show` fills the same card with a pin's
+  lines and keeps it there until toggled off.
 - **Folding.** `editor/fold` (`modules/editor/drgnx-fold.el`) reads the line model's one fold table (`nidhogg-lines-folds`,
   `nidhogg-lines-fold-at`: `(BEG END KIND DEPTH SOURCE)`, BEG the first line's start, END the last line's end). Its
   sources are numbers: 0 tree-sitter, 1 the hub, 2 headings and 4 indentation (the model finds those itself, again

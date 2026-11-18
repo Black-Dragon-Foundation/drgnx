@@ -146,6 +146,19 @@ again only when the text above the window's top changes or the hub answers. Scro
 scopes reuses their names (the scope lines are read once). **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own). It is one of the header's tail providers: add your own with
 `drgnx-chrome-add-tail-provider` (a function of a window returning a string or nil, and a depth; lowest first).
 
+**Lines instead of names.** With `drgnx-sticky-style` set to `lines` (default `names`), the scopes' first lines show
+as code, VS Code's way: up to `drgnx-sticky-max` lines (3), outermost first, with their line numbers and syntax colours,
+over the window's top rows, the popups' shadow under the last. They are a card over the text, so the text never
+moves, point stays where it is and a scroll counts the same rows. Click a line to go there; Ctrl+click folds that scope.
+The scopes come from the fold table, so sticky scroll, folding and the minimap agree (else from tree-sitter). The card
+is filled again only when the set of scopes changes, never per scroll.
+
+**Pinned regions.** **Pin Region** pins the selection, or the scope at point: it keeps a band and its name on the
+minimap (the scroll bar's pin marks, which move with your edits). **Show Pinned Region** shows a pin (the one at point,
+else one you choose from the buffer's pins) in the same card over the window's top rows, so you can read a signature
+while you write its uses elsewhere; run it again to take it off. **Unpin Region** removes one. Pins last while the
+buffer is open.
+
 ## Markdown
 
 Markdown files open in markdown-mode — READMEs as GitHub Flavored Markdown — with code blocks highlighted in their
