@@ -2146,6 +2146,7 @@ mod tests {
             glyphs: &[],
             density: Density::Comfortable,
             icons: None,
+            ascii: false,
         }
     }
 
