@@ -1063,8 +1063,17 @@ what changed: the buffers whose text did, each window's body width before and af
                                     buffers)))
          (ticks (mapcar #'buffer-chars-modified-tick buffers))
          (before (funcall widths))
+         (texts (mapcar (lambda (b) (with-current-buffer b (buffer-substring-no-properties (point-min) (point-max))))
+                        buffers))
          (r (drgnx-look-scene--hub-round buffers)))
     (unless (eq r t)
+      (cl-mapc (lambda (b old)
+                 (let ((new (with-current-buffer b (buffer-substring-no-properties (point-min) (point-max)))))
+                   (unless (equal old new)
+                     (let ((o (split-string old "\n")) (n (split-string new "\n")))
+                       (push (format "DIFF %s: -%S +%S" (buffer-name b) (seq-difference o n) (seq-difference n o))
+                             drgnx-look-scene--errors)))))
+               buffers texts)
       (push (if (eq r 'no-answer) "agent-panel: the hub did not answer a ping"
               (format "agent-panel: one more hub round trip changed the panel's rows: the shot shows the hub's first fit (changed %S, widths %S then %S, asks open %d)"
                       (delq nil (cl-mapcar (lambda (b tick) (and (/= tick (buffer-chars-modified-tick b)) (buffer-name b)))
