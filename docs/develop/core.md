@@ -1702,7 +1702,8 @@ lists at each publish.
   `org-fold`; `evil-fold-list` gets a provider for `drgnx-fold-mode`.
 - **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
   8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
-  at 26 %; all through `drgnx-px`.
+  at 26 %; all through `drgnx-px`. The themes give that face the text colour (`fg`, the look's `--fg`), never a fill
+  token: 26 % of a fill such as `hover` sits a step from every surface and the thumb vanishes.
   - The fringe is widened by the strip with `set-window-fringes` only when the strip comes or goes, or the scale
     changes (`drgnx-scrollbar-refresh-all` on the density hook). Its own width is kept in the window parameter
     `drgnx-ruler-fringe`, which is also the strip's `:right`.

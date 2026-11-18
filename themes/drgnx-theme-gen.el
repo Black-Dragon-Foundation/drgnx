@@ -331,8 +331,9 @@ faces a landed kit component replaces (`drgnx-ui-kit-replaced-faces'): they inhe
           (drgnx-debug-stopped-line :background ,(c 'stop-band) :extend t)
           (drgnx-debug-frame-line :background ,(c 'ok-tint) :extend t)
           (drgnx-debug-exception-line :background ,(c 'error-tint) :extend t)
-          ;; the overview ruler (debugging-extras.html): the shown lines a soft band, marks in their role colours
-          (drgnx-ruler-view :inherit shadow :foreground ,(c 'hover))
+          ;; the overview ruler (debugging-extras.html, minimap.css `.sbar .thumb'): the shown lines a soft band, the text
+          ;; colour that the spec draws at 26 %; marks in their role colours
+          (drgnx-ruler-view :inherit shadow :foreground ,(c 'fg))
           (drgnx-debug-ruler-breakpoint :inherit drgnx-debug-breakpoint :foreground ,(c 'error))
           (drgnx-debug-ruler-unverified :inherit drgnx-debug-unverified :foreground ,(c 'disabled))
           (drgnx-debug-ruler-stop :inherit drgnx-debug-stopped :foreground ,(c 'warn))
