@@ -37,10 +37,10 @@ drgnx-ui's sessions run under a Linux compositor; macOS has no setsid(1) to make
 
 (ert-deftest drgnx-ui/a-launched-group-is-ours-while-its-command-execs ()
   "While a process execs, its /proc command line reads empty for an instant.  The detached launcher's leader (sh)
-once exec'd `timeout' as its last step, so at that instant no member of the new group named the run directory, and
+execs `timeout' as its last step, so at that instant no member of the new group named the run directory, and
 `drgnx-ui-alive-p' said the session's processes were gone (drgnx-inv/i2-every-area-keeps-its-size failed 0.05 s
 into its start on a loaded machine).  A `timeout' whose command line names no run stands in for that instant, held:
-the group is still the session's."
+the group is still the session's, by its leader's start time."
   (unless (executable-find "setsid")
     (ert-skip "no setsid(1): drgnx-ui's sessions run under a Linux compositor"))
   (let* ((run (directory-file-name (make-temp-file "drgnx-ui-run" t))) (bin (make-temp-file "drgnx-ui-bin" t))

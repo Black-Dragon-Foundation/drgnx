@@ -503,12 +503,12 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (drgnx-ui--launch-detached sess)
       (let ((cmd (car (last (car calls)))))
         (should (string-match-p "ulimit -v [0-9]+ " cmd))
-        (should (string-match-p "; timeout -k 10 1800 env " cmd))
+        (should (string-match-p "exec timeout -k 10 1800 env " cmd))
         (should (string-match-p "pgid; ulimit" cmd)))
       (setq calls nil)
       (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME=2700" process-environment)))
         (drgnx-ui--launch-detached sess))
-      (should (string-match-p "; timeout -k 10 2700 env " (car (last (car calls))))))))
+      (should (string-match-p "exec timeout -k 10 2700 env " (car (last (car calls))))))))
 
 (ert-deftest drgnx-ui/stop-removes-the-wayland-display-socket ()
   (drgnx-ui-test--with-state
