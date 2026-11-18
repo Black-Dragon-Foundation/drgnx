@@ -90,6 +90,8 @@ words of its line pairs: `when' against `if', the faces `diff-refine-removed' an
           (should (equal (buffer-name) "cache-experiments.ipynb")))
       (kill-buffer buffer))))
 
+(defvar drgnx-view-env--views)
+
 (defun drgnx-look-scenes-test--shown-view (view then)
   "A hub-fed VIEW shown in the selected window, its env sent and no rows yet; THEN called with its state, with
 `accept-process-output' standing for the hub's wait (it returns nil)."
@@ -132,6 +134,25 @@ an error while the hub's rows are on their way: the step waits for them, as the 
          (drgnx-look-scene--unfed))
        (should (= 1 (length drgnx-look-scene--errors)))
        (should (string-match-p "\\`unfed-test: shown in .* with no rows from the hub" (car drgnx-look-scene--errors)))))))
+
+(ert-deftest drgnx-look-scenes/a-view-fed-by-its-own-channel-needs-no-env-classes ()
+  "The terminal view is fed through `term/open' and never registers with the view env, so it has no classes though
+its rows came: a version is enough.  A view the env registry knows with rows but no env sent is still an error."
+  (drgnx-look-scenes-test--shown-view
+   "term-test"
+   (lambda (state)
+     (let ((drgnx-look-scene--errors nil) (drgnx-look-scene-rows-wait 0)
+           (drgnx-view-env--views (make-hash-table :test #'equal)))
+       (setf (drgnx-view-patch-version state) 3)
+       (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () t))
+                 ((symbol-function 'drgnx-view-env-classes) (lambda (_) nil))
+                 ((symbol-function 'redisplay) #'ignore)
+                 ((symbol-function 'accept-process-output) #'ignore))
+         (drgnx-look-scene--unfed)
+         (should-not drgnx-look-scene--errors)
+         (puthash "term-test" (list (current-buffer)) drgnx-view-env--views)
+         (drgnx-look-scene--unfed))
+       (should (= 1 (length drgnx-look-scene--errors)))))))
 
 (ert-deftest drgnx-look-scenes/the-theme-switch-names-one-theme-for-every-scene ()
   ;; DRGNX_LOOK_THEME: unset, each scene's own theme; set, the one every scene draws in

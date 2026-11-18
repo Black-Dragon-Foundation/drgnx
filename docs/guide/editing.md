@@ -15,7 +15,17 @@ changes apply at once:
 |---|---|---|---|
 | `drgnx-editing-font-size` | `editor.fontSize` | 13.5 | The code font's size in pixels. 13.5 is drgnx's own code size (VS Code's is 14); the code font role (`drgnx-look-font-code`) can still set a size of its own, which wins. |
 | `drgnx-editing-tab-size` | `editor.tabSize` | 4 | Columns a tab takes, and an indent where the mode has none of its own. A mode with its own indent keeps it. |
-| `drgnx-editing-word-wrap` | `editor.wordWrap` | `on` | `on` continues a long line on the next row at a word; `off` lets it run past the edge. drgnx wraps by default (VS Code does not). Toggle Word Wrap flips it for one buffer. |
+| `drgnx-editing-word-wrap` | `editor.wordWrap` | `auto` | What a line longer than its window does. `off` lets it run past the edge; `on` continues it on the next row at a word (narrow windows too, with no continuation arrows in the fringes, as in VS Code); `column` wraps it at `drgnx-editing-word-wrap-column` (VS Code's `wordWrapColumn`), and at the window's edge when the window is narrower; `bounded` is the same. `auto` wraps prose (Markdown, Org, reStructuredText, LaTeX, commit messages, plain text) and cuts code, configuration and data (YAML, TOML, HTML, XML, CSS, JSON). A `(:mode MODE …)` entry gives one language its own. Buffers that are not code, data or text (the Explorer, tables, the work graph) keep their own. Under `auto` and `on` drgnx also wraps Org, which cuts by default (`org-startup-truncated`), unless you set that yourself. A file's own `truncate-lines` or `word-wrap` (a local variables line, `.dir-locals.el`) still wins. |
+| `drgnx-editing-word-wrap-column` | `editor.wordWrapColumn` | 80 | The column `column` and `bounded` wrap at; the other values ignore it. |
+
+**Toggle Word Wrap** (palette, View menu; VS Code profile Alt+Z, Emacs profile `C-x x t`, Vim profile `SPC t w`)
+wraps or cuts one buffer until you close it. A restart opens the file with the setting's wrap again.
+
+Your old `drgnx-face-line-wrap` (gone) was folded into `drgnx-editing-word-wrap` once, at the first start of this
+version. A value you set (in Settings, `settings.el`, a private workspace file, Customize or your Lisp) was kept and
+mapped (`word` is `on`, `truncate` is `off`), a value drgnx had written for you was dropped (so `auto` applies), and
+anything it could not map (a project's shared `.drgnx/settings.el`, `nil`, a computed value) is listed in
+**Settings: Migration Report**, untouched.
 
 Indents are made of spaces, as VS Code's `editor.insertSpaces`, in every key profile: `indent-tabs-mode` defaults to
 nil (Emacs's own default, tabs, would turn every 4-column indent into a tab now that a tab is 4 columns). A mode with tabs
@@ -147,8 +157,10 @@ scopes reuses their names (the scope lines are read once). **Toggle Sticky Scrol
 `drgnx-chrome-add-tail-provider` (a function of a window returning a string or nil, and a depth; lowest first).
 
 **Lines instead of names.** With `drgnx-sticky-style` set to `lines` (default `names`), the scopes' first lines show
-as code, VS Code's way: up to `drgnx-sticky-max` lines (3), outermost first, with their line numbers and syntax colours,
-over the window's top rows, the popups' shadow under the last. They are a card over the text, so the text never
+as code, VS Code's way: up to `drgnx-sticky-max` lines (3), outermost first, in syntax colours, over the window's top
+rows, the popups' shadow under the last. When the editor shows line numbers, so do the lines, padded as the editor's,
+and their text starts in the editor's text column, in its font and text size, so the columns line up (also while the
+editor is scrolled sideways). They are a card over the text, so the text never
 moves, point stays where it is and a scroll counts the same rows. Click a line to go there; Ctrl+click folds that scope.
 The scopes come from the fold table, so sticky scroll, folding and the minimap agree (else from tree-sitter). The card
 is filled again only when the set of scopes changes, never per scroll. Each window with sticky scroll gets its card,

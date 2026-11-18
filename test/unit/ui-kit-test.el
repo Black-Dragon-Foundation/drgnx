@@ -270,6 +270,151 @@
     (should (= i (length want)))
     (should-not (nreverse fails))))
 
+(defun ui-kit-test--answers (kind labels width)
+  "A question card of KIND with LABELS' answers: (CARD-TEXT . ANSWERS), ANSWERS the indexes the card's handlers got."
+  (let* ((got (list nil))
+         (lines (drgnx-ui-kit-question-card
+                 kind "Run cargo test?" "The agent wants to run a command in the project folder, and waits for you."
+                 (mapcar (lambda (l) (list l nil (lambda (i) (push i (car got))))) labels) width)))
+    (cons (apply #'concat lines) got)))
+
+(ert-deftest drgnx-ui-kit/question-card-keys-answer ()
+  ;; a bare key on the card answers (y/a/n a permission's Allow once, Always, Deny; 1..9 a question's; y/n a sign-off's),
+  ;; through the card's action kind map; a click on its text answers nothing
+  (dolist (case '((permission ("Allow once" "Always" "Deny") (("y" . 0) ("a" . 1) ("n" . 2)))
+                  (question ("A" "B" "C") (("1" . 0) ("3" . 2)))
+                  (sign-off ("Approve" "Request changes") (("y" . 0) ("n" . 1)))))
+    (pcase-let* ((`(,kind ,labels ,keys) case) (c (ui-kit-test--answers kind labels 60)))
+      (with-temp-buffer
+        (insert (car c)) (goto-char (point-min))
+        (dolist (k keys)
+          (setcar (cdr c) nil)
+          (cl-letf (((symbol-function 'this-command-keys-vector) (lambda () (kbd (car k)))))
+            (drgnx-ui-kit-activate))
+          (should (equal (list kind (car k) (cadr c)) (list kind (car k) (list (cdr k))))))
+        (setcar (cdr c) nil)
+        (cl-letf (((symbol-function 'this-command-keys-vector) (lambda () [mouse-1])))
+          (drgnx-ui-kit-activate))
+        (should-not (cadr c))))))
+
+(ert-deftest drgnx-ui-kit/question-card-has-a-primary-first-button-and-the-head-tint ()
+  (let* ((c (car (ui-kit-test--answers 'permission '("Allow once" "Deny") 60)))
+         (lines (split-string c "\n" t)))
+    (should (= (length lines) 5))
+    (should (memq 'drgnx-kit-question-card-head
+                  (ensure-list (get-text-property (string-match "Run cargo" (nth 0 lines)) 'face (nth 0 lines)))))
+    (let* ((row (nth (- (length lines) 2) lines))
+           (a (string-match "Allow once" row)) (d (string-match "Deny" row)))
+      (should (memq 'drgnx-kit-button-primary (ensure-list (get-text-property a 'face row))))
+      (should (memq 'drgnx-kit-button-secondary (ensure-list (get-text-property d 'face row)))))))
+
+(defun ui-kit-test--merged-height (faces base &optional attr)
+  "The ATTR (default `:height') Emacs gives text in FACES (a `face' property value) over the line face BASE: a probe face inheriting
+FACES then BASE (an anonymous face in FACES becomes a face of its own), on `default'."
+  (let ((inherit nil) (k 0))
+    (dolist (f (if (and (consp faces) (not (keywordp (car faces)))) faces (list faces)))
+      (cond ((and f (symbolp f)) (push f inherit))
+            ((consp f) (let ((anon (intern (format "ui-kit-test--anon-%d" (setq k (1+ k))))))
+                         (make-face anon)
+                         (face-spec-set anon `((t ,@f)))
+                         (push anon inherit)))))
+    (make-face 'ui-kit-test--probe)
+    (face-spec-set 'ui-kit-test--probe `((t :inherit ,(nreverse (cons base inherit)))))
+    (face-attribute 'ui-kit-test--probe (or attr :height) nil 'default)))
+
+(defun ui-kit-test--font-of (face)
+  "The type face kit FACE takes its size from, read from the components file: its binding's `:font', else the first
+type face in its `:inherit'; nil for a face that only colours."
+  (let ((b (nth 2 (assq face (drgnx-ui-kit-face-bindings)))))
+    (cl-find-if (lambda (x) (memq x '(drgnx-ui-text drgnx-ui-heading drgnx-ui-caption drgnx-ui-title drgnx-code-small)))
+                (or (plist-get b :font) (plist-get b :inherit)))))
+
+(ert-deftest drgnx-ui-kit/line-text-scales-once ()
+  ;; a mode, header or tab line's face is under the kit's text; drgnx's themes give the header line the UI font's
+  ;; relative size, and a kit face inheriting the UI font's relative size scaled it again (the panel tab's text 25 px
+  ;; for 26 at scale 2); so would a kit face inheriting a standard face with a size (`tab-line', 0.9).  Every fixture
+  ;; component on each line, over that line's face, with and without drgnx's theme: each character a kit face sizes
+  ;; is its type face's size on `default', once, as Emacs merges the faces.  Red first: 0.963 twice.
+  (require 'drgnx-look-density (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir))
+  (require 'tab-line)                   ; the tab's faces inherit its faces: undefined, the merge gives up
+  (let ((drgnx-look-density 'comfortable) (drgnx-face-glyphs drgnx-ui--default-glyphs)
+        (cases (plist-get (ui-kit-test--json "cases.json" 'list) :comps))
+        (code (face-attribute 'default :height nil t)) (checked 0) (fails nil))
+    (unwind-protect
+        (dolist (theme '(nil drgnx-dark))
+          (mapc #'disable-theme custom-enabled-themes)
+          (when theme (load-theme theme t))
+          (set-face-attribute 'default nil :height 135)
+          ;; drgnx's header line scales: the case the check is for
+          (when theme (should (/= 135 (face-attribute 'header-line :height nil 'default))))
+          (dolist (where '(header-line tab-line mode-line))
+            (dolist (c cases)
+              (let* ((comp (plist-get c :comp))
+                     ;; as on a graphical frame at scale 2 (the theme is loaded outside: it reads real colours)
+                     (s (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                                  ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 2.0)))
+                          (drgnx-ui-kit-string (intern (plist-get comp :c)) comp where nil))))
+                (dotimes (i (length s))
+                  (let* ((faces (get-text-property i 'face s))
+                         (font (cl-some (lambda (f) (and f (symbolp f) (ui-kit-test--font-of f)))
+                                        (if (and (consp faces) (not (keywordp (car faces)))) faces (list faces)))))
+                    (when font
+                      (setq checked (1+ checked))
+                      (let ((want (face-attribute font :height nil 'default))
+                            (got (ui-kit-test--merged-height faces where)))
+                        (unless (equal want got)
+                          (push (list theme where (plist-get c :name) i font want got) fails))))))))))
+      (mapc #'disable-theme custom-enabled-themes)
+      (when (integerp code) (set-face-attribute 'default nil :height code)))
+    (should (> checked 0))
+    (should-not (seq-take (nreverse fails) 12))))
+
+(ert-deftest drgnx-ui-kit/state-faces-carry-no-type ()
+  ;; a state or surface face is a colour: under a theme that knows nothing of drgnx it must not bring `default's family
+  ;; or code size over a kit face's text (a pressed or selected-inactive button took the code font).  Kit text of every
+  ;; fixture component, on a line and in the buffer, merged over its base: the family and size are its type face's.
+  ;; Red first: `drgnx-selected-quiet' -> `drgnx-surface-raised' -> `default'.
+  (require 'drgnx-look-density (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir))
+  (require 'tab-line)
+  (let ((drgnx-look-density 'comfortable) (drgnx-face-glyphs drgnx-ui--default-glyphs)
+        (cases (plist-get (ui-kit-test--json "cases.json" 'list) :comps))
+        (code (face-attribute 'default :height nil t)) (fam (face-attribute 'default :family nil t))
+        (checked 0) (fails nil))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (set-face-attribute 'default nil :family "Adwaita Mono" :height 135)
+          (dolist (where '(text header-line tab-line mode-line))
+            (let ((base (if (eq where 'text) 'default where)))
+              (dolist (c cases)
+                (let* ((comp (plist-get c :comp))
+                       (s (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                                    ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 2.0)))
+                            (drgnx-ui-kit-string (intern (plist-get comp :c)) comp where nil))))
+                  (dotimes (i (length s))
+                    (let* ((faces (get-text-property i 'face s))
+                           (font (cl-some (lambda (f) (and f (symbolp f) (ui-kit-test--font-of f)))
+                                          (if (and faces (consp faces) (not (keywordp (car faces)))) faces (list faces)))))
+                      (when (and font (not (eq font 'drgnx-code-small)))
+                        (setq checked (1+ checked))
+                        (dolist (attr '(:family))
+                          (let ((want (face-attribute font attr nil 'default))
+                                (got (ui-kit-test--merged-height faces base attr)))
+                            (unless (equal want got)
+                              (push (list where (plist-get c :name) i attr font want got) fails)))))))))))
+          (should (> checked 0))
+          (should-not (seq-take (nreverse fails) 12))
+          ;; and the colour faces themselves bring no family or size (the buffer's merge puts them over the text)
+          (make-face 'ui-kit-test--blank)
+          (dolist (f '(drgnx-surface-gap drgnx-surface-panel drgnx-surface-raised drgnx-surface-overlay drgnx-hover
+                                         drgnx-selected drgnx-selected-quiet drgnx-selected-inactive drgnx-row-selected
+                                         drgnx-selected-secondary drgnx-chip-attention drgnx-tint-warn drgnx-control))
+            (dolist (attr '(:family :height))
+              (should (eq 'unspecified (face-attribute f attr nil 'ui-kit-test--blank))))))
+      (mapc #'disable-theme custom-enabled-themes)
+      (set-face-attribute 'default nil :family fam)
+      (when (integerp code) (set-face-attribute 'default nil :height code)))))
+
 (ert-deftest drgnx-ui-kit/buffer-text-uses-canonical-widths ()
   ;; in buffer text a pad is a width in canonical characters, so one buffer is right at two scales
   (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
@@ -996,3 +1141,90 @@ switch."
 
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here
+
+;;;; Text input (flow Task 22a)
+
+(ert-deftest drgnx-ui-kit/text-input-geometry ()
+  ;; single: 28 px; multi: the text's lines (two at least), its rows in a card's shapes; 8 px each side, radius 6
+  (should (= (plist-get (drgnx-ui-kit-geometry 'text-input '(single)) :height) 28))
+  (should (= (plist-get (drgnx-ui-kit-geometry 'text-input '(multi top)) :height) 0))
+  (should (equal (plist-get (drgnx-ui-kit-geometry 'text-input '(single)) :pad) '(8 . 8)))
+  (should (= (plist-get (drgnx-ui-kit-geometry 'text-input '(single)) :radius) 6))
+  ;; at 1.25 each pad rounds on its own (8 px: 10 device px) and the row is 35
+  (let ((e (drgnx-ui-kit-expand 'text-input '(:c "text-input" :placeholder "Ask") 1.25 nil)))
+    (should (equal (plist-get e :text) " Ask "))
+    (should (equal (plist-get e :spaces) [[0 10 0] [4 10 0]]))
+    (should (equal (plist-get e :height) '(:lines 1 :unit 35)))
+    ;; the placeholder is muted, over the field's face
+    (should (equal (plist-get e :runs) [[1 4 "drgnx-text-muted"] [0 5 "drgnx-kit-text-input"]])))
+  ;; a multi-line field's first row is the top of its shape and has the line height of its text
+  (let ((e (drgnx-ui-kit-expand 'text-input '(:c "text-input" :lines "multi" :text "a\nb") 1.0 nil)))
+    (should (equal (plist-get e :runs) [[0 3 "drgnx-kit-text-input-multi-top"]]))
+    (should-not (plist-get e :height)))
+  (should (equal (plist-get (drgnx-ui-kit-expand 'text-input '(:c "text-input" :placeholder "Ask") 1.0 t) :text) "[ Ask ]"))
+  (should (equal (plist-get (drgnx-ui-kit-component 'text-input) :label) "text field")))
+
+(ert-deftest drgnx-ui-kit/text-input-chip-remove-action ()
+  ;; a click on a chip's close mark and RET on it both remove that chip, and nothing else carries its action
+  (let ((items (list "a.rs" "b.rs")) (drgnx-face-glyphs drgnx-ui--default-glyphs))
+    (unwind-protect
+        (progn
+          (drgnx-ui-kit-define-action 'composer-chip-remove (lambda (args) (setq items (delete (car args) items)))
+                                      '(("RET" . identity)))
+          (ui-kit-test--gui 1.0
+            (let* ((field (drgnx-ui-kit-text-input
+                           "Ask" 'single
+                           '(("a.rs" neutral (composer-chip-remove "a.rs")) ("b.rs" accent (composer-chip-remove "b.rs")))
+                           40 'text))
+                   (head (car (car field)))
+                   (first (next-single-property-change 0 'drgnx-action head))
+                   (second (next-single-property-change (next-single-property-change first 'drgnx-action head)
+                                                        'drgnx-action head)))
+              ;; the close mark is one character (the glyph, or the x's image where icons are drawn)
+              (should (= (- (next-single-property-change first 'drgnx-action head) first) 1))
+              (should-not (get-text-property 2 'drgnx-action head))     ; the label has none
+              (should (equal (get-text-property first 'help-echo head) "remove a.rs"))
+              (let ((last-input-event (list 'mouse-1 (list (selected-window) first '(0 . 0) 0 (cons head first)))))
+                (drgnx-ui-kit-activate))
+              (should (equal items '("b.rs")))
+              (with-temp-buffer
+                (insert head)
+                (goto-char (1+ second))
+                (let ((last-input-event ?\r)) (call-interactively #'drgnx-ui-kit-activate)))
+              (should (null items)))))
+      (drgnx-ui-kit-undefine-action 'composer-chip-remove))))
+
+(ert-deftest drgnx-ui-kit/text-input-focus-ring-only-after-keys ()
+  ;; the ring (the `focus-visible' state's face) shows after a key event, not after a mouse event
+  (ui-kit-test--gui 1.0
+    (let ((drgnx-ui-kit--focus-visible nil))
+      (let ((head (car (car (drgnx-ui-kit-text-input "Ask" 'single nil 40 'text t)))))
+        (should-not (memq 'drgnx-focus (ensure-list (get-text-property 0 'face head)))))
+      (setq drgnx-ui-kit--focus-visible t)
+      (let ((head (car (car (drgnx-ui-kit-text-input "Ask" 'single nil 40 'text t)))))
+        (should (eq 'drgnx-focus (car (ensure-list (get-text-property 0 'face head))))))
+      ;; not focused: no ring after a key either
+      (let ((head (car (car (drgnx-ui-kit-text-input "Ask" 'single nil 40 'text nil)))))
+        (should-not (memq 'drgnx-focus (ensure-list (get-text-property 0 'face head))))))))
+
+(ert-deftest drgnx-ui-kit/text-input-buffer-text-uses-canonical-widths ()
+  ;; in buffer text a pad is a width in canonical characters, so one buffer is right at two scales; the tail stretches to
+  ;; the column, and a multi-line field has a head and a tail per line
+  (dolist (case '((1.0 0.8) (1.25 1.0)))
+    (ui-kit-test--gui (car case)
+      (let* ((field (drgnx-ui-kit-text-input "Ask" 'multi nil 30 'text)) (head (car (car field))) (tail (cdr (car field))))
+        (should (= (length field) 2))
+        (should (equal (substring-no-properties head) " "))
+        (should (equal (get-text-property 0 'display head) `(space :width ,(cadr case))))
+        (should (equal (get-text-property 0 'display tail) '(space :align-to 30)))
+        (should (equal (get-text-property 1 'display tail) `(space :width ,(cadr case))))
+        (should (eq (get-text-property 0 'face tail) 'drgnx-kit-text-input-multi-top))
+        (should (eq (get-text-property 0 'face (cdr (cadr field))) 'drgnx-kit-text-input-multi-bottom))
+        ;; the placeholder travels with the first head, muted, and is its spoken label
+        (should (equal (substring-no-properties (get-text-property 0 'drgnx-placeholder head)) "Ask"))
+        (should (equal (get-text-property 0 'help-echo head) "Ask")))))
+  ;; a terminal: [ ... ]
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil)))
+    (let ((f (car (drgnx-ui-kit-text-input "Ask" 'single nil 30 'text))))
+      (should (equal (substring-no-properties (car f)) "[ "))
+      (should (equal (substring-no-properties (cdr f)) "  ]")))))

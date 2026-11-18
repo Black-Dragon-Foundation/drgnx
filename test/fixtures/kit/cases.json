@@ -140,6 +140,16 @@
     {"name": "diff-line-add", "comp": {"c": "diff-line", "part": "add", "text": "  12 + let x = 1;"}},
     {"name": "diff-line-hunk", "comp": {"c": "diff-line", "part": "hunk", "text": "@@ -10,3 +10,4 @@"}},
     {"name": "empty-state", "comp": {"c": "empty-state", "text": "Nothing here yet"}},
-    {"name": "empty-state-action", "comp": {"c": "empty-state", "text": "No agents", "action": ["Start one", {"kind": "kit-test", "args": ["start"]}]}}
+    {"name": "empty-state-action", "comp": {"c": "empty-state", "text": "No agents", "action": ["Start one", {"kind": "kit-test", "args": ["start"]}]}},
+    {"name": "input-single-empty", "comp": {"c": "text-input", "placeholder": "Ask an agent"}},
+    {"name": "input-single-text", "comp": {"c": "text-input", "text": "rename the helper", "placeholder": "Ask an agent"}},
+    {"name": "input-single-1chip", "comp": {"c": "text-input", "text": "why does this fail", "placeholder": "Ask an agent", "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}]}},
+    {"name": "input-single-3chips", "comp": {"c": "text-input", "placeholder": "Ask an agent", "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}, {"label": "Plan step 2", "tone": "accent", "remove": {"kind": "composer-chip-remove", "args": ["step-2"]}}, {"label": "fix-explorer", "tone": {"agent": 3}, "remove": {"kind": "composer-chip-remove", "args": ["fix-explorer"]}}]}},
+    {"name": "input-single-focused", "comp": {"c": "text-input", "text": "rename the helper", "placeholder": "Ask an agent", "focused": true}},
+    {"name": "input-single-disabled", "comp": {"c": "text-input", "placeholder": "Ask an agent", "state": "disabled"}},
+    {"name": "input-multi-empty", "comp": {"c": "text-input", "lines": "multi", "placeholder": "Request changes"}},
+    {"name": "input-multi-text", "comp": {"c": "text-input", "lines": "multi", "text": "first line\nsecond line\nthird line", "placeholder": "Request changes"}},
+    {"name": "input-multi-1chip-focused", "comp": {"c": "text-input", "lines": "multi", "text": "one", "placeholder": "Request changes", "focused": true, "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}]}},
+    {"name": "input-multi-3chips", "comp": {"c": "text-input", "lines": "multi", "placeholder": "Request changes", "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}, {"label": "Plan step 2", "tone": "accent", "remove": {"kind": "composer-chip-remove", "args": ["step-2"]}}, {"label": "fix-explorer", "tone": {"agent": 3}, "remove": {"kind": "composer-chip-remove", "args": ["fix-explorer"]}}]}}
   ]
 }

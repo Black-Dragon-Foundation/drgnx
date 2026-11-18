@@ -1582,6 +1582,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
+| `review-screen/close` | user | `{view: string}` | `boolean` | no |
+| `review-screen/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
+| `review-screen/subscribe` | user | `{doc?: string, from?: string, session?: string, view: string}` | `boolean` | no |
 | `review/effects` | user | `{change: ChangeRef}` | `[TaskEffect]` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
 | `runners/add` | user | `{accept?: "all" \| "heavy", allow_admin?: boolean, allow_own_account?: boolean, host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |

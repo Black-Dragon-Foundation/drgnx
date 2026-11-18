@@ -34,7 +34,7 @@
     (plus "+" . "+") (minus "−" . "-") (ellipsis "…" . "...") (x "×" . "x") (check "✓" . "+") (replace-all "⇗" . "/")
     (git-branch "⑂" . "Y") (git-merge "⑃" . "Y") (git-pull-request "⇄" . "<>") (git-commit-horizontal "○" . "o")
     (circle-x "✕" . "X") (triangle-alert "⚠" . "!") (circle-check "✓" . "+") (circle-alert "!" . "!")
-    (layers "☰" . "=") (grip-vertical "⠿" . "::") (maximize-2 "▢" . "[]") (minimize-2 "–" . "-")
+    (layers "☰" . "=") (grip-vertical "⠿" . "::") (maximize-2 "▢" . "[]") (move "✥" . "+") (minimize-2 "–" . "-")
     (message-square "▭" . "m") (scroll-text "≣" . "=") (list-checks "☑" . "x")
     (monitor "▭" . "M") (laptop "▭" . "L") (server "☰" . "S") (globe "◍" . "@") (brain "◉" . "B")
     (lightbulb "◌" . "i") (pencil "✎" . "e") (clock "◷" . "t") (bot "◈" . "b") (pin "⌖" . "p")
@@ -1341,6 +1341,75 @@ the hub's `kit::segmented'."
       (drgnx-ui-kit--b-under 0 drgnx-ui-kit--bpos track)
       (drgnx-ui-kit--b-finish nil 0 0 props-out nil))))
 
+(defun drgnx-ui-kit--b-input-chip (chip)
+  "A context CHIP (:label :tone :remove) of a text input on the builder: its pads and label, its close mark (the Lucide
+x where icons are drawn, else the `close' glyph) in the chip's face.  Returns its props (the close mark's action and
+words), as the hub's `kit::input_chip' puts them."
+  (let* ((entry (drgnx-ui-kit-component 'chip))
+         (tone-prop (plist-get chip :tone)) (agent (and (consp tone-prop) (cadr tone-prop)))
+         (tone (if agent 'agent (drgnx-ui-kit--prop-symbol tone-prop 'neutral)))
+         (chosen (drgnx-ui-kit--chosen entry (list (if agent 'neutral tone) 'soft)))
+         (g (plist-get entry :geometry)) (pad (plist-get g :pad))
+         (face (drgnx-ui-kit--face 'chip chosen)) (label (or (plist-get chip :label) ""))
+         (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0))
+         text-from text-to at)
+    (drgnx-ui-kit--b-pad (car pad) tty-pad face)
+    (setq text-from drgnx-ui-kit--bpos)
+    (drgnx-ui-kit--b-push label face)
+    (setq text-to drgnx-ui-kit--bpos)
+    (drgnx-ui-kit--b-pad (drgnx-ui-kit--value (plist-get g :gap) chosen) 1 face)
+    (setq at drgnx-ui-kit--bpos)
+    (drgnx-ui-kit--b-mark (and (not drgnx-ui-kit--btty) drgnx-ui-kit--icons
+                               (funcall drgnx-ui-kit--icons 'x drgnx-ui-kit-tab-icon-px))
+                          (drgnx-ui-kit--glyph 'close drgnx-ui-kit--btty) face nil)
+    (let ((props (append (drgnx-ui-kit--b-action (plist-get chip :remove) at)
+                         (list (list at drgnx-ui-kit--bpos 'help-echo (format "remove %s" label))))))
+      (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+      (when (and agent (<= 1 agent 12))
+        (push (list text-from text-to (intern (format "drgnx-agent-%d" agent))) drgnx-ui-kit--bruns))
+      props)))
+
+(defun drgnx-ui-kit--text-input (props scale tty)
+  "The `text-input' component of PROPS (:text :placeholder :lines :chips :focused :state) at SCALE, see
+`drgnx-ui-kit--expand' and the hub's `kit::text_input_row'.  The row is the first row (the hub's others are its own);
+the constructor's `:row' and `:rows' (a row's index and the number of rows) draw another row of a multi-line field."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'text-input)) (g (plist-get entry :geometry))
+           (lines (drgnx-ui-kit--name props :lines 'single))
+           (text (or (plist-get props :text) "")) (placeholder (or (plist-get props :placeholder) ""))
+           (i (or (plist-get props :row) 0))
+           (n (or (plist-get props :rows)
+                  (if (eq lines 'multi) (max 2 (length (split-string text "\n"))) 1)))
+           (shape (cond ((= n 1) 'single) ((= i 0) 'top) ((= i (1- n)) 'bottom) (t 'mid)))
+           (chosen (drgnx-ui-kit--chosen entry (list lines shape)))
+           (face (drgnx-ui-kit--face 'text-input chosen))
+           (pad (plist-get g :pad)) (gap (drgnx-ui-kit--value (plist-get g :gap) chosen))
+           (focused (eq (plist-get props :focused) t))
+           (props-out nil) text-from text-to)
+      (if tty (drgnx-ui-kit--b-push "[ " nil) (drgnx-ui-kit--b-pad (car pad) 0 nil))
+      (when (= i 0)
+        (dolist (chip (plist-get props :chips))
+          (setq props-out (append props-out (drgnx-ui-kit--b-input-chip chip)))
+          (drgnx-ui-kit--b-pad gap 1 nil)))
+      (setq text-from drgnx-ui-kit--bpos)
+      (if (and (= i 0) (string-empty-p text))
+          (drgnx-ui-kit--b-push placeholder 'drgnx-text-muted)
+        (drgnx-ui-kit--b-push (or (nth i (split-string text "\n")) "") nil))
+      (setq text-to drgnx-ui-kit--bpos)
+      (if tty (drgnx-ui-kit--b-push " ]" nil) (drgnx-ui-kit--b-pad (cdr pad) 0 nil))
+      (drgnx-ui-kit--b-under 0 drgnx-ui-kit--bpos face)
+      (when (= i 0)
+        (setq props-out
+              (append props-out
+                      (list (list text-from text-to 'help-echo
+                                  (if (and (string-empty-p text) (not (string-empty-p placeholder)))
+                                      placeholder (plist-get entry :label)))))))
+      (drgnx-ui-kit--b-finish (plist-get (drgnx-ui-kit-state (if focused 'focus-visible (drgnx-ui-kit--name props :state 'rest)))
+                                         :face)
+                              0 drgnx-ui-kit--bpos props-out
+                              (let ((h (and (not tty) (drgnx-ui-kit--value (plist-get g :height) chosen))))
+                                (and h (> h 0) (drgnx-px h nil scale)))))))
+
 (defun drgnx-ui-kit--expand (component props scale tty)
   "COMPONENT (a symbol) with PROPS at SCALE (TTY: on a terminal, `ascii' for ASCII glyphs) as (TEXT RUNS PROPS
 SPACES HEIGHT): RUNS ((FROM TO FACE)...), PROPS ((FROM TO NAME VALUE)...), SPACES ((POS WIDTH HEIGHT)...) in device
@@ -1362,6 +1431,7 @@ px, HEIGHT the row's line height in device px or nil (one text line)."
     ('status-dot (drgnx-ui-kit--status-dot props scale tty))
     ('tab (drgnx-ui-kit--tab props scale tty))
     ('segmented (drgnx-ui-kit--segmented props scale tty))
+    ('text-input (drgnx-ui-kit--text-input props scale tty))
     (_ (error "drgnx-ui-kit: no component %s" component))))
 
 (defun drgnx-ui-kit--wire (v)
@@ -1482,10 +1552,62 @@ stay spaces).  Called per hub row: loops, no closures."
                                                     (not (memql (1+ pos) at)) shape line))
                   out)))))))
 
+(defconst drgnx-ui-kit--type-faces '(drgnx-ui-text drgnx-ui-heading drgnx-ui-caption drgnx-ui-title drgnx-code-small)
+  "The type faces (core/drgnx-type-faces.el) a kit face takes its size from: its binding's `:font', else the first of
+these in its `:inherit'.")
+
+(defvar drgnx-ui-kit--font-of nil
+  "Kit face → the type face it takes its size from, or nil: an alist made once from the components file.")
+
+(defun drgnx-ui-kit-font-face (face)
+  "The type face kit FACE takes its size from (`drgnx-ui-kit--type-faces'), or nil (a face that only colours)."
+  (alist-get face (or drgnx-ui-kit--font-of
+                      (setq drgnx-ui-kit--font-of
+                            (mapcar (lambda (f)
+                                      (let ((b (nth 2 f)))
+                                        (cons (car f) (cl-find-if (lambda (x) (memq x drgnx-ui-kit--type-faces))
+                                                                  (or (plist-get b :font) (plist-get b :inherit))))))
+                                    (drgnx-ui-kit-face-bindings))))))
+
+(defun drgnx-ui-kit--sized (faces face height)
+  "FACES (a `face' property value) with (:height HEIGHT) right above FACE, one of them (`eq')."
+  (let (out)
+    (dolist (f (if (and (consp faces) (not (keywordp (car faces)))) faces (list faces)) (nreverse out))
+      (when (eq f face) (push (list :height height) out))
+      (push f out))))
+
+(defun drgnx-ui-kit--line-sizes (s frame)
+  "Give each run of S (a kit string for a mode, header or tab line on graphical FRAME) that a kit face sizes the
+absolute height of that face's type face on `default' (`drgnx-ui-kit-font-face'), over its faces.  The line's own
+face is under the text, and when it scales already (drgnx's themes give the header line the UI font's size) a
+relative size would apply twice; so would a kit face that inherits a standard face with a size of its own (Emacs's
+`tab-line' is 0.9), and a state face over it that inherits `default' (under another theme) would give the code size.
+The size goes right above the first face of the run that has one.  Lines are made when they change, not at each
+redisplay."
+  (let ((i 0) (n (length s)))
+    (while (< i n)
+      (let* ((next (next-single-property-change i 'face s n))
+             (faces (get-text-property i 'face s))
+             (kit nil) (top nil))
+        (dolist (f (if (and (consp faces) (not (keywordp (car faces)))) faces (list faces)))
+          ;; TOP: the first face that has a size of its own (a state face that inherits `default' under a third-party
+          ;; theme has the code size), KIT the first kit face that has a type face
+          (unless (or top (null f) (eq 'unspecified (cond ((facep f) (face-attribute f :height frame t))
+                                                          ((consp f) (or (plist-get f :height) 'unspecified))
+                                                          (t 'unspecified))))
+            (setq top f))
+          (when (and (not kit) f (symbolp f) (drgnx-ui-kit-font-face f)) (setq kit f)))
+        ;; the size right above the first face with a size: the faces over it (the focus ring's) stay on top
+        (when-let* ((kit) (top) (h (face-attribute (drgnx-ui-kit-font-face kit) :height frame 'default)) ((integerp h)) ((> h 0)))
+          (put-text-property i next 'face (drgnx-ui-kit--sized faces top h) s))
+        (setq i next)))
+    s))
+
 (defun drgnx-ui-kit-string (component props where frame)
   "COMPONENT with PROPS (as `drgnx-ui-kit-expand') as a propertized string for WHERE (`text', `header-line',
 `mode-line' or `tab-line') on FRAME (nil: the selected one), at FRAME's scale or as its terminal draws it.  A click
-on an action (PROPS :action) runs `kit-activate' (the kind's map, `drgnx-ui-kit-action-map')."
+on an action (PROPS :action) runs `kit-activate' (the kind's map, `drgnx-ui-kit-action-map').  On a graphical line
+its text has its type faces' sizes once (`drgnx-ui-kit--line-sizes')."
   (let* ((gui (display-graphic-p frame))
          (e (let ((drgnx-ui-kit--icons (drgnx-ui-kit-icon-function frame)))
               (drgnx-ui-kit--expand component props (if gui (drgnx-pixels-scale frame) 1.0)
@@ -1501,6 +1623,7 @@ on an action (PROPS :action) runs `kit-activate' (the kind's map, `drgnx-ui-kit-
       (dolist (sp (nth 3 e))
         (put-text-property (car sp) (1+ (car sp)) 'display
                            (or (cdr (assq (car sp) bars)) (drgnx-ui-kit--pad (nth 1 sp) where frame (nth 2 sp))) s)))
+    (when (and gui (not (eq where 'text))) (drgnx-ui-kit--line-sizes s frame))
     s))
 
 ;;;; Actions: what a click or RET on a component does
@@ -1701,6 +1824,48 @@ text is inert (`drgnx-row-inert'); its accessible text is TEXT."
     (add-text-properties 0 (length s) (list 'drgnx-row-inert t 'help-echo text) s)
     s))
 
+(defun drgnx-ui-kit-text-input (placeholder lines chips width where &optional focused frame)
+  "The decoration of a text input round a buffer's own text, as one (HEAD . TAIL) per line of the field, for WHERE
+\(`text', `header-line', `mode-line' or `tab-line') of FRAME (nil: the selected one).  FOCUSED non-nil draws the focus
+ring, but only after a key event (`drgnx-ui-kit-focus-visible-p').  LINES is `single' (one line) or
+`multi' (two), CHIPS ((LABEL TONE ACTION)...) the context chips: TONE a name (`neutral', `accent'...) or (:agent N),
+ACTION what `drgnx-ui-kit-button' takes (the kit action kind `composer-chip-remove' with the item), run by a click or
+RET on the chip's close mark.  The first HEAD is the field's left edge and the chips; every TAIL stretches to column
+WIDTH and closes the field's right edge (a terminal's `[ ' and ` ]').  The text between is the buffer's: the kit never
+draws it.  The first HEAD carries PLACEHOLDER as its `drgnx-placeholder' property, in the muted role, for the buffer to
+show while it is empty, and as its `help-echo' (the field's spoken label)."
+  (let* ((n (if (eq lines 'multi) 2 1)) (i 0) (out nil)
+         (tty (not (display-graphic-p frame)))
+         (cut (if tty 2 1)))
+    (while (< i n)
+      (let* ((s (drgnx-ui-kit-string
+                 'text-input
+                 (list :c "text-input" :lines (symbol-name (or lines 'single)) :row i :rows n :text "" :placeholder ""
+                       :focused (if (and focused (drgnx-ui-kit-focus-visible-p)) t :false)
+                       :chips (and (= i 0)
+                                   (mapcar (lambda (c)
+                                             (list :label (nth 0 c)
+                                                   :tone (let ((tn (nth 1 c))) (if (consp tn) tn (and tn (symbol-name tn))))
+                                                   :remove (drgnx-ui-kit--action-spec (nth 2 c))))
+                                           chips)))
+                 where frame))
+             (face (drgnx-ui-kit--face
+                    'text-input
+                    (drgnx-ui-kit--chosen (drgnx-ui-kit-component 'text-input)
+                                          (list (or lines 'single) (cond ((= n 1) 'single) ((= i 0) 'top) (t 'bottom))))))
+             (head (substring s 0 (- (length s) cut)))
+             (tail (concat (propertize " " 'display `(space :align-to ,width) 'face face)
+                           (substring s (- (length s) cut)))))
+        (when (= i 0)
+          ;; the field's spoken label where the head has no words of its own (a chip's close mark has)
+          (dotimes (k (length head))
+            (unless (get-text-property k 'help-echo head)
+              (put-text-property k (1+ k) 'help-echo (if (string-empty-p placeholder) "text field" placeholder) head)))
+          (put-text-property 0 1 'drgnx-placeholder (propertize placeholder 'face 'drgnx-text-muted) head))
+        (push (cons head tail) out)
+        (setq i (1+ i))))
+    (nreverse out)))
+
 (defun drgnx-ui-kit-card-lines (lines kind width)
   "LINES (strings) as the rows of one card of KIND (`plain', `needs-you' or `selected') WIDTH columns wide, one string.
 Each row is its own box run (a box run spans lines, so rows cannot rely on soft wrap): the text filled to WIDTH
@@ -1717,6 +1882,85 @@ row's shape: single, top, mid or bottom, open where the card goes on."
                       "\n")
               out)))
     (apply #'concat (nreverse out))))
+
+;;; A question card (a permission, a question, a sign-off) as the lines of a needs-you card
+
+(defun drgnx-ui-kit--question (args)
+  "The action kind `question': ARGS (HANDLER KIND INDEX) calls HANDLER with INDEX, the answer picked; nil INDEX (a click
+on the card's text) does nothing."
+  (when (nth 2 args) (funcall (car args) (nth 2 args))))
+
+(drgnx-ui-kit-define-action
+ 'question #'drgnx-ui-kit--question
+ (append
+  (list (cons "y" (lambda (a) (list (car a) (cadr a) 0)))
+        (cons "a" (lambda (a) (list (car a) (cadr a) 1)))
+        (cons "n" (lambda (a) (list (car a) (cadr a) (if (eq (cadr a) 'sign-off) 1 2)))))
+  (cl-loop for i from 1 to 9
+           collect (let ((i i)) (cons (number-to-string i) (lambda (a) (list (car a) (cadr a) (1- i))))))))
+
+(defun drgnx-ui-kit--question-words (text width)
+  "TEXT filled to WIDTH columns, as a list of lines."
+  (with-temp-buffer
+    (insert text)
+    (let ((fill-column (max 10 width))) (fill-region (point-min) (point-max)))
+    (split-string (buffer-string) "\n")))
+
+(defun drgnx-ui-kit--question-line (text width kind shape head card-props)
+  "TEXT (kit strings and plain text) as one line of the needs-you card (`drgnx-ui-kit-card-lines'): its ring face of
+SHAPE under what TEXT has, HEAD (a face or nil) above that, filled by a stretch to column WIDTH (the text is in the
+proportional UI font: its columns are not the width's) that closes the card at its right edge; the card's own props
+\(CARD-PROPS) on every part that has no action of its own."
+  (let* ((entry (drgnx-ui-kit-component 'card))
+         (ring (drgnx-ui-kit--face 'card (drgnx-ui-kit--chosen entry (list kind shape))))
+         (line (concat " " text))
+         (len (length line)) (pos 0))
+    ;; what has no action of its own (a button has: its boxes stay its own) is the card's: its tint and ring, its props
+    (while (< pos len)
+      (let ((next (next-single-property-change pos 'drgnx-action line len)))
+        (unless (get-text-property pos 'drgnx-action line)
+          (when head (add-face-text-property pos next head nil line))
+          (add-face-text-property pos next ring t line)
+          (add-text-properties pos next card-props line))
+        (setq pos next)))
+    (concat line
+            (apply #'propertize " " 'display `(space :align-to ,(1+ width)) 'face (if head (list head ring) ring)
+                   card-props)
+            "\n")))
+
+(defun drgnx-ui-kit-question-card (kind title body choices width)
+  "A question card as a list of line strings, WIDTH columns wide: KIND (`permission', `question' or `sign-off') sets
+the keys a bare key answers with when point is on the card (permission `y' `a' `n', question `1'...`9', sign-off `y'
+`n'); TITLE on the needs-you head, BODY filled to the width, and CHOICES, ((LABEL KEY ACTION)...), as kit buttons, the
+first primary, each with its key hint KEY (nil: the kind's).  ACTION is a function of the answer's index.  The card's
+accessible text is \"needs you: TITLE\"."
+  (let* ((handler (lambda (i) (funcall (nth 2 (nth i choices)) i)))
+         (card-props (list 'drgnx-action (list 'question handler kind nil) 'keymap (drgnx-ui-kit-action-map 'question)
+                           'help-echo (concat "needs you: " title)))
+         (default-keys (pcase kind
+                         ('question (mapcar #'number-to-string (number-sequence 1 (min 9 (length choices)))))
+                         ('sign-off '("y" "n"))
+                         (_ '("y" "a" "n"))))
+         (head (drgnx-ui-kit-string 'status-dot (list :c "status-dot" :status "needs-you" :word :false) 'text nil))
+         (buttons (let ((i -1))
+                    (mapcar (lambda (c)
+                              (setq i (1+ i))
+                              (drgnx-ui-kit-button (nth 0 c) (list 'question handler kind i) (if (= i 0) 'primary 'secondary)
+                                                   'md 'rest (or (nth 1 c) (nth i default-keys)) 'text))
+                            choices)))
+         (rows (append (list (cons (concat head " " title) 'head))
+                       (mapcar (lambda (l) (cons (propertize l 'face 'drgnx-ui-text) nil)) (and (> (length body) 0) (drgnx-ui-kit--question-words body (- width 2))))
+                       (and buttons (list (cons (mapconcat #'identity buttons (apply #'propertize " " card-props)) nil)
+                                          ;; room under the buttons, so the ring runs unbroken below them
+                                          (cons "" nil)))))
+         (n (length rows)) (i 0) (out nil))
+    (dolist (r rows)
+      (push (drgnx-ui-kit--question-line
+             (car r) width 'needs-you (cond ((= n 1) 'single) ((= i 0) 'top) ((= i (1- n)) 'bottom) (t 'mid))
+             (and (cdr r) 'drgnx-kit-question-card-head) card-props)
+            out)
+      (setq i (1+ i)))
+    (nreverse out)))
 
 ;;; A kit button in buffer text that is also a `button.el' button (`push-button', `forward-button' reach it).
 (defun drgnx-ui-kit-text-button (label fn help style size)

@@ -33,12 +33,16 @@ pub enum CompId {
     TimeAxis,
     /// `tab`
     Tab,
+    /// `question-card`
+    QuestionCard,
     /// `segmented`
     Segmented,
     /// `diff-block`
     DiffBlock,
     /// `empty-state`
     EmptyState,
+    /// `text-input`
+    TextInput,
 }
 
 /// A state of the state table (on the wire, its name: `"selected-inactive"`).
@@ -135,7 +139,7 @@ pub const GLYPHS: [(&str, &str, &str); 29] = [
 
 /// The whole standard glyph table (`drgnx-ui--default-glyphs`): `(name, Unicode, ASCII)`. A tab's icon is looked
 /// up here when the env has no glyph of its name, as the Lisp kit's tab does; other components keep [`GLYPHS`].
-pub const ALL_GLYPHS: [(&str, &str, &str); 150] = [
+pub const ALL_GLYPHS: [(&str, &str, &str); 151] = [
     ("handle", "⠿", "::"),
     ("close", "×", "x"),
     ("branch", "⑂", "Y"),
@@ -230,6 +234,7 @@ pub const ALL_GLYPHS: [(&str, &str, &str); 150] = [
     ("layers", "☰", "="),
     ("grip-vertical", "⠿", "::"),
     ("maximize-2", "▢", "[]"),
+    ("move", "✥", "+"),
     ("minimize-2", "–", "-"),
     ("message-square", "▭", "m"),
     ("scroll-text", "≣", "="),
@@ -656,6 +661,28 @@ const TAB_GEOM: [[Geom; 3]; 2] = [
 const TAB_LABEL: [Option<&str>; 2] = [Some("modified"), Some("modified")];
 const TAB_FACE: [FaceId; 2] = [FaceId::KitTab, FaceId::KitTab];
 
+const QUESTION_CARD_AXES: &[&[&str]] = &[&["permission", "question", "sign-off"]];
+const QUESTION_CARD_DEFAULTS: &[usize] = &[0];
+const QUESTION_CARD_GEOM: [[Geom; 3]; 3] = [
+    [
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const QUESTION_CARD_LABEL: [Option<&str>; 3] = [Some("needs you"), Some("needs you"), Some("needs you")];
+const QUESTION_CARD_FACE: [FaceId; 3] = [FaceId::KitQuestionCard, FaceId::KitQuestionCard, FaceId::KitQuestionCard];
+
 const SEGMENTED_AXES: &[&[&str]] = &[];
 const SEGMENTED_DEFAULTS: &[usize] = &[];
 const SEGMENTED_GEOM: [[Geom; 3]; 1] = [
@@ -712,6 +739,53 @@ const EMPTY_STATE_GEOM: [[Geom; 3]; 1] = [
 const EMPTY_STATE_LABEL: [Option<&str>; 1] = [None];
 const EMPTY_STATE_FACE: [FaceId; 1] = [FaceId::KitEmptyState];
 
+const TEXT_INPUT_AXES: &[&[&str]] = &[&["single", "multi"], &["single", "top", "mid", "bottom"]];
+const TEXT_INPUT_DEFAULTS: &[usize] = &[0, 0];
+const TEXT_INPUT_GEOM: [[Geom; 3]; 8] = [
+    [
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 28, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 6, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const TEXT_INPUT_LABEL: [Option<&str>; 8] = [Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field")];
+const TEXT_INPUT_FACE: [FaceId; 8] = [FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInputMultiTop, FaceId::KitTextInputMultiMid, FaceId::KitTextInputMultiBottom];
+
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {
     match id {
@@ -763,6 +837,10 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(TAB_AXES, TAB_DEFAULTS, variant);
             TAB_GEOM[i][d]
         }
+        CompId::QuestionCard => {
+            let (i, d) = index(QUESTION_CARD_AXES, QUESTION_CARD_DEFAULTS, variant);
+            QUESTION_CARD_GEOM[i][d]
+        }
         CompId::Segmented => {
             let (i, d) = index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant);
             SEGMENTED_GEOM[i][d]
@@ -774,6 +852,10 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
         CompId::EmptyState => {
             let (i, d) = index(EMPTY_STATE_AXES, EMPTY_STATE_DEFAULTS, variant);
             EMPTY_STATE_GEOM[i][d]
+        }
+        CompId::TextInput => {
+            let (i, d) = index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant);
+            TEXT_INPUT_GEOM[i][d]
         }
     }
 }
@@ -793,9 +875,11 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::RangeBar => RANGE_BAR_LABEL[index(RANGE_BAR_AXES, RANGE_BAR_DEFAULTS, variant).0],
         CompId::TimeAxis => TIME_AXIS_LABEL[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
         CompId::Tab => TAB_LABEL[index(TAB_AXES, TAB_DEFAULTS, variant).0],
+        CompId::QuestionCard => QUESTION_CARD_LABEL[index(QUESTION_CARD_AXES, QUESTION_CARD_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_LABEL[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
         CompId::DiffBlock => DIFF_BLOCK_LABEL[index(DIFF_BLOCK_AXES, DIFF_BLOCK_DEFAULTS, variant).0],
         CompId::EmptyState => EMPTY_STATE_LABEL[index(EMPTY_STATE_AXES, EMPTY_STATE_DEFAULTS, variant).0],
+        CompId::TextInput => TEXT_INPUT_LABEL[index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant).0],
     }
 }
 
@@ -814,8 +898,10 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::RangeBar => RANGE_BAR_FACE[index(RANGE_BAR_AXES, RANGE_BAR_DEFAULTS, variant).0],
         CompId::TimeAxis => TIME_AXIS_FACE[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
         CompId::Tab => TAB_FACE[index(TAB_AXES, TAB_DEFAULTS, variant).0],
+        CompId::QuestionCard => QUESTION_CARD_FACE[index(QUESTION_CARD_AXES, QUESTION_CARD_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_FACE[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
         CompId::DiffBlock => DIFF_BLOCK_FACE[index(DIFF_BLOCK_AXES, DIFF_BLOCK_DEFAULTS, variant).0],
         CompId::EmptyState => EMPTY_STATE_FACE[index(EMPTY_STATE_AXES, EMPTY_STATE_DEFAULTS, variant).0],
+        CompId::TextInput => TEXT_INPUT_FACE[index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant).0],
     }
 }

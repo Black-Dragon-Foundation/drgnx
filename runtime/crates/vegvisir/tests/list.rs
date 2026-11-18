@@ -244,5 +244,10 @@ fn an_empty_workspace_draws_a_line_that_says_so() {
         "the line is no item"
     );
     // the kit's empty state face
-    assert!(rows[0].runs.iter().any(|r| r.2 == "drgnx-kit-empty-state"));
+    assert!(
+        rows[0]
+            .runs
+            .iter()
+            .any(|r| r.2 == drgnx_rows::faces::FaceId::KitEmptyState.name())
+    );
 }

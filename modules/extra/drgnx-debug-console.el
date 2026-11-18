@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'seq)
 
+(declare-function drgnx-ui-kit-empty-state "drgnx-ui-kit" (text button where))
 (declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
 (declare-function drgnx-hub-call-sync "drgnx-hub-client" (method params &optional timeout))
 (declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab buffer))

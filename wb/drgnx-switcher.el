@@ -23,7 +23,7 @@
 (require 'drgnx-frame-kind)
 (require 'drgnx-grid-tree)
 (require 'drgnx-timer)
-(require 'drgnx-ui-kit)                 ; the cards (`drgnx-ui-kit-card-lines'), the hint's keys
+(require 'drgnx-ui-kit)                 ; the hint's keys
 
 (declare-function drgnx-grid-tiles "drgnx-grid" (&optional frame filter))
 (declare-function drgnx-grid-tile-main "drgnx-grid-ops" (window))
@@ -31,7 +31,13 @@
 (declare-function drgnx-grid-editor-tile-p "drgnx-grid" (window))
 (declare-function drgnx-grid--title "drgnx-grid" (kind))
 (declare-function drgnx-grid--entries "drgnx-grid-ops" (window))
+(declare-function drgnx-grid--tile-root "drgnx-grid" (window))
+(declare-function drgnx-chrome-tabs "drgnx-chrome" (w))
+(declare-function drgnx-chrome-tab-title "drgnx-chrome" (b))
+(declare-function drgnx-wb-sidebar-view "drgnx-wb" (&optional frame))
 (declare-function drgnx-px "drgnx-pixels" (logical &optional frame))
+(declare-function drgnx-px-line "drgnx-pixels" (width &optional frame scale))
+(declare-function drgnx-pixels-border-width "drgnx-pixels" (px &optional frame))
 (declare-function drgnx-look-chrome-current "drgnx-look")
 (defvar drgnx-look-motion)
 
@@ -59,10 +65,25 @@ Child frames (cards, popups) and the daemon's initial frame take no part."
     (if (memq sel all) (cons sel others) others)))
 
 (defun drgnx-switcher--tile-title (w)
-  "Tile W's title: an editor's buffer, a tool tile's shown kind."
-  (if (drgnx-grid-editor-tile-p w) (buffer-name (window-buffer w))
-    (let ((kind (car (drgnx-grid--entries w))))
-      (string-trim (if kind (drgnx-grid--title kind) (buffer-name (window-buffer w)))))))
+  "Tile W's caption, as tiling.html's cards have it: an editor's shown tab's title and \"editor\" (\"a stack of N\" in
+place of the title when it holds several tabs), \"(current)\" after the tile you are in; a tool tile's shown kind as
+its tab shows it, with \"a stack of N\" when it holds several; the side bar's view (\"Explorer\")."
+  (if (drgnx-grid-editor-tile-p w)
+      (let ((n (length (drgnx-chrome-tabs w))))
+        (concat (if (> n 1) (format "a stack of %d" n) (drgnx-chrome-tab-title (window-buffer w)))
+                " · editor" (if (eq w (drgnx-grid-tile-main (selected-window))) " (current)" "")))
+    (let ((kinds (drgnx-grid--entries w)))
+      (cond (kinds (concat (let ((s (string-trim (drgnx-grid--title (car kinds)))))
+                             ;; a side bar style title (" AGENT") reads as a word
+                             (if (equal s (upcase s)) (capitalize s) s))
+                           (if (cdr kinds) (format " · a stack of %d" (length kinds)) "")))
+            ((eq (window-parameter w 'drgnx-role) 'dock)
+             (capitalize (symbol-name (drgnx-wb-sidebar-view (window-frame w)))))
+            (t (drgnx-chrome-tab-title (window-buffer w)))))))
+
+(defun drgnx-switcher--tile-edges (w)
+  "The pixel edges of tile W's whole tile: its atom's (the side bar's sections, the agent panel's windows), else W's."
+  (window-pixel-edges (drgnx-grid--tile-root w)))
 
 (defun drgnx-switcher--tile-windows (frame)
   "FRAME's tiles, each by its main window, in reading order."
@@ -76,7 +97,7 @@ Child frames (cards, popups) and the daemon's initial frame take no part."
             (y (or (cdr (frame-position f)) 0))
             (monitor (alist-get 'name (frame-monitor-attributes f))))
         (dolist (w (drgnx-switcher--tile-windows f))
-          (let ((e (window-pixel-edges w)))
+          (let ((e (drgnx-switcher--tile-edges w)))
             (push (list :window w :frame f :rank rank :terminal (not (display-graphic-p f))
                         :edges (list (+ x (nth 0 e)) (+ y (nth 1 e)) (+ x (nth 2 e)) (+ y (nth 3 e)))
                         :local e :title (drgnx-switcher--tile-title w) :monitor monitor)
@@ -144,7 +165,9 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
     `((parent-frame . ,parent) (minibuffer . nil) (name . "drgnx-switcher-card") (drgnx-switcher-card . t)
       (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t) (skip-taskbar . t)
       (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t) (border-width . 0)
-      (internal-border-width . ,(drgnx-px 8 parent))
+      (internal-border-width . ,(drgnx-pixels-border-width (drgnx-px 8 parent) parent))
+      ;; the ring, inside the card's edge (tiling.html's `.letter.hi': inset 2 px of the focus colour)
+      (child-frame-border-width . ,(drgnx-pixels-border-width (drgnx-px-line 2 parent) parent))
       (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0) (left-fringe . 0) (right-fringe . 0)
       (vertical-scroll-bars) (horizontal-scroll-bars) (cursor-type . nil) (visibility . nil)
       ,@chrome)))
@@ -158,7 +181,8 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
                       (make-frame (drgnx-switcher--card-params parent)))))
         (with-current-buffer buf
           (setq-local indent-tabs-mode nil cursor-type nil mode-line-format nil header-line-format nil tab-line-format nil
-                      cursor-in-non-selected-windows nil truncate-lines t))
+                      cursor-in-non-selected-windows nil truncate-lines t)
+          (face-remap-add-relative 'default 'drgnx-surface-overlay))
         (set-window-buffer (frame-root-window frame) buf)
         (set-window-dedicated-p (frame-root-window frame) t)
         (setq entry (cons frame buf))
@@ -170,38 +194,50 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
 (defun drgnx-switcher--several-monitors-p (items)
   (cdr (delete-dups (mapcar (lambda (it) (plist-get it :monitor)) items))))
 
-(defun drgnx-switcher--centred (s width)
-  "S with spaces before it to centre it in WIDTH columns."
-  (concat (make-string (max 0 (/ (- width (string-width s)) 2)) ?\s) s))
-
-(defun drgnx-switcher--card-text (it monitors highlighted)
-  "The text of IT's card: a kit card (`selected' when HIGHLIGHTED, else `plain') of two rows, its letter large and
-its title (and with MONITORS, its monitor) under it, both centred."
+(defun drgnx-switcher--card-text (it monitors buffer)
+  "The text of IT's card (tiling.html's `.letter') and its width in pixels, (TEXT . WIDTH): its letter large (the UI
+heading font, 42 logical px) over its title (muted, caption size; with MONITORS, its monitor after it), each line
+centred by a pixel space before it and the card's side padding (18 logical px, the frame's internal border giving 8)
+on both sides.  Widths are measured as BUFFER (the card's, its default face the popup surface's) draws them."
   (let* ((f (plist-get it :frame))
          (height (max 1.0 (/ (float (drgnx-px drgnx-switcher-letter-px f)) (frame-char-height f))))
          (title (if (and monitors (plist-get it :monitor)) (format "%s · %s" (plist-get it :title) (plist-get it :monitor))
                   (plist-get it :title)))
-         ;; the letter is about HEIGHT columns wide: room for it and a column either side
-         (width (max (string-width title) (+ 2 (ceiling height))))
-         (pad (/ (- width (ceiling height)) 2))
-         (s (drgnx-ui-kit-card-lines (list (concat (make-string pad ?\s) (string (plist-get it :letter)))
-                                           (drgnx-switcher--centred title width))
-                                     (if highlighted 'selected 'plain) width)))
-    ;; the letter keeps its card face under its own height and weight; it is about HEIGHT columns wide, so the spaces
-    ;; after it give up all but one column for it (the row's stretch closes the card at the same edge either way)
-    (add-face-text-property pad (1+ pad) (list :height height :weight 'bold) nil s)
-    (concat (substring s 0 (1+ pad)) (substring s (+ pad (ceiling height))))))
+         (letter (propertize (string (plist-get it :letter)) 'face `(:inherit drgnx-ui-heading :height ,height)))
+         (caption (propertize title 'face '(drgnx-text-muted drgnx-ui-caption)))
+         (side (drgnx-px 10 f))
+         (wl (string-pixel-width letter buffer)) (wc (string-pixel-width caption buffer)) (w (max wl wc))
+         (line (lambda (s ws)
+                 (let ((before (+ side (/ (- w ws) 2))))
+                   (concat (propertize " " 'display `(space :width (,before)))
+                           s
+                           (propertize " " 'display `(space :width (,(+ side (- w ws before) side))))
+                           "\n")))))
+    (cons (concat (funcall line letter wl) (substring (funcall line caption wc) 0 -1)) (+ side w side))))
 
 (defun drgnx-switcher--fill-card (entry it monitors highlighted)
-  "Card ENTRY shows IT, centred on its tile."
-  (pcase-let ((`(,frame . ,buf) entry))
+  "Card ENTRY shows IT, centred on its tile: the popup surface, and the focus colour's 2 px ring on the HIGHLIGHTED
+card.  The others' ring is the popups' own (high contrast's `child-frame-border'), else the surface's colour, so every
+card has one size."
+  (pcase-let* ((`(,frame . ,buf) entry) (`(,text . ,width) (drgnx-switcher--card-text it monitors buf)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert (drgnx-switcher--card-text it monitors highlighted))
+        (insert text)
         (goto-char (point-min))))
+    (let* ((parent (frame-parent frame))
+           (bg (face-background 'drgnx-surface-overlay parent t))
+           (popup-ring (and (fboundp 'drgnx-look-chrome-current)
+                            (> (or (alist-get 'child-frame-border-width (drgnx-look-chrome-current)) 0) 0)))
+           (ring (cond (highlighted (face-foreground 'drgnx-focus-line parent t))
+                       (popup-ring (face-background 'child-frame-border parent t))
+                       (t bg))))
+      (unless (equal (frame-parameter frame 'background-color) bg) (set-frame-parameter frame 'background-color bg))
+      (when (stringp ring) (set-face-background 'child-frame-border ring frame)))
+    ;; the height fits the two lines; the width is the text's own, so no line is cut at the edge
     (let ((window-min-height 1) (window-min-width 1))
-      (fit-frame-to-buffer frame))
+      (fit-frame-to-buffer frame)
+      (set-frame-size frame width (frame-text-height frame) t))
     (let* ((e (plist-get it :local))
            (x (- (/ (+ (nth 0 e) (nth 2 e)) 2) (/ (frame-pixel-width frame) 2)))
            (y (- (/ (+ (nth 1 e) (nth 3 e)) 2) (/ (frame-pixel-height frame) 2))))

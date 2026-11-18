@@ -309,6 +309,11 @@
               (work-second-reviewer "V")
               (work-review-accept "a")
               (work-review-reject "D")
+              (work-review-screen "E")
+              (review-screen-accept "A")
+              (review-screen-request-changes "r")
+              (review-screen-request-send "C-c C-c")
+              (review-screen-request-cancel "C-c C-k")
               (work-focus "f")
               (work-overlaps "o")
               (work-collapse-layer-1 "1")
@@ -807,7 +812,7 @@
               (fold-previous :none "the palette")
               (modal-toggle :none "with Vim keys")
               (face-toggle-menu-bar :none "the palette; F10 opens the menu as text while the bar is hidden")
-              (face-toggle-wrap :none "the palette")
+              (face-toggle-wrap "M-z")
               ;; the menu bar's mnemonics, as VS Code's window.enableMenuBarMnemonics (the Emacs and Vim profiles keep Alt)
               (menu-bar-open-file "M-f" :mac ())   ; macOS: the system menu bar
               (menu-bar-open-edit "M-e" :mac ())   ; macOS: the system menu bar

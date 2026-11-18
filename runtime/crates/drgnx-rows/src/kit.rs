@@ -205,6 +205,36 @@ impl ChipFill {
     }
 }
 
+/// A text input's lines: `single` is one 28 px line, `multi` at least two text lines (rows in the shapes of a card).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputLines {
+    #[default]
+    Single,
+    Multi,
+}
+
+impl InputLines {
+    fn name(self) -> &'static str {
+        match self {
+            InputLines::Single => "single",
+            InputLines::Multi => "multi",
+        }
+    }
+}
+
+/// A context chip of a text input: LABEL in TONE (soft), with a close mark that runs REMOVE.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct InputChip {
+    pub label: String,
+    #[serde(default)]
+    pub tone: Tone,
+    pub remove: Action,
+}
+
+/// A text input's least number of rows when it is `multi`.
+pub const INPUT_MULTI_MIN_ROWS: usize = 2;
+
 /// A status dot's status.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -749,11 +779,52 @@ impl DiffLine {
     }
 }
 
+/// What a question card asks: a permission (`y` Allow once, `a` Always, `n` Deny), a question (its answers `1`…`9`) or a
+/// sign-off (`y` Approve, `n` Request changes).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum QuestionKind {
+    #[default]
+    Permission,
+    Question,
+    SignOff,
+}
+
+impl QuestionKind {
+    fn name(self) -> &'static str {
+        match self {
+            QuestionKind::Permission => "permission",
+            QuestionKind::Question => "question",
+            QuestionKind::SignOff => "sign-off",
+        }
+    }
+
+    /// The key of the I-th choice when the card gives none: the kind's own (`y a n`, `1`…`9`, `y n`).
+    fn key(self, i: usize) -> String {
+        match (self, i) {
+            (QuestionKind::Permission, 0) | (QuestionKind::SignOff, 0) => "y".to_owned(),
+            (QuestionKind::Permission, 1) => "a".to_owned(),
+            (QuestionKind::Permission, 2) | (QuestionKind::SignOff, 1) => "n".to_owned(),
+            (QuestionKind::Question, i) if i < 9 => (i + 1).to_string(),
+            _ => String::new(),
+        }
+    }
+}
+
 /// One hunk of a diff block: its `@@` HEADER and its LINES (kind, the line's number, text).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Hunk {
     pub header: String,
     pub lines: Vec<(DiffLine, u32, String)>,
+}
+
+/// One answer of a question card: its LABEL, the KEY of its hint (empty: the kind's own) and what it does.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct Choice {
+    pub label: String,
+    #[serde(default)]
+    pub key: String,
+    pub action: Action,
 }
 
 /// A component with its props, as JSON `{"c": "row", …}`.
@@ -791,6 +862,18 @@ pub enum Comp {
         key: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
+    },
+    /// A question card (a block of rows, `expand_rows`): the needs-you status dot and TITLE on the attention tint, BODY
+    /// (one row a line) and the CHOICES as kit buttons, the first primary, each with its key hint. As one inline piece
+    /// it is its head.
+    QuestionCard {
+        #[serde(default)]
+        kind: QuestionKind,
+        title: String,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        choices: Vec<Choice>,
     },
     /// A section's header: TITLE (a twisty before it when COLLAPSIBLE, open unless COLLAPSED) and an optional COUNT (a neutral soft chip).
     SectionHeader {
@@ -886,6 +969,22 @@ pub enum Comp {
         modified: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
+    },
+    /// A text input: TEXT (the first row's line; more lines after a newline) or, when empty, PLACEHOLDER, with CHIPS
+    /// before the first line. `Multi` has at least two rows. FOCUSED draws the focus ring; STATE is the state table's.
+    TextInput {
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        placeholder: String,
+        #[serde(default)]
+        lines: InputLines,
+        #[serde(default)]
+        chips: Vec<InputChip>,
+        #[serde(default)]
+        focused: bool,
+        #[serde(default)]
+        state: State,
     },
     /// A segmented switch: ITEMS (a label and its action each) in one track, CURRENT the one shown.
     Segmented {
@@ -1734,6 +1833,7 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 b.push(&format!(" {w}"), face);
             }
         }
+        Comp::QuestionCard { kind, title, .. } => question_head(b, env, *kind, title),
         Comp::AgentMark { slot, handle } => agent_mark(b, env, *slot, handle),
         Comp::Tab {
             title,
@@ -1754,6 +1854,13 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             action.as_ref(),
         ),
         Comp::Segmented { items, current } => segmented(b, env, items, *current),
+        Comp::TextInput { lines, text, .. } => {
+            let n = match lines {
+                InputLines::Single => 1,
+                InputLines::Multi => text_input_rows(text),
+            };
+            text_input_row(b, env, c, 0, n);
+        }
         Comp::Progress { kind, value, width } => progress(b, env, *kind, *value, *width),
         Comp::Meter {
             spent,
@@ -1994,9 +2101,255 @@ fn progress(b: &mut RowBuilder, env: &KitEnv, kind: ProgressKind, value: f64, wi
     }
 }
 
+/// A question card's head onto B: the card's room, the needs-you status dot, TITLE, the room again, all on the head's
+/// tint (`drgnx-kit-question-card-head`).
+fn question_head(b: &mut RowBuilder, env: &KitEnv, kind: QuestionKind, title: &str) {
+    let v = [kind.name(), env.density.name()];
+    let g: Geom = kit_gen::geom(CompId::QuestionCard, &v);
+    let head = Some(FaceId::KitQuestionCardHead.name());
+    pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), head);
+    let dot = Comp::StatusDot {
+        status: Status::NeedsYou,
+        word: false,
+    };
+    expand(b, env, &dot);
+    b.push(" ", head);
+    b.push(title, head);
+    pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), head);
+    let end = b.pos();
+    b.face(0, end, FaceId::KitQuestionCardHead.name());
+    // the label "needs you: TITLE"
+    let label = format!(
+        "{}: {title}",
+        kit_gen::label(CompId::QuestionCard, &v).unwrap_or("")
+    );
+    b.prop(0, end, "help-echo", Value::String(label));
+}
+
+/// A question card as the rows of a needs-you card: the head, BODY's lines and the choices' row (the first button
+/// primary, each with its key hint: the choice's own KEY, else the kind's).
+fn question_rows(
+    env: &KitEnv,
+    key: &str,
+    kind: QuestionKind,
+    title: &str,
+    body: &str,
+    choices: &[Choice],
+) -> Vec<Row> {
+    let v = [kind.name(), env.density.name()];
+    let g: Geom = kit_gen::geom(CompId::QuestionCard, &v);
+    let face = comp_face(kit_gen::face(CompId::QuestionCard, &v));
+    let lead =
+        |b: &mut RowBuilder| pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+    let trail =
+        |b: &mut RowBuilder| pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+    let mut rows = Vec::new();
+    let mut b = RowBuilder::new(format!("{key}/0"));
+    question_head(&mut b, env, kind, title);
+    rows.push(b.finish());
+    for line in body.lines() {
+        let mut b = RowBuilder::new(format!("{key}/{}", rows.len()));
+        lead(&mut b);
+        b.push(line, face);
+        trail(&mut b);
+        rows.push(b.finish());
+    }
+    if !choices.is_empty() {
+        let mut b = RowBuilder::new(format!("{key}/{}", rows.len()));
+        lead(&mut b);
+        for (i, c) in choices.iter().enumerate() {
+            if i > 0 {
+                pad(&mut b, env, px(g.gap, env.scale), 1, face);
+            }
+            let hint = if c.key.is_empty() {
+                kind.key(i)
+            } else {
+                c.key.clone()
+            };
+            let button = Comp::Button {
+                label: c.label.clone(),
+                style: if i == 0 {
+                    ButtonStyle::Primary
+                } else {
+                    ButtonStyle::Secondary
+                },
+                size: Size::Md,
+                state: State::Rest,
+                key: Some(hint).filter(|k| !k.is_empty()),
+                action: Some(c.action.clone()),
+            };
+            expand(&mut b, env, &button);
+        }
+        trail(&mut b);
+        rows.push(b.finish());
+        // room under the buttons, so the ring runs unbroken below them
+        let mut b = RowBuilder::new(format!("{key}/{}", rows.len()));
+        lead(&mut b);
+        trail(&mut b);
+        rows.push(b.finish());
+    }
+    card_rows(env, CardKind::NeedsYou, rows)
+}
+
+/// The rows of a multi-line input's TEXT: its lines, at least [`INPUT_MULTI_MIN_ROWS`].
+fn text_input_rows(text: &str) -> usize {
+    text.split('\n').count().max(INPUT_MULTI_MIN_ROWS)
+}
+
+/// A context chip of a text input onto B (`drgnx-ui-kit--b-input-chip`): the chip's pads and label, then its close mark
+/// (the Lucide x where the env draws icons, else the `close` glyph) in the chip's face; a click or RET on the mark runs
+/// the chip's `remove` and its label (`help-echo`) is "remove LABEL".
+fn input_chip(b: &mut RowBuilder, env: &KitEnv, chip: &InputChip) {
+    let variant = [chip.tone.name(), "soft", env.density.name()];
+    let g: Geom = kit_gen::geom(CompId::Chip, &variant);
+    let face = match chip.tone {
+        Tone::Agent(_) => comp_face(kit_gen::face(
+            CompId::Chip,
+            &["neutral", "soft", env.density.name()],
+        )),
+        _ => comp_face(kit_gen::face(CompId::Chip, &variant)),
+    };
+    pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+    let text_from = b.pos();
+    b.push(&chip.label, face);
+    let text_to = b.pos();
+    pad(b, env, px(g.gap, env.scale), 1, face);
+    let at = b.pos();
+    match env
+        .icons
+        .filter(|_| !env.tty)
+        .and_then(|i| (i.0)("x", px(TAB_ICON_PX, env.scale)))
+    {
+        Some(id) => {
+            b.image(id, glyph(env, "close"));
+            if let Some(f) = face {
+                b.face(at, at + 1, f);
+            }
+        }
+        None => {
+            b.push(glyph(env, "close"), face);
+        }
+    }
+    let to = b.pos();
+    pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+    if let Some(a) = match chip.tone {
+        Tone::Agent(n) => usize::from(n)
+            .checked_sub(1)
+            .and_then(|i| AGENT_FACES.get(i)),
+        _ => None,
+    } {
+        b.face(text_from, text_to, a.name());
+    }
+    put_action(b, at, to, &chip.remove);
+    b.prop(
+        at,
+        to,
+        "help-echo",
+        Value::String(format!("remove {}", chip.label)),
+    );
+}
+
+/// Row I of N of the text input C onto B (`drgnx-ui-kit--text-input` draws row 0): the field's pads (a terminal's `[ `
+/// and ` ]`), on the first row the chips and then the text or, when it is empty, the placeholder in the muted role; the
+/// field's face of its shape under all of it (the ring is open where the field goes on), the state above.
+fn text_input_row(b: &mut RowBuilder, env: &KitEnv, c: &Comp, i: usize, n: usize) {
+    let Comp::TextInput {
+        text,
+        placeholder,
+        lines,
+        chips,
+        focused,
+        state,
+    } = c
+    else {
+        return;
+    };
+    let shape = CardShape::of(i, n);
+    let variant = [lines.name(), shape.name(), env.density.name()];
+    let g: Geom = kit_gen::geom(CompId::TextInput, &variant);
+    let face = comp_face(kit_gen::face(CompId::TextInput, &variant));
+    let from = b.pos();
+    if env.tty {
+        b.push("[ ", None);
+    } else {
+        pad(b, env, px(g.pad.0, env.scale), 0, None);
+    }
+    if i == 0 {
+        for chip in chips {
+            input_chip(b, env, chip);
+            pad(b, env, px(g.gap, env.scale), 1, None);
+        }
+    }
+    let line = text.split('\n').nth(i).unwrap_or("");
+    let text_from = b.pos();
+    if i == 0 && text.is_empty() {
+        b.push(placeholder, Some(FaceId::TextMuted.name()));
+    } else {
+        b.push(line, None);
+    }
+    let text_to = b.pos();
+    if env.tty {
+        b.push(" ]", None);
+    } else {
+        pad(b, env, px(g.pad.1, env.scale), 0, None);
+    }
+    let to = b.pos();
+    if let Some(f) = face {
+        b.face(from, to, f);
+    }
+    // the focus ring is the state table's: the field has colours of its own, so a state is above them
+    let shown = if *focused {
+        State::FocusVisible
+    } else {
+        *state
+    };
+    if let Some(f) = state_face(shown) {
+        b.face_over(from, to, f.name());
+    }
+    if !env.tty && g.height > 0 {
+        b.height(1, px(g.height, env.scale));
+    }
+    if i == 0 {
+        let word = kit_gen::label(CompId::TextInput, &variant).unwrap_or_default();
+        let spoken = if text.is_empty() && !placeholder.is_empty() {
+            placeholder.as_str()
+        } else {
+            word
+        };
+        b.prop(
+            text_from,
+            text_to,
+            "help-echo",
+            Value::String(spoken.to_owned()),
+        );
+    }
+}
+
 /// C as whole rows, keys `KEY/0`, `KEY/1`…: a block component's rows (cards, toasts…, in later tasks), an inline one's
 /// one row.
 pub fn expand_rows(env: &KitEnv, key: &str, c: &Comp) -> Vec<Row> {
+    if let Comp::QuestionCard {
+        kind,
+        title,
+        body,
+        choices,
+    } = c
+    {
+        return question_rows(env, key, *kind, title, body, choices);
+    }
+    if let Comp::TextInput { lines, text, .. } = c {
+        let n = match lines {
+            InputLines::Single => 1,
+            InputLines::Multi => text_input_rows(text),
+        };
+        return (0..n)
+            .map(|i| {
+                let mut b = RowBuilder::new(format!("{key}/{i}"));
+                text_input_row(&mut b, env, c, i, n);
+                b.finish()
+            })
+            .collect();
+    }
     let mut b = RowBuilder::new(format!("{key}/0"));
     expand(&mut b, env, c);
     let head = b.finish();
@@ -2143,6 +2496,84 @@ mod tests {
         };
         assert_eq!(expand_rows(&env, "k", &row(Some(true)))[0].text, "   ⌄ a ");
         assert_eq!(expand_rows(&env, "k", &row(None))[0].key, "k/0");
+    }
+
+    fn permission(choices: Vec<Choice>) -> Comp {
+        Comp::QuestionCard {
+            kind: QuestionKind::Permission,
+            title: "Run cargo test?".to_owned(),
+            body: "The agent wants to run a command.\nIn the project folder.".to_owned(),
+            choices,
+        }
+    }
+
+    fn answers() -> Vec<Choice> {
+        ["Allow once", "Always", "Deny"]
+            .iter()
+            .enumerate()
+            .map(|(i, l)| Choice {
+                label: (*l).to_owned(),
+                key: String::new(),
+                action: Action {
+                    kind: "question".to_owned(),
+                    args: vec![serde_json::json!(i)],
+                },
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_question_card_is_a_needs_you_card_of_head_body_and_choices() {
+        let rows = expand_rows(&chip_env(1.0, false), "q", &permission(answers()));
+        assert_eq!(rows.len(), 5, "head, two body lines, choices, room");
+        assert_eq!(rows[0].key, "q/0");
+        assert!(rows[0].text.contains("Run cargo test?"));
+        // the head is on the attention tint; every row is under the needs-you card's ring face
+        assert!(
+            rows[0]
+                .runs
+                .iter()
+                .any(|r| r.2 == FaceId::KitQuestionCardHead.name())
+        );
+        for (i, r) in rows.iter().enumerate() {
+            let want = CardShape::of(i, 5);
+            let ring = kit_gen::face(CompId::Card, &["needs-you", want.name(), "comfortable"]);
+            assert!(r.runs.iter().any(|x| x.2 == ring.name()), "row {i}");
+        }
+        assert_eq!(rows[1].text.trim(), "The agent wants to run a command.");
+    }
+
+    #[test]
+    fn a_question_cards_first_button_is_primary_and_each_has_its_key() {
+        let rows = expand_rows(&chip_env(1.0, false), "q", &permission(answers()));
+        let choices = &rows[3]; // then the room under it
+        let primary = kit_gen::face(CompId::Button, &["primary", "md", "comfortable"]);
+        let secondary = kit_gen::face(CompId::Button, &["secondary", "md", "comfortable"]);
+        let faces: Vec<&str> = choices.runs.iter().map(|r| r.2.as_str()).collect();
+        assert!(faces.contains(&primary.name()));
+        assert!(faces.contains(&secondary.name()));
+        // y, a and n, each through the button's action
+        for (word, key) in [("Allow once", "y"), ("Always", "a"), ("Deny", "n")] {
+            assert!(
+                choices.text.contains(word) && choices.text.contains(key),
+                "{word}"
+            );
+        }
+        let acts: Vec<&Value> = choices
+            .props
+            .iter()
+            .filter(|p| p.2 == "drgnx-action")
+            .map(|p| &p.3)
+            .collect();
+        assert_eq!(acts.len(), 3);
+        assert_eq!(acts[2], &serde_json::json!(["question", 2]));
+    }
+
+    #[test]
+    fn a_terminal_question_card_says_who_needs_you_in_words() {
+        let rows = expand_rows(&chip_env(1.0, true), "q", &permission(answers()));
+        assert!(rows[0].text.contains("●"), "{}", rows[0].text);
+        assert!(rows[3].text.contains("[y]"), "{}", rows[3].text);
     }
 
     #[test]
@@ -2801,5 +3232,85 @@ mod tests {
         assert_eq!(r.text, "$12 · no limit");
         let r = meter_at(1.0, 31.0, Some(40.0), MeterState::Ok, "31 % wk");
         assert!(r.text.ends_with(" 31 % wk"), "{}", r.text);
+    }
+    fn input(lines: InputLines, text: &str) -> Comp {
+        Comp::TextInput {
+            text: text.into(),
+            placeholder: "Request changes".into(),
+            lines,
+            chips: Vec::new(),
+            focused: false,
+            state: State::Rest,
+        }
+    }
+
+    fn plain_env() -> KitEnv<'static> {
+        KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            ascii: false,
+            density: Density::Comfortable,
+            icons: None,
+        }
+    }
+
+    #[test]
+    fn text_input_multi_line_is_rows() {
+        let env = plain_env();
+        // one line of text still has two rows; three lines have three, in a card's shapes, keys KEY/0, KEY/1…
+        let two = expand_rows(&env, "k", &input(InputLines::Multi, "a"));
+        assert_eq!(
+            two.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+            ["k/0", "k/1"]
+        );
+        let three = expand_rows(&env, "k", &input(InputLines::Multi, "a\nb\nc"));
+        let faces: Vec<&str> = three
+            .iter()
+            .map(|r| r.runs.last().expect("the field's face").2.as_str())
+            .collect();
+        assert_eq!(
+            faces,
+            [
+                FaceId::KitTextInputMultiTop.name(),
+                FaceId::KitTextInputMultiMid.name(),
+                FaceId::KitTextInputMultiBottom.name()
+            ]
+        );
+        assert!(three[1].text.contains('b') && three[2].text.contains('c'));
+        // a single field is one row, 28 px tall
+        let one = expand_rows(&env, "k", &input(InputLines::Single, "a\nb"));
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].height, Some(crate::RowHeight { lines: 1, unit: 28 }));
+    }
+
+    #[test]
+    fn text_input_chip_close_carries_remove() {
+        let remove = Action {
+            kind: "composer-chip-remove".into(),
+            args: vec![Value::String("kit.rs".into())],
+        };
+        let c = Comp::TextInput {
+            text: String::new(),
+            placeholder: "Ask".into(),
+            lines: InputLines::Single,
+            chips: vec![InputChip {
+                label: "kit.rs".into(),
+                tone: Tone::Neutral,
+                remove: remove.clone(),
+            }],
+            focused: false,
+            state: State::Rest,
+        };
+        let r = &expand_rows(&plain_env(), "k", &c)[0];
+        let (from, to, _, v) = r
+            .props
+            .iter()
+            .find(|p| p.2 == "drgnx-action")
+            .expect("the close mark's action");
+        assert_eq!(v, &serde_json::json!(["composer-chip-remove", "kit.rs"]));
+        // the action covers the close mark alone: one character, the last of the chip's label run
+        assert_eq!(to - from, 1);
+        assert_eq!(r.text.chars().nth(*from as usize), Some('×'));
     }
 }

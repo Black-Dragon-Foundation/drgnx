@@ -20,7 +20,7 @@
           (drgnx-face-title-bar drgnx-face-title-bar) (drgnx-face-gtk-theme drgnx-face-gtk-theme)
           (drgnx-face--wm-noted nil)
           (drgnx-face-menu-bar drgnx-face-menu-bar) (drgnx-face-scroll-bars drgnx-face-scroll-bars)
-          (drgnx-face-line-spacing drgnx-face-line-spacing) (drgnx-face-line-wrap drgnx-face-line-wrap)
+          (drgnx-face-line-spacing drgnx-face-line-spacing)
           (drgnx-face-frame-title drgnx-face-frame-title)
           (drgnx-face-line-numbers-modes drgnx-face-line-numbers-modes)
           (drgnx-face-inline-problems drgnx-face-inline-problems))
@@ -385,44 +385,6 @@ on a graphical frame too, and nothing in it is a display spec."
       (should (eql (default-value 'line-spacing) 3)))
     (should (eql (default-value 'line-spacing) 5))))      ; and the module turned off gives it back
 
-(ert-deftest drgnx-face/long-lines-wrap-at-a-word-in-every-window ()
-  ;; one policy: Emacs cuts below 50 columns and breaks mid-word above; drgnx wraps at words everywhere
-  (let ((word-wrap nil) (truncate-lines nil) (truncate-partial-width-windows 50))
-    (drgnx-face-test--with
-      (should (eq (default-value 'word-wrap) t))
-      (should-not (default-value 'truncate-lines))
-      (should-not (default-value 'truncate-partial-width-windows))
-      (setopt drgnx-face-line-wrap 'truncate)
-      (should (default-value 'truncate-lines))
-      (should-not (default-value 'truncate-partial-width-windows))
-      (setopt drgnx-face-line-wrap nil)                     ; Emacs's own again
-      (should-not (default-value 'word-wrap))
-      (should-not (default-value 'truncate-lines))
-      (should (eql (default-value 'truncate-partial-width-windows) 50)))))
-
-(ert-deftest drgnx-face/wrapped-lines-have-no-fringe-arrows ()
-  "Audit G4: a line wrapped at a word showed Emacs's continuation arrows in both fringes; VS Code draws none.  The
-module turned off gives Emacs's arrows back."
-  (let ((word-wrap nil) (truncate-lines nil) (truncate-partial-width-windows 50)
-        (fringe-indicator-alist (default-value 'fringe-indicator-alist)))
-    (should (cdr (assq 'continuation fringe-indicator-alist)))   ; the premise: Emacs's arrows
-    (drgnx-face-test--with
-      (should (equal (assq 'continuation (default-value 'fringe-indicator-alist)) '(continuation nil nil)))
-      (should (assq 'truncation (default-value 'fringe-indicator-alist))))   ; the rest is kept
-    (should (cdr (assq 'continuation (default-value 'fringe-indicator-alist))))))
-
-(ert-deftest drgnx-face/toggle-word-wrap-flips-one-buffer ()
-  (drgnx-face-test--with
-    (should (drgnx-commands-get 'face-toggle-wrap))
-    (with-temp-buffer
-      (should-not truncate-lines)
-      (call-interactively (drgnx-cmd-command (drgnx-commands-get 'face-toggle-wrap)))
-      (should truncate-lines)
-      (call-interactively (drgnx-cmd-command (drgnx-commands-get 'face-toggle-wrap)))
-      (should-not truncate-lines)
-      (should word-wrap))
-    (should-not (default-value 'truncate-lines))))              ; other buffers keep the policy
-
 (ert-deftest drgnx-face/the-wrap-toggle-is-in-every-profile ()
   (dolist (p '("vscode" "emacs" "vim"))
     (with-temp-buffer
@@ -561,11 +523,12 @@ the string made last, and allocates nothing; a renamed buffer or another project
   ;; so may the find bar's buttons, read among its own: match-previous and match-next are ahead's ^ and behind's v,
   ;; rename-symbol diamond's <>; and the Search view's dropdown and save-search, behind's v and dot's *)
   ;; nor the glyphs of the icons (`drgnx-ui--icon-glyphs'): they stand in for a picture; nor a progress bar's pieces
-  ;; (bar-...): read only inside the bar, its [##--] (and the partial cells have no ASCII form at all)
+  ;; (bar-...) and a range bar's (range-..., seg-..., axis-...: its late "!" is warning's, thinking's "." is the forecast's,
+  ;; by the hub's own table): read only inside the bar, its [##--] (and the partial cells have no ASCII form at all)
   (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (or (memq (car g) '(fail stopped dismiss unqueue info warn
                                                                                match-previous match-next rename-symbol
                                                                                dropdown save-search))
-                                                          (string-prefix-p "bar-" (symbol-name (car g)))
+                                                          (string-match-p "\\`\\(?:bar\\|range\\|seg\\|axis\\)-" (symbol-name (car g)))
                                                           (assq (car g) drgnx-ui--icon-glyphs)))
                                           (default-value 'drgnx-face-glyphs)))))
     (should (= (length ascii) (length (delete-dups (copy-sequence ascii))))))

@@ -68,12 +68,13 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `lightbulb` | - |
 | `list-checks` | `core/drgnx-palette.el` |
 | `lock` | - |
-| `maximize-2` | - |
+| `maximize-2` | `wb/drgnx-grid.el` |
 | `menu` | - |
 | `message-square` | - |
 | `minimize-2` | - |
 | `minus` | `modules/tools/drgnx-replace.el` |
 | `monitor` | - |
+| `move` | `wb/drgnx-grid-ops.el` |
 | `package` | - |
 | `panel-bottom` | - |
 | `panel-left` | - |

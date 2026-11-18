@@ -16,12 +16,14 @@
 
 (defgroup drgnx-look nil "The look: faces, fonts and chrome." :group 'drgnx :prefix "drgnx-")
 
-;;;; Surfaces: no standard face, so `default' until derive or a theme writes them
+;;;; Surfaces: nothing until derive or a theme writes them, the raised one the quiet selection's fill.  Never `default':
+;;;; its family and absolute size come with it under a theme that knows nothing of drgnx, over every kit text a state
+;;;; face reaches.
 
-(defface drgnx-surface-gap '((t :inherit default)) "The gap between cards, and the bars." :group 'drgnx-look)
-(defface drgnx-surface-panel '((t :inherit default)) "A side panel's surface." :group 'drgnx-look)
-(defface drgnx-surface-raised '((t :inherit default)) "A raised surface: chips, hovered rows, the current tab." :group 'drgnx-look)
-(defface drgnx-surface-overlay '((t :inherit default)) "A popup's or palette's surface." :group 'drgnx-look)
+(defface drgnx-surface-gap '((t)) "The gap between cards, and the bars." :group 'drgnx-look)
+(defface drgnx-surface-panel '((t)) "A side panel's surface." :group 'drgnx-look)
+(defface drgnx-surface-raised '((t :inherit secondary-selection)) "A raised surface: chips, hovered rows, the current tab." :group 'drgnx-look)
+(defface drgnx-surface-overlay '((t)) "A popup's or palette's surface." :group 'drgnx-look)
 
 ;;;; Text
 

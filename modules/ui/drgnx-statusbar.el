@@ -41,6 +41,7 @@
 (declare-function nidhogg-view-bar "nidhogg-views" (spec))
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-look-echo-status "drgnx-look-echo" ())
+(declare-function drgnx-grid-full-size-status "drgnx-grid" (&optional frame))
 (declare-function drgnx-notice-toast-more-count "drgnx-notice-toast")
 (declare-function drgnx-notice-toast-more-text "drgnx-notice-toast")
 (declare-function drgnx-file-write "drgnx-file")
@@ -1826,9 +1827,9 @@ set up without editor/evil: `drgnx-modal-mode-line' is \"\")."
 
 (defun drgnx-statusbar--seg-misc ()
   "What stock Emacs would show beside the file: evil's state tag, keycast's key, a keyboard macro being recorded,
-narrowing, a remote directory, the process of the buffer, which-function's name, the entries other packages added to
-`mode-line-misc-info' and `global-mode-string' (without the job badge: `drgnx-statusbar--misc', once per buffer per
-redisplay)."
+narrowing, a tile shown full size (`full size · 6 tiles'), a remote directory, the process of the buffer,
+which-function's name, the entries other packages added to `mode-line-misc-info' and `global-mode-string' (without the
+job badge: `drgnx-statusbar--misc', once per buffer per redisplay)."
   (let* ((global (drgnx-statusbar--misc))
          (which (drgnx-statusbar--which-func (drgnx-statusbar-source-window)))
          (parts (delq nil
@@ -1837,6 +1838,7 @@ redisplay)."
                             (and defining-kbd-macro
                                  (propertize (format "%s Rec" (drgnx-statusbar--glyph 'dot)) 'face 'error))
                             (and (buffer-narrowed-p) "Narrowed")
+                            (and (fboundp 'drgnx-grid-full-size-status) (drgnx-grid-full-size-status))
                             (when-let* (((stringp default-directory))
                                         ;; parses the name, no connection
                                         (host (file-remote-p default-directory 'host))

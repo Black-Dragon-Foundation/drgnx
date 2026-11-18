@@ -1558,6 +1558,7 @@ The commands of modules that need no installed package are in it, the later stag
                               debug-console debug-console-history-previous debug-console-history-next ; the console
                               debug-memory-next debug-memory-previous debug-memory-write ; the memory view
                               debug-heap-select ; the heap graph's RET
+                              face-toggle-wrap ; group 21e: the word-wrap toggle got M-z (VS Code's Alt+Z)
                               scm-open scm-stage scm-unstage scm-discard scm-toggle ; the Source Control view's own
                               scm-commit-message ; its commit box's Ctrl+Enter
                               menu-bar-open-file menu-bar-open-edit menu-bar-open-selection menu-bar-open-view
@@ -1582,7 +1583,10 @@ The commands of modules that need no installed package are in it, the later stag
                               tile-unstack tile-resize tile-resize-left tile-resize-right tile-resize-up tile-resize-down
                               layout-restore-previous  ; the grid's Restore Previous Layout (C-k C-z)
                               tile-switcher            ; Switch Tile (Esc Esc, C-<escape>)
-                              tile-placeholder-open tile-placeholder-close)) ; a tile placeholder's RET and x
+                              tile-placeholder-open tile-placeholder-close
+                              ;; the review screen (flow Task 28)
+                              work-review-screen review-screen-accept review-screen-request-changes
+                              review-screen-request-send review-screen-request-cancel)) ; a tile placeholder's RET and x
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

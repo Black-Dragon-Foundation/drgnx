@@ -20,13 +20,16 @@
 
 (defconst drgnx-kit-catalogue-buffer "*drgnx: Components*" "The catalogue's buffer.")
 
-(defconst drgnx-kit-catalogue--stateless '(agent-mark progress card range-bar segmented diff-block empty-state)
+(defconst drgnx-kit-catalogue--stateless '(agent-mark progress card range-bar segmented diff-block empty-state question-card)
   "The components that show no state (nothing to hover or select; a segmented switch's current item is its own):
 drawn at rest only.")
 
 (defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress section-header card diff-block empty-state chip status-dot tab
-                                         segmented range-bar)
+                                         segmented range-bar text-input)
   "The components the hub expands: their cells are drawn as hub rows.")
+
+(defconst drgnx-kit-catalogue--input-states '(rest focus-visible disabled)
+  "The states a text input shows: the field at rest, with the focus ring, and disabled (hover and selection are not its).")
 
 (defconst drgnx-kit-catalogue--meters
   (cl-loop for size in '(row card wide)
@@ -82,6 +85,15 @@ drawn at rest only.")
     ('status-dot (list :c "status-dot" :status (symbol-name (alist-get 'status variants)) :word t))
     ('tab (list :c "tab" :title "main.rs" :size (symbol-name (alist-get 'size variants)) :state (symbol-name state)
                 :icon "file-code" :close t :modified :false))
+    ('text-input (let* ((multi (eq (alist-get 'lines variants) 'multi))
+                        (shape (alist-get 'shape variants)))
+                   ;; a multi-line field is three rows, each cell one of them in its shape
+                   (list :c "text-input" :lines (symbol-name (alist-get 'lines variants))
+                         :row (and multi (pcase shape ('top 0) ('mid 1) (_ 2))) :rows (and multi 3)
+                         :text (if multi "one\ntwo\nthree" "Text") :placeholder "Placeholder"
+                         :chips (list (list :label "kit.rs" :tone "neutral"
+                                            :remove (list :kind "kit-catalogue" :args (list "kit.rs"))))
+                         :state (symbol-name state))))
     ('segmented (list :c "segmented" :current 1
                       :items (mapcar (lambda (l) (list l (list :kind "kit-catalogue" :args (list (downcase l)))))
                                      '("Map" "Board" "Timeline"))))
@@ -111,12 +123,25 @@ dresses a hub row, in STATE (a patch state); the cell's text, its line's height 
     (propertize (drgnx-view-patch--dress state "kit" row (copy-sequence (plist-get e :text)))
                 'drgnx-kit-line-height (plist-get (plist-get e :height) :unit))))
 
+(defun drgnx-kit-catalogue--question-card (kind)
+  "A question card of KIND as the catalogue shows it: its lines, 72 columns wide."
+  (let ((ids (pcase kind
+               ('question '(("Use the JSON schema" nil) ("Use the TOML one" nil) ("Neither" nil)))
+               ('sign-off '(("Approve" nil) ("Request changes" nil)))
+               (_ '(("Allow once" nil) ("Always" nil) ("Deny" nil))))))
+    (apply #'concat
+           (drgnx-ui-kit-question-card
+            kind (pcase kind ('question "Which format?") ('sign-off "Sign off the review?") (_ "Run cargo test?"))
+            "The agent wants this to go on; it waits for you."
+            (mapcar (lambda (c) (list (car c) (cadr c) #'ignore)) ids) 72))))
+
 (defun drgnx-kit-catalogue--cell (id variants state scale tty patch)
   "One cell's text: component ID with VARIANTS in STATE."
   (let* ((props (drgnx-kit-catalogue--props id variants state))
-         (s (if (memq id drgnx-kit-catalogue--hub)
-                (drgnx-kit-catalogue--hub-row id props scale tty patch)
-              (drgnx-ui-kit-string id props 'text nil))))
+         (s (cond ((eq id 'question-card) (drgnx-kit-catalogue--question-card (alist-get 'kind variants)))
+                  ((memq id drgnx-kit-catalogue--hub)
+                   (drgnx-kit-catalogue--hub-row id props scale tty patch))
+                  (t (drgnx-ui-kit-string id props 'text nil)))))
     (put-text-property 0 (length s) 'drgnx-kit-cell (list id (mapcar #'cdr variants) state) s)
     ;; progress beside its caption, as it is used: the bar and the ring on the caption's centre line (a meter has its
     ;; text)
@@ -152,7 +177,10 @@ frame's)."
                  (or (null component) (eq component (car c)) (and (eq component 'meter) (eq (car c) 'progress))))
         (insert (propertize (format "%s\n" (car c)) 'face 'drgnx-ui-heading) "\n")
         (dolist (variants (drgnx-kit-catalogue--combos (cdr c)))
-          (when (drgnx-kit-catalogue--shown-p component (car c) variants)
+          (when (and (drgnx-kit-catalogue--shown-p component (car c) variants)
+                     ;; a text input's shapes: a single line is `single', a multi-line field's rows are not
+                     (or (not (eq (car c) 'text-input))
+                         (eq (eq (alist-get 'lines variants) 'single) (eq (alist-get 'shape variants) 'single))))
             (when variants
               (insert (propertize (mapconcat (lambda (v) (format "%s %s" (car v) (cdr v))) variants ", ")
                                   'face 'drgnx-text-muted)
@@ -160,6 +188,7 @@ frame's)."
             (dolist (state (cond ((and (eq (car c) 'progress) (eq (alist-get 'kind variants) 'meter))
                                   (mapcar #'car drgnx-kit-catalogue--meters))
                                  ((memq (car c) drgnx-kit-catalogue--stateless) '(rest))
+                                 ((eq (car c) 'text-input) drgnx-kit-catalogue--input-states)
                                  (t drgnx-ui-kit-states)))
               (let ((s (drgnx-kit-catalogue--cell (car c) variants state scale tty patch)))
                 ;; a hub row's newline carries its height, as the inserter's render puts it

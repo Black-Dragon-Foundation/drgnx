@@ -34,6 +34,8 @@
 (declare-function drgnx-work-trail--agent-sid "drgnx-work-trail")
 (declare-function drgnx-work-trail--cwd "drgnx-work-trail")
 (declare-function drgnx-work-code-one-line "drgnx-work-code")
+(declare-function drgnx-review-screen-accept-hunk "drgnx-review-screen")
+(declare-function drgnx-review-screen-reject-hunk "drgnx-review-screen")
 (defvar drgnx-work-lens--map)
 (defvar drgnx-work-lens-nav)
 (defvar drgnx-work-lens-map)
@@ -234,7 +236,14 @@ computed of each, the edited files and their hunks.  Returns the buffer; it does
 (defun drgnx-work-review--accept (path)
   "Accept PATH's change as it is now: a review mark with the diff's hash (the merge gate compares it)."
   (let* ((diff (or (cdr (assoc path drgnx-work-review--diffs)) (user-error "%s: its diff is not here yet" path)))
-         (hash (secure-hash 'sha1 diff)))
+         (hash (secure-hash 'sha1 diff)) (i 0))
+    ;; the whole-file accept is the accept of every hunk in the file (the review screen marks hunks as PATH#INDEX)
+    (dolist (h (drgnx-work-review-parse-hunks diff))
+      (let ((hh (secure-hash 'sha1 (concat (plist-get h :header) "\n" (plist-get h :text)))))
+        (drgnx-hub-call "review/mark"
+                        (list :agent drgnx-work-review--session :path (format "%s#%d" path i) :state "accepted" :hash hh)
+                        #'ignore))
+      (setq i (1+ i)))
     (drgnx-hub-call "review/mark"
                     (list :agent drgnx-work-review--session :path path :state "accepted" :hash hash
                           :event (list :kind "accept" :summary (format "you accepted %s" path)
@@ -259,14 +268,19 @@ PATH and the hunk's header are the agent's words: they stay on the message's one
     (message "Work: %s is marked pending and the agent has been told" path)))
 
 (defun drgnx-work-review-accept ()
-  "Accept the file at point as its diff is now (a review mark for the merge gate); nothing is merged."
+  "Accept the file at point as its diff is now (a review mark for the merge gate); nothing is merged.  In the review
+screen, the hunk at point."
   (interactive)
-  (drgnx-work-review--accept (car (drgnx-work-review--here))))
+  (if (derived-mode-p 'drgnx-review-screen-mode)
+      (drgnx-review-screen-accept-hunk)
+    (drgnx-work-review--accept (car (drgnx-work-review--here)))))
 
 (defun drgnx-work-review-reject ()
   "Reject the hunk at point: the file goes back to pending and the agent is told (queued; it is not cancelled)."
   (interactive)
-  (let ((here (drgnx-work-review--here))) (drgnx-work-review--reject (car here) (cdr here))))
+  (if (derived-mode-p 'drgnx-review-screen-mode)
+      (drgnx-review-screen-reject-hunk)
+    (let ((here (drgnx-work-review--here))) (drgnx-work-review--reject (car here) (cdr here)))))
 
 (defun drgnx-work-review--nav (dir)
   "A key of the lens in a review: up and down move by rows; the others do nothing here."

@@ -28,7 +28,9 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Agent mark (kit)](agent-mark.md) | the agent mark's numbers (generated from `etc/ui/components.eld`) |
 | [Progress (kit)](progress.md) | progress's numbers (generated from `etc/ui/components.eld`) |
 | [Tab (kit)](tab.md) | an editor tab or a panel's tab, its icon, title and close mark |
+| [Question card (kit)](question-card.md) | what an agent asks you: a permission, a question or a sign-off, on one needs-you card |
 | [Segmented switch (kit)](segmented.md) | one ringed track of choices, the current one on the quiet selection |
+| [Text input (kit)](text-input.md) | the field round a real buffer's text: one line or several, with context chips |
 
 ## How to read a page
 

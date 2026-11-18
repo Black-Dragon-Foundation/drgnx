@@ -57,8 +57,10 @@ const AGENT: &str = FaceId::WorkFlowAgent.name();
 const HOVER: &str = FaceId::Hover.name();
 /// A key's badge (the keycap).
 const KEY: &str = FaceId::WorkFlowKey.name();
-/// The detail's action rows, logical px (`.detail .acts`: 24 px buttons, 6 px apart).
-const ACT_ROW: f32 = 30.0;
+/// The detail's action rows, logical px: as tall as the kit's small button (22; its box fills the row) and the mockup's 6 px
+/// between two rows (`.detail .acts`).
+const ACT_ROW: f32 = 22.0;
+const ACT_GAP: f32 = 6.0;
 /// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
 const CARD: &str = FaceId::WorkFlowCard.name();
 const CARD_TEXT: &str = FaceId::WorkFlowCardText.name();
@@ -773,7 +775,8 @@ pub(crate) fn flow_rows(
             if text_px(fonts, LABEL, name) <= room {
                 cols.push(name, Some(LABEL));
             } else {
-                cols.push(&fit_px(fonts, LABEL, name, room), Some(LABEL));
+                // no room for the word: the icon alone, the word its help-echo (never a stub like "B…")
+                cols.prop(start, end, "help-echo", json!(name));
             }
         } else {
             cols.push(name, Some(LABEL));
@@ -1219,6 +1222,17 @@ fn button(b: &mut RowBuilder, env: &ViewEnv, label: &str, key: &str, primary: bo
     kit::expand(b, &kit_env(env), &kit_button(label, key, primary));
 }
 
+/// The registered command a detail button's KEY is bound to (the key profiles bind the same ids): a click runs it.
+fn command_of(key: &str) -> Option<&'static str> {
+    match key {
+        "r" => Some("work-flow-run-red"),
+        "s" => Some("work-flow-tell-agent"),
+        "w" => Some("work-flow-waive"),
+        "e" => Some("work-flow-evidence"),
+        _ => None,
+    }
+}
+
 fn kit_button(label: &str, key: &str, primary: bool) -> Comp {
     Comp::Button {
         label: label.to_owned(),
@@ -1227,10 +1241,13 @@ fn kit_button(label: &str, key: &str, primary: bool) -> Comp {
         } else {
             ButtonStyle::Secondary
         },
-        size: Size::Md,
+        size: Size::Sm,
         state: KitState::Rest,
         key: Some(key.to_owned()),
-        action: None,
+        action: command_of(key).map(|id| drgnx_rows::kit::Action {
+            kind: "work-command".to_owned(),
+            args: vec![json!(id)],
+        }),
     }
 }
 
@@ -1275,12 +1292,20 @@ fn row_px(m: &dyn Measure, row: &drgnx_rows::Row) -> u32 {
     total.ceil() as u32
 }
 
+/// The blank row between two rows of buttons (`ACT_GAP`; none on a terminal), keyed `d:gap` and what follows `d:` in KEY.
+fn act_gap(key: &str, env: &ViewEnv) -> Row {
+    let mut b = RowBuilder::new(format!("d:gap{}", key.trim_start_matches("d:")));
+    strut(&mut b, env, ACT_GAP);
+    b.finish()
+}
+
 /// The rows of buttons (label, key, primary) keyed KEY, KEY:2, …: side by side, a gap between, as many to a row as
-/// ENV's width holds (a narrow tile drew two buttons 3 px past its edge).
+/// ENV's width holds (a narrow tile drew two buttons 3 px past its edge), a gap row between rows.
 fn buttons(key: &str, list: &[(&str, &str, bool)], env: &ViewEnv, fonts: &dyn Measure) -> Vec<Row> {
     let gap = text_px(fonts, LABEL, " ");
     let mut rows = Vec::new();
     let mut row: Option<(RowBuilder, u32)> = None;
+    let mut made = 0;
     for &(label, k, primary) in list {
         let w = button_px(fonts, env, label, k, primary);
         match &mut row {
@@ -1293,11 +1318,13 @@ fn buttons(key: &str, list: &[(&str, &str, bool)], env: &ViewEnv, fonts: &dyn Me
             _ => {
                 if let Some((b, _)) = row.take() {
                     rows.push(b.finish());
+                    rows.push(act_gap(&format!("{key}:{made}"), env));
                 }
-                let mut b = RowBuilder::new(if rows.is_empty() {
+                made += 1;
+                let mut b = RowBuilder::new(if made == 1 {
                     key.to_owned()
                 } else {
-                    format!("{key}:{}", rows.len() + 1)
+                    format!("{key}:{made}")
                 });
                 strut(&mut b, env, ACT_ROW);
                 button(&mut b, env, label, k, primary);
@@ -1636,8 +1663,12 @@ pub(crate) fn detail_tile(
     } else {
         &[("Evidence", "e", false)]
     };
+    if t.card.is_some() {
+        out.push(act_gap("d:act", env));
+    }
     out.extend(buttons("d:act2", waive, env, fonts));
     if t.card.is_some() {
+        out.push(act_gap("d:note", env));
         for (i, l) in wrap(
             fonts,
             Some(LABEL),
@@ -2240,6 +2271,36 @@ mod tests {
         }
     }
 
+    /// [D] A heading that does not fit its column is never cut to a stub ("B…", "R…"): the column shows its icon alone (its
+    /// name in the icon's `help-echo`); one that fits is written whole.  The work-flow scene's widths lint found the stubs.
+    #[test]
+    fn a_heading_that_does_not_fit_its_column_shows_its_icon_alone() {
+        for scale in [1.0, 2.0] {
+            let mut tile = env(scale);
+            tile.width_px = (420.0 * scale) as u32;
+            let (rows, _) = flow_rows(&flow(), &tile, &fonts());
+            let cols = rows.iter().find(|r| r.key == "cols").expect("cols");
+            assert!(!cols.text.contains('…'), "scale {scale}: {}", cols.text);
+            assert_eq!(cols.images.len(), 6, "scale {scale}");
+            let named: Vec<&str> = GATES
+                .iter()
+                .copied()
+                .filter(|g| cols.text.contains(g))
+                .collect();
+            let echoed = cols.props.iter().filter(|p| p.2 == "help-echo").count();
+            assert_eq!(named.len() + echoed, 6, "{named:?} {echoed}: {}", cols.text);
+            assert!(
+                echoed > 0,
+                "a 420 px tile fits no six headings: {}",
+                cols.text
+            );
+            let wide = flow_rows(&flow(), &env(scale), &fonts()).0;
+            let wide = wide.iter().find(|r| r.key == "cols").expect("cols");
+            assert!(GATES.iter().all(|g| wide.text.contains(g)), "{}", wide.text);
+            assert!(wide.props.iter().all(|p| p.2 != "help-echo"));
+        }
+    }
+
     /// [D] The rows: the run's line, the headings (an icon each), a row per task with a chip per gate in its state's
     /// face at the column's stop (device px: the scale's), the task's id on the row; then the batch.  Icons are drawn
     /// at 14 logical px, each image once; an empty cell is a ring, a held one carries a lock.
@@ -2741,20 +2802,30 @@ mod tests {
         assert!(rows[0].text.ends_with("Detail"), "{}", rows[0].text);
     }
 
-    /// [D] The detail's action rows are the mockup's (`.detail .acts`: 24 px buttons, 6 px apart): 30 logical px each,
-    /// by a strut first on the row, so the buttons' boxes have room for their pad; a terminal has none.
+    /// [D] The detail's action rows are the mockup's (`.detail .acts`: buttons 6 px apart): each as tall as the kit's
+    /// small button (22 logical px, a strut first on the row; its box fills the row, so a taller row drew a taller button),
+    /// with a 6 px row of its own between two rows of buttons (the boxes abutted); a terminal has none.
     #[test]
-    fn the_detail_s_action_rows_are_tall_enough_for_the_buttons() {
+    fn the_detail_s_action_rows_are_as_tall_as_the_buttons_with_a_gap_between() {
         for scale in [1.0, 2.0] {
             let (rows, _) = detail_tile(&flow(), "task:J#5", &env(scale), &fonts());
             for key in ["d:act", "d:act2"] {
                 let r = rows.iter().find(|r| r.key == key).expect(key);
                 assert_eq!(
                     r.spaces.first().copied(),
-                    Some((0, 1, (30.0 * scale).round() as u32)),
+                    Some((0, 1, (22.0 * scale).round() as u32)),
                     "{key} at scale {scale}"
                 );
             }
+            let at = |key: &str| rows.iter().position(|r| r.key == key).expect(key);
+            let gap = &rows[at("d:act") + 1];
+            assert_eq!(gap.key, "d:gapact", "scale {scale}");
+            assert_eq!(
+                gap.spaces.first().copied(),
+                Some((0, 1, (6.0 * scale).round() as u32)),
+                "scale {scale}"
+            );
+            assert_eq!(at("d:act2"), at("d:act") + 2, "scale {scale}");
         }
         let mut tty = env(1.0);
         tty.display = Display::Tty;
@@ -2763,6 +2834,44 @@ mod tests {
             rows.iter()
                 .filter(|r| r.key.starts_with("d:act"))
                 .all(|r| r.spaces.is_empty())
+        );
+    }
+
+    /// [D] The detail's buttons are clickable and small: each carries its command as the kit's action (kind `work-command`,
+    /// the registry id as its argument), so the kit adds its 4 px hit pads, and the note under them (`Waiving is yours`)
+    /// has a 6 px row above it.
+    #[test]
+    fn the_detail_s_buttons_carry_their_command_and_the_note_has_room_above() {
+        let scale = 2.0;
+        let (rows, _) = detail_tile(&flow(), "task:J#5", &env(scale), &fonts());
+        let want = [
+            ("d:act", "Run the red", "work-flow-run-red"),
+            ("d:act", "Tell the agent", "work-flow-tell-agent"),
+            ("d:act2", "Waive once", "work-flow-waive"),
+            ("d:act2", "Evidence", "work-flow-evidence"),
+        ];
+        for (key, label, command) in want {
+            let row = rows.iter().find(|r| r.key == key).expect(key);
+            assert!(
+                row.props.iter().any(|p| p.2 == "drgnx-action"
+                    && p.3 == json!(["work-command", command])
+                    && row.text.contains(label)),
+                "{label}: {:?}",
+                row.props
+            );
+        }
+        let first = rows.iter().find(|r| r.key == "d:act").expect("d:act");
+        assert!(
+            first.spaces.iter().any(|s| s.1 == (4.0 * scale) as u32),
+            "the hit pad: {:?}",
+            first.spaces
+        );
+        let at = |key: &str| rows.iter().position(|r| r.key == key).expect(key);
+        let gap = &rows[at("d:waive:0") - 1];
+        assert_eq!(gap.key, "d:gapnote");
+        assert_eq!(
+            gap.spaces.first().copied(),
+            Some((0, 1, (6.0 * scale) as u32))
         );
     }
 

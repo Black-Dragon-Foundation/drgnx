@@ -218,6 +218,26 @@ focus), its keys kit key hints; its words stay."
         (should (= (point) 2))
         (should (= (window-pixel-width one) (+ w (* 2 step))))))))
 
+(ert-deftest drgnx-grid-moves/resize-mode-says-so-in-the-tab-row ()
+  "tiling.html's `.resize-chip': while Resize Tiles is on, the tile's tab row carries an accent chip \"Resize · Esc\";
+the key that ends the mode takes it away."
+  (drgnx-grid-test--with
+    (let* ((one (selected-window)) (b (get-buffer-create "*g-typed*")))
+      (with-current-buffer b (erase-buffer))
+      (drgnx-groups-split-right)
+      (set-window-buffer one b)
+      (select-window one)
+      (let ((emulation-mode-map-alists (cons (list (cons t (define-keymap "<f13>" #'drgnx-grid-resize-mode)))
+                                             emulation-mode-map-alists)))
+        (execute-kbd-macro (kbd "<f13>"))
+        (let ((note (window-parameter one 'drgnx-grid-mode-note)))
+          (should (equal (substring-no-properties (string-trim note)) (concat (drgnx-face-glyph 'move) " Resize · Esc")))
+          (should (seq-some (lambda (f) (memq 'drgnx-accent (ensure-list (face-attribute f :inherit nil t))))
+                            (ensure-list (get-text-property (string-search "R" note) 'face note)))))
+        (execute-kbd-macro (kbd "a"))
+        (should-not (window-parameter one 'drgnx-grid-mode-note))
+        (should (equal (with-current-buffer b (buffer-string)) "a"))))))
+
 (ert-deftest drgnx-grid-moves/no-room-in-a-tiny-frame-changes-nothing ()
   ;; Review Focus 4: six tiles in a frame too small to split any of them; every move, split and unstack changes
   ;; nothing and says so

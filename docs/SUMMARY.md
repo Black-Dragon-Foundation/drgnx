@@ -129,6 +129,8 @@
     - [Range bar (kit)](design/components/range-bar.md)
     - [Time axis (kit)](design/components/time-axis.md)
     - [Tab (kit)](design/components/tab.md)
+    - [Question card (kit)](design/components/question-card.md)
     - [Segmented switch (kit)](design/components/segmented.md)
+    - [Text input (kit)](design/components/text-input.md)
 - [The app icon](design/app-icon.md)
 - [Writing a theme for drgnx](design/theme-authors.md)

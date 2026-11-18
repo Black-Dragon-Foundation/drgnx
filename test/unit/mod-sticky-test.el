@@ -180,10 +180,16 @@
 (ert-deftest drgnx-sticky/lines-a-line-is-its-number-and-its-code ()
   (drgnx-sticky-test--in (drgnx-sticky-test--elisp 60) #'emacs-lisp-mode
     (let* ((p (save-excursion (goto-char (point-min)) (forward-line 9) (point)))
-           (s (drgnx-sticky--text-of (list (point-min) p))))
-      ;; the numbers right-aligned to the widest
-      (should (equal (substring-no-properties s) " 1 (defun drgnx-sticky-test-fn ()\n10   (message \"line 8\")"))
-      (should (memq 'line-number (ensure-list (get-text-property 0 'face s))))
+           (s (drgnx-sticky--text-of (list (point-min) p) 3))
+           (num (lambda (i) (cadr (get-text-property i 'display s)))))
+      ;; each number in the left margin, padded to the editor's digits (3 here: not the card's last line's 2)
+      (should (equal (substring-no-properties s) " (defun drgnx-sticky-test-fn ()\n   (message \"line 8\")"))
+      (should (equal (car (get-text-property 0 'display s)) '(margin left-margin)))
+      (should (equal (substring-no-properties (funcall num 0)) "   1 "))
+      (should (equal (substring-no-properties (funcall num (1+ (string-search "\n" s)))) "  10 "))
+      (should (memq 'line-number (ensure-list (get-text-property 0 'face (funcall num 0)))))
+      ;; the editor shows no numbers: neither does the card
+      (should (equal (substring-no-properties (drgnx-sticky--text-of (list (point-min)))) "(defun drgnx-sticky-test-fn ()"))
       (should (eq (get-text-property 0 'drgnx-sticky-pos s) (point-min)))
       (should (eq (get-text-property (- (length s) 1) 'drgnx-sticky-pos s) p))
       (should (eq (lookup-key (get-text-property 0 'keymap s) [mouse-1]) #'drgnx-sticky-click)))))
