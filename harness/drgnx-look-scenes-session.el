@@ -3123,7 +3123,6 @@ error).  What was seen goes to FILE."
                                          (and drgnx-ruler-span-function (funcall drgnx-ruler-span-function)))
                              :resolved (and (window-parameter w 'glitnir--ruler) t)
                              :drawn (cond (covered 'covered) ((and without (not child)) drawn) (t 'unchecked)))))
-            >>>>>>> b95a0bcf5
             (push fact log)
             (cond ((not spec)
                    (push (format "scrollbars: %s (%s) has no scroll bar" (buffer-name (window-buffer w))
