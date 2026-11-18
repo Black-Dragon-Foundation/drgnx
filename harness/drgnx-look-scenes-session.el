@@ -3313,7 +3313,9 @@ agent panel (f), the panel's terminal under the editors (j) and the Work map und
       (setq drgnx-look-scene--windows-rearranged t)
       (drgnx-look-scene--until 15 "the Work map tile's rows" (lambda () (with-current-buffer map (drgnx-look-scene--row-ids ""))))
       ;; the map shows its Detail in the right dock once its rows come: the agent's tile is the mockup's there
-      (when (drgnx-pane-window 'work-detail) (drgnx-pane-hide 'work-detail))
+      (dotimes (_ 3)                    ; it comes a round trip after the rows: hide it until it stays hidden
+        (when (drgnx-pane-window 'work-detail) (drgnx-pane-hide 'work-detail))
+        (drgnx-look-scene--settle-frame))
       (unless (get-buffer-window drgnx-look-scene--panel)
         (save-selected-window (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel)))
       (drgnx-look-scene--settle-frame))))
@@ -3324,8 +3326,13 @@ agent panel (f), the panel's terminal under the editors (j) and the Work map und
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-tiling-resize ()
-  "Six tiles in Resize Tiles (its keys, C-k r), one step to the right taken."
+  "Six tiles in Resize Tiles (its keys, C-k r), one step to the right taken, on the editor with the fewest tabs: its
+tab row has room for the chip (tiling.html's resize tile has one tab; a row whose tabs run past the window shows none
+of its right end, buttons included)."
   (drgnx-look-scene--six-tiles)
+  (drgnx-look-scene--try "tiling-resize"
+    (select-window (car (sort (drgnx-grid-tiles nil 'editor)
+                              (lambda (a b) (< (length (drgnx-chrome-tabs a)) (length (drgnx-chrome-tabs b))))))))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-tiling-full ()
