@@ -860,7 +860,7 @@ fn rerun_is_a_no_op() {
     assert_eq!(
         open(&mut c, &fx.db, &fx.opts),
         OpenOutcome::Ready {
-            schema: crate::migrate14::SCHEMA
+            schema: crate::migrate15::SCHEMA
         }
     );
     assert_eq!(census(&c), before);
@@ -932,7 +932,7 @@ fn a_fresh_file_is_schema_7() {
     assert_eq!(
         open(&mut c, &fx.db, &fx.opts),
         OpenOutcome::Ready {
-            schema: crate::migrate14::SCHEMA
+            schema: crate::migrate15::SCHEMA
         }
     );
     assert!(fx.backups().is_empty(), "nothing to copy");
@@ -941,7 +941,7 @@ fn a_fresh_file_is_schema_7() {
         kv,
         vec![
             vec![json!("compat-read"), json!("6")],
-            vec![json!("schema"), json!("14")]
+            vec![json!("schema"), json!("15")]
         ]
     );
     let schema = |c: &Connection| {
@@ -950,7 +950,14 @@ fn a_fresh_file_is_schema_7() {
             "select type, name, tbl_name, sql from sqlite_master where name not like 'sqlite_%' and name not like 'step%' and name not like 'forecast%' and name not in ('decision', 'worktree_base', 'entity_manager_job') order by name",
         )
     };
-    let (_m, migrated_conn, _) = migrated();
+    // the migrated file moved on to the top as the opening rule moves it (schema 15's `node` view)
+    let (m, mut migrated_conn, _) = migrated();
+    assert_eq!(
+        open(&mut migrated_conn, &m.db, &m.opts),
+        OpenOutcome::Ready {
+            schema: crate::migrate15::SCHEMA
+        }
+    );
     assert_eq!(schema(&c), schema(&migrated_conn));
     // A write of a coordination table works; a view refuses one.
     c.execute("insert into event (at, kind) values (1.0, 'x')", [])
@@ -1176,7 +1183,7 @@ async fn a_migrated_lease_stays_in_history() {
     assert_eq!(
         handle.status().last_open,
         Some(OpenOutcome::Ready {
-            schema: crate::migrate14::SCHEMA
+            schema: crate::migrate15::SCHEMA
         })
     );
     let read = || Connection::open(&fx.db).unwrap();
@@ -1244,7 +1251,7 @@ async fn excise_on_a_migrated_store_leaves_no_trace() {
     assert_eq!(
         handle.status().last_open,
         Some(OpenOutcome::Ready {
-            schema: crate::migrate14::SCHEMA
+            schema: crate::migrate15::SCHEMA
         })
     );
     let read = || Connection::open(&fx.db).unwrap();

@@ -83,7 +83,7 @@
 - [The terminal](develop/terminal.md)
 - [Extensions](develop/extensions.md)
 - [Live recordings](develop/recordings.md)
-- [The store (Urdr): `work.db` schema 14](develop/store.md)
+- [The store (Urdr): `work.db` schema 15](develop/store.md)
 - [The Work space: how the map is built](develop/work-space.md)
 - [The edit history (`verdandi`)](develop/history.md)
 - [Records (saga)](develop/records.md)

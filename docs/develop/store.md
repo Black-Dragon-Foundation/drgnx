@@ -1,4 +1,4 @@
-# The store (Urdr): `work.db` schema 14
+# The store (Urdr): `work.db` schema 15
 
 `work.db` holds one knowledge graph across projects: entities and immutable links with transaction-time history,
 written by Ratatoskr only. The graph layer is the generic `urdr::graph` (kinds, link names and policy are the
@@ -640,15 +640,11 @@ result. What the rule answers for the file it finds:
 
 | The file | The answer |
 |---|---|
-| missing (or empty) | made at schema 7 and moved to 12: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
-| schema 6 | migrated (below), then moved to 8, 9, 10, 11 and 12, then `Ready { 12 }` |
-| schema 7 | moved to 8, 9, 10, 11 and 12 (next sections), then `Ready { 12 }` |
-| schema 8 | moved to 9, 10, 11 and 12, then `Ready { 12 }` |
-| schema 9 | moved to 10, 11 and 12, then `Ready { 12 }` |
-| schema 10 | moved to 11 and 12, then `Ready { 12 }` |
-| schema 11 | moved to 12, then `Ready { 12 }` |
-| schema 14 | `Ready { 14 }` |
-| above 12 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
+| missing (or empty) | made at schema 7 and moved to 15: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
+| schema 6 | migrated (below), then moved to 8 and on to 15, then `Ready { 15 }` |
+| schema 7 to 14 | moved one schema at a time to 15 (next sections), then `Ready { 15 }` |
+| schema 15 | `Ready { 15 }` |
+| above 15 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
 | below 6 | `NotReady`: "work.db is schema N; open it once with drgnx 6 first, or remove it (installs are disposable)" |
 | a migration that failed | `Failed { reason }`, never tried again in this process (call 18) |
 
@@ -764,7 +760,7 @@ so older files and fresh ones arrive at 10 too; a crash leaves 9): it builds the
 for), drops the old table and sets `schema = 10`. A table that already has the key (a file made from today's DDL) only
 gets the number. A second move does nothing. Tests: `rebuild_keeps_every_row_and_its_model`,
 `a_second_model_sits_beside_the_first`, `a_table_with_the_key_is_left_alone`, `a_failed_move_changes_nothing`, and
-`tests/entity_vec_schema8.rs` (a schema-8 file through the real opening rule). A file of schema 14 or above is
+`tests/entity_vec_schema8.rs` (a schema-8 file through the real opening rule). A file of schema 15 or above is
 read-only.
 
 ## Schema 11: forecast samples (agent system part 5)
@@ -802,6 +798,16 @@ timeline's wire `Step` carries the four facts and `revertible`: true while the s
 session's snapshots were not removed at the checkpoint cap in this hub's run. Tests:
 `upgrade_keeps_rows_and_is_idempotent`, `a_schema_7_file_goes_through_to_the_top` (in `migrate12`),
 `mark_undone_marks_only_after_seq`, `step_carries_acp_head_and_revertible` and the `head_of_*` tests.
+
+## Schema 15: the `node` view lists the importer's tasks
+
+`norn::migrate15` moves a schema-14 file to 15 in one `BEGIN IMMEDIATE` transaction (a crash leaves 14): the compat
+view `node` is made again with every task that is no job task (`data.job` empty) — the records importer's
+(`task:rec-…`) as well as the scanner's (`task:/…`), and a node's `parent` is `data.parent` or, for the importer's
+pieces (which keep none), the source of the live `parent_of` link into it: a task's plan head. Schema 7's view took a task by its `task:/` id, so the
+importer's plan tasks were in neither `node` nor `jtask`, and the editor's Work tab, `drgnx work status` and
+`drgnx-work-nodes` showed none. Tests: `migrate15_lists_the_importers_tasks_as_nodes` (a populated schema-14 file) and
+`a_failed_move_leaves_schema_14`.
 
 ## Parsed entities (Task 15a)
 
