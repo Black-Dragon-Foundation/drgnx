@@ -41,6 +41,25 @@
    (should (eq (window-parameter (drgnx-wb-section-window 'top) 'drgnx-role) 'dock))
    (should (window-live-p (drgnx-wb-section-window 'bottom)))))
 
+(ert-deftest drgnx-rules/side-window-toggling-keeps-the-docks-window-parameters ()
+  ;; Emacs's own parameters come back with the dock too: C-x o and C-x 1 still pass it by, each section keeps its
+  ;; title (its header line), and a folded section stays folded.
+  (drgnx-rules-edge--with
+   (delete-other-windows (split-window))
+   (drgnx-wb-show-sidebar)
+   (let* ((params '(no-other-window no-delete-other-windows header-line-format))
+          (before (mapcar (lambda (p) (window-parameter (drgnx-wb-section-window 'top) p)) params)))
+     (should (equal (seq-take before 2) '(t t)))
+     (should (car (last before)))
+     (window-toggle-side-windows)
+     (window-toggle-side-windows)
+     (should (equal (mapcar (lambda (p) (window-parameter (drgnx-wb-section-window 'top) p)) params) before)))
+   (let ((w (drgnx-wb-section-window 'bottom)))
+     (set-window-parameter w 'drgnx-folded (list (window-buffer w) 100))
+     (window-toggle-side-windows)
+     (window-toggle-side-windows)
+     (should (window-parameter (drgnx-wb-section-window 'bottom) 'drgnx-folded)))))
+
 (ert-deftest drgnx-rules/the-file-rule-never-reads-the-current-buffer ()
   ;; A name that is no buffer is not "a file" because the current buffer visits one.
   (drgnx-rules-edge--with
