@@ -167,6 +167,8 @@
  drgnx-fold-name
  drgnx-minimap-label
  drgnx-sticky
+ drgnx-sticky-line
+ drgnx-marks-pin
  drgnx-blame
  drgnx-debug-bisect-good
  drgnx-debug-bisect-bad

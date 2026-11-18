@@ -340,6 +340,10 @@ pub enum FaceId {
     MinimapLabel,
     /// `drgnx-sticky`
     Sticky,
+    /// `drgnx-sticky-line`
+    StickyLine,
+    /// `drgnx-marks-pin`
+    MarksPin,
     /// `drgnx-blame`
     Blame,
     /// `drgnx-debug-bisect-good`
@@ -1110,7 +1114,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 549] = [
+    pub const ALL: [FaceId; 551] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1277,6 +1281,8 @@ impl FaceId {
         FaceId::FoldName,
         FaceId::MinimapLabel,
         FaceId::Sticky,
+        FaceId::StickyLine,
+        FaceId::MarksPin,
         FaceId::Blame,
         FaceId::DebugBisectGood,
         FaceId::DebugBisectBad,
@@ -1831,6 +1837,8 @@ impl FaceId {
             FaceId::FoldName => "drgnx-fold-name",
             FaceId::MinimapLabel => "drgnx-minimap-label",
             FaceId::Sticky => "drgnx-sticky",
+            FaceId::StickyLine => "drgnx-sticky-line",
+            FaceId::MarksPin => "drgnx-marks-pin",
             FaceId::Blame => "drgnx-blame",
             FaceId::DebugBisectGood => "drgnx-debug-bisect-good",
             FaceId::DebugBisectBad => "drgnx-debug-bisect-bad",
@@ -2386,6 +2394,8 @@ impl FaceId {
             "drgnx-fold-name" => FaceId::FoldName,
             "drgnx-minimap-label" => FaceId::MinimapLabel,
             "drgnx-sticky" => FaceId::Sticky,
+            "drgnx-sticky-line" => FaceId::StickyLine,
+            "drgnx-marks-pin" => FaceId::MarksPin,
             "drgnx-blame" => FaceId::Blame,
             "drgnx-debug-bisect-good" => FaceId::DebugBisectGood,
             "drgnx-debug-bisect-bad" => FaceId::DebugBisectBad,

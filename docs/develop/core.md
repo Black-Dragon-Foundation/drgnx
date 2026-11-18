@@ -1669,7 +1669,8 @@ lists at each publish.
   header's memo `sticky-segment` (once per window start, text change above it, or hub answer) works out the scopes
   from `drgnx-fold-ranges` (else tree-sitter) and asks for a refill (a 0 s debounce: no frame change inside a
   redisplay) only when the set differs from the card's; a scroll inside the same scopes runs nothing.
-  `window-size-change-functions` moves the cards with their windows. `drgnx-pin-show` fills the same card with a pin's
+  The store's `pane-resized` and `windows-changed` events (a `now` subscription that arms a 0 s timer) move the cards
+  with their windows. `drgnx-pin-show` fills the same card with a pin's
   lines and keeps it there until toggled off.
 - **Folding.** `editor/fold` (`modules/editor/drgnx-fold.el`) reads the line model's one fold table (`nidhogg-lines-folds`,
   `nidhogg-lines-fold-at`: `(BEG END KIND DEPTH SOURCE)`, BEG the first line's start, END the last line's end). Its

@@ -26,6 +26,7 @@
 (declare-function nidhogg-treesit-parser-ready-p "nidhogg-treesit-bg.c" (parser))
 (declare-function treesit-parser-p "treesit.c")
 (declare-function drgnx-chrome-apply "drgnx-chrome")
+(declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-outline-scopes "drgnx-outline" (buffer line callback))
 (declare-function treesit-parser-list "treesit.c")
 (declare-function treesit-node-at "treesit")
@@ -302,7 +303,7 @@ the minimap and the ruler."
   "Window W's card, [FRAME BUFFER CONTENT], made on first use."
   (let ((card (cdr (assq w drgnx-sticky--cards))))
     (unless (and card (frame-live-p (aref card 0)))
-      (let* ((buf (generate-new-buffer " *drgnx-sticky*"))
+      (let* ((buf (generate-new-buffer " *drgnx-sticky*" t))
              (frame (let ((after-make-frame-functions nil) (before-make-frame-hook nil))
                       (make-frame (drgnx-sticky--card-params (window-frame w))))))
         (with-current-buffer buf
@@ -353,8 +354,15 @@ the minimap and the ruler."
         (when (buffer-live-p (aref card 1)) (kill-buffer (aref card 1))))))
   (when delete (setq drgnx-sticky--cards nil drgnx-sticky--pin-shown nil)))
 
+(defun drgnx-sticky--windows-moved (data)
+  "A `now' subscriber of the store's `pane-resized' and `windows-changed' (DATA): the cards over its frame's windows
+are placed again after this redisplay (a frame is never changed inside one)."
+  (when drgnx-sticky--cards
+    (drgnx-timer-debounce 'sticky-cards 0 #'drgnx-sticky--resized :args (list (plist-get data :frame))
+                          :owner 'editor/sticky)))
+
 (defun drgnx-sticky--resized (frame)
-  "`window-size-change-functions': the cards over FRAME's windows follow their windows; a dead window's card goes."
+  "The cards over FRAME's windows follow their windows; a dead window's card goes."
   (dolist (e drgnx-sticky--cards)
     (let ((w (car e)) (card (cdr e)))
       (cond ((not (window-live-p w))
@@ -533,7 +541,11 @@ with the setup)."
                               (eval-after-load 'drgnx-chrome
                                 (drgnx-modules-with-owner (drgnx-chrome-add-tail-provider #'drgnx-sticky--tail 20)))
                               (add-hook 'prog-mode-hook #'drgnx-sticky--maybe)
-                              (add-hook 'window-size-change-functions #'drgnx-sticky--resized)
+                              ;; the cards follow their windows: the store's events (a setup's subscriptions go
+                              ;; with it)
+                              (when (fboundp 'drgnx-state-subscribe)
+                                (dolist (event '(pane-resized windows-changed))
+                                  (drgnx-state-subscribe event #'drgnx-sticky--windows-moved :lane 'now)))
                               (drgnx-command-define 'toggle-sticky-scroll :category "View" :title "Toggle Sticky Scroll"
                                                     :command #'drgnx-sticky-mode :doc "The enclosing scopes in the header, off or on")
                               (drgnx-command-define 'pin-region :category "Edit" :title "Pin Region"
