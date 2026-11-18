@@ -115,7 +115,8 @@ line."
                                                  (drgnx-look-token 'range-tail variant)
                                                (face-foreground face nil t))))
                (xm (+ (drgnx-kit-sheet--x (+ beg (aref sp 0)) s edges) (/ (aref sp 1) 2)))
-               (rows (cl-loop for y from top below (+ top h) when (equal colour (drgnx-uitest-pixel snap xm y)) collect y)))
+               (rows (cl-loop for y from (max 0 (- top h)) below (+ top h h) ; the whole neighbourhood of the line: the bar is the only thing in the part's colour in this column
+                              when (equal colour (drgnx-uitest-pixel snap xm y)) collect y)))
           (should (equal (list what face 'range-bar-height (aref sp 2))
                          (list what face 'range-bar-height (length rows)))))))))
 
