@@ -238,8 +238,6 @@ pub enum FaceId {
     ChromeTabCurrent,
     /// `drgnx-chrome-tab-active`
     ChromeTabActive,
-    /// `drgnx-chrome-tab-hover`
-    ChromeTabHover,
     /// `drgnx-chrome-tab-preview`
     ChromeTabPreview,
     /// `drgnx-chrome-crumb`
@@ -1136,6 +1134,8 @@ pub enum FaceId {
     KitTabCurrentInactive,
     /// `drgnx-kit-tab-panel-current`
     KitTabPanelCurrent,
+    /// `drgnx-kit-tab-preview`
+    KitTabPreview,
     /// `drgnx-kit-segmented`
     KitSegmented,
     /// `drgnx-kit-segmented-current`
@@ -1260,7 +1260,6 @@ impl FaceId {
         FaceId::ChromeTab,
         FaceId::ChromeTabCurrent,
         FaceId::ChromeTabActive,
-        FaceId::ChromeTabHover,
         FaceId::ChromeTabPreview,
         FaceId::ChromeCrumb,
         FaceId::ExplorerRoot,
@@ -1709,6 +1708,7 @@ impl FaceId {
         FaceId::KitTabCurrent,
         FaceId::KitTabCurrentInactive,
         FaceId::KitTabPanelCurrent,
+        FaceId::KitTabPreview,
         FaceId::KitSegmented,
         FaceId::KitSegmentedCurrent,
     ];
@@ -1831,7 +1831,6 @@ impl FaceId {
             FaceId::ChromeTab => "drgnx-chrome-tab",
             FaceId::ChromeTabCurrent => "drgnx-chrome-tab-current",
             FaceId::ChromeTabActive => "drgnx-chrome-tab-active",
-            FaceId::ChromeTabHover => "drgnx-chrome-tab-hover",
             FaceId::ChromeTabPreview => "drgnx-chrome-tab-preview",
             FaceId::ChromeCrumb => "drgnx-chrome-crumb",
             FaceId::ExplorerRoot => "drgnx-explorer-root",
@@ -2280,6 +2279,7 @@ impl FaceId {
             FaceId::KitTabCurrent => "drgnx-kit-tab-current",
             FaceId::KitTabCurrentInactive => "drgnx-kit-tab-current-inactive",
             FaceId::KitTabPanelCurrent => "drgnx-kit-tab-panel-current",
+            FaceId::KitTabPreview => "drgnx-kit-tab-preview",
             FaceId::KitSegmented => "drgnx-kit-segmented",
             FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
         }
@@ -2403,7 +2403,6 @@ impl FaceId {
             "drgnx-chrome-tab" => FaceId::ChromeTab,
             "drgnx-chrome-tab-current" => FaceId::ChromeTabCurrent,
             "drgnx-chrome-tab-active" => FaceId::ChromeTabActive,
-            "drgnx-chrome-tab-hover" => FaceId::ChromeTabHover,
             "drgnx-chrome-tab-preview" => FaceId::ChromeTabPreview,
             "drgnx-chrome-crumb" => FaceId::ChromeCrumb,
             "drgnx-explorer-root" => FaceId::ExplorerRoot,
@@ -2852,6 +2851,7 @@ impl FaceId {
             "drgnx-kit-tab-current" => FaceId::KitTabCurrent,
             "drgnx-kit-tab-current-inactive" => FaceId::KitTabCurrentInactive,
             "drgnx-kit-tab-panel-current" => FaceId::KitTabPanelCurrent,
+            "drgnx-kit-tab-preview" => FaceId::KitTabPreview,
             "drgnx-kit-segmented" => FaceId::KitSegmented,
             "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
             _ => return None,

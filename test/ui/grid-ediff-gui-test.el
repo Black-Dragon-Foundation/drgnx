@@ -30,11 +30,17 @@
   "Run START (a function that starts an ediff session from the selected editor tile) and check the layout, then quit.
 On a frame of its own, deleted after: the grid's frame parameters stay off the session's frame."
   (unless (display-graphic-p) (ert-skip "needs a graphical frame"))
-  ;; well inside the monitor: a frame near the work area's size is maximized by mutter a while after it maps, which
-  ;; moved every window under the row; the grid fixture's 160 × 50 would be that size, so it is not applied
-  (let ((frame (make-frame '((width . 100) (height . 30)))))
+  ;; well inside the monitor at every scale: a frame near the work area's size, or over it, is maximized by mutter a
+  ;; while after it maps, which moved every window under the row (100 × 30 columns was 1632 × 1110 px at scale 2 on a
+  ;; 1600 × 900 work area); so its size is the work area's 70 %, in pixels, and the row checks it is, before anything
+  (let* ((wa (frame-monitor-workarea))
+         (frame (make-frame `((width . (text-pixels . ,(round (* 0.7 (nth 2 wa)))))
+                              (height . (text-pixels . ,(round (* 0.7 (nth 3 wa)))))))))
     (unwind-protect
         (with-selected-frame frame
+          (should (equal (list :inside-the-work-area t)
+                         (list :inside-the-work-area (and (< (frame-pixel-width frame) (* 0.8 (nth 2 wa)))
+                                                          (< (frame-pixel-height frame) (* 0.8 (nth 3 wa)))))))
           ;; the echo area stays one line: a message wrapping in this narrower frame would take a line from every
           ;; window under the row
           (cl-letf (((symbol-function 'set-frame-size) #'ignore))

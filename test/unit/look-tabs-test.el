@@ -79,8 +79,8 @@ preview: the scratch buffer) is in italics."
         (drgnx-chrome-apply nil t)
         (setq tabs (window-parameter (selected-window) 'tab-line-format))
         (let ((face (get-text-property (string-search "Scratch" tabs) 'face tabs)))
-          (should (memq 'drgnx-chrome-tab-preview (ensure-list face)))
-          (should (eq 'italic (face-attribute 'drgnx-chrome-tab-preview :slant nil nil))))))))
+          (should (memq 'drgnx-kit-tab-preview (ensure-list face)))
+          (should (eq 'italic (face-attribute 'drgnx-kit-tab-preview :slant nil nil))))))))
 
 (ert-deftest drgnx-look-tabs/terminal-shows-the-close-on-the-selected ()
   "Pattern D: on a terminal there is no hover, so every tab shows its close mark in its real face, the shown one

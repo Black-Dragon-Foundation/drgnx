@@ -1139,6 +1139,7 @@ a map off the rows path or without a hub draws a placeholder, and a shot of that
 (defvar drgnx-topline-agents-function)
 (declare-function drgnx-work-map--needs-you-count "drgnx-work-map")
 (declare-function drgnx-work-map--team "drgnx-work-map")
+(declare-function drgnx-work-map-set-mode "drgnx-work-map")
 
 (defun drgnx-look-scene--work-selected (theme)
   "The Work map of work-space-*.html in THEME: the first agent selected, its chain lit and its detail in the side panel.
@@ -1149,6 +1150,8 @@ Its session's hub seeds the map's own graph (`drgnx-look-scene-seed' \"map\", th
       ;; the Work space is a view in the editor (UX audit S1-1): the map in the editor group beside the Explorer, its
       ;; Detail in the right dock (`drgnx-work-space--follow-layout')
       (unless (get-buffer-window map) (set-window-buffer (drgnx-wb-editor-window) map))
+      ;; the mockup is the Graph; a map opens in List mode (the default), whose rows are tasks, not agents
+      (with-current-buffer map (drgnx-work-map-set-mode 'graph))
       (unless (drgnx-look-scene--until 15 "the map's seeded graph (the first agent, agent:a1)"
                                        (lambda () (with-current-buffer map
                                                     (member "agent:a1" (drgnx-look-scene--row-ids "agent:")))))
@@ -2322,6 +2325,17 @@ is not resized again (bounded by the scenes: one entry per view per scene at mos
   (cl-remove-if-not (lambda (w) (and (boundp 'drgnx-view-patch) (buffer-local-value 'drgnx-view-patch (window-buffer w))))
                     (cl-mapcan (lambda (f) (and (eq (frame-visible-p f) t) (window-list f 'never))) (frame-list))))
 
+(defun drgnx-look-scene--px (window from to)
+  "The px from FROM to TO in WINDOW (its buffer current) as drawn.  `window-text-pixel-size' from a position right
+after invisible text (the Explorer's hidden root row, its newline hidden too, so the next row starts mid screen line)
+leaves out an image at FROM; this measures from where the invisible run starts and takes off the px before FROM."
+  (let ((s from))
+    (while (and (> s (point-min)) (invisible-p (1- s)))
+      (setq s (1- s)))
+    (if (= s from)
+        (car (window-text-pixel-size window from to))
+      (- (car (window-text-pixel-size window s to)) (car (window-text-pixel-size window s from))))))
+
 (defun drgnx-look-scene--row-parts (window bol eol)
   "The parts of the row BOL..EOL in WINDOW's buffer as drawn, for the log of a row wider than its window: ((TEXT FACE
 PX HOW) ...), one per stretch of one face, PX its width in WINDOW and HOW the face's answer to the hub
@@ -2332,7 +2346,7 @@ PX HOW) ...), one per stretch of one face, PX its width in WINDOW and HOW the fa
              (face (get-text-property pos 'face))
              (top (if (consp face) (car face) face)))
         (push (list (buffer-substring-no-properties pos next) face
-                    (car (window-text-pixel-size window pos next))
+                    (drgnx-look-scene--px window pos next)
                     (and (symbolp top) top (drgnx-view-env-face (symbol-name top) (current-buffer))))
               parts)
         (setq pos next)))
@@ -2354,7 +2368,7 @@ roles the hub measured it in.  The number of rows measured is in `drgnx-look-sce
             (let* ((bol (point)) (eol (line-end-position)))
               (when (stringp (ignore-errors (drgnx-view-key-at bol)))
                 (setq rows (1+ rows))
-                (let ((px (car (window-text-pixel-size window bol eol))))
+                (let ((px (drgnx-look-scene--px window bol eol)))
                   (when (> px body)
                     (push (list px n (buffer-substring-no-properties bol (min eol (+ bol 60)))
                                 (drgnx-look-scene--row-parts window bol eol)
@@ -2452,7 +2466,7 @@ block's own padding, kept on both sides) counts, and the px past the block are n
       (cond
        ((not block)
         (+ free (if (< q eol) 0
-                  (max 0 (- (window-body-width window t) (car (window-text-pixel-size window bol eol)))))))
+                  (max 0 (- (window-body-width window t) (drgnx-look-scene--px window bol eol))))))
        (t
         (let ((e block) (face (get-text-property block 'face)) (s bol))
           (while (and (< e eol) (drgnx-look-scene--blank-p e) (equal (get-text-property e 'face) face))
@@ -2461,7 +2475,7 @@ block's own padding, kept on both sides) counts, and the px past the block are n
             (setq s (1+ s)))
           (if (< e eol) free
             (+ free (max 0 (- (car (window-text-pixel-size window block eol))
-                              (if (> s bol) (car (window-text-pixel-size window bol s)) 0)))))))))))
+                              (if (> s bol) (drgnx-look-scene--px window bol s) 0)))))))))))
 
 (defun drgnx-look-scene--cut-rows (window how)
   "Each cut in the hub's rows in WINDOW's buffer: (KEY HOW BODY-PX PREFIX AFTER FREE ELLIPSIS-PX ROW-PARTS FONTS),

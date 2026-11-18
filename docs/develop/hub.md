@@ -105,8 +105,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 ### Starting, stopping and restarting Ratatoskr
 
 `ratatoskr ensure [--timeout SECS]` (default 5) pings; when nothing answers it starts a hub and waits up to the timeout
-for `ping`. It prints the socket path and exits **0**; **1** when it could not start one (the reason, from the hub's
-log when the wait timed out, and the log's directory); **3** when a Lisp hub from before Ratatoskr holds the lock
+for `ping`. A hub that has stopped serving but still writes its store (its lock marked `stopping`, below) is waited for
+first, within the same timeout: no second hub opens that store until the first has ended, and one that was killed
+meanwhile released its lock with its death, so the start goes on at once. It prints the socket path and exits **0**;
+**1** when it could not start one (the reason, from the hub's log when the wait timed out, and the log's directory; `a
+hub is ending here (pid N)` when the stopping hub was still writing at the timeout); **3** when a Lisp hub from before Ratatoskr holds the lock
 (checked first, before the ping: such a hub answers one, and `ensure` still says it as `serve` does). How the hub is started:
 
 | Where | How | Restarted |
@@ -136,8 +139,13 @@ really held:
 
 - **Ratatoskr's lock** (a file): `flock(LOCK_EX|LOCK_NB)` is tried first. If it succeeds nobody holds the lock (a stale
   file naming a live, reused pid, say): it prints `not running` and exits 0 without a signal. If it fails the hub is
-  asked to `shutdown` as a user client, and `stop` waits for the lock to be released and prints `stopped Ratatoskr (pid
-  N)`. Only when it is not released does it signal, and then only **the process listening on the hub's socket**,
+  asked to `shutdown` as a user client, and `stop` waits for the hub to have stopped and prints `stopped Ratatoskr (pid
+  N)`. **Stopped** means the hub serves no more: its socket is removed, its connections are closed and its lock file
+  says `PID START stopping` (`Lock::mark_stopping`). The lock itself stays held while the store's threads write what is
+  queued to them (no queued write is dropped, however long that takes; a second SIGTERM abandons it), and the process
+  ends when they are done, so `stop`'s timeout bounds what its caller sees, never the store's last writes. Each stage
+  of the end is logged with the milliseconds since the stop began (`stopping: the sessions ended`, `… the debug
+  sessions ended`, `… the networked jobs ended`, `… the connections closed`, `… the store's threads ended`). Only when it is not released does it signal, and then only **the process listening on the hub's socket**,
   never one a lock's text or a command line names (`peer.rs`, `lock::signal_target`): it connects to the socket
   through the checked directory and asks the system who accepted. On Linux that is a pidfd (`SO_PEERPIDFD`, else
   `pidfd_open` of the `SO_PEERCRED` pid), so the SIGTERM (`pidfd_send_signal`) reaches that process even if its pid is
@@ -595,8 +603,8 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 14, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 14. A newer file (above 14) makes the hub read-only; a
+missing file is made at schema 15, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 15. A newer file (above 15) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
@@ -1197,7 +1205,7 @@ as the peer `agent:<session>` on the user's branch). Both user only; `history/hu
 
 ## The store
 
-The front serves the store (`work.db`, schema 14) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 15) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
 card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
@@ -3057,8 +3065,10 @@ repository) for the Explorer's marks (`explorer/subscribe`, "Git marks").
 Once read for a connection, a repository is **watched** until the connection goes or its view closes
 (`view/close`): its gitdir (the index, `HEAD`, `packed-refs`; a linked worktree's own and the common dir) and the
 common dir's `refs`, not recursive except `refs`. A commit, checkout, `git add` or branch move from a terminal reads
-the status again once its burst is quiet for 50 ms (at most 250 ms after its first change) and sends what changed; a
-lock file's events and reads (the hub's own `git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
+the status again once its burst is quiet for 50 ms (at most 250 ms after its first change) and git holds no lock it
+took (a commit stalled on its ref's fsync is still one burst; at most 2 s after its first change, for a lock a dead git
+left or a commit waiting in an editor), and sends what changed; a lock file's events and reads (the hub's own
+`git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
 Explorer listing that its watch relisted (a name made or removed outside Emacs) also reads its repositories again.
 
 ### Ranked file names as rows (`search/files`)
