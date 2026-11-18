@@ -37,6 +37,7 @@ pub mod past;
 pub mod plans;
 pub mod plugins;
 pub mod records;
+pub mod review_screen;
 pub mod runners;
 pub mod say;
 pub mod scm;
@@ -406,6 +407,9 @@ params! {
     ChangesSubscribe(changes::Subscribe),
     ChangesSet(changes::Set),
     ChangesClose(changes::ViewId),
+    ReviewScreenSubscribe(review_screen::Subscribe),
+    ReviewScreenSet(review_screen::Set),
+    ReviewScreenClose(review_screen::ViewId),
     ScmSubscribe(scm::Subscribe),
     ScmSet(scm::Set),
     ScmClose(scm::ViewId),
@@ -537,6 +541,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(git::methods());
     v.extend(agents_side::methods());
     v.extend(changes::methods());
+    v.extend(review_screen::methods());
     v.extend(scm::methods());
     v.extend(runners::methods());
     v.extend(extensions::methods());

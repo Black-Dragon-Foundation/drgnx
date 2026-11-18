@@ -188,15 +188,15 @@ fill stretches to the right edge before the notice, which pushes it off the wind
 
 (defun drgnx-outline--reveal-row (window start)
   "Put WINDOW's point (and the buffer's) on the row at START, the window at the top; a row below the first screen
-gets a third of the window above it."
+gets a third of the window above it, but the window never starts so late that blank room shows under the last row
+of a list longer than it (a list does not scroll past its end)."
   (goto-char start)
   (drgnx-wb-with-owned-windows (list window)
     (set-window-point window start)
-    (let ((height (window-body-height window)))
-      (set-window-start window (if (>= (count-lines (point-min) start) height)
-                                   (save-excursion (forward-line (- (/ height 3))) (point))
-                                 (point-min))
-                        t))))
+    (let* ((height (window-body-height window)) (line (count-lines (point-min) start))
+           (rows (count-lines (point-min) (point-max)))
+           (top (if (>= line height) (max 0 (min (- line (/ height 3)) (- rows height))) 0)))
+      (set-window-start window (save-excursion (goto-char (point-min)) (forward-line top) (point)) t))))
 
 (defun drgnx-outline-line-at (&optional pos)
   "The line (from 1) of the definition on the Outline's row at POS (default point), or nil."

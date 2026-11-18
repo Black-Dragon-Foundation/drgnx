@@ -1691,6 +1691,13 @@ lists at each publish.
   The store's `pane-resized` and `windows-changed` events (a `now` subscription that arms a 0 s timer) move the cards
   with their windows. `drgnx-pin-show` fills the same card with a pin's
   lines and keeps it there until toggled off.
+  - **Columns** (design 2026-11-18 §3.4e). The card takes the editor's font (frame parameter) and its buffer's
+    `face-remapping-alist` (text-scale). Numbers, only when the editor shows them, sit in the card's left margin
+    (a `(margin left-margin)` display string), padded to the editor's `line-number-display-width`, not to the card's
+    last line. The margin is whole columns, so `drgnx-sticky--margin` sizes it to the string's pixel width rounded up
+    and moves the card left by the remainder (`drgnx-sticky--shift`). The text then starts at the editor's text column,
+    and the margin does not scroll sideways. The card's window carries `nidhogg-hscroll-of` WINDOW, from which
+    Nidhogg copies the editor's hscroll in pixels.
 - **Folding.** `editor/fold` (`modules/editor/drgnx-fold.el`) reads the line model's one fold table (`nidhogg-lines-folds`,
   `nidhogg-lines-fold-at`: `(BEG END KIND DEPTH SOURCE)`, BEG the first line's start, END the last line's end). Its
   sources are numbers: 0 tree-sitter, 1 the hub, 2 headings and 4 indentation (the model finds those itself, again
@@ -1702,7 +1709,8 @@ lists at each publish.
   `org-fold`; `evil-fold-list` gets a provider for `drgnx-fold-mode`.
 - **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
   8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
-  at 26 %; all through `drgnx-px`.
+  at 26 %; all through `drgnx-px`. The themes give that face the text colour (`fg`, the look's `--fg`), never a fill
+  token: 26 % of a fill such as `hover` sits a step from every surface and the thumb vanishes.
   - The fringe is widened by the strip with `set-window-fringes` only when the strip comes or goes, or the scale
     changes (`drgnx-scrollbar-refresh-all` on the density hook). Its own width is kept in the window parameter
     `drgnx-ruler-fringe`, which is also the strip's `:right`.
@@ -1723,7 +1731,7 @@ lists at each publish.
   scene (`drgnx-look-scene-scrollbars`: the strip is set, and on the root frame drawn exactly when the content runs
   past the window, from two snapshots of the root frame with and without the strips (the checker marks each window
   it toggles with `force-window-update`, so the root is redrawn while a popup has the focus); a child frame's own strips are
-  not judged for drawing; a strip under the palette's child frame, a tile switcher's card or under a popup the scene opens on purpose, its
+  not judged for drawing; a strip under the palette's child frame, a tile switcher's card or a popup the scene opens on purpose, its
   `:covers` in `drgnx-look-scenes`, is not judged, one under any other child frame, a toast say, is an error);
   Nidhogg's `glitnir-gui/the-ruler-*` rows check the pixels.
 - **Perf.** `debug-ruler-scroll` (10,000 lines, 200 marks) against `debug-ruler-baseline`, the same scroll with the
@@ -3654,8 +3662,7 @@ tiles**, ordinary windows of the frame's window tree, not side windows. Callers 
 `-hide`, `-focus`, `-window` and `-resize`; the backend is registered in `drgnx-pane--backends` from
 `wb/drgnx-grid.el`.
 
-- A **tool tile** has the role `tile` (chrome `tile`: the tab row of its stack on its tab line, each kind the kit's
-  panel tab, `drgnx-ui-kit-tab`, the shown one selected; no mode line),
+- A **tool tile** has the role `tile` (chrome `tile`: the tab row of its stack on its tab line, no mode line),
   `drgnx-pane-stack` (its kinds, the shown one first), `drgnx-tile-id` (an integer, per frame), `drgnx-tile-dock`
   (`left`, `right`, `bottom`, nil once moved off its home), `no-delete-other-windows`, `no-other-window`, and a
   `delete-window` parameter that hides it. It is dedicated (`drgnx`), so `display-buffer` never puts another buffer
@@ -3894,6 +3901,13 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   action. `drgnx-ui-button` keeps its `&key` signature for callers off per-row paths; its faces `drgnx-ui-button` and
   `drgnx-ui-button-primary` (and `drgnx-button`, `drgnx-keycap`) are aliases of the kit
   faces once `ui/look` is on.
+- `question-card` (kind `permission`, `question` or `sign-off`; Task 13) is a block: the hub's `kit::expand_rows`
+  (`Comp::QuestionCard { kind, title, body, choices }`, the caller wraps BODY, one row a line) gives a needs-you card's
+  rows (head on `drgnx-kit-question-card-head`, body, the choices as kit buttons, the first primary, each with the
+  key hint of its `Choice.key` or the kind's); Lisp's `(drgnx-ui-kit-question-card KIND TITLE BODY CHOICES WIDTH)` gives
+  the lines (CHOICES `((LABEL KEY ACTION)...)`, ACTION a function of the answer's index, BODY filled to WIDTH). In Lisp a
+  bare key on the card answers through the action kind `question` (`y a n` a permission's, `1`...`9` a question's, `y n`
+  a sign-off's); a click on its text answers nothing.
 - A binding may name `:font` (faces with no colours: the UI or code font): a drgnx theme's spec for a face with
   colours keeps only those of its `:inherit`, while a third-party theme styles it through the whole `:inherit`.
 
@@ -3938,9 +3952,8 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
 - `(drgnx-ui-kit-tab TITLE SIZE STATE ICON CLOSE WHERE &optional MODIFIED FRAME)` and `(drgnx-ui-kit-segmented ITEMS
   CURRENT WHERE &optional FRAME)` (ITEMS `((LABEL . ACTION)...)`, ACTION as a button's) build them as strings. The
   editor's tab line (`drgnx-chrome--tab`), an area's tab row (`drgnx-area`), the Detail island's title and the Work lens
-  bar (`drgnx-work-lens-string`) and a tool tile's tab row (`drgnx-grid--tab-row`) draw with them; the
-  `drgnx-work-lens-*` faces are aliases of the kit faces once `ui/look` is on (the old `drgnx-wb-tab*` and
-  `drgnx-chrome-tab*` faces are gone). The action kind `ui-window-button`
+  bar (`drgnx-work-lens-string`) draw with them; `drgnx-wb-tab*`, `drgnx-chrome-tab`, `-active`, `-current` and the
+  `drgnx-work-lens-*` faces are aliases of the kit faces once `ui/look` is on. The action kind `ui-window-button`
   selects the clicked window before it runs its action (a lens item switches the lens of the window it is in).
 
 ### The text input (flow Task 22a)
