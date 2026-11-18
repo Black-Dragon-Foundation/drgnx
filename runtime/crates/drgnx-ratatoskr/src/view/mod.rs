@@ -35,6 +35,7 @@ pub mod panel;
 pub mod panel_cards;
 pub mod panel_review;
 pub mod panel_top;
+pub mod review_screen;
 pub mod scm;
 pub mod search;
 #[cfg(test)]
@@ -638,6 +639,8 @@ pub struct Views {
     scms: scm::Scms,
     /// The Changes views (`changes/subscribe`): what the agents changed, by task.
     changes: changes::Changes,
+    /// The review screens (`review-screen/subscribe`): one change under review.
+    review_screens: review_screen::ReviewScreens,
     /// The Agents side views (`agents/side/subscribe`).
     agents_sides: agents_side::AgentsSides,
     /// The Run and Debug views (`debug/view`).
@@ -667,6 +670,7 @@ impl Default for Views {
             minimaps: minimap::Watches::default(),
             scms: scm::Scms::default(),
             changes: changes::Changes::default(),
+            review_screens: review_screen::ReviewScreens::default(),
             agents_sides: agents_side::AgentsSides::default(),
             debugs: debug::DebugViews::default(),
             panels: Arc::default(),
@@ -708,6 +712,7 @@ impl Views {
             || self.outline_build(f, key)
             || self.scm_build(f, key)
             || self.changes_build(f, key)
+            || self.review_screen_build(f, key)
             || self.agents_side_build(f, key)
             || self.debugs.env_build(f, key)
             || f.core.presence.here_build(f, key.0, &key.1)
@@ -1048,6 +1053,7 @@ impl Views {
         self.minimaps.gone(conn);
         self.scms.gone(conn);
         self.changes.gone(conn);
+        self.review_screens.gone(conn);
         self.agents_sides.gone(conn);
         self.debugs.gone(conn);
         self.panels.gone(conn, None);

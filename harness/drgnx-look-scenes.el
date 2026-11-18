@@ -43,6 +43,7 @@
     (org :mockup magit)
     (shell-heredoc)
     (work-flow :mockup hub-orchestration)
+    (review-screen)
     (start-page)
     (start-page-light)
     (notebook-dark :mockup notebook)

@@ -3313,3 +3313,37 @@ labelled, the minimap held open, dark."
 
 (provide 'drgnx-look-scenes-session)
 ;;; drgnx-look-scenes-session.el ends here
+
+;;;; The review screen (frontend flow plan, Task 28)
+
+(declare-function drgnx-review-screen-open "drgnx-review-screen")
+
+(defun drgnx-look-scene-review-screen ()
+  "The review screen of a document: a plan in a git repository of its own, committed and then edited (a task's text
+changed, one dropped, one added), on the scenes' hub.  Its rows are the hub's (what changed, the effect on tasks, the
+reasons, Accept and Request changes); a screen without them is an error."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "review screen"
+    (drgnx-look-scene--hub)
+    (let* ((dir (make-temp-file "look-review" t)) (file (expand-file-name "plan.md" dir))
+           (git (lambda (&rest args)
+                  (let ((default-directory dir))
+                    (apply #'call-process "git" nil nil nil "-c" "user.name=scene" "-c" "user.email=scene@localhost"
+                           "-c" "commit.gpgsign=false" args)))))
+      (funcall git "init" "-q" "-b" "main")
+      (with-temp-file file
+        (insert "# Plan\n\n### Task 1: Add the note\n\nAdd note.txt.\n\n### Task 2: Test the note\n\nTest it with three cases.\n"
+                "\n### Task 3: Document the note\n\nWrite the guide's section on notes.\n"))
+      (funcall git "add" "plan.md")
+      (funcall git "commit" "-q" "-m" "plan")
+      (with-temp-file file
+        (insert "# Plan\n\n### Task 1: Add the note\n\nAdd note.txt, with a title line.\n\n### Task 2: Test the note\n\n"
+                "Test it with three cases.\n\n### Task 4: Announce the note\n\nTell the team.\n"))
+      (let ((buf (drgnx-review-screen-open :doc file)))
+        (pop-to-buffer-same-window buf)
+        (drgnx-look-scene--until 15 "the review screen's rows"
+                                 (lambda ()
+                                   (with-current-buffer buf
+                                     (save-excursion (goto-char (point-min))
+                                                     (search-forward "Request changes" nil t))))))))
+  (drgnx-look-scene--answer))
