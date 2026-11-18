@@ -213,7 +213,8 @@ fn diff_card(
                 (p.0, p.1, format!("card:{verb}:{path}:{n}"))
             })
             .collect();
-        r.props.retain(|p| !(p.2 == "drgnx-action" && p.3[0] == "card"));
+        r.props
+            .retain(|p| !(p.2 == "drgnx-action" && p.3[0] == "card"));
         for (from, to, action) in panel {
             let help = if action.starts_with("card:reject") {
                 "D: take the change back"
@@ -222,8 +223,7 @@ fn diff_card(
             };
             r.props
                 .push((from, to, "drgnx-agent-panel-action".into(), json!(action)));
-            r.props
-                .push((from, to, "help-echo".into(), json!(help)));
+            r.props.push((from, to, "help-echo".into(), json!(help)));
         }
         r.props.push((
             0,

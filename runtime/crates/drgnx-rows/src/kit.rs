@@ -12,8 +12,8 @@
 //!   `hit` px of extra padding each side (none on a terminal).
 
 use crate::builder::RowBuilder;
-use crate::fit;
 use crate::faces::FaceId;
+use crate::fit;
 use crate::kit_gen::{self, Geom, STATES};
 use crate::row::{ImageId, Row};
 use serde::{Deserialize, Serialize};
@@ -1551,7 +1551,9 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), head);
             if let Some(name) = icon {
                 let alt = if env.ascii { "#" } else { "\u{25a4}" };
-                let mark = Some(glyph(env, name)).filter(|m| !m.is_empty()).unwrap_or(alt);
+                let mark = Some(glyph(env, name))
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or(alt);
                 match env
                     .icons
                     .filter(|_| !env.tty)
@@ -2036,7 +2038,8 @@ fn diff_head_room(env: &KitEnv, m: &dyn fit::Measure, c: &Comp, width: u32) -> f
     let bg: Geom = kit_gen::geom(CompId::Button, &["quiet", "sm", d]);
     let bf = comp_face(kit_gen::face(CompId::Button, &["quiet", "sm", d]));
     for (label, _) in buttons {
-        used += (px(g.gap, env.scale) + px(bg.pad.0, env.scale) + px(bg.pad.1, env.scale)) as f32 + w(bf, label);
+        used += (px(g.gap, env.scale) + px(bg.pad.0, env.scale) + px(bg.pad.1, env.scale)) as f32
+            + w(bf, label);
     }
     px(u16::try_from(width).unwrap_or(u16::MAX), env.scale) as f32 - used
 }
@@ -2052,7 +2055,10 @@ pub fn diff_block_rows(env: &KitEnv, key: &str, c: &Comp, m: &dyn fit::Measure) 
     } = &c
     {
         let room = diff_head_room(env, m, &c, *width);
-        let head = comp_face(kit_gen::face(CompId::DiffBlock, &["head", env.density.name()]));
+        let head = comp_face(kit_gen::face(
+            CompId::DiffBlock,
+            &["head", env.density.name()],
+        ));
         let fitted = if room > 0.0 {
             fit::fit_in(m, head, file, room)
         } else {
@@ -2664,12 +2670,19 @@ mod tests {
         let narrow = diff_block_rows(&env, "d", &head_block(name, Some(300)), &Mono);
         let t = &narrow[0].text;
         assert!(!t.contains(name) && t.contains('\u{2026}'), "{t}");
-        assert!(t.contains("+2") && t.contains("Reject") && t.contains("Accept"), "{t}");
+        assert!(
+            t.contains("+2") && t.contains("Reject") && t.contains("Accept"),
+            "{t}"
+        );
         // no room at all: no name, the buttons stay
         let none = diff_block_rows(&env, "d", &head_block(name, Some(100)), &Mono);
         assert!(!none[0].text.contains("core") && none[0].text.contains("Accept"));
         // no width: the whole name, as `expand` draws it
-        assert!(diff_block_rows(&env, "d", &head_block(name, None), &Mono)[0].text.contains(name));
+        assert!(
+            diff_block_rows(&env, "d", &head_block(name, None), &Mono)[0]
+                .text
+                .contains(name)
+        );
     }
 
     #[test]
