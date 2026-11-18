@@ -1139,6 +1139,7 @@ a map off the rows path or without a hub draws a placeholder, and a shot of that
 (defvar drgnx-topline-agents-function)
 (declare-function drgnx-work-map--needs-you-count "drgnx-work-map")
 (declare-function drgnx-work-map--team "drgnx-work-map")
+(declare-function drgnx-work-map-set-mode "drgnx-work-map")
 
 (defun drgnx-look-scene--work-selected (theme)
   "The Work map of work-space-*.html in THEME: the first agent selected, its chain lit and its detail in the side panel.
@@ -1149,6 +1150,8 @@ Its session's hub seeds the map's own graph (`drgnx-look-scene-seed' \"map\", th
       ;; the Work space is a view in the editor (UX audit S1-1): the map in the editor group beside the Explorer, its
       ;; Detail in the right dock (`drgnx-work-space--follow-layout')
       (unless (get-buffer-window map) (set-window-buffer (drgnx-wb-editor-window) map))
+      ;; the mockup is the Graph; a map opens in List mode (the default), whose rows are tasks, not agents
+      (with-current-buffer map (drgnx-work-map-set-mode 'graph))
       (unless (drgnx-look-scene--until 15 "the map's seeded graph (the first agent, agent:a1)"
                                        (lambda () (with-current-buffer map
                                                     (member "agent:a1" (drgnx-look-scene--row-ids "agent:")))))
