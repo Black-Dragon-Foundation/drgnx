@@ -116,15 +116,22 @@ neither has it."
 (defface drgnx-status-needs-you '((t :inherit drgnx-status-attention)) "Something waits for you." :group 'drgnx)
 
 (defconst drgnx-ui--severities
-  '((ok ok drgnx-status-ok) (info info drgnx-status-info) (warn warn drgnx-status-warn)
-    (fail fail drgnx-status-fail) (needs-you waiting drgnx-status-needs-you))
-  "SEVERITY → (GLYPH-NAME FACE).")
+  '((ok done drgnx-status-ok) (info nil drgnx-status-info) (warn nil drgnx-status-warn)
+    (fail error drgnx-status-fail) (needs-you needs-you drgnx-status-needs-you))
+  "SEVERITY → (KIT-STATUS FACE): the kit's `status-dot' status whose glyph the severity draws, or nil (info and warn
+are not among the kit's five statuses: they draw its `needs-you' dot, a plain `●'), and the severity's own face.")
 
 (defun drgnx-ui-status (severity &optional text)
-  "The glyph for SEVERITY (ok, info, warn, fail or needs-you), then a space and TEXT when given, in its status face.
-An unknown SEVERITY is `info'."
-  (pcase-let ((`(,_ ,glyph ,face) (or (assq severity drgnx-ui--severities) (assq 'info drgnx-ui--severities))))
-    (propertize (if text (concat (drgnx-face-glyph glyph) " " text) (drgnx-face-glyph glyph)) 'face face)))
+  "The status dot of SEVERITY (ok, info, warn, fail or needs-you), then a space and TEXT when given, in the severity's
+status face.  The dot is the kit's `status-dot' (its glyph, its ASCII form on a terminal that is not UTF-8): a wrapper
+that keeps the severities the callers know.  An unknown SEVERITY is `info'."
+  (pcase-let ((`(,_ ,status ,face) (or (assq severity drgnx-ui--severities) (assq 'info drgnx-ui--severities))))
+    (let ((dot (car (split-string      ; the glyph alone: a terminal's expansion adds the status's word, the callers have their own
+                     (plist-get (drgnx-ui-kit-expand 'status-dot (list :c "status-dot" :status (symbol-name (or status 'needs-you)))
+                                                     1.0 (cond ((not (drgnx-ui-ascii-frame-p)) nil) (t 'ascii)))
+                                :text)
+                     " "))))
+      (propertize (if text (concat dot " " text) dot) 'face face))))
 
 ;;;; Buttons
 

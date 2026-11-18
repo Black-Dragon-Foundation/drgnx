@@ -481,10 +481,10 @@ asks the hub nothing and its keys say the same."
       (progn
         (should (facep 'drgnx-work-step-number))
         (should (equal (face-attribute 'drgnx-work-step-number :background nil t)
-                       (face-attribute 'drgnx-chip-solid :background nil t)))
+                       (face-attribute 'drgnx-kit-chip-accent-solid :background nil t)))
         (should (stringp (face-attribute 'drgnx-work-step-number :background nil t)))
         (should (equal (face-attribute 'drgnx-work-step-number :foreground nil t)
-                       (face-attribute 'drgnx-chip-solid :foreground nil t))))
+                       (face-attribute 'drgnx-kit-chip-accent-solid :foreground nil t))))
     (disable-theme 'drgnx-dark)))
 
 (ert-deftest drgnx-work-map-rows/the-status-line-names-the-agents-what-needs-you-and-the-view ()

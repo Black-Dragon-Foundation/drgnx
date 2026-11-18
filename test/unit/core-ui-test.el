@@ -62,14 +62,28 @@
     (should-not (cl-some (lambda (a) (stringp (face-attribute face a nil nil))) '(:foreground :background)))))
 
 (ert-deftest drgnx-ui-kit/status-gives-glyph-and-text-in-its-face ()
+  ;; the kit's dots: done `✓', error `✕', needs-you `●'; info and warn have no kit status, so they draw its plain dot
   (drgnx-ui-test--unicode
-   (pcase-dolist (`(,sev ,glyph ,face) '((ok "✓" drgnx-status-ok) (info "ℹ" drgnx-status-info) (warn "⚠" drgnx-status-warn)
-                                         (fail "✕" drgnx-status-fail) (needs-you "◐" drgnx-status-needs-you)))
+   (pcase-dolist (`(,sev ,glyph ,face) '((ok "✓" drgnx-status-ok) (info "●" drgnx-status-info) (warn "●" drgnx-status-warn)
+                                         (fail "✕" drgnx-status-fail) (needs-you "●" drgnx-status-needs-you)))
      (let ((s (drgnx-ui-status sev "text")))
        (should (equal (substring-no-properties s) (concat glyph " text")))
        (should (eq (get-text-property 0 'face s) face))
        (should (eq (get-text-property (1- (length s)) 'face s) face)))
      (should (equal (substring-no-properties (drgnx-ui-status sev)) glyph)))))
+
+(ert-deftest drgnx-ui-kit/status-is-the-kit-s-dot ()
+  ;; drgnx-ui-status is a wrapper: the dot of every severity (warn and info included) is what the kit's `status-dot'
+  ;; draws, in its unicode and its ASCII form
+  (pcase-dolist (`(,sev . ,status) '((ok . "done") (info . "needs-you") (warn . "needs-you") (fail . "error")
+                                     (needs-you . "needs-you")))
+    (dolist (tty '(nil ascii))
+      (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) (and tty t))))
+        (should (equal (substring-no-properties (drgnx-ui-status sev))
+                       ;; the glyph alone: a terminal's expansion adds the word, the caller has its own text
+                       (car (split-string (plist-get (drgnx-ui-kit-expand 'status-dot (list :c "status-dot" :status status) 1.0 tty)
+                                                     :text)
+                                          " "))))))))
 
 (ert-deftest drgnx-ui-kit/a-saved-glyph-option-still-applies ()
   ;; the option keeps its name: a value saved by customize before the move (the old 18 entries, with ok and
@@ -83,15 +97,15 @@
     (should (= (length drgnx-face-glyphs) 18))
     (drgnx-ui-test--unicode
      (should (equal (substring-no-properties (drgnx-ui-status 'ok "fine")) "OK fine"))
-     (should (equal (substring-no-properties (drgnx-ui-status 'needs-you)) "W"))
+     (should (equal (substring-no-properties (drgnx-ui-status 'needs-you)) "●"))
      (should (equal (substring-no-properties (drgnx-ui-status 'fail "failed: x")) "✕ failed: x"))
-     (should (equal (substring-no-properties (drgnx-ui-status 'info)) "ℹ"))
+     (should (equal (substring-no-properties (drgnx-ui-status 'info)) "●"))
      (should (equal (drgnx-face-glyph 'dismiss) "×"))
      (should (equal (drgnx-face-glyph 'bullet) "•")))
     (drgnx-ui-test--ascii
      (should (equal (substring-no-properties (drgnx-ui-status 'ok "fine")) "ok fine"))
      (should (equal (substring-no-properties (drgnx-ui-status 'fail "bad")) "X bad"))
-     (should (equal (substring-no-properties (drgnx-ui-status 'warn)) "!")))
+     (should (equal (substring-no-properties (drgnx-ui-status 'warn)) "*")))
     (should-not (drgnx-face-glyph 'no-such-glyph))))
 
 (ert-deftest drgnx-modules/list-statuses-use-the-kit ()

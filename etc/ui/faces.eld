@@ -39,13 +39,8 @@
  drgnx-selected-secondary
  drgnx-focus
  drgnx-status-attention
- drgnx-chip-quiet
  drgnx-chip-attention
- drgnx-chip-accent
- drgnx-chip-ok
- drgnx-chip-warn
  drgnx-tint-warn
- drgnx-chip-error
  drgnx-control
  drgnx-control-primary
  drgnx-pill
@@ -121,7 +116,6 @@
  drgnx-chrome-tab
  drgnx-chrome-tab-current
  drgnx-chrome-tab-active
- drgnx-chrome-tab-hover
  drgnx-chrome-tab-preview
  drgnx-chrome-crumb
  drgnx-explorer-root
@@ -477,7 +471,7 @@
  drgnx-work-seg-wait
  drgnx-chip
  drgnx-badge
- drgnx-chip-solid
+ drgnx-kit-chip-accent-solid
  drgnx-button
  drgnx-button-hover
  drgnx-button-pressed
@@ -543,7 +537,6 @@
  drgnx-kit-chip-ok-soft
  drgnx-kit-chip-error-soft
  drgnx-kit-chip-neutral-solid
- drgnx-kit-chip-accent-solid
  drgnx-kit-chip-warn-solid
  drgnx-kit-chip-ok-solid
  drgnx-kit-chip-error-solid
@@ -571,5 +564,6 @@
  drgnx-kit-tab-current
  drgnx-kit-tab-current-inactive
  drgnx-kit-tab-panel-current
+ drgnx-kit-tab-preview
  drgnx-kit-segmented
  drgnx-kit-segmented-current)

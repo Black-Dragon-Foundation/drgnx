@@ -456,8 +456,8 @@ and face). A terminal with fewer than 20 lines shows no line at all (it needs th
 | `drgnx-topline-min-lines` | `20` | A terminal frame with fewer lines than this shows none; windows always show it. |
 
 Its faces are `drgnx-topline` (the quiet text) and `drgnx-topline-strong` (the project and the keys), both over
-`tab-bar`, which the theme paints in the UI font on the gap colour; the chips use `drgnx-chip-quiet`,
-`drgnx-chip-attention` and `drgnx-chip-accent`. The glyphs `diamond`, `search`, `minimize` and `maximize` are in the table above.
+`tab-bar`, which the theme paints in the UI font on the gap colour; the chips use `drgnx-kit-chip-neutral-soft`,
+`drgnx-chip-attention` and `drgnx-kit-chip-accent-soft`. The glyphs `diamond`, `search`, `minimize` and `maximize` are in the table above.
 
 ## Quick help
 

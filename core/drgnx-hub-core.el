@@ -19,9 +19,9 @@
 (defconst drgnx-hub-proto-min 1 "The oldest hub protocol this drgnx still speaks.")
 (defconst drgnx-hub-records 2
   "The record layout this drgnx reads (records 2: JSON objects): the agents mirror pauses while a hub's differs.")
-(defconst drgnx-hub-schema-readable-max 14
+(defconst drgnx-hub-schema-readable-max 15
   "The newest work.db schema this editor reads (`drgnx-work-db-read': schema 7's compatibility views, `compat-read' 6,
-which schemas 8 to 14 keep): a hub whose hello says a schema from `drgnx-work-db-schema-version' to this one is not
+which schemas 8 to 15 keep): a hub whose hello says a schema from `drgnx-work-db-schema-version' to this one is not
 skewed.")
 
 (defconst drgnx-hub-core-event-kinds

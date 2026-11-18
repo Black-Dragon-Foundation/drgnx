@@ -44,13 +44,13 @@ fn an_outline_row_has_index_type_prompt_first_line_and_state_and_names_its_cell(
         rows[2]
             .runs
             .iter()
-            .any(|(_, _, f)| f == FaceId::ChipError.name())
+            .any(|(_, _, f)| f == FaceId::KitChipErrorSoft.name())
     );
     assert!(
         rows[3]
             .runs
             .iter()
-            .any(|(_, _, f)| f == FaceId::ChipAccent.name())
+            .any(|(_, _, f)| f == FaceId::KitChipAccentSoft.name())
     );
 }
 
@@ -545,7 +545,7 @@ fn log_rows_show_the_type_and_the_text_a_bounded_number_of_lines_and_say_what_is
         rows[2]
             .runs
             .iter()
-            .any(|(_, _, f)| f == FaceId::ChipError.name())
+            .any(|(_, _, f)| f == FaceId::KitChipErrorSoft.name())
     );
     assert_eq!(
         rows[1].props,
@@ -614,7 +614,7 @@ fn the_outlines_type_and_state_are_chips_of_the_look() {
         let kind_len = if r.text.contains("markdown") { 8 } else { 4 };
         assert_eq!(
             faces_at(r, 3, 3 + kind_len),
-            [FaceId::ChipQuiet.name()],
+            [FaceId::KitChipNeutralSoft.name()],
             "{}",
             r.text
         );
@@ -632,29 +632,29 @@ fn the_outlines_type_and_state_are_chips_of_the_look() {
     };
     assert_eq!(
         chip(&rows[0], "running").as_deref(),
-        Some(FaceId::ChipAccent.name())
+        Some(FaceId::KitChipAccentSoft.name())
     );
     assert_eq!(
         chip(&rows[1], "queued").as_deref(),
-        Some(FaceId::ChipQuiet.name())
+        Some(FaceId::KitChipNeutralSoft.name())
     );
     assert_eq!(
         chip(&rows[2], "error").as_deref(),
-        Some(FaceId::ChipError.name())
+        Some(FaceId::KitChipErrorSoft.name())
     );
     assert_eq!(
         chip(&rows[3], "aborted").as_deref(),
-        Some(FaceId::ChipWarn.name())
+        Some(FaceId::KitChipWarnSoft.name())
     );
     assert_eq!(
         chip(&rows[4], "cancelled").as_deref(),
-        Some(FaceId::ChipWarn.name())
+        Some(FaceId::KitChipWarnSoft.name())
     );
     assert_eq!(
         rows[5]
             .runs
             .iter()
-            .filter(|r| r.2.starts_with("drgnx-chip-"))
+            .filter(|r| r.2.starts_with("drgnx-kit-chip-"))
             .count(),
         1,
         "a cell at rest has the type chip only"
@@ -723,7 +723,10 @@ fn a_cut_row_is_a_tinted_row_with_the_key_that_moves_the_window() {
     );
     // the arrow is one character, not three bytes: the key's place is counted in characters
     let key = up.text[..up.text.find("M-p").unwrap()].chars().count() as u32;
-    assert_eq!(faces_at(up, key, key + 3)[0], FaceId::ChipQuiet.name());
+    assert_eq!(
+        faces_at(up, key, key + 3)[0],
+        FaceId::KitChipNeutralSoft.name()
+    );
     let dlen = down.text.chars().count() as u32;
     assert_eq!(
         faces_at(down, 0, dlen).last().copied(),
@@ -745,7 +748,10 @@ fn a_cut_row_fits_the_panes_columns_with_its_key_chip_whole() {
     let rows = output_rows("c", &lines(2500), 1200, 7 + 12);
     let up = &rows[0];
     let key = up.text[..up.text.find("M-p").unwrap()].chars().count() as u32;
-    assert_eq!(faces_at(up, key, key + 3)[0], FaceId::ChipQuiet.name());
+    assert_eq!(
+        faces_at(up, key, key + 3)[0],
+        FaceId::KitChipNeutralSoft.name()
+    );
     let len = up.text.chars().count() as u32;
     assert_eq!(
         faces_at(up, 0, len).last().copied(),
@@ -786,7 +792,10 @@ fn the_lines_of_an_error_output_are_error_rows_and_other_lines_are_not() {
 #[test]
 fn the_logs_type_is_a_chip_and_an_error_entry_is_an_error_row() {
     let rows = log_rows(&[entry(1, "stream", "hi"), entry(2, "error", "a\nb")], 0);
-    assert_eq!(faces_at(&rows[0], 0, 6), [FaceId::ChipQuiet.name()]);
+    assert_eq!(
+        faces_at(&rows[0], 0, 6),
+        [FaceId::KitChipNeutralSoft.name()]
+    );
     assert!(
         faces_at(&rows[0], 6, 7).is_empty(),
         "the padding is no chip"
@@ -801,7 +810,7 @@ fn the_logs_type_is_a_chip_and_an_error_entry_is_an_error_row() {
         is_err(&rows[1]) && is_err(&rows[2]),
         "every line of an error entry"
     );
-    assert!(faces_at(&rows[1], 0, 5).contains(&FaceId::ChipError.name()));
+    assert!(faces_at(&rows[1], 0, 5).contains(&FaceId::KitChipErrorSoft.name()));
 }
 
 #[tokio::test(flavor = "multi_thread")]

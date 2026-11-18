@@ -328,7 +328,10 @@ channel, session, message_id?}`) and `asked` links from it to specs, plans, task
   `SessionGone`). The shell, `work::asks::run` (task `asks:run`), takes its inputs in order on one channel: a session's
   turn sends the user message just before its prompt, `agents/start` the start, `agents/stop` and `agents/kill` the end.
   Before each input it reads the spec, plan and task versions written since the last look from the store's `tx` log
-  (the entity scan runs only when a session wrote), so a write is always seen before the message after it.
+  (the entity scan runs only when a session wrote), so a write is always seen before the message after it. Its first
+  look only sets the mark (`work::asks::start`); `serve` awaits it before the hub accepts a connection, so no conclusion
+  or write a session makes falls behind the mark (a test-hooks hub started with `RATATOSKR_TEST_ASKS_MARK_DELAY_MS=N`
+  takes the mark N ms late, as a loaded machine once did).
 - A session's tool call answers only after its writes are linked: every tool on a session's socket is wrapped
   (`sessions::AfterTool`) to call `norn::tools::Hub::after_tool`, which waits for the shell to read the log. A live
   spec (`work::specs`) goes in as the scan, so its write is sent to the shell directly.
@@ -569,7 +572,7 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   width and the UI font's measure, and the subtitle never wraps (a wrapped line shows a continuation glyph): it drops
   "(API prices)", then its parts from the end, then is cut with an ellipsis. A trail's step that a conclusion rests on
   starts with the conclusion's number in a filled accent circle (`drgnx-work-step-number`, the solid chip
-  `drgnx-chip-solid` in the badge's pill), the
+  `drgnx-kit-chip-accent-solid` in the badge's pill), the
   others keep the room; the newest conclusion's card says `new` while it is stamped on one of the last three steps.
 - **Cards, Detail and trail as the mockup draws them.** The trail is the panel's Trail tab, the lens switch is the kit's segmented switch (`drgnx-ui-kit-segmented`), the shown lens on the quiet selection. A card line is as tall as its layout row says (a row's
   `height` unit, px: `drgnx-view-patch` sets `line-height` from it; a row with no unit is that many default lines).

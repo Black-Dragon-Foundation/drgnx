@@ -53,7 +53,7 @@
           :bind (((primary) :bg button-primary-bg :fg button-primary-fg :inherit (drgnx-control-primary) :font (drgnx-ui-text))
                  ((secondary) :bg sel-quiet :edge button-edge :inherit (drgnx-control) :font (drgnx-ui-text))
                  ((quiet) :inherit (drgnx-ui-text drgnx-text-muted))
-                 ((danger) :bg error-tint :fg error :inherit (drgnx-chip-error) :font (drgnx-ui-text)))
+                 ((danger) :bg error-tint :fg error :inherit (drgnx-ui-caption error drgnx-selected-quiet) :font (drgnx-ui-text)))
           :replaces ((drgnx-ui-button . drgnx-kit-button-secondary) (drgnx-ui-button-primary . drgnx-kit-button-primary)
                      (drgnx-button . drgnx-kit-button-secondary) (drgnx-work-flow-button . drgnx-kit-button-secondary)
                      (drgnx-work-flow-button-primary . drgnx-kit-button-primary))
@@ -142,9 +142,7 @@
                ((warn solid) :bg warn :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption))
                ((ok solid) :bg ok :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption))
                ((error solid) :bg error :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption)))
-        :replaces ((drgnx-chip-quiet . drgnx-kit-chip-neutral-soft) (drgnx-chip-accent . drgnx-kit-chip-accent-soft)
-                   (drgnx-chip-ok . drgnx-kit-chip-ok-soft) (drgnx-chip-warn . drgnx-kit-chip-warn-soft)
-                   (drgnx-chip-error . drgnx-kit-chip-error-soft) (drgnx-chip-solid . drgnx-kit-chip-accent-solid))
+        :replaces nil
         :helpers (drgnx-decor-chip) :lint t)
   ;; a status dot: the status's glyph in its face, with its word after it when `word' is on (the terminal always has one)
   (status-dot :variants ((status done running needs-you idle error)) :defaults (status idle)
@@ -156,7 +154,7 @@
                      ((needs-you) :fg attention :inherit (drgnx-status-needs-you))
                      ((idle) :fg subtle :inherit (drgnx-text-subtle))
                      ((error) :fg error :inherit (drgnx-status-fail)))
-              :replaces nil :helpers (drgnx-ui-status) :lint t)
+              :replaces nil :helpers nil :lint t)
   ;; a range bar: a span of time or money on an axis, in the row's own width (`width' logical px).  `schedule': done
   ;; solid, to p50 light, p50 to p90 the tail, a baseline tick, the target's mark; `cost': p50 solid, p50 to p90 the
   ;; tail, the limit a rule; `segment': one span in its kind's colour, its letter inside on a terminal.  The bar is
@@ -198,7 +196,8 @@
   ;; hovered (a terminal always shows it).  An editor tab is window-dark.html's `.tab': muted on the row, the shown tab
   ;; on the editor's colour (`current'; in a group that is not the active one, still muted: `current-inactive'); a
   ;; panel tab is debugging.html's `.pt': the shown one a rounded pill on the quiet selection (`panel-current').  Its
-  ;; label is its title, with "modified" after it when its file is
+  ;; label is its title, with "modified" after it when its file is.  A tab that is only there while it is shown (a
+  ;; preview, the scratch buffer) is italic: the part `preview', laid over the tab's own face
   (tab :variants ((size editor panel)) :defaults (size editor)
        :geometry (:height (:by size (editor 34) (panel 30)) :pad (:by size (editor (10 . 8)) (panel (9 . 9)))
                           :gap (:by size (editor 7) (panel 6)) :box nil :radius (:by size (editor 7) (panel 6)) :hit 0)
@@ -208,10 +207,12 @@
               ((current-inactive) :bg editor :fg muted :inherit (drgnx-ui-text drgnx-text-muted tab-line-tab-current tab-line)
                :font (drgnx-ui-text))
               ((panel-current) :bg sel-quiet :fg fg :edge sel-quiet :ring (1 6)
-               :inherit (drgnx-ui-text drgnx-selected-quiet tab-line-tab-current) :font (drgnx-ui-text)))
+               :inherit (drgnx-ui-text drgnx-selected-quiet tab-line-tab-current) :font (drgnx-ui-text))
+              ((preview) :attrs (:slant italic)))
        :replaces ((drgnx-chrome-tab . drgnx-kit-tab) (drgnx-chrome-tab-active . drgnx-kit-tab-current)
                   (drgnx-chrome-tab-current . drgnx-kit-tab-current-inactive) (drgnx-wb-tab . drgnx-kit-tab)
-                  (drgnx-wb-tab-current . drgnx-kit-tab-panel-current) (drgnx-work-lens-title . drgnx-kit-tab-current))
+                  (drgnx-wb-tab-current . drgnx-kit-tab-panel-current) (drgnx-work-lens-title . drgnx-kit-tab-current)
+                  (drgnx-chrome-tab-preview . drgnx-kit-tab-preview))
        :helpers nil :lint t)
   ;; a segmented switch: its items in one track (a 1 px ring in the border's colour, radius 6), the current one on the
   ;; quiet selection in the body text's colour, the others muted; each item an action.  The current item's label is

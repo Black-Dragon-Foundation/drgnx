@@ -64,7 +64,9 @@ Once a component lands, it owns its role, and the old ways of drawing that role 
   - a string holding one of the role's literals (not in docstrings).
 
   In Rust it counts uses of a replaced face's `FaceId` variant, outside `drgnx-rows/src/kit.rs` and the generated enum.
-- **What is never counted.** Domain faces (syntax, diff refine, ANSI, the debugger, notebooks) never match a role.
+- **What is never counted.** Domain faces (syntax, diff refine, ANSI, the debugger, notebooks) never match a role. The
+  `defface` of a face the entry `:replaces` is no draw either: it is an alias of its kit face (below), kept for a
+  user's customization of the old name; its uses still count.
 - **The allowlist.** The counts are checked against `drgnx-lint-kit--not-yet`, rows of `(FILE ID COUNT)`. The lint fails when a file's count is:
   - above its row ("above": draw it with the kit);
   - below its row ("below": lower or remove the row).

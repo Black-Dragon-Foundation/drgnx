@@ -452,6 +452,16 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
         }
         return 0;
     }
+    let deadline = crate::clock::real_now() + timeout;
+    // a hub that has stopped serving still writes its store's queue under the lock: no second hub starts on that store
+    // until it has ended (a killed one releases the lock at once)
+    if let Some(pid) = ending(&lock_path, deadline) {
+        eprintln!(
+            "ratatoskr ensure: a hub is ending here (pid {}): it still writes its store; try again once it has ended",
+            pid.map_or_else(|| "unknown".to_string(), |p| p.to_string())
+        );
+        return 1;
+    }
     let exe = match crate::idle::resolve_exe() {
         Ok(e) => e,
         Err(e) => {
@@ -466,7 +476,6 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
             return 1;
         }
     };
-    let deadline = crate::clock::real_now() + timeout;
     let mut ended = None;
     loop {
         if client::ping(&socket, Duration::from_secs(1)).is_some() {
@@ -506,16 +515,36 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
     1
 }
 
-/// Wait up to WITHIN for the lock at PATH to be released (nobody holds it any more).
-fn wait_released(path: &Path, within: Duration) -> bool {
+/// Wait up to WITHIN for the hub holding the lock at PATH to have stopped: the lock released, or marked stopping (it
+/// serves no more and only finishes its store's queue, under the lock: [`lock::Lock::mark_stopping`]).
+fn wait_stopped(path: &Path, within: Duration) -> bool {
     let deadline = crate::clock::real_now() + within;
     loop {
         match lock::holder(path, &lock::System) {
-            Ok(Holder::Ratatoskr { .. }) => {}
+            Ok(Holder::Ratatoskr {
+                stopping: false, ..
+            }) => {}
             _ => return true,
         }
         if crate::clock::real_now() >= deadline {
             return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Wait until DEADLINE for a hub that marked the lock at PATH stopping to end.  Its pid (when the file names one) if it
+/// is still ending then; None when no hub is ending, or it ended.
+fn ending(path: &Path, deadline: std::time::Instant) -> Option<Option<u32>> {
+    loop {
+        match lock::holder(path, &lock::System) {
+            Ok(Holder::Ratatoskr {
+                pid,
+                stopping: true,
+                ..
+            }) if crate::clock::real_now() >= deadline => return Some(pid),
+            Ok(Holder::Ratatoskr { stopping: true, .. }) => {}
+            _ => return None,
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -571,7 +600,7 @@ pub fn stop(env: &Env, timeout: Duration) -> i32 {
             0
         }
         Ok(Holder::Lisp { pid }) => stop_lisp(&socket, &lock_path, pid, timeout),
-        Ok(Holder::Ratatoskr { pid, start }) => {
+        Ok(Holder::Ratatoskr { pid, start, .. }) => {
             stop_ratatoskr(&socket, &lock_path, pid, start, timeout)
         }
     }
@@ -593,7 +622,7 @@ fn stop_ratatoskr(
     if let Err(e) = asked {
         eprintln!("ratatoskr stop: the hub did not take a shutdown ({e})");
     }
-    if wait_released(lock_path, timeout) {
+    if wait_stopped(lock_path, timeout) {
         println!("stopped Ratatoskr{}", named(pid));
         return 0;
     }
@@ -607,7 +636,7 @@ fn stop_ratatoskr(
     });
     match signalled {
         Ok(p) => {
-            if wait_released(lock_path, timeout) {
+            if wait_stopped(lock_path, timeout) {
                 println!("stopped Ratatoskr (pid {p}, by SIGTERM)");
                 0
             } else {
