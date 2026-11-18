@@ -1110,6 +1110,36 @@ pub enum FaceId {
     KitStatusDotIdle,
     /// `drgnx-kit-status-dot-error`
     KitStatusDotError,
+    /// `drgnx-kit-range-bar`
+    KitRangeBar,
+    /// `drgnx-kit-range-bar-forecast`
+    KitRangeBarForecast,
+    /// `drgnx-kit-range-bar-tail`
+    KitRangeBarTail,
+    /// `drgnx-kit-range-bar-late`
+    KitRangeBarLate,
+    /// `drgnx-kit-range-bar-wait`
+    KitRangeBarWait,
+    /// `drgnx-kit-range-bar-seg-read`
+    KitRangeBarSegRead,
+    /// `drgnx-kit-range-bar-seg-search`
+    KitRangeBarSegSearch,
+    /// `drgnx-kit-range-bar-seg-web`
+    KitRangeBarSegWeb,
+    /// `drgnx-kit-range-bar-seg-think`
+    KitRangeBarSegThink,
+    /// `drgnx-kit-range-bar-seg-edit`
+    KitRangeBarSegEdit,
+    /// `drgnx-kit-range-bar-seg-test`
+    KitRangeBarSegTest,
+    /// `drgnx-kit-range-bar-seg-job`
+    KitRangeBarSegJob,
+    /// `drgnx-kit-range-bar-seg-wait`
+    KitRangeBarSegWait,
+    /// `drgnx-kit-time-axis`
+    KitTimeAxis,
+    /// `drgnx-kit-time-axis-now`
+    KitTimeAxisNow,
     /// `drgnx-kit-tab`
     KitTab,
     /// `drgnx-kit-tab-current`
@@ -1126,7 +1156,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 557] = [
+    pub const ALL: [FaceId; 572] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1678,6 +1708,21 @@ impl FaceId {
         FaceId::KitStatusDotNeedsYou,
         FaceId::KitStatusDotIdle,
         FaceId::KitStatusDotError,
+        FaceId::KitRangeBar,
+        FaceId::KitRangeBarForecast,
+        FaceId::KitRangeBarTail,
+        FaceId::KitRangeBarLate,
+        FaceId::KitRangeBarWait,
+        FaceId::KitRangeBarSegRead,
+        FaceId::KitRangeBarSegSearch,
+        FaceId::KitRangeBarSegWeb,
+        FaceId::KitRangeBarSegThink,
+        FaceId::KitRangeBarSegEdit,
+        FaceId::KitRangeBarSegTest,
+        FaceId::KitRangeBarSegJob,
+        FaceId::KitRangeBarSegWait,
+        FaceId::KitTimeAxis,
+        FaceId::KitTimeAxisNow,
         FaceId::KitTab,
         FaceId::KitTabCurrent,
         FaceId::KitTabCurrentInactive,
@@ -2240,6 +2285,21 @@ impl FaceId {
             FaceId::KitStatusDotNeedsYou => "drgnx-kit-status-dot-needs-you",
             FaceId::KitStatusDotIdle => "drgnx-kit-status-dot-idle",
             FaceId::KitStatusDotError => "drgnx-kit-status-dot-error",
+            FaceId::KitRangeBar => "drgnx-kit-range-bar",
+            FaceId::KitRangeBarForecast => "drgnx-kit-range-bar-forecast",
+            FaceId::KitRangeBarTail => "drgnx-kit-range-bar-tail",
+            FaceId::KitRangeBarLate => "drgnx-kit-range-bar-late",
+            FaceId::KitRangeBarWait => "drgnx-kit-range-bar-wait",
+            FaceId::KitRangeBarSegRead => "drgnx-kit-range-bar-seg-read",
+            FaceId::KitRangeBarSegSearch => "drgnx-kit-range-bar-seg-search",
+            FaceId::KitRangeBarSegWeb => "drgnx-kit-range-bar-seg-web",
+            FaceId::KitRangeBarSegThink => "drgnx-kit-range-bar-seg-think",
+            FaceId::KitRangeBarSegEdit => "drgnx-kit-range-bar-seg-edit",
+            FaceId::KitRangeBarSegTest => "drgnx-kit-range-bar-seg-test",
+            FaceId::KitRangeBarSegJob => "drgnx-kit-range-bar-seg-job",
+            FaceId::KitRangeBarSegWait => "drgnx-kit-range-bar-seg-wait",
+            FaceId::KitTimeAxis => "drgnx-kit-time-axis",
+            FaceId::KitTimeAxisNow => "drgnx-kit-time-axis-now",
             FaceId::KitTab => "drgnx-kit-tab",
             FaceId::KitTabCurrent => "drgnx-kit-tab-current",
             FaceId::KitTabCurrentInactive => "drgnx-kit-tab-current-inactive",
@@ -2803,6 +2863,21 @@ impl FaceId {
             "drgnx-kit-status-dot-needs-you" => FaceId::KitStatusDotNeedsYou,
             "drgnx-kit-status-dot-idle" => FaceId::KitStatusDotIdle,
             "drgnx-kit-status-dot-error" => FaceId::KitStatusDotError,
+            "drgnx-kit-range-bar" => FaceId::KitRangeBar,
+            "drgnx-kit-range-bar-forecast" => FaceId::KitRangeBarForecast,
+            "drgnx-kit-range-bar-tail" => FaceId::KitRangeBarTail,
+            "drgnx-kit-range-bar-late" => FaceId::KitRangeBarLate,
+            "drgnx-kit-range-bar-wait" => FaceId::KitRangeBarWait,
+            "drgnx-kit-range-bar-seg-read" => FaceId::KitRangeBarSegRead,
+            "drgnx-kit-range-bar-seg-search" => FaceId::KitRangeBarSegSearch,
+            "drgnx-kit-range-bar-seg-web" => FaceId::KitRangeBarSegWeb,
+            "drgnx-kit-range-bar-seg-think" => FaceId::KitRangeBarSegThink,
+            "drgnx-kit-range-bar-seg-edit" => FaceId::KitRangeBarSegEdit,
+            "drgnx-kit-range-bar-seg-test" => FaceId::KitRangeBarSegTest,
+            "drgnx-kit-range-bar-seg-job" => FaceId::KitRangeBarSegJob,
+            "drgnx-kit-range-bar-seg-wait" => FaceId::KitRangeBarSegWait,
+            "drgnx-kit-time-axis" => FaceId::KitTimeAxis,
+            "drgnx-kit-time-axis-now" => FaceId::KitTimeAxisNow,
             "drgnx-kit-tab" => FaceId::KitTab,
             "drgnx-kit-tab-current" => FaceId::KitTabCurrent,
             "drgnx-kit-tab-current-inactive" => FaceId::KitTabCurrentInactive,

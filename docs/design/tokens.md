@@ -78,6 +78,19 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #f47a72"></span> | `meter-reached` | `#f47a72` | the colour of `error` | semantic | `drgnx-kit-progress-meter-reached` |
 | <span class="swatch" style="background: #a2a5b2"></span> | `meter-tick` | `#a2a5b2` | the colour of `muted` | semantic | `drgnx-kit-progress-meter-tick`, `drgnx-kit-progress-meter-outline` |
 | <span class="swatch" style="background: #46484f"></span> | `meter-span` | `#46484f` | `muted` at 35 % over `editor` | semantic | `drgnx-kit-progress-meter-span` |
+| <span class="swatch" style="background: #7aa5ff"></span> | `range-done` | `#7aa5ff` | the colour of `accent` | semantic | `drgnx-kit-range-bar`, `drgnx-kit-time-axis-now` |
+| <span class="swatch" style="background: #4d6598"></span> | `range-forecast` | `#4d6598` | `accent` at 55.00000000000001 % over `editor` | semantic | `drgnx-kit-range-bar-forecast` |
+| <span class="swatch" style="background: #5c7aba"></span> | `range-tail` | `#5c7aba` | `accent` at 70 % over `editor` | semantic | `drgnx-kit-range-bar-tail` |
+| <span class="swatch" style="background: #f47a72"></span> | `range-late` | `#f47a72` | the colour of `error` | semantic | `drgnx-kit-range-bar-late` |
+| <span class="swatch" style="background: #e9bc5c"></span> | `range-wait` | `#e9bc5c` | the colour of `warn` | semantic | `drgnx-kit-range-bar-wait` |
+| <span class="swatch" style="background: #6fc6ea"></span> | `seg-read` | `#6fc6ea` | the colour of `info` | semantic | `drgnx-kit-range-bar-seg-read` |
+| <span class="swatch" style="background: #7aa5ff"></span> | `seg-search` | `#7aa5ff` | the colour of `accent` | semantic | `drgnx-kit-range-bar-seg-search` |
+| <span class="swatch" style="background: #7fd6d1"></span> | `seg-web` | `#7fd6d1` | the colour of `a6` | semantic | `drgnx-kit-range-bar-seg-web` |
+| <span class="swatch" style="background: #a2a5b2"></span> | `seg-think` | `#a2a5b2` | the colour of `muted` | semantic | `drgnx-kit-range-bar-seg-think` |
+| <span class="swatch" style="background: #62d394"></span> | `seg-edit` | `#62d394` | the colour of `ok` | semantic | `drgnx-kit-range-bar-seg-edit` |
+| <span class="swatch" style="background: #e9bc5c"></span> | `seg-test` | `#e9bc5c` | the colour of `warn` | semantic | `drgnx-kit-range-bar-seg-test` |
+| <span class="swatch" style="background: #c6a0ff"></span> | `seg-job` | `#c6a0ff` | the colour of `a4` | semantic | `drgnx-kit-range-bar-seg-job` |
+| <span class="swatch" style="background: #ff9566"></span> | `seg-wait` | `#ff9566` | the colour of `attention` | semantic | `drgnx-kit-range-bar-seg-wait` |
 
 ## Light
 
@@ -153,6 +166,19 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #c22f28"></span> | `meter-reached` | `#c22f28` | the colour of `error` | semantic | `drgnx-kit-progress-meter-reached` |
 | <span class="swatch" style="background: #545866"></span> | `meter-tick` | `#545866` | the colour of `muted` | semantic | `drgnx-kit-progress-meter-tick`, `drgnx-kit-progress-meter-outline` |
 | <span class="swatch" style="background: #c3c5c9"></span> | `meter-span` | `#c3c5c9` | `muted` at 35 % over `editor` | semantic | `drgnx-kit-progress-meter-span` |
+| <span class="swatch" style="background: #2c5fd4"></span> | `range-done` | `#2c5fd4` | the colour of `accent` | semantic | `drgnx-kit-range-bar`, `drgnx-kit-time-axis-now` |
+| <span class="swatch" style="background: #8ba7e7"></span> | `range-forecast` | `#8ba7e7` | `accent` at 55.00000000000001 % over `editor` | semantic | `drgnx-kit-range-bar-forecast` |
+| <span class="swatch" style="background: #6b8fe1"></span> | `range-tail` | `#6b8fe1` | `accent` at 70 % over `editor` | semantic | `drgnx-kit-range-bar-tail` |
+| <span class="swatch" style="background: #c22f28"></span> | `range-late` | `#c22f28` | the colour of `error` | semantic | `drgnx-kit-range-bar-late` |
+| <span class="swatch" style="background: #8a5d00"></span> | `range-wait` | `#8a5d00` | the colour of `warn` | semantic | `drgnx-kit-range-bar-wait` |
+| <span class="swatch" style="background: #0b6f99"></span> | `seg-read` | `#0b6f99` | the colour of `info` | semantic | `drgnx-kit-range-bar-seg-read` |
+| <span class="swatch" style="background: #2c5fd4"></span> | `seg-search` | `#2c5fd4` | the colour of `accent` | semantic | `drgnx-kit-range-bar-seg-search` |
+| <span class="swatch" style="background: #0b7470"></span> | `seg-web` | `#0b7470` | the colour of `a6` | semantic | `drgnx-kit-range-bar-seg-web` |
+| <span class="swatch" style="background: #545866"></span> | `seg-think` | `#545866` | the colour of `muted` | semantic | `drgnx-kit-range-bar-seg-think` |
+| <span class="swatch" style="background: #1a7d44"></span> | `seg-edit` | `#1a7d44` | the colour of `ok` | semantic | `drgnx-kit-range-bar-seg-edit` |
+| <span class="swatch" style="background: #8a5d00"></span> | `seg-test` | `#8a5d00` | the colour of `warn` | semantic | `drgnx-kit-range-bar-seg-test` |
+| <span class="swatch" style="background: #7a3ccf"></span> | `seg-job` | `#7a3ccf` | the colour of `a4` | semantic | `drgnx-kit-range-bar-seg-job` |
+| <span class="swatch" style="background: #b8461a"></span> | `seg-wait` | `#b8461a` | the colour of `attention` | semantic | `drgnx-kit-range-bar-seg-wait` |
 
 ## High contrast
 
@@ -229,3 +255,16 @@ Every colour drgnx draws is one of these tokens, in one of three variants. A fac
 | <span class="swatch" style="background: #ff9a92"></span> | `meter-reached` | `#ff9a92` | the colour of `error` | semantic | `drgnx-kit-progress-meter-reached` |
 | <span class="swatch" style="background: #ffffff"></span> | `meter-tick` | `#ffffff` | the colour of `fg` | semantic | `drgnx-kit-progress-meter-tick`, `drgnx-kit-progress-meter-outline` |
 | <span class="swatch" style="background: #d6d8de"></span> | `meter-span` | `#d6d8de` | the colour of `muted` | semantic | `drgnx-kit-progress-meter-span` |
+| <span class="swatch" style="background: #a8c6ff"></span> | `range-done` | `#a8c6ff` | the colour of `accent` | semantic | `drgnx-kit-range-bar`, `drgnx-kit-time-axis-now` |
+| <span class="swatch" style="background: #d6d8de"></span> | `range-forecast` | `#d6d8de` | the colour of `muted` | semantic | `drgnx-kit-range-bar-forecast` |
+| <span class="swatch" style="background: #d6d8de"></span> | `range-tail` | `#d6d8de` | the colour of `muted` | semantic | `drgnx-kit-range-bar-tail` |
+| <span class="swatch" style="background: #ff9a92"></span> | `range-late` | `#ff9a92` | the colour of `error` | semantic | `drgnx-kit-range-bar-late` |
+| <span class="swatch" style="background: #ffd36b"></span> | `range-wait` | `#ffd36b` | the colour of `warn` | semantic | `drgnx-kit-range-bar-wait` |
+| <span class="swatch" style="background: #8fdcff"></span> | `seg-read` | `#8fdcff` | the colour of `info` | semantic | `drgnx-kit-range-bar-seg-read` |
+| <span class="swatch" style="background: #a8c6ff"></span> | `seg-search` | `#a8c6ff` | the colour of `accent` | semantic | `drgnx-kit-range-bar-seg-search` |
+| <span class="swatch" style="background: #96ece6"></span> | `seg-web` | `#96ece6` | the colour of `a6` | semantic | `drgnx-kit-range-bar-seg-web` |
+| <span class="swatch" style="background: #d6d8de"></span> | `seg-think` | `#d6d8de` | the colour of `muted` | semantic | `drgnx-kit-range-bar-seg-think` |
+| <span class="swatch" style="background: #7ff0ad"></span> | `seg-edit` | `#7ff0ad` | the colour of `ok` | semantic | `drgnx-kit-range-bar-seg-edit` |
+| <span class="swatch" style="background: #ffd36b"></span> | `seg-test` | `#ffd36b` | the colour of `warn` | semantic | `drgnx-kit-range-bar-seg-test` |
+| <span class="swatch" style="background: #dcc0ff"></span> | `seg-job` | `#dcc0ff` | the colour of `a4` | semantic | `drgnx-kit-range-bar-seg-job` |
+| <span class="swatch" style="background: #ffb38a"></span> | `seg-wait` | `#ffb38a` | the colour of `attention` | semantic | `drgnx-kit-range-bar-seg-wait` |
