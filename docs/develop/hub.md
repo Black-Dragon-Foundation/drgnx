@@ -3065,8 +3065,10 @@ repository) for the Explorer's marks (`explorer/subscribe`, "Git marks").
 Once read for a connection, a repository is **watched** until the connection goes or its view closes
 (`view/close`): its gitdir (the index, `HEAD`, `packed-refs`; a linked worktree's own and the common dir) and the
 common dir's `refs`, not recursive except `refs`. A commit, checkout, `git add` or branch move from a terminal reads
-the status again once its burst is quiet for 50 ms (at most 250 ms after its first change) and sends what changed; a
-lock file's events and reads (the hub's own `git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
+the status again once its burst is quiet for 50 ms (at most 250 ms after its first change) and git holds no lock it
+took (a commit stalled on its ref's fsync is still one burst; at most 2 s after its first change, for a lock a dead git
+left or a commit waiting in an editor), and sends what changed; a lock file's events and reads (the hub's own
+`git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
 Explorer listing that its watch relisted (a name made or removed outside Emacs) also reads its repositories again.
 
 ### Ranked file names as rows (`search/files`)
