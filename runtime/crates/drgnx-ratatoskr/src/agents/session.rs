@@ -40,8 +40,8 @@ use norn::matrix::{Action, Who};
 use runstav::methods::Empty;
 use runstav::methods::agents::{
     AgentOp, AgentWheel, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission,
-    PermissionParams, RpcId, SendParams, SessionStatus, Snapshot, StartParams, Started, Transcript,
-    Usage, Via, WheelSaved, WheelState,
+    PermissionParams, RpcId, SendIntent, SendParams, SessionStatus, Snapshot, StartParams, Started,
+    Transcript, Usage, Via, WheelSaved, WheelState,
 };
 use runstav::methods::hub::{EnvVar, refused_env_name};
 use runstav::methods::matrix::{Role, Unit};
@@ -6777,22 +6777,48 @@ pub async fn get(f: &Front, _: &Caller, p: ById) -> Result<Transcript, Error> {
 
 /// The user's prompt: a turn while idle, else queued (or steered); it never cancels.  With `if_free` it is a turn or
 /// nothing: a session that is busy, paused, holding a queue or closed on a job answers `false` and is left as it was.
+/// What the agent is told for an `ask` (`agents/send` with `intent: "ask"`): answer only.
+const ASK_INSTRUCTION: &str = "This message is a question. Answer it only: do not change your plan, and do not create, edit or delete any file or run anything that changes state.";
+
+/// TEXT as the provider gets it for INTENT: the instruction before an ask, the text itself for a steer.
+pub(crate) fn text_for_intent(text: &str, intent: Option<SendIntent>) -> String {
+    match intent {
+        Some(SendIntent::Ask) => format!("{ASK_INSTRUCTION}\n\n{text}"),
+        _ => text.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod intent_tests {
+    use super::*;
+
+    #[test]
+    fn an_ask_carries_the_answer_only_instruction_and_a_steer_does_not() {
+        let ask = text_for_intent("why this file?", Some(SendIntent::Ask));
+        assert!(ask.starts_with(ASK_INSTRUCTION), "{ask}");
+        assert!(ask.ends_with("\n\nwhy this file?"), "{ask}");
+        assert!(ask.contains("do not change your plan"), "{ask}");
+        for intent in [None, Some(SendIntent::Steer)] {
+            assert_eq!(text_for_intent("go on", intent), "go on");
+        }
+    }
+}
+
 pub async fn send(f: &Front, c: &Caller, p: SendParams) -> Result<bool, Error> {
     if c.class != Class::User {
         return Err(refuse("only the user sends a message here"));
     }
+    let text = text_for_intent(p.text.as_str(), p.intent);
     if p.if_free == Some(true) {
         return f
             .core
             .agents
             .find(p.id.as_str())?
-            .prompt_if_free(p.text.as_str().to_string(), Origin::User);
+            .prompt_if_free(text, Origin::User);
     }
     // a session closed on a job is resumed first: the message must reach a running agent
     resume_closed(&f.core.agents, f, p.id.as_str()).await?;
-    f.core
-        .agents
-        .send(p.id.as_str(), p.text.as_str().to_string())?;
+    f.core.agents.send(p.id.as_str(), text)?;
     Ok(true)
 }
 
