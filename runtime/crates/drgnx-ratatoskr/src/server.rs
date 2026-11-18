@@ -539,14 +539,22 @@ pub async fn run(args: ServeArgs) -> Exit {
         }
     };
     drop(listener);
+    // each stage of the end is logged with the time since the stop began, so a slow stop names its stage
+    let began = crate::clock::real_now();
+    let stage = |what: &str| {
+        tracing::info!(ms = began.elapsed().as_millis() as u64, "stopping: {what}");
+    };
     // a nightly copy running (or checked) is interrupted, its partial file removed: the stop never waits for one
     urdr::graph::backup::interrupt_all();
     // the hub's own sessions end with it (their rows, transcripts and queues stay for the next start)
     front.core.agents.shutdown().await;
+    stage("the sessions ended");
     // the debug sessions stop (children first) and their adapters are reaped
     front.debug.shutdown().await;
+    stage("the debug sessions ended");
     // networked jobs can't run on without the hub's relay: they end now, as the next start would end them
     front.core.exec.end_networked().await;
+    stage("the networked jobs ended");
     // `--test-sequencer`: what it still holds is written before the connections close
     #[cfg(feature = "test-hooks")]
     if let Some(seq) = crate::sequencer::current() {
@@ -558,6 +566,12 @@ pub async fn run(args: ServeArgs) -> Exit {
     remove(&socket, &cap_path);
     // nothing more is served: the clients hear the end now, before any wait below that can hang
     front.end_connections().await;
+    stage("the connections closed");
+    // the hub has stopped: `stop` is answered by this mark, while the lock stays held until the store's queue is
+    // written (`ensure` waits for its release, so no second hub opens the store meanwhile)
+    if let Err(e) = lock.mark_stopping() {
+        tracing::warn!("cannot mark the lock {} stopping: {e}", lock.path.display());
+    }
     #[cfg(feature = "test-hooks")]
     if args.test_hold_store {
         hold_store(&runtime).await;
@@ -581,6 +595,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         &mut int,
     )
     .await;
+    stage("the store's threads ended");
     if exit == Exit::Restart && args.supervisor == Supervisor::SelfDetached {
         // nothing supervises this hub, so `main` executes the binary again: the lock stays held until the exec
         // closes it (every descriptor is close-on-exec), and the new image takes it

@@ -105,8 +105,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 ### Starting, stopping and restarting Ratatoskr
 
 `ratatoskr ensure [--timeout SECS]` (default 5) pings; when nothing answers it starts a hub and waits up to the timeout
-for `ping`. It prints the socket path and exits **0**; **1** when it could not start one (the reason, from the hub's
-log when the wait timed out, and the log's directory); **3** when a Lisp hub from before Ratatoskr holds the lock
+for `ping`. A hub that has stopped serving but still writes its store (its lock marked `stopping`, below) is waited for
+first, within the same timeout: no second hub opens that store until the first has ended, and one that was killed
+meanwhile released its lock with its death, so the start goes on at once. It prints the socket path and exits **0**;
+**1** when it could not start one (the reason, from the hub's log when the wait timed out, and the log's directory; `a
+hub is ending here (pid N)` when the stopping hub was still writing at the timeout); **3** when a Lisp hub from before Ratatoskr holds the lock
 (checked first, before the ping: such a hub answers one, and `ensure` still says it as `serve` does). How the hub is started:
 
 | Where | How | Restarted |
@@ -136,8 +139,13 @@ really held:
 
 - **Ratatoskr's lock** (a file): `flock(LOCK_EX|LOCK_NB)` is tried first. If it succeeds nobody holds the lock (a stale
   file naming a live, reused pid, say): it prints `not running` and exits 0 without a signal. If it fails the hub is
-  asked to `shutdown` as a user client, and `stop` waits for the lock to be released and prints `stopped Ratatoskr (pid
-  N)`. Only when it is not released does it signal, and then only **the process listening on the hub's socket**,
+  asked to `shutdown` as a user client, and `stop` waits for the hub to have stopped and prints `stopped Ratatoskr (pid
+  N)`. **Stopped** means the hub serves no more: its socket is removed, its connections are closed and its lock file
+  says `PID START stopping` (`Lock::mark_stopping`). The lock itself stays held while the store's threads write what is
+  queued to them (no queued write is dropped, however long that takes; a second SIGTERM abandons it), and the process
+  ends when they are done, so `stop`'s timeout bounds what its caller sees, never the store's last writes. Each stage
+  of the end is logged with the milliseconds since the stop began (`stopping: the sessions ended`, `… the debug
+  sessions ended`, `… the networked jobs ended`, `… the connections closed`, `… the store's threads ended`). Only when it is not released does it signal, and then only **the process listening on the hub's socket**,
   never one a lock's text or a command line names (`peer.rs`, `lock::signal_target`): it connects to the socket
   through the checked directory and asks the system who accepted. On Linux that is a pidfd (`SO_PEERPIDFD`, else
   `pidfd_open` of the `SO_PEERCRED` pid), so the SIGTERM (`pidfd_send_signal`) reaches that process even if its pid is

@@ -1,6 +1,8 @@
 //! One hub per data dir (design 3.2; review I2, I3): an exclusive `flock` on `hub-HASH.sock.lock`, held for the hub's
 //! life (the kernel drops it when the process ends, so a crashed hub leaves no stale lock), with `"PID START_TIME\n"`
-//! inside for display.
+//! inside for display.  A hub that has stopped serving and only writes its store's queue before it ends marks the file
+//! `"PID START_TIME stopping\n"` ([`Lock::mark_stopping`]): `stop` is answered by that mark, and `ensure` waits for the
+//! release before it starts a hub, so two hubs never write the same store.
 //!
 //! A Lisp hub from before Ratatoskr locks the same path as a *directory* holding `pid` (`drgnx-hub--take-lock`).
 //! While that pid is alive and its command line names `drgnx-hub-main`, the directory is respected, whether or not
@@ -24,6 +26,24 @@ pub const LISP_HUB_SERVES: &str = "a Lisp hub from before Ratatoskr serves here:
 pub struct Lock {
     _file: File,
     pub path: PathBuf,
+}
+
+/// The third word of a stopping hub's lock file.
+const STOPPING: &str = "stopping";
+
+impl Lock {
+    /// The hub serves no more and only finishes its store before it ends: the file says so (the lock stays held).  The
+    /// text only grows, written over the old in place, so a reader sees the old text or the new, never an empty file.
+    pub fn mark_stopping(&self) -> io::Result<()> {
+        use std::os::unix::fs::FileExt;
+        let mut buf = [0u8; 64];
+        let n = self._file.read_at(&mut buf, 0)?;
+        let line = format!(
+            "{} {STOPPING}\n",
+            String::from_utf8_lossy(&buf[..n]).trim_end()
+        );
+        self._file.write_all_at(line.as_bytes(), 0)
+    }
 }
 
 /// Dropping unlocks before the descriptor closes: a child another thread forked shares the open file until its exec,
@@ -173,10 +193,12 @@ pub fn acquire(path: &Path, procs: &impl Procs) -> Result<Lock, LockError> {
 pub enum Holder {
     /// Nothing: no file, a file nobody holds, or a stale Lisp lock directory.
     Nobody,
-    /// A Ratatoskr holds the `flock`; the file says `"PID START_TIME"` (none where it does not read).
+    /// A Ratatoskr holds the `flock`; the file says `"PID START_TIME"` (none where it does not read), and STOPPING when
+    /// it has stopped serving and finishes its store ([`Lock::mark_stopping`]).
     Ratatoskr {
         pid: Option<u32>,
         start: Option<u64>,
+        stopping: bool,
     },
     /// A Lisp hub's lock directory that [`judge_lisp_lock`] respects (its pid, when it reads).
     Lisp { pid: Option<u32> },
@@ -236,7 +258,12 @@ pub fn holder(path: &Path, procs: &impl Procs) -> io::Result<Holder> {
         .and_then(|p| p.parse().ok())
         .filter(|p| *p > 0);
     let start = fields.next().and_then(|s| s.parse().ok());
-    Ok(Holder::Ratatoskr { pid, start })
+    let stopping = fields.next() == Some(STOPPING);
+    Ok(Holder::Ratatoskr {
+        pid,
+        start,
+        stopping,
+    })
 }
 
 /// The pid `stop` may signal for a held lock that names LOCK_PID and LOCK_START (call 14): only the process LISTENER
@@ -437,6 +464,17 @@ mod tests {
             Holder::Ratatoskr {
                 pid: Some(p),
                 start: Some(_),
+                stopping: false,
+            } => assert_eq!(p, me),
+            other => panic!("{other:?}"),
+        }
+        // marked: still held, by the same pid, now stopping
+        held.mark_stopping().unwrap();
+        match holder(&path, &Fake(vec![])).unwrap() {
+            Holder::Ratatoskr {
+                pid: Some(p),
+                start: Some(_),
+                stopping: true,
             } => assert_eq!(p, me),
             other => panic!("{other:?}"),
         }
@@ -558,7 +596,8 @@ mod tests {
             holder(&path, &Fake(vec![])).unwrap(),
             Holder::Ratatoskr {
                 pid: None,
-                start: Some(5)
+                start: Some(5),
+                stopping: false
             }
         );
         // the same lock with the directory open to others: refused, never "held by" what the file names
