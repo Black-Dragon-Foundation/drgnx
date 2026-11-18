@@ -1370,10 +1370,62 @@ stay spaces).  Called per hub row: loops, no closures."
                                                     (not (memql (1+ pos) at)) shape line))
                   out)))))))
 
+(defconst drgnx-ui-kit--type-faces '(drgnx-ui-text drgnx-ui-heading drgnx-ui-caption drgnx-ui-title drgnx-code-small)
+  "The type faces (core/drgnx-type-faces.el) a kit face takes its size from: its binding's `:font', else the first of
+these in its `:inherit'.")
+
+(defvar drgnx-ui-kit--font-of nil
+  "Kit face → the type face it takes its size from, or nil: an alist made once from the components file.")
+
+(defun drgnx-ui-kit-font-face (face)
+  "The type face kit FACE takes its size from (`drgnx-ui-kit--type-faces'), or nil (a face that only colours)."
+  (alist-get face (or drgnx-ui-kit--font-of
+                      (setq drgnx-ui-kit--font-of
+                            (mapcar (lambda (f)
+                                      (let ((b (nth 2 f)))
+                                        (cons (car f) (cl-find-if (lambda (x) (memq x drgnx-ui-kit--type-faces))
+                                                                  (or (plist-get b :font) (plist-get b :inherit))))))
+                                    (drgnx-ui-kit-face-bindings))))))
+
+(defun drgnx-ui-kit--sized (faces face height)
+  "FACES (a `face' property value) with (:height HEIGHT) right above FACE, one of them (`eq')."
+  (let (out)
+    (dolist (f (if (and (consp faces) (not (keywordp (car faces)))) faces (list faces)) (nreverse out))
+      (when (eq f face) (push (list :height height) out))
+      (push f out))))
+
+(defun drgnx-ui-kit--line-sizes (s frame)
+  "Give each run of S (a kit string for a mode, header or tab line on graphical FRAME) that a kit face sizes the
+absolute height of that face's type face on `default' (`drgnx-ui-kit-font-face'), over its faces.  The line's own
+face is under the text, and when it scales already (drgnx's themes give the header line the UI font's size) a
+relative size would apply twice; so would a kit face that inherits a standard face with a size of its own (Emacs's
+`tab-line' is 0.9), and a state face over it that inherits `default' (under another theme) would give the code size.
+The size goes right above the first face of the run that has one.  Lines are made when they change, not at each
+redisplay."
+  (let ((i 0) (n (length s)))
+    (while (< i n)
+      (let* ((next (next-single-property-change i 'face s n))
+             (faces (get-text-property i 'face s))
+             (kit nil) (top nil))
+        (dolist (f (if (and (consp faces) (not (keywordp (car faces)))) faces (list faces)))
+          ;; TOP: the first face that has a size of its own (a state face that inherits `default' under a third-party
+          ;; theme has the code size), KIT the first kit face that has a type face
+          (unless (or top (null f) (eq 'unspecified (cond ((facep f) (face-attribute f :height frame t))
+                                                          ((consp f) (or (plist-get f :height) 'unspecified))
+                                                          (t 'unspecified))))
+            (setq top f))
+          (when (and (not kit) f (symbolp f) (drgnx-ui-kit-font-face f)) (setq kit f)))
+        ;; the size right above the first face with a size: the faces over it (the focus ring's) stay on top
+        (when-let* ((kit) (top) (h (face-attribute (drgnx-ui-kit-font-face kit) :height frame 'default)) ((integerp h)) ((> h 0)))
+          (put-text-property i next 'face (drgnx-ui-kit--sized faces top h) s))
+        (setq i next)))
+    s))
+
 (defun drgnx-ui-kit-string (component props where frame)
   "COMPONENT with PROPS (as `drgnx-ui-kit-expand') as a propertized string for WHERE (`text', `header-line',
 `mode-line' or `tab-line') on FRAME (nil: the selected one), at FRAME's scale or as its terminal draws it.  A click
-on an action (PROPS :action) runs `kit-activate' (the kind's map, `drgnx-ui-kit-action-map')."
+on an action (PROPS :action) runs `kit-activate' (the kind's map, `drgnx-ui-kit-action-map').  On a graphical line
+its text has its type faces' sizes once (`drgnx-ui-kit--line-sizes')."
   (let* ((gui (display-graphic-p frame))
          (e (let ((drgnx-ui-kit--icons (drgnx-ui-kit-icon-function frame)))
               (drgnx-ui-kit--expand component props (if gui (drgnx-pixels-scale frame) 1.0)
@@ -1389,6 +1441,7 @@ on an action (PROPS :action) runs `kit-activate' (the kind's map, `drgnx-ui-kit-
       (dolist (sp (nth 3 e))
         (put-text-property (car sp) (1+ (car sp)) 'display
                            (or (cdr (assq (car sp) bars)) (drgnx-ui-kit--pad (nth 1 sp) where frame (nth 2 sp))) s)))
+    (when (and gui (not (eq where 'text))) (drgnx-ui-kit--line-sizes s frame))
     s))
 
 ;;;; Actions: what a click or RET on a component does

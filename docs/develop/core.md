@@ -3846,7 +3846,14 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   `(space :width N)` with N = px / `frame-char-width`, canonical characters, so one buffer is right on frames of two
   scales; on a line it is `(space :width (PX))`, the spec made once per width (`drgnx-ui-kit--pads`, bounded by the
   pad widths at the scales seen). Per-row path: positional arguments, no `&key`, no `apply`, no closures; after a
-  warm-up a call allocates no vector (`drgnx-ui-kit/row-call-allocates-no-closure`).
+  warm-up a call allocates no vector (`drgnx-ui-kit/row-call-allocates-no-closure`). On a graphical line each run a
+  kit face sizes gets the absolute height of that face's type face on `default` (`drgnx-ui-kit--line-sizes`; the type
+  face is the binding's `:font`, else the first type face in its `:inherit`): the line's own face lies under the text,
+  and drgnx's themes give the header and tab lines the UI font's relative size, so a relative kit size would apply
+  twice (the panel tab's text was 25 px for 26 at scale 2), as would a kit face inheriting a standard face with a size
+  (Emacs's `tab-line`, 0.9), or a state face above it that inherits `default` under another theme (the code size); the
+  size sits right above the run's first face that has one. `drgnx-ui-kit/line-text-scales-once` checks every fixture component on each line, as
+  Emacs merges the faces, with and without drgnx's theme.
 
 ### Buttons and key hints (Task 12)
 
@@ -3896,10 +3903,9 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   editor's surface in the body text's colour (`drgnx-kit-tab-current`; a shown tab of another group muted,
   `drgnx-kit-tab-current-inactive`), the others muted on the row (`drgnx-kit-tab`); a panel tab (an area's tab row) is
   30 px with 9 px each side, the shown one a pill on the quiet selection (`drgnx-kit-tab-panel-current`). The area's
-  row is 32 px with the tabs' text in its middle, and under Glitnir the shown tab's pill is 24 px of it (a box fit to
-  its text, `drgnx-area--tab-row-parts`); the tabs' text takes the kit face's size as an absolute height, since the
-  header line's relative UI size would otherwise apply twice. Neither is
-  ever bold. Its parts: the icon (14 px, an image where the frame draws SVG icons, else its glyph and a space), the
+  row is 32 px with the tabs' text in its middle and the `drgnx-border-subtle` hairline on its last pixels, and under
+  Glitnir the shown tab's pill is 24 px of it (a box fit to its text, `drgnx-area--tab-row-parts`). Neither is ever
+  bold. Its parts: the icon (14 px, an image where the frame draws SVG icons, else its glyph and a space), the
   title, then with a close mark the gap and an 18 px slot: 2 px, the `x` icon (the `close` glyph on a terminal; the
   `dot` glyph, muted, when the file is modified), 2 px. The close mark is hidden (`drgnx-control-hidden`) on a tab
   that is not shown, except on a terminal or under the pointer. The tab's own face is the state face for the shown
