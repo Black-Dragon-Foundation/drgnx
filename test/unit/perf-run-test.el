@@ -506,7 +506,8 @@ its advice off `timer-event-handler' and the hub batch."
     (should-not (funcall fails 10.4 10.0))
     (should (funcall fails 10.6 10.0))
     (should (assq 'sticky-lines-baseline (drgnx-perf-run--workloads)))
-    (should (assq 'sticky-lines-scroll (drgnx-perf-run--workloads)))))
+    (should (assq 'sticky-lines-scroll (drgnx-perf-run--workloads)))
+    (should (assq 'sticky-first-show (drgnx-perf-run--workloads)))))
 
 (ert-deftest drgnx-perf-run/the-line-model-is-judged-against-the-same-typing-without-it ()
   ;; design §8: typing with the line model on is at most 0.3 ms p95 over the same typing with it off (10,000 lines and

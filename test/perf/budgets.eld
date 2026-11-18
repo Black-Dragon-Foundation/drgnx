@@ -24,6 +24,8 @@
  (minimap-scroll (:input :p95) 16) (minimap-scroll (:input :max) 50)
  ;; the sticky lines' card over a 10,000-line scroll (design §8, F6): within a frame, and judged against sticky-lines-baseline
  (sticky-lines-scroll (:input :p95) 16) (sticky-lines-scroll (:input :max) 50)
+ ;; its first show, the card's frame made and drawn (design §8, F6): ≤ 30 ms
+ (sticky-first-show (:show_ms) 30)
  ;; the line model (design §8): typing with it on within a frame (and within 0.3 ms p95 of it off: the relative rule),
  ;; its first build of 1 MB at most 25 ms, at most 40 bytes a line
  (minimap-type (:input :p95) 16) (minimap-type (:input :max) 50)
