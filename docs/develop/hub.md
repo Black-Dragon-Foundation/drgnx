@@ -3168,7 +3168,9 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   who is here, the hub keeps its paths' ordinals for the connection and puts `drgnx-agents-here` (the ordinals, a
   list) on the name of each entry an agent is changing, or holding such a file inside; a change draws the listings
   again. The editor makes the badge (`drgnx-explorer-badge-functions`: the marks and colours of an ordinal are the
-  display's) and draws it after the name.
+  display's) and draws it after the name, before the tail: an empty overlay's `after-string` above the tail's priority
+  (Emacs draws a position's after-strings before its before-strings, so a before-string badge came after the tail and
+  ran past the window's edge).
 
 ### The Buffers panel's rows (`buffers/set`)
 

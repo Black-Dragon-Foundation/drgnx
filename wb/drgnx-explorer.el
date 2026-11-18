@@ -978,7 +978,7 @@ read on the same connection (`git/letters'), which a new hub has lost.  At attac
   "On the rows path, the tail overlay of each drawn row by its key (`drgnx-wb-row-tail-overlay'), moved with the row.")
 
 (defvar-local drgnx-explorer--badges nil
-  "On the rows path, the who-is-here badge overlay (empty, at the name's end) of each drawn row that has one, by key.")
+  "On the rows path, the who-is-here badge overlay (empty, at the name's end, its `after-string') of each drawn row that has one, by key.")
 
 (defvar drgnx-explorer-badge-functions nil
   "Called with (ORDINALS DIRP) for a row the hub says agents are at (`drgnx-agents-here': their ordinals, ascending;
@@ -986,7 +986,11 @@ DIRP for a folder with a file of theirs inside); the first string returned is th
 The marks and colours of an ordinal are the display's: who is here (tools/agents-in-editor) adds its function.")
 
 (defun drgnx-explorer--rows-badge (key eol ords)
-  "Put KEY's badge for the agents ORDS (a list or vector from the hub, or nil) at EOL, moving its overlay; none: gone."
+  "Put KEY's badge for the agents ORDS (a list or vector from the hub, or nil) at EOL, moving its overlay; none: gone.
+The badge is its empty overlay's `after-string', above the tail's priority: Emacs draws every after-string at a
+position before any before-string there, and after-strings by falling priority, so the badge comes after the name and
+before the tail (`drgnx-explorer--rows-tail'), whose stretch then ends the row at the body's edge.  As a before-string
+it came after the tail and ran past the edge by its width."
   (let* ((badges (or drgnx-explorer--badges (setq drgnx-explorer--badges (make-hash-table :test #'equal))))
          (o (gethash key badges))
          (s (and ords (> (length ords) 0)
@@ -996,7 +1000,7 @@ The marks and colours of an ordinal are the display's: who is here (tools/agents
         (when o (delete-overlay o) (remhash key badges))
       (if (and o (overlay-buffer o)) (move-overlay o eol eol) (setq o (make-overlay eol eol)) (puthash key o badges))
       (overlay-put o 'priority 5)
-      (overlay-put o 'before-string s))))
+      (overlay-put o 'after-string s))))
 
 (defun drgnx-explorer--rows-tail (key beg eol)
   "Give KEY's drawn row (BEG to EOL) its tail at the right edge, its overlay moved rather than made again: the ⋯
