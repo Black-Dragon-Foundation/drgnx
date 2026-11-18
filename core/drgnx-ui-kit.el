@@ -1265,7 +1265,8 @@ stay spaces).  Called per hub row: loops, no closures."
           (let* ((sp (cdr part)) (pos (car sp)) (w (nth 1 sp)) (h (nth 2 sp))
                  (shape (pcase (car part)
                           ('tick (if hc 'tick-full 'tick)) ('span (if hc 'box 'fill)) (s s))))
-            (push (cons pos (drgnx-ui-kit-bar-image w h (if (< w (* 2 r)) 0 (min r (/ h 2)))   ; a tick is square: a corner radius would clip its column (not (memql (1- pos) at))
+            ;; a tick (narrower than two radii) is square: a corner radius would clip its column
+            (push (cons pos (drgnx-ui-kit-bar-image w h (if (< w (* 2 r)) 0 (min r (/ h 2))) (not (memql (1- pos) at))
                                                     (not (memql (1+ pos) at)) shape line))
                   out)))))))
 
