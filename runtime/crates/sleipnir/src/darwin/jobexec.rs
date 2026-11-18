@@ -624,12 +624,17 @@ mod tests {
     fn a_kill_reason_stops_the_job() {
         let d = tempfile::tempdir().unwrap();
         let reason = d.path().join(KILL_REASON);
+        // written whole and then renamed, as `kill_reason` writes it: a plain `>` makes the file before the text, and
+        // job-exec stopping the shell in between left an empty reason (a SIGKILL with none: `oomd/killed`)
         let s = spec(
             d.path(),
             &[
                 "/bin/sh",
                 "-c",
-                &format!("echo 'infra: disk' > '{}'; sleep 300", reason.display()),
+                &format!(
+                    "echo 'infra: disk' > '{0}.tmp' && mv '{0}.tmp' '{0}'; sleep 300",
+                    reason.display()
+                ),
             ],
         );
         let (r, stop) = run_unchecked(d.path(), &s, None);
