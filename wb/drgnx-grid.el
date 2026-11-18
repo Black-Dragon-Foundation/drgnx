@@ -175,7 +175,8 @@ Kept out of frame parameters: a buffer object in one would make the saved frame 
 (define-derived-mode drgnx-grid-placeholder-mode special-mode "Tile"
   "A tile whose kind is not defined (its module is off) or has nothing to show.  It fills in place when the kind is
 defined again (`drgnx-grid--kind-defined')."
-  (setq-local cursor-type nil truncate-lines t))
+  (setq-local cursor-type nil truncate-lines t)
+  (drgnx-ui-kit-focus-remap-enable))
 
 (defvar-local drgnx-grid-placeholder-kind nil "The kind the tile placeholder in this buffer stands for.")
 
@@ -183,15 +184,19 @@ defined again (`drgnx-grid--kind-defined')."
 
 (defun drgnx-grid-tile-placeholder (kind)
   "KIND's tile placeholder buffer, ` *drgnx tile: KIND*': one line saying what waits there (its title, or KIND when it
-is not defined) and the keys, RET to open it and x to close the tile.  Its text is written again at each call."
-  (let ((b (get-buffer-create (drgnx-grid--placeholder-name kind) t))
-        (text (if (drgnx-pane-kind kind)
-                  (format "%s · nothing to show · ↵ open · x close" (drgnx-grid--title kind))
-                (format "%s · waits for its module · ↵ choose · x close" kind))))
+is not defined) and the keys, RET to open it and x to close the tile, as kit key hints.  The line is a kit row in the
+selected state (`drgnx-row-selected', which follows the tile's focus).  Its text is written again at each call."
+  (let* ((b (get-buffer-create (drgnx-grid--placeholder-name kind) t))
+         (key (lambda (k) (drgnx-ui-kit-key-hint k nil 'text)))
+         (text (if (drgnx-pane-kind kind)
+                   (format "%s · nothing to show · %s open · %s close" (drgnx-grid--title kind)
+                           (funcall key "↵") (funcall key "x"))
+                 (format "%s · waits for its module · %s choose · %s close" kind (funcall key "↵") (funcall key "x")))))
+    (add-face-text-property 0 (length text) (drgnx-ui-kit-row-face 'selected) t text)
     (with-current-buffer b
       (unless (derived-mode-p 'drgnx-grid-placeholder-mode) (drgnx-grid-placeholder-mode))
       (setq drgnx-grid-placeholder-kind kind)
-      (unless (equal (buffer-string) text)
+      (unless (equal-including-properties (buffer-string) text)
         (let ((inhibit-read-only t)) (erase-buffer) (insert text) (goto-char (point-min)))))
     b))
 

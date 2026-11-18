@@ -7,11 +7,11 @@
 ;; workbench window, on every monitor.  The letters (`drgnx-grid-letters') go in window order (the selected window
 ;; first, then by monitor and position, left to right) and reading order inside each, so they are stable for one
 ;; layout.  The 12 largest tiles of graphical windows get a card: a pooled undecorated child frame centred on the
-;; tile, the letter large and the tile's title under it (with the monitor's name when windows sit on several
-;; monitors).  The others, and every tile of a terminal window, get the letter in inverse video at the window's start.
+;; tile, a kit card (the current tile's the `selected' card) with the letter large and the tile's title under it
+;; (with the monitor's name when windows sit on several monitors).  The others, and every tile of a terminal window, get the letter in inverse video at the window's start.
 ;; While it is open: a letter picks that tile (its window selected; no window moves), Shift and a letter swaps the
 ;; tile you were in with that one, the arrows move the highlight across tiles and windows and RET picks it, Esc closes,
-;; and any other key closes and is replayed.  Letters count only once the cards show (`drgnx-switcher-pop-in', one
+;; and any other key closes and is replayed; the echo area says so in kit key hints (`drgnx-switcher-hint').  Letters count only once the cards show (`drgnx-switcher-pop-in', one
 ;; frame under reduced motion): one typed before closes and is replayed to the tile you were in.
 ;; The model (the items, their letters, the neighbour by direction, which get cards) is pure and takes items, so it is
 ;; tested without windows; module ui/tiles owns the command, the timers and the pool.
@@ -23,6 +23,7 @@
 (require 'drgnx-frame-kind)
 (require 'drgnx-grid-tree)
 (require 'drgnx-timer)
+(require 'drgnx-ui-kit)                 ; the cards (`drgnx-ui-kit-card-lines'), the hint's keys
 
 (declare-function drgnx-grid-tiles "drgnx-grid" (&optional frame filter))
 (declare-function drgnx-grid-tile-main "drgnx-grid-ops" (window))
@@ -169,14 +170,27 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
 (defun drgnx-switcher--several-monitors-p (items)
   (cdr (delete-dups (mapcar (lambda (it) (plist-get it :monitor)) items))))
 
+(defun drgnx-switcher--centred (s width)
+  "S with spaces before it to centre it in WIDTH columns."
+  (concat (make-string (max 0 (/ (- width (string-width s)) 2)) ?\s) s))
+
 (defun drgnx-switcher--card-text (it monitors highlighted)
-  "The text of IT's card: its letter large, its title (and with MONITORS, its monitor) under it."
+  "The text of IT's card: a kit card (`selected' when HIGHLIGHTED, else `plain') of two rows, its letter large and
+its title (and with MONITORS, its monitor) under it, both centred."
   (let* ((f (plist-get it :frame))
          (height (max 1.0 (/ (float (drgnx-px drgnx-switcher-letter-px f)) (frame-char-height f))))
          (title (if (and monitors (plist-get it :monitor)) (format "%s · %s" (plist-get it :title) (plist-get it :monitor))
-                  (plist-get it :title))))
-    (concat (propertize (string (plist-get it :letter)) 'face `(:inherit ,(if highlighted '(highlight bold) 'bold) :height ,height))
-            "\n" (propertize title 'face (if highlighted 'highlight 'shadow)))))
+                  (plist-get it :title)))
+         ;; the letter is about HEIGHT columns wide: room for it and a column either side
+         (width (max (string-width title) (+ 2 (ceiling height))))
+         (pad (/ (- width (ceiling height)) 2))
+         (s (drgnx-ui-kit-card-lines (list (concat (make-string pad ?\s) (string (plist-get it :letter)))
+                                           (drgnx-switcher--centred title width))
+                                     (if highlighted 'selected 'plain) width)))
+    ;; the letter keeps its card face under its own height and weight; it is about HEIGHT columns wide, so the spaces
+    ;; after it give up all but one column for it (the row's stretch closes the card at the same edge either way)
+    (add-face-text-property pad (1+ pad) (list :height height :weight 'bold) nil s)
+    (concat (substring s 0 (1+ pad)) (substring s (+ pad (ceiling height))))))
 
 (defun drgnx-switcher--fill-card (entry it monitors highlighted)
   "Card ENTRY shows IT, centred on its tile."
@@ -185,8 +199,7 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (drgnx-switcher--card-text it monitors highlighted))
-        (goto-char (point-min))
-        (center-region (point-min) (point-max))))
+        (goto-char (point-min))))
     (let ((window-min-height 1) (window-min-width 1))
       (fit-frame-to-buffer frame))
     (let* ((e (plist-get it :local))
@@ -240,6 +253,15 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
 
 ;;;; Open, keys, close
 
+(defun drgnx-switcher-hint (items)
+  "The echo area's line while the switcher shows ITEMS: their letters and its keys, as kit key hints."
+  (let ((key (lambda (k) (drgnx-ui-kit-key-hint k nil 'text))))
+    (concat "Switch tile: "
+            (mapconcat (lambda (it) (funcall key (string (plist-get it :letter))))
+                       (seq-filter (lambda (it) (plist-get it :letter)) items) " ")
+            " · " (funcall key "⇧") "+letter swaps · "
+            (mapconcat key '("←" "→" "↑" "↓") " ") " move · " (funcall key "↵") " picks · " (funcall key "Esc") " closes")))
+
 (defvar drgnx-switcher-map (list 'keymap (cons t #'drgnx-switcher-key))
   "While the switcher is open every key goes to `drgnx-switcher-key'.")
 
@@ -255,6 +277,9 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
     (setq drgnx-switcher--state (list :items items :origin origin :ready nil :overlays nil :cards nil
                                       :current (seq-find (lambda (it) (eq (plist-get it :window) origin)) items)))
     (drgnx-switcher--draw)
+    (let ((hint (drgnx-switcher-hint items)) (message-log-max nil))
+      (plist-put drgnx-switcher--state :hint hint)
+      (message "%s" hint))
     (drgnx-timer-start '(switcher . ready) (if (drgnx-switcher--reduced-p) drgnx-switcher-one-frame drgnx-switcher-pop-in)
                        #'drgnx-switcher--ready :owner 'ui/tiles)
     (plist-put drgnx-switcher--state :exit (set-transient-map drgnx-switcher-map #'drgnx-switcher-open-p))
@@ -265,6 +290,7 @@ windows: the nearest centre in that half-plane, the main axis counting more; nil
   (when-let* ((st drgnx-switcher--state))
     (mapc #'delete-overlay (plist-get st :overlays))
     (setq drgnx-switcher--state nil)
+    (when (equal (current-message) (plist-get st :hint)) (message nil))
     (when-let* ((exit (plist-get st :exit))) (funcall exit)))
   (drgnx-timer-cancel '(switcher . ready))
   (drgnx-switcher--hide-cards))

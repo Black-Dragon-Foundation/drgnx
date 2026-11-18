@@ -3566,7 +3566,11 @@ then by monitor and position; child frames and the daemon's initial frame left o
 `drgnx-switcher-assign` letters them by rank and reading order (`drgnx-grid-letters`); `drgnx-switcher-neighbour
 ITEMS FROM DIRECTION` is the nearest centre in that half-plane, across frames; `drgnx-switcher-cards` picks the 12
 largest of graphical frames. Cards are pooled child frames (`drgnx-switcher--pool`, made on first use, hidden on close,
-deleted by the teardown), centred on the tile; the rest get an overlay letter (`before-string`, inverse video, the
+deleted by the teardown), centred on the tile, each a kit card (`drgnx-ui-kit-card-lines`: `selected` for the current
+item, else `plain`; the letter's row gives up the columns the large letter takes); the echo area holds
+`drgnx-switcher-hint` (the letters and keys as kit key hints, cleared on close when still shown), as Resize Tiles holds
+`drgnx-grid-resize-hint`; a tile placeholder's line is a kit row in the selected state (`drgnx-ui-kit-row-face`,
+remapped by focus) with its keys as key hints; the rest get an overlay letter (`before-string`, inverse video, the
 overlay's `window` the tile's). Keys go through a transient map whose default binding is `drgnx-switcher-key`, left by every close (its exit
 function is kept in the state) (`drgnx-switcher-handle EVENT` returns `closed`, `quit`, `picked`, `swapped`, `moved` or `replayed`); a replayed key is put on
 `unread-command-events`. The gate: `:ready` is set by the layer timer `(switcher . ready)` after
