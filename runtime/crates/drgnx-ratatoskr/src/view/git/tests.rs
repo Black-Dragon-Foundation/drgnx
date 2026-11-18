@@ -180,8 +180,15 @@ fn a_repository_s_watch_reads_again_after_git_changes_it() {
     std::fs::write(dir.join("b"), "2").unwrap();
     git(&dir, &["add", "b"]);
     next("git add");
+    // a commit that stalls while it holds its locks (an fsync of the ref under IO load), forced: the hook holds it
+    // past SETTLE_MAX between its first writes and its ref and index; still one read, after git lets go
+    let hook = dir.join(".git").join("hooks").join("reference-transaction");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\n[ \"$1\" = prepared ] && sleep 0.5\nexit 0\n").unwrap();
+    std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     git(&dir, &["commit", "-qm", "two"]);
     next("git commit");
+    std::fs::remove_file(&hook).unwrap();
     git(&dir, &["checkout", "-qb", "side"]);
     next("git checkout");
     poke.send(Heard::Changed).unwrap();
