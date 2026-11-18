@@ -123,6 +123,14 @@
     {"name": "range-segment-edit", "comp": {"c": "range-bar", "variant": {"segment": "edit"}, "from": 0, "to": 10, "spans": {}, "state": "on-track", "width": 120}},
     {"name": "range-segment-think", "comp": {"c": "range-bar", "variant": {"segment": "think"}, "from": 0, "to": 10, "spans": {}, "state": "on-track", "width": 48}},
     {"name": "range-segment-wait-you", "comp": {"c": "range-bar", "variant": {"segment": "wait-you"}, "from": 0, "to": 10, "spans": {}, "state": "on-track", "width": 96}},
-    {"name": "range-tiny", "comp": {"c": "range-bar", "variant": "cost", "from": 0, "to": 1000, "spans": {"p50": 1}, "state": "on-track", "width": 100}}
+    {"name": "range-tiny", "comp": {"c": "range-bar", "variant": "cost", "from": 0, "to": 1000, "spans": {"p50": 1}, "state": "on-track", "width": 100}},
+    {"name": "tab-rest", "comp": {"c": "tab", "title": "main.rs", "close": true}},
+    {"name": "tab-hover", "comp": {"c": "tab", "title": "main.rs", "state": "hover", "close": true}},
+    {"name": "tab-selected", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "close": true}},
+    {"name": "tab-selected-inactive", "comp": {"c": "tab", "title": "main.rs", "state": "selected-inactive", "close": true}},
+    {"name": "tab-modified", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "close": true, "modified": true}},
+    {"name": "tab-panel", "comp": {"c": "tab", "title": "Terminal", "size": "panel"}},
+    {"name": "tab-panel-selected", "comp": {"c": "tab", "title": "Debug Console", "size": "panel", "state": "selected", "action": {"kind": "ui-button", "args": ["area-show"]}}},
+    {"name": "segmented", "comp": {"c": "segmented", "current": 1, "items": [["Map", {"kind": "ui-button", "args": ["map"]}], ["Board", {"kind": "ui-button", "args": ["board"]}], ["Flow", {"kind": "ui-button", "args": ["flow"]}]]}}
   ]
 }

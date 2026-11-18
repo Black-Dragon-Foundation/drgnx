@@ -16,6 +16,7 @@ use forseti::{JobId, Limits, MachineState, Profile};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 /// How long the relay sidecar's image check or import may take.
@@ -31,6 +32,8 @@ pub struct LinuxPlatform {
     name: String,
     /// The `sleipnir` that runs job-exec, and whose folder holds the bundle's other binaries.
     exe: PathBuf,
+    /// The timing slice's partition fallback was said (once per runner).
+    partition_said: AtomicBool,
 }
 
 impl LinuxPlatform {
@@ -51,6 +54,7 @@ impl LinuxPlatform {
             root: cfg.root.clone(),
             name: cfg.name.clone(),
             exe: exe.to_path_buf(),
+            partition_said: AtomicBool::new(false),
         })
     }
 
@@ -65,7 +69,17 @@ impl LinuxPlatform {
             prefix: "t".into(),
             hub_id: "hubA".into(),
             exe: PathBuf::from("/nonexistent/sleipnir"),
+            partition_said: AtomicBool::new(false),
         }
+    }
+
+    /// Job ID's slice: under the timing slice for a timing job (its slice is there), else under the work slice.
+    fn slice_of(&self, id: &str) -> Result<String, String> {
+        let timing = slices::timing_job_slice(SLICE_ROOT, id)?;
+        if self.probe.slice_dir(&timing).is_dir() {
+            return Ok(timing);
+        }
+        slices::job_slice(SLICE_ROOT, id)
     }
 
     /// Job ID's container.
@@ -171,7 +185,7 @@ impl Platform for LinuxPlatform {
     }
 
     fn current_mib(&self, id: &str) -> Option<u64> {
-        let slice = slices::job_slice(SLICE_ROOT, id).ok()?;
+        let slice = self.slice_of(id).ok()?;
         self.probe.cgroup(&slice).ok().map(|c| c.used_mib())
     }
 
@@ -229,7 +243,12 @@ impl Platform for LinuxPlatform {
             }))
             .map_err(|_| format!("no row parser {:?}", req.parser))?;
         slices::ensure_tree(SLICE_ROOT, self.profile)?;
-        let slice = slices::job_slice(SLICE_ROOT, id)?;
+        // a timing job runs on the island: its slice is under the timing slice, out of the work slice's CPUs
+        let slice = if matches!(meta.spec.lane, forseti::Lane::Timing { pinned: Some(_) }) {
+            slices::timing_job_slice(SLICE_ROOT, id)?
+        } else {
+            slices::job_slice(SLICE_ROOT, id)?
+        };
         // the job's slice throttles past its reservation and is killed at its cap, whatever runs in it (§3 #3)
         slices::set(
             &slice,
@@ -292,6 +311,8 @@ impl Platform for LinuxPlatform {
             expect: meta.spec.expect,
             grant: meta.grant,
             timeout_s: meta.spec.timeout_s,
+            stall_s: meta.spec.derived.stall_s,
+            silent_s: meta.spec.derived.silent_s,
             // every runner job has its helper: the disk watch, and its keys and proxy when it has them
             helper: Some(HelperSpec {
                 root: self.root.clone(),
@@ -355,7 +376,8 @@ impl Platform for LinuxPlatform {
     /// The slice's `memory.current` (its container and job-exec) sorts out the jobs well under the cap; the
     /// container's own reading is what a grow judges.
     fn grow_candidate(&self, id: &str, cap_mib: u64, max_mib: u64) -> Option<Sized> {
-        let near = slices::job_slice(SLICE_ROOT, id)
+        let near = self
+            .slice_of(id)
             .ok()
             .and_then(|s| self.probe.cgroup(&s).ok())
             .is_some_and(|c| c.current / (1024 * 1024) * 100 > cap_mib * resize::GROW_AT_PCT);
@@ -381,7 +403,7 @@ impl Platform for LinuxPlatform {
     }
 
     fn weight_unit(&self, id: &str) -> Option<String> {
-        slices::job_slice(SLICE_ROOT, id).ok()
+        self.slice_of(id).ok()
     }
 
     fn set_weight(&self, unit: &str, w: u32) -> Result<(), String> {
@@ -392,12 +414,55 @@ impl Platform for LinuxPlatform {
         crate::helper::keys::hand(&dir.join(HELPER_SOCK), name, value)
     }
 
+    fn island_check(&self, island: &str) -> Result<(), String> {
+        slices::island_whole_l3(Path::new("/sys/devices/system/cpu"), island)?;
+        let usable = self
+            .probe
+            .cpus_usable()
+            .map_err(|e| format!("the usable CPUs: {e}"))?;
+        let cpus = probe::parse_cpu_list(island).map_err(|e| e.to_string())?;
+        if let Some(c) = cpus.iter().find(|c| !usable.contains(c)) {
+            return Err(format!(
+                "the island {island} has CPU {c}, which this runner may not use"
+            ));
+        }
+        if cpus.len() >= usable.len() {
+            return Err(format!("the island {island} leaves no CPU for work"));
+        }
+        Ok(())
+    }
+
+    fn island(&self, on: Option<&str>) -> Result<(), String> {
+        let by_systemd = self.probe.cpuset_by_systemd()?;
+        let rest = match on {
+            None => String::new(),
+            Some(island) => {
+                let usable = self
+                    .probe
+                    .cpus_usable()
+                    .map_err(|e| format!("the usable CPUs: {e}"))?;
+                let isl = probe::parse_cpu_list(island).map_err(|e| e.to_string())?;
+                let rest: Vec<u32> = usable.into_iter().filter(|c| !isl.contains(c)).collect();
+                slices::cpu_list(&rest)
+            }
+        };
+        slices::island_on(
+            &self.probe.manager,
+            SLICE_ROOT,
+            on.map(|i| (i, rest.as_str())),
+            by_systemd,
+            &self.partition_said,
+        )
+        .map(|_| ())
+    }
+
     fn cleanup(&self, root: &Path, owner: &cleanup::Owner) {
         let seen = cleanup::Seen {
             containers: cleanup::containers(&self.prefix, &self.hub_id),
             units: cleanup::units(&self.prefix),
             folders: attempts::scan(root, &unit::active),
             bundles: cleanup::bundles(root),
+            slices: cleanup::slices(crate::serve::SLICE_ROOT),
         };
         cleanup::apply(root, &cleanup::plan(owner, &seen));
     }

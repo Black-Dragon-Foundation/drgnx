@@ -887,5 +887,30 @@ face spec and hook back as Nidhogg had them."
     (should-not (memq #'drgnx-menu-look--refeed (default-value 'drgnx-look-density-changed-hook)))
     (should-not drgnx-menu-look--door)))
 
+(ert-deftest drgnx-ui-kit/tab-line-is-the-kit ()
+  "Every tab row draws the kit's tab (design §4 tabs): the shown editor tab is on the editor's surface in the body text's
+colour and never bold, a panel's shown tab on the quiet selection; the Work lens bar is the kit's tab and segmented
+switch."
+  (let* ((tok (lambda (token) (symbol-name token)))
+         (specs (drgnx-ui-kit-theme-specs tok nil nil))
+         (cur (cdr (assq 'drgnx-kit-tab-current specs)))
+         (panel (cdr (assq 'drgnx-kit-tab-panel-current specs))))
+    (should (equal '("editor" "fg" nil) (list (plist-get cur :background) (plist-get cur :foreground) (plist-get cur :weight))))
+    (should (equal "sel-quiet" (plist-get panel :background))))
+  ;; the expansion of a shown tab names no bold face and no weight
+  (dolist (size '("editor" "panel"))
+    (let* ((e (drgnx-ui-kit-expand 'tab (list :c "tab" :title "a.el" :size size :state "selected" :close t) 1.0 nil))
+           (faces (mapcar (lambda (r) (aref r 2)) (plist-get e :runs))))
+      (should (member (if (equal size "editor") "drgnx-kit-tab-current" "drgnx-kit-tab-panel-current") faces))
+      (should-not (seq-some (lambda (f) (string-match-p "bold" f)) faces))))
+  ;; the callers: the editor's tab line, an area's tab row and the Work lens bar
+  (require 'drgnx-work-map (expand-file-name "modules/tools/drgnx-work-map" drgnx-dir))
+  (let ((s (drgnx-work-lens-string 'map "x")))
+    (should (eq 'drgnx-kit-tab-current (get-text-property (string-search "Work" s) 'face s)))
+    (should (memq 'drgnx-kit-segmented (ensure-list (get-text-property (string-search "Board" s) 'face s)))))
+  (let ((s (drgnx-ui-kit-tab "a.el" 'editor 'selected nil t 'tab-line)))
+    (should (eq 'drgnx-kit-tab-current (get-text-property (string-search "a.el" s) 'face s)))
+    (should-not (memq 'bold (ensure-list (get-text-property (string-search "a.el" s) 'face s))))))
+
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

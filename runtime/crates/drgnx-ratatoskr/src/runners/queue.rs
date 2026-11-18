@@ -160,6 +160,8 @@ pub struct Placement {
     pub features: Vec<String>,
     /// The jobs it needs (`exec/start`'s `needs`): it starts once each passed, and ends as infra if one did not.
     pub needs: Vec<String>,
+    /// The lane (`exec/start`'s `lane` and `whole_machine`): work, or a timing run on the island or the whole machine.
+    pub lane: forseti::Lane,
 }
 
 /// What a command takes in place of the selector of the rows an attempt runs (`forseti::split::selector`, an Emacs
@@ -197,6 +199,7 @@ impl Default for Placement {
             os: Os::Linux,
             features: vec![],
             needs: vec![],
+            lane: forseti::Lane::Work,
         }
     }
 }
@@ -545,6 +548,10 @@ struct St {
     /// The machine each session's next jobs go to, as the user moved the session (`machines/move`); kept in
     /// `asession.machine` and restored with the rest ([`Kept`]).
     prefs: BTreeMap<String, Machine>,
+    /// This tick's drains (design §5.6): each machine a whole-machine timing run has, while it waits to start there
+    /// or runs; no other job starts on it. The highest P1–P2 priority pending, while that holds every drain back.
+    drains: BTreeMap<String, String>,
+    drain_behind: Option<Priority>,
 }
 
 impl St {
@@ -613,6 +620,17 @@ impl St {
             .into_iter()
             .partition(|r| r.machine == machine);
         forseti::expected(&here, &other, 1.0, None)
+    }
+
+    /// The time box SPEC is offered with on MACHINE: its own, capped at three times its p95 wall time there (else
+    /// elsewhere's), design §5.7.
+    fn timeout_on(&self, spec: &JobSpec, machine: &str) -> u64 {
+        let (here, other): (Vec<HistRow>, Vec<HistRow>) = self
+            .history_of(&forseti::history_key(spec))
+            .into_iter()
+            .partition(|r| r.machine == machine);
+        let p95 = forseti::history::wall_p95_s(&here, &other, 1.0);
+        sleipnir::linux::progress::wall_limit(spec.timeout_s, p95)
     }
 }
 
@@ -963,6 +981,9 @@ pub fn wait_text(r: &WaitReason) -> String {
             format!("{} is held by job {holder}", dir.display())
         }
         WaitReason::IslandBusy => "the timing island is busy".into(),
+        WaitReason::NoIsland => {
+            "its machine has no timing island (a whole-machine run asks for whole_machine)".into()
+        }
         WaitReason::DrainWaits => "the machine is draining".into(),
         WaitReason::DesktopUnreachable { .. } => "its runner can't be reached".into(),
         WaitReason::SpillIn { minutes } => format!("may go to a runner in {minutes} min"),
@@ -2221,6 +2242,7 @@ impl Queue {
                 rj.priority = rj.priority.max(p);
             }
         }
+        Self::drains(&mut st, &eff);
         if queued.is_empty() {
             Self::tell_head(&mut st, None);
             return t;
@@ -2259,6 +2281,36 @@ impl Queue {
         Self::tell_head(&mut st, need);
         st.reservation = None;
         t
+    }
+
+    /// This tick's drains (design §5.6, `forseti::drain`): a whole-machine timing run waits while any P1–P2 job is
+    /// queued or running (EFF: the effective priorities); otherwise its named machine drains for it until it ends. A P1
+    /// arrival before it starts holds the drain back again, and admission there reopens.
+    fn drains(st: &mut St, eff: &HashMap<JobId, Priority>) {
+        let prio = |j: &QJob| eff.get(&JobId(j.s.id.clone())).copied().unwrap_or(j.s.own);
+        let whole = |j: &QJob| j.s.spec.lane == forseti::Lane::Timing { pinned: None };
+        st.drain_behind = st
+            .jobs
+            .values()
+            .filter(|j| !whole(j))
+            .map(prio)
+            .chain(st.local_running.values().map(|r| r.priority))
+            .filter(|p| *p >= Priority::P2)
+            .max();
+        let may_start = forseti::drain_may_start(st.drain_behind.is_some());
+        st.drains = st
+            .jobs
+            .values()
+            .filter(|j| whole(j) && (may_start || j.state != QState::Queued))
+            .filter_map(|j| {
+                let on = match &j.s.place.machine {
+                    Machine::Local => LOCAL.to_string(),
+                    Machine::Runner(n) => n.clone(),
+                    Machine::Auto => return None,
+                };
+                Some((on, j.s.id.clone()))
+            })
+            .collect();
     }
 
     /// The head still waits after this tick's placing, reserved on a runner (NEED: its need): that runner hears it in
@@ -2440,10 +2492,20 @@ impl Queue {
     /// machine against a job that wouldn't end before the head's start there; that job may still go elsewhere.
     fn place(&self, st: &mut St, job: &Job, eff: Priority, now: u64, starts: &mut Vec<String>) {
         let id = job.id.0.clone();
+        if let Some(why) = Self::whole_machine_waits(st, job) {
+            if let Some(q) = st.jobs.get_mut(&id) {
+                q.waiting = Some(wait_text(&why));
+            }
+            return;
+        }
         let Some(q) = st.jobs.get(&id) else {
             return;
         };
         let (mut cands, held_off, no_room) = Self::candidates(st, job, q, true);
+        // a drained machine takes no job but its whole-machine run
+        let before = cands.len();
+        cands.retain(|c| st.drains.get(&c.name).is_none_or(|j| *j == id));
+        let drained = (cands.len() < before).then_some(WaitReason::DrainWaits);
         let place = q.s.place.clone();
         let all = cands.clone();
         let ctx = PlaceCtx {
@@ -2510,7 +2572,11 @@ impl Queue {
                     break Placed::There(n, expect(c), warm);
                 }
                 Pick::Wait(r) => {
-                    let why = kept.take().or(here.take()).or(no_room.clone());
+                    let why = kept
+                        .take()
+                        .or(here.take())
+                        .or(drained.clone())
+                        .or(no_room.clone());
                     break Placed::Wait(why.unwrap_or(r));
                 }
             }
@@ -2563,6 +2629,24 @@ impl Queue {
                 }
             }
         }
+    }
+
+    /// Why whole-machine run JOB waits before placing: behind P1–P2 work while its drain can't start, then while
+    /// anything else still runs on its machine. None for any other job, and once its machine is empty.
+    fn whole_machine_waits(st: &St, job: &Job) -> Option<WaitReason> {
+        if job.spec.lane != (forseti::Lane::Timing { pinned: None }) {
+            return None;
+        }
+        let id = &job.id.0;
+        let Some((on, _)) = st.drains.iter().find(|(_, j)| *j == id) else {
+            return Some(WaitReason::Behind(st.drain_behind.unwrap_or(Priority::P2)));
+        };
+        let busy = if on == LOCAL {
+            st.local_running.keys().any(|k| k != id)
+        } else {
+            st.on.iter().any(|(k, o)| o.machine == *on && k != id)
+        };
+        busy.then_some(WaitReason::DrainWaits)
     }
 
     /// Offers JOB to runner NAME, where it is expected to take EXPECTED_S (from a WARM start or not): a new attempt
@@ -2623,7 +2707,9 @@ impl Queue {
         );
         if let Some(rr) = st.runners.get(name) {
             // a requeue of a job whose suite selects rows runs only the rows without a result
-            let spec = attempt_spec(&job.spec, j.s.place.suite.as_ref(), st.rows.get(&id));
+            let mut spec = attempt_spec(&job.spec, j.s.place.suite.as_ref(), st.rows.get(&id));
+            // the progress guard's wall: the job's time box, at most three times its p95 there
+            spec.timeout_s = st.timeout_on(&job.spec, name);
             rr.session.send(Frame::Offer {
                 r: r.clone(),
                 spec: Box::new(spec),
@@ -3843,6 +3929,7 @@ fn runner_state(name: &str, now: u64, running: Vec<RunningJob>) -> forseti::Mach
         features: vec![],
         reachable: true,
         others: vec![],
+        island: None,
     }
 }
 
@@ -4200,6 +4287,27 @@ mod tests {
         assert!(!forseti::admit::small(&st.expected_on(&spec, "r2")));
     }
 
+    // [D] pure (design §5.7): the time box a runner is offered is the pack's, capped at three times the job's p95 wall
+    // time there (else elsewhere's); a job with no runs keeps the pack's
+    #[test]
+    fn an_offer_caps_the_time_box_at_three_p95() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        let mut spec = blank_spec("x1");
+        spec.timeout_s = 3600;
+        let ran = |wall: f64| json!({"verdict": "Pass", "wall_s": wall, "cpu_s": 1.0, "mem_peak_mib": 100});
+        let mut st = q.lock();
+        assert_eq!(st.timeout_on(&spec, "r1"), 3600);
+        q.record_run(&mut st, &spec, "r1", &ran(300.0), 10);
+        q.record_run(&mut st, &spec, "r1", &ran(400.0), 20);
+        assert_eq!(st.timeout_on(&spec, "r1"), 1200);
+        // a long job keeps the pack's maximum
+        q.record_run(&mut st, &spec, "r1", &ran(3000.0), 30);
+        assert_eq!(st.timeout_on(&spec, "r1"), 3600);
+        // elsewhere's runs count on a runner with none
+        assert!(st.timeout_on(&spec, "r9") <= 3600);
+    }
+
     // [D] pure (a cgroup tree in a folder, as `slices.rs`'s rows): a job here counts what its slice uses (design §0.3
     // R2, C1): `memory.current` 3 GiB less 0.5 GiB of page cache is 2,560 MiB, read at each tick
     #[cfg(target_os = "linux")]
@@ -4247,6 +4355,61 @@ mod tests {
         let mut s = job(id, own, 64);
         s.spec.needs = needs.iter().map(|n| JobId((*n).into())).collect();
         s
+    }
+
+    // [D] pure (design §5.6, `forseti::drain_may_start`): a whole-machine timing run waits while P1–P2 work is
+    // pending; then its machine drains (no new work starts there), it starts once the machine is empty, and the
+    // machine stays its own until it ends
+    #[test]
+    fn whole_machine_drains_and_waits_for_p1_p2() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = Queue::new(QueueCfg {
+            hub_id: "h".into(),
+            exec_root: dir.path().to_path_buf(),
+            local: LocalRunner::new(super::super::local::Admission::Fixed(4), dir.path()),
+            db: None,
+        });
+        let ran = |q: &Queue, id: &str, at: u64| {
+            q.ran_here(id, &json!({"verdict": "Pass", "wall_s": 5.0}), at);
+            q.release(id);
+        };
+        q.submit(job("w1", Priority::P3, 64), 100);
+        assert_eq!(q.tick(100).starts, vec!["w1".to_string()]);
+        let mut t = job("t", Priority::P3, 64);
+        t.spec.lane = forseti::Lane::Timing { pinned: None };
+        t.place.machine = Machine::Local;
+        q.submit(t, 101);
+        q.submit(job("p2", Priority::P2, 64), 101);
+        // P2 work goes first, and other work isn't held while the drain can't start
+        let started = q.tick(101).starts;
+        assert!(started.contains(&"p2".to_string()), "{started:?}");
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some("behind priority 2 work")
+        );
+        q.submit(job("w2", Priority::P3, 64), 102);
+        assert_eq!(q.tick(102).starts, vec!["w2".to_string()]);
+        // the P2 result is in: the drain starts, new work waits, and the run waits for the machine to empty
+        ran(&q, "p2", 110);
+        q.submit(job("w3", Priority::P3, 64), 111);
+        assert!(q.tick(111).starts.is_empty());
+        assert_eq!(
+            q.row("w3").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+        ran(&q, "w1", 120);
+        ran(&q, "w2", 121);
+        assert_eq!(q.tick(122).starts, vec!["t".to_string()]);
+        assert!(
+            q.tick(123).starts.is_empty(),
+            "the machine is the run's while it runs"
+        );
+        ran(&q, "t", 130);
+        assert_eq!(q.tick(131).starts, vec!["w3".to_string()]);
     }
 
     // [D] pure (design §5.2 item 2): a job waits for its needs as `needs`, holding no slot and no reservation; it is

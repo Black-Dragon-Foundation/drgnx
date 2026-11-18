@@ -192,4 +192,36 @@
              :label "time axis"
              :bind ((() :inherit (drgnx-ui-caption shadow) :font (drgnx-ui-caption))
                     ((now) :fg range-done :inherit (drgnx-ui-caption link) :font (drgnx-ui-caption)))
-             :replaces nil :helpers nil :lint t)))
+             :replaces nil :helpers nil :lint t)
+  ;; a tab: its icon (14 px, the shown tab's), its title and, when it has one, its close mark in an 18 px slot (the
+  ;; Lucide x at 14 px, or a modified file's dot), the mark hidden in the row's colour unless the tab is shown or
+  ;; hovered (a terminal always shows it).  An editor tab is window-dark.html's `.tab': muted on the row, the shown tab
+  ;; on the editor's colour (`current'; in a group that is not the active one, still muted: `current-inactive'); a
+  ;; panel tab is debugging.html's `.pt': the shown one a rounded pill on the quiet selection (`panel-current').  Its
+  ;; label is its title, with "modified" after it when its file is
+  (tab :variants ((size editor panel)) :defaults (size editor)
+       :geometry (:height (:by size (editor 34) (panel 30)) :pad (:by size (editor (10 . 8)) (panel (9 . 9)))
+                          :gap (:by size (editor 7) (panel 6)) :box nil :radius (:by size (editor 7) (panel 6)) :hit 0)
+       :tty (:pad 2 :glyphs (close dot)) :label "modified"
+       :bind ((() :bg panel :fg muted :inherit (drgnx-ui-text tab-line-tab-inactive tab-line) :font (drgnx-ui-text))
+              ((current) :bg editor :fg fg :inherit (drgnx-ui-text tab-line-tab-current tab-line) :font (drgnx-ui-text))
+              ((current-inactive) :bg editor :fg muted :inherit (drgnx-ui-text drgnx-text-muted tab-line-tab-current tab-line)
+               :font (drgnx-ui-text))
+              ((panel-current) :bg sel-quiet :fg fg :edge sel-quiet :ring (1 6)
+               :inherit (drgnx-ui-text drgnx-selected-quiet tab-line-tab-current) :font (drgnx-ui-text)))
+       :replaces ((drgnx-chrome-tab . drgnx-kit-tab) (drgnx-chrome-tab-active . drgnx-kit-tab-current)
+                  (drgnx-chrome-tab-current . drgnx-kit-tab-current-inactive) (drgnx-wb-tab . drgnx-kit-tab)
+                  (drgnx-wb-tab-current . drgnx-kit-tab-panel-current) (drgnx-work-lens-title . drgnx-kit-tab-current))
+       :helpers nil :lint t)
+  ;; a segmented switch: its items in one track (a 1 px ring in the border's colour, radius 6), the current one on the
+  ;; quiet selection in the body text's colour, the others muted; each item an action.  The current item's label is
+  ;; "LABEL, selected"
+  (segmented :variants nil :defaults nil
+             :geometry (:height 24 :pad (10 . 10) :gap 0 :box t :radius 6 :hit 0)
+             :tty (:pad 1) :label "selected"
+             :bind ((() :fg muted :edge border :ring (1 6) :inherit (drgnx-ui-text drgnx-text-muted tab-line)
+                     :font (drgnx-ui-text))
+                    ((current) :bg sel-quiet :fg fg :inherit (drgnx-ui-text drgnx-selected-quiet) :font (drgnx-ui-text)))
+             :replaces ((drgnx-work-lens-rail . drgnx-kit-segmented) (drgnx-work-lens-seg . drgnx-kit-segmented)
+                        (drgnx-work-lens-current . drgnx-kit-segmented-current))
+             :helpers nil :lint t)))

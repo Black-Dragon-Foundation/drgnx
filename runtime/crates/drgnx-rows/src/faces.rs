@@ -1136,11 +1136,23 @@ pub enum FaceId {
     KitTimeAxis,
     /// `drgnx-kit-time-axis-now`
     KitTimeAxisNow,
+    /// `drgnx-kit-tab`
+    KitTab,
+    /// `drgnx-kit-tab-current`
+    KitTabCurrent,
+    /// `drgnx-kit-tab-current-inactive`
+    KitTabCurrentInactive,
+    /// `drgnx-kit-tab-panel-current`
+    KitTabPanelCurrent,
+    /// `drgnx-kit-segmented`
+    KitSegmented,
+    /// `drgnx-kit-segmented-current`
+    KitSegmentedCurrent,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 564] = [
+    pub const ALL: [FaceId; 570] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1705,6 +1717,12 @@ impl FaceId {
         FaceId::KitRangeBarSegWait,
         FaceId::KitTimeAxis,
         FaceId::KitTimeAxisNow,
+        FaceId::KitTab,
+        FaceId::KitTabCurrent,
+        FaceId::KitTabCurrentInactive,
+        FaceId::KitTabPanelCurrent,
+        FaceId::KitSegmented,
+        FaceId::KitSegmentedCurrent,
     ];
 
     /// The face's Emacs name.
@@ -2274,6 +2292,12 @@ impl FaceId {
             FaceId::KitRangeBarSegWait => "drgnx-kit-range-bar-seg-wait",
             FaceId::KitTimeAxis => "drgnx-kit-time-axis",
             FaceId::KitTimeAxisNow => "drgnx-kit-time-axis-now",
+            FaceId::KitTab => "drgnx-kit-tab",
+            FaceId::KitTabCurrent => "drgnx-kit-tab-current",
+            FaceId::KitTabCurrentInactive => "drgnx-kit-tab-current-inactive",
+            FaceId::KitTabPanelCurrent => "drgnx-kit-tab-panel-current",
+            FaceId::KitSegmented => "drgnx-kit-segmented",
+            FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
         }
     }
 
@@ -2844,6 +2868,12 @@ impl FaceId {
             "drgnx-kit-range-bar-seg-wait" => FaceId::KitRangeBarSegWait,
             "drgnx-kit-time-axis" => FaceId::KitTimeAxis,
             "drgnx-kit-time-axis-now" => FaceId::KitTimeAxisNow,
+            "drgnx-kit-tab" => FaceId::KitTab,
+            "drgnx-kit-tab-current" => FaceId::KitTabCurrent,
+            "drgnx-kit-tab-current-inactive" => FaceId::KitTabCurrentInactive,
+            "drgnx-kit-tab-panel-current" => FaceId::KitTabPanelCurrent,
+            "drgnx-kit-segmented" => FaceId::KitSegmented,
+            "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
             _ => return None,
         })
     }

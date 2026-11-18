@@ -51,6 +51,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// `ready` this often.
 pub const READY_EVERY: Duration = Duration::from_secs(2);
+/// The cleanup runs at least this often (orphan containers, design §5.7).
+pub const CLEANUP_EVERY: Duration = Duration::from_secs(600);
 /// `ping` this often.
 pub const PING_EVERY: Duration = Duration::from_secs(10);
 /// The link is lost after this long without a frame.
@@ -81,6 +83,9 @@ pub struct Config {
     pub allow: crate::darwin::probe::Allow,
     /// A workstation's reserve for its user, MiB (`--reserve-mib`); none: the profile's.
     pub reserve_mib: Option<u64>,
+    /// The timing island (`--island`, a CPU list of whole L3 groups): timing jobs run on it, work on the rest while one
+    /// runs (design §5.6). None: no timing lane here.
+    pub island: Option<String>,
 }
 
 /// Letters, digits and `-`, not at either end: a prefix and a hub id are parts of unit, slice, container and file
@@ -97,7 +102,7 @@ impl Config {
     /// [--allow-admin] [--reserve-mib N]` (a workstation's, at least [`forseti::MIN_RESERVE_MIB`]).
     pub fn parse(args: &[&str]) -> Result<Config, String> {
         let (mut root, mut prefix, mut hub_id, mut profile) = (None, None, None, None);
-        let (mut watchdog, mut reserve_mib) = (None, None);
+        let (mut watchdog, mut reserve_mib, mut island) = (None, None, None);
         let mut allow = crate::darwin::probe::Allow::default();
         let mut it = args.iter();
         while let Some(a) = it.next() {
@@ -126,6 +131,7 @@ impl Config {
                 }
                 "--allow-own-account" => allow.own_account = true,
                 "--allow-admin" => allow.admin = true,
+                "--island" => island = Some(val()?),
                 "--reserve-mib" => {
                     let v = val()?;
                     reserve_mib = Some(
@@ -159,6 +165,7 @@ impl Config {
             watchdog,
             allow,
             reserve_mib,
+            island,
         })
     }
 
@@ -300,6 +307,8 @@ pub struct Serve<W: Write> {
     last_ping: Instant,
     last_frame: Instant,
     last_units: Instant,
+    /// The last cleanup (at start, at a job's end, or by the timer: [`CLEANUP_EVERY`]).
+    last_cleanup: Instant,
     /// Where a thread of this `serve` (an origin fetch) tells the loop it ended; none: such work runs in the loop.
     events: Option<mpsc::Sender<Event>>,
     /// The images the attempts it started ran in (so present here), for `ready`.
@@ -310,6 +319,8 @@ pub struct Serve<W: Write> {
     /// With `--watchdog`: the notice and the idle time already sent up.
     sent_preempting: bool,
     sent_idle: Option<u64>,
+    /// Whether the island was last set on or off (none: not since this `serve` started; its start sets it).
+    island_held: Option<bool>,
 }
 
 /// Runs `serve` with CFG on INPUT and OUTPUT until the link ends; the exit status.
@@ -420,14 +431,22 @@ impl<W: Write> Serve<W> {
             last_ping: now,
             last_frame: now,
             last_units: now,
+            last_cleanup: now,
             events: None,
             images: BTreeSet::new(),
             heartbeat: Default::default(),
             heartbeat_written: None,
             sent_preempting: false,
             sent_idle: None,
+            island_held: None,
         };
+        if let Some(i) = &s.cfg.island {
+            s.platform.island_check(i)?;
+        }
         s.load_running();
+        // a timing job that ended while no `serve` ran (killed, a restart) gave nothing back: the work slice's CPUs
+        // come back here, before anything else starts
+        s.island_sync();
         Ok(s)
     }
 
@@ -453,6 +472,43 @@ impl<W: Write> Serve<W> {
                 let key = (f.meta.r.job.clone(), f.meta.r.attempt);
                 self.live.entry(key).or_insert(Live::new(f.dir, f.meta));
             }
+        }
+    }
+
+    /// The timing job holding the island: a live attempt in the timing lane not started yet, or still up.
+    fn island_holder(&self) -> Option<forseti::JobId> {
+        self.live
+            .values()
+            .find(|l| {
+                matches!(l.meta.spec.lane, forseti::Lane::Timing { pinned: Some(_) })
+                    && l.meta.unit.as_ref().is_none_or(|u| self.platform.active(u))
+            })
+            .map(|l| forseti::JobId(l.meta.r.job.clone()))
+    }
+
+    /// The machine's island as admission reads it: its CPUs and the timing job on it; none without `--island`.
+    fn island_state(&self) -> Option<forseti::Island> {
+        let island = self.cfg.island.as_deref()?;
+        let cpus = crate::linux::probe::parse_cpu_list(island).map_or(0, |c| c.len());
+        Some(forseti::Island {
+            cpus: u32::try_from(cpus).unwrap_or(u32::MAX),
+            busy: self.island_holder(),
+        })
+    }
+
+    /// The island on while a timing job holds it, off otherwise (design §5.6), set only when that changes; at start it
+    /// is always set, so a restart restores the work slice's CPUs.
+    fn island_sync(&mut self) {
+        let Some(island) = self.cfg.island.clone() else {
+            return;
+        };
+        let want = self.island_holder().is_some();
+        if self.island_held == Some(want) {
+            return;
+        }
+        match self.platform.island(want.then_some(island.as_str())) {
+            Ok(()) => self.island_held = Some(want),
+            Err(e) => eprintln!("sleipnir serve: the timing island {island}: {e}"),
         }
     }
 
@@ -888,6 +944,7 @@ impl<W: Write> Serve<W> {
             spec: &spec,
             priority,
             expected,
+            island: self.island_state(),
         };
         let ours = self.running_jobs();
         match admit::admit(
@@ -972,6 +1029,13 @@ impl<W: Write> Serve<W> {
             return Next::Go;
         }
         let (dir, mut meta) = (l.dir.clone(), l.meta.clone());
+        let mut env = env;
+        let timing = matches!(meta.spec.lane, forseti::Lane::Timing { pinned: Some(_) })
+            && self.cfg.island.is_some();
+        if let Some(island) = self.cfg.island.clone().filter(|_| timing) {
+            // its harness checks its CPUs by this before it measures
+            env.push(("DRGNX_PERF_ISLAND".into(), island));
+        }
         // synced inputs: the attempt reads its slot (or a private copy of it); none: an empty source
         let mut slot_held = None;
         let src = match &l.sync {
@@ -982,6 +1046,10 @@ impl<W: Write> Serve<W> {
             }),
             None => Ok(dir.join("src")),
         };
+        // work leaves the island before the timing job starts on it
+        if timing {
+            self.island_sync();
+        }
         let ran_in = image.clone();
         let launched = src.and_then(|src| {
             self.platform.launch(&LaunchReq {
@@ -1596,11 +1664,17 @@ impl<W: Write> Serve<W> {
         if !self.hello {
             return Next::Go;
         }
+        self.island_sync();
         if self.last_ping.elapsed() >= PING_EVERY {
             self.last_ping = Instant::now();
             if self.send(&Frame::Ping { at: now_s() }) == Next::Stop {
                 return Next::Stop;
             }
+        }
+        // orphans (a labelled container whose job slice is gone) end within ten minutes, job ends or not
+        if self.last_cleanup.elapsed() >= CLEANUP_EVERY {
+            self.last_cleanup = Instant::now();
+            self.cleanup();
         }
         let check_units = self.last_units.elapsed() >= READY_EVERY;
         if check_units {

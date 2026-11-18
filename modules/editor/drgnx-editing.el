@@ -285,14 +285,18 @@ role (`drgnx-look-font-code') still sets a size of its own on top.  A change app
   :type 'number :group 'drgnx :scope 'global :agents 'never :apply #'drgnx-editing--apply-font-size
   :schema '(pred drgnx-editing--font-size-p "a size in pixels from 6 to 72"))
 
-(defvar drgnx-editing--tab-saved nil "(TAB-WIDTH STANDARD-INDENT) the defaults `drgnx-editing-tab-size' replaced.")
+(defvar drgnx-editing--tab-saved nil
+  "(TAB-WIDTH STANDARD-INDENT INDENT-TABS-MODE) the defaults `drgnx-editing-tab-size' and the spaces default replaced.")
 
 (defun drgnx-editing--apply-tab-size ()
   "`:apply' of `drgnx-editing-tab-size': the default `tab-width' and `standard-indent', as VS Code's editor.tabSize
-sets how many columns a tab and an indent are.  Buffers whose mode sets an indent of its own keep it."
+sets how many columns a tab and an indent are, and indents made of spaces (`indent-tabs-mode' nil by default, VS Code's
+editor.insertSpaces), whatever the key profile: with a tab of 4 columns Emacs's default would turn every 4-column
+indent into a tab.  Buffers whose mode sets an indent or tabs of its own (Makefile, Go) keep them."
   (unless drgnx-editing--tab-saved
-    (setq drgnx-editing--tab-saved (list (default-value 'tab-width) (default-value 'standard-indent))))
-  (setq-default tab-width drgnx-editing-tab-size standard-indent drgnx-editing-tab-size))
+    (setq drgnx-editing--tab-saved (list (default-value 'tab-width) (default-value 'standard-indent)
+                                         (default-value 'indent-tabs-mode))))
+  (setq-default tab-width drgnx-editing-tab-size standard-indent drgnx-editing-tab-size indent-tabs-mode nil))
 
 (drgnx-defsetting drgnx-editing-tab-size 4
   "How many columns a tab character, and one level of indent where the mode has none of its own, take (VS Code's
@@ -357,7 +361,8 @@ applies at once."
                      (lambda ()
                        (when drgnx-editing--tab-saved
                          (setq-default tab-width (nth 0 drgnx-editing--tab-saved)
-                                       standard-indent (nth 1 drgnx-editing--tab-saved))
+                                       standard-indent (nth 1 drgnx-editing--tab-saved)
+                                       indent-tabs-mode (nth 2 drgnx-editing--tab-saved))
                          (setq drgnx-editing--tab-saved nil))))
 
 (provide 'drgnx-editing)

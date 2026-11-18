@@ -69,7 +69,7 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   (`editor::marks::place`, hub.md "Editor marks"): `:pos` (the bar), `:line_pos` and `:end_pos` (the ring's first and
   last row, the projected tag), `:symbol` (hrafn's outline of the text the hub holds) on each agent, and `:start_pos`
   and `:end_pos` on each gutter range. Lisp counts no line and walks to none from the top: it moves overlays to
-  positions and, on a scroll, walks only the visible rows, telling each by the position its line starts at. A frame
+  positions and, on a scroll, walks only the visible rows, telling each by the position its line starts at (as many rows as the window's pixel height holds at the buffer's text scale: the window's line count is in the frame font's lines). A frame
   with no positions (a text over the hub's marks limit) draws nothing.
 - **Gutter strip:** the frame's `:gutter` ranges become a list of strips (`--strips`, start and end positions), one
   `before-string` overlay per visible row at priority 100 (the fringe spec in GUI frames, a `(margin left-margin)` display in terminals, where the buffer

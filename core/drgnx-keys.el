@@ -25,7 +25,7 @@
 (require 'drgnx-keys-modal)
 
 (defvar drgnx-keys-profiles nil
-  "Alist PROFILE → plist (:name :doc :bind :claims :map :mac-cmd :claims-defaults :modal :indent-tabs-mode
+  "Alist PROFILE → plist (:name :doc :bind :claims :map :mac-cmd :claims-defaults :modal
 :lone-modifiers).")
 
 (defvar drgnx-keys-problems nil "Problems found while loading profiles or keys.eld.")
@@ -1194,31 +1194,13 @@ keys (they come back with the next apply), and the redirect stays on to record t
 
 (defun drgnx-keys--restore ()
   "Take the profile's keys out of every keymap but the profile map (refilled by the next apply): the `:everywhere'
-keys, the foreign layer, the layers of drgnx's own maps, the indentation default; the global map back to `global-map'.
+keys, the foreign layer, the layers of drgnx's own maps; the global map back to `global-map'.
 drgnx writes no other map, so there is nothing else to undo."
   (drgnx-keys--set-everywhere nil)
   (drgnx-keys--fill-foreign nil)
   (drgnx-keys--detach-all)
-  (drgnx-keys--profile-indent nil)
   (drgnx-keys--profile-lone nil)
   (drgnx-keys--uninstall-global))
-
-(defvar drgnx-keys--indent-orig 'unset
-  "The default `indent-tabs-mode' before a profile set it (`unset': none did).")
-
-(defun drgnx-keys--profile-indent (layers)
-  "Give `indent-tabs-mode' the default a profile in LAYERS asks for (`:indent-tabs-mode' in its spec, VS Code's nil);
-with none, put back what it was before."
-  (let ((want (cl-some (lambda (l)
-                         (let ((spec (alist-get (car l) drgnx-keys-profiles)))
-                           (and (plist-member spec :indent-tabs-mode) (list (plist-get spec :indent-tabs-mode)))))
-                       layers)))
-    (cond (want (when (eq drgnx-keys--indent-orig 'unset)
-                  (setq drgnx-keys--indent-orig (default-value 'indent-tabs-mode)))
-                (setq-default indent-tabs-mode (car want)))
-          ((not (eq drgnx-keys--indent-orig 'unset))
-           (setq-default indent-tabs-mode drgnx-keys--indent-orig
-                         drgnx-keys--indent-orig 'unset)))))
 
 (defvar nidhogg-lone-modifier-events)
 
@@ -1669,7 +1651,6 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                                       :snapshots (and (featurep 'evil)
                                                       (drgnx-keys-modal-engine-maps 'evil drgnx-keys-profiles)))))
           (drgnx-keys--set-mac-modifiers layers (plist-get user :mac-option))
-          (drgnx-keys--profile-indent layers)
           (drgnx-keys--profile-lone layers)
           (dolist (c (drgnx-commands-all)) (setf (drgnx-cmd-bound c) nil))
           (dolist (b (plist-get r :bindings))

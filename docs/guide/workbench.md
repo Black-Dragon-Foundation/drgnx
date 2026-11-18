@@ -360,7 +360,10 @@ to do it, or press Esc or `C-g` to stop. A tab dragged off its row moves only th
 still shows it): onto another group's middle it joins that group's tabs, onto an edge it is a group of its own there;
 a group's only tab moves the whole group. A drop on the tile itself, on no tile or
 where there is no room changes nothing and says "Nothing moved"; panes stack only onto a tile that is no dock (move
-the docked one off its dock first). The dividers between tiles still drag to resize. `drgnx-grid-drag` set to nil
+the docked one off its dock first). The dividers between tiles still drag to resize. The side bar, the panel and the
+right side keep the size you gave them when the window is resized, moved to a monitor of another scale or given another
+UI scale: the editors take the difference, and a dock gives way only to leave the editors their least width (it comes
+back to its size once there is room). `drgnx-grid-drag` set to nil
 draws no grip and turns dragging off. **Restore Previous Layout** (`C-k C-z` · `C-x w u` · `SPC l u`) puts back the
 layout before the last change to it — a move, a stack, a drop, or a package that collapsed the tiles behind the
 workbench's back — across every window: a window it had that you closed opens again, one it lacked closes, its files
@@ -383,7 +386,10 @@ tile's name under it (and the monitor's, when your windows are on more than one)
 terminal window, show the letter at their start. Type a letter to go to that tile (its window comes to the front; no
 window moves), **Shift** and a letter to swap your tile with that one (inside one window), or move with the arrows,
 across windows too, and press RET. Esc closes it; any other key closes it and then does what it does. Letters count once
-the cards are up (a blink, 120 ms, or one frame with reduced motion): one typed sooner goes to the tile you are in.
+the cards are up (a blink, 120 ms, or one frame with reduced motion): one typed sooner goes to the tile you are in. The
+card of the tile the arrows are on has the focus ring, and the echo area lists the letters and the keys while it is
+open. Resize Tiles says its keys there too, and a tile with nothing to show says what waits there and its keys
+(RET, x) on one highlighted row.
 
 **Esc Esc** opens it too, in every profile: press Esc where it cancels something (leaves Vim's insert state, quits, clears
 a Work view's search, or closes nothing), then Esc again within 0.3 s (`drgnx-esc-double-tap`; nil turns this off). A
@@ -622,7 +628,7 @@ profile, as in VS Code) shows its Terminal tab, starting a terminal when the tab
 tab already shows; a click on the Terminal tab with no terminal starts one too, in the editor's folder; the **right dock** (Toggle
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
 **tab row** at the top (click a tab to show it; the shown tab is a pill on the quiet selection, face
-`drgnx-wb-tab-current`, the others muted text, `drgnx-wb-tab`). The right dock shows its tab row only while two of its tabs have
+`drgnx-kit-tab-panel-current`, the others muted text, `drgnx-kit-tab`). The right dock shows its tab row only while two of its tabs have
 something to show: with one (an agent panel, say) that pane's own header is the top row, and `q` or `C-w l` then
 `C-x 0` hides the dock. Showing a buffer there never takes focus (Focus Panel does), and
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back

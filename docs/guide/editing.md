@@ -17,6 +17,10 @@ changes apply at once:
 | `drgnx-editing-tab-size` | `editor.tabSize` | 4 | Columns a tab takes, and an indent where the mode has none of its own. A mode with its own indent keeps it. |
 | `drgnx-editing-word-wrap` | `editor.wordWrap` | `on` | `on` continues a long line on the next row at a word; `off` lets it run past the edge. drgnx wraps by default (VS Code does not). Toggle Word Wrap flips it for one buffer. |
 
+Indents are made of spaces, as VS Code's `editor.insertSpaces`, in every key profile: `indent-tabs-mode` defaults to
+nil (Emacs's own default, tabs, would turn every 4-column indent into a tab now that a tab is 4 columns). A mode with tabs
+of its own (Makefile, Go), a file's own indentation and `.editorconfig` still win.
+
 ## Language support (tree-sitter)
 
 Every language is a **language pack** (`packs/` in drgnx: Python, JavaScript, TypeScript, TSX, Go, Rust, Java, C, C++,

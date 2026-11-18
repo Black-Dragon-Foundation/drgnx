@@ -17,9 +17,10 @@
 marked, then the lens's own keys as chips with their key badges."
   (let ((s (drgnx-work-lens-string 'flow "drgnx" '(("evidence" . "e") ("rules" . "R")))))
     (should (string-match-p "Work · drgnx.*Map.*Board.*Timeline.*Flow.*evidence.*e.*rules.*R" s))
-    (should (eq (get-text-property (string-match "Work · drgnx" s) 'face s) 'drgnx-work-lens-title))
-    (should (eq (get-text-property (string-match "Flow" s) 'face s) 'drgnx-work-lens-current))
-    (should (eq (get-text-property (string-match "Map" s) 'face s) 'drgnx-work-lens-seg))
+    ;; the kit's shown editor tab, then its segmented switch: the current item, the others on the track
+    (should (eq (get-text-property (string-match "Work · drgnx" s) 'face s) 'drgnx-kit-tab-current))
+    (should (memq 'drgnx-kit-segmented-current (ensure-list (get-text-property (string-match "Flow" s) 'face s))))
+    (should (equal (get-text-property (string-match "Map" s) 'face s) 'drgnx-kit-segmented))
     (should (eq (get-text-property (string-match "evidence" s) 'face s) 'drgnx-work-chip))
     (should (eq (get-text-property (string-search "R" s (string-search "rules" s)) 'face s) 'drgnx-work-lens-key)))
   ;; no name: the tab says Work alone; no keys: no chips
@@ -68,9 +69,19 @@ menu also holds the keys sheet, so both doors stay reachable."
 registered command, from the tab line or a header line."
   (let ((s (drgnx-work-lens-string 'flow "drgnx" '(("evidence" . "e") ("rules" . "R")))) ran)
     (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran))))
+      ;; a lens is the kit's segmented switch: its item's action selects the clicked window and runs the command, through
+      ;; the kind's map on the line (the same on the tab line and a header line)
       (pcase-dolist (`(,label . ,id) '(("Map" . work-view-map) ("Board" . work-view-board)
-                                       ("Timeline" . work-view-timeline) ("Flow" . work-view-flow)
-                                       ("evidence" . work-flow-evidence) ("rules" . work-flow-rules)))
+                                       ("Timeline" . work-view-timeline) ("Flow" . work-view-flow)))
+        (setq ran nil)
+        (let ((action (get-text-property (string-search label s) 'drgnx-action s))
+              (map (get-text-property (string-search label s) 'local-map s)))
+          (should (equal action (list 'ui-window-button id)))
+          (should (keymapp map))
+          (should (eq (lookup-key map [header-line mouse-1]) (lookup-key map [tab-line mouse-1])))
+          (drgnx-ui-kit--run-window-button (cdr action))
+          (should (equal ran (list id)))))
+      (pcase-dolist (`(,label . ,id) '(("evidence" . work-flow-evidence) ("rules" . work-flow-rules)))
         (setq ran nil)
         (let ((map (get-text-property (string-search label s) 'keymap s)))
           (should (keymapp map))

@@ -138,9 +138,6 @@ faces a landed kit component replaces (`drgnx-ui-kit-replaced-faces'): they inhe
           (drgnx-work-who-4 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a4))
           (drgnx-work-who-5 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a5))
           (drgnx-work-who-6 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a6))
-          ;; the lens switch's rail (look.css `.lens'): the gap's colour behind the labels
-          (drgnx-work-lens-rail :inherit drgnx-work-label :background ,(c 'gap))
-          (drgnx-work-lens-seg :inherit drgnx-work-lens-rail)
           (drgnx-chip-ok :foreground ,(c 'ok) :background ,(c 'ok-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
           (drgnx-chip-warn :foreground ,(c 'warn) :background ,(c 'warn-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
           (drgnx-tint-warn :background ,(c 'warn-tint) ,@(and hc `(:box (:line-width (-1 . -1) :color ,(c 'warn)))))
@@ -243,10 +240,6 @@ faces a landed kit component replaces (`drgnx-ui-kit-replaced-faces'): they inhe
           (drgnx-agent-panel-perm-head :inherit (drgnx-ui-text drgnx-chip-attention) :weight bold
                                        :box (:line-width 1 :color ,(c 'attention)
                                                          ,@(and (featurep 'glitnir) '(:corner-radius 8))))
-          ;; work-space-dark.html `.lens .on': the lens shown is a raised pill in a 1 px ring in the strong border
-          (drgnx-work-lens-current :inherit (bold drgnx-pill-on)
-                                   :box (:line-width 1 :color ,(c 'border-strong)
-                                                     ,@(and (featurep 'glitnir) '(:corner-radius 6))))
           (highlight :background ,(c 'hover))
           (hl-line :background ,(c 'current-line) :extend t)
           (fringe :foreground ,(c 'subtle) :background ,(c 'editor))
@@ -315,14 +308,6 @@ faces a landed kit component replaces (`drgnx-ui-kit-replaced-faces'): they inhe
           (tab-line-tab-inactive :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'panel))
           (tab-line-tab-special :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'panel))
           (tab-line-highlight :background ,(c 'hover))
-          ;; an area's tab row (the bottom panel's): muted text, the shown tab a pill on the quiet selection
-          ;; (debugging.html `.pt', `.pt.on': radius 6, 24 px in the 32 px row)
-          ;; (a space each side plus a 5 px box: the 9 px pad; drgnx-decor scales the boxes per frame)
-          (drgnx-wb-tab :inherit tab-line-tab-inactive :foreground ,(c 'muted) :background ,(c 'panel)
-                        :box (:line-width (5 . 3) :color ,(c 'panel)))
-          (drgnx-wb-tab-current :inherit tab-line-tab-current :foreground ,(c 'fg) :background ,(c 'sel-quiet)
-                                :box (:line-width (5 . 3) :color ,(c 'sel-quiet)
-                                                  ,@(and (featurep 'glitnir) '(:corner-radius 6))))
           (tab-line-close-highlight :foreground ,(c 'accent))
           (window-divider :foreground ,(c 'gap))
           (window-divider-first-pixel :foreground ,(c 'gap))
@@ -485,7 +470,13 @@ faces a landed kit component replaces (`drgnx-ui-kit-replaced-faces'): they inhe
     (drgnx-selected-inactive :underline t :weight normal)
     (drgnx-hover :inherit nil)
     (drgnx-focus :inverse-video t)
-    (drgnx-text-disabled :inherit shadow :weight light))
+    (drgnx-text-disabled :inherit shadow :weight light)
+    ;; the kit's tabs and segmented switch read the same table (on a terminal the row and the editor are one colour):
+    ;; the shown tab inverse, a shown tab of another group underlined, the current item inverse
+    (drgnx-kit-tab-current :inverse-video t)
+    (drgnx-kit-tab-current-inactive :underline t)
+    (drgnx-kit-tab-panel-current :inverse-video t)
+    (drgnx-kit-segmented-current :inverse-video t))
   "Faces drawn without a colour on a terminal frame: the selection's tint is too close to the editor's colour for a
 terminal to tell apart (Emacs then blinks a copy, as for an unhighlighted region), so there it is inverse video; the
 kit's states take their terminal forms (`drgnx-ui-kit-state' :tty).")

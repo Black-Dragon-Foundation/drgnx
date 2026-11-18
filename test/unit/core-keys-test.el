@@ -653,20 +653,32 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
                 (should (eq (drgnx-keys--lookup (symbol-value sym) key) #'ignore)))
        (if prev (keymap-set (symbol-value sym) key prev) (keymap-unset (symbol-value sym) key t))))))
 
+(defun drgnx-keys-test--indents-with-spaces (layers)
+  "With module editor/editing on and LAYERS the key stack, a 4-column indent in a text buffer is 4 spaces, not a tab,
+from Emacs's own default (tabs) on: spaces are the editing default, whatever the profile."
+  (let ((orig (default-value 'indent-tabs-mode)))
+    (unwind-protect
+        (progn
+          (setq-default indent-tabs-mode t)
+          (drgnx-test-with-modules '(editor/editing)
+            (drgnx-keys-test--live
+             (drgnx-keys-use layers)
+             (should (equal (with-temp-buffer
+                              (text-mode)
+                              (insert "x")
+                              (indent-rigidly (point-min) (point-max) 4)
+                              (buffer-string))
+                            "    x")))))
+      (setq-default indent-tabs-mode orig))))
+
 (ert-deftest drgnx-keys/the-vscode-profile-indents-with-spaces ()
-  "VS Code's default is spaces (M12f-AF-3): the profile sets `indent-tabs-mode' nil, the other profiles leave it."
-  (drgnx-keys-test--live
-   (let ((orig (default-value 'indent-tabs-mode)))
-     (unwind-protect
-         (progn
-           (setq-default indent-tabs-mode t)
-           (drgnx-keys-use '((emacs app editing window)))
-           (should (default-value 'indent-tabs-mode))
-           (drgnx-keys-use '((vscode app editing window)))
-           (should-not (default-value 'indent-tabs-mode))
-           (drgnx-keys-use '((emacs app editing window)))
-           (should (default-value 'indent-tabs-mode)))
-       (setq-default indent-tabs-mode orig)))))
+  (drgnx-keys-test--indents-with-spaces '((vscode app editing window))))
+
+(ert-deftest drgnx-keys/the-emacs-profile-indents-with-spaces ()
+  (drgnx-keys-test--indents-with-spaces '((emacs app editing window))))
+
+(ert-deftest drgnx-keys/the-vim-profile-indents-with-spaces ()
+  (drgnx-keys-test--indents-with-spaces '((vim app editing window))))
 
 (defvar nidhogg-lone-modifier-events)
 

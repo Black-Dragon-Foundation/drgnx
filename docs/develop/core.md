@@ -3364,12 +3364,18 @@ undo stack and saved layouts, and it is applied by rebuilding windows, never by 
 part of its parent, in (0, 1]. `(drgnx-grid-tree-to-logical PX SCALE)` and `(drgnx-grid-tree-from-logical LOGICAL
 SCALE)` convert, rounded half up as `drgnx-px` rounds, so logical → pixels → logical is exact at any scale.
 
-**A scale change.** A window moved to a monitor of another scale, or given another UI scale, keeps its tiles' shares
-(within 0.005): Emacs resizes its windows in proportion, and the grid's preserved sizes do not hold a tile's pixels
-against it. Other windows are not touched. The window keeps its frame pixels, so its logical size, and each tile's,
-changes by the scales' ratio; the next tree records the new logical sizes. The resize step and `drgnx-grid-min-px`
-are logical (`drgnx-px` at the frame's scale). `test/ui/grid-scales-gui-test.el` moves the session's monitor through
-mutter (`gdctl`) from 1.25 to 2.
+**A scale change, a window resize.** The docks (the side bar, the panel, the right side) keep their logical px and
+the editors take the difference, as VS Code's side bar keeps its width: `drgnx-grid-keep-dock-sizes` runs at each
+window size change and at Nidhogg's scale change (`nidhogg-frame-scale-change-functions`), with the scale
+`drgnx-pixels-scale` (display × UI scale). While the grid root keeps its size and scale, a dock's size is noted as its
+logical size; when either changed (a monitor of another scale, the UI scale, the window resized, the echo area grown
+with the font), each shown dock is given its logical size in the new pixels and a hidden one's `:sizes` intent is
+moved to it. A dock never squeezes the editors below their least size (`drgnx-grid-min-px` per tile, summed along a
+row): it gives way, and keeps the size it wants, so it is that size again once there is room. Other windows are not
+touched. A windowed frame keeps its logical size across a scale change (Nidhogg); a maximized one is its monitor's
+size, smaller in logical px at a larger scale. The resize step and `drgnx-grid-min-px` are logical (`drgnx-px` at the
+frame's scale). `test/ui/grid-scales-gui-test.el` moves the session's monitor through mutter (`gdctl`) from 1.25 to 2
+and back.
 
 **Terminal frames.** `(drgnx-grid-home-size DOCK FRACTION MINIMUM &optional FRAME)` gives a dock FRACTION of the
 frame's columns (lines for `bottom`), at least MINIMUM of them: its tile now, when it shows, and the size it comes back
@@ -3560,7 +3566,11 @@ then by monitor and position; child frames and the daemon's initial frame left o
 `drgnx-switcher-assign` letters them by rank and reading order (`drgnx-grid-letters`); `drgnx-switcher-neighbour
 ITEMS FROM DIRECTION` is the nearest centre in that half-plane, across frames; `drgnx-switcher-cards` picks the 12
 largest of graphical frames. Cards are pooled child frames (`drgnx-switcher--pool`, made on first use, hidden on close,
-deleted by the teardown), centred on the tile; the rest get an overlay letter (`before-string`, inverse video, the
+deleted by the teardown), centred on the tile, each a kit card (`drgnx-ui-kit-card-lines`: `selected` for the current
+item, else `plain`; the letter's row gives up the columns the large letter takes); the echo area holds
+`drgnx-switcher-hint` (the letters and keys as kit key hints, cleared on close when still shown), as Resize Tiles holds
+`drgnx-grid-resize-hint`; a tile placeholder's line is a kit row in the selected state (`drgnx-ui-kit-row-face`,
+remapped by focus) with its keys as key hints; the rest get an overlay letter (`before-string`, inverse video, the
 overlay's `window` the tile's). Keys go through a transient map whose default binding is `drgnx-switcher-key`, left by every close (its exit
 function is kept in the state) (`drgnx-switcher-handle EVENT` returns `closed`, `quit`, `picked`, `swapped`, `moved` or `replayed`); a replayed key is put on
 `unread-command-events`. The gate: `:ready` is set by the layer timer `(switcher . ready)` after
@@ -3576,7 +3586,8 @@ an event itself:
   when it closed nothing (`drgnx-close--closed`).
 - `drgnx-esc--map` at the front of `emulation-mode-map-alists` (placed by `drgnx-modal-order-alists` right after the
   modules' `drgnx-modal-front-alists`: after Close Pane's and quick help's, before the modal engine's) binds `<escape>` to `drgnx-esc`: within `drgnx-esc-double-tap` of a
-  cancel (`drgnx-esc-cancel-commands`) it opens the switcher, else it runs what `<escape>` means without the map
+  cancel (`drgnx-esc-cancel-commands`) it opens the switcher (never for an Esc a keyboard macro replays: its keys are
+  not taps, so Vim's `q a A ! Esc j q @ a` leaves insert state), else it runs what `<escape>` means without the map
   (`key-binding` with `drgnx-esc--on` nil), or gives an unbound Esc back as ESC. In a buffer of
   `drgnx-esc-process-modes` it runs the major mode's own binding every time (so a terminal tile gets its Esc ahead of
   evil's).
@@ -3854,6 +3865,29 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
 - Bindings gained `:attrs` (raw face attributes, in the defface and the theme's spec) and `:ring (WIDTH RADIUS OPEN...)`
   (the edge's width, and where Glitnir draws, its radius and open sides; `drgnx-ui-kit-theme-specs` takes a GLITNIR
   flag).
+
+### Tabs and the segmented switch (Task 16)
+
+- `tab` (variant `size` editor, panel): an editor tab is 34 px with 10 px before and 8 px after, the shown tab on the
+  editor's surface in the body text's colour (`drgnx-kit-tab-current`; a shown tab of another group muted,
+  `drgnx-kit-tab-current-inactive`), the others muted on the row (`drgnx-kit-tab`); a panel tab (an area's tab row) is
+  30 px with 9 px each side, the shown one a pill on the quiet selection (`drgnx-kit-tab-panel-current`). Neither is
+  ever bold. Its parts: the icon (14 px, an image where the frame draws SVG icons, else its glyph and a space), the
+  title, then with a close mark the gap and an 18 px slot: 2 px, the `x` icon (the `close` glyph on a terminal; the
+  `dot` glyph, muted, when the file is modified), 2 px. The close mark is hidden (`drgnx-control-hidden`) on a tab
+  that is not shown, except on a terminal or under the pointer. The tab's own face is the state face for the shown
+  states; other states' faces go above it. Its accessible text is the title (", modified").
+- `segmented` (no variants): one 24 px track in a 1 px `border` ring inside its line, radius 6, its items 10 px each
+  side, the current one on the quiet selection in the body text's colour (`drgnx-kit-segmented-current`); each item its
+  own action, its accessible text "LABEL" or "LABEL, selected".
+- On a terminal the themes draw the shown tab and the current item in inverse video and a shown tab of another group
+  underlined (the state table's terminal forms; `drgnx-theme--terminal-faces`).
+- `(drgnx-ui-kit-tab TITLE SIZE STATE ICON CLOSE WHERE &optional MODIFIED FRAME)` and `(drgnx-ui-kit-segmented ITEMS
+  CURRENT WHERE &optional FRAME)` (ITEMS `((LABEL . ACTION)...)`, ACTION as a button's) build them as strings. The
+  editor's tab line (`drgnx-chrome--tab`), an area's tab row (`drgnx-area`), the Detail island's title and the Work lens
+  bar (`drgnx-work-lens-string`) draw with them; `drgnx-wb-tab*`, `drgnx-chrome-tab`, `-active`, `-current` and the
+  `drgnx-work-lens-*` faces are aliases of the kit faces once `ui/look` is on. The action kind `ui-window-button`
+  selects the clicked window before it runs its action (a lens item switches the lens of the window it is in).
 
 ### Actions and focus-visible
 

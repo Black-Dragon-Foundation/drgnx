@@ -325,7 +325,7 @@ pending, corfu's auto timer run, and no other timer due within 1 s.")
                                         (drgnx-wb-show-in-editor (find-file-noselect ,(expand-file-name "a.txt" dir)) t)
                                         (with-current-buffer "a.txt" (insert "z"))
                                         t))
-      (drgnx-tty-session-wait-screen s "a\\.txt \\* x")                ; tab: name, changed mark, close mark
+      (drgnx-tty-session-wait-screen s "a\\.txt \\*$")                  ; tab: name, the changed mark in the close's slot
       (drgnx-tty-session-wait-screen s "^ v Files")                    ; the Explorer's section, open (one root: no root row)
       (drgnx-tty-session-wait-screen s "^> src")                       ; …closed folder
       (drgnx-tty-session-wait-screen s "| [a-z]+ > [a-zA-Z0-9.-]+ > ")  ; breadcrumb (cut off at the window's edge)

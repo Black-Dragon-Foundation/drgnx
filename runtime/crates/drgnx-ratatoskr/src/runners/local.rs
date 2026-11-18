@@ -13,7 +13,7 @@ use forseti::{
     Expected, Grant, Job, LastStart, Limits, MachineState, Priority, Profile, Psi, RunningJob,
     WaitReason,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The scheduler name of the hub's own reservations.
@@ -241,11 +241,24 @@ pub fn slice_used_mib(manager: &Path, slice: &str) -> Option<u64> {
 /// job's slice under this process's user manager.
 #[cfg(target_os = "linux")]
 pub fn local_use() -> crate::runners::queue::LocalUse {
+    let manager = own_manager();
+    Box::new(move |id| slice_used_mib(&manager, &crate::exec::unit::job_slice_name(id)))
+}
+
+/// The cgroup folder of this process's user manager.
+#[cfg(target_os = "linux")]
+fn own_manager() -> PathBuf {
     let uid = rustix::process::getuid().as_raw();
     let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
-    let manager =
-        Path::new("/sys/fs/cgroup").join(sleipnir::linux::probe::manager_cgroup(&own, uid));
-    Box::new(move |id| slice_used_mib(&manager, &crate::exec::unit::job_slice_name(id)))
+    Path::new("/sys/fs/cgroup").join(sleipnir::linux::probe::manager_cgroup(&own, uid))
+}
+
+/// The cgroup folder of local job ID's slice (`drgnx-job-<id>.slice`) under this process's user manager.
+#[cfg(target_os = "linux")]
+pub fn job_slice_dir(id: &str) -> PathBuf {
+    own_manager().join(sleipnir::linux::probe::slice_path(
+        &crate::exec::unit::job_slice_name(id),
+    ))
 }
 
 /// A machine with nothing read but what runs: the count admission's.
@@ -267,6 +280,7 @@ fn counted(running: &[RunningJob], last: LastStart, now: u64) -> MachineState {
         features: vec![],
         reachable: true,
         others: vec![],
+        island: None,
     }
 }
 

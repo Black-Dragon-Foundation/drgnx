@@ -31,6 +31,15 @@ pub enum JobOs {
     Macos,
 }
 
+/// The lane a job runs in: `work` (the default) or `timing` (a measurement: on a runner's timing island, or with
+/// `whole_machine` the whole machine; never joined, never cached).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum JobLane {
+    Work,
+    Timing,
+}
+
 /// Where a job is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -135,6 +144,14 @@ pub struct StartParams {
     /// `exec/stop` and the hub's stop still end it.  With `timebox_s` it is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_timebox: Option<bool>,
+    /// The progress guard's stall limit: seconds with no output, CPU under a tenth of a core and no IO before the job
+    /// ends `infra: stuck (stall)` (1 to 86400; default 1200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_s: Option<u64>,
+    /// The progress guard's silent limit: seconds with no output, whatever the CPU, before the job ends
+    /// `infra: stuck (silent)` (1 to 86400; default 2700).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent_s: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<ExecKind>,
     /// A container job's image: a name on `agents-container-images` (kind container only).
@@ -170,6 +187,14 @@ pub struct StartParams {
     /// The OS it needs (default `linux`); a `macos` job needs a Mac runner with its project's Homebrew packages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os: Option<JobOs>,
+    /// The lane (default `work`): a `timing` job runs on its runner's timing island while no other timing job holds it
+    /// (a machine without an island refuses it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<JobLane>,
+    /// A `timing` job that takes the whole machine instead of the island: it needs a named `machine`, waits while P1–P2
+    /// work is pending, then drains the machine (no new work starts there) and starts once it is empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole_machine: Option<bool>,
     /// The job's priority, 1 (highest) to 5: the user's connections only (a session's request is refused).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<u8>,
@@ -365,6 +390,11 @@ fn check_start(p: &StartParams) -> Result<(), Error> {
     }
     if p.timebox_s.is_some_and(|t| !(1..=86_400).contains(&t)) {
         return Err(invalid("timebox_s", "a time box of 1 to 86400 seconds"));
+    }
+    for (name, v) in [("stall_s", p.stall_s), ("silent_s", p.silent_s)] {
+        if v.is_some_and(|t| !(1..=86_400).contains(&t)) {
+            return Err(invalid(name, "a limit of 1 to 86400 seconds"));
+        }
     }
     if p.no_timebox == Some(true) && p.timebox_s.is_some() {
         return Err(invalid(

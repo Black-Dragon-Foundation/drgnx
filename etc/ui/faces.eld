@@ -564,4 +564,10 @@
  drgnx-kit-range-bar-seg-job
  drgnx-kit-range-bar-seg-wait
  drgnx-kit-time-axis
- drgnx-kit-time-axis-now)
+ drgnx-kit-time-axis-now
+ drgnx-kit-tab
+ drgnx-kit-tab-current
+ drgnx-kit-tab-current-inactive
+ drgnx-kit-tab-panel-current
+ drgnx-kit-segmented
+ drgnx-kit-segmented-current)

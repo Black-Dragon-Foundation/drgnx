@@ -162,6 +162,9 @@ pub struct Record {
     /// start.
     #[serde(default)]
     pub reserve_mib: Option<u64>,
+    /// The timing island (`--island`, a CPU list); `serve` gets it at every start.
+    #[serde(default)]
+    pub island: Option<String>,
     /// The memory the host had available at its last probe, MiB: the runner list's room for jobs until the runner's
     /// first ready.
     #[serde(default)]
@@ -391,7 +394,7 @@ fn profile_word(p: Profile) -> &'static str {
     }
 }
 
-/// `serve`'s flags for what the user allowed of RECORD's account, and a workstation's set reserve.
+/// `serve`'s flags for what the user allowed of RECORD's account, a workstation's set reserve, and the timing island.
 fn serve_flags(r: &Record) -> Vec<String> {
     let mut f: Vec<String> = [
         (r.allow_own_account, "--allow-own-account"),
@@ -403,6 +406,9 @@ fn serve_flags(r: &Record) -> Vec<String> {
     .collect();
     if let Some(n) = r.reserve_mib {
         f.extend(["--reserve-mib".to_string(), n.to_string()]);
+    }
+    if let Some(cpus) = &r.island {
+        f.extend(["--island".to_string(), cpus.clone()]);
     }
     f
 }
@@ -863,6 +869,7 @@ impl Registry {
             allow_own_account: own_account,
             allow_admin: admin,
             reserve_mib: None,
+            island: None,
             mem_available_mib: None,
         };
         let probe = self.probe_serve(&rec).await?;
@@ -1224,10 +1231,18 @@ impl Registry {
             (None, false) => None,
         };
         check_reserve(profile, reserve)?;
-        let new_profile = profile != rec.profile || reserve != rec.reserve_mib;
+        // the island stays until it is set again; empty removes it (`serve` checks it at its start)
+        let island = match &p.island {
+            Some(cpus) if cpus.is_empty() => None,
+            Some(cpus) => Some(cpus.to_string()),
+            None => rec.island.clone(),
+        };
+        let new_profile =
+            profile != rec.profile || reserve != rec.reserve_mib || island != rec.island;
         rec.trust = p.trust.unwrap_or(rec.trust);
         rec.profile = profile;
         rec.reserve_mib = reserve;
+        rec.island = island;
         rec.accept = p.accept.unwrap_or(rec.accept);
         self.cfg.store.put(&rec).await.map_err(failed)?;
         self.cfg.queue.set_runner(
@@ -1428,6 +1443,12 @@ mod tests {
                 "--reserve-mib",
                 "2048"
             ]
+        );
+        // the timing island reaches `serve` at every start
+        r.island = Some("0-5,12-17".into());
+        assert_eq!(
+            serve_flags(&r)[4..],
+            ["--island".to_string(), "0-5,12-17".to_string()]
         );
     }
 

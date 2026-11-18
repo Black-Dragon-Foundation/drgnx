@@ -327,6 +327,20 @@ impl SegKind {
             SegKind::WaitMachine => Some('M'),
             SegKind::WaitPermission => Some('P'),
             SegKind::Stalled => Some('!'),
+/// A tab's size: an editor's tab row (34 px) or a panel's (30 px).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TabSize {
+    #[default]
+    Editor,
+    Panel,
+}
+
+impl TabSize {
+    fn name(self) -> &'static str {
+        match self {
+            TabSize::Editor => "editor",
+            TabSize::Panel => "panel",
         }
     }
 }
@@ -695,6 +709,10 @@ fn time_axis(
         }
     }
 }
+/// A tab's icon size in logical px (window-dark.html's `.tab`: 14, as the chrome draws them).
+pub const TAB_ICON_PX: u16 = 14;
+/// The room each side of a tab's close mark in its 18 px slot, logical px.
+pub const TAB_CLOSE_PAD_PX: u16 = 2;
 
 /// A component with its props, as JSON `{"c": "row", …}`.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -785,6 +803,29 @@ pub enum Comp {
     },
     /// An agent's mark: its HANDLE (one or two letters) on the colour of its SLOT (1–12, `drgnx-agent-identity`).
     AgentMark { slot: u8, handle: String },
+    /// A tab: TITLE of SIZE, an ICON before it, a close mark after it when CLOSE (a dot when MODIFIED). Its STATE:
+    /// `selected` is the shown tab, `selected-inactive` the shown tab of a group that is not the active one.
+    Tab {
+        title: String,
+        #[serde(default)]
+        size: TabSize,
+        #[serde(default)]
+        state: State,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
+        #[serde(default)]
+        close: bool,
+        #[serde(default)]
+        modified: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<Action>,
+    },
+    /// A segmented switch: ITEMS (a label and its action each) in one track, CURRENT the one shown.
+    Segmented {
+        items: Vec<(String, Action)>,
+        #[serde(default)]
+        current: usize,
+    },
     /// Progress: a bar WIDTH logical px wide or a ring, VALUE from 0 to 1.
     Progress {
         #[serde(default)]
@@ -1516,6 +1557,25 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             }
         }
         Comp::AgentMark { slot, handle } => agent_mark(b, env, *slot, handle),
+        Comp::Tab {
+            title,
+            size,
+            state,
+            icon,
+            close,
+            modified,
+            action,
+        } => tab(
+            b,
+            env,
+            title,
+            *size,
+            *state,
+            icon.as_deref(),
+            (*close, *modified),
+            action.as_ref(),
+        ),
+        Comp::Segmented { items, current } => segmented(b, env, items, *current),
         Comp::Progress { kind, value, width } => progress(b, env, *kind, *value, *width),
         Comp::Meter {
             spent,
@@ -1564,6 +1624,132 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             }
         }
     }
+}
+
+/// A tab onto B (`drgnx-ui-kit--tab`): its pad, the ICON (an image at [`TAB_ICON_PX`] where the env draws icons, then
+/// the gap; else its glyph and a space), TITLE, and with CLOSE (CLOSE_MODIFIED's first) the gap and an 18 px slot
+/// holding the close mark (the `x` icon, else the glyph `close`), or with MODIFIED (its second) the glyph `dot` in the
+/// muted text; then its end pad. The tab's face is its state's: the shown tab `current` (`current-inactive` in a
+/// group that is not the active one; a panel's `panel-current`), the others the component's own with the state's
+/// face above. The close mark is in the row's colour (`drgnx-control-hidden`) unless the tab is shown or hovered or
+/// on a terminal. Its label (`help-echo`) is TITLE, with "modified" after it.
+#[allow(clippy::too_many_arguments)]
+fn tab(
+    b: &mut RowBuilder,
+    env: &KitEnv,
+    title: &str,
+    size: TabSize,
+    state: State,
+    icon: Option<&str>,
+    (close, modified): (bool, bool),
+    action: Option<&Action>,
+) {
+    let variant = [size.name(), env.density.name()];
+    let g: Geom = kit_gen::geom(CompId::Tab, &variant);
+    let shown = matches!(state, State::Selected | State::SelectedInactive);
+    let own = match (size, state) {
+        (TabSize::Editor, State::Selected) => FaceId::KitTabCurrent,
+        (TabSize::Editor, State::SelectedInactive) => FaceId::KitTabCurrentInactive,
+        (TabSize::Panel, State::Selected | State::SelectedInactive) => FaceId::KitTabPanelCurrent,
+        _ => kit_gen::face(CompId::Tab, &variant),
+    };
+    let f = own.name();
+    let face = Some(f);
+    let icon_image = |name: &str| {
+        env.icons
+            .filter(|_| !env.tty)
+            .and_then(|i| (i.0)(name, px(TAB_ICON_PX, env.scale)))
+    };
+    let from = b.pos();
+    pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+    if let Some(name) = icon {
+        let at = b.pos();
+        let mark = glyph(env, name);
+        match icon_image(name) {
+            Some(id) => {
+                b.image(id, mark);
+                b.face(at, at + 1, f);
+                pad(b, env, px(g.gap, env.scale), 0, face);
+            }
+            None if !mark.is_empty() => {
+                b.push(&format!("{mark} "), face);
+            }
+            None => {}
+        }
+    }
+    b.push(title, face);
+    if close || modified {
+        pad(b, env, px(g.gap, env.scale), 1, face);
+        let slot = px(TAB_CLOSE_PAD_PX, env.scale);
+        pad(b, env, slot, 0, face);
+        let at = b.pos();
+        let mark_face = if modified {
+            FaceId::TextMuted
+        } else if shown || state == State::Hover || env.tty {
+            FaceId::UiClose
+        } else {
+            FaceId::ControlHidden
+        };
+        match icon_image("x").filter(|_| !modified) {
+            Some(id) => {
+                b.image(id, glyph(env, "close"));
+                b.face(at, at + 1, mark_face.name());
+            }
+            None => {
+                b.push(
+                    glyph(env, if modified { "dot" } else { "close" }),
+                    Some(mark_face.name()),
+                );
+            }
+        }
+        // the tab's own colours under the mark's
+        let end = b.pos();
+        b.face(at, end, f);
+        pad(b, env, slot, 0, face);
+    }
+    pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+    let to = b.pos();
+    // a tab has colours of its own: a state other than shown is above them
+    if !shown && let Some(s) = state_face(state) {
+        b.face_over(from, to, s.name());
+    }
+    if let Some(a) = action {
+        put_action(b, from, to, a);
+    }
+    let label = match kit_gen::label(CompId::Tab, &variant).filter(|_| modified) {
+        Some(word) => format!("{title}, {word}"),
+        None => title.to_owned(),
+    };
+    b.prop(from, to, "help-echo", Value::String(label));
+}
+
+/// A segmented switch onto B (`drgnx-ui-kit--segmented`): each item its pads and label, the CURRENT one in the
+/// `current` face, each with its action and its label (`help-echo`, "LABEL, selected" for the current one); the
+/// track's face (its ring) under them all.
+fn segmented(b: &mut RowBuilder, env: &KitEnv, items: &[(String, Action)], current: usize) {
+    let variant = [env.density.name()];
+    let g: Geom = kit_gen::geom(CompId::Segmented, &variant);
+    let track = kit_gen::face(CompId::Segmented, &variant).name();
+    let word = kit_gen::label(CompId::Segmented, &variant).unwrap_or_default();
+    let from = b.pos();
+    for (i, (label, action)) in items.iter().enumerate() {
+        let on = i == current;
+        let face = on.then(|| FaceId::KitSegmentedCurrent.name());
+        let at = b.pos();
+        pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+        b.push(label, face);
+        pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+        let to = b.pos();
+        put_action(b, at, to, action);
+        let spoken = if on {
+            format!("{label}, {word}")
+        } else {
+            label.clone()
+        };
+        b.prop(at, to, "help-echo", Value::String(spoken));
+    }
+    let end = b.pos();
+    b.face(from, end, track);
 }
 
 /// SLOT's agent mark onto B (`drgnx-ui-kit--agent-mark`): the handle between the pads on the agent's colour (its face

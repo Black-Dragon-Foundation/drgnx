@@ -37,6 +37,7 @@ use runstav::methods::exec::{
 use runstav::wire::{Error, ErrorCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sleipnir::linux::progress::{self as pguard, GuardLimits};
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -128,6 +129,11 @@ pub struct UserJob {
     /// The job has no time box: `ExecSpec::timebox` is not used and the timer never ends it.
     #[serde(default)]
     pub no_timebox: bool,
+    /// The progress guard's stall and silent limits in seconds (`sleipnir::linux::progress`); none: the defaults.
+    #[serde(default)]
+    pub stall_s: Option<u64>,
+    #[serde(default)]
+    pub silent_s: Option<u64>,
 }
 
 impl ExecSpec {
@@ -203,6 +209,9 @@ impl Live {
     }
 }
 
+/// A job's slice folder by job id ([`Hooks::guard_slice`]).
+pub type GuardSlice = Arc<dyn Fn(&str) -> Option<PathBuf> + Send + Sync>;
+
 /// What the runner reaches beyond its own folder: the store (a job is an entity), the subscribers (`exec-done`), the
 /// memory cap and whether a user systemd carries the units.
 #[derive(Clone)]
@@ -235,6 +244,9 @@ pub struct Hooks {
     pub cards: Option<hostgrants::Hub>,
     /// The providers' key variables (`key_env`) as the settings say now: never in a user's job's environment.
     pub key_envs: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// The cgroup folder of a local job's slice, by job id, for the progress guard; none: the job's
+    /// `drgnx-job-<id>.slice` under this process's user manager (tests pass a fixture).
+    pub guard_slice: Option<GuardSlice>,
     /// The projects' edit histories and the state folder they live in: a runner's applied changes are one version
     /// there. None: they are applied unrecorded (tests).
     pub history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
@@ -268,6 +280,7 @@ impl Default for Hooks {
             nevers: None,
             cards: None,
             key_envs: Arc::new(Vec::new),
+            guard_slice: None,
             history: None,
             #[cfg(test)]
             plain_sessions: false,
@@ -454,6 +467,7 @@ impl ExecSpec {
             _ => PathBuf::from("."),
         };
         s.timeout_s = self.time_box().map_or(0, |t| t.as_secs());
+        (s.derived.stall_s, s.derived.silent_s) = (self.user.stall_s, self.user.silent_s);
         s.mem_mib.max =
             mem_mib(self.user.memory_max.as_deref().unwrap_or(memory)).max(s.mem_mib.min);
         s.project = s
@@ -462,6 +476,7 @@ impl ExecSpec {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         s.local_only = self.place.local_only;
+        s.lane = self.place.lane.clone();
         s.keys = self.place.keys.clone();
         s.writes = self.place.writes.clone();
         if self.place.heavy {
@@ -1704,6 +1719,54 @@ impl Inner {
 
     /// The `podman run` of a container job.  The container is the sandbox, so the starter's Gleipnir spec is not used;
     /// the hub pulls the image first, the job never does.
+    /// `CARGO_BUILD_JOBS` for local job ID from its grant (its cores and SPEC's memory cap, design §3 #4); None when
+    /// the queue holds no grant for it.
+    fn cargo_jobs(&self, id: &str, spec: &ExecSpec) -> Option<u32> {
+        let memory = spec
+            .user
+            .memory_max
+            .as_deref()
+            .unwrap_or(self.hooks.memory.as_str());
+        let grant = forseti::Grant {
+            cores: self.queue.local_cores(id)?,
+            mem_cap_mib: mem_mib(memory),
+            reserve_mib: 0,
+        };
+        Some(forseti::admit::cargo_jobs(&grant))
+    }
+
+    /// The cgroup folder of local job ID's slice, for the progress guard: the test hook's, else its
+    /// `drgnx-job-<id>.slice` when systemd runs the jobs; none: no slice to read.
+    fn guard_slice_dir(&self, id: &str) -> Option<PathBuf> {
+        if let Some(f) = &self.hooks.guard_slice {
+            return f(id);
+        }
+        #[cfg(target_os = "linux")]
+        if self.hooks.systemd {
+            return Some(crate::runners::local::job_slice_dir(id));
+        }
+        None
+    }
+
+    /// The progress guard over local job ID (its slice and log) under limits L: the stop, when a rule is hit; it
+    /// reads every [`pguard::period_s`].
+    async fn guard(&self, id: &str, l: GuardLimits) -> pguard::Stop {
+        let slice = self.guard_slice_dir(id);
+        let logs = vec![self.dir(id).join("log")];
+        let t0 = crate::clock::now();
+        let period = Duration::from_secs(pguard::period_s(&l));
+        let mut last = pguard::read(0, slice.as_deref(), &logs, &pguard::Reading::default());
+        let mut t = pguard::Tracker::new(last);
+        loop {
+            crate::clock::sleep(period).await;
+            let at = (crate::clock::now() - t0).as_secs();
+            last = pguard::read(at, slice.as_deref(), &logs, &last);
+            if let Some(s) = t.see(last, &l) {
+                return s;
+            }
+        }
+    }
+
     async fn container_spec(
         &self,
         id: &str,
@@ -1799,7 +1862,13 @@ impl Inner {
         }
         // the container runs in the job's slice beside its scope, so the slice holds all the job uses
         let slice = self.hooks.systemd.then(|| unit::job_slice_name(id));
-        let args = match container::argv(&req, &caps, &owner, slice.as_deref()) {
+        // cargo in the container builds as many units at once as the job's grant allows, unless the job says otherwise
+        let cargo_jobs = if spec.user.env.iter().any(|(k, _)| k == "CARGO_BUILD_JOBS") {
+            0
+        } else {
+            self.cargo_jobs(id, spec).unwrap_or(0)
+        };
+        let args = match container::argv(&req, &caps, &owner, slice.as_deref(), cargo_jobs) {
             Ok(a) => a,
             Err(e) => {
                 if let Some(r) = relay {
@@ -2003,15 +2072,22 @@ impl Inner {
         // cargo builds as many units at once as the job's grant allows (design §3 #4), unless the job says otherwise
         if status.is_none()
             && !inner.env.iter().any(|(k, _)| k == "CARGO_BUILD_JOBS")
-            && let Some(cores) = self.queue.local_cores(id)
+            && let Some(n) = self.cargo_jobs(id, &spec)
         {
-            let grant = forseti::Grant {
-                cores,
-                mem_cap_mib: mem_mib(memory),
-                reserve_mib: 0,
-            };
-            let n = forseti::admit::cargo_jobs(&grant).to_string();
-            inner.env.push(("CARGO_BUILD_JOBS".into(), n.into()));
+            inner
+                .env
+                .push(("CARGO_BUILD_JOBS".into(), n.to_string().into()));
+        }
+        // the job's deadline, so a harness can dump its state before its time box ends (design §5.7); a container
+        // job's podman passes it in
+        if status.is_none()
+            && let Some(t) = spec.time_box()
+        {
+            let deadline = (now() + t.as_secs_f64()).ceil() as u64;
+            inner.env.push((
+                sleipnir::linux::podman::DEADLINE_ENV.into(),
+                deadline.to_string().into(),
+            ));
         }
         let wrap = if keyed.is_some() {
             unit::wrap_to_hub
@@ -2130,10 +2206,11 @@ impl Inner {
             self.nets.lock().unwrap().insert(id.clone(), tx);
             Net { net, stop }
         });
+        let guard = guard_of(&spec);
         crate::clock::spawn("exec:watch", async move {
             // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not;
             // an advance does not wait for it (the job's time box may be what ends it)
-            crate::clock::real_long(me.clone().watch(&id, Some(child), relay, keyed)).await;
+            crate::clock::real_long(me.clone().watch(&id, Some(child), relay, keyed, guard)).await;
             drop(permit);
             me.pump();
         });
@@ -2220,13 +2297,15 @@ impl Inner {
 
     /// Wait for the job to end (or its time box, or its relay), then record the end.  CHILD is the process this hub
     /// started; none: a job re-attached after a restart, watched by polling.  RELAY is a networked job's: when its
-    /// channel ends first (or a graceful hub stop asks), the job ends `infra: proxy`.
+    /// channel ends first (or a graceful hub stop asks), the job ends `infra: proxy`.  GUARD: the progress guard's
+    /// limits, when the job has it ([`guard_of`]); a stop ends the job `infra: stuck (<rule>)`.
     async fn watch(
         self: Arc<Self>,
         id: &str,
         child: Option<draugr::Child>,
         relay: Option<Net>,
         keyed: Option<Keyed>,
+        guard: Option<GuardLimits>,
     ) {
         let mut relay = relay;
         let mut acks = Vec::new();
@@ -2247,8 +2326,35 @@ impl Inner {
                         None => std::future::pending().await,
                     }
                 };
+                let stuck = async {
+                    match guard {
+                        Some(l) => self.guard(id, l).await,
+                        None => std::future::pending().await,
+                    }
+                };
                 tokio::select! {
                     _ = c.wait() => {}
+                    stop = stuck => {
+                        // the report and the log line, then the reason; the job's group goes, and its slice at the end
+                        let slice = self.guard_slice_dir(id);
+                        let (d, s) = (dir.clone(), stop);
+                        let _ = crate::clock::blocking(move || {
+                            if let Err(e) = pguard::stuck_report(&d, &s, slice.as_deref(), &d.join("log")) {
+                                tracing::warn!("the stuck report: {e}");
+                            }
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(d.join("log")) {
+                                let _ = writeln!(f, "{}", pguard::log_line(&s));
+                            }
+                            let _ = std::fs::write(d.join("why"), format!("infra: {}", pguard::verdict_text(&s)));
+                        })
+                        .await;
+                        crate::clock::real(async {
+                            let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
+                            let _ = c.wait().await;
+                        })
+                        .await;
+                    }
                     end = relay_end => {
                         let r = relay.take().expect("the relay arm fired");
                         // the sidecar's stderr is read before it is stopped; the job container goes before the sidecar
@@ -2635,7 +2741,7 @@ impl Inner {
                 }
                 let me = self.clone();
                 crate::clock::spawn("exec:watch", async move {
-                    crate::clock::real_long(me.watch(&id, None, None, None)).await;
+                    crate::clock::real_long(me.watch(&id, None, None, None, None)).await;
                 });
             }
         }
@@ -3043,7 +3149,38 @@ async fn placement(
             .flat_map(|n| n.iter())
             .map(|n| n.as_str().to_string())
             .collect(),
+        lane: lane_of(p)?,
     })
+}
+
+/// The lane `exec/start` asks for (`lane`, `whole_machine`): a timing run is an island run unless it asks for the whole
+/// machine, which needs the timing lane and a named machine (design §5.6).
+pub(crate) fn lane_of(p: &StartParams) -> Result<forseti::Lane, Error> {
+    use runstav::methods::exec::JobLane;
+    let timing = p.lane == Some(JobLane::Timing);
+    if p.whole_machine != Some(true) {
+        return Ok(if timing {
+            forseti::Lane::Timing { pinned: Some(0) }
+        } else {
+            forseti::Lane::Work
+        });
+    }
+    if !timing {
+        return Err(crate::agents::session::invalid(
+            "whole_machine",
+            "a whole-machine run is a timing run: lane \"timing\"",
+        ));
+    }
+    if matches!(
+        Machine::parse(p.machine.as_ref().map(|m| m.as_str())),
+        Machine::Auto
+    ) {
+        return Err(crate::agents::session::invalid(
+            "whole_machine",
+            "a whole-machine run names its machine (`machine`)",
+        ));
+    }
+    Ok(forseti::Lane::Timing { pinned: None })
 }
 
 /// The hosts a container job's network grant reaches (its cell over the caps' `drgnx-agents-net-hosts`): what its
@@ -3455,6 +3592,19 @@ fn requested_timebox(p: &StartParams) -> Duration {
 /// What the user's request adds to its job.  An agent's request that sets any of it is refused (its job's limits are
 /// the hub's); a container job takes no environment and no memory cap of its own (the image's caps apply); macOS has
 /// no memory cap for a job.
+/// The progress guard's limits for a local job SPEC, or none when it has no guard: a job with a time box that names
+/// its limits, runs a container or runs a test suite (the editor's servers and the user's own commands are never
+/// judged by their output). Its wall is its time box, which ends it first as `timed out`.
+fn guard_of(spec: &ExecSpec) -> Option<GuardLimits> {
+    let t = spec.time_box()?;
+    let named = spec.user.stall_s.is_some() || spec.user.silent_s.is_some();
+    (named || spec.container.is_some() || spec.place.suite.is_some()).then(|| GuardLimits {
+        stall_s: spec.user.stall_s.unwrap_or(pguard::STALL_S),
+        silent_s: spec.user.silent_s.unwrap_or(pguard::SILENT_S),
+        ..GuardLimits::defaults(t.as_secs().max(1))
+    })
+}
+
 fn user_job(sid: &Option<String>, kind: CheckKind, p: &StartParams) -> Result<UserJob, Error> {
     if sid.is_some()
         && let Some(field) = p.user_only_field()
@@ -3487,6 +3637,8 @@ fn user_job(sid: &Option<String>, kind: CheckKind, p: &StartParams) -> Result<Us
         memory_max: p.memory_max.as_ref().map(|m| m.to_string()),
         nice: p.nice,
         no_timebox: p.no_timebox == Some(true),
+        stall_s: p.stall_s,
+        silent_s: p.silent_s,
     })
 }
 

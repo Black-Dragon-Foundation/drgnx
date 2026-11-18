@@ -31,6 +31,10 @@ pub enum CompId {
     RangeBar,
     /// `time-axis`
     TimeAxis,
+    /// `tab`
+    Tab,
+    /// `segmented`
+    Segmented,
 }
 
 /// A state of the state table (on the wire, its name: `"selected-inactive"`).
@@ -93,7 +97,7 @@ pub struct Geom {
 
 /// The glyphs the components name: `(name, Unicode, ASCII)`, from the standard table (`drgnx-ui--default-glyphs`);
 /// the env's glyphs (`KitEnv::glyphs`) take precedence.
-pub const GLYPHS: [(&str, &str, &str); 28] = [
+pub const GLYPHS: [(&str, &str, &str); 29] = [
     ("chevron-right", "›", ">"),
     ("chevron-down", "⌄", "v"),
     ("bar-left", "", "["),
@@ -122,6 +126,7 @@ pub const GLYPHS: [(&str, &str, &str); 28] = [
     ("range-forecast", "┄", "."),
     ("seg-think", "·", "."),
     ("axis-now", "│", "|"),
+    ("close", "×", "x"),
 ];
 
 const DENSITIES: [&str; 3] = ["compact", "comfortable", "roomy"];
@@ -475,6 +480,35 @@ const TIME_AXIS_GEOM: [[Geom; 3]; 1] = [
 const TIME_AXIS_LABEL: [Option<&str>; 1] = [Some("time axis")];
 const TIME_AXIS_FACE: [FaceId; 1] = [FaceId::KitTimeAxis];
 
+const TAB_AXES: &[&[&str]] = &[&["editor", "panel"]];
+const TAB_DEFAULTS: &[usize] = &[0];
+const TAB_GEOM: [[Geom; 3]; 2] = [
+    [
+        Geom { height: 34, pad: (10, 8), gap: 7, boxed: false, radius: 7, hit: 0, indent: 0, tty_pad: 2, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 34, pad: (10, 8), gap: 7, boxed: false, radius: 7, hit: 0, indent: 0, tty_pad: 2, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 34, pad: (10, 8), gap: 7, boxed: false, radius: 7, hit: 0, indent: 0, tty_pad: 2, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 30, pad: (9, 9), gap: 6, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 2, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 30, pad: (9, 9), gap: 6, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 2, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 30, pad: (9, 9), gap: 6, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 2, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const TAB_LABEL: [Option<&str>; 2] = [Some("modified"), Some("modified")];
+const TAB_FACE: [FaceId; 2] = [FaceId::KitTab, FaceId::KitTab];
+
+const SEGMENTED_AXES: &[&[&str]] = &[];
+const SEGMENTED_DEFAULTS: &[usize] = &[];
+const SEGMENTED_GEOM: [[Geom; 3]; 1] = [
+    [
+        Geom { height: 24, pad: (10, 10), gap: 0, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 24, pad: (10, 10), gap: 0, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 24, pad: (10, 10), gap: 0, boxed: true, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const SEGMENTED_LABEL: [Option<&str>; 1] = [Some("selected")];
+const SEGMENTED_FACE: [FaceId; 1] = [FaceId::KitSegmented];
+
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {
     match id {
@@ -522,6 +556,14 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant);
             TIME_AXIS_GEOM[i][d]
         }
+        CompId::Tab => {
+            let (i, d) = index(TAB_AXES, TAB_DEFAULTS, variant);
+            TAB_GEOM[i][d]
+        }
+        CompId::Segmented => {
+            let (i, d) = index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant);
+            SEGMENTED_GEOM[i][d]
+        }
     }
 }
 
@@ -539,6 +581,8 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::StatusDot => STATUS_DOT_LABEL[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
         CompId::RangeBar => RANGE_BAR_LABEL[index(RANGE_BAR_AXES, RANGE_BAR_DEFAULTS, variant).0],
         CompId::TimeAxis => TIME_AXIS_LABEL[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
+        CompId::Tab => TAB_LABEL[index(TAB_AXES, TAB_DEFAULTS, variant).0],
+        CompId::Segmented => SEGMENTED_LABEL[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
     }
 }
 
@@ -556,5 +600,7 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::StatusDot => STATUS_DOT_FACE[index(STATUS_DOT_AXES, STATUS_DOT_DEFAULTS, variant).0],
         CompId::RangeBar => RANGE_BAR_FACE[index(RANGE_BAR_AXES, RANGE_BAR_DEFAULTS, variant).0],
         CompId::TimeAxis => TIME_AXIS_FACE[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
+        CompId::Tab => TAB_FACE[index(TAB_AXES, TAB_DEFAULTS, variant).0],
+        CompId::Segmented => SEGMENTED_FACE[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
     }
 }

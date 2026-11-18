@@ -75,11 +75,15 @@ impl PartialOrd for Priority {
     }
 }
 
-/// Which lane a job runs in: ordinary work, or a timing run (pinned to `pinned` cores when given).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Which lane a job runs in: ordinary work, or a timing run: on the runner's timing island (`pinned: Some(n)`, the n
+/// CPUs its harness pins there, 0 when the harness picks), or the whole machine (`None`, design §5.6).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Lane {
+    #[default]
     Work,
-    Timing { pinned: Option<u8> },
+    Timing {
+        pinned: Option<u8>,
+    },
 }
 
 /// Heavy or light. A job is heavy only when it is marked so; [`JobSpec::heavy`] reads it.
@@ -216,6 +220,10 @@ pub struct Derived {
     /// `floor(log2(MiB))` of the frozen tree the job reads ([`tree_bucket`]): a history key class, so a tree ten times
     /// bigger keeps its own expected time and memory.
     pub tree_bucket: Option<u8>,
+    /// The progress guard's stall and silent limits in seconds, when the starter or the pack names them (none: the
+    /// defaults, `sleipnir::linux::progress`).
+    pub stall_s: Option<u64>,
+    pub silent_s: Option<u64>,
 }
 
 /// The history class of a tree of BYTES: `floor(log2(MiB))`, 0 below 2 MiB.
@@ -338,6 +346,16 @@ pub struct MachineState {
     /// Other schedulers' reservations on this machine (jobq's legacy slot reservations among them). The probe drops
     /// those whose process is gone; the budget counts the rest by [`crate::count_others`].
     pub others: Vec<Reservation>,
+    /// The runner's timing island (its profile's `island`) and the timing job on it; none on a machine without one.
+    #[serde(default)]
+    pub island: Option<Island>,
+}
+
+/// A runner's timing island (design §5.6): CPUS of its own (a whole L3 group), and the timing job that holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Island {
+    pub cpus: u32,
+    pub busy: Option<JobId>,
 }
 
 /// How a job ended.
@@ -388,6 +406,8 @@ pub enum WaitReason {
         holder: JobId,
     },
     IslandBusy,
+    /// A timing run pinned to an island, on a machine without one: it never takes the whole machine unasked.
+    NoIsland,
     DrainWaits,
     DesktopUnreachable {
         since: u64,

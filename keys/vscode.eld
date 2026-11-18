@@ -3,7 +3,6 @@
 (:name "VS Code"
        :doc "Visual Studio Code's default keys"
        :mac-cmd t
-       :indent-tabs-mode nil   ; VS Code indents with spaces (the default Emacs would give Lisp files tabs of 8)
        :lone-modifiers (alt)   ; Alt pressed and released alone is `lone-alt' (Nidhogg): the menu, as VS Code's
        :bind ((palette "C-S-p" "<f1>")
               (keys-sheet "C-k C-r")
