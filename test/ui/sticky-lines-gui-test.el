@@ -62,4 +62,27 @@
       (drgnx-sticky--hide-all t)
       (kill-buffer b))))
 
+(ert-deftest drgnx-ui-sticky-lines/a-window-gets-its-hidden-card-in-the-lines-style-and-it-goes-with-the-window ()
+  (skip-unless (display-graphic-p))
+  (let ((b (generate-new-buffer "sticky-lines-premake")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (let ((drgnx-sticky-style 'lines) (w (split-window)))
+            (with-current-buffer b (insert "(defun f ()\n  1)\n") (emacs-lisp-mode) (drgnx-sticky-mode 1))
+            (set-window-buffer w b)
+            (drgnx-sticky--resized (window-frame w))             ; the window change's subscriber
+            (let ((card (cdr (assq w drgnx-sticky--cards))))
+              (should card)
+              (should (frame-live-p (aref card 0)))
+              (should-not (frame-visible-p (aref card 0)))
+              (should-not (aref card 2))
+              (delete-window w)
+              (drgnx-sticky--resized (selected-frame))
+              (should-not (assq w drgnx-sticky--cards))
+              (should-not (frame-live-p (aref card 0)))
+              (should-not (buffer-live-p (aref card 1))))))
+      (drgnx-sticky--hide-all t)
+      (kill-buffer b))))
+
 ;;; sticky-lines-gui-test.el ends here

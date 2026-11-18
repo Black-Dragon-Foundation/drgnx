@@ -48,7 +48,9 @@ sticky scroll.  A click on a line goes there; Ctrl+click folds that scope."
   "A sticky setting changed: every buffer's scopes are worked out again, and the cards a `names' style leaves go."
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-sticky-mode b) (drgnx-epoch-bump 'sticky b)))
-  (unless (eq drgnx-sticky-style 'lines) (drgnx-sticky--hide-all t))
+  (if (eq drgnx-sticky-style 'lines)
+      (dolist (f (frame-list)) (drgnx-sticky--premake f))
+    (drgnx-sticky--hide-all t))
   (force-mode-line-update t))
 
 (defvar drgnx-sticky-node-types
@@ -357,7 +359,7 @@ the minimap and the ruler."
 (defun drgnx-sticky--windows-moved (data)
   "A `now' subscriber of the store's `pane-resized' and `windows-changed' (DATA): the cards over its frame's windows
 are placed again after this redisplay (a frame is never changed inside one)."
-  (when drgnx-sticky--cards
+  (when (or drgnx-sticky--cards (eq drgnx-sticky-style 'lines))
     (drgnx-timer-debounce 'sticky-cards 0 #'drgnx-sticky--resized :args (list (plist-get data :frame))
                           :owner 'editor/sticky)))
 
@@ -371,7 +373,18 @@ are placed again after this redisplay (a frame is never changed inside one)."
              (setq drgnx-sticky--cards (delq e drgnx-sticky--cards)
                    drgnx-sticky--pin-shown (assq-delete-all w drgnx-sticky--pin-shown)))
             ((and (eq (window-frame w) frame) (aref card 2) (frame-live-p (aref card 0)))
-             (drgnx-sticky--place w card))))))
+             (drgnx-sticky--place w card)))))
+  (drgnx-sticky--premake frame))
+
+(defun drgnx-sticky--premake (frame)
+  "In the `lines' style, the hidden card of each of FRAME's windows with sticky scroll, made now (after a redisplay,
+outside it) so a card's first show only fills and maps it: making the frame is most of a first show's time.  The card
+goes with its window (`drgnx-sticky--resized') or the style (`drgnx-sticky--setting-changed')."
+  (when (and (eq drgnx-sticky-style 'lines) (frame-live-p frame) (display-graphic-p frame)
+             (not (frame-parameter frame 'drgnx-sticky-card)))
+    (dolist (w (window-list frame 'never))
+      (when (and (buffer-local-value 'drgnx-sticky-mode (window-buffer w)) (not (assq w drgnx-sticky--cards)))
+        (drgnx-sticky--card w)))))
 
 (defun drgnx-sticky--click-target (event)
   "The window and position a click EVENT on a card goes to, as (WINDOW . POS), or nil."
@@ -510,7 +523,8 @@ in a buffer with sticky scroll."
   "Sticky scroll: the scopes scrolled off the top, in the header after the breadcrumb."
   :lighter nil
   (if drgnx-sticky-mode
-      (add-hook 'after-change-functions #'drgnx-sticky--after-change nil t)
+      (progn (add-hook 'after-change-functions #'drgnx-sticky--after-change nil t)
+             (dolist (w (get-buffer-window-list nil nil t)) (drgnx-sticky--premake (window-frame w))))
     (remove-hook 'after-change-functions #'drgnx-sticky--after-change t)
     (dolist (w (get-buffer-window-list nil nil t)) (drgnx-sticky--hide w)))
   (when (and (bound-and-true-p drgnx-chrome-mode) (get-buffer-window)) (drgnx-chrome-apply)))   ; the header shows it now

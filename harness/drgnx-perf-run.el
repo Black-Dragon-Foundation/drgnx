@@ -2570,33 +2570,33 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                                (or drgnx-perf-run--fixture ""))
              :check "(fboundp 'drgnx-fold-fold-all)")
             ;; the sticky lines' first show (design §8, F6): one card of 2 lines over the window's top rows, 20 times,
-            ;; each from no card frame at all through the redisplay that draws it (`show_ms' its p50, ≤ 30 ms; `show_p95');
-            ;; split into the pooled child frame's making alone (`make_ms') and a fill into a made, hidden card (`fill_ms')
+            ;; each into the hidden card made after a window change (`drgnx-sticky--resized', the lines style on)
+            ;; through the redisplay that draws it (`show_ms' its p50, ≤ 30 ms; `show_p95'); the making of that hidden
+            ;; card, off the show's path, alone (`make_ms')
             (sticky-first-show
              :measure ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
                                " (require 'drgnx-sticky) (drgnx-sticky--hide-all t)"
                                " (setq drgnx-sticky--pin-shown (list (cons (selected-window) 'perf)))"
                                " (unwind-protect"
-                               "     (let* ((w (selected-window))"
+                               "     (let* ((drgnx-sticky-style 'lines) (w (selected-window))"
                                "            (lines (list (point-min) (save-excursion (forward-line 1) (point))))"
                                "            (shown (lambda () (seq-some (lambda (f) (and (frame-parameter f 'drgnx-sticky-card) (frame-visible-p f))) (frame-list))))"
                                "            (ms (lambda (t0) (* 1000 (- (float-time) t0))))"
-                               "            show make fill)"
+                               "            show make)"
+                               "       (drgnx-sticky-mode 1)"
                                "       (dotimes (_ 20)"
-                               "         (drgnx-sticky--hide-all t) (redisplay t)"
-                               "         (let ((t0 (float-time)))"
-                               "           (drgnx-sticky--fill w lines) (redisplay t)"
-                               "           (push (funcall ms t0) show))"
-                               "         (unless (funcall shown) (error \"sticky-first-show: no card shown\"))"
-                               "         (drgnx-sticky--hide-all t) (redisplay t)"
-                               "         (let ((t0 (float-time))) (drgnx-sticky--card w) (push (funcall ms t0) make))"
+                               "         (drgnx-sticky--hide-all t)"
+                               "         (setq drgnx-sticky--pin-shown (list (cons w 'perf))) (redisplay t)"
+                               "         (let ((t0 (float-time))) (drgnx-sticky--resized (window-frame w)) (push (funcall ms t0) make))"
+                               "         (unless (assq w drgnx-sticky--cards) (error \"sticky-first-show: no card made after a window change\"))"
                                "         (redisplay t)"
                                "         (let ((t0 (float-time)))"
                                "           (drgnx-sticky--fill w lines) (redisplay t)"
-                               "           (push (funcall ms t0) fill)))"
+                               "           (push (funcall ms t0) show))"
+                               "         (unless (funcall shown) (error \"sticky-first-show: no card shown\")))"
                                "       (let ((p50 (lambda (v) (drgnx-perf--round (plist-get (drgnx-perf-stats v) :p50)))))"
                                "         (list :show_ms (funcall p50 show) :show_p95 (drgnx-perf--round (drgnx-perf--p95 show))"
-                               "               :make_ms (funcall p50 make) :fill_ms (funcall p50 fill) :n (length show))))"
+                               "               :make_ms (funcall p50 make) :n (length show))))"
                                "   (drgnx-sticky--hide-all t) " kill-fixture "))"))
             ;; the model's memory a line, over the whole fixture (≤ 40 B)
             (lines-memory
