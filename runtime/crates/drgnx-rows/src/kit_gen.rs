@@ -33,6 +33,8 @@ pub enum CompId {
     TimeAxis,
     /// `tab`
     Tab,
+    /// `question-card`
+    QuestionCard,
     /// `segmented`
     Segmented,
     /// `text-input`
@@ -655,6 +657,28 @@ const TAB_GEOM: [[Geom; 3]; 2] = [
 const TAB_LABEL: [Option<&str>; 2] = [Some("modified"), Some("modified")];
 const TAB_FACE: [FaceId; 2] = [FaceId::KitTab, FaceId::KitTab];
 
+const QUESTION_CARD_AXES: &[&[&str]] = &[&["permission", "question", "sign-off"]];
+const QUESTION_CARD_DEFAULTS: &[usize] = &[0];
+const QUESTION_CARD_GEOM: [[Geom; 3]; 3] = [
+    [
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const QUESTION_CARD_LABEL: [Option<&str>; 3] = [Some("needs you"), Some("needs you"), Some("needs you")];
+const QUESTION_CARD_FACE: [FaceId; 3] = [FaceId::KitQuestionCard, FaceId::KitQuestionCard, FaceId::KitQuestionCard];
+
 const SEGMENTED_AXES: &[&[&str]] = &[];
 const SEGMENTED_DEFAULTS: &[usize] = &[];
 const SEGMENTED_GEOM: [[Geom; 3]; 1] = [
@@ -765,6 +789,10 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(TAB_AXES, TAB_DEFAULTS, variant);
             TAB_GEOM[i][d]
         }
+        CompId::QuestionCard => {
+            let (i, d) = index(QUESTION_CARD_AXES, QUESTION_CARD_DEFAULTS, variant);
+            QUESTION_CARD_GEOM[i][d]
+        }
         CompId::Segmented => {
             let (i, d) = index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant);
             SEGMENTED_GEOM[i][d]
@@ -791,6 +819,7 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::RangeBar => RANGE_BAR_LABEL[index(RANGE_BAR_AXES, RANGE_BAR_DEFAULTS, variant).0],
         CompId::TimeAxis => TIME_AXIS_LABEL[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
         CompId::Tab => TAB_LABEL[index(TAB_AXES, TAB_DEFAULTS, variant).0],
+        CompId::QuestionCard => QUESTION_CARD_LABEL[index(QUESTION_CARD_AXES, QUESTION_CARD_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_LABEL[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
         CompId::TextInput => TEXT_INPUT_LABEL[index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant).0],
     }
@@ -811,6 +840,7 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::RangeBar => RANGE_BAR_FACE[index(RANGE_BAR_AXES, RANGE_BAR_DEFAULTS, variant).0],
         CompId::TimeAxis => TIME_AXIS_FACE[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
         CompId::Tab => TAB_FACE[index(TAB_AXES, TAB_DEFAULTS, variant).0],
+        CompId::QuestionCard => QUESTION_CARD_FACE[index(QUESTION_CARD_AXES, QUESTION_CARD_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_FACE[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
         CompId::TextInput => TEXT_INPUT_FACE[index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant).0],
     }

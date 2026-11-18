@@ -212,6 +212,15 @@
                   (drgnx-wb-tab-current . drgnx-kit-tab-panel-current) (drgnx-work-lens-title . drgnx-kit-tab-current)
                   (drgnx-chrome-tab-preview . drgnx-kit-tab-preview))
        :helpers nil :lint t)
+  ;; a question card: a needs-you card of a head (the needs-you status dot and the title on the attention tint), the body's
+  ;; wrapped text and the choices' row (kit buttons, the first primary, each with its key hint).  `kind' sets the choices'
+  ;; keys (permission y a n, question 1..9, sign-off y n); a block of rows: the hub's `expand_rows', Lisp's `drgnx-ui-kit-question-card' (lines), no inline form
+  (question-card :variants ((kind permission question sign-off)) :defaults (kind permission)
+                 :geometry (:height 0 :pad (8 . 8) :gap 8 :box t :radius 8 :hit 0)
+                 :tty (:pad 1) :label "needs you"
+                 :bind ((() :inherit (drgnx-ui-text))
+                        ((head) :bg attention-tint :inherit (drgnx-ui-text drgnx-selected-quiet) :font (drgnx-ui-text)))
+                 :replaces nil :helpers nil :lint t)
   ;; a segmented switch: its items in one track (a 1 px ring in the border's colour, radius 6), the current one on the
   ;; quiet selection in the body text's colour, the others muted; each item an action.  The current item's label is
   ;; "LABEL, selected"

@@ -36,3 +36,13 @@ wrong when a new view draws its own background.  (The kit's `card` component, a 
 - Per-corner radii, two boxes on one face and a different divider colour per window are not available in the
   compositor: do not design for them.
 - High contrast has no shadow: the edge is a 1 or 2 px ring.
+
+## The question card
+
+What an agent asks you (a permission to run something, a question with answers, a sign-off) is one kit component, the
+[question card](question-card.md): a needs-you card (the attention-coloured ring) whose head is the needs-you status
+dot and the title on the attention tint, then the body's text, then the answers as [kit buttons](button.md), the first
+primary, each with its [key hint](key-hint.md): a permission `y` Allow once, `a` Always, `n` Deny; a question `1`...`9`;
+a sign-off `y` Approve, `n` Request changes. The agent panel, the review screen and the trust and sign-off asks draw
+it through the kit, never by hand. A prompt a command raised itself (the debug launch's trust question) stays a
+minibuffer prompt.
