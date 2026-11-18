@@ -569,7 +569,7 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   width and the UI font's measure, and the subtitle never wraps (a wrapped line shows a continuation glyph): it drops
   "(API prices)", then its parts from the end, then is cut with an ellipsis. A trail's step that a conclusion rests on
   starts with the conclusion's number in a filled accent circle (`drgnx-work-step-number`, the solid chip
-  `drgnx-chip-solid` in the badge's pill), the
+  `drgnx-kit-chip-accent-solid` in the badge's pill), the
   others keep the room; the newest conclusion's card says `new` while it is stamped on one of the last three steps.
 - **Cards, Detail and trail as the mockup draws them.** The trail is the panel's Trail tab, the lens switch is the kit's segmented switch (`drgnx-ui-kit-segmented`), the shown lens on the quiet selection. A card line is as tall as its layout row says (a row's
   `height` unit, px: `drgnx-view-patch` sets `line-height` from it; a row with no unit is that many default lines).

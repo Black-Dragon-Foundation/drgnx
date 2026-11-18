@@ -103,10 +103,10 @@ and folded again when it opens (each found again by its kind and first line with
 dropped)."
   :type 'boolean :group 'drgnx-fold :scope 'global)
 
-(defface drgnx-fold-summary '((t :inherit drgnx-chip-quiet))
+(defface drgnx-fold-summary '((t :inherit drgnx-kit-chip-neutral-soft))
   "The summary after a folded line (`⋯ 38 lines')." :group 'drgnx-fold)
 
-(defface drgnx-fold-name '((t :inherit drgnx-chip-accent))
+(defface drgnx-fold-name '((t :inherit drgnx-kit-chip-accent-soft))
   "A named fold's name after its folded line." :group 'drgnx-fold)
 
 ;;;; The fold table

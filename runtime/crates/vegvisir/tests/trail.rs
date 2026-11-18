@@ -709,7 +709,7 @@ fn a_finding_card_keeps_its_keys_and_a_filled_number() {
     );
     let top = rows.iter().find(|r| r.key == "conc:1:0").expect("the card");
     assert!(
-        top.runs.iter().any(|r| r.2 == FaceId::ChipSolid.name()),
+        top.runs.iter().any(|r| r.2 == FaceId::KitChipAccentSolid.name()),
         "{top:?}"
     );
     let sub = rows
@@ -722,7 +722,7 @@ fn a_finding_card_keeps_its_keys_and_a_filled_number() {
         "{sub:?}"
     );
     assert!(
-        sub.runs.iter().any(|r| r.2 == FaceId::ChipQuiet.name()),
+        sub.runs.iter().any(|r| r.2 == FaceId::KitChipNeutralSoft.name()),
         "{sub:?}"
     );
 }

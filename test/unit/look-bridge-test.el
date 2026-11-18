@@ -24,9 +24,9 @@ the UI heading role, the gutter in the status colours.  Turning ui/look off give
           (drgnx-test-with-modules '(ui/look)
             (should (equal old (get 'magit-tag 'face-defface-spec)))   ; not loaded yet: untouched
             (provide 'magit)
-            (should (memq 'drgnx-chip-accent (drgnx-look-bridge-test--inherits 'magit-branch-local)))
-            (should (memq 'drgnx-chip-ok (drgnx-look-bridge-test--inherits 'magit-branch-remote)))
-            (should (memq 'drgnx-chip-warn (drgnx-look-bridge-test--inherits 'magit-tag)))
+            (should (memq 'drgnx-kit-chip-accent-soft (drgnx-look-bridge-test--inherits 'magit-branch-local)))
+            (should (memq 'drgnx-kit-chip-ok-soft (drgnx-look-bridge-test--inherits 'magit-branch-remote)))
+            (should (memq 'drgnx-kit-chip-warn-soft (drgnx-look-bridge-test--inherits 'magit-tag)))
             (should (memq 'drgnx-text-subtle (drgnx-look-bridge-test--inherits 'magit-hash)))
             ;; a chip is as tall as the text: no room above or below
             (let ((box (plist-get (cdar (get 'magit-tag 'face-defface-spec)) :box)))
@@ -60,7 +60,7 @@ TODO and DONE as chips no taller than the text; `outline-1' (headings in code) s
       (should (< (abs (- (plist-get two :height) (/ 14.5 13.5))) 0.001))
       (should (eq 'semibold (plist-get two :weight))))
     (should (memq 'drgnx-chip-attention (drgnx-look-bridge-test--inherits 'org-todo)))
-    (should (memq 'drgnx-chip-ok (drgnx-look-bridge-test--inherits 'org-done)))
+    (should (memq 'drgnx-kit-chip-ok-soft (drgnx-look-bridge-test--inherits 'org-done)))
     (should (<= (cdr (plist-get (plist-get (cdar (get 'org-todo 'face-defface-spec)) :box) :line-width)) 0))
     (should-not (plist-get (cdar (get 'outline-1 'face-defface-spec)) :height))))
 

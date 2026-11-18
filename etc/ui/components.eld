@@ -142,9 +142,7 @@
                ((warn solid) :bg warn :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption))
                ((ok solid) :bg ok :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption))
                ((error solid) :bg error :fg on-accent :inherit (drgnx-ui-caption highlight) :font (drgnx-ui-caption)))
-        :replaces ((drgnx-chip-quiet . drgnx-kit-chip-neutral-soft) (drgnx-chip-accent . drgnx-kit-chip-accent-soft)
-                   (drgnx-chip-ok . drgnx-kit-chip-ok-soft) (drgnx-chip-warn . drgnx-kit-chip-warn-soft)
-                   (drgnx-chip-error . drgnx-kit-chip-error-soft) (drgnx-chip-solid . drgnx-kit-chip-accent-solid))
+        :replaces nil
         :helpers (drgnx-decor-chip) :lint t)
   ;; a status dot: the status's glyph in its face, with its word after it when `word' is on (the terminal always has one)
   (status-dot :variants ((status done running needs-you idle error)) :defaults (status idle)

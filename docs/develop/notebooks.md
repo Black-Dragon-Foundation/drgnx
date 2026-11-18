@@ -164,7 +164,7 @@ action?}`: a code cell's are `run` (the button: `action` `run`, or `stop` while 
 (`[3]`, `[ ]`, or `[*]` while queued or running) and `language` (the kernelspec's or `code`, at most 64 characters); a markdown or raw
 cell's is `kind`. `chip` says which chip the text is in, `quiet`, or `accent` for the count while the cell is queued or running. The
 editor draws the button with the icon `play` (`square` for `stop`; a click runs the cell or interrupts the kernel) and each chip with
-`drgnx-chip-quiet` or `drgnx-chip-accent`, in that order, and a cell with no head yet (new) shows its type as a quiet chip. On the
+`drgnx-kit-chip-neutral-soft` or `drgnx-kit-chip-accent-soft`, in that order, and a cell with no head yet (new) shows its type as a quiet chip. On the
 **selected cell** the editor adds a right-aligned toolbar of icons, each a registry command (`drgnx-notebook--tools`): `chevron-up`
 Move Cell Up, `chevron-down` Move Cell Down, `trash-2` Delete Cell and `ellipsis` Cell Menu (a choice of copy, cut, paste, add
 above, split, merge, change type, clear outputs, run above or below); the header is built again when the selection moves.
@@ -187,9 +187,9 @@ for its views.
   `drgnx-notebook-cell` (the cell's id): selecting a row jumps to that cell. The first line is the first one with anything on it,
   without control or direction-changing characters, cut at 80 characters. It shows the cells as the hub has them, which are the
   editor's as of its last `notebook/sync`, `execute` or `save`. At most 2000 cells are listed; a last row `more`, text
-  `more: N cells are not listed`, carries N as the property `drgnx-notebook-more`. The type is a chip (`drgnx-chip-quiet`) and so is the
-  state word: `running` `drgnx-chip-accent`, `queued` `drgnx-chip-quiet`, `error` `drgnx-chip-error`, `aborted` and `cancelled`
-  `drgnx-chip-warn`; the padding after a chip is not in it. **The current cell:** the editor sends `notebook/focus {id, cell?}` when the
+  `more: N cells are not listed`, carries N as the property `drgnx-notebook-more`. The type is a chip (`drgnx-kit-chip-neutral-soft`) and so is the
+  state word: `running` `drgnx-kit-chip-accent-soft`, `queued` `drgnx-kit-chip-neutral-soft`, `error` `drgnx-kit-chip-error-soft`, `aborted` and `cancelled`
+  `drgnx-kit-chip-warn-soft`; the padding after a chip is not in it. **The current cell:** the editor sends `notebook/focus {id, cell?}` when the
   cell it is in changes (no `cell`: it is in none, such as in a view); the row of that cell then carries the property
   `drgnx-notebook-current` (`true`) and, under its other faces, the face `drgnx-notebook-current-row` over the whole row, for the editor to
   draw as the selected row. Other faces: `shadow`, `drgnx-notebook-prompt`, `drgnx-notebook-stale` (the output is the file's own).
@@ -198,7 +198,7 @@ for its views.
   the hub holds them (within the output limits: 1 MiB of text, 64 outputs, a cut says so on a last line), at most 1000 lines at a
   time. Rows `l:I` carry `drgnx-notebook-cell` and `drgnx-notebook-line` (the 1-based line); a row `above` and one `below` count the
   lines outside the window: `▲ N lines above   M-p earlier lines` and `▼ N lines below   M-n later lines` (N is also the property
-  `drgnx-notebook-above` or `-below`; the whole row has the face `drgnx-notebook-cut`, the key is a `drgnx-chip-quiet` chip; the
+  `drgnx-notebook-above` or `-below`; the whole row has the face `drgnx-notebook-cut`, the key is a `drgnx-kit-chip-neutral-soft` chip; the
   keys in the text are the default bindings, the hub does not know the user's). The editor moves the window with `view/window {view, list: "lines", from}` (0-based line) and the hub
   builds the rows again; a `from` past the end comes back to the last line. Text carries the terminal roles as faces
   (`drgnx-notebook-fg-NAME`, `drgnx-notebook-bg-NAME`, `bold`, `italic`, `underline`, `drgnx-notebook-inverse`), never colours. An
@@ -213,7 +213,7 @@ for its views.
   text) across the kernel's restarts. One row per line of an entry, keys `e:SEQ:K`, text `TYPE  line` (the lines of an entry under
   its type, at most 8, each cut at 400 characters, the rest counted `(N more lines)`), the property `drgnx-notebook-log` (the entry's
   number); a first row `lost  N earlier entries` (property `drgnx-notebook-lost` N) says how many earlier entries were dropped. The type is a
-  chip, `drgnx-chip-quiet` (`drgnx-chip-error` for an `error`), and every line of an `error` entry has `drgnx-notebook-error-row`.
+  chip, `drgnx-kit-chip-neutral-soft` (`drgnx-kit-chip-error-soft` for an `error`), and every line of an `error` entry has `drgnx-notebook-error-row`.
   `notebook/log {id, since?}` returns the same as data:
   `{entries: [{seq, type, text}], next, lost}` for the entries after `since` (a number from a former answer, or from the
   `notebook-log` event); `lost` counts the entries after `since` the hub no longer holds.

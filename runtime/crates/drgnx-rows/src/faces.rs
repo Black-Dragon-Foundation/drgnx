@@ -84,20 +84,10 @@ pub enum FaceId {
     Focus,
     /// `drgnx-status-attention`
     StatusAttention,
-    /// `drgnx-chip-quiet`
-    ChipQuiet,
     /// `drgnx-chip-attention`
     ChipAttention,
-    /// `drgnx-chip-accent`
-    ChipAccent,
-    /// `drgnx-chip-ok`
-    ChipOk,
-    /// `drgnx-chip-warn`
-    ChipWarn,
     /// `drgnx-tint-warn`
     TintWarn,
-    /// `drgnx-chip-error`
-    ChipError,
     /// `drgnx-control`
     Control,
     /// `drgnx-control-primary`
@@ -960,8 +950,8 @@ pub enum FaceId {
     Chip,
     /// `drgnx-badge`
     Badge,
-    /// `drgnx-chip-solid`
-    ChipSolid,
+    /// `drgnx-kit-chip-accent-solid`
+    KitChipAccentSolid,
     /// `drgnx-button`
     Button,
     /// `drgnx-button-hover`
@@ -1092,8 +1082,6 @@ pub enum FaceId {
     KitChipErrorSoft,
     /// `drgnx-kit-chip-neutral-solid`
     KitChipNeutralSolid,
-    /// `drgnx-kit-chip-accent-solid`
-    KitChipAccentSolid,
     /// `drgnx-kit-chip-warn-solid`
     KitChipWarnSolid,
     /// `drgnx-kit-chip-ok-solid`
@@ -1156,7 +1144,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 572] = [
+    pub const ALL: [FaceId; 566] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1195,13 +1183,8 @@ impl FaceId {
         FaceId::SelectedSecondary,
         FaceId::Focus,
         FaceId::StatusAttention,
-        FaceId::ChipQuiet,
         FaceId::ChipAttention,
-        FaceId::ChipAccent,
-        FaceId::ChipOk,
-        FaceId::ChipWarn,
         FaceId::TintWarn,
-        FaceId::ChipError,
         FaceId::Control,
         FaceId::ControlPrimary,
         FaceId::Pill,
@@ -1633,7 +1616,7 @@ impl FaceId {
         FaceId::WorkSegWait,
         FaceId::Chip,
         FaceId::Badge,
-        FaceId::ChipSolid,
+        FaceId::KitChipAccentSolid,
         FaceId::Button,
         FaceId::ButtonHover,
         FaceId::ButtonPressed,
@@ -1699,7 +1682,6 @@ impl FaceId {
         FaceId::KitChipOkSoft,
         FaceId::KitChipErrorSoft,
         FaceId::KitChipNeutralSolid,
-        FaceId::KitChipAccentSolid,
         FaceId::KitChipWarnSolid,
         FaceId::KitChipOkSolid,
         FaceId::KitChipErrorSolid,
@@ -1772,13 +1754,8 @@ impl FaceId {
             FaceId::SelectedSecondary => "drgnx-selected-secondary",
             FaceId::Focus => "drgnx-focus",
             FaceId::StatusAttention => "drgnx-status-attention",
-            FaceId::ChipQuiet => "drgnx-chip-quiet",
             FaceId::ChipAttention => "drgnx-chip-attention",
-            FaceId::ChipAccent => "drgnx-chip-accent",
-            FaceId::ChipOk => "drgnx-chip-ok",
-            FaceId::ChipWarn => "drgnx-chip-warn",
             FaceId::TintWarn => "drgnx-tint-warn",
-            FaceId::ChipError => "drgnx-chip-error",
             FaceId::Control => "drgnx-control",
             FaceId::ControlPrimary => "drgnx-control-primary",
             FaceId::Pill => "drgnx-pill",
@@ -2210,7 +2187,7 @@ impl FaceId {
             FaceId::WorkSegWait => "drgnx-work-seg-wait",
             FaceId::Chip => "drgnx-chip",
             FaceId::Badge => "drgnx-badge",
-            FaceId::ChipSolid => "drgnx-chip-solid",
+            FaceId::KitChipAccentSolid => "drgnx-kit-chip-accent-solid",
             FaceId::Button => "drgnx-button",
             FaceId::ButtonHover => "drgnx-button-hover",
             FaceId::ButtonPressed => "drgnx-button-pressed",
@@ -2276,7 +2253,6 @@ impl FaceId {
             FaceId::KitChipOkSoft => "drgnx-kit-chip-ok-soft",
             FaceId::KitChipErrorSoft => "drgnx-kit-chip-error-soft",
             FaceId::KitChipNeutralSolid => "drgnx-kit-chip-neutral-solid",
-            FaceId::KitChipAccentSolid => "drgnx-kit-chip-accent-solid",
             FaceId::KitChipWarnSolid => "drgnx-kit-chip-warn-solid",
             FaceId::KitChipOkSolid => "drgnx-kit-chip-ok-solid",
             FaceId::KitChipErrorSolid => "drgnx-kit-chip-error-solid",
@@ -2350,13 +2326,8 @@ impl FaceId {
             "drgnx-selected-secondary" => FaceId::SelectedSecondary,
             "drgnx-focus" => FaceId::Focus,
             "drgnx-status-attention" => FaceId::StatusAttention,
-            "drgnx-chip-quiet" => FaceId::ChipQuiet,
             "drgnx-chip-attention" => FaceId::ChipAttention,
-            "drgnx-chip-accent" => FaceId::ChipAccent,
-            "drgnx-chip-ok" => FaceId::ChipOk,
-            "drgnx-chip-warn" => FaceId::ChipWarn,
             "drgnx-tint-warn" => FaceId::TintWarn,
-            "drgnx-chip-error" => FaceId::ChipError,
             "drgnx-control" => FaceId::Control,
             "drgnx-control-primary" => FaceId::ControlPrimary,
             "drgnx-pill" => FaceId::Pill,
@@ -2788,7 +2759,7 @@ impl FaceId {
             "drgnx-work-seg-wait" => FaceId::WorkSegWait,
             "drgnx-chip" => FaceId::Chip,
             "drgnx-badge" => FaceId::Badge,
-            "drgnx-chip-solid" => FaceId::ChipSolid,
+            "drgnx-kit-chip-accent-solid" => FaceId::KitChipAccentSolid,
             "drgnx-button" => FaceId::Button,
             "drgnx-button-hover" => FaceId::ButtonHover,
             "drgnx-button-pressed" => FaceId::ButtonPressed,
@@ -2854,7 +2825,6 @@ impl FaceId {
             "drgnx-kit-chip-ok-soft" => FaceId::KitChipOkSoft,
             "drgnx-kit-chip-error-soft" => FaceId::KitChipErrorSoft,
             "drgnx-kit-chip-neutral-solid" => FaceId::KitChipNeutralSolid,
-            "drgnx-kit-chip-accent-solid" => FaceId::KitChipAccentSolid,
             "drgnx-kit-chip-warn-solid" => FaceId::KitChipWarnSolid,
             "drgnx-kit-chip-ok-solid" => FaceId::KitChipOkSolid,
             "drgnx-kit-chip-error-solid" => FaceId::KitChipErrorSolid,

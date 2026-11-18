@@ -672,7 +672,7 @@ given) instead of selecting the placeholder: it makes one, which the rules show 
   (when-let* ((w (drgnx-wb-area-window 'panel)) (buf (window-buffer w))
               ((memq buf (drgnx-wb-output-channels))))
     (propertize (concat " " (string-trim (buffer-name buf) "[ *]+" "[ *]+") " " (drgnx-look-icon 'chevron-down nil 14) " ")
-                'face 'drgnx-chip-quiet 'mouse-face 'highlight
+                'face 'drgnx-kit-chip-neutral-soft 'mouse-face 'highlight
                 'help-echo "The Output channel shown: click for another" 'local-map drgnx-area--channel-map)))
 
 (defun drgnx-area--problems-content ()

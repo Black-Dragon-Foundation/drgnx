@@ -41,7 +41,7 @@
   :group 'drgnx-debug)
 (defface drgnx-debug-heap-reference '((t :inherit (drgnx-ui-caption drgnx-text-subtle drgnx-debug-heap-card)))
   "A reference field's target type (its edge leaves the row)." :group 'drgnx-debug)
-(defface drgnx-debug-heap-cut '((t :inherit (drgnx-ui-caption drgnx-chip-quiet)))
+(defface drgnx-debug-heap-cut '((t :inherit (drgnx-ui-caption drgnx-kit-chip-neutral-soft)))
   "A cut field's stub, \"+N not shown\", where its dashed edge ends." :group 'drgnx-debug)
 (defface drgnx-debug-heap-changed '((t :inherit (drgnx-tint-warn))) "A row whose value changed at this stop."
   :group 'drgnx-debug)
@@ -227,7 +227,7 @@ tint."
                                      (propertize type 'face 'drgnx-debug-heap-type)))))
          (rows (list (drgnx-debug-heap--row c w face (cons title t)
                                             (and (eq state 'new)
-                                                 (cons (propertize " new " 'face '(drgnx-ui-caption drgnx-chip-accent))
+                                                 (cons (propertize " new " 'face '(drgnx-ui-caption drgnx-kit-chip-accent-soft))
                                                        t))))))
     (dolist (f (seq-take fields shown))
       (let* ((to (plist-get f :to)) (v (plist-get f :value)) (ref (or to (plist-get f :cut)))
@@ -287,9 +287,9 @@ objects; against the right edge, chips for what changed at this stop and what th
                                 " · ")))
          (chip (lambda (s face) (propertize s 'face (list 'drgnx-ui-caption face))))
          (chips (string-join
-                 (delq nil (list (and (> changed 0) (funcall chip (format " %d changed " changed) 'drgnx-chip-quiet))
-                                 (and (> added 0) (funcall chip (format " %d new " added) 'drgnx-chip-accent))
-                                 (and (> cut 0) (funcall chip (format " +%d not shown " cut) 'drgnx-chip-quiet))
+                 (delq nil (list (and (> changed 0) (funcall chip (format " %d changed " changed) 'drgnx-kit-chip-neutral-soft))
+                                 (and (> added 0) (funcall chip (format " %d new " added) 'drgnx-kit-chip-accent-soft))
+                                 (and (> cut 0) (funcall chip (format " +%d not shown " cut) 'drgnx-kit-chip-neutral-soft))
                                  (and drgnx-debug-heap--error (propertize drgnx-debug-heap--error 'face 'error))))
                  " ")))
     (concat " " (drgnx-look-icon 'workflow 'drgnx-text-muted 14) " "
