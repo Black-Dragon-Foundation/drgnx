@@ -151,6 +151,30 @@ switcher closed after."
       (dolist (it items) (should (member (string (plist-get it :letter)) keys)))
       (dolist (k '("⇧" "←" "→" "↑" "↓" "↵" "Esc")) (should (member k keys))))))
 
+(ert-deftest drgnx-switcher/captions-name-what-the-tile-holds ()
+  "tiling.html's captions: an editor's shown tab and `editor', `(current)' on the tile you are in, `a stack of N' for
+an editor of several tabs; a tool tile's kind as its tab shows it, with `a stack of N' when it holds several."
+  (drgnx-switcher-test--with
+    (let* ((eds (drgnx-grid-tiles nil 'editor)) (two (cadr eds)))
+      (set-window-parameter two 'drgnx-tabs (list (window-buffer two) (get-buffer-create "*g-extra*")))
+      (drgnx-pane-show 'g-chat)
+      (let ((titles (mapcar (lambda (it) (cons (plist-get it :window) (plist-get it :title))) (drgnx-switcher-items))))
+        (should (equal (alist-get (car eds) titles) (format "%s · editor (current)" (drgnx-chrome-tab-title (window-buffer (car eds))))))
+        (should (equal (alist-get two titles) "a stack of 2 · editor"))
+        (should (equal (alist-get (nth 2 eds) titles) (format "%s · editor" (drgnx-chrome-tab-title (window-buffer (nth 2 eds))))))
+        (should (equal (alist-get (drgnx-pane-window 'g-chat) titles) "Chat"))))))
+
+(ert-deftest drgnx-switcher/a-tile-of-several-windows-is-measured-whole ()
+  "A tile whose windows are one atom (the side bar's sections, the agent panel's windows) is placed by the whole tile's
+edges, so its card centres on the tile, not on its first window."
+  (drgnx-switcher-test--with
+    (drgnx-pane-show 'g-chat)
+    (let* ((chat (drgnx-pane-window 'g-chat)))
+      (drgnx-grid-add-part chat 'below)
+      (let ((it (seq-find (lambda (it) (eq (plist-get it :window) (drgnx-grid-tile-main chat))) (drgnx-switcher-items))))
+        (should it)
+        (should (equal (plist-get it :local) (window-pixel-edges (window-atom-root chat))))))))
+
 (ert-deftest drgnx-switcher/teardown-deletes-the-pool ()
   ;; batch makes no card (its frame is a terminal's): a pool entry stands in for one; teardown closes the switcher,
   ;; deletes the pool and leaves no timer of the module

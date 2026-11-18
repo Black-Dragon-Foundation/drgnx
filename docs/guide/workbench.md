@@ -345,13 +345,14 @@ Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC 
 in a tool tile — a dock, the panel, the right side — a new tile beside the whole tile asks what it shows: Editor or
 any pane, which moves there from its dock), Close Tile (palette · `C-x 0` · `SPC w c`; an editor group closes and the
 last one stays, a tool tile hides), Full-Size Tile (`C-k C-m` · `C-x w m`, also `C-x 1` · `C-w o`, `C-w _`, `C-w |`:
-this tile alone, its tab row saying "Full size · 1 of N · KEY back"; again, or any other tile command, puts every tile
+this tile alone, a chip in its tab row saying "Full size · 1 of N · KEY back" and the status bar "full size · N
+tiles"; again, or any other tile command, puts every tile
 back exactly where it was; Zen is the same plus centred text), **Moving tiles** (the table in the key guide):
 Focus Tile, Move Tile, Swap Tile and Stack Tile, each Left/Right/Up/Down by the tiles' edges (across the docks); a
 moved tile takes half of the one it lands beside and gives its space to the one it leaves, a swap keeps the sizes where
 they are, a stack puts one tile's tabs onto another's (editors onto editors, panes onto a tile of panes); Unstack the
 Shown Tab puts it into a new tile beside, on the side with more room; Resize Tiles (`C-k r` · `C-x w z` · `SPC w z`)
-lets the arrows move the tile's edges one step each (Resize Tile Left/Right/Up/Down, in Resize Tiles' own map, so a profile or your keys.eld can rebind them) until any other key, which then does what it does. With no room
+lets the arrows move the tile's edges one step each (a "Resize · Esc" chip in the tile's tab row while it is on) (Resize Tile Left/Right/Up/Down, in Resize Tiles' own map, so a profile or your keys.eld can rebind them) until any other key, which then does what it does. With no room
 for a move or a split nothing changes and the echo area says "No room there". A docked tile moved is no dock's any
 more. **Dragging a tile:** press its grip, the ⠿ (`::` on a terminal that is not UTF-8) at the start of its tab row (an editor's tab row, a tool tile's, a
 docked panel's or side's header row), and drag: the tile under the pointer says on its own tab row what a drop does
@@ -381,8 +382,9 @@ open in the **other group** — the one you used last besides this one — never
 
 **Switch Tile** (`C-x w w` · `SPC w f`, and the palette) puts a letter on every tile of every window, on every
 monitor: the window you are in first, then the others left to right, and inside each, from the top left. The same
-layout always gets the same letters. The 12 largest tiles show a card in their middle — the letter, large, and the
-tile's name under it (and the monitor's, when your windows are on more than one); the others, and the tiles of a
+layout always gets the same letters. The 12 largest tiles show a card in their middle — the letter, large, and what the
+tile holds under it ("init.el · editor (current)", "Terminal · a stack of 2", and the monitor's name when your windows
+are on more than one); the others, and the tiles of a
 terminal window, show the letter at their start. Type a letter to go to that tile (its window comes to the front; no
 window moves), **Shift** and a letter to swap your tile with that one (inside one window), or move with the arrows,
 across windows too, and press RET. Esc closes it; any other key closes it and then does what it does. Letters count once
