@@ -523,7 +523,31 @@ the windows the minimap scenes marked open."
         :sticky (and (boundp 'drgnx-sticky-style) drgnx-sticky-style)
         :minimap-held (and (advice-member-p #'drgnx-look-scene--minimap-held 'drgnx-minimap--spec) t)
         :minimap-open (seq-filter (lambda (w) (window-parameter w 'drgnx-look-scene-minimap-open))
-                                  (window-list-1 nil 'never t))))
+                                  (window-list-1 nil 'never t))
+        :popups (drgnx-look-scene--popups)))
+
+(declare-function drgnx-uitest-root-frame "drgnx-uitest" ())
+
+(defun drgnx-look-scene--popups ()
+  "The visible child frames of the root frame, by the name of the buffer each shows."
+  (let ((root (drgnx-uitest-root-frame)))
+    (sort (mapcar (lambda (f) (buffer-name (window-buffer (frame-root-window f))))
+                  (seq-filter (lambda (f) (and (eq (frame-parent f) root) (eq (frame-visible-p f) t))) (frame-list)))
+          #'string<)))
+
+(defvar drgnx-debug-share-buffer)
+(declare-function drgnx-debug-share--close "drgnx-debug-share")
+(declare-function drgnx-inbox-close "drgnx-inbox")
+
+(defun drgnx-look-scene--close-popups ()
+  "The cards a scene leaves open closed the way their own Close does, the root frame selected: the Send Run card (a
+modal: its Esc asks before closing a written card) and the inbox's drop-down.  Left open, the next scene's begin ran in
+the card's frame (\"Window is dedicated to *Send Run*\") and the heap graph drew under it."
+  (when-let* ((b (and (boundp 'drgnx-debug-share-buffer) (get-buffer drgnx-debug-share-buffer))))
+    (with-current-buffer b (drgnx-debug-share--close)))
+  (when (fboundp 'drgnx-inbox-close) (drgnx-inbox-close))
+  (let ((root (drgnx-uitest-root-frame)))
+    (unless (eq (selected-frame) root) (select-frame-set-input-focus root))))
 
 (defun drgnx-look-scene--start-again ()
   "The frame as the setup left it (`drgnx-look-scene--start'): its layout's name and arrangement (the tiles, the
@@ -550,7 +574,7 @@ to split).  Left held, the sticky-lines scene drew the minimap the hover scenes 
     ;; the check: anything a scene left that this did not put back is an error of the next scene's begin
     (redisplay t)
     (let ((now (drgnx-look-scene--start-state)) (want (cdr drgnx-look-scene--start)))
-      (dolist (key '(:layout :tiles :sticky :minimap-held :minimap-open))
+      (dolist (key '(:layout :tiles :sticky :minimap-held :minimap-open :popups))
         (unless (equal (plist-get now key) (plist-get want key))
           (push (format "begin: the scene before left %s %S, not the setup's %S"
                         (substring (symbol-name key) 1) (plist-get now key) (plist-get want key))
@@ -560,7 +584,8 @@ to split).  Left held, the sticky-lines scene drew the minimap the hover scenes 
   "Before each scene (`drgnx-look-scenes-run'): the editor layout, whatever the scene before left, then the frame as
 the setup left it (`drgnx-look-scene--start-again'), checked.  A scene in another layout (the Work map's) applies it
 itself; without this the scenes after it drew in its layout (the start page and the notebooks showed the Work map)."
-  (drgnx-look-scene--try "begin" (drgnx-look-scene--editor-layout) (drgnx-look-scene--start-again))
+  (drgnx-look-scene--try "begin"
+    (drgnx-look-scene--close-popups) (drgnx-look-scene--editor-layout) (drgnx-look-scene--start-again))
   ;; not `drgnx-look-scene--answer': the scene's own answer checks its views, once it has shown them
   (prog1 (drgnx-uitest--json (list :errors (vconcat (nreverse drgnx-look-scene--errors))))
     (setq drgnx-look-scene--errors nil)))
@@ -2978,16 +3003,28 @@ chrome faces, frame metrics, windows, modules."
                           (< y b) (> (+ y (frame-pixel-height f)) top)))))
             (frame-list)))
 
-(defun drgnx-look-scene--expected-cover-p (f)
-  "Whether child frame F is one a scene opens on purpose (the floating palette); any other cover, a toast say, is an
-error, so an unexpected child frame still fails the scene."
-  (and (boundp 'drgnx-palette-frame--frame) (eq f drgnx-palette-frame--frame)))
+(defun drgnx-look-scene--expected-cover-p (f covers)
+  "Whether child frame F is one the scene opens on purpose: the floating palette, or a frame whose buffer's name
+COVERS (a regexp, the scene's :covers in `drgnx-look-scenes': its menu, card or drop-down) matches.  Any other cover,
+a toast say, is an error, so an unexpected child frame still fails the scene."
+  (or (and (boundp 'drgnx-palette-frame--frame) (eq f drgnx-palette-frame--frame))
+      (and covers (string-match-p covers (buffer-name (window-buffer (frame-root-window f)))))))
 
-(defun drgnx-look-scene-scrollbars (file)
+(defun drgnx-look-scene--ruler-set (window spec minimap)
+  "WINDOW's `glitnir-ruler' SPEC and `glitnir-minimap' MINIMAP, and the window marked for the next redisplay: a window
+parameter alone marks nothing, so on a frame redisplay does not pass (the root, while a popup is selected) Glitnir never
+resolved the change and the two snapshots showed the same strip."
+  (set-window-parameter window 'glitnir-ruler spec)
+  (set-window-parameter window 'glitnir-minimap minimap)
+  (force-window-update window))
+
+(defun drgnx-look-scene-scrollbars (file &optional covers)
   "Every scrollable surface shown has the scroll bar: each window `drgnx-scrollbar-window-p' names has its
 `glitnir-ruler' with the fringe widened, and on the root frame the strip draws something exactly when the window
-shows only part of its content (a snapshot with the strips, one without them, compared on each strip; a strip under the
-palette's child frame is not judged, one under any other child frame is an error).  What was seen goes to FILE."
+shows only part of its content (a snapshot of the root frame with the strips, one without them, compared on each
+strip; a child frame's own strips are not in the snapshot, so not judged there; a strip under the palette's child frame
+or one COVERS names, `drgnx-look-scene--expected-cover-p', is not judged, one under any other child frame is an
+error).  What was seen goes to FILE."
   (let (log)
     (drgnx-look-scene--try "scrollbars"
       (let* ((ws (drgnx-look-scene--scrollbar-windows))
@@ -3000,39 +3037,37 @@ palette's child frame is not judged, one under any other child frame is an error
              without)
         (when with
           (unwind-protect
-              (progn (dolist (s specs)
-                       (set-window-parameter (car s) 'glitnir-ruler nil)
-                       (set-window-parameter (car s) 'glitnir-minimap nil))
+              (progn (dolist (s specs) (drgnx-look-scene--ruler-set (car s) nil nil))
                      (drgnx-look-scene--settle-frame)
                      (setq without (drgnx-uitest-snapshot)))
-            (dolist (s specs)
-              (set-window-parameter (car s) 'glitnir-ruler (nth 1 s))
-              (set-window-parameter (car s) 'glitnir-minimap (nth 2 s)))
+            (dolist (s specs) (drgnx-look-scene--ruler-set (car s) (nth 1 s) (nth 2 s)))
             (drgnx-look-scene--settle-frame)))
         (dolist (w ws)
           (let* ((spec (window-parameter w 'glitnir-ruler))
                  (over (drgnx-look-scene--overflows-p w))
                  (cover (and spec (not (frame-parent (window-frame w)))
                              (drgnx-look-scene--covering (drgnx-look-scene--strip-rect w) (window-frame w))))
-                 (covered (and cover (drgnx-look-scene--expected-cover-p cover)))
+                 (covered (and cover (drgnx-look-scene--expected-cover-p cover covers)))
+                 (child (frame-parent (window-frame w)))
                  (drawn (and spec without (not covered) (not (frame-parent (window-frame w)))
                              (not (drgnx-uitest-region-equal-p with without (drgnx-look-scene--strip-rect w)
                                                                :tolerance 2 :ignore-alpha t))))
                  (fact (list :buffer (buffer-name (window-buffer w))
                              :mode (buffer-local-value 'major-mode (window-buffer w))
                              :strip (and spec t) :span (plist-get spec :span) :overflows over
-                             :drawn (cond (covered 'covered) (without drawn) (t 'unchecked)))))
+                             :drawn (cond (covered 'covered) ((and without (not child)) drawn) (t 'unchecked)))))
             (push fact log)
             (cond ((not spec)
                    (push (format "scrollbars: %s (%s) has no scroll bar" (buffer-name (window-buffer w))
                                  (plist-get fact :mode))
                          drgnx-look-scene--errors))
                   ((and cover (not covered))
-                   (push (format "scrollbars: %s (%s): the strip is under an unexpected child frame (%s)"
+                   (push (format "scrollbars: %s (%s): the strip is under an unexpected child frame (%s at %S, %dx%d)"
                                  (buffer-name (window-buffer w)) (plist-get fact :mode)
-                                 (buffer-name (window-buffer (frame-root-window cover))))
+                                 (buffer-name (window-buffer (frame-root-window cover)))
+                                 (frame-position cover) (frame-pixel-width cover) (frame-pixel-height cover))
                          drgnx-look-scene--errors))
-                  ((and without (not covered) (not (eq (and over t) (and drawn t))))
+                  ((and without (not covered) (not child) (not (eq (and over t) (and drawn t))))
                    (push (format "scrollbars: %s (%s): content %s but the strip %s"
                                  (buffer-name (window-buffer w)) (plist-get fact :mode)
                                  (if over "runs past the window" "fits") (if drawn "draws" "draws nothing"))
