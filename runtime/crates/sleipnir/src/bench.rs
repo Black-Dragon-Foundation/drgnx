@@ -94,6 +94,7 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> Result<Vec<String>, Strin
         pins: vec![],
     };
     let req = ContainerReq {
+        features: vec![],
         image: "bench".into(),
         argv: vec!["sh".into(), "-c".into(), SCRIPT.into()],
         worktree: src.to_path_buf(),
@@ -115,6 +116,8 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> Result<Vec<String>, Strin
         owner: String::new(),
         job_labels: false,
         cargo_jobs: 0,
+        allowed: vec![],
+        render_node: None,
     };
     podman::argv(&req, &caps, &ra)
         .map_err(|r| r.message)?

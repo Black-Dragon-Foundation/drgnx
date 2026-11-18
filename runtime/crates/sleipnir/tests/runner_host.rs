@@ -257,6 +257,7 @@ fn caps(memory: &str) -> Caps {
 /// `podman run …` for job ID in its slice, with CMD in the base image, through the shared argv builder.
 fn podman_run(id: &str, source: &Path, target: &Path, memory: &str, cmd: &[&str]) -> Vec<String> {
     let req = ContainerReq {
+        features: vec![],
         image: "base".into(),
         argv: cmd.iter().map(|s| s.to_string()).collect(),
         worktree: source.to_path_buf(),
@@ -766,6 +767,7 @@ fn a_container_job_lands_in_its_slice() {
     let j = job_dir();
     let slice = "drgnx-job-h1.slice";
     let req = ContainerReq {
+        features: vec![],
         image: "base".into(),
         argv: vec!["sleep".into(), "600".into()],
         worktree: j.source.clone(),
@@ -1226,4 +1228,49 @@ fn grow_reaches_the_container() {
     assert_eq!((read("memory.max"), shown(&scope)), (bytes(64), bytes(64)));
     slices::stop(&slices::job_slice(ROOT, "g1").unwrap()).unwrap();
     stopped_with_its_slice(name);
+}
+
+/// [D] A `sandbox` job on a runner that allows it runs with the namespaces' masks off: podman masks `/proc/timer_list`
+/// (a character device, `/dev/null`) in every container, and `--security-opt=unmask=ALL` — the feature's argument —
+/// leaves the real file, which is what lets bwrap mount a fresh `/proc` inside the job. Without the feature the mask
+/// stays, and a job that names it on a runner that does not allow it is refused before podman runs.
+#[test]
+#[ignore = "runner-host"]
+fn sandbox_unmasks_proc_under_the_runners_argv() {
+    use sleipnir::linux::podman::Feature;
+    let j = job_dir();
+    slices::ensure_tree(ROOT, forseti::Profile::Dedicated).unwrap();
+    let kind = |id: &str, features: Vec<Feature>, allowed: Vec<Feature>| {
+        let req = ContainerReq {
+            features,
+            image: "base".into(),
+            argv: ["stat", "-c", "%F", "/proc/timer_list"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            worktree: j.source.clone(),
+            subdir: PathBuf::new(),
+            job: id.into(),
+            net: false,
+            keys: None,
+            runner: Some(RunnerMounts {
+                writes_tree: false,
+                target: j.target.clone(),
+                caches: vec![],
+                cargo_jobs: 0,
+            }),
+        };
+        let mut ra = RunnerArgs::runner(PREFIX, "hubtest", &slices::job_slice(ROOT, id).unwrap());
+        ra.allowed = allowed;
+        podman::argv(&req, &caps("256M"), &ra)
+    };
+    let go = |a: Vec<std::ffi::OsString>| {
+        let a: Vec<String> = a.into_iter().map(|s| s.into_string().unwrap()).collect();
+        run("podman", &a.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    let masked = go(kind("m1", vec![], vec![]).unwrap());
+    assert_eq!(masked, "character special file");
+    let open = go(kind("m2", vec![Feature::Sandbox], vec![Feature::Sandbox]).unwrap());
+    assert_ne!(open, masked, "unmask=ALL leaves the real /proc/timer_list");
+    assert!(kind("m3", vec![Feature::Sandbox], vec![]).is_err());
 }

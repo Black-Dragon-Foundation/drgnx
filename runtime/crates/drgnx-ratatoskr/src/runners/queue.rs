@@ -446,6 +446,8 @@ struct Remote {
     synced: Vec<String>,
     /// The features its last probe offered (`probe-result`): what it has as a candidate (none before its first probe).
     features: Vec<String>,
+    /// The opt-in container features the user allowed there, as (project, feature) (`runners/feature`).
+    enabled: Vec<(String, String)>,
 }
 
 impl Remote {
@@ -1352,6 +1354,7 @@ impl Queue {
                 ready: None,
                 synced: vec![],
                 features: vec![],
+                enabled: vec![],
             },
         );
     }
@@ -1361,6 +1364,13 @@ impl Queue {
     pub fn set_features(&self, name: &str, features: Vec<String>) {
         if let Some(r) = self.lock().runners.get_mut(name) {
             r.features = features;
+        }
+    }
+
+    /// Runner NAME's opt-in features per project, as the registry's record has them.
+    pub fn set_enabled(&self, name: &str, enabled: Vec<(String, String)>) {
+        if let Some(r) = self.lock().runners.get_mut(name) {
+            r.enabled = enabled;
         }
     }
 
@@ -2566,7 +2576,7 @@ impl Queue {
                 os: r.r.os,
                 // the runner's features are its probe's: a Mac's packages and tools (a missing one waits with its
                 // install line), a Linux runner's podman, gpu and kvm
-                features: r.features.clone(),
+                features: advertised(&r.features, &r.enabled, &job.spec.project, r.r.trust),
                 state: r.state.clone(),
                 accept: r.r.accept,
                 link_bps: None,
@@ -3997,6 +4007,40 @@ enum Placed {
     Wait(WaitReason),
 }
 
+/// The features a Linux runner offers a job of PROJECT: what its probe found, except the devices a job gets only by
+/// the user's opt-in (`kvm`, `udmabuf`), plus the opt-ins ENABLED for PROJECT there (D2): `sandbox` always,
+/// `udmabuf` and `kvm` when the probe found the device, `render` when it found a GPU. Only a `mine` runner: a
+/// `my-cloud` or `shared` machine offers none of them, enabled or not.
+fn advertised(
+    probed: &[String],
+    enabled: &[(String, String)],
+    project: &str,
+    trust: RunnerTrust,
+) -> Vec<String> {
+    let mut f: Vec<String> = probed
+        .iter()
+        .filter(|p| !matches!(p.as_str(), "kvm" | "udmabuf"))
+        .cloned()
+        .collect();
+    if trust != RunnerTrust::Mine {
+        return f;
+    }
+    for (p, name) in enabled {
+        let has = |d: &str| probed.iter().any(|x| x == d);
+        let offered = match name.as_str() {
+            "sandbox" => true,
+            "udmabuf" => has("udmabuf"),
+            "kvm" => has("kvm"),
+            "render" => has("gpu"),
+            _ => false,
+        };
+        if p == project && offered && !f.contains(name) {
+            f.push(name.clone());
+        }
+    }
+    f
+}
+
 /// What a job needs to start, as admission checks it (its minimum memory; its minimum cores, the hub knowing no CPU
 /// history).
 fn need_of(job: &Job) -> forseti::Need {
@@ -5012,7 +5056,7 @@ mod tests {
     // not placed on a runner whose probe lacks it, and is once its probe offers it
     #[tokio::test]
     async fn a_linux_runner_has_only_its_probes_features() {
-        for feature in ["gpu", "kvm"] {
+        for feature in ["gpu"] {
             let dir = tempfile::tempdir().unwrap();
             let (q, _rx) = test_queue(dir.path(), None, true);
             add(&q, "r1", 600);
@@ -5036,6 +5080,65 @@ mod tests {
             let row = q.row("x1").unwrap();
             assert_eq!(row.machine.as_deref(), Some("r1"), "{feature}: {row:?}");
         }
+    }
+
+    // [D] pure: an opt-in feature (`render`, with the GPU its probe found) is offered to a job of the project it was
+    // enabled for, on a `mine` runner only; the same enabling on `my-cloud` or `shared`, or for another project, offers
+    // nothing; a device (`kvm`) is no feature until enabled
+    #[tokio::test]
+    async fn a_feature_is_offered_only_when_enabled_on_a_mine_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        let probe = Frame::ProbeResult {
+            facts: None,
+            missing: vec![],
+            limits: None,
+            features: ["podman", "gpu", "kvm"].map(String::from).to_vec(),
+            mem_available_mib: 16_384,
+        };
+        frame(&q, "r1", probe, 100);
+        let mut s = job("x1", Priority::P3, 64);
+        s.spec.features = vec!["render".into(), "kvm".into()];
+        s.spec.project = "drgnx".into();
+        q.submit(s, 100);
+        let placed = |q: &Queue, now| {
+            q.tick(now);
+            q.row("x1").unwrap().machine
+        };
+        assert_eq!(placed(&q, 100), None, "nothing enabled");
+        let on = |p: &str| {
+            vec![
+                (p.to_string(), "render".to_string()),
+                (p.to_string(), "kvm".to_string()),
+            ]
+        };
+        q.set_enabled("r1", on("other"));
+        assert_eq!(placed(&q, 101), None, "enabled for another project");
+        for trust in [RunnerTrust::MyCloud, RunnerTrust::Shared] {
+            q.set_runner("r1", trust, Accept::All);
+            q.set_enabled("r1", on("drgnx"));
+            assert_eq!(placed(&q, 102), None, "{trust:?}");
+        }
+        q.set_runner("r1", RunnerTrust::Mine, Accept::All);
+        assert_eq!(placed(&q, 103).as_deref(), Some("r1"));
+    }
+
+    // [D] pure: a job that needs a feature no runner offers waits with the reason `features`
+    #[tokio::test]
+    async fn a_job_needing_an_unoffered_feature_waits_as_features() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        let mut s = job("x1", Priority::P3, 64);
+        s.spec.features = vec!["udmabuf".into()];
+        q.submit(s, 100);
+        q.tick(100);
+        let row = q.row("x1").unwrap();
+        assert_eq!(row.machine, None, "{row:?}");
+        assert!(format!("{row:?}").contains("udmabuf"), "{row:?}");
     }
 
     // [D] pure: a Mac whose last `ready` said it ran on battery is `sleeping` when it goes quiet (a lid closed), not

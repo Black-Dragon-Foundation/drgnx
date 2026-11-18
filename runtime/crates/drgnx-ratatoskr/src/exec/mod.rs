@@ -1830,6 +1830,7 @@ impl Inner {
             .map(Path::to_path_buf)
             .map_err(|_| refusal("the job's folder is outside its worktree"))?;
         let req = container::ContainerReq {
+            features: vec![],
             image: job.image.clone(),
             argv: spec.argv.clone(),
             worktree,

@@ -32,6 +32,8 @@ pub struct LinuxPlatform {
     name: String,
     /// The `sleipnir` that runs job-exec, and whose folder holds the bundle's other binaries.
     exe: PathBuf,
+    /// The opt-in container features the user allowed here, per project.
+    features: Vec<(String, podman::Feature)>,
     /// The timing slice's partition fallback was said (once per runner).
     partition_said: AtomicBool,
 }
@@ -53,6 +55,14 @@ impl LinuxPlatform {
             profile: cfg.profile,
             root: cfg.root.clone(),
             name: cfg.name.clone(),
+            features: cfg
+                .features
+                .iter()
+                .filter_map(|s| {
+                    let (p, f) = s.split_once(':')?;
+                    Some((p.to_string(), podman::Feature::parse(f)?))
+                })
+                .collect(),
             exe: exe.to_path_buf(),
             partition_said: AtomicBool::new(false),
         })
@@ -69,6 +79,7 @@ impl LinuxPlatform {
             prefix: "t".into(),
             hub_id: "hubA".into(),
             exe: PathBuf::from("/nonexistent/sleipnir"),
+            features: vec![],
             partition_said: AtomicBool::new(false),
         }
     }
@@ -254,7 +265,15 @@ impl Platform for LinuxPlatform {
             &slice,
             &slices::job_props(meta.grant.reserve_mib, meta.grant.mem_cap_mib),
         )?;
-        let ra = RunnerArgs::runner(&self.prefix, &self.hub_id, &slice);
+        let mut ra = RunnerArgs::runner(&self.prefix, &self.hub_id, &slice);
+        // the opt-ins the user gave this job's project here (D2)
+        ra.allowed = self
+            .features
+            .iter()
+            .filter(|(p, _)| *p == meta.spec.project)
+            .map(|(_, f)| *f)
+            .collect();
+        ra.render_node = self.probe.render_node(Path::new("/dev"));
         // a networked or keyed job's relay: the sidecar's image from the bundle's binary, its name and its argv for the
         // helper (a keyed job reads its keys through it)
         let relay = if hub_allow.is_none() && keys.is_none() {
@@ -269,6 +288,12 @@ impl Platform for LinuxPlatform {
         };
         let keyed = keys.is_some();
         let creq = ContainerReq {
+            features: meta
+                .spec
+                .features
+                .iter()
+                .filter_map(|f| podman::Feature::parse(f))
+                .collect(),
             image: "job".into(),
             argv: meta.spec.command.clone(),
             worktree: req.src.to_path_buf(),

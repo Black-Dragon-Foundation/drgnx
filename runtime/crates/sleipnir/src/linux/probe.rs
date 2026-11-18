@@ -12,6 +12,29 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Whether this user may read and write P.
+fn usable(p: &Path) -> bool {
+    rustix::fs::access(
+        p,
+        rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK,
+    )
+    .is_ok()
+}
+
+/// The names in DIR that start with PREFIX, sorted.
+fn named(dir: &Path, prefix: &str) -> Vec<String> {
+    let mut v: Vec<String> = fs::read_dir(dir)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with(prefix))
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
 /// Test builds only: the file in the runner folder whose figures stand in for the host's in [`Probe::machine`].
 #[cfg(feature = "test-hooks")]
 pub const TEST_MACHINE: &str = "test-machine.json";
@@ -293,30 +316,31 @@ impl Probe {
         has(&self.runtime_dir, "wayland-") || has(Path::new("/tmp/.X11-unix"), "X")
     }
 
-    /// The devices this user can open read-write, as placement features: `kvm` for `/dev/kvm`, `gpu` for a DRM
-    /// render node (`/dev/dri/renderD*`) of a real driver (not `vgem` or `vkms`, which only share buffers or draw
-    /// in memory) or NVIDIA's `nvidiactl` with a `nvidiaN`. Names and permissions only: nothing is opened, so the probe
-    /// stays cheap and offline. Jobs don't get the devices yet: sleipnir passes none into their containers.
+    /// The devices this user can open read-write, as placement features: `kvm` for `/dev/kvm`, `udmabuf` for
+    /// `/dev/udmabuf`, `gpu` for a DRM render node (`/dev/dri/renderD*`) of a real driver (not `vgem` or `vkms`, which
+    /// only share buffers or draw in memory) or NVIDIA's `nvidiactl` with a `nvidiaN`. Names and permissions only:
+    /// nothing is opened, so the probe stays cheap and offline. A job gets one only when the user opted in
+    /// ([`super::podman::Feature`]).
     pub fn devices(&self, dev: &Path) -> Vec<String> {
-        let usable = |p: &Path| {
-            rustix::fs::access(
-                p,
-                rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK,
-            )
-            .is_ok()
-        };
-        let named = |dir: &Path, prefix: &str| -> Vec<String> {
-            let mut v: Vec<String> = fs::read_dir(dir)
-                .map(|d| {
-                    d.flatten()
-                        .map(|e| e.file_name().to_string_lossy().into_owned())
-                        .filter(|n| n.starts_with(prefix))
-                        .collect()
-                })
-                .unwrap_or_default();
-            v.sort();
-            v
-        };
+        let nvidia = usable(&dev.join("nvidiactl"))
+            && named(dev, "nvidia")
+                .into_iter()
+                .any(|n| n[6..].parse::<u32>().is_ok() && usable(&dev.join(&n)));
+        let mut features = vec![];
+        if self.render_node(dev).is_some() || nvidia {
+            features.push("gpu".to_string());
+        }
+        if usable(&dev.join("kvm")) {
+            features.push("kvm".to_string());
+        }
+        if usable(&dev.join("udmabuf")) {
+            features.push("udmabuf".to_string());
+        }
+        features
+    }
+
+    /// The render node of a real driver this user can open (`/dev/dri/renderD128`): the one a `render` job is given.
+    pub fn render_node(&self, dev: &Path) -> Option<String> {
         let shares_only = |node: &str| {
             fs::read_link(
                 self.sys_root
@@ -326,21 +350,10 @@ impl Probe {
             )
             .is_ok_and(|d| d.file_name().is_some_and(|n| n == "vgem" || n == "vkms"))
         };
-        let render = named(&dev.join("dri"), "renderD")
+        named(&dev.join("dri"), "renderD")
             .into_iter()
-            .any(|n| !shares_only(&n) && usable(&dev.join("dri").join(&n)));
-        let nvidia = usable(&dev.join("nvidiactl"))
-            && named(dev, "nvidia")
-                .into_iter()
-                .any(|n| n[6..].parse::<u32>().is_ok() && usable(&dev.join(&n)));
-        let mut features = vec![];
-        if render || nvidia {
-            features.push("gpu".to_string());
-        }
-        if usable(&dev.join("kvm")) {
-            features.push("kvm".to_string());
-        }
-        features
+            .find(|n| !shares_only(n) && usable(&dev.join("dri").join(n)))
+            .map(|n| format!("/dev/dri/{n}"))
     }
 
     /// Whether a unit of ours can be given `memory.swap.max` (swap accounting on the user manager's tree).
@@ -1327,5 +1340,11 @@ mod tests {
             fs::remove_file(dev.join(n)).unwrap();
         }
         assert_eq!(p.devices(&dev), ["kvm"]);
+        node(&dev.join("udmabuf"));
+        assert_eq!(p.devices(&dev), ["kvm", "udmabuf"]);
+        assert_eq!(p.render_node(&dev), None);
+        node(&dev.join("dri/renderD130"));
+        driver("renderD130", "i915");
+        assert_eq!(p.render_node(&dev).as_deref(), Some("/dev/dri/renderD130"));
     }
 }

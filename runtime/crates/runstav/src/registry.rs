@@ -425,6 +425,7 @@ mod tests {
             "runners/add",
             "runners/bench",
             "runners/check",
+            "runners/feature",
             "runners/remove",
             "runners/set",
             "runners/unbench",

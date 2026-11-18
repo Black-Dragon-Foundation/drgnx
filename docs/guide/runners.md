@@ -88,6 +88,30 @@ The runner list is yours alone: an agent can't add, bench, change or remove a ma
 when drgnx starts stays in the list as `not connected`; `drgnx runner check NAME` connects it again. Removing a runner
 refuses while a job is on it.
 
+## Container features: what a job may ask of a machine
+
+A job's container gets no device and keeps every default mask. A few jobs need more: a sandbox test needs the
+masks off so `bwrap` can mount a fresh `/proc`, a GUI test needs the render node or `/dev/udmabuf`, a virtual-machine test needs `/dev/kvm`. Each is a feature you
+allow yourself, **per runner and per project**:
+
+```
+drgnx runner feature NAME sandbox|udmabuf|render|kvm on|off --project PROJECT
+```
+
+| Feature | What the job's container gets | The runner must have |
+|---|---|---|
+| `sandbox` | `--security-opt=unmask=ALL` | nothing |
+| `udmabuf` | `--device=/dev/udmabuf` | the device, readable and writable by the runner's user |
+| `render` | `--device=` the GPU's render node (`/dev/dri/renderD…`) | a GPU of a real driver |
+| `kvm` | `--device=/dev/kvm` | the device |
+
+A runner offers a feature to a job only when all three hold: the runner is `mine` (a `my-cloud` or `shared`
+machine offers none, enabled or not), you enabled it for the job's project, and its probe found the device. A job that
+needs a feature no runner offers waits, and its card says it waits for `features`. The runner enforces the same rule
+again when it starts the container: a feature that was not allowed for the job's project is refused there, whatever the
+hub sent. `kvm` and `udmabuf` are offered only this way (the probe's own `kvm` finding no longer places a job by
+itself); `gpu` stays a plain finding. A change reconnects the runner at once, like `profile`.
+
 ## The runner list
 
 **Show Runners** (palette) opens the list in the editor: a row per runner, the same as `drgnx runner list`, in at most

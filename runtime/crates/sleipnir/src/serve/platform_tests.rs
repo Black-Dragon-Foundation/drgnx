@@ -238,6 +238,7 @@ fn serve_full(
         allow: Default::default(),
         reserve_mib,
         island: island.map(str::to_string),
+        features: vec![],
     };
     let out = Out::default();
     let s = Serve::with_platform(cfg, out.clone(), Box::new(fake)).unwrap();
