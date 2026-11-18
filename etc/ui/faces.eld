@@ -562,4 +562,8 @@
  drgnx-kit-tab-panel-current
  drgnx-kit-tab-preview
  drgnx-kit-segmented
- drgnx-kit-segmented-current)
+ drgnx-kit-segmented-current
+ drgnx-kit-text-input
+ drgnx-kit-text-input-multi-top
+ drgnx-kit-text-input-multi-mid
+ drgnx-kit-text-input-multi-bottom)

@@ -938,3 +938,90 @@ switch."
 
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here
+
+;;;; Text input (flow Task 22a)
+
+(ert-deftest drgnx-ui-kit/text-input-geometry ()
+  ;; single: 28 px; multi: the text's lines (two at least), its rows in a card's shapes; 8 px each side, radius 6
+  (should (= (plist-get (drgnx-ui-kit-geometry 'text-input '(single)) :height) 28))
+  (should (= (plist-get (drgnx-ui-kit-geometry 'text-input '(multi top)) :height) 0))
+  (should (equal (plist-get (drgnx-ui-kit-geometry 'text-input '(single)) :pad) '(8 . 8)))
+  (should (= (plist-get (drgnx-ui-kit-geometry 'text-input '(single)) :radius) 6))
+  ;; at 1.25 each pad rounds on its own (8 px: 10 device px) and the row is 35
+  (let ((e (drgnx-ui-kit-expand 'text-input '(:c "text-input" :placeholder "Ask") 1.25 nil)))
+    (should (equal (plist-get e :text) " Ask "))
+    (should (equal (plist-get e :spaces) [[0 10 0] [4 10 0]]))
+    (should (equal (plist-get e :height) '(:lines 1 :unit 35)))
+    ;; the placeholder is muted, over the field's face
+    (should (equal (plist-get e :runs) [[1 4 "drgnx-text-muted"] [0 5 "drgnx-kit-text-input"]])))
+  ;; a multi-line field's first row is the top of its shape and has the line height of its text
+  (let ((e (drgnx-ui-kit-expand 'text-input '(:c "text-input" :lines "multi" :text "a\nb") 1.0 nil)))
+    (should (equal (plist-get e :runs) [[0 3 "drgnx-kit-text-input-multi-top"]]))
+    (should-not (plist-get e :height)))
+  (should (equal (plist-get (drgnx-ui-kit-expand 'text-input '(:c "text-input" :placeholder "Ask") 1.0 t) :text) "[ Ask ]"))
+  (should (equal (plist-get (drgnx-ui-kit-component 'text-input) :label) "text field")))
+
+(ert-deftest drgnx-ui-kit/text-input-chip-remove-action ()
+  ;; a click on a chip's close mark and RET on it both remove that chip, and nothing else carries its action
+  (let ((items (list "a.rs" "b.rs")) (drgnx-face-glyphs drgnx-ui--default-glyphs))
+    (unwind-protect
+        (progn
+          (drgnx-ui-kit-define-action 'composer-chip-remove (lambda (args) (setq items (delete (car args) items)))
+                                      '(("RET" . identity)))
+          (ui-kit-test--gui 1.0
+            (let* ((field (drgnx-ui-kit-text-input
+                           "Ask" 'single
+                           '(("a.rs" neutral (composer-chip-remove "a.rs")) ("b.rs" accent (composer-chip-remove "b.rs")))
+                           40 'text))
+                   (head (car (car field)))
+                   (first (next-single-property-change 0 'drgnx-action head))
+                   (second (next-single-property-change (next-single-property-change first 'drgnx-action head)
+                                                        'drgnx-action head)))
+              ;; the close mark is one character (the glyph, or the x's image where icons are drawn)
+              (should (= (- (next-single-property-change first 'drgnx-action head) first) 1))
+              (should-not (get-text-property 2 'drgnx-action head))     ; the label has none
+              (should (equal (get-text-property first 'help-echo head) "remove a.rs"))
+              (let ((last-input-event (list 'mouse-1 (list (selected-window) first '(0 . 0) 0 (cons head first)))))
+                (drgnx-ui-kit-activate))
+              (should (equal items '("b.rs")))
+              (with-temp-buffer
+                (insert head)
+                (goto-char (1+ second))
+                (let ((last-input-event ?\r)) (call-interactively #'drgnx-ui-kit-activate)))
+              (should (null items)))))
+      (drgnx-ui-kit-undefine-action 'composer-chip-remove))))
+
+(ert-deftest drgnx-ui-kit/text-input-focus-ring-only-after-keys ()
+  ;; the ring (the `focus-visible' state's face) shows after a key event, not after a mouse event
+  (ui-kit-test--gui 1.0
+    (let ((drgnx-ui-kit--focus-visible nil))
+      (let ((head (car (car (drgnx-ui-kit-text-input "Ask" 'single nil 40 'text t)))))
+        (should-not (memq 'drgnx-focus (ensure-list (get-text-property 0 'face head)))))
+      (setq drgnx-ui-kit--focus-visible t)
+      (let ((head (car (car (drgnx-ui-kit-text-input "Ask" 'single nil 40 'text t)))))
+        (should (eq 'drgnx-focus (car (ensure-list (get-text-property 0 'face head))))))
+      ;; not focused: no ring after a key either
+      (let ((head (car (car (drgnx-ui-kit-text-input "Ask" 'single nil 40 'text nil)))))
+        (should-not (memq 'drgnx-focus (ensure-list (get-text-property 0 'face head))))))))
+
+(ert-deftest drgnx-ui-kit/text-input-buffer-text-uses-canonical-widths ()
+  ;; in buffer text a pad is a width in canonical characters, so one buffer is right at two scales; the tail stretches to
+  ;; the column, and a multi-line field has a head and a tail per line
+  (dolist (case '((1.0 0.8) (1.25 1.0)))
+    (ui-kit-test--gui (car case)
+      (let* ((field (drgnx-ui-kit-text-input "Ask" 'multi nil 30 'text)) (head (car (car field))) (tail (cdr (car field))))
+        (should (= (length field) 2))
+        (should (equal (substring-no-properties head) " "))
+        (should (equal (get-text-property 0 'display head) `(space :width ,(cadr case))))
+        (should (equal (get-text-property 0 'display tail) '(space :align-to 30)))
+        (should (equal (get-text-property 1 'display tail) `(space :width ,(cadr case))))
+        (should (eq (get-text-property 0 'face tail) 'drgnx-kit-text-input-multi-top))
+        (should (eq (get-text-property 0 'face (cdr (cadr field))) 'drgnx-kit-text-input-multi-bottom))
+        ;; the placeholder travels with the first head, muted, and is its spoken label
+        (should (equal (substring-no-properties (get-text-property 0 'drgnx-placeholder head)) "Ask"))
+        (should (equal (get-text-property 0 'help-echo head) "Ask")))))
+  ;; a terminal: [ ... ]
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil)))
+    (let ((f (car (drgnx-ui-kit-text-input "Ask" 'single nil 30 'text))))
+      (should (equal (substring-no-properties (car f)) "[ "))
+      (should (equal (substring-no-properties (cdr f)) "  ]")))))

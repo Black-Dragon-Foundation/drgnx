@@ -476,6 +476,13 @@ item on the surface, in every theme and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'segmented))
 
+(drgnx-look-gui-deftest drgnx-kit-sheet/text-input ()
+  "The text input's sheet: a single line (28 px) and the three rows of a multi-line field, each at rest, with the focus
+ring and disabled, with a context chip and its close mark: each pad exact, the field on the editor's surface in the
+border's ring, in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'text-input))
+
 (declare-function drgnx-wb-area-show "drgnx-wb")
 (declare-function drgnx-wb-area-hide "drgnx-wb")
 (declare-function drgnx-wb-area-window "drgnx-wb")

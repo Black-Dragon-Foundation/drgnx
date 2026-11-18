@@ -46,7 +46,21 @@ fn expansions() -> Value {
             let mut b = RowBuilder::new(name.clone());
             kit::expand(&mut b, &env, &comp);
             let row = b.finish();
-            out.push(json!({"name": name, "text": row.text, "runs": row.runs, "props": row.props, "spaces": row.spaces, "height": row.height}));
+            let mut entry = json!({"name": name, "text": row.text, "runs": row.runs, "props": row.props, "spaces": row.spaces, "height": row.height});
+            // a block component (a multi-line text input) is more than one row: the rows after the first, as the
+            // Lisp half does not draw them (it draws the first row; the rest are the hub's)
+            let rows = kit::expand_rows(&env, &name, &comp);
+            assert_eq!(
+                rows[0].text, row.text,
+                "{name}: expand and expand_rows start alike"
+            );
+            if rows.len() > 1 {
+                entry["more"] = rows[1..]
+                    .iter()
+                    .map(|r| json!({"text": r.text, "runs": r.runs, "props": r.props, "spaces": r.spaces, "height": r.height}))
+                    .collect();
+            }
+            out.push(entry);
         }
     }
     Value::Array(out)
