@@ -58,6 +58,11 @@
 right edge, and shrinks back 600 ms after the pointer leaves."
   :type 'boolean :group 'drgnx-minimap :scope 'global :apply #'drgnx-minimap--setting-changed)
 
+(drgnx-defsetting drgnx-minimap-hstrip t
+  "Non-nil: an editor that cuts its lines gets a horizontal scroll bar along the bottom of the text while a line is
+wider than the window (12 px over the text, from the first text column; it takes no space).  Nil: none."
+  :type 'boolean :group 'drgnx-minimap :scope 'global :apply #'drgnx-minimap--setting-changed)
+
 (drgnx-defsetting drgnx-minimap-width 120
   "The minimap's width in logical pixels, 80 to 200."
   :type 'natnum :group 'drgnx-minimap :scope 'global :apply #'drgnx-minimap--setting-changed)
@@ -251,8 +256,57 @@ profile it reads."
   (customize-set-variable 'drgnx-minimap-layer layer)
   (drgnx-minimap--setting-changed))
 
+;;;; The horizontal strip (design 2026-11-18 §3.1): Nidhogg draws it and decides when it shows (the window cuts its
+;; lines and a line is wider than the text); Lisp names the windows that may have it, through `glitnir-hstrip'.
+
+(defun drgnx-minimap-hstrip-window-p (window)
+  "Whether WINDOW may get the horizontal strip: a scrollable surface that is an editor (no `drgnx-role', not a popup
+or a child frame's, a file's or a text buffer that is not a view or a special mode), or whose buffer sets
+`drgnx-hscrollbar'."
+  (and drgnx-minimap-hstrip (drgnx-scrollbar-window-p window)
+       (with-current-buffer (window-buffer window)
+         (or drgnx-hscrollbar
+             (and (not (window-parameter window 'drgnx-role)) (not (window-parameter window 'drgnx-popup))
+                  (not (frame-parent (window-frame window)))
+                  (not drgnx-ruler-span-function) (not (derived-mode-p 'special-mode))
+                  (or buffer-file-name (derived-mode-p 'prog-mode 'text-mode 'diff-mode)))))
+       t))
+
+(defun drgnx-minimap--hstrip-spec (frame)
+  "The `glitnir-hstrip' of FRAME's windows, in its device px: the strip's height, the hit lane (its bottom), the
+thumb's inset, radius and least length, and its face and opacity (the vertical thumb's)."
+  (list :height (drgnx-px 12 frame) :lane (drgnx-px 8 frame) :thumb-inset (drgnx-px 3 frame)
+        :radius (drgnx-px 3 frame) :least (drgnx-px 24 frame) :band (cons 'drgnx-ruler-view drgnx-ruler--thumb-opacity)))
+
+(defun drgnx-minimap-hstrip-scroll (event)
+  "EVENT, (glitnir-hstrip WINDOW HSCROLL), a press or drag on WINDOW's horizontal strip: scroll it to HSCROLL columns.
+Point stays, and WINDOW is not selected; Emacs keeps the scroll until point moves."
+  (interactive "e")
+  (let ((w (nth 1 event)) (cols (nth 2 event)))
+    (when (and (window-live-p w) (natnump cols))
+      (set-window-hscroll w cols))))
+
+(defun drgnx-minimap--wraps-p (window)
+  "Whether WINDOW wraps its lines now: its buffer does not truncate them, in this window, and it is not scrolled
+sideways."
+  (and (zerop (window-hscroll window))
+       (not (buffer-local-value 'truncate-lines (window-buffer window)))
+       (not (truncated-partial-width-window-p window))))
+
+(defun drgnx-hscroll-wheel (event)
+  "A sideways wheel, tilt or Shift-wheel EVENT: nothing over a window that wraps its lines (any scroll would cut
+them), else `mwheel-scroll'."
+  (interactive "e")
+  (let ((w (posn-window (event-start event))))
+    (unless (and (window-live-p w) (drgnx-minimap--wraps-p w))
+      (mwheel-scroll event))))
+
 (defun drgnx-minimap--place (window on)
-  "`drgnx-ruler-place-functions': WINDOW's minimap as it should be now, given that it shows the strip (ON)."
+  "`drgnx-ruler-place-functions': WINDOW's minimap and horizontal strip as they should be now, given that it shows
+the strip (ON)."
+  (let ((hs (and on (drgnx-minimap-hstrip-window-p window) (drgnx-minimap--hstrip-spec (window-frame window)))))
+    (unless (equal hs (window-parameter window 'glitnir-hstrip))
+      (set-window-parameter window 'glitnir-hstrip hs)))
   (if (and on (drgnx-minimap-window-p window))
       (let ((buffer (window-buffer window)))
         (with-current-buffer buffer
@@ -276,7 +330,8 @@ profile it reads."
   "Every window's minimap gone, and the hub told no file is shown in one."
   (dolist (f (frame-list))
     (dolist (w (window-list f 'nomini))
-      (when (window-parameter w 'glitnir-minimap) (set-window-parameter w 'glitnir-minimap nil))))
+      (when (window-parameter w 'glitnir-minimap) (set-window-parameter w 'glitnir-minimap nil))
+      (when (window-parameter w 'glitnir-hstrip) (set-window-parameter w 'glitnir-hstrip nil))))
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-minimap--watched b) (drgnx-minimap--watch b nil))
     (with-current-buffer b (kill-local-variable 'drgnx-minimap--asked))
@@ -305,6 +360,8 @@ profile it reads."
   "The scroll bar and the marks' producers off; every window's strip gone."
   (drgnx-marks-off)
   (remove-hook 'drgnx-ruler-place-functions #'drgnx-minimap--place)
+  (when (eq (lookup-key special-event-map [glitnir-hstrip]) #'drgnx-minimap-hstrip-scroll)
+    (define-key special-event-map [glitnir-hstrip] nil t))
   (drgnx-minimap--off)
   (remove-hook 'drgnx-look-density-changed-hook #'drgnx-scrollbar-refresh-all)
   (drgnx-scrollbar-mode -1))
@@ -318,6 +375,11 @@ profile it reads."
                                 (drgnx-command-define id :category "Go" :title title :command fn :scope 'editing
                                                       :doc doc))
                               (add-hook 'drgnx-ruler-place-functions #'drgnx-minimap--place)
+                              ;; the horizontal strip: Nidhogg's press and drag events, the sideways wheel and tilt
+                              (define-key special-event-map [glitnir-hstrip] #'drgnx-minimap-hstrip-scroll)
+                              (dolist (k '([wheel-left] [wheel-right] [S-wheel-up] [S-wheel-down]))
+                                (drgnx-module-define-key 'global-map k #'drgnx-hscroll-wheel))
+                              (drgnx-module-set 'mouse-wheel-tilt-scroll t)
                               (drgnx-scrollbar-mode 1)
                               (add-hook 'drgnx-look-density-changed-hook #'drgnx-scrollbar-refresh-all)
                               (drgnx-marks-on)))

@@ -358,6 +358,94 @@ the text (X6); the change commands go by hunk, wrapping."
         (set-window-buffer w was)
         (kill-buffer b)))))
 
+;;;; The horizontal strip (design 2026-11-18 §3.1, Task 21f)
+
+(defvar drgnx-minimap-hstrip)
+
+(ert-deftest drgnx-minimap/the-hstrip-spec-is-on-editors-only ()
+  "An editor window gets `glitnir-hstrip' (12 px, the 8 px hit lane, the vertical thumb's face and opacity); the
+Explorer's (a docked special-mode list) and a popup's do not, unless the buffer sets `drgnx-hscrollbar'; the setting
+off, or the scroll bar off, takes it away."
+  (ruler-test--with-minimap
+    (let ((w (selected-window)))
+      (let ((spec (window-parameter w 'glitnir-hstrip)))
+        (should (equal (plist-get spec :height) (drgnx-px 12)))
+        (should (equal (plist-get spec :lane) (drgnx-px 8)))
+        (should (equal (plist-get spec :band) (cons 'drgnx-ruler-view drgnx-ruler--thumb-opacity))))
+      ;; the Explorer: a docked list
+      (setq buffer-file-name nil)
+      (special-mode)
+      (set-window-parameter w 'drgnx-role 'dock)
+      (drgnx-ruler--place w)
+      (should (window-parameter w 'glitnir-ruler))
+      (should-not (window-parameter w 'glitnir-hstrip))
+      ;; a docked buffer that asks for it
+      (setq-local drgnx-hscrollbar t)
+      (drgnx-ruler--place w)
+      (should (window-parameter w 'glitnir-hstrip))
+      (kill-local-variable 'drgnx-hscrollbar)
+      (set-window-parameter w 'drgnx-role nil)
+      ;; a popup's text buffer
+      (text-mode)
+      (set-window-parameter w 'drgnx-popup t)
+      (drgnx-ruler--place w)
+      (should-not (window-parameter w 'glitnir-hstrip))
+      (set-window-parameter w 'drgnx-popup nil)
+      (drgnx-ruler--place w)
+      (should (window-parameter w 'glitnir-hstrip))
+      (let ((drgnx-minimap-hstrip nil))
+        (drgnx-ruler--place w)
+        (should-not (window-parameter w 'glitnir-hstrip)))
+      (drgnx-ruler--place w)
+      (drgnx-scrollbar-mode -1)
+      (should-not (window-parameter w 'glitnir-hstrip)))))
+
+(ert-deftest drgnx-minimap/an-hstrip-drag-scrolls-and-keeps-point ()
+  "Nidhogg's (glitnir-hstrip WINDOW HSCROLL) event scrolls WINDOW sideways to HSCROLL columns; point, the window's
+point and the selected window stay; a dead window or a bad column is ignored."
+  (ruler-test--with-minimap
+    (let ((w (selected-window)) (other (split-window)))
+      (unwind-protect
+          (progn
+            (setq truncate-lines t)
+            (goto-char (point-min))
+            (insert (make-string 400 ?x) "\n")
+            (goto-char 10)
+            (set-window-point w 10)
+            (select-window other)
+            (drgnx-minimap-hstrip-scroll (list 'glitnir-hstrip w 30))
+            (should (= (window-hscroll w) 30))
+            (should (= (window-point w) 10))
+            (should (eq (selected-window) other))
+            (drgnx-minimap-hstrip-scroll (list 'glitnir-hstrip w -1))
+            (should (= (window-hscroll w) 30))
+            (let ((dead (split-window other)))
+              (delete-window dead)
+              (drgnx-minimap-hstrip-scroll (list 'glitnir-hstrip dead 5))))
+        (select-window w)
+        (delete-window other)
+        (set-window-hscroll w 0)))))
+
+(ert-deftest drgnx-minimap/a-sideways-wheel-in-a-wrapped-buffer-does-nothing ()
+  "★7: a sideways wheel, tilt or Shift-wheel over a window that wraps its lines leaves it wrapping at hscroll 0 (any
+scroll would cut its lines); over a window that cuts them, it scrolls sideways."
+  (ruler-test--with-minimap
+    (let ((w (selected-window)) (mouse-wheel-tilt-scroll t) (mouse-wheel-flip-direction nil))
+      (goto-char (point-min))
+      (insert (make-string 400 ?x) "\n")
+      (goto-char (point-min))
+      (setq truncate-lines nil)
+      (dolist (e '(wheel-left wheel-right S-wheel-up S-wheel-down))
+        (drgnx-hscroll-wheel (list e (list w (point) '(0 . 0) 0)))
+        (should (= (window-hscroll w) 0))
+        (should-not truncate-lines))
+      (setq truncate-lines t)
+      (unwind-protect
+          (progn
+            (drgnx-hscroll-wheel (list 'wheel-left (list w (point) '(0 . 0) 0)))
+            (should (> (window-hscroll w) 0)))
+        (set-window-hscroll w 0)))))
+
 (ert-deftest drgnx-minimap/a-files-change-hunks-are-labelled ()
   "A file with its change marks on gets a label at each of the hub's hunks (`drgnx-hunks--data'): a deletion at the
 line before it; none without the marks."
