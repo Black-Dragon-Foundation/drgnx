@@ -175,7 +175,13 @@ async fn branch_fork(
     dst: &Path,
     cut: Cut,
 ) -> Result<(String, String, Arc<Hub>), Error> {
-    let (hub, from, to) = trees(&f.core.history, hubdir, src, dst)?;
+    let (hubs, hd, s, d) = (
+        f.core.history.clone(),
+        hubdir.to_owned(),
+        src.to_owned(),
+        dst.to_owned(),
+    );
+    let (hub, from, to) = blocking(move || trees(&hubs, &hd, &s, &d)).await?;
     let (h2, sid, seq, now) = (hub.clone(), t.sid.clone(), t.seq, crate::clock::wall_secs());
     let (name, source) = blocking(move || {
         let mut g = h2.lock();
