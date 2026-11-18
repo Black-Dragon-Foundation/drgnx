@@ -3021,6 +3021,9 @@ palette's child frame is not judged, one under any other child frame is an error
                  (fact (list :buffer (buffer-name (window-buffer w))
                              :mode (buffer-local-value 'major-mode (window-buffer w))
                              :strip (and spec t) :span (plist-get spec :span) :overflows over
+                             :shown (list (window-start w) (window-end w t)
+                                          (with-current-buffer (window-buffer w) (point-max)))
+                             :ruler (and (window-parameter w 'glitnir--ruler) t)
                              :drawn (cond (covered 'covered) (without drawn) (t 'unchecked)))))
             (push fact log)
             (cond ((not spec)
