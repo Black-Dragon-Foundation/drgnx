@@ -3148,7 +3148,15 @@ async fn placement(
             .flat_map(|n| n.iter())
             .map(|n| n.as_str().to_string())
             .collect(),
+        lane: lane_of(p)?,
     })
+}
+
+/// The lane `exec/start` asks for (`lane`, `whole_machine`): a timing run is an island run unless it asks for the whole
+/// machine, which needs the timing lane and a named machine (design §5.6).
+pub(crate) fn lane_of(p: &StartParams) -> Result<forseti::Lane, Error> {
+    let _ = p;
+    Ok(forseti::Lane::Work)
 }
 
 /// The hosts a container job's network grant reaches (its cell over the caps' `drgnx-agents-net-hosts`): what its

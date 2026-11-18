@@ -160,6 +160,8 @@ pub struct Placement {
     pub features: Vec<String>,
     /// The jobs it needs (`exec/start`'s `needs`): it starts once each passed, and ends as infra if one did not.
     pub needs: Vec<String>,
+    /// The lane (`exec/start`'s `lane` and `whole_machine`): work, or a timing run on the island or the whole machine.
+    pub lane: forseti::Lane,
 }
 
 /// What a command takes in place of the selector of the rows an attempt runs (`forseti::split::selector`, an Emacs
@@ -197,6 +199,7 @@ impl Default for Placement {
             os: Os::Linux,
             features: vec![],
             needs: vec![],
+            lane: forseti::Lane::Work,
         }
     }
 }
@@ -974,6 +977,9 @@ pub fn wait_text(r: &WaitReason) -> String {
             format!("{} is held by job {holder}", dir.display())
         }
         WaitReason::IslandBusy => "the timing island is busy".into(),
+        WaitReason::NoIsland => {
+            "its machine has no timing island (a whole-machine run asks for whole_machine)".into()
+        }
         WaitReason::DrainWaits => "the machine is draining".into(),
         WaitReason::DesktopUnreachable { .. } => "its runner can't be reached".into(),
         WaitReason::SpillIn { minutes } => format!("may go to a runner in {minutes} min"),
@@ -3856,6 +3862,7 @@ fn runner_state(name: &str, now: u64, running: Vec<RunningJob>) -> forseti::Mach
         features: vec![],
         reachable: true,
         others: vec![],
+        island: None,
     }
 }
 
@@ -4281,6 +4288,61 @@ mod tests {
         let mut s = job(id, own, 64);
         s.spec.needs = needs.iter().map(|n| JobId((*n).into())).collect();
         s
+    }
+
+    // [D] pure (design §5.6, `forseti::drain_may_start`): a whole-machine timing run waits while P1–P2 work is
+    // pending; then its machine drains (no new work starts there), it starts once the machine is empty, and the
+    // machine stays its own until it ends
+    #[test]
+    fn whole_machine_drains_and_waits_for_p1_p2() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = Queue::new(QueueCfg {
+            hub_id: "h".into(),
+            exec_root: dir.path().to_path_buf(),
+            local: LocalRunner::new(super::super::local::Admission::Fixed(4), dir.path()),
+            db: None,
+        });
+        let ran = |q: &Queue, id: &str, at: u64| {
+            q.ran_here(id, &json!({"verdict": "Pass", "wall_s": 5.0}), at);
+            q.release(id);
+        };
+        q.submit(job("w1", Priority::P3, 64), 100);
+        assert_eq!(q.tick(100).starts, vec!["w1".to_string()]);
+        let mut t = job("t", Priority::P3, 64);
+        t.spec.lane = forseti::Lane::Timing { pinned: None };
+        t.place.machine = Machine::Local;
+        q.submit(t, 101);
+        q.submit(job("p2", Priority::P2, 64), 101);
+        // P2 work goes first, and other work isn't held while the drain can't start
+        let started = q.tick(101).starts;
+        assert!(started.contains(&"p2".to_string()), "{started:?}");
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some("behind priority 2 work")
+        );
+        q.submit(job("w2", Priority::P3, 64), 102);
+        assert_eq!(q.tick(102).starts, vec!["w2".to_string()]);
+        // the P2 result is in: the drain starts, new work waits, and the run waits for the machine to empty
+        ran(&q, "p2", 110);
+        q.submit(job("w3", Priority::P3, 64), 111);
+        assert!(q.tick(111).starts.is_empty());
+        assert_eq!(
+            q.row("w3").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+        ran(&q, "w1", 120);
+        ran(&q, "w2", 121);
+        assert_eq!(q.tick(122).starts, vec!["t".to_string()]);
+        assert!(
+            q.tick(123).starts.is_empty(),
+            "the machine is the run's while it runs"
+        );
+        ran(&q, "t", 130);
+        assert_eq!(q.tick(131).starts, vec!["w3".to_string()]);
     }
 
     // [D] pure (design §5.2 item 2): a job waits for its needs as `needs`, holding no slot and no reservation; it is

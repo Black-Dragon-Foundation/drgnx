@@ -280,6 +280,7 @@ fn counted(running: &[RunningJob], last: LastStart, now: u64) -> MachineState {
         features: vec![],
         reachable: true,
         others: vec![],
+        island: None,
     }
 }
 

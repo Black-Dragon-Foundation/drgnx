@@ -123,6 +123,7 @@ impl Platform for DarwinPlatform {
             features: vec![],
             reachable: true,
             others,
+            island: None,
         })
     }
 

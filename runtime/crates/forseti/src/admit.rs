@@ -3,7 +3,8 @@
 
 use crate::backfill::{Reservation, backfill_ok};
 use crate::model::{
-    Expected, Grant, Job, JobId, Limits, MachineState, Priority, Range, RunningJob, WaitReason,
+    Expected, Grant, Job, JobId, Lane, Limits, MachineState, Priority, Range, RunningJob,
+    WaitReason,
 };
 use crate::reserve::count_others;
 
@@ -236,6 +237,7 @@ mod tests {
         assert_eq!(cargo_jobs(&g(12, 1024)), 1);
         assert_eq!(cargo_jobs(&g(0, 0)), 1);
     }
+    use crate::model::Island;
     use crate::testkit::{job, machine, running};
 
     fn known(cpu: f64, p95: u64) -> Expected {
@@ -244,6 +246,108 @@ mod tests {
             cpu,
             mem_p95_mib: Some(p95),
         }
+    }
+
+    /// Job NAME in the timing lane: on the island (PINNED cores), or the whole machine (none).
+    fn timing(name: &str, pinned: Option<u8>) -> Job {
+        let mut j = job(name, Priority::P3, 0);
+        j.spec.lane = Lane::Timing { pinned };
+        j
+    }
+
+    #[test]
+    fn a_second_timing_job_waits_island_busy() {
+        // [D] pure (design §5.6): one timing job holds the island; a second waits for it
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 24);
+        let mut m = machine(Profile::Dedicated);
+        m.island = Some(Island {
+            cpus: 12,
+            busy: Some(JobId("t1".into())),
+        });
+        m.running = vec![running("t1", Priority::P3, m.now - 60, 512, 512)];
+        let t2 = timing("t2", Some(4));
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&t2, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::IslandBusy)
+        );
+        // a work job is no timing job: it doesn't wait for the island
+        let w = job("w", Priority::P3, 0);
+        assert_eq!(
+            admit(&w, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+        m.island.as_mut().unwrap().busy = None;
+        m.running.clear();
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&t2, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn work_cpu_budget_shrinks_while_timing_runs() {
+        // [D] pure (design §5.6): while a timing job holds the island, work has the other cores only; the timing
+        // job's own CPU is the island's, not counted twice
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 24);
+        let mut m = machine(Profile::Dedicated);
+        m.running = vec![
+            running("t1", Priority::P3, m.now - 60, 512, 512),
+            running("w1", Priority::P3, m.now - 60, 512, 512),
+        ];
+        m.island = Some(Island {
+            cpus: 12,
+            busy: None,
+        });
+        assert_eq!(budget(&m, &lim).cpu, 22.0);
+        m.island.as_mut().unwrap().busy = Some(JobId("t1".into()));
+        assert_eq!(budget(&m, &lim).cpu, 24.0 - 12.0 - 1.0);
+        // a work job wanting more than the rest waits for cores
+        let mut big = job("big", Priority::P3, 0);
+        big.spec.cores.min = 12;
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(
+                &big,
+                Priority::P3,
+                &Expected {
+                    minutes: 10.0,
+                    cpu: 12.0,
+                    mem_p95_mib: Some(512)
+                },
+                &m,
+                &b,
+                &lim
+            ),
+            Err(WaitReason::Threads)
+        );
+    }
+
+    #[test]
+    fn whole_machine_is_refused_without_the_flag() {
+        // [D] pure (design §5.6, memory desktop-perf-island): a timing run asked for the island never silently takes
+        // a machine that has none; only a whole-machine run (asked with `whole_machine`) may, once the machine is
+        // empty
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 24);
+        let mut m = machine(Profile::Dedicated);
+        let b = budget(&m, &lim);
+        let island_run = timing("t", Some(4));
+        assert_eq!(
+            admit(&island_run, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::NoIsland)
+        );
+        let whole = timing("t", None);
+        assert_eq!(
+            admit(&whole, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+        m.running = vec![running("w1", Priority::P5, m.now - 60, 512, 512)];
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&whole, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::DrainWaits)
+        );
     }
 
     #[test]

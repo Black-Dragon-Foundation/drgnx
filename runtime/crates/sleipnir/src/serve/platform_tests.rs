@@ -46,6 +46,7 @@ impl Platform for Fake {
             features: vec![],
             reachable: true,
             others: vec![],
+            island: None,
         })
     }
     fn limits(&self, profile: Profile) -> Limits {
