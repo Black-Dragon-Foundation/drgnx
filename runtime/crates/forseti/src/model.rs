@@ -20,6 +20,30 @@ impl fmt::Display for JobId {
     }
 }
 
+/// A project's id: what a job belongs to, and what the user's per-project opt-ins name. Until the project registry
+/// (runners Task 46) it comes from the old folder rule (the tree's last component); 46 replaces the source, not the type.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProjectId(pub String);
+
+impl ProjectId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ProjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for ProjectId {
+    fn from(s: &str) -> Self {
+        ProjectId(s.to_string())
+    }
+}
+
 /// A job's priority, 1 to 5. `Ord` puts P1 highest: `Priority::P1 > Priority::P5`, so `max` is the more urgent.
 ///
 /// - 1: a job the user starts or bumps;
@@ -201,7 +225,7 @@ pub struct JobSpec {
     pub lane: Lane,
     pub fresh: bool,
     pub stop_on_red: bool,
-    pub project: String,
+    pub project: ProjectId,
     pub trust: JobTrust,
     /// The names of the keys the job needs (never values).
     pub keys: Vec<String>,

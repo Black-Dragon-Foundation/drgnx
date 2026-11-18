@@ -16,15 +16,16 @@ use super::queue::{Queue, RemoteRunner};
 use super::ssh_config;
 use super::transport::{Channels, LinkError, Transport};
 use super::{NAME_MAX, Remote, RunnerCfg};
-use forseti::{Accept as FAccept, RunnerTrust};
+use forseti::{Accept as FAccept, ProjectId, RunnerTrust};
 use mimir::BoxFuture;
 use runstav::methods::runners::{
     self as wire, Accept, AddParams, Effective, HostFacts, Missing, Probed, Profile, Trust,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sleipnir::linux::podman::Feature;
 use sleipnir::proto::{Frame, FrameWriter, PROTO_VERSION};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -165,10 +166,10 @@ pub struct Record {
     /// The timing island (`--island`, a CPU list); `serve` gets it at every start.
     #[serde(default)]
     pub island: Option<String>,
-    /// The opt-in container features the user allowed on this runner, as (project, feature): `runner feature`; `serve`
-    /// gets them at every start, the queue offers them (only while the runner is `mine`).
+    /// The opt-in container features the user allowed on this runner, per project (`runner feature`): keyed
+    /// (feature, project). `serve` gets them at every start; the queue offers them (see `queue::advertised`).
     #[serde(default)]
-    pub enabled_features: Vec<(String, String)>,
+    pub enabled: BTreeSet<(Feature, ProjectId)>,
     /// The memory the host had available at its last probe, MiB: the runner list's room for jobs until the runner's
     /// first ready.
     #[serde(default)]
@@ -414,8 +415,15 @@ fn serve_flags(r: &Record) -> Vec<String> {
     if let Some(cpus) = &r.island {
         f.extend(["--island".to_string(), cpus.clone()]);
     }
-    for (project, feature) in &r.enabled_features {
-        f.extend(["--feature".to_string(), format!("{project}:{feature}")]);
+    // a `mine` runner's `kvm` is a probe fact offered to every project: its serve gets it for all (`*`)
+    if r.trust == Trust::Mine {
+        f.extend(["--feature".to_string(), "*:kvm".to_string()]);
+    }
+    for (feature, project) in &r.enabled {
+        f.extend([
+            "--feature".to_string(),
+            format!("{project}:{}", feature.name()),
+        ]);
     }
     f
 }
@@ -423,16 +431,16 @@ fn serve_flags(r: &Record) -> Vec<String> {
 /// FEATURE switched ON or off for PROJECT in ENABLED. The names are the opt-ins a container job can ask for; a project key
 /// is a plain word (it travels in a `--feature PROJECT:FEATURE` argument).
 fn set_feature(
-    enabled: &mut Vec<(String, String)>,
+    enabled: &mut BTreeSet<(Feature, ProjectId)>,
     project: &str,
     feature: &str,
     on: bool,
 ) -> Result<(), RegError> {
-    if !["sandbox", "udmabuf", "render", "kvm"].contains(&feature) {
+    let Some(feature) = Feature::parse(feature) else {
         return Err(refused(format!(
-            "{feature:?} is not a runner feature: sandbox, udmabuf, render or kvm"
+            "{feature:?} is not a runner feature: sandbox, udmabuf, render, kvm or build-net"
         )));
-    }
+    };
     if project.is_empty()
         || !project
             .bytes()
@@ -442,10 +450,11 @@ fn set_feature(
             "{project:?} is not a project key: letters, digits, - _ ."
         )));
     }
-    let entry = (project.to_string(), feature.to_string());
-    enabled.retain(|e| *e != entry);
+    let entry = (feature, ProjectId(project.to_string()));
     if on {
-        enabled.push(entry);
+        enabled.insert(entry);
+    } else {
+        enabled.remove(&entry);
     }
     Ok(())
 }
@@ -907,7 +916,7 @@ impl Registry {
             allow_admin: admin,
             reserve_mib: None,
             island: None,
-            enabled_features: vec![],
+            enabled: BTreeSet::new(),
             mem_available_mib: None,
         };
         let probe = self.probe_serve(&rec).await?;
@@ -1083,9 +1092,7 @@ impl Registry {
             .await?;
         // what it offered at its last probe, until its next health check reads them again
         self.cfg.queue.set_features(&rec.name, rec.features.clone());
-        self.cfg
-            .queue
-            .set_enabled(&rec.name, rec.enabled_features.clone());
+        self.cfg.queue.set_enabled(&rec.name, rec.enabled.clone());
         Ok(())
     }
 
@@ -1302,7 +1309,7 @@ impl Registry {
         let _g = self.busy.lock().await;
         let mut rec = self.record(p.name.as_str()).await?;
         set_feature(
-            &mut rec.enabled_features,
+            &mut rec.enabled,
             p.project.as_str(),
             p.feature.as_str(),
             p.on,
@@ -1507,27 +1514,30 @@ mod tests {
             ["--island".to_string(), "0-5,12-17".to_string()]
         );
         // the opt-ins reach `serve` too, one flag per project and feature
-        r.enabled_features = vec![("drgnx".into(), "render".into())];
+        r.enabled = [(Feature::Render, ProjectId::from("drgnx"))].into();
         assert_eq!(
             serve_flags(&r)[6..],
             ["--feature".to_string(), "drgnx:render".to_string()]
         );
+        // a `mine` runner's kvm is a fact for every project; another trust sends none
+        assert!(!serve_flags(&r).contains(&"*:kvm".to_string()));
+        r.trust = Trust::Mine;
+        assert!(serve_flags(&r).contains(&"*:kvm".to_string()));
     }
 
     // [D] pure: a feature is on per project and runner, off again by name; an unknown one or a project key that could
     // carry a second argument is refused, whatever the state
     #[test]
     fn features_are_set_per_project() {
-        let mut e = vec![];
+        let mut e = BTreeSet::new();
         set_feature(&mut e, "drgnx", "render", true).unwrap();
         set_feature(&mut e, "drgnx", "render", true).unwrap();
         set_feature(&mut e, "other", "render", true).unwrap();
         assert_eq!(e.len(), 2, "{e:?}");
         set_feature(&mut e, "drgnx", "render", false).unwrap();
-        assert_eq!(e, [("other".to_string(), "render".to_string())]);
+        assert_eq!(e, [(Feature::Render, ProjectId::from("other"))].into());
         for (p, f) in [
             ("drgnx", "gpu"),
-            ("drgnx", "build-net"),
             ("a b", "kvm"),
             ("", "kvm"),
             ("a:b", "kvm"),

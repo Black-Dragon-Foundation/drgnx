@@ -418,7 +418,10 @@ fn ok_memory(m: &str) -> bool {
 
 /// An opt-in feature of a runner's container (runners design D2): a thing a job may ask for that the user must have
 /// allowed, per runner and per project. The names are the placement features.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
 pub enum Feature {
     /// `--security-opt=unmask=ALL`: bwrap and other namespace sandboxes run inside the job.
     Sandbox,
@@ -453,6 +456,59 @@ impl Feature {
             Feature::Kvm => "kvm",
         }
     }
+}
+
+/// What a runner allows a job of PROJECT: the hub's `--feature` rows for PROJECT or for every project (`*`, a `mine`
+/// runner's `kvm` fact), except that a `kvm` row for PROJECT alone also needs the runner's own opt-in, `KVM_PROJECTS`
+/// (its `runner.conf`, [`kvm_projects`]): a shared or my-cloud machine's owner says which projects may have `/dev/kvm`.
+pub fn allowed_for(
+    project: &str,
+    rows: &[(String, Feature)],
+    kvm_projects: &[String],
+) -> Vec<Feature> {
+    let mut out: Vec<Feature> = vec![];
+    for (p, f) in rows {
+        let ok = match (p.as_str(), f) {
+            ("*", _) => true,
+            (p, Feature::Kvm) => p == project && kvm_projects.iter().any(|k| k == project),
+            (p, _) => p == project,
+        };
+        if ok && !out.contains(f) {
+            out.push(*f);
+        }
+    }
+    out
+}
+
+/// The projects a runner's own config lets use `/dev/kvm`: the `kvm = ["a", "b"]` line under `[features]` of its
+/// `runner.conf`. Only that one shape is read (a TOML subset); anything else is ignored.
+pub fn kvm_projects(text: &str) -> Vec<String> {
+    let mut in_features = false;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_features = line == "[features]";
+        } else if in_features
+            && let Some(list) = line
+                .strip_prefix("kvm")
+                .map(str::trim_start)
+                .and_then(|r| r.strip_prefix('='))
+                .map(str::trim)
+                .and_then(|r| r.strip_prefix('['))
+                .and_then(|r| r.strip_suffix(']'))
+        {
+            return list
+                .split(',')
+                .map(|p| p.trim().trim_matches('"'))
+                .filter(|p| {
+                    !p.is_empty()
+                        && p.bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+                })
+                .map(str::to_string)
+                .collect();
+        }
+    }
+    vec![]
 }
 
 /// The `podman run` arguments for the features REQ asks for: each only when RA allows it, else a refusal.
@@ -1359,6 +1415,42 @@ mod tests {
         for f in [Feature::BuildNet, Feature::Sandbox] {
             assert_eq!(Feature::parse(f.name()), Some(f));
         }
+    }
+
+    /// [D] pure: the hub's rows allow a project its own features and every project's `*` rows; `kvm` for one project
+    /// also needs the runner's own list naming it.
+    #[test]
+    fn a_runner_allows_what_the_hub_and_its_own_config_both_say() {
+        let rows = |v: &[(&str, Feature)]| -> Vec<(String, Feature)> {
+            v.iter().map(|(p, f)| (p.to_string(), *f)).collect()
+        };
+        let own = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).collect() };
+        let r = rows(&[
+            ("a", Feature::Render),
+            ("b", Feature::Sandbox),
+            ("a", Feature::Kvm),
+        ]);
+        assert_eq!(allowed_for("a", &r, &[]), [Feature::Render]);
+        assert_eq!(allowed_for("a", &r, &own(&["b"])), [Feature::Render]);
+        assert_eq!(
+            allowed_for("a", &r, &own(&["a"])),
+            [Feature::Render, Feature::Kvm]
+        );
+        assert_eq!(allowed_for("c", &r, &own(&["c"])), []);
+        // a `mine` runner's kvm for every project needs nothing of the runner's
+        assert_eq!(
+            allowed_for("c", &rows(&[("*", Feature::Kvm)]), &[]),
+            [Feature::Kvm]
+        );
+    }
+
+    /// [D] pure: `runner.conf` names the projects that may have kvm; other lines, sections and bad names are ignored.
+    #[test]
+    fn the_runner_conf_lists_the_kvm_projects() {
+        let t = "# a runner\n[other]\nkvm = [\"x\"]\n[features]\nkvm = [\"a\", \"b-1\" , \"bad name\", \"\"]\n";
+        assert_eq!(kvm_projects(t), ["a", "b-1"]);
+        assert!(kvm_projects("[features]\nrender = [\"a\"]\n").is_empty());
+        assert!(kvm_projects("").is_empty());
     }
 
     /// [D] pure: the network feature belongs to an artifact build; a container job that names it is refused even

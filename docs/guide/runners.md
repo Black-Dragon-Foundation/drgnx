@@ -1,3 +1,4 @@
+| `kvm` | `--device=/dev/kvm` | the device (see below for who may have it) |
 # Runners: your other machines run jobs
 
 A **runner** is another machine of yours that runs drgnx's jobs (builds, tests) when it would finish them sooner than
@@ -106,11 +107,13 @@ drgnx runner feature NAME sandbox|udmabuf|render|kvm on|off --project PROJECT
 | `kvm` | `--device=/dev/kvm` | the device |
 
 A runner offers a feature to a job only when all three hold: the runner is `mine` (a `my-cloud` or `shared`
-machine offers none, enabled or not), you enabled it for the job's project, and its probe found the device. A job that
+machine offers none, enabled or not), you enabled it for the job's project (the project id is the project's folder name until the project registry), and its probe found the device. A job that
 needs a feature no runner offers waits, and its card says it waits for `features`. The runner enforces the same rule
 again when it starts the container: a feature that was not allowed for the job's project is refused there, whatever the
-hub sent. `kvm` and `udmabuf` are offered only this way (the probe's own `kvm` finding no longer places a job by
-itself); `gpu` stays a plain finding. A change reconnects the runner at once, like `profile`.
+hub sent. `gpu` stays a plain finding. `udmabuf` is offered only this way. `kvm` on a `mine` runner is a plain finding too, for every
+project; on a `my-cloud` or `shared` runner it needs two opt-ins that both name the project: yours (`drgnx runner feature
+NAME kvm on --project P`) and the machine's own, a `runner.conf` in the runner's folder with
+`[features]` and `kvm = ["P"]` (its owner decides who gets `/dev/kvm`; the runner reports the list to the hub). A change reconnects the runner at once, like `profile`.
 
 ## The runner list
 

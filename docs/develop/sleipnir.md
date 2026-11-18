@@ -242,7 +242,7 @@ feature only if allowed, else refuses it: `Sandbox` → `--security-opt=unmask=A
 `Kvm` → `--device=/dev/kvm`, `Render` → `--device=` `RunnerArgs.render_node` (`Probe::render_node`, checked against
 `/dev/dri/renderD<digits>`; none: refused). `BuildNet` is refused on every `podman run`: it belongs to an artifact
 build. The probe adds `udmabuf` to its device findings; the hub offers `render`, `sandbox`, `udmabuf` and `kvm` to a
-job only on a `mine` runner that has them enabled for the job's project (`queue::advertised`).
+job only on a `mine` runner that has them enabled for the job's project (`queue::advertised`). `kvm` is a fact on a `mine` runner (serve gets `*:kvm`); elsewhere `podman::allowed_for` allows it for a project only when the hub's row and the runner's own `runner.conf` (`[features] kvm = ["P"]`, `podman::kvm_projects`, reported in the probe as `kvm-for:P`) both name it. The registry's record holds the opt-ins as `enabled: {(feature, project)}`; `forseti::ProjectId` is the project key (the tree's folder name until the project registry).
 
 ## The executor
 

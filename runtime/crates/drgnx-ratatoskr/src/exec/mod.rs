@@ -470,11 +470,13 @@ impl ExecSpec {
         (s.derived.stall_s, s.derived.silent_s) = (self.user.stall_s, self.user.silent_s);
         s.mem_mib.max =
             mem_mib(self.user.memory_max.as_deref().unwrap_or(memory)).max(s.mem_mib.min);
-        s.project = s
-            .tree
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        // the project id is the old folder rule until the project registry (runners Task 46)
+        s.project = forseti::ProjectId(
+            s.tree
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
         s.local_only = self.place.local_only;
         s.lane = self.place.lane.clone();
         s.keys = self.place.keys.clone();

@@ -34,6 +34,8 @@ pub struct LinuxPlatform {
     exe: PathBuf,
     /// The opt-in container features the user allowed here, per project.
     features: Vec<(String, podman::Feature)>,
+    /// The projects its own `runner.conf` lets use `/dev/kvm`.
+    kvm_projects: Vec<String>,
     /// The timing slice's partition fallback was said (once per runner).
     partition_said: AtomicBool,
 }
@@ -63,6 +65,9 @@ impl LinuxPlatform {
                     Some((p.to_string(), podman::Feature::parse(f)?))
                 })
                 .collect(),
+            kvm_projects: std::fs::read_to_string(cfg.root.join("runner.conf"))
+                .map(|t| podman::kvm_projects(&t))
+                .unwrap_or_default(),
             exe: exe.to_path_buf(),
             partition_said: AtomicBool::new(false),
         })
@@ -79,6 +84,7 @@ impl LinuxPlatform {
             prefix: "t".into(),
             hub_id: "hubA".into(),
             exe: PathBuf::from("/nonexistent/sleipnir"),
+            kvm_projects: vec![],
             features: vec![],
             partition_said: AtomicBool::new(false),
         }
@@ -180,6 +186,8 @@ impl Platform for LinuxPlatform {
             vec![]
         };
         features.extend(self.probe.devices(Path::new("/dev")));
+        // the projects its own config lets use kvm, for the hub to read with the device (D2)
+        features.extend(self.kvm_projects.iter().map(|p| format!("kvm-for:{p}")));
         // an administrator's login is taken as any other; the runner list shows what that exposes
         if probe::is_admin(&probe::own_groups()) {
             features.push("account:admin".into());
@@ -267,12 +275,11 @@ impl Platform for LinuxPlatform {
         )?;
         let mut ra = RunnerArgs::runner(&self.prefix, &self.hub_id, &slice);
         // the opt-ins the user gave this job's project here (D2)
-        ra.allowed = self
-            .features
-            .iter()
-            .filter(|(p, _)| *p == meta.spec.project)
-            .map(|(_, f)| *f)
-            .collect();
+        ra.allowed = podman::allowed_for(
+            meta.spec.project.as_str(),
+            &self.features,
+            &self.kvm_projects,
+        );
         ra.render_node = self.probe.render_node(Path::new("/dev"));
         // a networked or keyed job's relay: the sidecar's image from the bundle's binary, its name and its argv for the
         // helper (a keyed job reads its keys through it)

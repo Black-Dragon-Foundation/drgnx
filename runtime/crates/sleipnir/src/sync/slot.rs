@@ -82,7 +82,7 @@ impl SlotKey {
     /// slot by it, and the hub knows from it whether a runner's `ready` lists the job's slot.
     pub fn of(spec: &forseti::JobSpec) -> SlotKey {
         SlotKey {
-            project: spec.project.clone(),
+            project: spec.project.as_str().to_string(),
             worktree: spec.tree.display().to_string(),
             trust: spec.trust,
             toolchain: String::new(),
