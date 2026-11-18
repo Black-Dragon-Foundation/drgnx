@@ -484,7 +484,9 @@ item on the surface, in every theme and density."
 (drgnx-look-gui-deftest drgnx-kit-sheet/panel-tab-pill ()
   "The panel's tab row (debugging.html `.ptabs' and `.pt.on'): the row is 32 px tall and the shown tab's pill on the
 quiet selection is 24 px of it, 4 above and 4 below (one device px of rounding allowed), read down a column 7 px
-past the pill's left edge: inside its start pad, clear of its rounded corners.  Red first: the pill was as tall as the row's text line."
+past the pill's left edge: inside its start pad, clear of its rounded corners.  Red first: the pill was as tall as the row's text line.
+The row ends in its hairline (`.ptabs' border-bottom, `drgnx-border-subtle'), `max(1, floor(scale))' device px, under
+the pill and the empty row alike.  Red first: the row had none."
   (skip-unless (and (display-graphic-p) (fboundp 'glitnir-active-p) (glitnir-active-p)))
   (require 'drgnx-area)
   (require 'drgnx-state)
@@ -516,6 +518,8 @@ past the pill's left edge: inside its start pad, clear of its rounded corners.  
               (setq x (1+ x)))
             (should at)
             (let* ((snap (drgnx-uitest-snapshot root)) (fill (drgnx-kit-sheet--argb 'drgnx-kit-tab-panel-current))
+                   (rule (cons 255 (mapcar (lambda (v) (/ v 257))
+                                           (color-values (face-foreground 'drgnx-border-subtle root t)))))
                    ;; the pill's left edge: its first fill pixel across the row's middle (the tab's string may start
                    ;; with the gap before it)
                    (left (cl-loop for dx from (round (* s at)) below (round (* s (nth 2 edges)))
@@ -524,10 +528,15 @@ past the pill's left edge: inside its start pad, clear of its rounded corners.  
                    (col (+ (or left 0) (round (* s (drgnx-px 7 root)))))
                    ;; the row's own colour, at its top (4 px above the pill)
                    (bar (drgnx-uitest-pixel snap col (round (* s top))))
-                   ;; the pill: what is not the row's colour down the column (its ring and its fill)
+                   ;; the pill: what is neither the row's colour nor its hairline down the column (its ring and its fill)
                    (ys (cl-loop for y from (round (* s top)) below (round (* s (+ top row)))
-                                unless (equal bar (drgnx-uitest-pixel snap col y)) collect y))
-                   (pill (drgnx-px 24 root)) (dev (lambda (n) (round (* s n)))))
+                                for p = (drgnx-uitest-pixel snap col y)
+                                unless (or (equal bar p) (equal rule p)) collect y))
+                   (pill (drgnx-px 24 root)) (dev (lambda (n) (round (* s n))))
+                   ;; the hairline's device rows at the bottom of a column: under the pill, and in the row's empty middle
+                   (hair (lambda (x) (cl-loop for y downfrom (1- (round (* s (+ top row)))) to (round (* s top))
+                                              while (equal rule (drgnx-uitest-pixel snap x y)) count t)))
+                   (empty (round (* s (/ (+ (nth 0 edges) (nth 2 edges)) 2)))))
               (ert-info ((format "pill rows %S, left %S, col %d, row %d, ring %S, fill %S" ys left col row
                                  (and ys (drgnx-uitest-pixel snap col (car ys))) fill))
                 (should left)
@@ -544,7 +553,11 @@ past the pill's left edge: inside its start pad, clear of its rounded corners.  
                 (should (<= (1- (funcall dev pill)) (length ys) (funcall dev pill)))
                 (should (<= (abs (- (- (car ys) (funcall dev top))
                                     (- (funcall dev (+ top row)) (1+ (car (last ys))))))
-                            1))))))
+                            1))
+                ;; the hairline: the row's last device rows, under the pill and in the empty row
+                (let ((thin (max 1 (floor s))))
+                  (should (equal (list 'hairline-under-pill thin) (list 'hairline-under-pill (funcall hair col))))
+                  (should (equal (list 'hairline-empty thin) (list 'hairline-empty (funcall hair empty)))))))))
       (ignore-errors (with-selected-frame root (drgnx-wb-area-hide 'panel)))
       (drgnx-state-mode -1)
       (pcase-dolist (`(,p . ,v) saved) (set-frame-parameter root p v))
