@@ -386,7 +386,10 @@ tile's name under it (and the monitor's, when your windows are on more than one)
 terminal window, show the letter at their start. Type a letter to go to that tile (its window comes to the front; no
 window moves), **Shift** and a letter to swap your tile with that one (inside one window), or move with the arrows,
 across windows too, and press RET. Esc closes it; any other key closes it and then does what it does. Letters count once
-the cards are up (a blink, 120 ms, or one frame with reduced motion): one typed sooner goes to the tile you are in.
+the cards are up (a blink, 120 ms, or one frame with reduced motion): one typed sooner goes to the tile you are in. The
+card of the tile the arrows are on has the focus ring, and the echo area lists the letters and the keys while it is
+open. Resize Tiles says its keys there too, and a tile with nothing to show says what waits there and its keys
+(RET, x) on one highlighted row.
 
 **Esc Esc** opens it too, in every profile: press Esc where it cancels something (leaves Vim's insert state, quits, clears
 a Work view's search, or closes nothing), then Esc again within 0.3 s (`drgnx-esc-double-tap`; nil turns this off). A

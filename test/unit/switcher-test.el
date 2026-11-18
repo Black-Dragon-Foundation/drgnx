@@ -134,6 +134,23 @@ switcher closed after."
     (should (memq (nth 13 items) cards))
     (should-not (memq term cards))))
 
+(defun drgnx-switcher-test--key-hints (s)
+  "The keys of the kit key hints in string S, in order (their `help-echo' is \"key KEYS\")."
+  (let ((i 0) out)
+    (while (< i (length s))
+      (let ((h (get-text-property i 'help-echo s)) (next (next-single-property-change i 'help-echo s (length s))))
+        (when (and (stringp h) (string-prefix-p "key " h)) (push (substring h 4) out))
+        (setq i next)))
+    (nreverse out)))
+
+(ert-deftest drgnx-switcher/hint-line-is-the-kit ()
+  "The echo area's hint line names each letter and the keys (Shift, the arrows, Return, Esc) as kit key hints."
+  (drgnx-switcher-test--with
+    (let* ((items (drgnx-switcher-open)) (keys (drgnx-switcher-test--key-hints (drgnx-switcher-hint items))))
+      (should (string-prefix-p "Switch tile: " (drgnx-switcher-hint items)))
+      (dolist (it items) (should (member (string (plist-get it :letter)) keys)))
+      (dolist (k '("⇧" "←" "→" "↑" "↓" "↵" "Esc")) (should (member k keys))))))
+
 (ert-deftest drgnx-switcher/teardown-deletes-the-pool ()
   ;; batch makes no card (its frame is a terminal's): a pool entry stands in for one; teardown closes the switcher,
   ;; deletes the pool and leaves no timer of the module

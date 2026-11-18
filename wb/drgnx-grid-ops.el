@@ -293,11 +293,16 @@ does what it does.")
 (dolist (f '(drgnx-grid-resize-left drgnx-grid-resize-right drgnx-grid-resize-up drgnx-grid-resize-down))
   (put f 'repeat-map 'drgnx-grid-resize-map))
 
+(defun drgnx-grid-resize-hint ()
+  "Resize Tiles' line in the echo area: the arrows as kit key hints."
+  (concat "Resize Tiles: " (mapconcat (lambda (k) (drgnx-ui-kit-key-hint k nil 'text)) '("←" "→" "↑" "↓") " ")
+          " grow or shrink · any other key ends"))
+
 (defun drgnx-grid-resize-mode ()
   "Resize Tiles: the arrows grow the selected tile toward them (or shrink it at the grid's edge), one step each; any
-other key ends it and does what it does.  The hint is in the echo area."
+other key ends it and does what it does.  The hint is in the echo area (`drgnx-grid-resize-hint')."
   (interactive)
-  (message "Resize Tiles: arrows grow or shrink, any other key ends")
+  (message "%s" (drgnx-grid-resize-hint))
   (set-transient-map drgnx-grid-resize-map t (lambda () (message nil))))
 
 ;;;; Drag and drop inside a frame (`drgnx-grid-drag')
