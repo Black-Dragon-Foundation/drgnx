@@ -41,8 +41,6 @@
                                    (t :inherit tab-line-tab-current :box nil))
   "The shown tab of the active editor group: it joins the editor, in the body text's colour (the look, §3.8)."
   :group 'drgnx)
-(defface drgnx-chrome-tab-hover '((t :inherit tab-line-highlight))
-  "The tab (or its ×) under the pointer; only that one." :group 'drgnx)
 (defface drgnx-chrome-tab-preview '((t :slant italic))
   "A tab that is only there while it is shown (the scratch buffer, the start page): italic." :group 'drgnx)
 (defface drgnx-chrome-crumb '((t :inherit (drgnx-text-subtle shadow))) "The folders of a breadcrumb." :group 'drgnx)
@@ -252,7 +250,7 @@ hairline (PAINT's RULE)."
     (add-text-properties 0 close-at (list 'help-echo "Show; middle-click closes" 'local-map drgnx-chrome--tab-map) s)
     (add-text-properties close-at (length s) (list 'help-echo "Close this tab" 'local-map drgnx-chrome--close-map) s)
     (when (or (string-match-p drgnx-chrome-transient-tabs (buffer-name b)) (drgnx-chrome-preview-p w b))
-      (add-face-text-property 0 (length s) 'drgnx-chrome-tab-preview nil s))
+      (add-face-text-property 0 (length s) 'drgnx-kit-tab-preview nil s))
     (add-text-properties 0 (length s) (list 'drgnx-buffer b) s)
     (when mouse (add-text-properties 0 (length s) (list 'mouse-face mouse) s))
     (when-let* ((extra (if shown (car paint) (cdr paint)))) (add-face-text-property 0 (length s) extra nil s))

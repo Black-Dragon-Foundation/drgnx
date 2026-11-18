@@ -121,7 +121,6 @@
  drgnx-chrome-tab
  drgnx-chrome-tab-current
  drgnx-chrome-tab-active
- drgnx-chrome-tab-hover
  drgnx-chrome-tab-preview
  drgnx-chrome-crumb
  drgnx-explorer-root
@@ -571,5 +570,6 @@
  drgnx-kit-tab-current
  drgnx-kit-tab-current-inactive
  drgnx-kit-tab-panel-current
+ drgnx-kit-tab-preview
  drgnx-kit-segmented
  drgnx-kit-segmented-current)
