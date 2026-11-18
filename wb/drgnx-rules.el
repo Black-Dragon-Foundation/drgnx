@@ -274,8 +274,14 @@ left and right docks run the frame's full height, the panel sits under the edito
   "While reading, the minibuffer may grow (icomplete-vertical, fido-vertical); the echo area may not."
   (setq-local resize-mini-windows 'grow-only))
 (defconst drgnx-rules--entry '(drgnx-rules--condition (drgnx-rules--display)))
-(defconst drgnx-rules--persistent '(drgnx-role drgnx-section drgnx-area-part)
-  "Window parameters a saved window state keeps (`window-toggle-side-windows', `window-state-put').")
+(defconst drgnx-rules--persistent
+  '(drgnx-role drgnx-section drgnx-area-part drgnx-folded
+               no-other-window no-delete-other-windows header-line-format mode-line-format delete-window)
+  "Window parameters a saved window state keeps (`window-toggle-side-windows', `window-state-put'): drgnx's roles and
+the parameters it gives the docks and areas (Emacs keeps none of its own).  Saved only in states that are not written
+to a file (`window-persistent-parameters' value t).")
+(defvar drgnx-rules--added-persistent nil
+  "The parameters of `drgnx-rules--persistent' this mode added to `window-persistent-parameters' (not the user's).")
 
 (define-minor-mode drgnx-rules-mode
   "Show every buffer where the rules table says; set window defaults that never split or resize."
@@ -287,7 +293,9 @@ left and right docks run the frame's full height, the panel sits under the edito
         (pcase-dolist (`(,var . ,val) drgnx-rules--defaults) (set var val))
         (setq display-buffer-alist (append (remove drgnx-rules--entry display-buffer-alist) (list drgnx-rules--entry)))
         (dolist (p drgnx-rules--persistent)
-          (unless (assq p window-persistent-parameters) (push (cons p t) window-persistent-parameters)))
+          (unless (assq p window-persistent-parameters)
+            (push (cons p t) window-persistent-parameters)
+            (push p drgnx-rules--added-persistent)))
         (advice-add 'display-buffer-in-side-window :around #'drgnx-rules--side-window)
         (advice-add 'balance-windows :around #'drgnx-rules--balance)
         (add-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup)
@@ -299,7 +307,8 @@ left and right docks run the frame's full height, the panel sits under the edito
     (remove-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup)
     (setq display-buffer-alist (remove drgnx-rules--entry display-buffer-alist))
     (setq window-persistent-parameters
-          (seq-remove (lambda (c) (memq (car c) drgnx-rules--persistent)) window-persistent-parameters))
+          (seq-remove (lambda (c) (memq (car c) drgnx-rules--added-persistent)) window-persistent-parameters))
+    (setq drgnx-rules--added-persistent nil)
     (pcase-dolist (`(,var . ,val) drgnx-rules--saved) (set var val))
     (setq drgnx-rules--saved nil)))
 

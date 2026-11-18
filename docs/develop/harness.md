@@ -625,10 +625,11 @@ How it works:
   for the Explorer's Files rows, which come from the hub: without it the section is empty. Every scene starts from
   the frame as the setup left it (`drgnx-look-scene-begin`, called before each): the editor layout, its tiles and
   the editors' shown buffers put back from the arrangement the setup recorded, the minimap scenes' hold released and
-  the setup's sticky style restored. A scene may leave another layout, or open views inside the editor layout (the
+  the setup's sticky style restored, the cards a scene leaves open (Send Run, the inbox's drop-down) closed and the
+  debug session ended unless the scene is marked `:debug` (the debugging scenes share one stopped session). A scene may leave another layout, or open views inside the editor layout (the
   Work Flow's map, Detail and Rules tiles), whose `one` shape keeps the editor area as it is, and under the grid
   `delete-other-windows` keeps the editor tiles: so a layout switch alone does not reset it. After putting it back,
-  begin compares the layout, the tiles, the sticky style and the minimap hold with the setup's and reports any
+  begin compares the layout, the tiles, the sticky style, the minimap hold and the root's visible popups with the setup's and reports any
   difference as an error ("begin: the scene before left …"), so no scene's state reaches the next unnoticed. A scene
   in another layout applies it itself. The start page and notebook scenes report an error when their buffers
   are not shown in the editor layout. The setup writes the notebook scenes' kernelspec and its environment
@@ -648,9 +649,9 @@ How it works:
   problems from a stand-in Flymake backend (`✕ 1 ⚠ 1`), a stand-in eglot connection (`● eglot`; no language server
   runs) and the mock agent, which works in the scenes' project and edits a file there (`● replay-… editing`). The
   mock agent's hub seeds the plan run too, so a Work scene after an agent scene finds it. `agent-panel-long` (mockup
-  `agent-panel`) needs a transcript longer than its window: the session gives the mock agent 17 more steps when
-  `DRGNX_LOOK_ONLY` names it, so draw it alone (`DRGNX_LOOK_ONLY='^agent-panel-long$'`); with the others the transcript
-  fits and the scene says so. It wheels the transcript both ways with `pixel-scroll-precision-mode` on and off, and
+  `agent-panel`) needs a transcript longer than its window: it allows the first turn's open permission and sends the
+  mock agent a second prompt, whose turn (the script's second line) runs 17 more steps, and waits for the last of them;
+  the scenes before keep the mockup's three steps, so it is drawn alone or with the others alike. It wheels the transcript both ways with `pixel-scroll-precision-mode` on and off, and
   clicks the header window's parts (through the event loop too).
   Both panel scenes also check the panel's three windows in the right area: a header window (window parameter
   `drgnx-area-part` `above`) showing the hub's `agent-panel-top/SID` view with its `p:head` row, fitted to its text
@@ -661,7 +662,8 @@ How it works:
   is answered (the hub's first fit of a row comes before the editor's glyph widths, its refit one round trip after the
   answer; an answer sent later than the ask, after the ping, is not covered by the ping); one more round trip that
   changes them is an error, and so is
-  a hub that does not answer. The transcript's opening check: point at its end, and the end whole on its last line
+  a hub that does not answer; its message names the buffers that changed, the windows' body widths before and after
+  and the asks still open. The transcript's opening check: point at its end, and the end whole on its last line
   (under the end's row as redisplay drew it there is less space than the screen line before the start), or the whole
   transcript when it fits. `agent-panel-long` then checks, in the three windows:
   - **wheel:** the transcript wheeled up and down, with `pixel-scroll-precision-mode` on and off, moves each way while
@@ -712,6 +714,11 @@ How it works:
   agents on the map and cannot share a hub, so these scenes carry `:seed "map"` in `drgnx-look-scenes`: a run draws
   them in a second session of their own (with its own setup), after the other scenes, and its hub seeds the map's
   graph (`drgnx-look-scene-seed`). Each selects the first agent (its chain lit, the cards off it dimmed, its detail in the side panel) and waits for its rows.
+- **The tiling scenes** (`tiling`, `tiling-resize`, `tiling-full`; mockup `tiling.html`) build its six tiles
+  (`drgnx-look-scene--six-tiles`): the Explorer, the gateway file's editor (current), an editor of three tabs beside
+  it, the mock agent's panel in the right dock, the panel's terminal under the editors and the Work map in a tile under
+  the agent. Their keys then open the switcher (`C-<escape>`), Resize Tiles with one step (`C-k r <right>`) or full
+  size (`C-k C-m`), and close it after the shot. The switcher's cards are child frames the scrollbar check expects.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
   modules, the visible child frames, `:palette` while a minibuffer is open (whether the palette floats and why: its
   category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is

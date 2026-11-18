@@ -1615,6 +1615,16 @@ lists at each publish.
   `drgnx-ruler-update`, which sets the parameter only when the span moved. A press outside the rows held goes to
   `drgnx-ruler-goto-fraction-function`, which asks the hub for the window around that row (`view/window`) and goes
   there after the draw.
+- **The horizontal strip** (`glitnir-hstrip`, design 2026-11-18 §3.1). `drgnx-minimap--place` gives it to the windows
+  `drgnx-minimap-hstrip-window-p` names: editors (no `drgnx-role`, not a popup or a child frame's, a file's or a text
+  buffer that is not a view or a special mode), and any surface whose buffer sets `drgnx-hscrollbar`. The spec is in
+  device px: `:height` 12, `:lane` 8 (the hit height, the strip's bottom), `:thumb-inset`, `:radius`, `:least` (the
+  thumb's least length) and `:band`, the vertical thumb's face and opacity. C decides when it shows (the window cuts
+  its lines and a line is wider than the text). A press or drag reaches Lisp as the special event
+  `(glitnir-hstrip WINDOW HSCROLL)`, one per frame, HSCROLL in WINDOW's columns; `drgnx-minimap-hstrip-scroll` calls
+  `set-window-hscroll` and leaves point and the selected window alone. The sideways wheel, tilt and Shift-wheel go
+  to `drgnx-hscroll-wheel`, which does nothing over a window that wraps its lines and else calls `mwheel-scroll`;
+  the module turns `mouse-wheel-tilt-scroll` on.
 - **Producers.** One owner draws; producers hand it marks. A producer calls `(drgnx-ruler-source OWNER FUNCTION)` in a
   buffer. FUNCTION returns `(POS LANE FACE PRIORITY [SHAPE END])` marks, LANE `left`, `middle`, `right` or `full`,
   SHAPE nil or `dot` (6 px round, a breakpoint), END a position the mark runs down to (a run of changed lines).
@@ -1681,6 +1691,13 @@ lists at each publish.
   The store's `pane-resized` and `windows-changed` events (a `now` subscription that arms a 0 s timer) move the cards
   with their windows. `drgnx-pin-show` fills the same card with a pin's
   lines and keeps it there until toggled off.
+  - **Columns** (design 2026-11-18 §3.4e). The card takes the editor's font (frame parameter) and its buffer's
+    `face-remapping-alist` (text-scale). Numbers, only when the editor shows them, sit in the card's left margin
+    (a `(margin left-margin)` display string), padded to the editor's `line-number-display-width`, not to the card's
+    last line. The margin is whole columns, so `drgnx-sticky--margin` sizes it to the string's pixel width rounded up
+    and moves the card left by the remainder (`drgnx-sticky--shift`). The text then starts at the editor's text column,
+    and the margin does not scroll sideways. The card's window carries `nidhogg-hscroll-of` WINDOW, from which
+    Nidhogg copies the editor's hscroll in pixels.
 - **Folding.** `editor/fold` (`modules/editor/drgnx-fold.el`) reads the line model's one fold table (`nidhogg-lines-folds`,
   `nidhogg-lines-fold-at`: `(BEG END KIND DEPTH SOURCE)`, BEG the first line's start, END the last line's end). Its
   sources are numbers: 0 tree-sitter, 1 the hub, 2 headings and 4 indentation (the model finds those itself, again
@@ -1710,8 +1727,11 @@ lists at each publish.
 - **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler`, or in a terminal
   (`drgnx-ruler-available-p`).
 - **Checks.** `ruler-test.el` and `marks-test.el` (batch); the look scenes check every scrollable window of every
-  scene (`drgnx-look-scene-scrollbars`: the strip is set, and drawn exactly when the content runs past the window; a strip under the palette's child frame is not
-  judged, one under any other child frame, a toast say, is an error);
+  scene (`drgnx-look-scene-scrollbars`: the strip is set, and on the root frame drawn exactly when the content runs
+  past the window, from two snapshots of the root frame with and without the strips (the checker marks each window
+  it toggles with `force-window-update`, so the root is redrawn while a popup has the focus); a child frame's own strips are
+  not judged for drawing; a strip under the palette's child frame, a tile switcher's card or a popup the scene opens on purpose, its
+  `:covers` in `drgnx-look-scenes`, is not judged, one under any other child frame, a toast say, is an error);
   Nidhogg's `glitnir-gui/the-ruler-*` rows check the pixels.
 - **Perf.** `debug-ruler-scroll` (10,000 lines, 200 marks) against `debug-ruler-baseline`, the same scroll with the
   ruler off (docs/develop/perf.md, "The overview ruler"). The margin version this
@@ -3438,8 +3458,10 @@ AREA)`, the side bar one holding the kind `side-bar` with `(:view VIEW)`; an ato
 `drgnx-grid-full` (the `:arrangement` intent) and deletes every other tile of the grid (the status bar stays), past
 `no-delete-other-windows`. Again, `drgnx-grid-leave-full-size` applies the saved tree: the same edges, ±0 px at the
 same scale. While a tile is full size, every other grid command — a split, a tile shown, hidden, focused or resized, a
-dock toggled — leaves full size first, then acts. The full tile's tab line starts "Full size · 1 of N · KEY back"
-(window parameter `drgnx-grid-full-note`, read by the chrome; KEY from the profile). Workbench remaps
+dock toggled — leaves full size first, then acts. The full tile's tab row carries an accent kit chip, the maximize icon and "Full size · 1 of N
+· KEY back" (window parameter `drgnx-grid-full-note`, read by the chrome: at the right of an editor's row before the
+split and more buttons, first in any other row and on a terminal; KEY from the profile), and the status bar says "full
+size · N tiles" (`drgnx-grid-full-size-status`, the frame parameter `drgnx-grid-full-status`). Workbench remaps
 `delete-other-windows`, `evil-window-delete-others`, `evil-window-set-height` and `evil-window-set-width` to it, so
 `C-x 1` and those Vim keys never lose the layout. Zen is full size plus centred text: View: Zen (`drgnx-look-zen`) and
 the Zen layout (`drgnx-layouts--zen`, its way back the layout's own: `drgnx-grid-forget-full-size`).
@@ -3490,6 +3512,8 @@ named by its main window (`drgnx-grid-tile-main`).
   tile is at least as wide as tall, else below.
 - `(drgnx-grid-resize-mode)`: a transient map; each arrow moves the tile's edge on that side one step
   (`drgnx-grid-resize-step-px`, 24 logical px; a column or a line in a terminal), the opposite edge at the grid's edge.
+  While it is on, the tile's tab row carries `drgnx-grid-resize-note` (an accent kit chip, the `move` icon and "Resize
+  · Esc"; window parameter `drgnx-grid-mode-note`, placed as the full-size chip is), removed by the map's exit.
 - No room (`drgnx-grid-room-p`: the tile split in two below the least tile size, `drgnx-grid-min-size`): a move, an
   unstack or a split (`drgnx-grid-split-tile`, the groups' split) changes nothing and says "No room there"; the
   automatic placements fall back to their dock instead. A move first pushes the grid (`drgnx-grid-push` `move`); a
@@ -3586,8 +3610,13 @@ then by monitor and position; child frames and the daemon's initial frame left o
 `drgnx-switcher-assign` letters them by rank and reading order (`drgnx-grid-letters`); `drgnx-switcher-neighbour
 ITEMS FROM DIRECTION` is the nearest centre in that half-plane, across frames; `drgnx-switcher-cards` picks the 12
 largest of graphical frames. Cards are pooled child frames (`drgnx-switcher--pool`, made on first use, hidden on close,
-deleted by the teardown), centred on the tile, each a kit card (`drgnx-ui-kit-card-lines`: `selected` for the current
-item, else `plain`; the letter's row gives up the columns the large letter takes); the echo area holds
+deleted by the teardown), centred on the whole tile (`drgnx-switcher--tile-edges`: an atom's root, so the side bar's
+and the agent panel's cards centre on all their windows), each one popup card (tiling.html's `.letter`): the popup
+surface (`drgnx-surface-overlay`, remapped on the card's buffer and its frame's background), the letter in
+`drgnx-ui-heading` at 42 logical px over the caption in `drgnx-text-muted` and `drgnx-ui-caption`, each line centred by pixel spaces with 18 px at the sides, and a 2 px `child-frame-border` ring, its
+colour per card frame: `drgnx-focus-line`'s on the current item, else the popups' own ring (high contrast) or the
+surface's. The caption (`drgnx-switcher--tile-title`) is an editor's shown tab and "editor" ("(current)" on yours, "a
+stack of N" for several tabs), a tool tile's kind (with "· a stack of N"), the side bar's view; the echo area holds
 `drgnx-switcher-hint` (the letters and keys as kit key hints, cleared on close when still shown), as Resize Tiles holds
 `drgnx-grid-resize-hint`; a tile placeholder's line is a kit row in the selected state (`drgnx-ui-kit-row-face`,
 remapped by focus) with its keys as key hints; the rest get an overlay letter (`before-string`, inverse video, the
@@ -3843,7 +3872,14 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   `(space :width N)` with N = px / `frame-char-width`, canonical characters, so one buffer is right on frames of two
   scales; on a line it is `(space :width (PX))`, the spec made once per width (`drgnx-ui-kit--pads`, bounded by the
   pad widths at the scales seen). Per-row path: positional arguments, no `&key`, no `apply`, no closures; after a
-  warm-up a call allocates no vector (`drgnx-ui-kit/row-call-allocates-no-closure`).
+  warm-up a call allocates no vector (`drgnx-ui-kit/row-call-allocates-no-closure`). On a graphical line each run a
+  kit face sizes gets the absolute height of that face's type face on `default` (`drgnx-ui-kit--line-sizes`; the type
+  face is the binding's `:font`, else the first type face in its `:inherit`): the line's own face lies under the text,
+  and drgnx's themes give the header and tab lines the UI font's relative size, so a relative kit size would apply
+  twice (the panel tab's text was 25 px for 26 at scale 2), as would a kit face inheriting a standard face with a size
+  (Emacs's `tab-line`, 0.9), or a state face above it that inherits `default` under another theme (the code size); the
+  size sits right above the run's first face that has one. `drgnx-ui-kit/line-text-scales-once` checks every fixture component on each line, as
+  Emacs merges the faces, with and without drgnx's theme.
 
 ### Buttons and key hints (Task 12)
 
@@ -3900,10 +3936,9 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   editor's surface in the body text's colour (`drgnx-kit-tab-current`; a shown tab of another group muted,
   `drgnx-kit-tab-current-inactive`), the others muted on the row (`drgnx-kit-tab`); a panel tab (an area's tab row) is
   30 px with 9 px each side, the shown one a pill on the quiet selection (`drgnx-kit-tab-panel-current`). The area's
-  row is 32 px with the tabs' text in its middle, and under Glitnir the shown tab's pill is 24 px of it (a box fit to
-  its text, `drgnx-area--tab-row-parts`); the tabs' text takes the kit face's size as an absolute height, since the
-  header line's relative UI size would otherwise apply twice. Neither is
-  ever bold. Its parts: the icon (14 px, an image where the frame draws SVG icons, else its glyph and a space), the
+  row is 32 px with the tabs' text in its middle and the `drgnx-border-subtle` hairline on its last pixels, and under
+  Glitnir the shown tab's pill is 24 px of it (a box fit to its text, `drgnx-area--tab-row-parts`). Neither is ever
+  bold. Its parts: the icon (14 px, an image where the frame draws SVG icons, else its glyph and a space), the
   title, then with a close mark the gap and an 18 px slot: 2 px, the `x` icon (the `close` glyph on a terminal; the
   `dot` glyph, muted, when the file is modified), 2 px. The close mark is hidden (`drgnx-control-hidden`) on a tab
   that is not shown, except on a terminal or under the pointer. The tab's own face is the state face for the shown
@@ -3919,6 +3954,30 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   bar (`drgnx-work-lens-string`) draw with them; `drgnx-wb-tab*`, `drgnx-chrome-tab`, `-active`, `-current` and the
   `drgnx-work-lens-*` faces are aliases of the kit faces once `ui/look` is on. The action kind `ui-window-button`
   selects the clicked window before it runs its action (a lens item switches the lens of the window it is in).
+
+### The text input (flow Task 22a)
+
+- `text-input` (variants `lines` single, multi and `shape` single, top, mid, bottom, as a card's): the field the
+  composer, the paragraph-comment input and the review screen's Request changes draw round their real buffer text. The
+  kit draws the frame, the context chips and the placeholder; the text between is the buffer's own and is never drawn
+  by the kit. A single field is one 28 px line, a multi-line one at least two text lines (rows in a card's shapes, the
+  ring open where the field goes on); 8 px each side, radius 6, a 1 px `border` ring on the editor's surface
+  (`drgnx-kit-text-input`, `-multi-top`, `-multi-mid`, `-multi-bottom`). A terminal draws `[ ` and ` ]` round it. The
+  focus ring (2 px, inset, `focus`) is the state table's `focus-visible`, shown only after a key event
+  (`drgnx-ui-kit-focus-visible-p`); a disabled field is the state table's `disabled`. Its accessible text is the
+  placeholder, or "text field" without one.
+- Hub: `Comp::TextInput { text, placeholder, lines, chips, focused, state }`, `InputChip { label, tone, remove }`. The
+  hub expands it with `expand_rows` (keys `KEY/0`, `KEY/1`...); `expand` draws the first row. On the first row the chips
+  come first, each a soft kit chip with a close mark (the Lucide x where icons are drawn, else the `close` glyph); a
+  click or RET on the mark runs `remove`, an action of any kind (the composer's is the kit action kind
+  `composer-chip-remove`, defined by the composer's module). An empty first row shows the placeholder in the muted role.
+- Lisp: `(drgnx-ui-kit-text-input PLACEHOLDER LINES CHIPS WIDTH WHERE &optional FOCUSED FRAME)` returns one
+  `(HEAD . TAIL)` per line for the buffer to put before and after its text (a `line-prefix` and an `after-string`, or
+  an overlay): HEAD is the left edge and, on the first line, the chips; TAIL stretches to column WIDTH and closes the
+  right edge. Both are at canonical-character widths in `text` and px at the frame's scale on a line. CHIPS is
+  `((LABEL TONE ACTION)...)`. The first HEAD carries the placeholder as its `drgnx-placeholder` property.
+  `drgnx-ui-kit-expand 'text-input` is the first row, equal to the hub's (the conformance fixture has ten cases; the
+  hub's other rows are the fixture's `more`).
 
 ### Actions and focus-visible
 

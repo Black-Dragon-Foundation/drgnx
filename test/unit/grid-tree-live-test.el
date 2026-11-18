@@ -109,9 +109,14 @@ bottom.  Returns the editors."
         (should (equal (drgnx-grid-tiles) (list two)))
         (should (equal (window-pixel-edges two) root))
         (should (string-match-p "Full size · 1 of 6 · " (format "%s" (window-parameter two 'drgnx-grid-full-note))))
+        ;; tiling.html: an accent chip led by the maximize icon, and the status bar's word for it
+        (should (string-prefix-p (drgnx-face-glyph 'maximize-2)
+                                 (string-trim (substring-no-properties (window-parameter two 'drgnx-grid-full-note)))))
+        (should (equal (drgnx-grid-full-size-status) "full size · 6 tiles"))
         (drgnx-grid-full-size-toggle two)
         (should-not (drgnx-grid-full-size-p))
         (should-not (window-parameter two 'drgnx-grid-full-note))
+        (should-not (drgnx-grid-full-size-status))
         (should (equal (drgnx-grid-tree-live-test--edges) edges))))))
 
 (ert-deftest drgnx-grid-tree-live/full-size-then-move-leaves-full-size-first ()

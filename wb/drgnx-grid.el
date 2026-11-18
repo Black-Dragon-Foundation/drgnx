@@ -23,6 +23,7 @@
 (require 'drgnx-ui-kit)                 ; the grip's glyph (`drgnx-face-glyph')
 (require 'drgnx-grid-tree)
 (require 'drgnx-panes)
+(declare-function drgnx-statusbar-refresh "drgnx-statusbar" (&optional changed))
 
 (defvar drgnx-rules--placing)
 (defvar drgnx-rules-never-cover-modes)
@@ -1330,22 +1331,30 @@ last.  When the kept tiles are arranged otherwise than TREE has them, only the f
     (dolist (w (drgnx-grid--leaf-windows (window-frame window)))
       (unless (eq w mine) (drgnx-grid--delete-leaf w)))))
 
+(defun drgnx-grid-full-size-status (&optional frame)
+  "\"full size · N tiles\" while a tile of FRAME shows full size, else nil (the status bar shows it)."
+  (frame-parameter frame 'drgnx-grid-full-status))
+
 (defun drgnx-grid-full-size-p (&optional frame)
   "Non-nil while a tile of FRAME shows full size: (ID . TREE), the tile and the tree it goes back to."
   (frame-parameter frame 'drgnx-grid-full))
 
-(defun drgnx-grid--full-note (count)
-  "The note a full-size tile's tab row starts with: \"Full size · 1 of COUNT · KEY back\"."
+(defun drgnx-grid--full-note (count frame)
+  "The chip a full-size tile's tab row carries on FRAME (tiling.html's `chip acc', at the right of an editor's row):
+the maximize icon and \"Full size · 1 of COUNT · KEY back\"."
   (let ((key (substitute-command-keys "\\[drgnx-grid-full-size-toggle]")))
-    (propertize (format " Full size · 1 of %d · %s back " count
-                        (if (string-prefix-p "M-x " key) "tile-full-size" key))
-                'face 'shadow)))
+    (drgnx-ui-kit-string 'chip (list :c "chip" :tone "accent" :icon "maximize-2"
+                                     :label (format "Full size · 1 of %d · %s back" count
+                                                    (if (string-prefix-p "M-x " key) "tile-full-size" key)))
+                         'tab-line frame)))
 
 (defun drgnx-grid-forget-full-size (&optional frame)
   "FRAME shows no tile full size any more, though its tiles stay as they are (a layout put its own arrangement back).
 The saved tree, or nil when there was none."
   (when-let* ((full (drgnx-grid-full-size-p frame)))
     (set-frame-parameter frame 'drgnx-grid-full nil)
+    (set-frame-parameter frame 'drgnx-grid-full-status nil)
+    (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t))
     (dolist (w (window-list frame 'nomini)) (set-window-parameter w 'drgnx-grid-full-note nil))
     (cdr full)))
 
@@ -1365,7 +1374,11 @@ as it was.  The tab row says so, with the key back."
              (tree (drgnx-grid-tree frame)))
         (set-frame-parameter frame 'drgnx-grid-full (cons (drgnx-grid-tile-id main) tree))
         (drgnx-grid--keep-only main)
-        (set-window-parameter main 'drgnx-grid-full-note (drgnx-grid--full-note (length (drgnx-grid-tree-leaves tree))))
+        (let ((n (length (drgnx-grid-tree-leaves tree))))
+          (set-window-parameter main 'drgnx-grid-full-note (drgnx-grid--full-note n frame))
+          ;; the status bar's word for it (tiling.html: `full size · 6 tiles'), read as it draws
+          (set-frame-parameter frame 'drgnx-grid-full-status (format "full size · %d tiles" n))
+          (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
         (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply frame))))))
 
 ;;; Temporary windows, the popup row, and a grid a package collapsed

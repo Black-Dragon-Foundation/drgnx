@@ -807,7 +807,7 @@
               (fold-previous :none "the palette")
               (modal-toggle :none "with Vim keys")
               (face-toggle-menu-bar :none "the palette; F10 opens the menu as text while the bar is hidden")
-              (face-toggle-wrap :none "the palette")
+              (face-toggle-wrap "M-z")
               ;; the menu bar's mnemonics, as VS Code's window.enableMenuBarMnemonics (the Emacs and Vim profiles keep Alt)
               (menu-bar-open-file "M-f" :mac ())   ; macOS: the system menu bar
               (menu-bar-open-edit "M-e" :mac ())   ; macOS: the system menu bar

@@ -845,22 +845,42 @@ editor.tabSize).  A change applies at once.  A mode that sets its own indent kee
 
 ## drgnx-editing-word-wrap
 
-Whether a line longer than its window continues on the next row, breaking at a word (`on'), or runs off the edge
-(`off'), as VS Code's editor.wordWrap.  drgnx wraps by default.  Toggle Word Wrap flips it for one buffer.  A change
-applies at once.
+What a line longer than its window does, as VS Code's editor.wordWrap: `off' runs it off the edge, `on' continues it
+on the next row at a word, `column' wraps it at `drgnx-editing-word-wrap-column' (VS Code's wordWrapColumn),
+`bounded' at that column or the window's edge, whichever comes first.  `auto' (the default) wraps prose (Markdown,
+Org, plain text) and cuts code, configuration and data (YAML, HTML, JSON).  Buffers of other kinds keep their own.
+A `(:mode MODE …)' entry gives one language another; Toggle Word Wrap flips one buffer.  A change applies at once.
 
 | Key | Value |
 | --- | --- |
-| Default | `on` |
-| Type | `(choice (const on) (const off))` |
-| `:scope` | `global` |
+| Default | `auto` |
+| Type | `(choice (const auto) (const on) (const off) (const column) (const bounded))` |
+| `:scope` | `buffer` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |
 | `:on-error` | `last-good` |
 | `:apply` | `drgnx-editing--apply-word-wrap` |
 | `:runtime` | - |
 | `:agents` | `never` |
-| `:schema` | `(enum on off)` |
+| `:schema` | `(enum off on column bounded auto)` |
+
+## drgnx-editing-word-wrap-column
+
+The column long lines wrap at when `drgnx-editing-word-wrap' is `column' or `bounded' (VS Code's
+editor.wordWrapColumn); the other modes ignore it.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `80` |
+| Type | `integer` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-editing--apply-word-wrap` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(pred drgnx-editing--wrap-column-p "a column from 20 to 1000")` |
 
 ## drgnx-extensions-check-updates
 
@@ -1549,6 +1569,24 @@ past the window; the text keeps its width either way).
 | `:merge` | `replace` |
 | `:on-error` | `last-good` |
 | `:apply` | `drgnx-ruler--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-hstrip
+
+Non-nil: an editor that cuts its lines gets a horizontal scroll bar along the bottom of the text while a line is
+wider than the window (12 px over the text, from the first text column; it takes no space).  Nil: none.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
 | `:runtime` | - |
 | `:agents` | `grantable` |
 | `:schema` | - |

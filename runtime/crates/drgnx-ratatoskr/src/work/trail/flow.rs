@@ -57,8 +57,10 @@ const AGENT: &str = FaceId::WorkFlowAgent.name();
 const HOVER: &str = FaceId::Hover.name();
 /// A key's badge (the keycap).
 const KEY: &str = FaceId::WorkFlowKey.name();
-/// The detail's action rows, logical px (`.detail .acts`: 24 px buttons, 6 px apart).
-const ACT_ROW: f32 = 30.0;
+/// The detail's action rows, logical px: as tall as the kit's button (md, 26; its box fills the row) and the mockup's 6 px
+/// between two rows (`.detail .acts`).
+const ACT_ROW: f32 = 26.0;
+const ACT_GAP: f32 = 6.0;
 /// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
 const CARD: &str = FaceId::WorkFlowCard.name();
 const CARD_TEXT: &str = FaceId::WorkFlowCardText.name();
@@ -1275,12 +1277,20 @@ fn row_px(m: &dyn Measure, row: &drgnx_rows::Row) -> u32 {
     total.ceil() as u32
 }
 
+/// The blank row between two rows of buttons (`ACT_GAP`; none on a terminal), keyed `d:gap` and what follows `d:` in KEY.
+fn act_gap(key: &str, env: &ViewEnv) -> Row {
+    let mut b = RowBuilder::new(format!("d:gap{}", key.trim_start_matches("d:")));
+    strut(&mut b, env, ACT_GAP);
+    b.finish()
+}
+
 /// The rows of buttons (label, key, primary) keyed KEY, KEY:2, …: side by side, a gap between, as many to a row as
-/// ENV's width holds (a narrow tile drew two buttons 3 px past its edge).
+/// ENV's width holds (a narrow tile drew two buttons 3 px past its edge), a gap row between rows.
 fn buttons(key: &str, list: &[(&str, &str, bool)], env: &ViewEnv, fonts: &dyn Measure) -> Vec<Row> {
     let gap = text_px(fonts, LABEL, " ");
     let mut rows = Vec::new();
     let mut row: Option<(RowBuilder, u32)> = None;
+    let mut made = 0;
     for &(label, k, primary) in list {
         let w = button_px(fonts, env, label, k, primary);
         match &mut row {
@@ -1293,11 +1303,13 @@ fn buttons(key: &str, list: &[(&str, &str, bool)], env: &ViewEnv, fonts: &dyn Me
             _ => {
                 if let Some((b, _)) = row.take() {
                     rows.push(b.finish());
+                    rows.push(act_gap(&format!("{key}:{made}"), env));
                 }
-                let mut b = RowBuilder::new(if rows.is_empty() {
+                made += 1;
+                let mut b = RowBuilder::new(if made == 1 {
                     key.to_owned()
                 } else {
-                    format!("{key}:{}", rows.len() + 1)
+                    format!("{key}:{made}")
                 });
                 strut(&mut b, env, ACT_ROW);
                 button(&mut b, env, label, k, primary);
@@ -1636,6 +1648,9 @@ pub(crate) fn detail_tile(
     } else {
         &[("Evidence", "e", false)]
     };
+    if t.card.is_some() {
+        out.push(act_gap("d:act", env));
+    }
     out.extend(buttons("d:act2", waive, env, fonts));
     if t.card.is_some() {
         for (i, l) in wrap(
@@ -2741,20 +2756,30 @@ mod tests {
         assert!(rows[0].text.ends_with("Detail"), "{}", rows[0].text);
     }
 
-    /// [D] The detail's action rows are the mockup's (`.detail .acts`: 24 px buttons, 6 px apart): 30 logical px each,
-    /// by a strut first on the row, so the buttons' boxes have room for their pad; a terminal has none.
+    /// [D] The detail's action rows are the mockup's (`.detail .acts`: buttons 6 px apart): each as tall as the kit's
+    /// button (26 logical px, a strut first on the row; its box fills the row, so a taller row drew a taller button),
+    /// with a 6 px row of its own between two rows of buttons (the boxes abutted); a terminal has none.
     #[test]
-    fn the_detail_s_action_rows_are_tall_enough_for_the_buttons() {
+    fn the_detail_s_action_rows_are_as_tall_as_the_buttons_with_a_gap_between() {
         for scale in [1.0, 2.0] {
             let (rows, _) = detail_tile(&flow(), "task:J#5", &env(scale), &fonts());
             for key in ["d:act", "d:act2"] {
                 let r = rows.iter().find(|r| r.key == key).expect(key);
                 assert_eq!(
                     r.spaces.first().copied(),
-                    Some((0, 1, (30.0 * scale).round() as u32)),
+                    Some((0, 1, (26.0 * scale).round() as u32)),
                     "{key} at scale {scale}"
                 );
             }
+            let at = |key: &str| rows.iter().position(|r| r.key == key).expect(key);
+            let gap = &rows[at("d:act") + 1];
+            assert_eq!(gap.key, "d:gapact", "scale {scale}");
+            assert_eq!(
+                gap.spaces.first().copied(),
+                Some((0, 1, (6.0 * scale).round() as u32)),
+                "scale {scale}"
+            );
+            assert_eq!(at("d:act2"), at("d:act") + 2, "scale {scale}");
         }
         let mut tty = env(1.0);
         tty.display = Display::Tty;

@@ -133,6 +133,16 @@
     {"name": "tab-panel-selected", "comp": {"c": "tab", "title": "Debug Console", "size": "panel", "state": "selected", "action": {"kind": "ui-button", "args": ["area-show"]}}},
     {"name": "tab-icon", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "icon": "file-code", "close": true}},
     {"name": "tab-panel-icon", "comp": {"c": "tab", "title": "Debug Console", "size": "panel", "state": "selected", "icon": "terminal"}},
-    {"name": "segmented", "comp": {"c": "segmented", "current": 1, "items": [["Map", {"kind": "ui-button", "args": ["map"]}], ["Board", {"kind": "ui-button", "args": ["board"]}], ["Flow", {"kind": "ui-button", "args": ["flow"]}]]}}
+    {"name": "segmented", "comp": {"c": "segmented", "current": 1, "items": [["Map", {"kind": "ui-button", "args": ["map"]}], ["Board", {"kind": "ui-button", "args": ["board"]}], ["Flow", {"kind": "ui-button", "args": ["flow"]}]]}},
+    {"name": "input-single-empty", "comp": {"c": "text-input", "placeholder": "Ask an agent"}},
+    {"name": "input-single-text", "comp": {"c": "text-input", "text": "rename the helper", "placeholder": "Ask an agent"}},
+    {"name": "input-single-1chip", "comp": {"c": "text-input", "text": "why does this fail", "placeholder": "Ask an agent", "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}]}},
+    {"name": "input-single-3chips", "comp": {"c": "text-input", "placeholder": "Ask an agent", "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}, {"label": "Plan step 2", "tone": "accent", "remove": {"kind": "composer-chip-remove", "args": ["step-2"]}}, {"label": "fix-explorer", "tone": {"agent": 3}, "remove": {"kind": "composer-chip-remove", "args": ["fix-explorer"]}}]}},
+    {"name": "input-single-focused", "comp": {"c": "text-input", "text": "rename the helper", "placeholder": "Ask an agent", "focused": true}},
+    {"name": "input-single-disabled", "comp": {"c": "text-input", "placeholder": "Ask an agent", "state": "disabled"}},
+    {"name": "input-multi-empty", "comp": {"c": "text-input", "lines": "multi", "placeholder": "Request changes"}},
+    {"name": "input-multi-text", "comp": {"c": "text-input", "lines": "multi", "text": "first line\nsecond line\nthird line", "placeholder": "Request changes"}},
+    {"name": "input-multi-1chip-focused", "comp": {"c": "text-input", "lines": "multi", "text": "one", "placeholder": "Request changes", "focused": true, "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}]}},
+    {"name": "input-multi-3chips", "comp": {"c": "text-input", "lines": "multi", "placeholder": "Request changes", "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}, {"label": "Plan step 2", "tone": "accent", "remove": {"kind": "composer-chip-remove", "args": ["step-2"]}}, {"label": "fix-explorer", "tone": {"agent": 3}, "remove": {"kind": "composer-chip-remove", "args": ["fix-explorer"]}}]}}
   ]
 }
