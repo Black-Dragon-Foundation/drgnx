@@ -18,6 +18,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-memo)
 (require 'drgnx-large-file)
+(require 'drgnx-pixels)                 ; `drgnx-px': the minimap's width, logical
 (require 'drgnx-timer)
 (require 'drgnx-type-faces)             ; `drgnx-ui-caption'
 
@@ -321,11 +322,14 @@ the minimap and the ruler."
     card))
 
 (defun drgnx-sticky--place (w card)
-  "Put CARD over window W's top rows, as wide as its text area, as tall as its lines."
+  "Put CARD over window W's top rows, as wide as its text area less the minimap over its right edge (VS Code's: the
+minimap stays in sight when it opens), as tall as its lines."
   (let* ((frame (aref card 0)) (edges (window-inside-pixel-edges w))
+         (minimap (plist-get (window-parameter w 'glitnir-minimap) :width))
          (lines (with-current-buffer (aref card 1) (count-lines (point-min) (point-max))))
          (height (* (max 1 lines) (with-selected-window w (default-line-height)))))
-    (set-frame-size frame (- (nth 2 edges) (nth 0 edges)) height t)
+    (set-frame-size frame (max 1 (- (nth 2 edges) (nth 0 edges) (if minimap (drgnx-px minimap (window-frame w)) 0)))
+                    height t)
     (set-frame-position frame (nth 0 edges) (nth 1 edges))))
 
 (defun drgnx-sticky--fill (w positions)

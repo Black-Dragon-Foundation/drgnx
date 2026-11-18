@@ -485,11 +485,29 @@ focuses the editor starts here, or has no editor window to focus."
     (setq drgnx-look-scene--windows-rearranged nil)
     (drgnx-layouts-apply 'editor)))
 
+(defvar drgnx-sticky-style)
+(declare-function drgnx-sticky--setting-changed "drgnx-sticky" (&rest _))
+(declare-function drgnx-minimap--spec "drgnx-minimap" (window))
+
+(defun drgnx-look-scene--release-held ()
+  "What the minimap and sticky scenes hold goes before the next scene: the minimap kept open (its advice and window
+marks) and the sticky card shown in the `lines' style (the style back to `names', which deletes the cards).  Left
+held, the sticky-lines scene drew the minimap the hover scenes opened, and later scenes kept the card."
+  (advice-remove 'drgnx-minimap--spec #'drgnx-look-scene--minimap-held)
+  (dolist (w (window-list-1 nil 'never t))
+    (when (window-parameter w 'drgnx-look-scene-minimap-open)
+      (set-window-parameter w 'drgnx-look-scene-minimap-open nil)
+      (when (window-parameter w 'glitnir-minimap)
+        (set-window-parameter w 'glitnir-minimap (drgnx-minimap--spec w)))))
+  (when (and (featurep 'drgnx-sticky) (eq drgnx-sticky-style 'lines))
+    (setq drgnx-sticky-style 'names)
+    (drgnx-sticky--setting-changed)))
+
 (defun drgnx-look-scene-begin ()
   "Before each scene (`drgnx-look-scenes-run'): the editor layout, whatever the scene before left.  A scene in another
 layout (the Work map's) applies it itself; without this the scenes after it drew in its layout (the start page and the
 notebooks showed the Work map)."
-  (drgnx-look-scene--try "begin" (drgnx-look-scene--editor-layout))
+  (drgnx-look-scene--try "begin" (drgnx-look-scene--editor-layout) (drgnx-look-scene--release-held))
   ;; not `drgnx-look-scene--answer': the scene's own answer checks its views, once it has shown them
   (prog1 (drgnx-uitest--json (list :errors (vconcat (nreverse drgnx-look-scene--errors))))
     (setq drgnx-look-scene--errors nil)))
@@ -2947,6 +2965,9 @@ palette's child frame is not judged, one under any other child frame is an error
                  (fact (list :buffer (buffer-name (window-buffer w))
                              :mode (buffer-local-value 'major-mode (window-buffer w))
                              :strip (and spec t) :span (plist-get spec :span) :overflows over
+                             :shown (list (window-start w) (window-end w t)
+                                          (with-current-buffer (window-buffer w) (point-max)))
+                             :ruler (and (window-parameter w 'glitnir--ruler) t)
                              :drawn (cond (covered 'covered) (without drawn) (t 'unchecked)))))
             (push fact log)
             (cond ((not spec)

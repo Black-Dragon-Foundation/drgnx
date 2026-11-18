@@ -62,6 +62,26 @@
       (drgnx-sticky--hide-all t)
       (kill-buffer b))))
 
+(ert-deftest drgnx-ui-sticky-lines/the-card-leaves-the-minimap-in-sight ()
+  (skip-unless (display-graphic-p))
+  (let ((b (generate-new-buffer "sticky-lines-minimap")) (w (selected-window)))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer b)
+          (insert "(defun f ()\n  1)\n")
+          (set-window-parameter w 'glitnir-minimap '(:width 100))
+          (redisplay t)
+          (drgnx-sticky--fill w (list (point-min)))
+          (redisplay t)
+          (let ((frame (aref (cdr (assq w drgnx-sticky--cards)) 0)) (edges (window-inside-pixel-edges w)))
+            (should (frame-visible-p frame))
+            (should (= (+ (car (frame-position frame)) (frame-pixel-width frame))
+                       (- (nth 2 edges) (drgnx-px 100 (window-frame w)))))))
+      (set-window-parameter w 'glitnir-minimap nil)
+      (drgnx-sticky--hide-all t)
+      (kill-buffer b))))
+
 (ert-deftest drgnx-ui-sticky-lines/a-window-gets-its-hidden-card-in-the-lines-style-and-it-goes-with-the-window ()
   (skip-unless (display-graphic-p))
   (let ((b (generate-new-buffer "sticky-lines-premake")))

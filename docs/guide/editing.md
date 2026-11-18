@@ -152,7 +152,8 @@ over the window's top rows, the popups' shadow under the last. They are a card o
 moves, point stays where it is and a scroll counts the same rows. Click a line to go there; Ctrl+click folds that scope.
 The scopes come from the fold table, so sticky scroll, folding and the minimap agree (else from tree-sitter). The card
 is filled again only when the set of scopes changes, never per scroll. Each window with sticky scroll gets its card,
-hidden, as soon as the `lines` style is on, so the first sticky line shows at once; the card goes with its window.
+hidden, as soon as the `lines` style is on, so the first sticky line shows at once; the card goes with its window. The card stops short of the minimap,
+so the minimap stays in full sight when it opens.
 
 **Pinned regions.** **Pin Region** pins the selection, or the scope at point: it keeps a band and its name on the
 minimap (the scroll bar's pin marks, which move with your edits). **Show Pinned Region** shows a pin (the one at point,
