@@ -2232,6 +2232,42 @@ Read at every start; a change turns it on or off at once.  Without a watchdog in
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-sticky-max
+
+Scopes sticky scroll shows at most, the outermost first (VS Code's default is 5; the lines cover text rows).
+
+| Key | Value |
+| --- | --- |
+| Default | `3` |
+| Type | `integer` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-sticky--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-sticky-style
+
+How sticky scroll shows the scopes whose start has scrolled off the top: `names', their names after the breadcrumb;
+`lines', their first lines as code (line numbers and syntax colours) pinned over the window's top rows, VS Code's
+sticky scroll.  A click on a line goes there; Ctrl+click folds that scope.
+
+| Key | Value |
+| --- | --- |
+| Default | `names` |
+| Type | `(choice (const names) (const lines))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-sticky--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
 ## drgnx-term-abnormal-command-exit-runtime
 
 Milliseconds: a terminal whose program fails (a code other than 0, or a signal) sooner than this after it started

@@ -400,9 +400,11 @@ within three lines of the word icon."
              id)
      "(`drgnx_rows::kit`) and by the Lisp chrome (`drgnx-ui-kit-expand`). Sizes are logical pixels; every colour is a "
      "[token](../tokens.md). Open it live with **Design: Component Catalogue**.\n\n"
-     (format "![The %s component, dark](../img/kit-%s-dark.png)\n\n" id id)
-     (format "![The %s component, light](../img/kit-%s-light.png)\n\n" id id)
-     (format "![The %s component, high contrast](../img/kit-%s-hc.png)\n\n" id id)
+     (if (and (plist-member entry :sheet) (null (plist-get entry :sheet)))
+         "The hub draws this component alone (the Lisp chrome has no expansion of it), so it has no sheet: its rows are checked in Rust (`drgnx-rows`).\n\n"
+       (concat (format "![The %s component, dark](../img/kit-%s-dark.png)\n\n" id id)
+               (format "![The %s component, light](../img/kit-%s-light.png)\n\n" id id)
+               (format "![The %s component, high contrast](../img/kit-%s-hc.png)\n\n" id id)))
      "## Variants\n\n"
      (if (plist-get entry :variants)
          (mapconcat (lambda (a) (format "- `%s`: %s (default `%s`)" (car a)

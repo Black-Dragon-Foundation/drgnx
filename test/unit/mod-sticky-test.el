@@ -141,3 +141,136 @@
                (should drgnx-sticky-mode))
       (drgnx-sticky-mode -1)
       (setq buffer-file-name nil))))
+
+;;;; The `lines' style (F6) and pinned regions (X5)
+
+(ert-deftest drgnx-sticky/lines-the-scopes-come-from-the-fold-table ()
+  ;; The scopes holding the window's start that begin above it, outermost first, at most `drgnx-sticky-max'; one that
+  ;; begins on the start's own line is on screen
+  (drgnx-sticky-test--in (drgnx-sticky-test--elisp 60) #'emacs-lisp-mode
+    (drgnx-sticky-test--start-at-line 30)
+    (let* ((l (lambda (n) (save-excursion (goto-char (point-min)) (forward-line (1- n)) (point))))
+           (folds (list (list (funcall l 1) (funcall l 60) 'block 0 'model) (list (funcall l 2) (funcall l 50) 'block 1 'model)
+                        (list (funcall l 3) (funcall l 40) 'block 2 'model) (list (funcall l 4) (funcall l 35) 'block 3 'model)
+                        (list (funcall l 30) (funcall l 33) 'block 4 'model)))
+           (drgnx-sticky-max 3))
+      (cl-letf (((symbol-function 'drgnx-fold-ranges) (lambda (&rest _) folds)))
+        (should (equal (drgnx-sticky--scopes (selected-window)) (list (funcall l 1) (funcall l 2) (funcall l 3))))))))
+
+(ert-deftest drgnx-sticky/lines-the-header-wants-a-card-only-when-the-scopes-change ()
+  ;; The `lines' style shows nothing after the breadcrumb; the card is filled again only for a new set of scopes
+  (drgnx-sticky-test--in (drgnx-sticky-test--elisp 60) #'emacs-lisp-mode
+    (let ((drgnx-sticky-style 'lines) (asked nil) (w (selected-window)) (drgnx-sticky--cards nil)
+          (drgnx-sticky--pin-shown nil))
+      (cl-letf (((symbol-function 'drgnx-timer-debounce) (lambda (&rest args) (push args asked)))
+                ((symbol-function 'drgnx-sticky--scopes) (lambda (_w) '(1 33))))
+        (drgnx-sticky-test--start-at-line 30)
+        (should (equal (drgnx-sticky--segment w) ""))
+        (should (equal (nth 2 (car asked)) #'drgnx-sticky--fill))
+        (should (equal (plist-get (nthcdr 3 (car asked)) :args) (list w '(1 33))))
+        ;; the card shows them: the same set wants nothing
+        (setq drgnx-sticky--cards (list (cons w (vector nil nil '(1 33)))) asked nil)
+        (drgnx-sticky--want w '(1 33))
+        (should-not asked)
+        ;; a window showing a pin keeps it
+        (setq drgnx-sticky--pin-shown (list (cons w 'pin)))
+        (drgnx-sticky--want w '(1))
+        (should-not asked)))))
+
+(ert-deftest drgnx-sticky/lines-a-line-is-its-number-and-its-code ()
+  (drgnx-sticky-test--in (drgnx-sticky-test--elisp 60) #'emacs-lisp-mode
+    (let* ((p (save-excursion (goto-char (point-min)) (forward-line 9) (point)))
+           (s (drgnx-sticky--text-of (list (point-min) p))))
+      ;; the numbers right-aligned to the widest
+      (should (equal (substring-no-properties s) " 1 (defun drgnx-sticky-test-fn ()\n10   (message \"line 8\")"))
+      (should (memq 'line-number (ensure-list (get-text-property 0 'face s))))
+      (should (eq (get-text-property 0 'drgnx-sticky-pos s) (point-min)))
+      (should (eq (get-text-property (- (length s) 1) 'drgnx-sticky-pos s) p))
+      (should (eq (lookup-key (get-text-property 0 'keymap s) [mouse-1]) #'drgnx-sticky-click)))))
+
+(ert-deftest drgnx-sticky/lines-a-click-goes-to-the-scope ()
+  ;; A click on a card's line selects the window under the card and puts point on that scope's line; Ctrl+click folds it
+  (drgnx-sticky-test--in (drgnx-sticky-test--elisp 60) #'emacs-lisp-mode
+    (let* ((owner (selected-window)) (src (current-buffer))
+           (p (save-excursion (goto-char (point-min)) (forward-line 9) (point)))
+           (text (drgnx-sticky--text-of (list (point-min) p)))
+           (card (generate-new-buffer " *sticky-card-test*")) (folded nil))
+      (unwind-protect
+          (let ((cw (split-window owner)))
+            (with-current-buffer card (insert text) (setq drgnx-sticky--owner owner))
+            (set-window-buffer cw card)
+            (drgnx-sticky-test--start-at-line 30)
+            (with-current-buffer src (goto-char (point-max)))
+            (let ((event (list 'mouse-1 (list cw (with-current-buffer card (1- (point-max))) '(0 . 0) 0))))
+              (select-window cw)
+              (drgnx-sticky-click event)
+              (should (eq (selected-window) owner))
+              (should (= (point) p)))
+            (cl-letf (((symbol-function 'drgnx-fold-toggle) (lambda () (interactive) (setq folded (point)))))
+              (select-window cw)
+              (drgnx-sticky-fold-click (list 'C-mouse-1 (list cw 2 '(0 . 0) 0)))
+              (should (eq (selected-window) owner))
+              (should (eql folded (point-min)))))
+        (kill-buffer card)))))
+
+(ert-deftest drgnx-sticky/pins-are-marks-and-the-minimaps-names ()
+  ;; A pin: the region's lines, named for the symbol it defines; the scroll bar's `pin' marks run to its end, and the
+  ;; minimap's spec carries the pin kind, the colour and the names in buffer order
+  (load (expand-file-name "modules/editor/drgnx-minimap" drgnx-dir) nil t)
+  (drgnx-sticky-test--in (concat (drgnx-sticky-test--elisp 10) (drgnx-sticky-test--elisp 10)) #'emacs-lisp-mode
+    (let ((l (lambda (n) (save-excursion (goto-char (point-min)) (forward-line (1- n)) (point)))) (sources nil))
+      (cl-letf (((symbol-function 'drgnx-ruler-source)
+                 (lambda (owner fn &optional _b) (setq sources (if fn (list (cons owner fn)) nil)))))
+        (drgnx-pin-region (funcall l 13) (funcall l 16))
+        (drgnx-pin-region (funcall l 2) (+ 3 (funcall l 3)) "head")
+        (should (equal (drgnx-sticky-pin-names) '("head" "drgnx-sticky-test-fn")))   ; buffer order
+        (should (equal (mapcar #'car sources) '(pins)))
+        (should (equal (funcall (cdar sources))
+                       (list (list (funcall l 2) 'left 'drgnx-marks-pin 1 nil (1- (funcall l 4)))
+                             (list (funcall l 13) 'left 'drgnx-marks-pin 1 nil (1- (funcall l 17))))))
+        (let ((spec (drgnx-minimap--spec (selected-window))))
+          (should (eql (plist-get spec :pin-kind) (cl-position 'pin drgnx-ruler-kinds)))
+          (should (eq (plist-get spec :pin) 'drgnx-marks-pin))
+          (should (equal (plist-get spec :pin-names) ["head" "drgnx-sticky-test-fn"])))
+        ;; unpinned: the one at point goes; the last one gone takes the marks and the spec's keys
+        (goto-char (funcall l 15))
+        (drgnx-unpin-region)
+        (should (equal (drgnx-sticky-pin-names) '("head")))
+        (goto-char (funcall l 2))
+        (drgnx-unpin-region)
+        (should-not drgnx-sticky--pins)
+        (should-not sources)
+        (should-not (plist-member (drgnx-minimap--spec (selected-window)) :pin-names))))))
+
+(ert-deftest drgnx-sticky/pin-show-toggles-the-pin-in-the-card ()
+  ;; `pin-show' fills the window's card with the pin's lines (at most a third of the window), and again takes it off
+  (drgnx-sticky-test--in (drgnx-sticky-test--elisp 40) #'emacs-lisp-mode
+    (let ((filled nil) (hidden nil) (w (selected-window)) (drgnx-sticky--pin-shown nil) (drgnx-sticky--cards nil)
+          (l (lambda (n) (save-excursion (goto-char (point-min)) (forward-line (1- n)) (point)))))
+      (cl-letf (((symbol-function 'drgnx-ruler-source) #'ignore)
+                ((symbol-function 'drgnx-sticky--fill) (lambda (win pos) (push (cons win pos) filled)))
+                ((symbol-function 'drgnx-sticky--hide) (lambda (win) (push win hidden))))
+        (drgnx-pin-region (funcall l 1) (funcall l 3))
+        (goto-char (funcall l 30))
+        (drgnx-pin-show)
+        (should (equal (car filled) (cons w (list (funcall l 1) (funcall l 2) (funcall l 3)))))
+        (should (assq w drgnx-sticky--pin-shown))
+        (drgnx-pin-show)
+        (should-not drgnx-sticky--pin-shown)
+        (should (equal hidden (list w)))
+        (goto-char (funcall l 2))
+        (drgnx-unpin-region)))))
+
+(ert-deftest drgnx-sticky/turning-the-module-off-takes-the-pins ()
+  (let ((b (generate-new-buffer "sticky-pins-off")))
+    (unwind-protect
+        (progn
+          (drgnx-test-with-modules '(editor/sticky)
+            (with-current-buffer b
+              (insert (drgnx-sticky-test--elisp 10))
+              (emacs-lisp-mode)
+              (drgnx-pin-region (point-min) (+ 5 (point-min)))
+              (should drgnx-sticky--pins)))
+          (should-not (buffer-local-value 'drgnx-sticky--pins b))
+          (should-not drgnx-sticky--cards))
+      (kill-buffer b))))
