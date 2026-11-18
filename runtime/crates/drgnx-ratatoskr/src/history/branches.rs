@@ -213,14 +213,18 @@ pub async fn fork(f: &Front, c: &Caller, p: w::ForkParams) -> Result<w::Forked, 
         seq: p.seq,
     };
     let hubdir = hub_dir(f)?;
+    let sid = session::new_sid()?;
+    let stages = crate::stages::Stages::new("history/fork", sid.as_str());
     let (_, src_cwd, _) = rewind::source_of(&f.core.agents, f, &t.sid).await?;
+    stages.at("the source");
     let step = step_of(f, &t).await?;
+    stages.at("the step");
     let cut = match step.history_op {
         Some(op) => Cut::Op(op),
         None => Cut::Time(step.end.unwrap_or(step.start)),
     };
-    let sid = session::new_sid()?;
     let tree = super::tree::fork_tree(f, &t, &sid).await?;
+    stages.at("the tree");
     let (branch, source_branch, hub) =
         match branch_fork(f, &hubdir, &t, &src_cwd, &tree.path, cut).await {
             Ok(v) => v,
@@ -229,6 +233,7 @@ pub async fn fork(f: &Front, c: &Caller, p: w::ForkParams) -> Result<w::Forked, 
                 return Err(e);
             }
         };
+    stages.at("the branch");
     // a worker's fork works in its own tree as its source did; a chat's stays a chat (its project read-only)
     let role = f
         .core
@@ -249,6 +254,7 @@ pub async fn fork(f: &Front, c: &Caller, p: w::ForkParams) -> Result<w::Forked, 
         role,
     )
     .await;
+    stages.at("the conversation");
     match started {
         Ok((s, level)) => Ok(w::Forked {
             id: s.id,

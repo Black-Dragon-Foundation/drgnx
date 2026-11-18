@@ -56,8 +56,10 @@ pub struct Root {
 }
 
 /// A scenario hub's log level when the caller sets none: info, and a session's turn stages at debug (sending, the
-/// snapshot before it, the prompt written, each update read and applied), so a failure's log tail names the stage.
-pub const HUB_LOG: &str = "info,drgnx_ratatoskr::agents::session=debug";
+/// snapshot before it, the prompt written, each update read and applied), and the stages of the long request paths
+/// (`drgnx_ratatoskr::stages`: a fork, a session's launch, a tool call), so a failure's log tail names the stage.
+pub const HUB_LOG: &str =
+    "info,drgnx_ratatoskr::agents::session=debug,drgnx_ratatoskr::stages=debug";
 
 impl Root {
     pub fn new() -> Result<Arc<Root>, String> {
