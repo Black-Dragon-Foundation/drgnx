@@ -176,11 +176,25 @@ pub fn due_at(now: u64) -> bool {
         local(now),
         l.ok_at.map(local),
         l.attempt.map(|(at, _)| now.saturating_sub(at)),
-        STARTED
-            .get_or_init(std::time::Instant::now)
-            .elapsed()
-            .as_secs(),
+        up_secs(),
     )
+}
+
+/// How long the hub has run, as [`due`] counts it.  With the `test-hooks` feature, `DRGNX_TEST_BACKUP_SETTLE_SECS=N`
+/// counts a hub settled after N seconds instead of [`SETTLE`] (a live row does not wait five minutes for its copy).
+fn up_secs() -> u64 {
+    let up = STARTED
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs();
+    #[cfg(feature = "test-hooks")]
+    if let Some(n) = std::env::var("DRGNX_TEST_BACKUP_SETTLE_SECS")
+        .ok()
+        .and_then(|n| n.parse::<u64>().ok())
+    {
+        return if up >= n { up.max(SETTLE) } else { 0 };
+    }
+    up
 }
 
 #[cfg(test)]

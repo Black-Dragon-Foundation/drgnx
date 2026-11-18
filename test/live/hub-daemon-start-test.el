@@ -3,7 +3,8 @@
 ;; test-pattern: handshake
 ;; The unit tests stub `drgnx-hub--ensure-running'.  Here a daemon session asks for a hub as it does after startup
 ;; (`drgnx-hub-ask-at-daemon-start': a timer, then the real `ratatoskr ensure'), no key handed over; the hub opens the
-;; store, finds no copy for today (the session's local time is set past 03:00), and makes the nightly one.  Then the
+;; store, finds no copy for today (the session's local time is set past 03:00), and makes the nightly one once it has
+;; settled (DRGNX_TEST_BACKUP_SETTLE_SECS: 2 s here, not the five minutes of `backup_timer::SETTLE').  Then the
 ;; key-less hub idles for a few seconds and its CPU and resident memory are read from /proc.
 (require 'ert)
 (require 'drgnx-ui)
@@ -49,7 +50,8 @@
           (setq s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30 t) sess (drgnx-ui-own-session (plist-get s :name)))
           (should (drgnx-live-hds--q sess (format "(progn (setenv \"DRGNX_NO_HUB_START\") (setenv \"TZ\" %S)
                                                     (setenv \"DRGNX_RATATOSKR_BIN\" %S)
-                                                    (setenv \"DRGNX_HUB_PARENT_PID\" %S) (daemonp))"
+                                                    (setenv \"DRGNX_HUB_PARENT_PID\" %S)
+                                                    (setenv \"DRGNX_TEST_BACKUP_SETTLE_SECS\" \"2\") (daemonp))"
                                                   tz rbin (number-to-string (emacs-pid)))))
           (should-not (drgnx-live-hds--q sess "(drgnx-hub-running-p)"))
           (drgnx-live-hds--q sess "(progn (drgnx-hub-ask-at-daemon-start) nil)")
