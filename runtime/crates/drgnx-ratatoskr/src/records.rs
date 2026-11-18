@@ -328,7 +328,45 @@ fn today(at: f64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Copy every file in FOUND to a new `<hub>/records-backup/<date>[-n]/` (the path relative to ROOT kept).
+/// P with `.` and `..` resolved by its text alone (a `..` at `/` stays there).
+fn lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() && !out.has_root() {
+                    out.push(c);
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// P with its longest existing head resolved through links (`canonicalize`) and the rest, which does not exist yet, kept.
+fn canonical_beyond(p: &Path) -> PathBuf {
+    let mut head = p;
+    let mut tail = Vec::new();
+    loop {
+        if let Ok(mut c) = head.canonicalize() {
+            c.extend(tail.iter().rev());
+            return c;
+        }
+        match (head.parent(), head.file_name()) {
+            (Some(up), Some(name)) => {
+                tail.push(name);
+                head = up;
+            }
+            _ => return p.to_path_buf(),
+        }
+    }
+}
+
+/// Copy every file in FOUND to a new `<hub>/records-backup/<date>[-n]/` (the path relative to ROOT kept; a file outside
+/// ROOT under `outside/` by its absolute path).  Every target is checked before anything is written: one that is not
+/// inside the backup folder, or is its own source (by its text or through links), stops the import with an error.
 fn backup(hub: &Path, root: &Path, found: &[Found], at: f64) -> Result<PathBuf, Error> {
     let base = hub.join("records-backup");
     let date = today(at);
@@ -338,14 +376,40 @@ fn backup(hub: &Path, root: &Path, found: &[Found], at: f64) -> Result<PathBuf, 
         n += 1;
         dir = base.join(format!("{date}-{n}"));
     }
+    let real_dir = canonical_beyond(&dir);
+    let mut copies = Vec::new();
     for f in found {
-        let rel = f.path.strip_prefix(root).unwrap_or(&f.path);
-        let to = dir.join(rel);
+        // a file outside the root (a spec a plan names elsewhere) goes under `outside/` by its absolute path: joined
+        // as it is, the absolute path would replace the backup folder and the copy would empty the file onto itself
+        let rel = match f.path.strip_prefix(root) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(_) => Path::new("outside").join(f.path.strip_prefix("/").unwrap_or(&f.path)),
+        };
+        let to = lexical(&dir.join(&rel));
+        let real_to = canonical_beyond(&to);
+        let inside = to.starts_with(&dir) && to != dir && real_to.starts_with(&real_dir);
+        let itself = to == lexical(&f.path)
+            || f.path
+                .canonicalize()
+                .is_ok_and(|real_from| real_from == real_to);
+        if !inside || itself {
+            return Err(err(format!(
+                "backup: {} would be copied {}; nothing imported",
+                f.path.display(),
+                if itself {
+                    "onto itself"
+                } else {
+                    "outside the backup folder"
+                }
+            )));
+        }
+        copies.push((&f.path, to, rel));
+    }
+    for (from, to, rel) in copies {
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent).map_err(|e| err(format!("backup: {e}")))?;
         }
-        std::fs::copy(&f.path, &to)
-            .map_err(|e| err(format!("backup of {}: {e}", rel.display())))?;
+        std::fs::copy(from, &to).map_err(|e| err(format!("backup of {}: {e}", rel.display())))?;
     }
     Ok(dir)
 }
@@ -4031,6 +4095,83 @@ mod tests {
             titles.iter().any(|t| t.starts_with("Names it ")),
             "{titles:?}"
         );
+    }
+
+    /// A spec outside the root keeps its text: its backup goes under `outside/` in the backup folder, never onto the
+    /// file itself, and the spec's title and body are what the file says (`a-spec-outside-the-root-keeps-its-text`).
+    #[tokio::test]
+    async fn a_spec_outside_the_root_keeps_its_text_and_is_backed_up_beside() {
+        let f = fix();
+        let elsewhere = f._dir.path().join("elsewhere/s.md");
+        std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+        std::fs::write(&elsewhere, "# Far spec\n\nIts text.\n").unwrap();
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/far.md"),
+            format!(
+                "# Far plan\n\n**Spec:** `{}`\n\n### Task 1: a\n\n- [ ] x\n",
+                elsewhere.display()
+            ),
+        )
+        .unwrap();
+        let report = f.import(None, false).await;
+        assert_eq!(
+            std::fs::read_to_string(&elsewhere).unwrap(),
+            "# Far spec\n\nIts text.\n"
+        );
+        let backup = PathBuf::from(report.backup.expect("a first import backs up"));
+        let copy = backup
+            .join("outside")
+            .join(elsewhere.strip_prefix("/").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&copy).unwrap(),
+            "# Far spec\n\nIts text.\n"
+        );
+        let got = derives_of(&f).await;
+        assert!(
+            got.contains(&("Far plan".into(), "Far spec".into())),
+            "{got:?}"
+        );
+    }
+
+    /// A backup target that is not inside the backup folder, or is its own source, stops the import before anything is
+    /// written: a plan that names its spec through enough `..` to climb to `/` gives a path inside the root by its text,
+    /// whose backup would land on the file itself (`a-backup-onto-its-source-is-refused`).
+    #[tokio::test]
+    async fn a_backup_onto_its_source_stops_the_import_and_writes_nothing() {
+        let f = fix();
+        let elsewhere = f._dir.path().join("elsewhere/s.md");
+        std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+        std::fs::write(&elsewhere, "# Far spec\n\nIts text.\n").unwrap();
+        let climb = "../".repeat(64);
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/far.md"),
+            format!(
+                "# Far plan\n\n**Spec:** `{climb}{}`\n\n### Task 1: a\n\n- [ ] x\n",
+                elsewhere.strip_prefix("/").unwrap().display()
+            ),
+        )
+        .unwrap();
+        let heard = |_e: ViewEvent| {};
+        let r = import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &f.root,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &f.deny,
+            },
+        )
+        .await;
+        assert!(r.is_err(), "the import went on: {:?}", r.ok());
+        assert_eq!(
+            std::fs::read_to_string(&elsewhere).unwrap(),
+            "# Far spec\n\nIts text.\n"
+        );
+        assert!(!f.hub.join("records-backup").exists());
+        assert!(derives_of(&f).await.is_empty());
     }
 
     /// The one file of `~/org` the product reads is `board.org` (named by `only: board`): its items are imported,
