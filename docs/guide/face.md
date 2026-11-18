@@ -588,7 +588,7 @@ look it describes.
 
 | Face | Default inherits | Used for |
 |---|---|---|
-| `drgnx-surface-gap`, `-panel`, `-raised`, `-overlay` | `default` | the gap and bars, side panels, raised things (chips, the current tab), popups |
+| `drgnx-surface-gap`, `-panel`, `-raised`, `-overlay` | nothing; the raised one the quiet selection (`secondary-selection`), never `default` (its family and size) | the gap and bars, side panels, raised things (chips, the current tab), popups |
 | `drgnx-text-muted`, `-subtle`, `-disabled` | `shadow` | secondary, tertiary and unavailable text |
 | `drgnx-border`, `drgnx-border-strong` | `window-divider`, `vertical-border` | a card's hairline, an input's or popup's ring |
 | `drgnx-border-subtle` | `drgnx-border` | the fainter hairline under a tab row |
