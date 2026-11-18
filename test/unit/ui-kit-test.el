@@ -270,8 +270,8 @@
     (should (= i (length want)))
     (should-not (nreverse fails))))
 
-(defun ui-kit-test--merged-height (faces base)
-  "The height Emacs gives text in FACES (a `face' property value) over the line face BASE: a probe face inheriting
+(defun ui-kit-test--merged-height (faces base &optional attr)
+  "The ATTR (default `:height') Emacs gives text in FACES (a `face' property value) over the line face BASE: a probe face inheriting
 FACES then BASE (an anonymous face in FACES becomes a face of its own), on `default'."
   (let ((inherit nil) (k 0))
     (dolist (f (if (and (consp faces) (not (keywordp (car faces)))) faces (list faces)))
@@ -282,7 +282,7 @@ FACES then BASE (an anonymous face in FACES becomes a face of its own), on `defa
                          (push anon inherit)))))
     (make-face 'ui-kit-test--probe)
     (face-spec-set 'ui-kit-test--probe `((t :inherit ,(nreverse (cons base inherit)))))
-    (face-attribute 'ui-kit-test--probe :height nil 'default)))
+    (face-attribute 'ui-kit-test--probe (or attr :height) nil 'default)))
 
 (defun ui-kit-test--font-of (face)
   "The type face kit FACE takes its size from, read from the components file: its binding's `:font', else the first
@@ -330,6 +330,52 @@ type face in its `:inherit'; nil for a face that only colours."
       (when (integerp code) (set-face-attribute 'default nil :height code)))
     (should (> checked 0))
     (should-not (seq-take (nreverse fails) 12))))
+
+(ert-deftest drgnx-ui-kit/state-faces-carry-no-type ()
+  ;; a state or surface face is a colour: under a theme that knows nothing of drgnx it must not bring `default's family
+  ;; or code size over a kit face's text (a pressed or selected-inactive button took the code font).  Kit text of every
+  ;; fixture component, on a line and in the buffer, merged over its base: the family and size are its type face's.
+  ;; Red first: `drgnx-selected-quiet' -> `drgnx-surface-raised' -> `default'.
+  (require 'drgnx-look-density (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir))
+  (require 'tab-line)
+  (let ((drgnx-look-density 'comfortable) (drgnx-face-glyphs drgnx-ui--default-glyphs)
+        (cases (plist-get (ui-kit-test--json "cases.json" 'list) :comps))
+        (code (face-attribute 'default :height nil t)) (fam (face-attribute 'default :family nil t))
+        (checked 0) (fails nil))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (set-face-attribute 'default nil :family "Adwaita Mono" :height 135)
+          (dolist (where '(text header-line tab-line mode-line))
+            (let ((base (if (eq where 'text) 'default where)))
+              (dolist (c cases)
+                (let* ((comp (plist-get c :comp))
+                       (s (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                                    ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 2.0)))
+                            (drgnx-ui-kit-string (intern (plist-get comp :c)) comp where nil))))
+                  (dotimes (i (length s))
+                    (let* ((faces (get-text-property i 'face s))
+                           (font (cl-some (lambda (f) (and f (symbolp f) (ui-kit-test--font-of f)))
+                                          (if (and faces (consp faces) (not (keywordp (car faces)))) faces (list faces)))))
+                      (when (and font (not (eq font 'drgnx-code-small)))
+                        (setq checked (1+ checked))
+                        (dolist (attr '(:family))
+                          (let ((want (face-attribute font attr nil 'default))
+                                (got (ui-kit-test--merged-height faces base attr)))
+                            (unless (equal want got)
+                              (push (list where (plist-get c :name) i attr font want got) fails)))))))))))
+          (should (> checked 0))
+          (should-not (seq-take (nreverse fails) 12))
+          ;; and the colour faces themselves bring no family or size (the buffer's merge puts them over the text)
+          (make-face 'ui-kit-test--blank)
+          (dolist (f '(drgnx-surface-gap drgnx-surface-panel drgnx-surface-raised drgnx-surface-overlay drgnx-hover
+                                         drgnx-selected drgnx-selected-quiet drgnx-selected-inactive drgnx-row-selected
+                                         drgnx-selected-secondary drgnx-chip-attention drgnx-tint-warn drgnx-control))
+            (dolist (attr '(:family :height))
+              (should (eq 'unspecified (face-attribute f attr nil 'ui-kit-test--blank))))))
+      (mapc #'disable-theme custom-enabled-themes)
+      (set-face-attribute 'default nil :family fam)
+      (when (integerp code) (set-face-attribute 'default nil :height code)))))
 
 (ert-deftest drgnx-ui-kit/buffer-text-uses-canonical-widths ()
   ;; in buffer text a pad is a width in canonical characters, so one buffer is right at two scales

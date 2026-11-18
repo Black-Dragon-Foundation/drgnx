@@ -523,11 +523,12 @@ the string made last, and allocates nothing; a renamed buffer or another project
   ;; so may the find bar's buttons, read among its own: match-previous and match-next are ahead's ^ and behind's v,
   ;; rename-symbol diamond's <>; and the Search view's dropdown and save-search, behind's v and dot's *)
   ;; nor the glyphs of the icons (`drgnx-ui--icon-glyphs'): they stand in for a picture; nor a progress bar's pieces
-  ;; (bar-...): read only inside the bar, its [##--] (and the partial cells have no ASCII form at all)
+  ;; (bar-...) and a range bar's (range-..., seg-..., axis-...: its late "!" is warning's, thinking's "." is the forecast's,
+  ;; by the hub's own table): read only inside the bar, its [##--] (and the partial cells have no ASCII form at all)
   (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (or (memq (car g) '(fail stopped dismiss unqueue info warn
                                                                                match-previous match-next rename-symbol
                                                                                dropdown save-search))
-                                                          (string-prefix-p "bar-" (symbol-name (car g)))
+                                                          (string-match-p "\\`\\(?:bar\\|range\\|seg\\|axis\\)-" (symbol-name (car g)))
                                                           (assq (car g) drgnx-ui--icon-glyphs)))
                                           (default-value 'drgnx-face-glyphs)))))
     (should (= (length ascii) (length (delete-dups (copy-sequence ascii))))))
