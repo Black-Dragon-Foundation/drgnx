@@ -1024,18 +1024,23 @@ from the event's handlers before or after the counting one, by their order.")
 (with-eval-after-load 'drgnx-view-env
   (add-function :around drgnx-view-env-send-function #'drgnx-look-scene--answer-sent))
 
+(defun drgnx-look-scene--panel-strings (buffers)
+  "What BUFFERS draw, text and properties: a buffer the hub re-sent the same rows to (or Sjá drew again) changes its
+modification tick and not what the shot shows, so the rounds compare these, not the ticks."
+  (mapcar (lambda (b) (with-current-buffer b (buffer-string))) buffers))
+
 (defun drgnx-look-scene--hub-round (buffers)
   "One round trip to the hub (`drgnx-look-scene--hub-caught-up') and what it sent drawn in BUFFERS, Sjá views; non-nil
-when the round trip changed none of their texts and no ask of the hub's is still unanswered
+when the round trip changed none of their texts (with properties) and no ask of the hub's is still unanswered
 \(`drgnx-look-scene--asks-open': an answer sent later, on a timer, comes after the ping, and so does its refit),
 `no-answer' when the hub did not answer."
-  (let ((ticks (mapcar #'buffer-chars-modified-tick buffers)))
+  (let ((before (drgnx-look-scene--panel-strings buffers)))
     (if (not (drgnx-look-scene--hub-caught-up)) 'no-answer
       (accept-process-output nil 0.05)
       (dolist (b buffers) (when (drgnx-view-sja-p b) (drgnx-view-sja-draw-now b)))
       (redisplay t)
       (and (<= drgnx-look-scene--asks-open 0)
-           (equal ticks (mapcar #'buffer-chars-modified-tick buffers))))))
+           (equal-including-properties before (drgnx-look-scene--panel-strings buffers))))))
 
 (defun drgnx-look-scene--panel-buffers (buffer)
   "The live buffers of the agent panel BUFFER's windows: the transcript, the header and the composer shown with it."
@@ -1061,23 +1066,14 @@ what changed: the buffers whose text did, each window's body width before and af
   (let* ((buffers (drgnx-look-scene--panel-buffers buffer))
          (widths (lambda () (mapcar (lambda (b) (let ((w (get-buffer-window b))) (and w (window-body-width w t))))
                                     buffers)))
-         (ticks (mapcar #'buffer-chars-modified-tick buffers))
          (before (funcall widths))
-         (texts (mapcar (lambda (b) (with-current-buffer b (buffer-substring-no-properties (point-min) (point-max))))
-                        buffers))
+         (texts (drgnx-look-scene--panel-strings buffers))
          (r (drgnx-look-scene--hub-round buffers)))
     (unless (eq r t)
-      (cl-mapc (lambda (b old)
-                 (let ((new (with-current-buffer b (buffer-substring-no-properties (point-min) (point-max)))))
-                   (unless (equal old new)
-                     (let ((o (split-string old "\n")) (n (split-string new "\n")))
-                       (push (format "DIFF %s: -%S +%S" (buffer-name b) (seq-difference o n) (seq-difference n o))
-                             drgnx-look-scene--errors)))))
-               buffers texts)
       (push (if (eq r 'no-answer) "agent-panel: the hub did not answer a ping"
               (format "agent-panel: one more hub round trip changed the panel's rows: the shot shows the hub's first fit (changed %S, widths %S then %S, asks open %d)"
-                      (delq nil (cl-mapcar (lambda (b tick) (and (/= tick (buffer-chars-modified-tick b)) (buffer-name b)))
-                                           buffers ticks))
+                      (delq nil (cl-mapcar (lambda (b old new) (and (not (equal-including-properties old new)) (buffer-name b)))
+                                           buffers texts (drgnx-look-scene--panel-strings buffers)))
                       before (funcall widths) drgnx-look-scene--asks-open))
             drgnx-look-scene--errors))))
 
