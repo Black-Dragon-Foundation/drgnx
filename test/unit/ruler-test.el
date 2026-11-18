@@ -74,6 +74,19 @@ fringe is widened once, and the parameter set only when the marks change."
     (should-not (window-parameter (selected-window) 'glitnir-ruler))
     (should (equal fringes '(8 8)))))
 
+(declare-function drgnx-theme--faces "drgnx-theme-gen" (variant tok))
+(declare-function drgnx-look-token "drgnx-theme-gen" (name &optional variant))
+
+(ert-deftest drgnx-ruler/the-thumb-is-the-text-colour-in-every-theme ()
+  "The thumb is `drgnx-ruler-view's foreground at 26 %, and that foreground is the text colour (the look's `.sbar
+.thumb', --fg at 26 %), in every variant: a fill token (`hover', next to the surfaces' own colours) at 26 % left the
+thumb a step or two from the surface under it."
+  (require 'drgnx-theme-gen)
+  (dolist (variant '(dark light hc))
+    (let ((faces (drgnx-theme--faces variant (lambda (name) (drgnx-look-token name variant)))))
+      (should (equal (plist-get (alist-get 'drgnx-ruler-view faces) :foreground)
+                     (plist-get (alist-get 'default faces) :foreground))))))
+
 (ert-deftest drgnx-ruler/another-buffer-in-the-window-has-none ()
   "A window that shows another buffer loses the strip and its fringe width; showing the buffer again brings them."
   (ruler-test--with

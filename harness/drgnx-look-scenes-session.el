@@ -3026,6 +3026,7 @@ chrome faces, frame metrics, windows, modules."
 ;;;; The scroll bar on every surface (docs/guide/minimap.md)
 
 (declare-function drgnx-uitest-snapshot "drgnx-uitest" (&optional frame))
+(declare-function drgnx-uitest-pixel "drgnx-uitest" (snap x y))
 (declare-function drgnx-uitest-region-equal-p "drgnx-uitest" (a b rect &rest keys))
 (declare-function drgnx-scrollbar-window-p "drgnx-ruler" (window))
 (defvar drgnx-ruler-span-function)
