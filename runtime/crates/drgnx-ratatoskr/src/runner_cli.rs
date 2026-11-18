@@ -9,6 +9,7 @@
 //! runner check NAME | bench NAME | unbench NAME
 //! runner trust NAME mine|my-cloud|shared
 //! runner profile NAME dedicated|workstation [--reserve-mib N] [--island CPUS]   (applied at once)
+//! runner feature NAME sandbox|udmabuf|render|kvm on|off --project P   (a container feature for one project's jobs there)
 //! runner remove NAME [--yes]
 //! runner audit [--key K] [--job J]          (the keys sent to jobs and read by them, oldest first)
 //! runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]     (prints the role's policy; no hub call)
@@ -140,6 +141,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             "reserve-mib",
         ],
         "profile" => &["reserve-mib", "island"],
+        "feature" => &["project"],
         "remove" => &["yes"],
         "audit" => &["key", "job"],
         "cloud" => &["hub", "regions", "sizes", "project", "member", "yes"],
@@ -260,6 +262,23 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             Ok(RunnerCommand::Call {
                 method: "runners/set",
                 params,
+            })
+        }
+        "feature" => {
+            want(
+                3,
+                "feature NAME sandbox|udmabuf|render|kvm on|off --project P",
+            )?;
+            let feature = one_of(
+                "feature",
+                words[1].clone(),
+                &["sandbox", "udmabuf", "render", "kvm"],
+            )?;
+            let on = one_of("on|off", words[2].clone(), &["on", "off"])? == "on";
+            let project = opt("project").ok_or("runner feature needs --project P")?;
+            Ok(RunnerCommand::Call {
+                method: "runners/feature",
+                params: json!({"name": words[0], "project": project, "feature": feature, "on": on}),
             })
         }
         "remove" => {
@@ -653,6 +672,20 @@ mod tests {
                 params: json!({"name": "desk", "profile": "dedicated", "island": "0-5,12-17"}),
             })
         );
+        // a container feature, per runner and per project
+        assert_eq!(
+            p(&["feature", "desk", "render", "on", "--project", "drgnx"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/feature",
+                params: json!({"name": "desk", "project": "drgnx", "feature": "render", "on": true}),
+            })
+        );
+        assert!(
+            p(&["feature", "desk", "render", "on"]).is_err(),
+            "a project is needed"
+        );
+        assert!(p(&["feature", "desk", "gpu", "on", "--project", "x"]).is_err());
+        assert!(p(&["feature", "desk", "kvm", "maybe", "--project", "x"]).is_err());
         assert_eq!(
             p(&["trust", "desk", "shared"]),
             Ok(RunnerCommand::Call {

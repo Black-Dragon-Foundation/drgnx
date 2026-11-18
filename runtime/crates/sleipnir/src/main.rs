@@ -248,11 +248,11 @@ fn job_exec(dir: &std::path::Path) -> ExitCode {
             let wants = spec
                 .helper
                 .as_ref()
-                .and_then(|h| Some((h.proxy_fd?, h.proxy_port?)))
+                .and_then(|h| Some((h.proxy_fd?, h.proxy_v6_fd, h.proxy_port?)))
                 .filter(|_| sleipnir::darwin::jobexec::refusal(&spec).is_none());
             #[cfg(feature = "runner")]
             let proxy = wants
-                .map(|(fd, port)| sleipnir::darwin::proxy::take(fd, port, dir))
+                .map(|(fd, v6, port)| sleipnir::darwin::proxy::take(fd, v6, port, dir))
                 .transpose();
             #[cfg(not(feature = "runner"))]
             let proxy: Result<Option<()>, String> = match wants {

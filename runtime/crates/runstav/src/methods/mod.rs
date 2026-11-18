@@ -482,6 +482,7 @@ params! {
     HistoryProvenance(history::ProvenanceParams),
     HistoryRevertHunk(history::RevertHunkParams),
     RunnersUnbench(runners::ByName),
+    RunnersFeature(runners::FeatureParams),
     RunnersRemove(runners::RemoveParams),
     ExtensionsSearch(extensions::SearchParams),
     ExtensionsDetails(extensions::DetailsParams),

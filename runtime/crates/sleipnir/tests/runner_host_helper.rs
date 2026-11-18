@@ -449,6 +449,7 @@ mod relay_keys {
         let src = dir.join("src");
         fs::create_dir_all(&src).unwrap();
         let req = ContainerReq {
+            features: vec![],
             image: "base".into(),
             argv: vec!["sh".into(), "-c".into(), cmd.into()],
             worktree: src,

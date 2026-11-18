@@ -974,6 +974,7 @@ impl Front {
             | Params::HistoryProvenance(_)
             | Params::HistoryRevertHunk(_)
             | Params::RunnersUnbench(_)
+            | Params::RunnersFeature(_)
             | Params::RunnersRemove(_)
             | Params::PluginsList(_)
             | Params::PluginsApprove(_)

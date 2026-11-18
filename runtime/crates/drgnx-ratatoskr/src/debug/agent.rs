@@ -154,8 +154,10 @@ fn arg<'a>(args: &'a Value, k: &str) -> Result<&'a str, String> {
 pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result<String, String> {
     let me = f.core.agents.find(sid).map_err(|e| e.message)?;
     let a = action_of(op, &args).ok_or_else(|| format!("no debugger tool {op}"))?;
+    let stages = crate::stages::Stages::new(op, sid);
     let facts = crate::manager::call_facts(op, &args);
     crate::manager::gate(f, sid, &me.who(), a, None, &facts).await?;
+    stages.at("the matrix gate");
     let v = match op {
         "debug_read" => read(f, &args).await?,
         "debug_probe" => probe(f, sid, &args).await?,
@@ -165,6 +167,7 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
         "debug_fix" => fix(f, sid, &args).await?,
         _ => return Err(format!("no debugger tool {op}")),
     };
+    stages.at("the tool's work");
     Ok(v.to_string())
 }
 

@@ -37,6 +37,29 @@ pub fn step_detail(conn: &Tx, step: i64) -> Result<Option<StepDetail>, CoordErro
     ))
 }
 
+/// A `read` step's (first line, last line, agent).
+pub type Read = (Option<i64>, Option<i64>, Option<String>);
+
+/// The most `read` steps [`reads_of`] gives, the newest kept.
+pub const READS_MAX: i64 = 1 << 16;
+
+/// The `read` steps' line ranges of a file, under any of PATHS (the names a step's detail may give it: absolute or
+/// relative to its worktree), newest first: (first line, last line, the step's agent) each; at most [`READS_MAX`].
+/// The minimap's agent-read heat layer.
+pub fn reads_of(conn: &Tx, paths: &[&str]) -> Result<Vec<Read>, CoordError> {
+    let mut st = conn.prepare(
+        "select d.line_start, d.line_end, s.agent from step_detail d join step s on s.id = d.step \
+         where d.kind = 'read' and d.path = ?1 order by d.step desc limit ?2",
+    )?;
+    let mut out = Vec::new();
+    for p in paths {
+        for r in st.query_map((p, READS_MAX), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))? {
+            out.push(r?);
+        }
+    }
+    Ok(out)
+}
+
 /// Where WORKTREE branched from, if the hub recorded it.
 pub fn base(conn: &Tx, worktree: &str) -> Result<Option<WorktreeBase>, CoordError> {
     opt(conn.query_row(

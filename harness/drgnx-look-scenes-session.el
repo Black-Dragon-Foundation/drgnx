@@ -394,6 +394,13 @@ window starting at line START."
   ;; scene shows them where the file opened
   (run-hooks 'post-command-hook))
 
+(defvar drgnx-look-scene--start nil
+  "((:part PART) . STATE): the frame's arrangement (`drgnx-layouts--frame-part') and the state that is checked
+\(`drgnx-look-scene--start-state') as the setup left them, which every scene starts from (`drgnx-look-scene-begin').")
+
+(declare-function drgnx-layouts--frame-part "drgnx-layouts" (frame))
+(declare-function drgnx-layouts--put "drgnx-layouts" (frame part))
+
 (defun drgnx-look-scene-setup (elpa)
   "The mockups' state: the project at ~/code/drgnx, trusted; ELPA's packages active; tabs drgnx-gateway.el,
 gateway-test.el (changed, not saved), drgnx-job.el (a preview) and Magit; the Explorer; drgnx-gateway.el at 216:34,
@@ -428,7 +435,16 @@ from 201."
   ;; the mockups' last test run, as a run reports it (`213 tests' in the status bar)
   (drgnx-look-scene--try "tests" (drgnx-statusbar-note-tests 213 0))
   (drgnx-look-scene--try "back" (drgnx-wb-focus-editor) (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201))
+  ;; what every scene starts from (`drgnx-look-scene-begin')
+  (drgnx-look-scene--try "start"
+    (redisplay t)
+    (setq drgnx-look-scene--start (cons (list :part (drgnx-layouts--frame-part (selected-frame)))
+                                        (drgnx-look-scene--start-state))))
   (drgnx-look-scene--answer :project drgnx-look-scene--project))
+
+(defconst drgnx-look-scene--panel-more 17
+  "The steps of the mock agent's second turn (`agent-panel-long'): with the first turn's, a transcript longer than the
+panel's window at either scale.")
 
 (defun drgnx-look-scene-agent (bin)
   "A mock agent (BIN: a test-hooks ratatoskr with ratatoskr-mock beside it) reads, runs, edits and asks."
@@ -440,8 +456,8 @@ from 201."
    (t
     (drgnx-look-scene--try "agent"
       (load (expand-file-name "test/fixtures/panel-replay-fixture" (bound-and-true-p drgnx-dir)) nil t)
-      ;; the `agent-panel-long' scene runs alone with a transcript that overflows the panel (the pinned header's)
-      (setq drgnx-panel-replay-prefix (if (string-match-p "agent-panel-long" (or (getenv "DRGNX_LOOK_ONLY") "")) 20 3))
+      ;; the mockup's three steps; the `agent-panel-long' scene makes the transcript long with the second turn below
+      (setq drgnx-panel-replay-prefix 3)
       (defalias 'drgnx-panel-replay-program
         (lambda ()
           ;; the mockup's figures: a slow run (past `drgnx-agent-panel-slow-seconds'), a quick one, then a read
@@ -453,7 +469,12 @@ from 201."
                   "tool:run sleep 11; echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
                   "tool:edit test/unit/gateway-test.el\\nsay Queue the reply when the client went away.\\n"
                   "tool:run sleep 2; echo 9 of 14 passed\\n"
-                  "ask:tool {\"kind\": \"read\", \"title\": \"Read the gateway's log\"}\nsay done")))
+                  "ask:tool {\"kind\": \"read\", \"title\": \"Read the gateway's log\"}\n"
+                  ;; the second prompt's turn (the script's next line), which only `agent-panel-long' sends: steps
+                  ;; enough to run the transcript past the panel's window
+                  (mapconcat (lambda (i) (format "tool:run echo more %d\\nsay More %d finished.\\n" i i))
+                             (number-sequence 1 drgnx-look-scene--panel-more) "")
+                  "say done")))
       ;; the replay's hub is the scenes' hub from here on: it seeds the plan run as `drgnx-look-scene--hub' does
       ;; and the agent works in the scenes' project, so the status bar and the Explorer show it there
       (setq drgnx-look-scene--panel (let ((process-environment (cons "RATATOSKR_SEED_SCENE=1" process-environment))
@@ -469,6 +490,17 @@ from 201."
   "Non-nil once a scene took the windows apart by hand (`delete-other-windows', its own splits) while the layout's name
 still said `editor': the next scene's start puts the layout back (`drgnx-look-scene--editor-layout').")
 
+(declare-function drgnx-groups-list "drgnx-groups")
+
+(defun drgnx-look-scene--one-editor ()
+  "One editor group, the one used last, selected; the docks stay.  Not `delete-other-windows': under the grid an
+editor tile is kept from it (`no-delete-other-windows'), so the notebook views split the groups it left again at
+every scene, and the side bar gave way to the editors' least widths (the Explorer's rows cut to `…')."
+  (let ((keep (drgnx-wb-editor-window)))
+    (dolist (g (drgnx-groups-list))
+      (unless (eq g keep) (delete-window g)))
+    (select-window keep)))
+
 (defun drgnx-look-scene--editor-layout ()
   "The editor layout, when an earlier scene left another (the Work layout's editor group sits beside the map, and the
 send-run scenes' layout has none) or took the windows apart by hand (the notebook views' three panes: the scenes after
@@ -481,15 +513,106 @@ focuses the editor starts here, or has no editor window to focus."
       ;; and the layout is rebuilt from one window
       (dolist (b (buffer-list))
         (when (string-prefix-p "*Notebook " (buffer-name b)) (let ((kill-buffer-query-functions nil)) (kill-buffer b))))
-      (delete-other-windows))
+      (drgnx-look-scene--one-editor))
     (setq drgnx-look-scene--windows-rearranged nil)
     (drgnx-layouts-apply 'editor)))
 
-(defun drgnx-look-scene-begin ()
-  "Before each scene (`drgnx-look-scenes-run'): the editor layout, whatever the scene before left.  A scene in another
-layout (the Work map's) applies it itself; without this the scenes after it drew in its layout (the start page and the
-notebooks showed the Work map)."
-  (drgnx-look-scene--try "begin" (drgnx-look-scene--editor-layout))
+(defvar drgnx-sticky-style)
+(declare-function drgnx-sticky--setting-changed "drgnx-sticky" (&rest _))
+(declare-function drgnx-minimap--spec "drgnx-minimap" (window))
+(declare-function drgnx-grid-tree-leaves "drgnx-grid-tree" (tree))
+
+(defun drgnx-look-scene--start-state ()
+  "What `drgnx-look-scene-begin' puts back and then checks, now: the layout's name, the frame's tiles as (KIND SHOWN)
+\(editors with their buffer, tool tiles with their kind), the sticky style, whether the minimap hold's advice is on and
+the windows the minimap scenes marked open."
+  (list :layout (drgnx-layouts-current)
+        :tiles (mapcar (lambda (l) (list (car l) (plist-get (cdr l) :shown)))
+                       (drgnx-grid-tree-leaves (plist-get (drgnx-layouts--frame-part (selected-frame)) :tree)))
+        :sticky (and (boundp 'drgnx-sticky-style) drgnx-sticky-style)
+        :minimap-held (and (advice-member-p #'drgnx-look-scene--minimap-held 'drgnx-minimap--spec) t)
+        :minimap-open (seq-filter (lambda (w) (window-parameter w 'drgnx-look-scene-minimap-open))
+                                  (window-list-1 nil 'never t))
+        :popups (drgnx-look-scene--popups)))
+
+(declare-function drgnx-uitest-root-frame "drgnx-uitest" ())
+
+(defun drgnx-look-scene--popups ()
+  "The visible child frames of the root frame, by the name of the buffer each shows."
+  (let ((root (drgnx-uitest-root-frame)))
+    (sort (mapcar (lambda (f) (buffer-name (window-buffer (frame-root-window f))))
+                  (seq-filter (lambda (f) (and (eq (frame-parent f) root) (eq (frame-visible-p f) t))) (frame-list)))
+          #'string<)))
+
+(defvar drgnx-debug-share-buffer)
+(declare-function drgnx-debug-share--close "drgnx-debug-share")
+(declare-function drgnx-inbox-close "drgnx-inbox")
+
+(defun drgnx-look-scene--close-popups ()
+  "The cards a scene leaves open closed the way their own Close does, the root frame selected: the Send Run card (a
+modal: its Esc asks before closing a written card) and the inbox's drop-down.  Left open, the next scene's begin ran in
+the card's frame (\"Window is dedicated to *Send Run*\") and the heap graph drew under it."
+  (when-let* ((b (and (boundp 'drgnx-debug-share-buffer) (get-buffer drgnx-debug-share-buffer))))
+    (with-current-buffer b (drgnx-debug-share--close)))
+  (when (fboundp 'drgnx-inbox-close) (drgnx-inbox-close))
+  (let ((root (drgnx-uitest-root-frame)))
+    (unless (eq (selected-frame) root) (select-frame-set-input-focus root))))
+
+(defconst drgnx-look-scene--debug-popups '(" *drgnx-debug-toolbar*")
+  "The popups a live debug session shows: allowed at the begin of a scene with :debug, which keeps the session.")
+
+(defun drgnx-look-scene--start-again (&optional debug)
+  "The frame as the setup left it (`drgnx-look-scene--start'): its layout's name and arrangement (the tiles, the
+editors' tabs and shown buffers), what the minimap scenes hold released (the hold's advice and window marks) and the
+sticky style the setup had.  A scene that opens its views in the editor layout (the Work Flow's map, Flow, Detail and
+Rules tiles: the Work space is a view in the editor) leaves the layout's name `editor', whose `one' shape keeps the
+editor area as it is, and under the grid `delete-other-windows' keeps the editor tiles: without this every later scene
+drew inside them (scratch splits, a narrow sidebar that cut the Run and Debug rows, the notebook views' panes too small
+to split).  Left held, the sticky-lines scene drew the minimap the hover scenes opened, and later scenes kept the card."
+  (when drgnx-look-scene--start
+    (advice-remove 'drgnx-minimap--spec #'drgnx-look-scene--minimap-held)
+    (dolist (w (window-list-1 nil 'never t))
+      (when (window-parameter w 'drgnx-look-scene-minimap-open)
+        (set-window-parameter w 'drgnx-look-scene-minimap-open nil)
+        (when (window-parameter w 'glitnir-minimap)
+          (set-window-parameter w 'glitnir-minimap (drgnx-minimap--spec w)))))
+    (let ((sticky (plist-get (cdr drgnx-look-scene--start) :sticky)))
+      (when (and (featurep 'drgnx-sticky) (not (eq drgnx-sticky-style sticky)))
+        (setq drgnx-sticky-style sticky)
+        (drgnx-sticky--setting-changed)))
+    (drgnx-layouts--put (selected-frame) (plist-get (car drgnx-look-scene--start) :part))
+    (set-frame-parameter nil 'drgnx-layouts-current (plist-get (cdr drgnx-look-scene--start) :layout))
+    (drgnx-wb-focus-editor)
+    ;; the check: anything a scene left that this did not put back is an error of the next scene's begin
+    (redisplay t)
+    (let ((now (drgnx-look-scene--start-state)) (want (cdr drgnx-look-scene--start)))
+      (when debug                       ; the session the scene keeps shows its toolbar
+        (setq now (plist-put now :popups (seq-difference (plist-get now :popups) drgnx-look-scene--debug-popups))))
+      (dolist (key '(:layout :tiles :sticky :minimap-held :minimap-open :popups))
+        (unless (equal (plist-get now key) (plist-get want key))
+          (push (format "begin: the scene before left %s %S, not the setup's %S"
+                        (substring (symbol-name key) 1) (plist-get now key) (plist-get want key))
+                drgnx-look-scene--errors))))))
+
+(defvar drgnx-debug--sessions)
+
+(defun drgnx-look-scene--debug-end ()
+  "The scenes' debug sessions ended (a scene with :debug in `drgnx-look-scenes' keeps them: the debugging scenes
+share one stopped session).  Left running, the debug toolbar's child frame stayed over every later scene."
+  (when (bound-and-true-p drgnx-debug--sessions)
+    (dolist (s drgnx-debug--sessions)
+      (drgnx-hub-call-sync "debug/control" (list :session (plist-get s :id) :op "stop") 5))
+    (drgnx-look-scene--until 15 "the debug sessions' end" (lambda () (null drgnx-debug--sessions)))))
+
+(defun drgnx-look-scene-begin (&optional debug)
+  "Before each scene (`drgnx-look-scenes-run'): the editor layout, whatever the scene before left, then the frame as
+the setup left it (`drgnx-look-scene--start-again'), checked.  A scene in another layout (the Work map's) applies it
+itself; without this the scenes after it drew in its layout (the start page and the notebooks showed the Work map).
+DEBUG (the scene's :debug) keeps the debug session a scene before it started; without it the session ends."
+  (drgnx-look-scene--try "begin"
+    (drgnx-look-scene--close-popups)
+    (unless debug (drgnx-look-scene--debug-end))
+    (drgnx-look-scene--editor-layout) (drgnx-look-scene--start-again debug))
   ;; not `drgnx-look-scene--answer': the scene's own answer checks its views, once it has shown them
   (prog1 (drgnx-uitest--json (list :errors (vconcat (nreverse drgnx-look-scene--errors))))
     (setq drgnx-look-scene--errors nil)))
@@ -585,15 +708,38 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
     (drgnx-look-scene--until 15 "the status bar's job (the seeded run)" (lambda () (eql drgnx-jobs--running 1))))
   (drgnx-look-scene--answer))
 
+(defvar drgnx-look-scene--panel-long nil "Non-nil once `agent-panel-long' sent the mock agent its second prompt.")
+
+(declare-function drgnx-agent-panel--answer "drgnx-agent-panel-cards" (request option))
+(declare-function drgnx-agent-panel-cards--option "drgnx-agent-panel-cards" (request kinds))
+(declare-function drgnx-agent-panel--ask "drgnx-agent-panel" (method params &optional callback))
+(defvar drgnx-agent-panel--session)
+
+(defun drgnx-look-scene--panel-second-turn ()
+  "The mock agent's second turn, once: the first turn's open permission allowed (the turn ends), then a prompt, which
+runs the script's second line (`drgnx-look-scene--panel-more' steps); done when its last step is in the transcript.
+The first turn stays the mockup's three steps for the scenes before."
+  (with-current-buffer drgnx-look-scene--panel
+    (unless drgnx-look-scene--panel-long
+      (when-let* ((req (car (drgnx-agent-panel-cards--permissions))))
+        (drgnx-agent-panel--answer req (drgnx-agent-panel-cards--option req '("allow_once" "allow_always"))))
+      (drgnx-agent-panel--ask "agents/send" (list :id drgnx-agent-panel--session :text "more"))
+      (setq drgnx-look-scene--panel-long t)))
+  (let ((last (format "More %d finished." drgnx-look-scene--panel-more)))
+    (drgnx-look-scene--until 60 "the second turn's last step"
+                             (lambda () (with-current-buffer drgnx-look-scene--panel
+                                          (save-excursion (goto-char (point-min)) (search-forward last nil t)))))))
+
 (defun drgnx-look-scene-agent-panel-long ()
-  "The agent panel with a transcript longer than its window.  The checks of the three windows (header, transcript,
-composer) replace the old pinned-copy checks (Task 8 of the docks plan)."
+  "The agent panel with a transcript longer than its window (the mock agent's second turn).  The checks of the three
+windows (header, transcript, composer) replace the old pinned-copy checks (Task 8 of the docks plan)."
+  (drgnx-look-scene--try "panel second turn" (drgnx-look-scene--panel-second-turn))
   (prog1 (drgnx-look-scene-agent-panel)
     (drgnx-look-scene--try "panel long"
       (when-let* ((w (get-buffer-window drgnx-look-scene--panel)))
         (when (and (= (window-start w) (with-current-buffer drgnx-look-scene--panel (point-min)))
                    (pos-visible-in-window-p (with-current-buffer drgnx-look-scene--panel (point-max)) w))
-          (error "The transcript fits the panel's window: draw this scene alone (DRGNX_LOOK_ONLY='^agent-panel-long$'), which gives the mock agent its long transcript"))))
+          (error "The transcript fits the panel's window after the second turn"))))
     ;; the three windows' checks (docks plan, Task 8); the header clicks leave the transcript scrolled up a page
     (drgnx-look-scene--try "docks wheel" (drgnx-look-scene--panel-docks-wheel drgnx-look-scene--panel))
     (drgnx-look-scene--try "header clicks" (drgnx-look-scene--panel-header-clicks drgnx-look-scene--panel))
@@ -906,11 +1052,20 @@ An error when the hub does not answer, or when the rows still change after 10 s.
 
 (defun drgnx-look-scene--panel-unsettled (buffer)
   "An error when one more hub round trip changes the agent panel BUFFER's windows' texts: the shot would show the
-hub's first fit (a chip cut before the editor's glyph widths came), not the rows the hub settles on."
-  (let ((r (drgnx-look-scene--hub-round (drgnx-look-scene--panel-buffers buffer))))
+hub's first fit (a chip cut before the editor's glyph widths came), not the rows the hub settles on.  The error names
+what changed: the buffers whose text did, each window's body width before and after, and the asks still open."
+  (let* ((buffers (drgnx-look-scene--panel-buffers buffer))
+         (widths (lambda () (mapcar (lambda (b) (let ((w (get-buffer-window b))) (and w (window-body-width w t))))
+                                    buffers)))
+         (ticks (mapcar #'buffer-chars-modified-tick buffers))
+         (before (funcall widths))
+         (r (drgnx-look-scene--hub-round buffers)))
     (unless (eq r t)
       (push (if (eq r 'no-answer) "agent-panel: the hub did not answer a ping"
-              "agent-panel: one more hub round trip changed the panel's rows: the shot shows the hub's first fit")
+              (format "agent-panel: one more hub round trip changed the panel's rows: the shot shows the hub's first fit (changed %S, widths %S then %S, asks open %d)"
+                      (delq nil (cl-mapcar (lambda (b tick) (and (/= tick (buffer-chars-modified-tick b)) (buffer-name b)))
+                                           buffers ticks))
+                      before (funcall widths) drgnx-look-scene--asks-open))
             drgnx-look-scene--errors))))
 
 (defun drgnx-look-scene-agent-panel ()
@@ -2268,7 +2423,7 @@ a finished run left."
           (setq views (list (format "*Notebook outline: %s*" base) (format "*Notebook output: %s %s*" base (if kernel (if running "c2" "c4") "c3"))
                             (format "*Notebook log: %s*" base)))
           (drgnx-look-scene--until 30 "the views' buffers" (lambda () (seq-every-p #'get-buffer views)))
-          (delete-other-windows)
+          (drgnx-look-scene--one-editor)
           (setq drgnx-look-scene--windows-rearranged t)
           (let* ((w1 (selected-window)) (w2 (split-window-right)) (w3 (with-selected-window w2 (split-window-right))))
             (cl-loop for w in (list w1 w2 w3) for name in views
@@ -2478,7 +2633,8 @@ block's own padding, kept on both sides) counts, and the px past the block are n
                               (if (> s bol) (drgnx-look-scene--px window bol s) 0)))))))))))
 
 (defun drgnx-look-scene--cut-rows (window how)
-  "Each cut in the hub's rows in WINDOW's buffer: (KEY HOW BODY-PX PREFIX AFTER FREE ELLIPSIS-PX ROW-PARTS FONTS),
+  "Each cut drawn in the hub's rows in WINDOW's buffer (none in hidden text): (KEY HOW BODY-PX PREFIX AFTER FREE
+ELLIPSIS-PX ROW-PARTS FONTS),
 PREFIX the row's text before the `…', AFTER its text after it, FREE the px free after it
 \(`drgnx-look-scene--free-after', less `drgnx-look-scene-widths-gap' when a text follows), FONTS the roles
 the hub measured the row in."
@@ -2494,23 +2650,25 @@ the hub measured the row in."
               (when (stringp key)
                 (goto-char bol)
                 (while (search-forward "…" eol t)
-                  (push (list key how (window-body-width window t)
-                              (buffer-substring-no-properties bol (1- (point)))
-                              (buffer-substring-no-properties (point) eol)
-                              ;; a text after the cut on the row keeps the hub's gap from it (a column's, a
-                              ;; place's at the right edge): not the cut text's room
-                              (let ((free (drgnx-look-scene--free-after window bol (point) eol)))
-                                (if (string-blank-p (buffer-substring-no-properties (point) eol)) free
-                                  (max 0 (- free (drgnx-px drgnx-look-scene-widths-gap (window-frame window))))))
-                              ;; with its faces, as the cut text is measured (`drgnx-look-scene--over-cut'):
-                              ;; `window-text-pixel-size' of a char past the body's edge gives the whole line's
-                              (string-pixel-width (let ((e (buffer-substring (1- (point)) (point))))
-                                                    (remove-text-properties 0 1 '(read-only nil front-sticky nil) e)
-                                                    e)
-                                                  (current-buffer))
-                              (drgnx-look-scene--row-parts window bol eol)
-                              (ignore-errors (plist-get (gethash key (drgnx-view-patch-rows drgnx-view-patch)) :fonts)))
-                        out))))
+                  ;; a hidden row (the Explorer's root: its name is the side bar's title) draws no cut
+                  (unless (invisible-p (1- (point)))
+                    (push (list key how (window-body-width window t)
+                                (buffer-substring-no-properties bol (1- (point)))
+                                (buffer-substring-no-properties (point) eol)
+                                ;; a text after the cut on the row keeps the hub's gap from it (a column's, a
+                                ;; place's at the right edge): not the cut text's room
+                                (let ((free (drgnx-look-scene--free-after window bol (point) eol)))
+                                  (if (string-blank-p (buffer-substring-no-properties (point) eol)) free
+                                    (max 0 (- free (drgnx-px drgnx-look-scene-widths-gap (window-frame window))))))
+                                ;; with its faces, as the cut text is measured (`drgnx-look-scene--over-cut'):
+                                ;; `window-text-pixel-size' of a char past the body's edge gives the whole line's
+                                (string-pixel-width (let ((e (buffer-substring (1- (point)) (point))))
+                                                      (remove-text-properties 0 1 '(read-only nil front-sticky nil) e)
+                                                      e)
+                                                    (current-buffer))
+                                (drgnx-look-scene--row-parts window bol eol)
+                                (ignore-errors (plist-get (gethash key (drgnx-view-patch-rows drgnx-view-patch)) :fonts)))
+                          out)))))
             (goto-char (line-end-position))
             (forward-line 1)))))
     (nreverse out)))
@@ -2904,16 +3062,28 @@ chrome faces, frame metrics, windows, modules."
                           (< y b) (> (+ y (frame-pixel-height f)) top)))))
             (frame-list)))
 
-(defun drgnx-look-scene--expected-cover-p (f)
-  "Whether child frame F is one a scene opens on purpose (the floating palette); any other cover, a toast say, is an
-error, so an unexpected child frame still fails the scene."
-  (and (boundp 'drgnx-palette-frame--frame) (eq f drgnx-palette-frame--frame)))
+(defun drgnx-look-scene--expected-cover-p (f covers)
+  "Whether child frame F is one the scene opens on purpose: the floating palette, or a frame whose buffer's name
+COVERS (a regexp, the scene's :covers in `drgnx-look-scenes': its menu, card or drop-down) matches.  Any other cover,
+a toast say, is an error, so an unexpected child frame still fails the scene."
+  (or (and (boundp 'drgnx-palette-frame--frame) (eq f drgnx-palette-frame--frame))
+      (and covers (string-match-p covers (buffer-name (window-buffer (frame-root-window f)))))))
 
-(defun drgnx-look-scene-scrollbars (file)
+(defun drgnx-look-scene--ruler-set (window spec minimap)
+  "WINDOW's `glitnir-ruler' SPEC and `glitnir-minimap' MINIMAP, and the window marked for the next redisplay: a window
+parameter alone marks nothing, so on a frame redisplay does not pass (the root, while a popup is selected) Glitnir never
+resolved the change and the two snapshots showed the same strip."
+  (set-window-parameter window 'glitnir-ruler spec)
+  (set-window-parameter window 'glitnir-minimap minimap)
+  (force-window-update window))
+
+(defun drgnx-look-scene-scrollbars (file &optional covers)
   "Every scrollable surface shown has the scroll bar: each window `drgnx-scrollbar-window-p' names has its
 `glitnir-ruler' with the fringe widened, and on the root frame the strip draws something exactly when the window
-shows only part of its content (a snapshot with the strips, one without them, compared on each strip; a strip under the
-palette's child frame is not judged, one under any other child frame is an error).  What was seen goes to FILE."
+shows only part of its content (a snapshot of the root frame with the strips, one without them, compared on each
+strip; a child frame's own strips are not in the snapshot, so not judged there; a strip under the palette's child frame
+or one COVERS names, `drgnx-look-scene--expected-cover-p', is not judged, one under any other child frame is an
+error).  What was seen goes to FILE."
   (let (log)
     (drgnx-look-scene--try "scrollbars"
       (let* ((ws (drgnx-look-scene--scrollbar-windows))
@@ -2926,39 +3096,45 @@ palette's child frame is not judged, one under any other child frame is an error
              without)
         (when with
           (unwind-protect
-              (progn (dolist (s specs)
-                       (set-window-parameter (car s) 'glitnir-ruler nil)
-                       (set-window-parameter (car s) 'glitnir-minimap nil))
+              (progn (dolist (s specs) (drgnx-look-scene--ruler-set (car s) nil nil))
                      (drgnx-look-scene--settle-frame)
                      (setq without (drgnx-uitest-snapshot)))
-            (dolist (s specs)
-              (set-window-parameter (car s) 'glitnir-ruler (nth 1 s))
-              (set-window-parameter (car s) 'glitnir-minimap (nth 2 s)))
+            (dolist (s specs) (drgnx-look-scene--ruler-set (car s) (nth 1 s) (nth 2 s)))
             (drgnx-look-scene--settle-frame)))
         (dolist (w ws)
           (let* ((spec (window-parameter w 'glitnir-ruler))
                  (over (drgnx-look-scene--overflows-p w))
                  (cover (and spec (not (frame-parent (window-frame w)))
                              (drgnx-look-scene--covering (drgnx-look-scene--strip-rect w) (window-frame w))))
-                 (covered (and cover (drgnx-look-scene--expected-cover-p cover)))
+                 (covered (and cover (drgnx-look-scene--expected-cover-p cover covers)))
+                 (child (frame-parent (window-frame w)))
                  (drawn (and spec without (not covered) (not (frame-parent (window-frame w)))
                              (not (drgnx-uitest-region-equal-p with without (drgnx-look-scene--strip-rect w)
                                                                :tolerance 2 :ignore-alpha t))))
                  (fact (list :buffer (buffer-name (window-buffer w))
                              :mode (buffer-local-value 'major-mode (window-buffer w))
                              :strip (and spec t) :span (plist-get spec :span) :overflows over
-                             :drawn (cond (covered 'covered) (without drawn) (t 'unchecked)))))
+                             ;; what the overflow and the strip were judged on: the window's start, end and the
+                             ;; buffer's end, the span the buffer gives now (the spec's may be older) and whether
+                             ;; Glitnir resolved the spec it has
+                             :shown (list (window-start w) (window-end w t)
+                                          (with-current-buffer (window-buffer w) (point-max)))
+                             :span-now (with-current-buffer (window-buffer w)
+                                         (and drgnx-ruler-span-function (funcall drgnx-ruler-span-function)))
+                             :resolved (and (window-parameter w 'glitnir--ruler) t)
+                             :drawn (cond (covered 'covered) ((and without (not child)) drawn) (t 'unchecked)))))
             (push fact log)
             (cond ((not spec)
                    (push (format "scrollbars: %s (%s) has no scroll bar" (buffer-name (window-buffer w))
                                  (plist-get fact :mode))
                          drgnx-look-scene--errors))
                   ((and cover (not covered))
-                   (push (format "scrollbars: %s (%s): the strip is under an unexpected child frame (%s)"
+                   (push (format "scrollbars: %s (%s): the strip is under an unexpected child frame (%s at %S, %dx%d)"
                                  (buffer-name (window-buffer w)) (plist-get fact :mode)
-                                 (buffer-name (window-buffer (frame-root-window cover))))
+                                 (buffer-name (window-buffer (frame-root-window cover)))
+                                 (frame-position cover) (frame-pixel-width cover) (frame-pixel-height cover))
                          drgnx-look-scene--errors))
-                  ((and without (not covered) (not (eq (and over t) (and drawn t))))
+                  ((and without (not covered) (not child) (not (eq (and over t) (and drawn t))))
                    (push (format "scrollbars: %s (%s): content %s but the strip %s"
                                  (buffer-name (window-buffer w)) (plist-get fact :mode)
                                  (if over "runs past the window" "fits") (if drawn "draws" "draws nothing"))
@@ -2972,6 +3148,7 @@ palette's child frame is not judged, one under any other child frame is an error
 (declare-function nidhogg-view-minimap "nidhogg-views" (what file &optional layer))
 (declare-function drgnx-minimap--spec "drgnx-minimap" (window))
 (declare-function drgnx-minimap--file "drgnx-minimap" (buffer))
+(declare-function drgnx-ruler--place "drgnx-ruler" (window))
 
 (defun drgnx-look-scene--parser-rs ()
   "minimap-folding.html's parser.rs, about 2,850 lines: five MARK sections, each a struct and an impl of eight
@@ -3071,6 +3248,67 @@ the window's top rows, dark."
       (setq drgnx-sticky--pin-shown (list (cons w 'scene)))
       (drgnx-sticky--fill w scopes)
       (drgnx-look-scene--settle-frame)))
+  (drgnx-look-scene--answer))
+
+;; the heat layer (X3) and the diff minimap (X6): drawn by the glue once Nidhogg's 13-N/17-N and hunk-labels steps
+;; are on the pin; until then the bars draw by class and the scene checks only that the hub sent the layer
+
+(defvar drgnx-minimap-layer)
+
+(defun drgnx-look-scene--minimap-hold (w)
+  "WINDOW W's minimap held open for the shot (as `drgnx-look-scene--minimap-open')."
+  (set-window-parameter w 'drgnx-look-scene-minimap-open t)
+  (advice-add 'drgnx-minimap--spec :around #'drgnx-look-scene--minimap-held)
+  (set-window-parameter w 'glitnir-minimap (drgnx-minimap--spec w))
+  (drgnx-look-scene--settle-frame))
+
+(defun drgnx-look-scene-minimap-heat ()
+  "minimap-layers.html's heat layer: blame age over a Rust file whose first half was committed a year before its
+second half, the minimap held open, dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-heat"
+    (drgnx-look-scene--hub)
+    (let* ((rel "runtime/src/heat.rs") (f (expand-file-name rel drgnx-look-scene--project))
+           (text (drgnx-look-scene--parser-rs)) (half (/ (length text) 2)))
+      (unless (file-exists-p f)
+        (make-directory (file-name-directory f) t)
+        (pcase-dolist (`(,upto ,date) `((,(string-search "\n" text half) "2025-06-01T12:00:00")
+                                        (,(length text) "2026-06-01T12:00:00")))
+          (write-region (substring text 0 upto) nil f nil 'silent)
+          (let ((process-environment (append (list (concat "GIT_AUTHOR_DATE=" date) (concat "GIT_COMMITTER_DATE=" date))
+                                             process-environment)))
+            (drgnx-look-scene--git drgnx-look-scene--project "add" rel)
+            (drgnx-look-scene--git drgnx-look-scene--project "commit" "-q" "-m" (format "heat.rs to %s" date)))))
+      (setq drgnx-minimap-layer 'blame)
+      (drgnx-look-scene--goto rel 812 4 800)
+      (let* ((w (selected-window)) (file (drgnx-minimap--file (window-buffer w))))
+        (drgnx-ruler--place w)
+        (unless (drgnx-look-scene--until 20 "minimap heat"
+                                         (lambda () (and file (nidhogg-view-minimap 'get file "heat:blame"))))
+          (push (format "minimap-heat: no heat:blame layer for %s" file) drgnx-look-scene--errors))
+        (drgnx-look-scene--minimap-hold w))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-minimap-diff ()
+  "minimap-layers.html's diff minimap: the project's uncommitted changes as a diff buffer (no file), each hunk
+labelled, the minimap held open, dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-diff"
+    (let ((b (get-buffer-create "*vc-diff*")))
+      (with-current-buffer b
+        (let ((inhibit-read-only t) (default-directory drgnx-look-scene--project))
+          (erase-buffer)
+          (call-process "git" nil t nil "diff" "HEAD")
+          (diff-mode)
+          (goto-char (point-min))))
+      (switch-to-buffer b)
+      (let ((w (selected-window)))
+        (drgnx-ruler--place w)
+        (unless (length> (plist-get (drgnx-minimap--spec w) :hunk-labels) 0)
+          (push "minimap-diff: no hunk labels in the spec" drgnx-look-scene--errors))
+        (drgnx-look-scene--minimap-hold w))))
   (drgnx-look-scene--answer))
 
 (provide 'drgnx-look-scenes-session)

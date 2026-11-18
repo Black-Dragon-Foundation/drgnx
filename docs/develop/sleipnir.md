@@ -142,13 +142,16 @@ resize, CPU weights or keys: those methods answer none or refuse.
 with that allow-list (`crate::net`, shared with Linux's job helper: no metadata service, no address that isn't public,
 connections only to public addresses), served by its own job-exec on a loopback port for the job's life; a Mac has no
 network namespace and no relay sidecar. `launch` checks the list, writes it to the attempt's `net.allow`, binds
-`127.0.0.1:0` and starts job-exec with that listener kept open (every other descriptor is close-on-exec), naming the
-descriptor and port in `job.json`'s helper. The port is in the job's profile as its only network (outbound to
-`localhost:<port>`) and in its `HTTP(S)_PROXY` variables, `NO_PROXY` the loopback names. job-exec takes the listener
-only if it is on `127.0.0.1:<port>`, makes it close-on-exec again so the job never holds it, and serves it on a thread
-of its own. Seatbelt's `localhost` is both loopbacks, so job-exec also listens on `[::1]:<port>` (never accepting) for
-the job's life: no other process can listen there for the job to reach. `launch` picks a port free on both, and a
-`::1` port taken by then refuses the job; a proxy that can't start fails the job `infra: setup`, and a refused request is logged in
+`127.0.0.1:0` and the same port on `[::1]` (skipping a port already taken there) and starts job-exec with both
+listeners kept open (every other descriptor is close-on-exec), naming the descriptors and port in `job.json`'s helper.
+The port is in the job's profile as its only network (outbound to `localhost:<port>`) and in its `HTTP(S)_PROXY`
+variables, `NO_PROXY` the loopback names. job-exec takes the listeners only if they are on `127.0.0.1:<port>` and
+`[::1]:<port>`, makes them close-on-exec again so the job never holds them, serves the first on a thread of its own and
+holds the second (never accepting) for the job's life: Seatbelt's `localhost` is both loopbacks, so no other process can
+listen there for the job to reach. A Mac without an IPv6 loopback has no `::1` listener to pass. The `::1` port is never
+let go between `launch` and job-exec: a process another thread of `serve` forks meanwhile holds copies of the
+descriptors until it execs, so a check-then-bind again in job-exec could find its own port taken and refuse a good job.
+A proxy that can't start fails the job `infra: setup`, and a refused request is logged in
 `job-exec.log`. Binding in `serve` means no other process can take the port between the profile and the proxy. The
 loopback is the whole Mac's: while the job runs, another local process could reach the job's allow-listed hosts
 through the port, and nothing else.
@@ -233,6 +236,16 @@ systemd manager, `memory pids cpu` delegated); `limits_enforced(info)` is its pu
 (on macOS, the machine's podman; its rootless connection is checked where the hub picks it), each refusal in the
 design's words ("Networked container jobs need podman 5.0 or newer; this host has `4.9.4`.", "drgnx runs containers
 rootless; this podman is rootful."). A job without network never runs it.
+
+Opt-in features (`podman::Feature`: `Sandbox`, `Udmabuf`, `Render`, `BuildNet`, `Kvm`; `Feature::parse`/`name` use the
+placement names, `build-net` for the last): `ContainerReq.features` is what the job asks, `RunnerArgs.allowed` what the
+user allowed for its project (`serve --feature PROJECT:FEATURE`, repeatable, from the registry record's
+`enabled_features`; `LinuxPlatform::start` keeps the ones of the job's `spec.project`), and `argv` maps each asked
+feature only if allowed, else refuses it: `Sandbox` → `--security-opt=unmask=ALL`, `Udmabuf` → `--device=/dev/udmabuf`,
+`Kvm` → `--device=/dev/kvm`, `Render` → `--device=` `RunnerArgs.render_node` (`Probe::render_node`, checked against
+`/dev/dri/renderD<digits>`; none: refused). `BuildNet` is refused on every `podman run`: it belongs to an artifact
+build. The probe adds `udmabuf` to its device findings; the hub offers `render`, `sandbox`, `udmabuf` and `kvm` to a
+job only on a `mine` runner that has them enabled for the job's project (`queue::advertised`). `kvm` is a fact on a `mine` runner (serve gets `*:kvm`); elsewhere `podman::allowed_for` allows it for a project only when the hub's row and the runner's own `runner.conf` (`[features] kvm = ["P"]`, `podman::kvm_projects`, reported in the probe as `kvm-for:P`) both name it. The registry's record holds the opt-ins as `enabled: {(feature, project)}`; `forseti::ProjectId` is the project key (the tree's folder name until the project registry).
 
 ## The executor
 

@@ -18,14 +18,21 @@
 //! as the Outline reads them (the editor's text where the edit history tracks it, else the disk), up to
 //! [`LABELS_MAX`] bytes, at once and again [`super::outline::QUIET`] after the edits to it pause.  MARK sections are
 //! not the hub's: the editor's line model finds them (any size, no hub).
+//!
+//! **Heat** (`minimap/watch`'s `heat`): the one heat layer the minimap shows, from [`super::heat`]'s sources, sent
+//! with the labels and again when they are; a coverage report's folder is watched, so a test run's new report is read
+//! again.  Asking for another layer (or none) removes the last one.  The spans' facts stay here until Sjá reads a 4th
+//! item element (Task 15).
 
+use super::heat::{self, Span};
 use super::lock;
 use crate::dispatch::Caller;
 use crate::front::{Front, event_line};
 use runstav::methods::view::MinimapWatch;
 use runstav::wire::Error;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -39,8 +46,8 @@ pub enum Layer {
     Labels(Vec<(u32, u32, String, String)>),
     /// Fold ranges for a buffer no parser folds: (first line, last line, kind).
     Folds(Vec<(u32, u32, String)>),
-    /// A heat source's spans: its name, then (first line, last line, value 0..=1000).
-    Heat(String, Vec<(u32, u32, u16)>),
+    /// A heat source's spans: its name, then each run of lines with its value 0..=1000 and fact.
+    Heat(String, Vec<Span>),
     /// A huge file's density: the buckets built so far, (bytes, errors, warnings) each, of `total`.
     Density {
         buckets: Vec<(u64, u32, u32)>,
@@ -63,7 +70,12 @@ impl Layer {
         match self {
             Layer::Labels(v) => json!(v),
             Layer::Folds(v) => json!(v),
-            Layer::Heat(_, v) => json!(v),
+            // [first, last, value]: the fact goes out once Sjá reads a 4th element (Task 15)
+            Layer::Heat(_, v) => json!(
+                v.iter()
+                    .map(|s| (s.first, s.last, s.value))
+                    .collect::<Vec<_>>()
+            ),
             Layer::Density { buckets, total } => json!({"buckets": buckets, "total": total}),
         }
     }
@@ -125,28 +137,243 @@ pub fn folds_of(path: &str, text: &str) -> Option<Layer> {
 /// Every layer's version: one counter for the hub, so a later push is always newer.
 static VERSION: AtomicU64 = AtomicU64::new(1);
 
-/// The files each connection shows in a minimap, each with the generation of its latest ask.
+/// What a connection's watch of a file asked for beyond its labels.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Ask {
+    pub heat: Option<String>,
+    pub coverage: Vec<String>,
+    pub profile: Option<String>,
+}
+
+/// The coverage reports' folders watched, and the reports' name patterns.
+#[derive(Default)]
+struct CoverageWatch {
+    watcher: Option<notify::RecommendedWatcher>,
+    dirs: HashSet<PathBuf>,
+    names: HashSet<String>,
+}
+
+/// The files each connection shows in a minimap, each with the generation of its latest ask and what it asked for.
 #[derive(Default)]
 pub struct Watches {
-    files: Mutex<HashMap<(u64, String), u64>>,
+    files: Mutex<HashMap<(u64, String), (u64, Ask)>>,
+    coverage: Mutex<CoverageWatch>,
 }
 
 impl Watches {
     pub(super) fn gone(&self, conn: u64) {
         lock(&self.files).retain(|(c, _), _| *c != conn);
+        self.coverage_unused();
+    }
+
+    /// The coverage folders unwatched once no watch shows the coverage layer.
+    fn coverage_unused(&self) {
+        let any = lock(&self.files)
+            .values()
+            .any(|(_, a)| a.heat.as_deref() == Some("coverage"));
+        if !any {
+            // the watcher is dropped outside the lock: its thread may be waiting for it
+            let old = std::mem::take(&mut *lock(&self.coverage));
+            drop(old);
+        }
     }
 }
 
-/// Send CONN FILE's labels, and its fold ranges when a pack's grammar parses it, for its ask GENERATION; nothing when a
-/// later ask came meanwhile or it is no longer watched.
-async fn push(f: &Front, conn: u64, file: &str, generation: u64) {
-    let current = |f: &Front| {
-        lock(&f.core.views.minimaps.files).get(&(conn, file.to_owned())) == Some(&generation)
+/// The worktree FILE is in: the nearest folder above it with a `.git`.
+fn worktree_root(file: &Path) -> Option<PathBuf> {
+    file.ancestors()
+        .skip(1)
+        .find(|d| d.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
+/// The bytes of PATH, a regular file of at most [`heat::REPORT_MAX`] bytes.
+fn read_capped(path: &Path) -> Option<Vec<u8>> {
+    let m = std::fs::metadata(path).ok()?;
+    (m.is_file() && m.len() <= heat::REPORT_MAX)
+        .then(|| std::fs::read(path).ok())
+        .flatten()
+}
+
+/// The coverage reports PATTERNS name under ROOT (`*` and `?` in the last part), newest first.
+fn coverage_reports(root: &Path, patterns: &[String]) -> Vec<PathBuf> {
+    let mut found: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut take = |path: PathBuf, m: std::fs::Metadata| {
+        if m.is_file() && seen.insert(path.clone()) {
+            found.push((m.modified().unwrap_or(std::time::UNIX_EPOCH), path));
+        }
     };
-    if !current(f) {
-        return;
+    for p in patterns {
+        let path = root.join(p);
+        let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
+        else {
+            continue;
+        };
+        if !name.contains(['*', '?']) {
+            if let Ok(m) = std::fs::metadata(&path) {
+                take(path, m);
+            }
+            continue;
+        }
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            if e.file_name()
+                .to_str()
+                .is_some_and(|n| super::explorer::glob(name.as_bytes(), n.as_bytes()))
+                && let Ok(m) = std::fs::metadata(e.path())
+            {
+                take(e.path(), m);
+            }
+        }
     }
-    let layers = match super::outline::text_within(f, file, LABELS_MAX).await {
+    found.sort_by_key(|a| std::cmp::Reverse(a.0));
+    found.into_iter().map(|(_, p)| p).collect()
+}
+
+/// Watch the folders of PATTERNS under ROOT: a report written there reads the coverage layers again.
+fn watch_coverage(f: &Front, root: &Path, patterns: &[String]) {
+    use notify::{RecursiveMode, Watcher};
+    let mut cov = lock(&f.core.views.minimaps.coverage);
+    for p in patterns {
+        let path = root.join(p);
+        let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
+        else {
+            continue;
+        };
+        cov.names.insert(name.to_owned());
+        if cov.dirs.contains(dir) {
+            continue;
+        }
+        if cov.watcher.is_none() {
+            cov.watcher = coverage_watcher(f);
+        }
+        // a folder not made yet is tried again at the next push
+        if let Some(w) = cov.watcher.as_mut()
+            && w.watch(dir, RecursiveMode::NonRecursive).is_ok()
+        {
+            cov.dirs.insert(dir.to_path_buf());
+        }
+    }
+}
+
+fn coverage_watcher(f: &Front) -> Option<notify::RecommendedWatcher> {
+    let front = f.core.views.front_weak()?;
+    let rt = tokio::runtime::Handle::try_current().ok()?;
+    notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        let Ok(ev) = res else { return };
+        if matches!(ev.kind, notify::EventKind::Access(_)) {
+            return;
+        }
+        let Some(f) = front.upgrade() else { return };
+        let hit = {
+            let cov = lock(&f.core.views.minimaps.coverage);
+            ev.paths.iter().any(|p| {
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    cov.names
+                        .iter()
+                        .any(|g| super::explorer::glob(g.as_bytes(), n.as_bytes()))
+                })
+            })
+        };
+        if hit {
+            let _in = rt.enter();
+            again(&f, |_, a| a.heat.as_deref() == Some("coverage"));
+        }
+    })
+    .ok()
+}
+
+/// FILE's heat layer as ASK wants it (LINES: the file's line count, for reads of the whole file); none without a
+/// heat source, or when the source has nothing to say (no worktree, no report).
+async fn heat_layer(f: &Front, file: &str, ask: &Ask, lines: u32) -> Option<Layer> {
+    let source = ask.heat.clone()?;
+    let root = worktree_root(Path::new(file));
+    let rel = root.as_ref().and_then(|r| {
+        Path::new(file)
+            .strip_prefix(r)
+            .ok()
+            .and_then(Path::to_str)
+            .map(str::to_owned)
+    });
+    let path = file.to_owned();
+    let spans = match source.as_str() {
+        "blame" => {
+            let (root, rel) = (root?, rel?);
+            let dir = f.dirs.get()?.hub.clone();
+            let (hub, tree) = f.core.history.of_tree(&dir, &root).ok()?;
+            let b = crate::clock::blocking(move || hub.git_blame(&tree, &rel))
+                .await
+                .ok()?
+                .ok()?;
+            heat::blame(&b, crate::clock::wall_secs() as i64)
+        }
+        "coverage" => {
+            let root = root?;
+            watch_coverage(f, &root, &ask.coverage);
+            let patterns = ask.coverage.clone();
+            crate::clock::blocking(move || {
+                coverage_reports(&root, &patterns)
+                    .iter()
+                    .find_map(|r| {
+                        let s = heat::coverage(&read_capped(r)?, &path);
+                        (!s.is_empty()).then_some(s)
+                    })
+                    .unwrap_or_default()
+            })
+            .await
+            .ok()?
+        }
+        "profile" => {
+            let p = ask.profile.clone()?;
+            crate::clock::blocking(move || {
+                read_capped(Path::new(&p))
+                    .map(|b| heat::profile(&b, &path))
+                    .unwrap_or_default()
+            })
+            .await
+            .ok()?
+        }
+        "agent-read" => {
+            let names: Vec<String> = std::iter::once(path).chain(rel).collect();
+            let reads = f
+                .writer
+                .db
+                .read(move |c| {
+                    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                    norn::read::work::reads_of(c, &names)
+                })
+                .await
+                .ok()?;
+            let line = |n: Option<i64>| n.and_then(|n| u32::try_from(n).ok());
+            let reads: Vec<_> = reads
+                .into_iter()
+                .map(|(a, b, who)| (line(a), line(b), who))
+                .collect();
+            heat::agent_read(&reads, lines)
+        }
+        _ => return None,
+    };
+    Some(Layer::Heat(source, spans))
+}
+
+/// Send CONN FILE's labels, its fold ranges when a pack's grammar parses it, and the heat layer it asked for, for its
+/// ask GENERATION; nothing when a later ask came meanwhile or it is no longer watched.
+async fn push(f: &Front, conn: u64, file: &str, generation: u64) {
+    let key = (conn, file.to_owned());
+    let ask = |f: &Front| {
+        lock(&f.core.views.minimaps.files)
+            .get(&key)
+            .filter(|e| e.0 == generation)
+            .map(|e| e.1.clone())
+    };
+    let Some(asked) = ask(f) else {
+        return;
+    };
+    let text = super::outline::text_within(f, file, LABELS_MAX).await;
+    let lines = text
+        .as_ref()
+        .map_or(0, |t| u32::try_from(t.lines().count()).unwrap_or(u32::MAX));
+    let mut layers = match text {
         Ok(text) => {
             let path = file.to_owned();
             crate::clock::blocking(move || {
@@ -159,7 +386,8 @@ async fn push(f: &Front, conn: u64, file: &str, generation: u64) {
         }
         Err(_) => vec![Layer::Labels(Vec::new())],
     };
-    if !current(f) {
+    layers.extend(heat_layer(f, file, &asked, lines).await);
+    if ask(f).is_none() {
         return;
     }
     for layer in layers {
@@ -172,43 +400,59 @@ async fn push(f: &Front, conn: u64, file: &str, generation: u64) {
     }
 }
 
-/// `minimap/watch`: the caller shows P's file in a minimap (its labels are sent before the answer), or no longer.
+/// `minimap/watch`: the caller shows P's file in a minimap (its labels and heat are sent before the answer), or no
+/// longer.  A heat layer the last ask showed and this one does not is removed.
 pub async fn watch(f: &Front, c: &Caller, p: MinimapWatch) -> Result<bool, Error> {
     let file = crate::work::presence::true_name(&p.file);
     let key = (c.conn_id, file.clone());
-    if !p.on {
-        lock(&f.core.views.minimaps.files).remove(&key);
-        return Ok(true);
-    }
-    let generation = {
-        let mut files = lock(&f.core.views.minimaps.files);
-        let g = files.entry(key).or_default();
-        *g += 1;
-        *g
+    let ask = Ask {
+        heat: p.heat,
+        coverage: p.coverage,
+        profile: p.profile,
     };
-    push(f, c.conn_id, &file, generation).await;
+    let (generation, old) = {
+        let mut files = lock(&f.core.views.minimaps.files);
+        if p.on {
+            let e = files.entry(key).or_default();
+            e.0 += 1;
+            (Some(e.0), std::mem::replace(&mut e.1, ask.clone()).heat)
+        } else {
+            (None, files.remove(&key).and_then(|(_, a)| a.heat))
+        }
+    };
+    if let Some(old) = old.filter(|o| generation.is_none() || ask.heat.as_ref() != Some(o)) {
+        let version = VERSION.fetch_add(1, Ordering::Relaxed);
+        f.send_to(
+            c.conn_id,
+            "view-model",
+            data(&file, version, &format!("heat:{old}"), Value::Null),
+        );
+    }
+    f.core.views.minimaps.coverage_unused();
+    if let Some(g) = generation {
+        push(f, c.conn_id, &file, g).await;
+    }
     Ok(true)
 }
 
-/// The edit history took an edit to FILE (its true name): every connection watching it gets its labels again once
-/// the edits pause.
-pub fn touched(f: &Front, file: &str) {
-    let due: Vec<(u64, u64)> = {
+/// Every watch DUE picks (by file and ask) gets its layers again once things settle ([`super::outline::QUIET`]).
+fn again(f: &Front, due: impl Fn(&str, &Ask) -> bool) {
+    let due: Vec<(u64, String, u64)> = {
         let mut files = lock(&f.core.views.minimaps.files);
         files
             .iter_mut()
-            .filter(|((_, name), _)| name == file)
-            .map(|((conn, _), g)| {
+            .filter(|((_, name), (_, a))| due(name, a))
+            .map(|((conn, name), (g, _))| {
                 *g += 1;
-                (*conn, *g)
+                (*conn, name.clone(), *g)
             })
             .collect()
     };
     let Some(front) = f.core.views.front_weak() else {
         return;
     };
-    for (conn, generation) in due {
-        let (front, file) = (front.clone(), file.to_owned());
+    for (conn, file, generation) in due {
+        let front = front.clone();
         crate::clock::spawn("minimap:quiet", async move {
             crate::clock::sleep(super::outline::QUIET).await;
             if let Some(f) = front.upgrade() {
@@ -216,6 +460,12 @@ pub fn touched(f: &Front, file: &str) {
             }
         });
     }
+}
+
+/// The edit history took an edit to FILE (its true name): every connection watching it gets its labels (and heat)
+/// again once the edits pause.
+pub fn touched(f: &Front, file: &str) {
+    again(f, |name, _| name == file);
 }
 
 #[cfg(test)]
@@ -237,7 +487,23 @@ mod tests {
             ),
             (
                 1,
-                Layer::Heat("blame".into(), vec![(1, 10, 1000), (11, 30, 250)]),
+                Layer::Heat(
+                    "blame".into(),
+                    vec![
+                        Span {
+                            first: 1,
+                            last: 10,
+                            value: 1000,
+                            fact: "not committed".into(),
+                        },
+                        Span {
+                            first: 11,
+                            last: 30,
+                            value: 250,
+                            fact: "2 days ago · 9f3c21e first · ann".into(),
+                        },
+                    ],
+                ),
             ),
             (
                 1,

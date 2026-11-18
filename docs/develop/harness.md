@@ -622,9 +622,16 @@ How it works:
   `drgnx-job.el`, Magit's status and the Explorer.
 - It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
   A scene on the editor starts the scenes' hub first (the session starts none) and waits (20 s at most, else an error)
-  for the Explorer's Files rows, which come from the hub: without it the section is empty. Every scene starts in the
-  editor layout (`drgnx-look-scene-begin`, called before each), because a scene before it may leave another layout;
-  a scene in another layout applies it itself. The start page and notebook scenes report an error when their buffers
+  for the Explorer's Files rows, which come from the hub: without it the section is empty. Every scene starts from
+  the frame as the setup left it (`drgnx-look-scene-begin`, called before each): the editor layout, its tiles and
+  the editors' shown buffers put back from the arrangement the setup recorded, the minimap scenes' hold released and
+  the setup's sticky style restored, the cards a scene leaves open (Send Run, the inbox's drop-down) closed and the
+  debug session ended unless the scene is marked `:debug` (the debugging scenes share one stopped session). A scene may leave another layout, or open views inside the editor layout (the
+  Work Flow's map, Detail and Rules tiles), whose `one` shape keeps the editor area as it is, and under the grid
+  `delete-other-windows` keeps the editor tiles: so a layout switch alone does not reset it. After putting it back,
+  begin compares the layout, the tiles, the sticky style, the minimap hold and the root's visible popups with the setup's and reports any
+  difference as an error ("begin: the scene before left …"), so no scene's state reaches the next unnoticed. A scene
+  in another layout applies it itself. The start page and notebook scenes report an error when their buffers
   are not shown in the editor layout. The setup writes the notebook scenes' kernelspec and its environment
   (`JUPYTER_PATH`, a short `XDG_RUNTIME_DIR`) before any hub starts, because the hub that runs the kernel is the one
   an earlier scene started.
@@ -642,9 +649,9 @@ How it works:
   problems from a stand-in Flymake backend (`✕ 1 ⚠ 1`), a stand-in eglot connection (`● eglot`; no language server
   runs) and the mock agent, which works in the scenes' project and edits a file there (`● replay-… editing`). The
   mock agent's hub seeds the plan run too, so a Work scene after an agent scene finds it. `agent-panel-long` (mockup
-  `agent-panel`) needs a transcript longer than its window: the session gives the mock agent 17 more steps when
-  `DRGNX_LOOK_ONLY` names it, so draw it alone (`DRGNX_LOOK_ONLY='^agent-panel-long$'`); with the others the transcript
-  fits and the scene says so. It wheels the transcript both ways with `pixel-scroll-precision-mode` on and off, and
+  `agent-panel`) needs a transcript longer than its window: it allows the first turn's open permission and sends the
+  mock agent a second prompt, whose turn (the script's second line) runs 17 more steps, and waits for the last of them;
+  the scenes before keep the mockup's three steps, so it is drawn alone or with the others alike. It wheels the transcript both ways with `pixel-scroll-precision-mode` on and off, and
   clicks the header window's parts (through the event loop too).
   Both panel scenes also check the panel's three windows in the right area: a header window (window parameter
   `drgnx-area-part` `above`) showing the hub's `agent-panel-top/SID` view with its `p:head` row, fitted to its text
@@ -655,7 +662,8 @@ How it works:
   is answered (the hub's first fit of a row comes before the editor's glyph widths, its refit one round trip after the
   answer; an answer sent later than the ask, after the ping, is not covered by the ping); one more round trip that
   changes them is an error, and so is
-  a hub that does not answer. The transcript's opening check: point at its end, and the end whole on its last line
+  a hub that does not answer; its message names the buffers that changed, the windows' body widths before and after
+  and the asks still open. The transcript's opening check: point at its end, and the end whole on its last line
   (under the end's row as redisplay drew it there is less space than the screen line before the start), or the whole
   transcript when it fits. `agent-panel-long` then checks, in the three windows:
   - **wheel:** the transcript wheeled up and down, with `pixel-scroll-precision-mode` on and off, moves each way while
@@ -724,7 +732,8 @@ How it works:
   in the buffer with its faces), less the `…`, plus the hub's 10 px slack, must not fit the px free after the `…`
   (blanks, a stop's space, the body past the row's end). A blank in a block's face (a box or a background of its own:
   a card's fill, a chip) ends the count: when the row ends in that block, only its end pad less the row's start pad in
-  that face counts (the block's own padding, kept on both sides), never the px past the block. When a text follows
+  that face counts (the block's own padding, kept on both sides), never the px past the block. A `…` in hidden text
+  is not counted (the Explorer's root row is cut as any row, but it is hidden: its name is the side bar's title). When a text follows
   on the row, the view's gap from it (10 logical px: a column's, a place's at the right edge) is not free. The `…` is measured
   with its faces as the cut text is (`window-text-pixel-size` of a char past the body's edge gives the whole
   line's). The drawn width is measured as the shot drew it, then
@@ -849,7 +858,9 @@ Wayland socket. It only ever
 stops what belongs to the current state root: a systemd unit only if its command line names this root's run
 directory (unit names are global — another checkout may run a session of the same id, however unlikely), a detached process group only if
 one of its members names the run directory (a stale `pgid` file may point at a reused id; ids 0 and 1 are never
-signalled), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
+signalled), or its leader is the process the launcher started (its start time from `/proc`, kept in `pgid-start`:
+the leader execs `timeout`, which as the session's leader stays in the group, and an exec'ing process's command line
+reads empty for an instant), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
 current state root — run directories, plus live units whose command line points into it — and leaves sessions
 of other state roots alone. Units also end on their own after 30 minutes (`RuntimeMaxSec=1800`) and are
 capped at 3 GB (`MemoryMax`). A detached session (no systemd: a container, or `DRGNX_UI_LAUNCHER=detached`) has the same time cap, from `timeout -k 10` (also `DRGNX_UI_MAX_RUNTIME`), and a 16 GB virtual-memory `ulimit` (generous on purpose: a GL stack maps a lot; it is a limit per process, not a cap on the whole group like `MemoryMax`). A systemd stop kills what is left after 10 s (`TimeoutStopSec`; systemd's default is 90). A test process that is ended (`DRGNX_UI_STOP_ON_EXIT`) first tells all its units to stop without waiting (`systemctl stop --no-block`), then stops each session in turn, so the stops overlap (that `kill-emacs-hook` entry is there only while the process has a session of its own, so a test file that merely loads `drgnx-ui` for its progress clock leaves no hook behind); one session takes 18 s at the very most (asking Emacs to exit: 8 s, then the unit: 10 s), within the 25 s `bin/drgnx check` gives an ended job. The slow exit seen under load (more than 45 s) was not reproduced on a quiet machine; this bounds it, it does not explain it. A failed `drgnx test --ui` or `--scenario` run keeps its run directory

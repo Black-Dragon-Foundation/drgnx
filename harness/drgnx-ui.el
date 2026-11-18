@@ -1182,6 +1182,7 @@ The runtime audit knows it as an event wait, not a wait on time (`drgnx-run-ert-
          (deadline (+ (float-time) 5)))
     ;; The caps of the systemd launcher: RuntimeMaxSec (timeout TERMs the group, KILLs it 10 s later) and a
     ;; virtual-memory ulimit (generous, since a GL stack maps a lot; MemoryMax=3G is the systemd one).
+    ;; timeout is exec'd: as the session's leader it cannot leave the group (it makes a group of its own when it can).
     (call-process "setsid" nil 0 nil "-f" "sh" "-c"
                   (format "echo $$ > %s; ulimit -v %d 2>/dev/null; exec timeout -k 10 %s %s > %s 2>&1"
                           (shell-quote-argument (expand-file-name "pgid" run))
@@ -1190,15 +1191,32 @@ The runtime audit knows it as an event wait, not a wait on time (`drgnx-run-ert-
                           (shell-quote-argument (expand-file-name "session.log" run))))
     (while (and (not (drgnx-ui--read-pgid run)) (< (float-time) deadline))
       (drgnx-ui--poll-pause 0.02))
-    (or (drgnx-ui--read-pgid run) (drgnx-ui--fail "setsid did not start %s" (plist-get sess :name)))))
+    (let ((pgid (or (drgnx-ui--read-pgid run) (drgnx-ui--fail "setsid did not start %s" (plist-get sess :name)))))
+      ;; the leader's start time names the group as this session's even while the leader execs (`drgnx-ui--group-ours-p')
+      (when-let* ((start (drgnx-ui--proc-start (string-to-number pgid))))
+        (write-region start nil (expand-file-name "pgid-start" run) nil 'silent))
+      pgid)))
+
+(defun drgnx-ui--proc-start (pid)
+  "PID's start time (field 22 of /proc/PID/stat, in clock ticks since boot) as a string, or nil once it is gone.
+It stays the same across an exec, unlike the command line."
+  (let ((stat (ignore-errors (with-temp-buffer (insert-file-contents (format "/proc/%d/stat" pid)) (buffer-string)))))
+    (and stat (string-match "\\`[^z-a]*) \\(.*\\)" stat)  ; after the last ") ": a command name may hold one
+         (nth 19 (split-string (match-string 1 stat) " " t)))))
 
 (defun drgnx-ui--group-ours-p (pgid run)
   "Non-nil while process group PGID has a member that belongs to the session started in RUN.
 Checks the whole group, not just its leader (which may exit first on TERM), and requires
 a member's command line to name RUN — the pgid file may be stale and the id reused by an
-unrelated group.  Ids 0 and 1 are never ours."
+unrelated group — or the leader to be the process the launcher started (its start time, RUN/pgid-start): an
+exec'ing process's command line reads empty for an instant, and the leader execs `timeout' as the session starts
+(once \"its processes are gone\" 0.05 s into a start).  Ids 0 and 1 are never ours."
   (and (stringp pgid) (string-match-p "\\`[0-9]+\\'" pgid) (> (string-to-number pgid) 1)
-       (eq 0 (car (drgnx-ui--run "pgrep" "-g" pgid "-f" "--" (concat (drgnx-ui--ere-quote run) "/"))))))
+       (or (eq 0 (car (drgnx-ui--run "pgrep" "-g" pgid "-f" "--" (concat (drgnx-ui--ere-quote run) "/"))))
+           (let ((want (ignore-errors (with-temp-buffer
+                                        (insert-file-contents (expand-file-name "pgid-start" run))
+                                        (string-trim (buffer-string))))))
+             (and want (equal want (drgnx-ui--proc-start (string-to-number pgid))))))))
 
 (defun drgnx-ui--unit-owned-p (name run)
   "Non-nil if systemd unit NAME is running the session whose run directory is RUN.

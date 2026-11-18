@@ -86,6 +86,9 @@ pub struct Config {
     /// The timing island (`--island`, a CPU list of whole L3 groups): timing jobs run on it, work on the rest while one
     /// runs (design §5.6). None: no timing lane here.
     pub island: Option<String>,
+    /// The opt-in container features the user allowed here, as `PROJECT:FEATURE` (`--feature`, repeatable): a job of
+    /// PROJECT gets the feature only if it is listed (D2).
+    pub features: Vec<String>,
 }
 
 /// Letters, digits and `-`, not at either end: a prefix and a hub id are parts of unit, slice, container and file
@@ -99,10 +102,11 @@ fn plain(s: &str) -> bool {
 
 impl Config {
     /// `--root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR] [--allow-own-account]
-    /// [--allow-admin] [--reserve-mib N]` (a workstation's, at least [`forseti::MIN_RESERVE_MIB`]).
+    /// [--allow-admin] [--reserve-mib N] [--island CPUS] [--feature PROJECT:FEATURE]…` (a workstation's, at least [`forseti::MIN_RESERVE_MIB`]).
     pub fn parse(args: &[&str]) -> Result<Config, String> {
         let (mut root, mut prefix, mut hub_id, mut profile) = (None, None, None, None);
         let (mut watchdog, mut reserve_mib, mut island) = (None, None, None);
+        let mut features: Vec<String> = vec![];
         let mut allow = crate::darwin::probe::Allow::default();
         let mut it = args.iter();
         while let Some(a) = it.next() {
@@ -132,6 +136,13 @@ impl Config {
                 "--allow-own-account" => allow.own_account = true,
                 "--allow-admin" => allow.admin = true,
                 "--island" => island = Some(val()?),
+                "--feature" => {
+                    let v = val()?;
+                    match v.split_once(':') {
+                        Some((p, f)) if !p.is_empty() && !f.is_empty() => features.push(v),
+                        _ => return Err(format!("--feature is PROJECT:FEATURE, not {v}")),
+                    }
+                }
                 "--reserve-mib" => {
                     let v = val()?;
                     reserve_mib = Some(
@@ -166,6 +177,7 @@ impl Config {
             allow,
             reserve_mib,
             island,
+            features,
         })
     }
 

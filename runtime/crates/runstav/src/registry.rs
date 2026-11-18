@@ -425,6 +425,7 @@ mod tests {
             "runners/add",
             "runners/bench",
             "runners/check",
+            "runners/feature",
             "runners/remove",
             "runners/set",
             "runners/unbench",
@@ -885,6 +886,21 @@ mod tests {
         for name in ["PLAYWRIGHT_MCP_CDP_ENDPOINT", "PATH", "LANG"] {
             assert!(!refused_env_name(name), "{name}");
         }
+    }
+
+    // a runner opt-in names its project: a call without one is `invalid-params` at `project`
+    #[test]
+    fn an_opt_in_needs_the_project_parameter() {
+        let m = find("runners/feature").unwrap();
+        assert!(
+            (m.decode)(&json!({"name": "desk", "feature": "kvm", "project": "p", "on": true}))
+                .is_ok()
+        );
+        let e = (m.decode)(&json!({"name": "desk", "feature": "kvm", "on": true}))
+            .err()
+            .expect("a call without a project is refused");
+        assert_eq!(e.code, ErrorCode::InvalidParams);
+        assert_eq!(e.path.as_deref(), Some("project"));
     }
 
     #[test]

@@ -17,6 +17,9 @@
 ;; definitions label the map (`minimap/watch'; the labels go from the hub to Sjá, not through Lisp).  A tree-sitter
 ;; buffer's bars are coloured by class: its pack's highlights query (else its own font-lock rules' queries) runs in C
 ;; at each parse (`nidhogg-treesit-highlight-query'), the classes' colours are the standard faces'.
+;; One heat layer at a time (`drgnx-minimap-layer', design X3) recolours the bars: the hub computes it (blame, coverage,
+;; profile, agent reads) and sends it to Sjá, the spec names it.  A diff buffer, or a file with its change marks on,
+;; gets a label at each hunk (`:hunk-labels', X6), counted here (`drgnx-marks-hunks').
 
 ;;; Code:
 (require 'cl-lib)
@@ -30,6 +33,7 @@
 (declare-function drgnx-sticky-pin-names "drgnx-sticky" (&optional buffer))
 
 (defvar drgnx-look-density-changed-hook)
+(defvar drgnx-hunks-mode)
 (defvar drgnx-hub--events)
 (declare-function drgnx-hub--call-on "drgnx-hub-client" (conn method params callback &rest keys))
 (declare-function drgnx-notify "drgnx-notice")
@@ -76,6 +80,30 @@ Emacs's): it is matched against each line; the section's name is the group named
 the whole match.  Nil: no MARK sections."
   :type '(choice (const :tag "None" nil) string) :group 'drgnx-minimap :scope 'global
   :apply #'drgnx-minimap--setting-changed)
+
+(defconst drgnx-minimap-layers '(blame coverage profile agent-read)
+  "The heat layers the hub computes (`minimap/watch''s `heat').")
+
+(drgnx-defsetting drgnx-minimap-layer nil
+  "The heat layer that recolours the minimap's bars, one at a time: `blame', each line's age (newest hottest);
+`coverage', covered lines (from the newest report `drgnx-minimap-coverage-files' names); `profile', each line's own
+samples (from the profile `minimap-layer' asks for); `agent-read', the lines agents read most; nil, none.  Marks stay
+on top."
+  :type '(choice (const :tag "None" nil) (const :tag "Blame age" blame) (const :tag "Coverage" coverage)
+                 (const :tag "Profile" profile) (const :tag "Lines agents read" agent-read))
+  :group 'drgnx-minimap :scope 'global :apply #'drgnx-minimap--setting-changed)
+
+(drgnx-defsetting drgnx-minimap-coverage-files
+  '("lcov.info" "coverage/lcov.info" "coverage/*.info" "coverage.xml" "coverage/cobertura*.xml" "cobertura.xml"
+    "coverage.json" "target/llvm-cov/*.json")
+  "Where the coverage heat layer finds reports, relative to the file's worktree (`*' and `?' match in the last part):
+lcov tracefiles, Cobertura XML reports and llvm-cov JSON exports.  The newest that names the file is read, and read
+again when a test run writes it."
+  :type '(repeat string) :group 'drgnx-minimap :scope 'global :apply #'drgnx-minimap--setting-changed)
+
+(defvar drgnx-minimap-profile-file nil
+  "The profile the `profile' heat layer reads (pprof, `perf script' text with source lines, or speedscope), as
+`minimap-layer' asked for it, or nil.")
 
 (defface drgnx-minimap-label '((t :inherit drgnx-ui-text :weight semi-bold))
   "The font of the minimap's labels (its colour comes from the label's kind)." :group 'drgnx-minimap)
@@ -129,6 +157,7 @@ parser or a Nidhogg that runs it."
 
 (defvar-local drgnx-minimap--regexp :none "The MARK expression last given the buffer's line model.")
 (defvar-local drgnx-minimap--watched nil "The file name the hub was last told this buffer shows in a minimap.")
+(defvar-local drgnx-minimap--asked nil "What the hub was last asked for with that file beyond its labels (the heat).")
 
 (defun drgnx-minimap-window-p (window)
   "Whether WINDOW gets the minimap: its strip is shown and it holds an editor's text (a file or a text buffer that
@@ -136,17 +165,28 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
   (and drgnx-minimap (window-parameter window 'glitnir-ruler) (fboundp 'nidhogg-lines-enable)
        (with-current-buffer (window-buffer window)
          (and (not drgnx-ruler-span-function) (not (derived-mode-p 'special-mode))
-              (or buffer-file-name (derived-mode-p 'prog-mode 'text-mode))))))
+              (or buffer-file-name (derived-mode-p 'prog-mode 'text-mode 'diff-mode))))))
 
 (defun drgnx-minimap--file (buffer)
   "The name BUFFER's file has in the hub's minimap layers (its true name), or nil (no file, a remote one)."
   (when-let* ((f (buffer-file-name buffer)) ((not (file-remote-p f))))
     (file-truename f)))
 
+(defun drgnx-minimap--hunk-labels (buffer)
+  "BUFFER's hunk labels for the spec: a vector of [LINE TEXT] (`drgnx-marks-hunks'), or nil when it has none."
+  (with-current-buffer buffer
+    (let ((n 0))
+      (and (or (derived-mode-p 'diff-mode) (bound-and-true-p drgnx-hunks-mode))
+           (vconcat (mapcar (lambda (h)
+                              (setq n (1+ n))
+                              (vector (car h) (drgnx-marks-hunk-label n (nth 1 h) (nth 2 h))))
+                            (drgnx-marks-hunks)))))))
+
 (defun drgnx-minimap--spec (window)
-  "WINDOW's `glitnir-minimap': the width, the colours and the labels."
-  (let ((file (and drgnx-minimap-labels (not (eq drgnx-minimap-labels 'marks-only))
-                   (drgnx-minimap--file (window-buffer window)))))
+  "WINDOW's `glitnir-minimap': the width, the colours, the labels and the heat layer."
+  (let ((file (and (or drgnx-minimap-layer (and drgnx-minimap-labels (not (eq drgnx-minimap-labels 'marks-only))))
+                   (drgnx-minimap--file (window-buffer window))))
+        (hunks (and drgnx-minimap-labels (drgnx-minimap--hunk-labels (window-buffer window)))))
     (append
      (list :width (max 80 (min 200 drgnx-minimap-width)) :scale 2 :nesting t
            :fill (cons (face-background 'drgnx-surface-panel nil 'default) 1.0)
@@ -159,6 +199,11 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
                 :label 'default :sub 'drgnx-text-muted :accent 'drgnx-accent :mark 'warning
                 :label-face 'drgnx-minimap-label))
      (and file (list :file file))
+     ;; the heat layer (X3): Sjá's `heat:S' of the file recolours the bars on the ramp
+     (and file drgnx-minimap-layer
+          (list :heat (symbol-name drgnx-minimap-layer) :heat-low 'drgnx-border-strong :heat-high 'drgnx-agent-2))
+     ;; the hunks' labels (X6), lines from 1 as counted now; sent again when the hunks change
+     (and (length> hunks 0) (list :hunk-labels hunks :hunk 'drgnx-text-muted))
      ;; pinned regions (X5): the bands are the line model's `pin' marks (they move with edits in C); the spec names
      ;; them in buffer order
      (let ((names (and (fboundp 'drgnx-sticky-pin-names) (drgnx-sticky-pin-names (window-buffer window)))))
@@ -169,17 +214,42 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
   "Non-nil when the hub's subscribed connection is up (the labels come there)."
   (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events) (fboundp 'drgnx-hub--call-on)))
 
+(defun drgnx-minimap--ask ()
+  "What a watch asks the hub for beyond the labels: the heat layer, with the coverage reports' places or the profile
+it reads."
+  (and drgnx-minimap-layer
+       (append (list :heat (symbol-name drgnx-minimap-layer))
+               (and (eq drgnx-minimap-layer 'coverage) drgnx-minimap-coverage-files
+                    (list :coverage (vconcat drgnx-minimap-coverage-files)))
+               (and (eq drgnx-minimap-layer 'profile) drgnx-minimap-profile-file
+                    (list :profile (expand-file-name drgnx-minimap-profile-file))))))
+
 (defun drgnx-minimap--watch (buffer file)
-  "Tell the hub BUFFER now shows FILE in a minimap (nil: none), when that changed."
+  "Tell the hub BUFFER now shows FILE in a minimap (nil: none) with the heat layer asked for, when either changed."
   (with-current-buffer buffer
-    (unless (equal file drgnx-minimap--watched)
-      (when (drgnx-minimap--hub-p)
-        (when drgnx-minimap--watched
-          (drgnx-hub--call-on drgnx-hub--events "minimap/watch" (list :file drgnx-minimap--watched :on :false)
-                              #'ignore))
-        (when file
-          (drgnx-hub--call-on drgnx-hub--events "minimap/watch" (list :file file :on t) #'ignore))
-        (setq drgnx-minimap--watched file)))))
+    (let ((ask (and file (drgnx-minimap--ask))))
+      (unless (and (equal file drgnx-minimap--watched) (equal ask drgnx-minimap--asked))
+        (when (drgnx-minimap--hub-p)
+          (when (and drgnx-minimap--watched (not (equal file drgnx-minimap--watched)))
+            (drgnx-hub--call-on drgnx-hub--events "minimap/watch" (list :file drgnx-minimap--watched :on :false)
+                                #'ignore))
+          (when file
+            (drgnx-hub--call-on drgnx-hub--events "minimap/watch" (append (list :file file :on t) ask) #'ignore))
+          (setq drgnx-minimap--watched file drgnx-minimap--asked ask))))))
+
+(defun drgnx-minimap-layer (layer)
+  "Show the heat LAYER on the minimap (a symbol of `drgnx-minimap-layers', or nil for none); for `profile', ask which
+profile it reads."
+  (interactive
+   (let* ((names '(("None" . nil) ("Blame age" . blame) ("Coverage" . coverage) ("Profile…" . profile)
+                   ("Lines agents read" . agent-read)))
+          (layer (cdr (assoc (completing-read "Minimap heat layer: " names nil t) names))))
+     (when (eq layer 'profile)
+       (setq drgnx-minimap-profile-file
+             (read-file-name "Profile (pprof, perf script, speedscope): " nil drgnx-minimap-profile-file t)))
+     (list layer)))
+  (customize-set-variable 'drgnx-minimap-layer layer)
+  (drgnx-minimap--setting-changed))
 
 (defun drgnx-minimap--place (window on)
   "`drgnx-ruler-place-functions': WINDOW's minimap as it should be now, given that it shows the strip (ON)."
@@ -209,6 +279,7 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
       (when (window-parameter w 'glitnir-minimap) (set-window-parameter w 'glitnir-minimap nil))))
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-minimap--watched b) (drgnx-minimap--watch b nil))
+    (with-current-buffer b (kill-local-variable 'drgnx-minimap--asked))
     (when (local-variable-p 'nidhogg-treesit-highlight-query b)
       (with-current-buffer b (kill-local-variable 'nidhogg-treesit-highlight-query))))
   (clrhash drgnx-minimap--queries))
@@ -225,7 +296,9 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
     (bookmark-go "Go to Bookmark…" drgnx-marks-bookmark-go "Go to a bookmark, this file's first")
     (agent-edit-next "Next Agent Edit" drgnx-marks-next-agent-edit "Go to the next place an agent edited in this file")
     (agent-edit-previous "Previous Agent Edit" drgnx-marks-previous-agent-edit
-                         "Go to the previous place an agent edited in this file"))
+                         "Go to the previous place an agent edited in this file")
+    (minimap-layer "Minimap Heat Layer…" drgnx-minimap-layer
+                   "Recolour the minimap by blame age, coverage, a profile or the lines agents read, or turn that off"))
   "The module's commands: (ID TITLE FUNCTION DOC) each.")
 
 (defun drgnx-minimap--teardown ()

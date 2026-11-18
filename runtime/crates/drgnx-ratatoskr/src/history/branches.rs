@@ -141,6 +141,28 @@ async fn freeze(hub: &Arc<Hub>, name: &str) {
     }
 }
 
+/// The project's history and the trees SRC and DST in it. It may open the history's store (sqlite on a disk that can
+/// stall for seconds), so it is for a blocking thread. `RATATOSKR_TEST_HISTORY_OFF_RUNTIME` (test-hooks): refused
+/// inside an async task's poll.
+fn trees(
+    hubs: &super::wire::Hubs,
+    hubdir: &Path,
+    src: &Path,
+    dst: &Path,
+) -> Result<(Arc<Hub>, Tree, Tree), Error> {
+    #[cfg(feature = "test-hooks")]
+    if std::env::var_os("RATATOSKR_TEST_HISTORY_OFF_RUNTIME").is_some()
+        && let Some(task) = crate::stall::polling()
+    {
+        return Err(internal(format!(
+            "the fork's history opened inside the async task {task}, not on a blocking thread"
+        )));
+    }
+    let (hub, from) = hubs.of_tree(hubdir, src)?;
+    let (_, to) = hubs.of_tree(hubdir, dst)?;
+    Ok((hub, from, to))
+}
+
 /// The fork's history branch: named for its tree DST (so the tree's later changes land on it), holding the source
 /// tree SRC's documents as they were at CUT, with one `fork` record.  A cut that holds no document of the source's
 /// branch (the history has none of its files yet) starts the branch from its base.  Its name, the source's, and the
@@ -153,8 +175,13 @@ async fn branch_fork(
     dst: &Path,
     cut: Cut,
 ) -> Result<(String, String, Arc<Hub>), Error> {
-    let (hub, from) = f.core.history.of_tree(hubdir, src)?;
-    let (_, to) = f.core.history.of_tree(hubdir, dst)?;
+    let (hubs, hd, s, d) = (
+        f.core.history.clone(),
+        hubdir.to_owned(),
+        src.to_owned(),
+        dst.to_owned(),
+    );
+    let (hub, from, to) = blocking(move || trees(&hubs, &hd, &s, &d)).await?;
     let (h2, sid, seq, now) = (hub.clone(), t.sid.clone(), t.seq, crate::clock::wall_secs());
     let (name, source) = blocking(move || {
         let mut g = h2.lock();
@@ -213,14 +240,18 @@ pub async fn fork(f: &Front, c: &Caller, p: w::ForkParams) -> Result<w::Forked, 
         seq: p.seq,
     };
     let hubdir = hub_dir(f)?;
+    let sid = session::new_sid()?;
+    let stages = crate::stages::Stages::new("history/fork", sid.as_str());
     let (_, src_cwd, _) = rewind::source_of(&f.core.agents, f, &t.sid).await?;
+    stages.at("the source");
     let step = step_of(f, &t).await?;
+    stages.at("the step");
     let cut = match step.history_op {
         Some(op) => Cut::Op(op),
         None => Cut::Time(step.end.unwrap_or(step.start)),
     };
-    let sid = session::new_sid()?;
     let tree = super::tree::fork_tree(f, &t, &sid).await?;
+    stages.at("the tree");
     let (branch, source_branch, hub) =
         match branch_fork(f, &hubdir, &t, &src_cwd, &tree.path, cut).await {
             Ok(v) => v,
@@ -229,6 +260,7 @@ pub async fn fork(f: &Front, c: &Caller, p: w::ForkParams) -> Result<w::Forked, 
                 return Err(e);
             }
         };
+    stages.at("the branch");
     // a worker's fork works in its own tree as its source did; a chat's stays a chat (its project read-only)
     let role = f
         .core
@@ -249,6 +281,7 @@ pub async fn fork(f: &Front, c: &Caller, p: w::ForkParams) -> Result<w::Forked, 
         role,
     )
     .await;
+    stages.at("the conversation");
     match started {
         Ok((s, level)) => Ok(w::Forked {
             id: s.id,

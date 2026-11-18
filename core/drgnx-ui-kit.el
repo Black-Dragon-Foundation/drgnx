@@ -690,6 +690,16 @@ draws SVG icons (`drgnx-look-icons').")
                               (let ((h (and (not tty) (drgnx-ui-kit--value (plist-get g :height) chosen))))
                                 (and h (> h 0) (drgnx-px h nil scale)))))))
 
+(defun drgnx-ui-kit--b-chip (label tone fill)
+  "A chip of LABEL in TONE (a symbol) and FILL (`soft' or `solid') on the builder: its pads and its label, in the
+chip's face (the part of `drgnx-ui-kit--chip' a component draws inside its own row; no icon, agent or action)."
+  (let* ((entry (drgnx-ui-kit-component 'chip)) (chosen (drgnx-ui-kit--chosen entry (list tone fill)))
+         (pad (plist-get (plist-get entry :geometry) :pad)) (face (drgnx-ui-kit--face 'chip chosen))
+         (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0)))
+    (drgnx-ui-kit--b-pad (car pad) tty-pad face)
+    (drgnx-ui-kit--b-push label face)
+    (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)))
+
 (defun drgnx-ui-kit--section-header (props scale tty)
   "The `section-header' component of PROPS (:title :collapsible :collapsed :count :action) at SCALE, see
 `drgnx-ui-kit--expand'."
@@ -714,7 +724,7 @@ draws SVG icons (`drgnx-look-icons').")
       (drgnx-ui-kit--b-push (or (plist-get props :title) "") face)
       (when count
         (drgnx-ui-kit--b-pad gap 1 face)
-        (drgnx-ui-kit--b-push (number-to-string count) 'drgnx-text-subtle))
+        (drgnx-ui-kit--b-chip (number-to-string count) 'neutral 'soft))
       (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
       (drgnx-ui-kit--b-finish (plist-get (drgnx-ui-kit-state (drgnx-ui-kit--name props :state 'rest)) :face)
                               0 drgnx-ui-kit--bpos (drgnx-ui-kit--b-action (plist-get props :action) 0)

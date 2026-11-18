@@ -7,6 +7,7 @@
 ;; counted the first folder's row 32 px short and called the hub's right cut of its name a needless one.
 
 (require 'ert)
+(require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
 
@@ -57,6 +58,29 @@ free after it are measured with the image, as drawn."
                              (list (+ image-px name-px))))
               (should (= (drgnx-look-scene--free-after w bol eol eol)
                          (- (window-body-width w t) drawn))))))
+      (kill-buffer buf))))
+
+(declare-function drgnx-look-scene--cut-rows "drgnx-look-scenes-session" (window how))
+
+(ert-deftest drgnx-ui-look-scene-measure/a-cut-in-a-hidden-row-is-not-counted ()
+  "The hub cuts the Explorer's hidden root row (its name is the side bar's title) as any row: the scenes' cut check
+counts only the cuts drawn, so a narrow Explorer's `D…' root, invisible, is no needless cut."
+  (let ((buf (get-buffer-create " *look-scene-cuts*")))
+    (drgnx-uitest-bare-frame)
+    (delete-other-windows)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (erase-buffer)
+            (insert (propertize "D…\n" 'invisible t) "core…\n")
+            (goto-char (point-min)))
+          (set-window-buffer (selected-window) buf)
+          (drgnx-test-wait-presented)
+          ;; every line a hub row
+          (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (pos) (format "row-%d" (line-number-at-pos pos)))))
+            (should (equal (mapcar (lambda (c) (list (nth 0 c) (nth 3 c)))
+                                   (drgnx-look-scene--cut-rows (selected-window) "as drawn"))
+                           '(("row-2" "core"))))))
       (kill-buffer buf))))
 
 ;;; look-scene-measure-gui-test.el ends here

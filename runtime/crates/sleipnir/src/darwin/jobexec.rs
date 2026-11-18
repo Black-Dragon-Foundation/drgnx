@@ -46,7 +46,7 @@ fn mono_s() -> f64 {
 }
 
 /// Why SPEC can't run on a Mac: no command, a command not under `sandbox-exec -f <profile>`, keys, or a helper that
-/// is anything but the job's proxy (its allow-list, socket and port: `darwin::proxy`).
+/// is anything but the job's proxy (its allow-list, sockets and port: `darwin::proxy`).
 pub fn refusal(spec: &JobExec) -> Option<String> {
     if spec.keyed {
         return Some("a Mac runner takes no keyed job".into());
@@ -55,6 +55,7 @@ pub fn refusal(spec: &JobExec) -> Option<String> {
         let proxy_only = HelperSpec {
             hub_allow: h.hub_allow.clone(),
             proxy_fd: h.proxy_fd,
+            proxy_v6_fd: h.proxy_v6_fd,
             proxy_port: h.proxy_port,
             ..HelperSpec::default()
         };
@@ -439,7 +440,8 @@ mod tests {
         assert!(refusal(&keyed).unwrap().contains("keyed"));
     }
 
-    /// [D] A Mac job's only helper is its proxy (its allow-list, its socket and port, all three); anything of
+    /// [D] A Mac job's only helper is its proxy (its allow-list, its sockets and port; the `::1` one only where the Mac
+    /// has an IPv6 loopback); anything of
     /// Linux's helper (keys, a relay, a container) or a part of the proxy alone is refused.
     #[test]
     fn a_mac_jobs_only_helper_is_its_proxy() {
@@ -447,11 +449,18 @@ mod tests {
         let proxy = HelperSpec {
             hub_allow: Some("/x/net.allow".into()),
             proxy_fd: Some(5),
+            proxy_v6_fd: Some(6),
             proxy_port: Some(41234),
             ..Default::default()
         };
         let mut s = spec(&d, &[SANDBOX_EXEC, "-f", "/x/job.sb", "/bin/true"]);
         s.helper = Some(proxy.clone());
+        assert_eq!(refusal(&s), None);
+        // a Mac without an IPv6 loopback has no listener there to pass
+        s.helper = Some(HelperSpec {
+            proxy_v6_fd: None,
+            ..proxy.clone()
+        });
         assert_eq!(refusal(&s), None);
         for bad in [
             HelperSpec {
@@ -624,12 +633,17 @@ mod tests {
     fn a_kill_reason_stops_the_job() {
         let d = tempfile::tempdir().unwrap();
         let reason = d.path().join(KILL_REASON);
+        // written whole and then renamed, as `kill_reason` writes it: a plain `>` makes the file before the text, and
+        // job-exec stopping the shell in between left an empty reason (a SIGKILL with none: `oomd/killed`)
         let s = spec(
             d.path(),
             &[
                 "/bin/sh",
                 "-c",
-                &format!("echo 'infra: disk' > '{}'; sleep 300", reason.display()),
+                &format!(
+                    "echo 'infra: disk' > '{0}.tmp' && mv '{0}.tmp' '{0}'; sleep 300",
+                    reason.display()
+                ),
             ],
         );
         let (r, stop) = run_unchecked(d.path(), &s, None);

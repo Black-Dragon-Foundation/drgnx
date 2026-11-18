@@ -91,10 +91,12 @@ pub struct HelperSpec {
     /// The job's container, killed when the disk watch stops the job.
     #[serde(default)]
     pub container: Option<String>,
-    /// A Mac job's proxy (`darwin::proxy`): the listener job-exec inherits under this number, and its loopback port.
-    /// Linux's helper has none.
+    /// A Mac job's proxy (`darwin::proxy`): the listeners job-exec inherits under these numbers (on `127.0.0.1`, and
+    /// on `::1` unless the Mac has no IPv6 loopback), and its loopback port. Linux's helper has none.
     #[serde(default)]
     pub proxy_fd: Option<i32>,
+    #[serde(default)]
+    pub proxy_v6_fd: Option<i32>,
     #[serde(default)]
     pub proxy_port: Option<u16>,
 }

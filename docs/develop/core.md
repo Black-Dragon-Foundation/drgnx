@@ -1653,7 +1653,7 @@ lists at each publish.
   test loads the same file.
 - **The minimap.** `editor/minimap` hooks `drgnx-ruler-place-functions` (run with each window and whether it shows
   the strip, when its strip is placed: no Lisp per scroll). An editor window (`drgnx-minimap-window-p`: the strip
-  shown, `drgnx-minimap` on, a file or a `prog-mode`/`text-mode` buffer that is neither a Sjá view nor a special mode)
+  shown, `drgnx-minimap` on, a file or a `prog-mode`/`text-mode`/`diff-mode` buffer that is neither a Sjá view nor a special mode)
   gets the window parameter `glitnir-minimap`: `:width` (`drgnx-minimap-width`, 80–200), the colours, `:nesting`,
   and with `drgnx-minimap-labels` the labels' `:labels` (`t` or `marks-only`), their colours (`:label`, `:sub` for a
   nested definition, `:accent` for the one under the pointer, `:mark` for a MARK section), `:label-face` (the font)
@@ -1664,6 +1664,15 @@ lists at each publish.
   regions (`editor/sticky`'s `drgnx-pin-region`) adds `:pin-kind` (the line model's `pin` kind, `drgnx-ruler-kinds`),
   `:pin` (the face `drgnx-marks-pin`) and `:pin-names` (a vector, buffer order): the bands are the scroll bar's `pin`
   marks (owner `pins`, each with its END), which the line model moves with edits, so the spec never carries positions.
+  With a heat layer (`drgnx-minimap-layer`, design X3) the spec adds `:heat` (the layer's name: Sjá's `heat:NAME` of
+  `:file`, which is then sent with labels off too) and the ramp's ends `:heat-low` (`drgnx-border-strong`) and
+  `:heat-high` (`drgnx-agent-2`); the watch asks the hub for that layer (`minimap/watch`'s `heat`, with `coverage`,
+  the places of `drgnx-minimap-coverage-files`, or `profile`, `drgnx-minimap-profile-file`), again when the layer or
+  its inputs change. A diff buffer (no file needed: `diff-mode` gets the minimap) or a file with `drgnx-hunks-mode`
+  adds `:hunk-labels`, a vector of `[LINE TEXT]` (lines from 1, `hunk N · +A −R`), and `:hunk` (`drgnx-text-muted`):
+  `drgnx-marks-hunks` counts a diff buffer's @@ hunks once per text change and reads a file's from `drgnx-hunks--data`;
+  the lines are not moved by C, the next placement (the ruler's debounced refresh after an edit, or the change marks'
+  redraw) sends them again. `drgnx-marks-next-change` goes by those hunks there (`drgnx-marks-step-hunk`).
 - **Sticky lines.** `editor/sticky` with `drgnx-sticky-style` `lines` draws the scope start lines in a pooled child
   frame per window over its top rows (`drgnx-sticky--cards`), its window and frame marked `drgnx-minimap-exclude`. The
   header's memo `sticky-segment` (once per window start, text change above it, or hub answer) works out the scopes
@@ -1701,8 +1710,11 @@ lists at each publish.
 - **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler`, or in a terminal
   (`drgnx-ruler-available-p`).
 - **Checks.** `ruler-test.el` and `marks-test.el` (batch); the look scenes check every scrollable window of every
-  scene (`drgnx-look-scene-scrollbars`: the strip is set, and drawn exactly when the content runs past the window; a strip under the palette's child frame is not
-  judged, one under any other child frame, a toast say, is an error);
+  scene (`drgnx-look-scene-scrollbars`: the strip is set, and on the root frame drawn exactly when the content runs
+  past the window, from two snapshots of the root frame with and without the strips (the checker marks each window
+  it toggles with `force-window-update`, so the root is redrawn while a popup has the focus); a child frame's own strips are
+  not judged for drawing; a strip under the palette's child frame or under a popup the scene opens on purpose, its
+  `:covers` in `drgnx-look-scenes`, is not judged, one under any other child frame, a toast say, is an error);
   Nidhogg's `glitnir-gui/the-ruler-*` rows check the pixels.
 - **Perf.** `debug-ruler-scroll` (10,000 lines, 200 marks) against `debug-ruler-baseline`, the same scroll with the
   ruler off (docs/develop/perf.md, "The overview ruler"). The margin version this
@@ -3860,7 +3872,7 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   build them as strings for WHERE as `drgnx-ui-kit-string` does. ACTION is a registry id, a command, a function of no
   arguments (all run through the kit action kind `ui-button`, i.e. `drgnx-ui-kit-run`) or `(KIND . ARGS)` of a kit
   action. `drgnx-ui-button` keeps its `&key` signature for callers off per-row paths; its faces `drgnx-ui-button` and
-  `drgnx-ui-button-primary` (and `drgnx-button`, `drgnx-work-flow-button*`, `drgnx-keycap`) are aliases of the kit
+  `drgnx-ui-button-primary` (and `drgnx-button`, `drgnx-keycap`) are aliases of the kit
   faces once `ui/look` is on.
 - A binding may name `:font` (faces with no colours: the UI or code font): a drgnx theme's spec for a face with
   colours keeps only those of its `:inherit`, while a third-party theme styles it through the whole `:inherit`.
@@ -3870,7 +3882,8 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
 - `section-header` (variant `collapsible` yes/no): 26 px, 6 px each side, the title in the UI font at 12 px, semibold,
   muted (`drgnx-kit-section-header`, with `:attrs (:weight semibold)`); collapsible: the twisty (`chevron-down` open,
   `chevron-right` collapsed, an icon image where the frame draws SVG icons, else its glyph) and a space; an optional
-  count after a 4 px gap in the subtle role (a plain number until the chip lands in the header, Task 14). A state's
+  count after a 4 px gap, drawn as a neutral soft chip (`drgnx-ui-kit--b-chip`, the builder form of the chip; the hub's
+  `Comp::Chip` inline). A state's
   face is above it. `(drgnx-ui-kit-section-header TITLE COLLAPSIBLE COLLAPSED COUNT WHERE)`; `drgnx-wb-section-header`
   (the dock sections) is built on it; its accessible text is "TITLE, collapsed|expanded".
 - `card` (variants `kind` plain, needs-you, selected; `shape` single, top, mid, bottom): the panel's fill and a ring
