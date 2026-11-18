@@ -442,6 +442,10 @@ from 201."
                                         (drgnx-look-scene--start-state))))
   (drgnx-look-scene--answer :project drgnx-look-scene--project))
 
+(defconst drgnx-look-scene--panel-more 17
+  "The steps of the mock agent's second turn (`agent-panel-long'): with the first turn's, a transcript longer than the
+panel's window at either scale.")
+
 (defun drgnx-look-scene-agent (bin)
   "A mock agent (BIN: a test-hooks ratatoskr with ratatoskr-mock beside it) reads, runs, edits and asks."
   (cond
@@ -452,8 +456,8 @@ from 201."
    (t
     (drgnx-look-scene--try "agent"
       (load (expand-file-name "test/fixtures/panel-replay-fixture" (bound-and-true-p drgnx-dir)) nil t)
-      ;; the `agent-panel-long' scene runs alone with a transcript that overflows the panel (the pinned header's)
-      (setq drgnx-panel-replay-prefix (if (string-match-p "agent-panel-long" (or (getenv "DRGNX_LOOK_ONLY") "")) 20 3))
+      ;; the mockup's three steps; the `agent-panel-long' scene makes the transcript long with the second turn below
+      (setq drgnx-panel-replay-prefix 3)
       (defalias 'drgnx-panel-replay-program
         (lambda ()
           ;; the mockup's figures: a slow run (past `drgnx-agent-panel-slow-seconds'), a quick one, then a read
@@ -465,7 +469,12 @@ from 201."
                   "tool:run sleep 11; echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
                   "tool:edit test/unit/gateway-test.el\\nsay Queue the reply when the client went away.\\n"
                   "tool:run sleep 2; echo 9 of 14 passed\\n"
-                  "ask:tool {\"kind\": \"read\", \"title\": \"Read the gateway's log\"}\nsay done")))
+                  "ask:tool {\"kind\": \"read\", \"title\": \"Read the gateway's log\"}\n"
+                  ;; the second prompt's turn (the script's next line), which only `agent-panel-long' sends: steps
+                  ;; enough to run the transcript past the panel's window
+                  (mapconcat (lambda (i) (format "tool:run echo more %d\\nsay More %d finished.\\n" i i))
+                             (number-sequence 1 drgnx-look-scene--panel-more) "")
+                  "say done")))
       ;; the replay's hub is the scenes' hub from here on: it seeds the plan run as `drgnx-look-scene--hub' does
       ;; and the agent works in the scenes' project, so the status bar and the Explorer show it there
       (setq drgnx-look-scene--panel (let ((process-environment (cons "RATATOSKR_SEED_SCENE=1" process-environment))
@@ -699,15 +708,38 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
     (drgnx-look-scene--until 15 "the status bar's job (the seeded run)" (lambda () (eql drgnx-jobs--running 1))))
   (drgnx-look-scene--answer))
 
+(defvar drgnx-look-scene--panel-long nil "Non-nil once `agent-panel-long' sent the mock agent its second prompt.")
+
+(declare-function drgnx-agent-panel--answer "drgnx-agent-panel-cards" (request option))
+(declare-function drgnx-agent-panel-cards--option "drgnx-agent-panel-cards" (request kinds))
+(declare-function drgnx-agent-panel--ask "drgnx-agent-panel" (method params &optional callback))
+(defvar drgnx-agent-panel--session)
+
+(defun drgnx-look-scene--panel-second-turn ()
+  "The mock agent's second turn, once: the first turn's open permission allowed (the turn ends), then a prompt, which
+runs the script's second line (`drgnx-look-scene--panel-more' steps); done when its last step is in the transcript.
+The first turn stays the mockup's three steps for the scenes before."
+  (with-current-buffer drgnx-look-scene--panel
+    (unless drgnx-look-scene--panel-long
+      (when-let* ((req (car (drgnx-agent-panel-cards--permissions))))
+        (drgnx-agent-panel--answer req (drgnx-agent-panel-cards--option req '("allow_once" "allow_always"))))
+      (drgnx-agent-panel--ask "agents/send" (list :id drgnx-agent-panel--session :text "more"))
+      (setq drgnx-look-scene--panel-long t)))
+  (let ((last (format "More %d finished." drgnx-look-scene--panel-more)))
+    (drgnx-look-scene--until 60 "the second turn's last step"
+                             (lambda () (with-current-buffer drgnx-look-scene--panel
+                                          (save-excursion (goto-char (point-min)) (search-forward last nil t)))))))
+
 (defun drgnx-look-scene-agent-panel-long ()
-  "The agent panel with a transcript longer than its window.  The checks of the three windows (header, transcript,
-composer) replace the old pinned-copy checks (Task 8 of the docks plan)."
+  "The agent panel with a transcript longer than its window (the mock agent's second turn).  The checks of the three
+windows (header, transcript, composer) replace the old pinned-copy checks (Task 8 of the docks plan)."
+  (drgnx-look-scene--try "panel second turn" (drgnx-look-scene--panel-second-turn))
   (prog1 (drgnx-look-scene-agent-panel)
     (drgnx-look-scene--try "panel long"
       (when-let* ((w (get-buffer-window drgnx-look-scene--panel)))
         (when (and (= (window-start w) (with-current-buffer drgnx-look-scene--panel (point-min)))
                    (pos-visible-in-window-p (with-current-buffer drgnx-look-scene--panel (point-max)) w))
-          (error "The transcript fits the panel's window: draw this scene alone (DRGNX_LOOK_ONLY='^agent-panel-long$'), which gives the mock agent its long transcript"))))
+          (error "The transcript fits the panel's window after the second turn"))))
     ;; the three windows' checks (docks plan, Task 8); the header clicks leave the transcript scrolled up a page
     (drgnx-look-scene--try "docks wheel" (drgnx-look-scene--panel-docks-wheel drgnx-look-scene--panel))
     (drgnx-look-scene--try "header clicks" (drgnx-look-scene--panel-header-clicks drgnx-look-scene--panel))
@@ -1020,11 +1052,20 @@ An error when the hub does not answer, or when the rows still change after 10 s.
 
 (defun drgnx-look-scene--panel-unsettled (buffer)
   "An error when one more hub round trip changes the agent panel BUFFER's windows' texts: the shot would show the
-hub's first fit (a chip cut before the editor's glyph widths came), not the rows the hub settles on."
-  (let ((r (drgnx-look-scene--hub-round (drgnx-look-scene--panel-buffers buffer))))
+hub's first fit (a chip cut before the editor's glyph widths came), not the rows the hub settles on.  The error names
+what changed: the buffers whose text did, each window's body width before and after, and the asks still open."
+  (let* ((buffers (drgnx-look-scene--panel-buffers buffer))
+         (widths (lambda () (mapcar (lambda (b) (let ((w (get-buffer-window b))) (and w (window-body-width w t))))
+                                    buffers)))
+         (ticks (mapcar #'buffer-chars-modified-tick buffers))
+         (before (funcall widths))
+         (r (drgnx-look-scene--hub-round buffers)))
     (unless (eq r t)
       (push (if (eq r 'no-answer) "agent-panel: the hub did not answer a ping"
-              "agent-panel: one more hub round trip changed the panel's rows: the shot shows the hub's first fit")
+              (format "agent-panel: one more hub round trip changed the panel's rows: the shot shows the hub's first fit (changed %S, widths %S then %S, asks open %d)"
+                      (delq nil (cl-mapcar (lambda (b tick) (and (/= tick (buffer-chars-modified-tick b)) (buffer-name b)))
+                                           buffers ticks))
+                      before (funcall widths) drgnx-look-scene--asks-open))
             drgnx-look-scene--errors))))
 
 (defun drgnx-look-scene-agent-panel ()
@@ -3073,6 +3114,14 @@ error).  What was seen goes to FILE."
                  (fact (list :buffer (buffer-name (window-buffer w))
                              :mode (buffer-local-value 'major-mode (window-buffer w))
                              :strip (and spec t) :span (plist-get spec :span) :overflows over
+                             ;; what the overflow and the strip were judged on: the window's start, end and the
+                             ;; buffer's end, the span the buffer gives now (the spec's may be older) and whether
+                             ;; Glitnir resolved the spec it has
+                             :shown (list (window-start w) (window-end w t)
+                                          (with-current-buffer (window-buffer w) (point-max)))
+                             :span-now (with-current-buffer (window-buffer w)
+                                         (and drgnx-ruler-span-function (funcall drgnx-ruler-span-function)))
+                             :resolved (and (window-parameter w 'glitnir--ruler) t)
                              :drawn (cond (covered 'covered) ((and without (not child)) drawn) (t 'unchecked)))))
             (push fact log)
             (cond ((not spec)
