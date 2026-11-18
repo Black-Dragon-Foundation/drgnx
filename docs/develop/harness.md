@@ -622,9 +622,15 @@ How it works:
   `drgnx-job.el`, Magit's status and the Explorer.
 - It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
   A scene on the editor starts the scenes' hub first (the session starts none) and waits (20 s at most, else an error)
-  for the Explorer's Files rows, which come from the hub: without it the section is empty. Every scene starts in the
-  editor layout (`drgnx-look-scene-begin`, called before each), because a scene before it may leave another layout;
-  a scene in another layout applies it itself. The start page and notebook scenes report an error when their buffers
+  for the Explorer's Files rows, which come from the hub: without it the section is empty. Every scene starts from
+  the frame as the setup left it (`drgnx-look-scene-begin`, called before each): the editor layout, its tiles and
+  the editors' shown buffers put back from the arrangement the setup recorded, the minimap scenes' hold released and
+  the setup's sticky style restored. A scene may leave another layout, or open views inside the editor layout (the
+  Work Flow's map, Detail and Rules tiles), whose `one` shape keeps the editor area as it is, and under the grid
+  `delete-other-windows` keeps the editor tiles: so a layout switch alone does not reset it. After putting it back,
+  begin compares the layout, the tiles, the sticky style and the minimap hold with the setup's and reports any
+  difference as an error ("begin: the scene before left …"), so no scene's state reaches the next unnoticed. A scene
+  in another layout applies it itself. The start page and notebook scenes report an error when their buffers
   are not shown in the editor layout. The setup writes the notebook scenes' kernelspec and its environment
   (`JUPYTER_PATH`, a short `XDG_RUNTIME_DIR`) before any hub starts, because the hub that runs the kernel is the one
   an earlier scene started.
@@ -855,7 +861,9 @@ Wayland socket. It only ever
 stops what belongs to the current state root: a systemd unit only if its command line names this root's run
 directory (unit names are global — another checkout may run a session of the same id, however unlikely), a detached process group only if
 one of its members names the run directory (a stale `pgid` file may point at a reused id; ids 0 and 1 are never
-signalled), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
+signalled), or its leader is the process the launcher started (its start time from `/proc`, kept in `pgid-start`:
+the leader execs `timeout`, which as the session's leader stays in the group, and an exec'ing process's command line
+reads empty for an instant), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
 current state root — run directories, plus live units whose command line points into it — and leaves sessions
 of other state roots alone. Units also end on their own after 30 minutes (`RuntimeMaxSec=1800`) and are
 capped at 3 GB (`MemoryMax`). A detached session (no systemd: a container, or `DRGNX_UI_LAUNCHER=detached`) has the same time cap, from `timeout -k 10` (also `DRGNX_UI_MAX_RUNTIME`), and a 16 GB virtual-memory `ulimit` (generous on purpose: a GL stack maps a lot; it is a limit per process, not a cap on the whole group like `MemoryMax`). A systemd stop kills what is left after 10 s (`TimeoutStopSec`; systemd's default is 90). A test process that is ended (`DRGNX_UI_STOP_ON_EXIT`) first tells all its units to stop without waiting (`systemctl stop --no-block`), then stops each session in turn, so the stops overlap (that `kill-emacs-hook` entry is there only while the process has a session of its own, so a test file that merely loads `drgnx-ui` for its progress clock leaves no hook behind); one session takes 18 s at the very most (asking Emacs to exit: 8 s, then the unit: 10 s), within the 25 s `bin/drgnx check` gives an ended job. The slow exit seen under load (more than 45 s) was not reproduced on a quiet machine; this bounds it, it does not explain it. A failed `drgnx test --ui` or `--scenario` run keeps its run directory

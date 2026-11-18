@@ -37442,6 +37442,233 @@
       "classes": [
         "user"
       ],
+      "doc": "a container feature (sandbox, udmabuf, render, kvm) allowed or not on a runner, for one project's jobs; offered only while the runner is mine",
+      "name": "runners/feature",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/feature`'s params: an opt-in container feature (`sandbox`, `udmabuf`, `render`, `kvm`) switched on or off\nfor the jobs of one project on one runner. Only the user does this; a runner offers it to a job only while it is a\n`mine` runner.",
+        "properties": {
+          "feature": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "name": {
+            "$ref": "#/$defs/Id"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "project": {
+            "description": "The project whose jobs get the feature (the job's project key).",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "project",
+          "feature",
+          "on"
+        ],
+        "title": "FeatureParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Accept": {
+            "description": "Which jobs a runner takes.",
+            "enum": [
+              "all",
+              "heavy"
+            ],
+            "type": "string"
+          },
+          "Profile": {
+            "description": "Whether somebody sits at the machine.",
+            "enum": [
+              "dedicated",
+              "workstation"
+            ],
+            "type": "string"
+          },
+          "Trust": {
+            "description": "What a runner may see of the user's work.",
+            "oneOf": [
+              {
+                "const": "mine",
+                "description": "The user's own machine: every job, every key.",
+                "type": "string"
+              },
+              {
+                "const": "my-cloud",
+                "description": "A machine drgnx starts in the user's cloud account: private code and only its listed keys.",
+                "type": "string"
+              },
+              {
+                "const": "shared",
+                "description": "Somebody else's: public code only.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A runner as the registry lists it.",
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/Accept"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "checked": {
+            "description": "When it was last checked (seconds since the epoch).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cores": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disk_free_gb": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "features": {
+            "default": [],
+            "description": "What the host has that a job may ask for (a GPU, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "jobs": {
+            "description": "Jobs running there now.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "landlock_abi": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_strike": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linger": {
+            "type": "boolean"
+          },
+          "mem_mib": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "no_room": {
+            "description": "Why the runner gets no job: its floor and reserve leave no room in the memory it has, with the numbers and the\nways out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "reserve_mib": {
+            "description": "A workstation's reserve for its user, MiB, when the user set one.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          },
+          "speed": {
+            "description": "Its bench: how many times the reference workload's speed (absent: not benched).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`, `benched: why (times)`, `needs a login: cmd`, `unreachable`, ...: the reason a runner is out of\nrotation is the state itself.",
+            "type": "string"
+          },
+          "strikes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trust": {
+            "$ref": "#/$defs/Trust"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "trust",
+          "profile",
+          "accept",
+          "root",
+          "prefix",
+          "arch",
+          "os",
+          "cores",
+          "mem_mib",
+          "disk_free_gb",
+          "podman",
+          "linger",
+          "landlock_abi",
+          "state",
+          "strikes",
+          "jobs"
+        ],
+        "title": "Runner",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "job keys to the hub's memory (never a file), sent to the runners' jobs that name them",
       "name": "runners/keys",
       "params": {
@@ -47342,6 +47569,10 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`view/env`: how VIEW looks in display class CLASS, measured in the view's buffer. EPOCH is the editor's number for\nthis env (the hub echoes it on every patch); a new epoch makes the next patch a reset.",
         "properties": {
+          "ascii": {
+            "description": "The class's frame is a terminal that is not UTF-8 (`drgnx-ui-ascii-frame-p`): a glyph the hub takes from its own\ntable (a tab's icon, `drgnx_rows::kit::ALL_GLYPHS`) is drawn in its ASCII form.",
+            "type": "boolean"
+          },
           "attach": {
             "description": "The first env of a new buffer for this (view, class): a pair the hub already holds for the connection (no\n`view/close` came) is dropped and starts again, so the new buffer gets the rows whole.",
             "type": "boolean"

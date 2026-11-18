@@ -19,11 +19,12 @@ use super::sync::{self, Frozen, SyncPlan};
 use crate::exec::Starter;
 use forseti::{
     Accept, Candidate, Drr, Expect, Expected, HistRow, Job, JobId, JobSpec, JobState, JobTrust,
-    Kind, Lane, Learned, Os, Pick, PlaceCtx, Priority, Range, RunnerState, RunnerTrust, RunningJob,
-    WaitReason, Warmth, Weight,
+    Kind, Lane, Learned, Os, Pick, PlaceCtx, Priority, ProjectId, Range, RunnerState, RunnerTrust,
+    RunningJob, WaitReason, Warmth, Weight,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sleipnir::linux::podman::Feature;
 use sleipnir::proto::{Frame, JobRef, ManifestEntry, Nonce, PROTO_VERSION, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -246,7 +247,7 @@ pub fn blank_spec(name: &str) -> JobSpec {
         lane: Lane::Work,
         fresh: false,
         stop_on_red: false,
-        project: String::new(),
+        project: forseti::ProjectId::default(),
         trust: JobTrust::Private,
         keys: vec![],
         local_only: false,
@@ -446,6 +447,8 @@ struct Remote {
     synced: Vec<String>,
     /// The features its last probe offered (`probe-result`): what it has as a candidate (none before its first probe).
     features: Vec<String>,
+    /// The opt-in container features the user allowed there, as (project, feature) (`runners/feature`).
+    enabled: BTreeSet<(Feature, ProjectId)>,
 }
 
 impl Remote {
@@ -1352,6 +1355,7 @@ impl Queue {
                 ready: None,
                 synced: vec![],
                 features: vec![],
+                enabled: BTreeSet::new(),
             },
         );
     }
@@ -1361,6 +1365,13 @@ impl Queue {
     pub fn set_features(&self, name: &str, features: Vec<String>) {
         if let Some(r) = self.lock().runners.get_mut(name) {
             r.features = features;
+        }
+    }
+
+    /// Runner NAME's opt-in features per project, as the registry's record has them.
+    pub fn set_enabled(&self, name: &str, enabled: BTreeSet<(Feature, ProjectId)>) {
+        if let Some(r) = self.lock().runners.get_mut(name) {
+            r.enabled = enabled;
         }
     }
 
@@ -1493,7 +1504,7 @@ impl Queue {
             Machine::Local => Some(LOCAL.to_string()),
             Machine::Runner(n) => Some(n.clone()),
         };
-        let project = j.s.spec.project.clone();
+        let project = j.s.spec.project.0.clone();
         let input_key = j.s.inputs.as_ref().map(|f| f.input_key.clone());
         let state = match j.state {
             QState::Queued => "queued",
@@ -2272,12 +2283,12 @@ impl Queue {
         let order = forseti::queue_order(&queued, &eff, &exp, now);
         let project: HashMap<JobId, String> = queued
             .iter()
-            .map(|j| (j.id.clone(), j.spec.project.clone()))
+            .map(|j| (j.id.clone(), j.spec.project.0.clone()))
             .collect();
         let weights: HashMap<String, f64> = st
             .jobs
             .values()
-            .map(|j| (j.s.spec.project.clone(), j.s.place.weight))
+            .map(|j| (j.s.spec.project.0.clone(), j.s.place.weight))
             .collect();
         let order = st.drr.order(
             &order,
@@ -2566,7 +2577,7 @@ impl Queue {
                 os: r.r.os,
                 // the runner's features are its probe's: a Mac's packages and tools (a missing one waits with its
                 // install line), a Linux runner's podman, gpu and kvm
-                features: r.features.clone(),
+                features: advertised(&r.features, &r.enabled, &job.spec.project, r.r.trust),
                 state: r.state.clone(),
                 accept: r.r.accept,
                 link_bps: None,
@@ -3997,6 +4008,43 @@ enum Placed {
     Wait(WaitReason),
 }
 
+/// The features a Linux runner offers a job of PROJECT: what its probe found, except `kvm` and `udmabuf`, plus the
+/// opt-ins ENABLED for `(feature, PROJECT)` (D2): `sandbox` always, `udmabuf` and `render` when the probe found the
+/// device or a GPU, only on a `mine` runner. `kvm` on a `mine` runner stays a probe fact for every project; on a
+/// `my-cloud` or `shared` one it needs the hub's opt-in for PROJECT **and** the runner's own, which its probe lists as
+/// `kvm-for:PROJECT` (its `runner.conf`).
+fn advertised(
+    probed: &[String],
+    enabled: &BTreeSet<(Feature, ProjectId)>,
+    project: &ProjectId,
+    trust: RunnerTrust,
+) -> Vec<String> {
+    let has = |d: &str| probed.iter().any(|x| x == d);
+    let mut f: Vec<String> = probed
+        .iter()
+        .filter(|p| !matches!(p.as_str(), "kvm" | "udmabuf") && !p.starts_with("kvm-for:"))
+        .cloned()
+        .collect();
+    let on = |feature: Feature| enabled.contains(&(feature, project.clone()));
+    if has("kvm")
+        && (trust == RunnerTrust::Mine || (on(Feature::Kvm) && has(&format!("kvm-for:{project}"))))
+    {
+        f.push("kvm".into());
+    }
+    if trust == RunnerTrust::Mine {
+        for (feature, device) in [
+            (Feature::Sandbox, None),
+            (Feature::Udmabuf, Some("udmabuf")),
+            (Feature::Render, Some("gpu")),
+        ] {
+            if on(feature) && device.is_none_or(has) {
+                f.push(feature.name().into());
+            }
+        }
+    }
+    f
+}
+
 /// What a job needs to start, as admission checks it (its minimum memory; its minimum cores, the hub knowing no CPU
 /// history).
 fn need_of(job: &Job) -> forseti::Need {
@@ -5008,11 +5056,12 @@ mod tests {
         );
     }
 
-    // [D] pure: a Linux runner has the features its probe offered, not the job's: a `gpu` job (then a `kvm` one) is
+    // [D] pure: a Linux runner has the features its probe offered, not the job's: a `gpu` job is
     // not placed on a runner whose probe lacks it, and is once its probe offers it
     #[tokio::test]
     async fn a_linux_runner_has_only_its_probes_features() {
-        for feature in ["gpu", "kvm"] {
+        let feature = "gpu";
+        {
             let dir = tempfile::tempdir().unwrap();
             let (q, _rx) = test_queue(dir.path(), None, true);
             add(&q, "r1", 600);
@@ -5036,6 +5085,116 @@ mod tests {
             let row = q.row("x1").unwrap();
             assert_eq!(row.machine.as_deref(), Some("r1"), "{feature}: {row:?}");
         }
+    }
+
+    /// A queue with runner `r1` whose probe found PROBED, and a job `x1` of project "drgnx" that needs FEATURES; the
+    /// machine here is busy, so the runner is the only place the job can go.
+    fn feature_queue(
+        probed: &[&str],
+        features: &[&str],
+        project: &str,
+    ) -> (tempfile::TempDir, Arc<Queue>) {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        let probe = Frame::ProbeResult {
+            facts: None,
+            missing: vec![],
+            limits: None,
+            features: probed.iter().map(|f| f.to_string()).collect(),
+            mem_available_mib: 16_384,
+        };
+        frame(&q, "r1", probe, 100);
+        let mut s = job("x1", Priority::P3, 64);
+        s.spec.features = features.iter().map(|f| f.to_string()).collect();
+        s.spec.project = ProjectId::from(project);
+        q.submit(s, 100);
+        (dir, q)
+    }
+
+    fn enable(q: &Queue, rows: &[(Feature, &str)]) {
+        q.set_enabled(
+            "r1",
+            rows.iter()
+                .map(|(f, p)| (*f, ProjectId::from(*p)))
+                .collect(),
+        );
+    }
+
+    fn placed(q: &Queue, now: u64) -> Option<String> {
+        q.tick(now);
+        q.row("x1").unwrap().machine
+    }
+
+    // [D] pure: an opt-in feature (`render`, with the GPU its probe found) is offered to a job of the project it was
+    // enabled for, on a `mine` runner only; the same enabling on `my-cloud` or `shared` offers nothing
+    #[tokio::test]
+    async fn a_feature_is_offered_only_when_enabled_on_a_mine_runner() {
+        let (_d, q) = feature_queue(&["podman", "gpu"], &["render"], "drgnx");
+        assert_eq!(placed(&q, 100), None, "nothing enabled");
+        enable(&q, &[(Feature::Render, "drgnx")]);
+        for trust in [RunnerTrust::MyCloud, RunnerTrust::Shared] {
+            q.set_runner("r1", trust, Accept::All);
+            assert_eq!(placed(&q, 101), None, "{trust:?}");
+        }
+        q.set_runner("r1", RunnerTrust::Mine, Accept::All);
+        assert_eq!(placed(&q, 102).as_deref(), Some("r1"));
+    }
+
+    // [D] pure: an opt-in for one project does not reach a job of another (the waiting reason is `features`)
+    #[tokio::test]
+    async fn an_opt_in_for_one_project_refuses_another() {
+        let (_d, q) = feature_queue(&["podman", "gpu"], &["render"], "b");
+        enable(&q, &[(Feature::Render, "a")]);
+        assert_eq!(placed(&q, 100), None);
+        enable(&q, &[(Feature::Render, "a"), (Feature::Render, "b")]);
+        assert_eq!(placed(&q, 101).as_deref(), Some("r1"));
+    }
+
+    // [D] pure: `kvm` on a `my-cloud` runner (a `shared` one takes no private job at all) needs the hub's opt-in and the runner's own, both naming the job's project
+    #[tokio::test]
+    async fn kvm_on_a_shared_runner_needs_both_opt_ins() {
+        // the hub's opt-in only
+        let (_d, q) = feature_queue(&["podman", "kvm"], &["kvm"], "drgnx");
+        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
+        enable(&q, &[(Feature::Kvm, "drgnx")]);
+        assert_eq!(placed(&q, 100), None, "hub only");
+        // the runner's only
+        let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:drgnx"], &["kvm"], "drgnx");
+        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
+        assert_eq!(placed(&q, 100), None, "runner only");
+        // the runner's names another project
+        let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:other"], &["kvm"], "drgnx");
+        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
+        enable(&q, &[(Feature::Kvm, "drgnx")]);
+        assert_eq!(
+            placed(&q, 100),
+            None,
+            "the runner's opt-in is for another project"
+        );
+        // both
+        let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:drgnx"], &["kvm"], "drgnx");
+        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
+        enable(&q, &[(Feature::Kvm, "drgnx")]);
+        assert_eq!(placed(&q, 100).as_deref(), Some("r1"), "both");
+    }
+
+    // [D] pure: on a `mine` runner `kvm` is a probe fact, offered to any project with nothing enabled
+    #[tokio::test]
+    async fn kvm_on_a_mine_runner_is_a_probe_fact() {
+        let (_d, q) = feature_queue(&["podman", "kvm"], &["kvm"], "anything");
+        assert_eq!(placed(&q, 100).as_deref(), Some("r1"));
+    }
+
+    // [D] pure: a job that needs `udmabuf` is not placed on a runner whose probe found the device until the user
+    // enables it for the job's project
+    #[tokio::test]
+    async fn a_job_needing_an_unoffered_feature_waits_as_features() {
+        let (_d, q) = feature_queue(&["podman", "udmabuf"], &["udmabuf"], "drgnx");
+        assert_eq!(placed(&q, 100), None);
+        enable(&q, &[(Feature::Udmabuf, "drgnx")]);
+        assert_eq!(placed(&q, 101).as_deref(), Some("r1"));
     }
 
     // [D] pure: a Mac whose last `ready` said it ran on battery is `sleeping` when it goes quiet (a lid closed), not

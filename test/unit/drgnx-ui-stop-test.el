@@ -3,6 +3,7 @@
 ;; test-pattern: handshake
 ;; Real process groups (setsid, sh, sleep): each member announces itself with a file once its TERM trap is set.
 (require 'ert)
+(require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-ui)
 
@@ -33,6 +34,30 @@ drgnx-ui's sessions run under a Linux compositor; macOS has no setsid(1) to make
           (should-not (eq 0 (call-process "pgrep" nil nil nil "-g" pgid))))
       (when pgid (call-process "kill" nil nil nil "-KILL" "--" (concat "-" pgid)))
       (delete-directory run t) (delete-directory aside t))))
+
+(ert-deftest drgnx-ui/a-launched-group-is-ours-while-its-command-execs ()
+  "While a process execs, its /proc command line reads empty for an instant.  The detached launcher's leader (sh)
+execs `timeout' as its last step, so at that instant no member of the new group named the run directory, and
+`drgnx-ui-alive-p' said the session's processes were gone (drgnx-inv/i2-every-area-keeps-its-size failed 0.05 s
+into its start on a loaded machine).  A `timeout' whose command line names no run stands in for that instant, held:
+the group is still the session's, by its leader's start time."
+  (unless (executable-find "setsid")
+    (ert-skip "no setsid(1): drgnx-ui's sessions run under a Linux compositor"))
+  (let* ((run (directory-file-name (make-temp-file "drgnx-ui-run" t))) (bin (make-temp-file "drgnx-ui-bin" t))
+         (fake (expand-file-name "timeout" bin)) pgid)
+    (write-region "#!/bin/bash\nexec -a drgnx-ui-stand-in sleep 30\n" nil fake)
+    (set-file-modes fake #o755)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-ui-session-env) #'ignore)
+                  ((symbol-function 'drgnx-ui-env-argv) (lambda (_) '("env")))
+                  ((symbol-function 'drgnx-ui-compositor-argv) (lambda (_) '("sleep" "30"))))
+          (let ((process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+            (setq pgid (drgnx-ui--launch-detached (list :name "drgnx-ui-9-00000a" :run run))))
+          (drgnx-test-wait (lambda () (eq 0 (call-process "pgrep" nil nil nil "-g" pgid "-f" "drgnx-ui-stand-in")))
+                           :secs 5 :what "the stand-in for the exec in the group")
+          (should (drgnx-ui--group-ours-p pgid run)))
+      (when pgid (call-process "kill" nil nil nil "-KILL" "--" (concat "-" pgid)))
+      (delete-directory run t) (delete-directory bin t))))
 
 (provide 'drgnx-ui-stop-test)
 ;;; drgnx-ui-stop-test.el ends here

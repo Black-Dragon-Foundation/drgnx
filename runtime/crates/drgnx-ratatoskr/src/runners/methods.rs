@@ -7,8 +7,8 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Empty;
 use runstav::methods::runners::{
-    AddParams, Audit, AuditParams, ByName, KeyNames, KeysParams, ProbeParams, Probed, RemoveParams,
-    Removed, Runner, Runners, SetParams,
+    AddParams, Audit, AuditParams, ByName, FeatureParams, KeyNames, KeysParams, ProbeParams,
+    Probed, RemoveParams, Removed, Runner, Runners, SetParams,
 };
 use runstav::wire::{Error, ErrorCode};
 #[cfg(all(unix, not(target_os = "android")))]
@@ -338,6 +338,13 @@ pub async fn unbench(f: &Front, _: &Caller, p: ByName) -> Result<Runner, Error> 
 }
 
 #[cfg(all(unix, not(target_os = "android")))]
+pub async fn feature(f: &Front, _: &Caller, p: FeatureParams) -> Result<Runner, Error> {
+    let r = reg!(f).feature(p).await.map_err(on::map)?;
+    changed(f).await;
+    Ok(r)
+}
+
+#[cfg(all(unix, not(target_os = "android")))]
 pub async fn remove(f: &Front, _: &Caller, p: RemoveParams) -> Result<Removed, Error> {
     reg!(f).remove(p.name.as_str()).await.map_err(on::map)?;
     changed(f).await;
@@ -412,6 +419,9 @@ mod off {
         Err(no(f))
     }
     pub async fn unbench(f: &Front, _: &Caller, _: ByName) -> Result<Runner, Error> {
+        Err(no(f))
+    }
+    pub async fn feature(f: &Front, _: &Caller, _: FeatureParams) -> Result<Runner, Error> {
         Err(no(f))
     }
     pub async fn remove(f: &Front, _: &Caller, _: RemoveParams) -> Result<Removed, Error> {

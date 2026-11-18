@@ -194,7 +194,7 @@ fn discover(root: &Path, only: Option<RecordKind>) -> Vec<Found> {
         .collect();
     for plan in plans {
         if let Some(spec) = plan_spec_of(&plan)
-            && spec.extension().is_some_and(|e| e == "md")
+            && spec.extension().is_some_and(|e| e == "md" || e == "org")
             && !out.iter().any(|f| f.path == spec)
         {
             out.push(found(spec, RecordKind::Specs));
@@ -1490,13 +1490,23 @@ fn plan_spec_of(plan: &Path) -> Option<PathBuf> {
     let rest = line.split_once('`')?.1;
     let name = rest.split_once('`')?.0;
     let named = Path::new(name);
+    // the file by its plain path (`a/../b` as `b`), so it is the record a scan finds; kept as named when a link before a
+    // `..` makes the plain path another file
+    let plain = |p: PathBuf| {
+        let l = lexical(&p);
+        match (l.canonicalize(), p.canonicalize()) {
+            (Ok(a), Ok(b)) if a == b => l,
+            _ => p,
+        }
+    };
     if named.is_absolute() {
-        return named.is_file().then(|| named.to_path_buf());
+        return named.is_file().then(|| plain(named.to_path_buf()));
     }
     plan.parent()?
         .ancestors()
         .map(|a| a.join(named))
         .find(|c| c.is_file())
+        .map(plain)
 }
 
 /// A plan is `derives`-linked to its spec (plan head to spec head, source: the plan's file); a spec that is gone, or no
@@ -2610,11 +2620,14 @@ pub async fn import_core(
     if !board_only && let RootVerdict::Denied { .. } = deny.check_root(root) {
         return Err(err(PERSONAL_NOTES_REFUSAL));
     }
-    // a file the hard tier denies (a spec a plan names inside `~/org`, even through a link) is never read
+    // a file the hard tier denies (a spec a plan names inside `~/org`, even through a link) is never read; one the user
+    // opted in (`personal-notes-allow.json`) is
     let mut found = discover(root, only);
     found.retain(|f| {
         let v = deny.check(&f.path);
-        v == Verdict::Allowed || (board_only && f.kind == RecordKind::Board && v == Verdict::Board)
+        v == Verdict::Allowed
+            || v == Verdict::OptedIn
+            || (board_only && f.kind == RecordKind::Board && v == Verdict::Board)
     });
     let mut fresh = Vec::new();
     for f in &found {
@@ -4097,6 +4110,76 @@ mod tests {
         );
     }
 
+    /// A spec in `~/org` the user opted in (`personal-notes-allow.json`) and a plan names is read, as any spec is
+    /// (`an-opted-in-spec-in-org-is-read`); the hard tier around it still holds.
+    #[tokio::test]
+    async fn an_opted_in_spec_in_org_that_a_plan_names_is_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = fix();
+        let home = f._dir.path().join("home");
+        std::fs::create_dir_all(home.join("org")).unwrap();
+        let reading = home.join("org/reading.md");
+        std::fs::write(&reading, "# Reading spec\n").unwrap();
+        let config = f._dir.path().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let allow = config.join("personal-notes-allow.json");
+        std::fs::write(
+            &allow,
+            serde_json::json!({"version": 1, "paths": [reading]}).to_string(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&allow, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/reads.md"),
+            format!(
+                "# Reads it\n\n**Spec:** `{}`\n\n### Task 1: a\n\n- [ ] x\n",
+                reading.display()
+            ),
+        )
+        .unwrap();
+        let deny = DenyList::load(&home, &config);
+        assert_eq!(deny.check(&reading), Verdict::OptedIn);
+        let heard = |_e: ViewEvent| {};
+        import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &f.root,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &deny,
+            },
+        )
+        .await
+        .unwrap();
+        let got = derives_of(&f).await;
+        assert!(
+            got.contains(&("Reads it".into(), "Reading spec".into())),
+            "{got:?}"
+        );
+    }
+
+    /// A spec a plan names in Org (`.org`) is followed as a Markdown one is (`an-org-spec-is-followed`).
+    #[tokio::test]
+    async fn an_org_spec_a_plan_names_is_followed() {
+        let f = fix();
+        std::fs::create_dir_all(f.root.join("notes")).unwrap();
+        std::fs::write(f.root.join("notes/s.org"), "# Org spec\n").unwrap();
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/org.md"),
+            "# Org plan\n\n**Spec:** `notes/s.org`\n\n### Task 1: a\n\n- [ ] x\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let got = derives_of(&f).await;
+        assert!(
+            got.contains(&("Org plan".into(), "Org spec".into())),
+            "{got:?}"
+        );
+    }
+
     /// A spec outside the root keeps its text: its backup goes under `outside/` in the backup folder, never onto the
     /// file itself, and the spec's title and body are what the file says (`a-spec-outside-the-root-keeps-its-text`).
     #[tokio::test]
@@ -4133,45 +4216,64 @@ mod tests {
         );
     }
 
-    /// A backup target that is not inside the backup folder, or is its own source, stops the import before anything is
-    /// written: a plan that names its spec through enough `..` to climb to `/` gives a path inside the root by its text,
-    /// whose backup would land on the file itself (`a-backup-onto-its-source-is-refused`).
-    #[tokio::test]
-    async fn a_backup_onto_its_source_stops_the_import_and_writes_nothing() {
+    /// A backup target that is not inside the backup folder, or is its own source, stops the backup before anything is
+    /// written (and with it the import): a path inside the root by its text that climbs to `/` through enough `..`
+    /// would be backed up onto the file itself (`a-backup-onto-its-source-is-refused`).
+    #[test]
+    fn a_backup_onto_its_source_is_refused_and_writes_nothing() {
         let f = fix();
         let elsewhere = f._dir.path().join("elsewhere/s.md");
         std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
         std::fs::write(&elsewhere, "# Far spec\n\nIts text.\n").unwrap();
-        let climb = "../".repeat(64);
-        std::fs::write(
-            f.root.join("docs/plans/drgnx/far.md"),
-            format!(
-                "# Far plan\n\n**Spec:** `{climb}{}`\n\n### Task 1: a\n\n- [ ] x\n",
-                elsewhere.strip_prefix("/").unwrap().display()
-            ),
-        )
-        .unwrap();
-        let heard = |_e: ViewEvent| {};
-        let r = import_core(
-            &f.db,
-            &f.views,
-            &f.hub,
-            &f.root,
-            None,
-            false,
-            Ears {
-                emit: &heard,
-                deny: &f.deny,
-            },
-        )
-        .await;
-        assert!(r.is_err(), "the import went on: {:?}", r.ok());
+        let climbing = f
+            .root
+            .join("docs")
+            .join("../".repeat(64))
+            .join(elsewhere.strip_prefix("/").unwrap());
+        let plan = f.root.join("docs/plans/drgnx/p.md");
+        let found = [
+            found(plan, RecordKind::Plans),
+            found(climbing, RecordKind::Specs),
+        ];
+        assert!(backup(&f.hub, &f.root, &found, 0.0).is_err());
         assert_eq!(
             std::fs::read_to_string(&elsewhere).unwrap(),
             "# Far spec\n\nIts text.\n"
         );
         assert!(!f.hub.join("records-backup").exists());
-        assert!(derives_of(&f).await.is_empty());
+    }
+
+    /// A spec a plan names through `..` is the record of its plain path, the one a scan finds
+    /// (`a-spec-named-through-dot-dot-is-its-plain-path`).
+    #[tokio::test]
+    async fn a_spec_named_through_dot_dot_is_its_plain_path() {
+        let f = fix();
+        std::fs::create_dir_all(f.root.join("notes")).unwrap();
+        std::fs::write(f.root.join("notes/s.md"), "# Dot spec\n").unwrap();
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/dot.md"),
+            "# Dot plan\n\n**Spec:** `../../../notes/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let file = f.root.join("notes/s.md").to_string_lossy().into_owned();
+        let n: i64 =
+            f.db.read(move |c| {
+                Ok(c.query_row(
+                    "select count(*) from entity where kind = 'spec' and retired_tx is null \
+                     and json_extract(data, '$.records.file') = ?1",
+                    [file],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let got = derives_of(&f).await;
+        assert!(
+            got.contains(&("Dot plan".into(), "Dot spec".into())),
+            "{got:?}"
+        );
     }
 
     /// The one file of `~/org` the product reads is `board.org` (named by `only: board`): its items are imported,

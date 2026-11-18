@@ -394,6 +394,13 @@ window starting at line START."
   ;; scene shows them where the file opened
   (run-hooks 'post-command-hook))
 
+(defvar drgnx-look-scene--start nil
+  "((:part PART) . STATE): the frame's arrangement (`drgnx-layouts--frame-part') and the state that is checked
+\(`drgnx-look-scene--start-state') as the setup left them, which every scene starts from (`drgnx-look-scene-begin').")
+
+(declare-function drgnx-layouts--frame-part "drgnx-layouts" (frame))
+(declare-function drgnx-layouts--put "drgnx-layouts" (frame part))
+
 (defun drgnx-look-scene-setup (elpa)
   "The mockups' state: the project at ~/code/drgnx, trusted; ELPA's packages active; tabs drgnx-gateway.el,
 gateway-test.el (changed, not saved), drgnx-job.el (a preview) and Magit; the Explorer; drgnx-gateway.el at 216:34,
@@ -428,6 +435,11 @@ from 201."
   ;; the mockups' last test run, as a run reports it (`213 tests' in the status bar)
   (drgnx-look-scene--try "tests" (drgnx-statusbar-note-tests 213 0))
   (drgnx-look-scene--try "back" (drgnx-wb-focus-editor) (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201))
+  ;; what every scene starts from (`drgnx-look-scene-begin')
+  (drgnx-look-scene--try "start"
+    (redisplay t)
+    (setq drgnx-look-scene--start (cons (list :part (drgnx-layouts--frame-part (selected-frame)))
+                                        (drgnx-look-scene--start-state))))
   (drgnx-look-scene--answer :project drgnx-look-scene--project))
 
 (defun drgnx-look-scene-agent (bin)
@@ -469,6 +481,17 @@ from 201."
   "Non-nil once a scene took the windows apart by hand (`delete-other-windows', its own splits) while the layout's name
 still said `editor': the next scene's start puts the layout back (`drgnx-look-scene--editor-layout').")
 
+(declare-function drgnx-groups-list "drgnx-groups")
+
+(defun drgnx-look-scene--one-editor ()
+  "One editor group, the one used last, selected; the docks stay.  Not `delete-other-windows': under the grid an
+editor tile is kept from it (`no-delete-other-windows'), so the notebook views split the groups it left again at
+every scene, and the side bar gave way to the editors' least widths (the Explorer's rows cut to `…')."
+  (let ((keep (drgnx-wb-editor-window)))
+    (dolist (g (drgnx-groups-list))
+      (unless (eq g keep) (delete-window g)))
+    (select-window keep)))
+
 (defun drgnx-look-scene--editor-layout ()
   "The editor layout, when an earlier scene left another (the Work layout's editor group sits beside the map, and the
 send-run scenes' layout has none) or took the windows apart by hand (the notebook views' three panes: the scenes after
@@ -481,15 +504,63 @@ focuses the editor starts here, or has no editor window to focus."
       ;; and the layout is rebuilt from one window
       (dolist (b (buffer-list))
         (when (string-prefix-p "*Notebook " (buffer-name b)) (let ((kill-buffer-query-functions nil)) (kill-buffer b))))
-      (delete-other-windows))
+      (drgnx-look-scene--one-editor))
     (setq drgnx-look-scene--windows-rearranged nil)
     (drgnx-layouts-apply 'editor)))
 
+(defvar drgnx-sticky-style)
+(declare-function drgnx-sticky--setting-changed "drgnx-sticky" (&rest _))
+(declare-function drgnx-minimap--spec "drgnx-minimap" (window))
+(declare-function drgnx-grid-tree-leaves "drgnx-grid-tree" (tree))
+
+(defun drgnx-look-scene--start-state ()
+  "What `drgnx-look-scene-begin' puts back and then checks, now: the layout's name, the frame's tiles as (KIND SHOWN)
+\(editors with their buffer, tool tiles with their kind), the sticky style, whether the minimap hold's advice is on and
+the windows the minimap scenes marked open."
+  (list :layout (drgnx-layouts-current)
+        :tiles (mapcar (lambda (l) (list (car l) (plist-get (cdr l) :shown)))
+                       (drgnx-grid-tree-leaves (plist-get (drgnx-layouts--frame-part (selected-frame)) :tree)))
+        :sticky (and (boundp 'drgnx-sticky-style) drgnx-sticky-style)
+        :minimap-held (and (advice-member-p #'drgnx-look-scene--minimap-held 'drgnx-minimap--spec) t)
+        :minimap-open (seq-filter (lambda (w) (window-parameter w 'drgnx-look-scene-minimap-open))
+                                  (window-list-1 nil 'never t))))
+
+(defun drgnx-look-scene--start-again ()
+  "The frame as the setup left it (`drgnx-look-scene--start'): its layout's name and arrangement (the tiles, the
+editors' tabs and shown buffers), what the minimap scenes hold released (the hold's advice and window marks) and the
+sticky style the setup had.  A scene that opens its views in the editor layout (the Work Flow's map, Flow, Detail and
+Rules tiles: the Work space is a view in the editor) leaves the layout's name `editor', whose `one' shape keeps the
+editor area as it is, and under the grid `delete-other-windows' keeps the editor tiles: without this every later scene
+drew inside them (scratch splits, a narrow sidebar that cut the Run and Debug rows, the notebook views' panes too small
+to split).  Left held, the sticky-lines scene drew the minimap the hover scenes opened, and later scenes kept the card."
+  (when drgnx-look-scene--start
+    (advice-remove 'drgnx-minimap--spec #'drgnx-look-scene--minimap-held)
+    (dolist (w (window-list-1 nil 'never t))
+      (when (window-parameter w 'drgnx-look-scene-minimap-open)
+        (set-window-parameter w 'drgnx-look-scene-minimap-open nil)
+        (when (window-parameter w 'glitnir-minimap)
+          (set-window-parameter w 'glitnir-minimap (drgnx-minimap--spec w)))))
+    (let ((sticky (plist-get (cdr drgnx-look-scene--start) :sticky)))
+      (when (and (featurep 'drgnx-sticky) (not (eq drgnx-sticky-style sticky)))
+        (setq drgnx-sticky-style sticky)
+        (drgnx-sticky--setting-changed)))
+    (drgnx-layouts--put (selected-frame) (plist-get (car drgnx-look-scene--start) :part))
+    (set-frame-parameter nil 'drgnx-layouts-current (plist-get (cdr drgnx-look-scene--start) :layout))
+    (drgnx-wb-focus-editor)
+    ;; the check: anything a scene left that this did not put back is an error of the next scene's begin
+    (redisplay t)
+    (let ((now (drgnx-look-scene--start-state)) (want (cdr drgnx-look-scene--start)))
+      (dolist (key '(:layout :tiles :sticky :minimap-held :minimap-open))
+        (unless (equal (plist-get now key) (plist-get want key))
+          (push (format "begin: the scene before left %s %S, not the setup's %S"
+                        (substring (symbol-name key) 1) (plist-get now key) (plist-get want key))
+                drgnx-look-scene--errors))))))
+
 (defun drgnx-look-scene-begin ()
-  "Before each scene (`drgnx-look-scenes-run'): the editor layout, whatever the scene before left.  A scene in another
-layout (the Work map's) applies it itself; without this the scenes after it drew in its layout (the start page and the
-notebooks showed the Work map)."
-  (drgnx-look-scene--try "begin" (drgnx-look-scene--editor-layout))
+  "Before each scene (`drgnx-look-scenes-run'): the editor layout, whatever the scene before left, then the frame as
+the setup left it (`drgnx-look-scene--start-again'), checked.  A scene in another layout (the Work map's) applies it
+itself; without this the scenes after it drew in its layout (the start page and the notebooks showed the Work map)."
+  (drgnx-look-scene--try "begin" (drgnx-look-scene--editor-layout) (drgnx-look-scene--start-again))
   ;; not `drgnx-look-scene--answer': the scene's own answer checks its views, once it has shown them
   (prog1 (drgnx-uitest--json (list :errors (vconcat (nreverse drgnx-look-scene--errors))))
     (setq drgnx-look-scene--errors nil)))
@@ -2268,7 +2339,7 @@ a finished run left."
           (setq views (list (format "*Notebook outline: %s*" base) (format "*Notebook output: %s %s*" base (if kernel (if running "c2" "c4") "c3"))
                             (format "*Notebook log: %s*" base)))
           (drgnx-look-scene--until 30 "the views' buffers" (lambda () (seq-every-p #'get-buffer views)))
-          (delete-other-windows)
+          (drgnx-look-scene--one-editor)
           (setq drgnx-look-scene--windows-rearranged t)
           (let* ((w1 (selected-window)) (w2 (split-window-right)) (w3 (with-selected-window w2 (split-window-right))))
             (cl-loop for w in (list w1 w2 w3) for name in views

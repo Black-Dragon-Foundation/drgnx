@@ -18,7 +18,7 @@ use crate::row::{ImageId, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use crate::kit_gen::{CompId, GLYPHS, State};
+pub use crate::kit_gen::{ALL_GLYPHS, CompId, GLYPHS, State};
 
 /// What an expansion reads of the display class: its scale, whether it is a terminal, the glyphs as the editor's
 /// frame draws them (`ViewEnv.glyphs`: `[name, glyph]`, ASCII on a terminal that is not UTF-8) and the user's density
@@ -28,6 +28,9 @@ pub struct KitEnv<'a> {
     pub scale: f32,
     pub tty: bool,
     pub glyphs: &'a [(String, String)],
+    /// A terminal that is not UTF-8 (`drgnx-ui-ascii-frame-p`): a tab's icon not in [`KitEnv::glyphs`] takes its
+    /// ASCII form from [`ALL_GLYPHS`].
+    pub ascii: bool,
     pub density: Density,
     /// On a graphical display that draws icons: the image of an icon name at a size in device px (the view keeps
     /// its SVG), none where the name has no file. Without it an icon is its glyph.
@@ -1040,6 +1043,22 @@ fn glyph<'a>(env: &'a KitEnv, name: &str) -> &'a str {
         .unwrap_or("")
 }
 
+/// A tab's icon NAME as ENV draws it: the env's form, else the whole standard table's ([`ALL_GLYPHS`], ASCII on an
+/// ASCII terminal), as the Lisp kit's tab looks it up (`drgnx-ui-kit--glyph`). Other components keep [`glyph`].
+fn icon_glyph<'a>(env: &'a KitEnv, name: &str) -> &'a str {
+    env.glyphs
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, g)| g.as_str())
+        .or_else(|| {
+            ALL_GLYPHS
+                .iter()
+                .find(|(n, _, _)| *n == name)
+                .map(|(_, u, a)| if env.ascii { *a } else { *u })
+        })
+        .unwrap_or("")
+}
+
 /// STATE's face, none at rest.
 fn state_face(state: State) -> Option<FaceId> {
     STATES.iter().find(|(s, _)| *s == state).map(|(_, f)| *f)
@@ -1668,7 +1687,7 @@ fn tab(
     pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
     if let Some(name) = icon {
         let at = b.pos();
-        let mark = glyph(env, name);
+        let mark = icon_glyph(env, name);
         match icon_image(name) {
             Some(id) => {
                 b.image(id, mark);
@@ -1870,6 +1889,7 @@ mod tests {
             scale: 1.0,
             tty: true,
             glyphs: &glyphs,
+            ascii: false,
             density: Density::Comfortable,
             icons: None,
         };
@@ -1880,6 +1900,7 @@ mod tests {
             scale: 1.0,
             tty: true,
             glyphs: &[],
+            ascii: false,
             density: Density::Comfortable,
             icons: None,
         };
@@ -1904,6 +1925,7 @@ mod tests {
                 scale: 1.75,
                 tty: false,
                 glyphs: &[],
+                ascii: false,
                 density: Density::Comfortable,
                 icons: None,
             },
@@ -1945,6 +1967,7 @@ mod tests {
             scale: 1.25,
             tty: false,
             glyphs: &[],
+            ascii: false,
             density: Density::Comfortable,
             icons,
         };
@@ -1974,6 +1997,7 @@ mod tests {
             scale,
             tty,
             glyphs: &[],
+            ascii: false,
             density: Density::Comfortable,
             icons: None,
         }
@@ -2065,6 +2089,7 @@ mod tests {
             scale: 1.0,
             tty: false,
             glyphs: &[],
+            ascii: false,
             density: Density::Comfortable,
             icons: None,
         };
@@ -2317,6 +2342,7 @@ mod tests {
                     scale: 1.0,
                     tty: false,
                     glyphs: &[],
+                    ascii: false,
                     density,
                     icons: None,
                 },
@@ -2342,6 +2368,7 @@ mod tests {
             scale,
             tty: false,
             glyphs: &[],
+            ascii: false,
             density: Density::Comfortable,
             icons: None,
         };

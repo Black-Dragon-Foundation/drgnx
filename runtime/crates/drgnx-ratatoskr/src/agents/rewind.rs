@@ -403,9 +403,14 @@ pub(crate) async fn fork_conversation(
     sid: Option<String>,
     role: Option<runstav::methods::matrix::Role>,
 ) -> Result<(Started, RestoreLevel), Error> {
+    let stages = crate::stages::Stages::new(
+        "history/fork conversation",
+        sid.as_deref().unwrap_or(t.sid.as_str()),
+    );
     let (src_profile, src_cwd, task) = source_of(hub, front, &t.sid).await?;
     let name = profile.unwrap_or(&src_profile).to_owned();
     front.refresh_settings().await;
+    stages.at("the source and the settings");
     let provider = |n: &str| session::find_profile(front, n).and_then(|p| p.provider());
     let same = provider(&name).is_some() && provider(&name) == provider(&src_profile);
     let steps = steps_of(front, &t.sid).await?;
@@ -433,10 +438,12 @@ pub(crate) async fn fork_conversation(
     };
     let ctx = (src_cwd.as_path(), task.as_deref());
     let told = first_text(point.level, &point, front, t, ctx, Some(first.clone())).await?;
+    stages.at("the steps, the cut and the first text");
     let p: StartParams =
         serde_json::from_value(serde_json::json!({"profile": name, "cwd": cwd, "role": role}))
             .map_err(|e| session::invalid("cwd", e.to_string()))?;
     let (started, landed) = session::open_with(hub, front, p, caller, None, sid, &attach).await?;
+    stages.at("the session opened (agent started, conversation forked)");
     let level = landed.unwrap_or(RestoreLevel::Summary);
     let text = if level == point.level {
         told.unwrap_or(first)
@@ -448,7 +455,9 @@ pub(crate) async fn fork_conversation(
         )
     };
     hub.prompt(&started.id, text, Origin::User)?;
+    stages.at("the message queued");
     link_fork(front, caller, &started.id, t, level).await;
+    stages.at("the fork's link written");
     Ok((started, level))
 }
 

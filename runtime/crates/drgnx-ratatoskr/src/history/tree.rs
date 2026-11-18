@@ -342,6 +342,8 @@ pub(crate) async fn fork_tree(
         })
         .await
         .map_err(|e| internal(format!("the source's step: {e}")))?;
+    let stages = crate::stages::Stages::new("history/fork tree", new_sid);
+    stages.at("the step and base read");
     let step = step.ok_or_else(|| {
         invalid(
             "seq",
@@ -399,6 +401,7 @@ pub(crate) async fn fork_tree(
         step.head.clone(),
         base_row.and_then(|b| b.base_commit),
     );
+    stages.at("the repository and its import");
     let base = crate::clock::blocking(move || {
         head.filter(|h| verifies(&r, h))
             .or_else(|| recorded.filter(|b| verifies(&r, b)))
@@ -419,11 +422,13 @@ pub(crate) async fn fork_tree(
             .map_err(|e| internal(e.to_string()))?,
     }
     .ok_or_else(|| invalid("seq", "not-revertible: the step has no checkpoint"))?;
+    stages.at("the base verified and the checkpoint found");
     let sid8: String = new_sid.chars().take(8).collect();
     let tree = git
         .task_worktree(&repo, &format!("fork-{sid8}"), new_sid, &base)
         .await
         .map_err(|e| internal(format!("the fork's tree: {}: {}", e.what, e.stderr)))?;
+    stages.at("the worktree added");
     let (path, src) = (tree.path.clone(), cwd.clone());
     let restored = crate::clock::blocking(move || {
         snapshot::restore_into(&root, &src, &path, &checkpoint, None, &[])
@@ -431,6 +436,7 @@ pub(crate) async fn fork_tree(
     .await
     .map_err(|e| internal(e.to_string()))?
     .map_err(|e| internal(format!("the checkpoint is not written into the fork: {e}")))?;
+    stages.at("the checkpoint restored");
     if !restored.skipped.is_empty() {
         tracing::info!(sid = new_sid, skipped = ?restored.skipped, "the fork's tree leaves paths out");
     }
@@ -441,6 +447,7 @@ pub(crate) async fn fork_tree(
             e.stderr
         );
     }
+    stages.at("the tree marked touched");
     Ok(tree)
 }
 

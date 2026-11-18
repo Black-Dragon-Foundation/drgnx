@@ -270,6 +270,7 @@
   "runners/audit": ["user"],
   "runners/bench": ["user"],
   "runners/check": ["user"],
+  "runners/feature": ["user"],
   "runners/keys": ["user"],
   "runners/keys-held": ["user"],
   "runners/list": ["user"],

@@ -19,10 +19,12 @@ fn expansions() -> Value {
         serde_json::from_str(&std::fs::read_to_string(fixture("cases.json")).unwrap()).unwrap();
     let mut out = Vec::new();
     for e in cases["envs"].as_array().unwrap() {
+        // an ASCII terminal's env sends the kit's glyphs in their ASCII form (`drgnx-view-env--kit-glyphs`)
         let ascii: Vec<(String, String)> = kit::GLYPHS
             .iter()
             .map(|(n, _, a)| ((*n).to_owned(), (*a).to_owned()))
             .collect();
+        let is_ascii = e["ascii"].as_bool().unwrap();
         let density =
             serde_json::from_value(e.get("density").cloned().unwrap_or(json!("comfortable")))
                 .unwrap();
@@ -30,11 +32,8 @@ fn expansions() -> Value {
             density,
             scale: e["scale"].as_f64().unwrap() as f32,
             tty: e["tty"].as_bool().unwrap(),
-            glyphs: if e["ascii"].as_bool().unwrap() {
-                &ascii
-            } else {
-                &[]
-            },
+            glyphs: if is_ascii { &ascii } else { &[] },
+            ascii: is_ascii,
             icons: None,
         };
         for c in cases["comps"].as_array().unwrap() {

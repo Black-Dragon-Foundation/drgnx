@@ -702,6 +702,10 @@ that have a face of their own, the one naming the most values; else the componen
                (mapconcat (lambda (n) (let ((g (alist-get n drgnx-ui--default-glyphs)))
                                         (format "    (%S, %S, %S)," (symbol-name n) (car g) (cdr g))))
                           names "\n")))
+     (format "/// The whole standard glyph table (`drgnx-ui--default-glyphs`): `(name, Unicode, ASCII)`. A tab's icon is looked\n/// up here when the env has no glyph of its name, as the Lisp kit's tab does; other components keep [`GLYPHS`].\npub const ALL_GLYPHS: [(&str, &str, &str); %d] = [\n%s\n];\n\n"
+             (length drgnx-ui--default-glyphs)
+             (mapconcat (lambda (g) (format "    (%S, %S, %S)," (symbol-name (car g)) (cadr g) (cddr g)))
+                        drgnx-ui--default-glyphs "\n"))
      "const DENSITIES: [&str; 3] = [\"compact\", \"comfortable\", \"roomy\"];\n\n"
      "/// The index of VARIANT's combination of AXES (each axis's DEFAULTS where VARIANT names none of its values),\n"
      "/// the last axis varying fastest, and the density's index.\n"

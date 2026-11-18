@@ -107,6 +107,19 @@ pub struct SetParams {
     pub island: Option<Bounded<String, 64>>,
 }
 
+/// `runners/feature`'s params: an opt-in container feature (`sandbox`, `udmabuf`, `render`, `kvm`) switched on or off
+/// for the jobs of one project on one runner. Only the user does this; a runner offers it to a job only while it is a
+/// `mine` runner.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureParams {
+    pub name: Id,
+    /// The project whose jobs get the feature (the job's project key).
+    pub project: Bounded<String, 128>,
+    pub feature: Bounded<String, 32>,
+    pub on: bool,
+}
+
 /// `runners/remove`'s params: `confirm` must be true.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -322,6 +335,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "runners/set", RunnersSet(SetParams) -> Runner,
             classes: [User], writes: true,
             doc: "a runner's trust, profile or accept changed",
+        ),
+        method!(
+            "runners/feature", RunnersFeature(FeatureParams) -> Runner,
+            classes: [User], writes: true,
+            doc: "a container feature (sandbox, udmabuf, render, kvm) allowed or not on a runner, for one project's jobs; offered only while the runner is mine",
         ),
         method!(
             "runners/unbench", RunnersUnbench(ByName) -> Runner,
