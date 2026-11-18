@@ -47,11 +47,16 @@ All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well und
 `ratatoskr graph import-records --root DIR [--only specs|plans|ledgers|decisions|deferred|build-board|board]
 [--dry-run]` (method `records/import`; `records/status` lists the files and their conflicted records). The importer
 finds `docs/specs/**/*.md`, `docs/plans/**/*.md` (ledgers end in `.ledger.md`), `docs/decisions/**/*.md`,
-`docs/adr/**/*.md`, `DEFERRED.md` and `BUILD-BOARD.md` under DIR; `board.org` only with `--only board`.
+`docs/adr/**/*.md`, `DEFERRED.md` and `BUILD-BOARD.md` under DIR; `board.org` only with `--only board`. A spec a
+plan's `**Spec:**` line names (`.md` or `.org`, anywhere) is read too, by its plain path (`a/../b` as `b`), unless the
+privacy deny-list refuses it: a file under `~/org` is read only when the user opted it in (`personal-notes-allow.json`).
 
 - **Backup first.** Before anything is imported, every file is copied to `<state>/hub/records-backup/<date>/` (a
-  second import on the same day gets `<date>-2`, never overwriting); the first adoption of a file also copies the graph
-  store there (`work.db`, `vacuum into`). A dry run reads and counts and writes nothing.
+  second import on the same day gets `<date>-2`, never overwriting); a file outside DIR (a spec a plan names elsewhere)
+  goes under `outside/<its absolute path>`. Every target is checked before the first copy: one outside the backup
+  folder, or equal to its source (by its text or through links), stops the import with an error and nothing is written.
+  The first adoption of a file also copies the graph store there (`work.db`, `vacuum into`). A dry run reads and counts
+  and writes nothing.
 - **The notice.** A file's first adoption sends `records-notice {root, files, backup}` (the editor shows it once) and
   then marks the file adopted (`kv` `records-adopted:PATH`); no file is rewritten before its mark (a sync says
   `Waiting`). Adoption itself writes no byte: an unchanged graph renders the file as it is.

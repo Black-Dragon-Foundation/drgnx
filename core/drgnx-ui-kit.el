@@ -76,7 +76,11 @@ that is not UTF-8: an icon's glyph says less than its picture.  The icon names t
      (bar-left "" . "[") (bar-full "█" . "#") (bar-empty "░" . "-") (bar-right "" . "]")
      (bar-1 "▏" . "") (bar-2 "▎" . "") (bar-3 "▍" . "") (bar-4 "▌" . "") (bar-5 "▋" . "") (bar-6 "▊" . "")
      (bar-7 "▉" . "")
-     (progress-0 "○" . "0") (progress-1 "◔" . "1") (progress-2 "◑" . "2") (progress-3 "◕" . "3") (progress-4 "●" . "4"))
+     (progress-0 "○" . "0") (progress-1 "◔" . "1") (progress-2 "◑" . "2") (progress-3 "◕" . "3") (progress-4 "●" . "4")
+     ;; the kit's range bars and time axis on a terminal: to p50, the late cap, the forecast alone, the now line, the
+     ;; thinking segment's letter
+     (range-light "▓" . "=") (range-late "▌" . "!") (range-forecast "┄" . ".") (axis-now "│" . "|")
+     (seg-think "·" . "."))
    drgnx-ui--icon-glyphs)
   "The standard glyph table: the default of `drgnx-face-glyphs', and where a name the option lacks is found.")
 
@@ -112,15 +116,22 @@ neither has it."
 (defface drgnx-status-needs-you '((t :inherit drgnx-status-attention)) "Something waits for you." :group 'drgnx)
 
 (defconst drgnx-ui--severities
-  '((ok ok drgnx-status-ok) (info info drgnx-status-info) (warn warn drgnx-status-warn)
-    (fail fail drgnx-status-fail) (needs-you waiting drgnx-status-needs-you))
-  "SEVERITY → (GLYPH-NAME FACE).")
+  '((ok done drgnx-status-ok) (info nil drgnx-status-info) (warn nil drgnx-status-warn)
+    (fail error drgnx-status-fail) (needs-you needs-you drgnx-status-needs-you))
+  "SEVERITY → (KIT-STATUS FACE): the kit's `status-dot' status whose glyph the severity draws, or nil (info and warn
+are not among the kit's five statuses: they draw its `needs-you' dot, a plain `●'), and the severity's own face.")
 
 (defun drgnx-ui-status (severity &optional text)
-  "The glyph for SEVERITY (ok, info, warn, fail or needs-you), then a space and TEXT when given, in its status face.
-An unknown SEVERITY is `info'."
-  (pcase-let ((`(,_ ,glyph ,face) (or (assq severity drgnx-ui--severities) (assq 'info drgnx-ui--severities))))
-    (propertize (if text (concat (drgnx-face-glyph glyph) " " text) (drgnx-face-glyph glyph)) 'face face)))
+  "The status dot of SEVERITY (ok, info, warn, fail or needs-you), then a space and TEXT when given, in the severity's
+status face.  The dot is the kit's `status-dot' (its glyph, its ASCII form on a terminal that is not UTF-8): a wrapper
+that keeps the severities the callers know.  An unknown SEVERITY is `info'."
+  (pcase-let ((`(,_ ,status ,face) (or (assq severity drgnx-ui--severities) (assq 'info drgnx-ui--severities))))
+    (let ((dot (car (split-string      ; the glyph alone: a terminal's expansion adds the status's word, the callers have their own
+                     (plist-get (drgnx-ui-kit-expand 'status-dot (list :c "status-dot" :status (symbol-name (or status 'needs-you)))
+                                                     1.0 (cond ((not (drgnx-ui-ascii-frame-p)) nil) (t 'ascii)))
+                                :text)
+                     " "))))
+      (propertize (if text (concat dot " " text) dot) 'face face))))
 
 ;;;; Buttons
 
@@ -938,6 +949,129 @@ px), then TEXT, formatted by the caller."
                                     :state (symbol-name state) :size (symbol-name size) :width (or width 0) :text text)
                        where frame))
 
+(defconst drgnx-ui-kit-range-bar-heights '(8 10 12)
+  "A range bar's height in logical px by density: compact, comfortable, roomy (the hub's `RANGE_BAR_HEIGHTS').")
+(defconst drgnx-ui-kit-range-min-span-px 2 "A span is never drawn under this many device px.")
+(defconst drgnx-ui-kit-range-tick-px 2 "A tick (the baseline, the target, the limit) is this many device px wide.")
+
+(defun drgnx-ui-kit--seg-face (kind)
+  "The kit face of segment KIND (a symbol), as the hub's `SegKind::face'."
+  (pcase kind
+    ('read 'drgnx-kit-range-bar-seg-read) ('search 'drgnx-kit-range-bar-seg-search)
+    ('web 'drgnx-kit-range-bar-seg-web) ('think 'drgnx-kit-range-bar-seg-think)
+    ('edit 'drgnx-kit-range-bar-seg-edit) ('test 'drgnx-kit-range-bar-seg-test) ('job 'drgnx-kit-range-bar-seg-job)
+    ((or 'wait-you 'wait-machine 'wait-permission) 'drgnx-kit-range-bar-seg-wait)
+    (_ 'drgnx-kit-range-bar-late)))
+
+(defun drgnx-ui-kit--seg-letter (kind)
+  "Segment KIND's letter on a terminal, nil for thinking (its glyph `seg-think'), as the hub's `SegKind::letter'."
+  (pcase kind ('read "R") ('search "S") ('web "W") ('think nil) ('edit "E") ('test "T") ('job "J") ('wait-you "Y")
+         ('wait-machine "M") ('wait-permission "P") (_ "!")))
+
+(defun drgnx-ui-kit--range-layers (variant seg from to spans state total)
+  "A range bar's layers, bottom first, as (FROM TO FACE) in device px of a bar TOTAL px wide (the hub's `range_layers'):
+VARIANT `schedule', `cost' or `segment' (of kind SEG), the axis FROM..TO, SPANS (the hub's `RangeSpans' plist) in STATE."
+  (let* ((width (max (- to from) 1e-300))
+         (at (lambda (x) (drgnx-ui-kit--round (* total (max 0.0 (min 1.0 (/ (- x from) width)))))))
+         (span (lambda (a z f)
+                 (let* ((a (funcall at a)) (z (min (max (funcall at z) (+ a drgnx-ui-kit-range-min-span-px))
+                                                   (max total drgnx-ui-kit-range-min-span-px))))
+                   (list (min a (max 0 (- z drgnx-ui-kit-range-min-span-px))) z f))))
+         (tick (lambda (x f)
+                 (let ((a (min (max 0 (- (funcall at x) (/ drgnx-ui-kit-range-tick-px 2)))
+                               (max 0 (- total drgnx-ui-kit-range-tick-px)))))
+                   (list a (+ a drgnx-ui-kit-range-tick-px) f))))
+         (late (memq state '(late slipped late-vs-target)))
+         (done-to (plist-get spans :done_to)) (p50 (plist-get spans :p50)) (p90 (plist-get spans :p90))
+         out)
+    (pcase variant
+      ('segment (push (funcall span from to (drgnx-ui-kit--seg-face seg)) out))
+      ('cost
+       (let ((p50 (or p50 from)))
+         (when p90 (push (funcall span p50 p90 'drgnx-kit-range-bar-tail) out))
+         (push (funcall span from p50 'drgnx-kit-range-bar) out)
+         (when (plist-get spans :limit) (push (funcall tick (plist-get spans :limit) 'drgnx-kit-range-bar-late) out))))
+      (_
+       (let* ((done (cond ((eq state 'waiting) 'drgnx-kit-range-bar-wait) (late 'drgnx-kit-range-bar-late)
+                          (t 'drgnx-kit-range-bar)))
+              (done-v (or done-to from)) (p50 (or p50 done-v)))
+         (when p90 (push (funcall span p50 p90 (if late 'drgnx-kit-range-bar-late 'drgnx-kit-range-bar-tail)) out))
+         (push (funcall span done-v p50 'drgnx-kit-range-bar-forecast) out)
+         (when done-to (push (funcall span from done-v done) out))
+         (when (plist-get spans :baseline) (push (funcall tick (plist-get spans :baseline) 'drgnx-kit-range-bar) out))
+         (when (plist-get spans :target)
+           (push (funcall tick (plist-get spans :target)
+                          (pcase state ('at-risk 'drgnx-kit-range-bar-wait) ('late-vs-target 'drgnx-kit-range-bar-late)
+                                 (_ 'drgnx-kit-range-bar)))
+                 out)))))
+    (nreverse out)))
+
+(defun drgnx-ui-kit--range-top (layers x)
+  "The face on top at device px X of LAYERS (bottom first), nil where nothing is drawn."
+  (let (face)
+    (dolist (l layers face)
+      (when (and (<= (nth 0 l) x) (< x (nth 1 l))) (setq face (nth 2 l))))))
+
+(defun drgnx-ui-kit--range-bar (props scale tty)
+  "The range bar of PROPS (:variant, :from, :to, :spans, :state, :label, :width, as the hub's `Comp::RangeBar') at
+SCALE or on a terminal (TTY): the spans as spaces of the parts' faces the editor draws as images, on a terminal a cell
+per 8 px (`█' `▓' `░', a forecast alone `┄', a segment its letter then `█') and a `▌' and the word late for a late bar;
+the label its `help-echo'.  As `drgnx-ui-kit--expand'."
+  (let* ((vp (plist-get props :variant))
+         (variant (cond ((null vp) 'schedule) ((stringp vp) (intern vp)) ((listp vp) 'segment) (t vp)))
+         (seg (and (eq variant 'segment) (if (listp vp) (intern (cadr vp)) (intern (or (plist-get props :segment) "read")))))
+         (from (float (plist-get props :from))) (to (float (plist-get props :to)))
+         (spans (plist-get props :spans))
+         (state (intern (or (plist-get props :state) "on-track")))
+         (label (or (plist-get props :label) ""))
+         (width (or (plist-get props :width) 0))
+         (late (memq state '(late slipped late-vs-target)))
+         (items nil))
+    (if tty
+        (let* ((cells (max 1 (drgnx-ui-kit--round (/ width (float drgnx-ui-kit-progress-cell-px)))))
+               (layers (drgnx-ui-kit--range-layers variant seg from to spans state (* cells drgnx-ui-kit-progress-cell-px)))
+               ;; the glyph is the part's role (done, forecast, tail), the colour the state's: a late tail is still a tail
+               (plain (drgnx-ui-kit--range-layers variant seg from to spans 'on-track (* cells drgnx-ui-kit-progress-cell-px))))
+          (dotimes (i cells)
+            (let* ((mid (+ (* i drgnx-ui-kit-progress-cell-px) (/ drgnx-ui-kit-progress-cell-px 2)))
+                   (top (drgnx-ui-kit--range-top layers mid))
+                   (role (drgnx-ui-kit--range-top plain mid))
+                   (text (cond ((null role) " ")
+                               ((and (eq variant 'segment) (= i 0))
+                                (or (drgnx-ui-kit--seg-letter seg) (drgnx-ui-kit--glyph 'seg-think tty)))
+                               ((eq variant 'segment) (drgnx-ui-kit--glyph 'bar-full tty))
+                               ((and (eq role 'drgnx-kit-range-bar-forecast) (eq state 'forecast))
+                                (drgnx-ui-kit--glyph 'range-forecast tty))
+                               ((eq role 'drgnx-kit-range-bar-forecast) (drgnx-ui-kit--glyph 'range-light tty))
+                               ((eq role 'drgnx-kit-range-bar-tail) (drgnx-ui-kit--glyph 'bar-empty tty))
+                               (t (drgnx-ui-kit--glyph 'bar-full tty)))))
+              (push (list :text text top) items)))
+          (when late
+            (push (list :text (drgnx-ui-kit--glyph 'range-late tty) 'drgnx-kit-range-bar-late) items)
+            (push (list :text " late" 'drgnx-kit-range-bar-late) items)))
+      (let* ((total (drgnx-px width nil scale))
+             (h (drgnx-px (nth (alist-get (or (bound-and-true-p drgnx-look-density) 'comfortable)
+                                          '((compact . 0) (comfortable . 1) (roomy . 2)))
+                               drgnx-ui-kit-range-bar-heights)
+                          nil scale))
+             (layers (drgnx-ui-kit--range-layers variant seg from to spans state total))
+             (cuts (sort (delete-dups (append (list 0 total) (mapcar #'car layers)
+                                              (mapcar (lambda (l) (min (nth 1 l) total)) layers)))
+                         #'<))
+             (parts nil))
+        (while (cdr cuts)
+          (let ((a (car cuts)) (z (cadr cuts)))
+            (when (and (> z a) (< a total))
+              (let ((f (drgnx-ui-kit--range-top layers a)))
+                (if (and parts (eq (cdar parts) f)) (setcar (car parts) (+ (caar parts) (- z a)))
+                  (push (cons (- z a) f) parts)))))
+          (setq cuts (cdr cuts)))
+        (dolist (part (nreverse parts))
+          (push (if (cdr part) (list :space (car part) h (cdr part)) (list :pad (car part) nil)) items))))
+    (setq items (nreverse items))
+    (pcase-let ((`(,str ,runs ,spaces ,n) (drgnx-ui-kit--assemble items)))
+      (list str runs (and (> n 0) (not (equal label "")) (list (list 0 n 'help-echo label))) spaces nil))))
+
 (defun drgnx-ui-kit--prop-symbol (value default)
   "VALUE (a name, or the symbol itself) as a symbol, DEFAULT when nil."
   (cond ((null value) default) ((symbolp value) value) (t (intern value))))
@@ -1101,6 +1235,7 @@ px, HEIGHT the row's line height in device px or nil (one text line)."
     ('agent-mark (drgnx-ui-kit--agent-mark props scale tty))
     ('progress (drgnx-ui-kit--progress props scale tty))
     ('meter (drgnx-ui-kit--meter props scale tty))
+    ('range-bar (drgnx-ui-kit--range-bar props scale tty))
     ('chip (drgnx-ui-kit--chip props scale tty))
     ('status-dot (drgnx-ui-kit--status-dot props scale tty))
     ('tab (drgnx-ui-kit--tab props scale tty))
@@ -1153,8 +1288,13 @@ above 0: a progress bar's) makes it that high."
   '(("drgnx-kit-progress-fill" . fill) ("drgnx-kit-progress" . fill) ("drgnx-kit-progress-meter-fill" . fill)
     ("drgnx-kit-progress-meter-near" . fill) ("drgnx-kit-progress-meter-reached" . fill)
     ("drgnx-kit-progress-meter-tick" . tick) ("drgnx-kit-progress-meter-tick-near" . tick)
-    ("drgnx-kit-progress-meter-span" . span) ("drgnx-kit-progress-meter-outline" . outline))
-  "The faces of a progress bar's or a meter's parts, by name, with the shape each draws.")
+    ("drgnx-kit-progress-meter-span" . span) ("drgnx-kit-progress-meter-outline" . outline)
+    ("drgnx-kit-range-bar" . fill) ("drgnx-kit-range-bar-forecast" . fill) ("drgnx-kit-range-bar-tail" . fill)
+    ("drgnx-kit-range-bar-late" . fill) ("drgnx-kit-range-bar-wait" . fill)
+    ("drgnx-kit-range-bar-seg-read" . fill) ("drgnx-kit-range-bar-seg-search" . fill) ("drgnx-kit-range-bar-seg-web" . fill)
+    ("drgnx-kit-range-bar-seg-think" . fill) ("drgnx-kit-range-bar-seg-edit" . fill) ("drgnx-kit-range-bar-seg-test" . fill)
+    ("drgnx-kit-range-bar-seg-job" . fill) ("drgnx-kit-range-bar-seg-wait" . fill))
+  "The faces of a progress bar's, a meter's or a range bar's parts, by name, with the shape each draws.")
 
 (defvar drgnx-ui-kit--bar-images (make-hash-table :test #'equal)
   "(WIDTH HEIGHT RADIUS START END SHAPE LINE) → a bar part's image.  Emptied at 256 entries (the widths a session's
@@ -1215,7 +1355,8 @@ stay spaces).  Called per hub row: loops, no closures."
           (let* ((sp (cdr part)) (pos (car sp)) (w (nth 1 sp)) (h (nth 2 sp))
                  (shape (pcase (car part)
                           ('tick (if hc 'tick-full 'tick)) ('span (if hc 'box 'fill)) (s s))))
-            (push (cons pos (drgnx-ui-kit-bar-image w h (min r (/ h 2)) (not (memql (1- pos) at))
+            ;; a tick (narrower than two radii) is square: a corner radius would clip its column
+            (push (cons pos (drgnx-ui-kit-bar-image w h (if (< w (* 2 r)) 0 (min r (/ h 2))) (not (memql (1- pos) at))
                                                     (not (memql (1+ pos) at)) shape line))
                   out)))))))
 

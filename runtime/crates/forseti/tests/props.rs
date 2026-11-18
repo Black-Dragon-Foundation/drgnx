@@ -82,6 +82,7 @@ fn machine(profile: Profile, avail: u64, now: u64) -> MachineState {
         features: vec![],
         reachable: true,
         others: vec![],
+        island: None,
     }
 }
 

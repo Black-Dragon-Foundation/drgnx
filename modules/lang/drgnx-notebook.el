@@ -58,7 +58,7 @@
   "A cell's run button." :group 'drgnx-notebook)
 (defface drgnx-notebook-tool '((t :inherit drgnx-control))
   "An icon of the selected cell's toolbar." :group 'drgnx-notebook)
-(defface drgnx-notebook-chip '((t :inherit drgnx-chip-quiet))
+(defface drgnx-notebook-chip '((t :inherit drgnx-kit-chip-neutral-soft))
   "A cell's type, and the kernel's state, in its header." :group 'drgnx-notebook)
 (defface drgnx-notebook-panel '((t :inherit default))
   "An output panel's fill: its foreground is the colour the panel is drawn in (a darker step than the card), at the
@@ -67,13 +67,13 @@ theme's own opacity; the theme sets it from the gap token." :group 'drgnx-notebo
   "The type of a cell header's chip: the mockup's 11 px under the row's 12." :group 'drgnx-notebook)
 (defface drgnx-notebook-output '((t :inherit (drgnx-code-small) :extend t))
   "A cell's output." :group 'drgnx-notebook)
-(defface drgnx-notebook-error '((t :inherit drgnx-chip-error :extend t))
+(defface drgnx-notebook-error '((t :inherit drgnx-kit-chip-error-soft :extend t))
   "A cell's error output." :group 'drgnx-notebook)
 (defface drgnx-notebook-stale '((t :inherit drgnx-text-subtle))
   "An output that came from the file, not from a run in this session." :group 'drgnx-notebook)
 (defface drgnx-notebook-cut '((t :inherit (drgnx-text-muted drgnx-selected-quiet) :extend t))
   "A view's cut row (`N lines above' and `below'): a quiet tint across the row." :group 'drgnx-notebook)
-(defface drgnx-notebook-error-row '((t :inherit drgnx-chip-error :extend t))
+(defface drgnx-notebook-error-row '((t :inherit drgnx-kit-chip-error-soft :extend t))
   "An error's rows in a view: the error tint across the row, never a solid block." :group 'drgnx-notebook)
 (defface drgnx-notebook-current-row '((t :inherit drgnx-row-selected :extend t))
   "The outline's row of the cell point is in: the selected row's look." :group 'drgnx-notebook)
@@ -339,7 +339,7 @@ the card's ring is its edge."
     (when (drgnx-notebook--cards-p) (add-face-text-property 0 (length s) '(:overline nil) nil s))
     s))
 
-(defconst drgnx-notebook--chip-faces '(("quiet" . drgnx-chip-quiet) ("accent" . drgnx-chip-accent))
+(defconst drgnx-notebook--chip-faces '(("quiet" . drgnx-kit-chip-neutral-soft) ("accent" . drgnx-kit-chip-accent-soft))
   "The hub's chip names of a head's parts, and the faces that draw them.")
 
 (defun drgnx-notebook--head-part (id part)
@@ -353,7 +353,7 @@ the run (or stop) button, or a chip of the part's text."
                       'mouse-face 'drgnx-hover 'help-echo (if stop "Stop the kernel's run" "Run this cell")))
       ;; the mockup's chip: the decor chip's box (rounded 4, 2 px above and below), the tint over it, one run
       (propertize (concat " " (plist-get part :text) " ")
-                  'face (list (or (cdr (assoc (plist-get part :chip) drgnx-notebook--chip-faces)) 'drgnx-chip-quiet)
+                  'face (list (or (cdr (assoc (plist-get part :chip) drgnx-notebook--chip-faces)) 'drgnx-kit-chip-neutral-soft)
                               'drgnx-chip 'drgnx-notebook-chip-type 'drgnx-notebook-head)))))
 
 (defun drgnx-notebook--toolbar (id)
@@ -1557,7 +1557,7 @@ THEN-RUN-ALL: run every code cell once it is up."
   (concat (propertize name 'face 'drgnx-text) "  " (propertize (or subtitle "") 'face 'drgnx-text-subtle)
           (when chip
             (concat (propertize " " 'display `(space :align-to (- right ,(+ 2 (string-width chip)))))
-                    (propertize (concat " " chip " ") 'face (if accent 'drgnx-chip-accent 'drgnx-chip-quiet))))))
+                    (propertize (concat " " chip " ") 'face (if accent 'drgnx-kit-chip-accent-soft 'drgnx-kit-chip-neutral-soft))))))
 
 (defun drgnx-notebook-view--notebook-name ()
   (if (buffer-live-p drgnx-notebook-view--notebook) (buffer-name drgnx-notebook-view--notebook) ""))

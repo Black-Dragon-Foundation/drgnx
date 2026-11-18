@@ -25,6 +25,7 @@
 (declare-function drgnx-perf-run "drgnx-perf-run")
 (declare-function drgnx-perf-ab-env "drgnx-perf-run")
 (declare-function drgnx-perf-ab "drgnx-perf-run")
+(declare-function drgnx-perf-check-island "drgnx-perf" (&optional island allowed)) ; loaded by drgnx-perf-run
 (declare-function drgnx-bench-run "drgnx-bench")
 (declare-function drgnx-look-scenes-run "drgnx-look-scenes")
 
@@ -2490,6 +2491,8 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
       ("test-bench" (require 'drgnx-bench) (let ((drgnx-ui-session-tier 'bench)) (drgnx-bench-run)))
       ("test-perf" (require 'drgnx-perf-run)
+       ;; a timing job off its island measures nothing (runners design §5.6)
+       (drgnx-perf-check-island)
        (let ((drgnx-ui-session-tier 'perf))
          (cond
           ((getenv "DRGNX_PERF_AB")

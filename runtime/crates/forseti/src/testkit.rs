@@ -80,6 +80,7 @@ pub(crate) fn machine(profile: Profile) -> MachineState {
         features: vec![],
         reachable: true,
         others: vec![],
+        island: None,
     }
 }
 

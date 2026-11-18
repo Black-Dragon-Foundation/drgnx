@@ -18643,6 +18643,14 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
             "type": "string"
           },
+          "JobLane": {
+            "description": "The lane a job runs in: `work` (the default) or `timing` (a measurement: on a runner's timing island, or with\n`whole_machine` the whole machine; never joined, never cached).",
+            "enum": [
+              "work",
+              "timing"
+            ],
+            "type": "string"
+          },
           "JobOs": {
             "description": "The OS a job needs: `linux` (the default; this machine and Linux runners) or `macos` (a Mac runner's host job: it\nwaits for one and never runs on this machine).",
             "enum": [
@@ -18754,6 +18762,17 @@
                 "type": "null"
               }
             ]
+          },
+          "lane": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JobLane"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The lane (default `work`): a `timing` job runs on its runner's timing island while no other timing job holds it\n(a machine without an island refuses it)."
           },
           "local_only": {
             "description": "The job runs on this machine only.",
@@ -18880,6 +18899,13 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "whole_machine": {
+            "description": "A `timing` job that takes the whole machine instead of the island: it needs a named `machine`, waits while P1–P2\nwork is pending, then drains the machine (no new work starts there) and starts once it is empty.",
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -37976,6 +38002,14 @@
               }
             ]
           },
+          "island": {
+            "description": "The timing island (`--island`): a CPU list of whole L3 groups (`0-5,12-17`) timing jobs run on; empty removes\nit. A change reconnects the runner, whose `serve` checks it against the machine's caches.",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "$ref": "#/$defs/Id"
           },
@@ -49104,5 +49138,5 @@
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 14
+  "schema": 15
 }

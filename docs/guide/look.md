@@ -45,7 +45,7 @@ setup.
 - **Problems at a line's end.** A diagnostic flymake shows after the line (`drgnx-face-inline-problems`) is a chip of
   its kind, opening with its icon (the glyph table's cross, triangle or info sign): the error, warning or note colour on
   its tint, in the caption size, as tall as the text, with Emacs's own Flymake and Flymake 1.4 alike. High contrast
-  rings it instead. The chips of the look come in six kinds: `drgnx-chip-quiet`, `-accent`, `-attention`, `-ok`,
+  rings it instead. The chips of the look come in six kinds: `drgnx-kit-chip-neutral-soft`, `-accent`, `-attention`, `-ok`,
   `-warn` and `-error`.
 
 ### Packages

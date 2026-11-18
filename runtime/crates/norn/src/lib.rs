@@ -21,6 +21,7 @@ pub mod migrate11;
 pub mod migrate12;
 pub mod migrate13;
 pub mod migrate14;
+pub mod migrate15;
 pub mod migrate7;
 pub mod migrate8;
 pub mod migrate9;

@@ -39,13 +39,8 @@
  drgnx-selected-secondary
  drgnx-focus
  drgnx-status-attention
- drgnx-chip-quiet
  drgnx-chip-attention
- drgnx-chip-accent
- drgnx-chip-ok
- drgnx-chip-warn
  drgnx-tint-warn
- drgnx-chip-error
  drgnx-control
  drgnx-control-primary
  drgnx-pill
@@ -166,6 +161,8 @@
  drgnx-fold-name
  drgnx-minimap-label
  drgnx-sticky
+ drgnx-sticky-line
+ drgnx-marks-pin
  drgnx-blame
  drgnx-debug-bisect-good
  drgnx-debug-bisect-bad
@@ -474,7 +471,7 @@
  drgnx-work-seg-wait
  drgnx-chip
  drgnx-badge
- drgnx-chip-solid
+ drgnx-kit-chip-accent-solid
  drgnx-button
  drgnx-button-hover
  drgnx-button-pressed
@@ -540,7 +537,6 @@
  drgnx-kit-chip-ok-soft
  drgnx-kit-chip-error-soft
  drgnx-kit-chip-neutral-solid
- drgnx-kit-chip-accent-solid
  drgnx-kit-chip-warn-solid
  drgnx-kit-chip-ok-solid
  drgnx-kit-chip-error-solid
@@ -549,6 +545,21 @@
  drgnx-kit-status-dot-needs-you
  drgnx-kit-status-dot-idle
  drgnx-kit-status-dot-error
+ drgnx-kit-range-bar
+ drgnx-kit-range-bar-forecast
+ drgnx-kit-range-bar-tail
+ drgnx-kit-range-bar-late
+ drgnx-kit-range-bar-wait
+ drgnx-kit-range-bar-seg-read
+ drgnx-kit-range-bar-seg-search
+ drgnx-kit-range-bar-seg-web
+ drgnx-kit-range-bar-seg-think
+ drgnx-kit-range-bar-seg-edit
+ drgnx-kit-range-bar-seg-test
+ drgnx-kit-range-bar-seg-job
+ drgnx-kit-range-bar-seg-wait
+ drgnx-kit-time-axis
+ drgnx-kit-time-axis-now
  drgnx-kit-tab
  drgnx-kit-tab-current
  drgnx-kit-tab-current-inactive

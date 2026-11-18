@@ -212,6 +212,41 @@
   (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :pad) '(7 . 7)))
   (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :radius) 4)))
 
+(ert-deftest drgnx-ui-kit/range-bar-states-carry-words ()
+  ;; a terminal has no colour to say a bar is late: the cap and the word do (ASCII `!' and the word)
+  (let ((drgnx-face-glyphs drgnx-ui--default-glyphs)
+        (props '(:c "range-bar" :variant "schedule" :from 0 :to 100 :width 80 :state "late"
+                    :spans (:done_to 30 :p50 50 :p90 100))))
+    (should (equal (plist-get (drgnx-ui-kit-expand 'range-bar props 1.0 t) :text) "███▓▓░░░░░▌ late"))
+    (should (equal (plist-get (drgnx-ui-kit-expand 'range-bar props 1.0 'ascii) :text) "###==-----! late"))
+    (should (equal (plist-get (drgnx-ui-kit-expand 'range-bar (plist-put (copy-sequence props) :state "on-track") 1.0 t)
+                              :text)
+                   "███▓▓░░░░░"))))
+
+(ert-deftest drgnx-ui-kit/segment-letters-in-hc-and-tty ()
+  (let ((drgnx-face-glyphs drgnx-ui--default-glyphs))
+    (dolist (c '(("wait-you" 32 "Y███") ("read" 32 "R███") ("stalled" 32 "!███") ("think" 16 "·█")))
+      (should (equal (plist-get (drgnx-ui-kit-expand 'range-bar
+                                                     (list :c "range-bar" :variant (list :segment (car c)) :from 0 :to 10
+                                                           :width (cadr c) :state "on-track")
+                                                     1.0 t)
+                                :text)
+                     (nth 2 c))))
+    ;; thinking's letter is a dot in ASCII
+    (should (equal (plist-get (drgnx-ui-kit-expand 'range-bar '(:c "range-bar" :variant (:segment "think") :from 0 :to 10
+                                                                   :width 16 :state "on-track")
+                                                   1.0 'ascii)
+                              :text)
+                   ".#"))))
+
+(ert-deftest drgnx-ui-kit/seg-faces-are-aliases ()
+  ;; the Timeline's segment faces inherit the kit's (kept until their callers move)
+  (dolist (pair '((drgnx-work-seg-read . drgnx-kit-range-bar-seg-read) (drgnx-work-seg-edit . drgnx-kit-range-bar-seg-edit)
+                  (drgnx-work-seg-tool . drgnx-kit-range-bar-seg-test) (drgnx-work-seg-think . drgnx-kit-range-bar-seg-think)
+                  (drgnx-work-seg-job . drgnx-kit-range-bar-seg-job) (drgnx-work-seg-wait . drgnx-kit-range-bar-seg-wait)))
+    (should (assq (car pair) (plist-get (drgnx-ui-kit-component 'range-bar) :replaces)))
+    (should (eq (cdr pair) (cdr (assq (car pair) (plist-get (drgnx-ui-kit-component 'range-bar) :replaces)))))))
+
 (ert-deftest drgnx-ui-kit/conformance ()
   ;; each case through `drgnx-ui-kit-expand' equals the hub's expansion of it, as expected.json holds it (the hub's at
   ;; the comfortable density, its default)
@@ -875,7 +910,21 @@ switch."
     (should (memq 'drgnx-kit-segmented (ensure-list (get-text-property (string-search "Board" s) 'face s)))))
   (let ((s (drgnx-ui-kit-tab "a.el" 'editor 'selected nil t 'tab-line)))
     (should (eq 'drgnx-kit-tab-current (get-text-property (string-search "a.el" s) 'face s)))
-    (should-not (memq 'bold (ensure-list (get-text-property (string-search "a.el" s) 'face s))))))
+    (should-not (memq 'bold (ensure-list (get-text-property (string-search "a.el" s) 'face s)))))
+  ;; a tool tile's tab row (its stack): the kit's panel tabs, the shown one selected and never bold
+  (require 'drgnx-grid)
+  (let ((w (selected-window)) (old (window-parameter (selected-window) 'drgnx-pane-stack)))
+    (unwind-protect
+        (progn
+          (set-window-parameter w 'drgnx-pane-stack '(kit-test-shown kit-test-other))
+          (let ((row (drgnx-grid--tab-row w))
+                (kit (lambda (title state) (let ((s (drgnx-ui-kit-tab title 'panel state nil nil 'tab-line)))
+                                             (get-text-property (string-search title s) 'face s)))))
+            (dolist (c '(("Kit-Test-Shown" selected) ("Kit-Test-Other" rest)))
+              (let ((face (get-text-property (string-search (car c) row) 'face row)))
+                (should (equal face (funcall kit (car c) (cadr c))))
+                (should-not (memq 'bold (ensure-list face)))))))
+      (set-window-parameter w 'drgnx-pane-stack old))))
 
 (provide 'ui-kit-test)
 ;;; ui-kit-test.el ends here

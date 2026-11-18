@@ -150,9 +150,9 @@ pub fn log_rows(entries: &[LogEntry], lost: u64) -> Vec<Row> {
             let mut b = RowBuilder::new(format!("e:{}:{k}", e.seq));
             if k == 0 {
                 let chip = if e.msg_type == "error" {
-                    FaceId::ChipError.name()
+                    FaceId::KitChipErrorSoft.name()
                 } else {
-                    FaceId::ChipQuiet.name()
+                    FaceId::KitChipNeutralSoft.name()
                 };
                 b.push(&ty, Some(chip)).push(
                     &" ".repeat(14usize.saturating_sub(ty.chars().count())),
@@ -222,7 +222,7 @@ fn kind_name(k: Kind) -> &'static str {
 }
 
 /// The outline's rows for CELLS, the first [`OUTLINE_ROWS`] of TOTAL: `INDEX  type  [n]  first line  state`, the index counted from 1,
-/// the type and the state chips (`drgnx-chip-*`). CURRENT is the cell the editor is in: its row carries the property
+/// the type and the state chips (`drgnx-kit-chip-*`). CURRENT is the cell the editor is in: its row carries the property
 /// `drgnx-notebook-current` and, under the other faces, the face `drgnx-notebook-current-row`.
 pub fn outline_rows(cells: &[OutlineCell], total: usize, current: Option<&str>) -> Vec<Row> {
     let width = total.to_string().len();
@@ -232,7 +232,7 @@ pub fn outline_rows(cells: &[OutlineCell], total: usize, current: Option<&str>) 
         let kind = kind_name(c.kind);
         b.push(&format!("{:>width$}", i + 1), Some("shadow"))
             .push("  ", None)
-            .push(kind, Some(FaceId::ChipQuiet.name()))
+            .push(kind, Some(FaceId::KitChipNeutralSoft.name()))
             .push(&" ".repeat(8 - kind.len()), None);
         let prompt = match (c.kind, c.state, c.execution_count) {
             (Kind::Code, "queued" | "running", _) => "[*]".to_string(),
@@ -252,10 +252,10 @@ pub fn outline_rows(cells: &[OutlineCell], total: usize, current: Option<&str>) 
             )
             .push(&c.first_line, None);
         let chip = match c.state {
-            "running" => Some(FaceId::ChipAccent.name()),
-            "queued" => Some(FaceId::ChipQuiet.name()),
-            "error" => Some(FaceId::ChipError.name()),
-            "aborted" | "cancelled" => Some(FaceId::ChipWarn.name()),
+            "running" => Some(FaceId::KitChipAccentSoft.name()),
+            "queued" => Some(FaceId::KitChipNeutralSoft.name()),
+            "error" => Some(FaceId::KitChipErrorSoft.name()),
+            "aborted" | "cancelled" => Some(FaceId::KitChipWarnSoft.name()),
             _ => None,
         };
         if let Some(face) = chip {
@@ -335,7 +335,7 @@ fn cut_row(
     let mut b = RowBuilder::new(key);
     b.push(&lead, None)
         .push("   ", None)
-        .push(keys, Some(FaceId::ChipQuiet.name()));
+        .push(keys, Some(FaceId::KitChipNeutralSoft.name()));
     if label_shown {
         b.push(&tail, Some("shadow"));
     }

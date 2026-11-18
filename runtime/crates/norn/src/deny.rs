@@ -466,10 +466,16 @@ pub fn paths_of(source: &Source, id: &str, data: &Value) -> Vec<PathBuf> {
             paths.push(path);
         }
     }
-    if let Some(path) = data.get("path").and_then(Value::as_str).map(PathBuf::from)
-        && !paths.contains(&path)
+    // `data.path`, and an imported record's file (`data.records.file`: a revoked opt-in excises what was read of it)
+    for path in [data.get("path"), data.pointer("/records/file")]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(PathBuf::from)
     {
-        paths.push(path);
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
     }
     paths
 }
@@ -1091,6 +1097,15 @@ mod tests {
         }
         // data.path that is not a string carries no path
         assert!(paths_of(&Source::Recorded, "task:x-1", &json!({"path": 3})).is_empty());
+        // an imported record's file (`paths-of-finds-a-records-file`)
+        assert_eq!(
+            paths_of(
+                &Source::Recorded,
+                "spec:rec-1-2",
+                &json!({"records": {"file": "/w/org/reading.org", "kind": "specs"}})
+            ),
+            vec![PathBuf::from("/w/org/reading.org")]
+        );
     }
 
     #[test]

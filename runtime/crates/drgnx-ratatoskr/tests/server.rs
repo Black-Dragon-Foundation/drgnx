@@ -589,6 +589,124 @@ fn a_second_sigterm_during_the_store_wait_abandons_it() {
     );
 }
 
+/// `ratatoskr stop`/`ensure` in ROOT's environment, with ARGS.
+#[cfg(feature = "test-hooks")]
+fn cli(root: &Root, args: &[&str]) -> std::process::Output {
+    Command::new(BIN)
+        .args(args)
+        .env_clear()
+        .envs(root.vars())
+        .output()
+        .unwrap()
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn stop_answers_when_the_hub_stopped_serving_and_its_store_finishes_under_the_lock() {
+    // a hub that ignores `shutdown` (so stop's SIGTERM) with runtime.db's thread held at its end and a write queued
+    // behind it (`--test-hold-store`): `stop` answers within its 2 s once the hub serves no more and has marked its lock
+    // stopping; the hub still writes, under the lock, and `ensure` meanwhile starts no second hub on its store;
+    // released, the queued write is written and the hub ends 0, nothing abandoned
+    let root = Root::new();
+    let socket = root.socket();
+    let lock = paths::lock_path(&socket);
+    let mut hub = Hub::start_with(&root, 1, &["--test-ignore-shutdown", "--test-hold-store"]);
+    hub.wait_ready(&socket);
+    let out = cli(&root, &["stop", "--timeout", "2"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!(
+            "stopped Ratatoskr (pid {}, by SIGTERM)",
+            hub.pid()
+        )),
+        "{out:?}"
+    );
+    assert!(!socket.exists() && !ping(&socket), "nothing serves");
+    assert!(
+        hub.exited().is_none(),
+        "the hub ended with a write still queued: {}",
+        hub.stderr_text()
+    );
+    // the hold is in place (its SIGUSR1 handler too) once the hub says the thread is still stopping
+    let logs = |root: &Root| -> String {
+        std::fs::read_dir(root.log_dir())
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect()
+    };
+    skuld::wait_until(
+        "the hub says runtime.db's thread is still stopping",
+        FAILED_AFTER.as_secs(),
+        || {
+            logs(&root)
+                .contains("runtime.db's thread is still stopping")
+                .then_some(())
+        },
+    );
+    let text = std::fs::read_to_string(&lock).unwrap();
+    assert!(
+        text.starts_with(&format!("{} ", hub.pid())) && text.trim_end().ends_with(" stopping"),
+        "the lock says the hub is stopping: {text:?}"
+    );
+    let out = cli(&root, &["ensure", "--timeout", "1"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains(&format!("a hub is ending here (pid {})", hub.pid())),
+        "{out:?}"
+    );
+    assert!(!ping(&socket), "no second hub started");
+    assert_eq!(
+        std::fs::read_to_string(&lock).unwrap(),
+        text,
+        "the lock is still the ending hub's"
+    );
+    unsafe { libc::kill(hub.pid() as i32, libc::SIGUSR1) };
+    assert_eq!(hub.wait_exit().code(), Some(0), "{}", hub.stderr_text());
+    let logs = logs(&root);
+    let closed = logs
+        .find("stopping: the connections closed")
+        .expect("the stages are logged");
+    let ended = logs
+        .find("stopping: the store's threads ended")
+        .expect("the stages are logged");
+    assert!(closed < ended, "{logs}");
+    assert!(!logs.contains("abandoned"), "nothing was abandoned: {logs}");
+    let db = urdr::open_readonly(&root.dir.path().join("s/drgnx/hub/runtime.db")).unwrap();
+    assert_eq!(
+        urdr::meta(&db, "test-hold-store").unwrap().as_deref(),
+        Some("written"),
+        "the write queued behind the held job: {logs}"
+    );
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_stopping_hub_that_is_killed_leaves_ensure_nothing_to_wait_for() {
+    // the stopping hub of the row above dies (SIGKILL) while its store is held: its lock went with it, so `ensure`
+    // starts a hub within its usual budget instead of waiting for a mark nobody holds
+    let root = Root::new();
+    let socket = root.socket();
+    let mut hub = Hub::start_with(&root, 1, &["--test-ignore-shutdown", "--test-hold-store"]);
+    hub.wait_ready(&socket);
+    let out = cli(&root, &["stop", "--timeout", "2"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
+    unsafe { libc::kill(hub.pid() as i32, libc::SIGKILL) };
+    hub.wait_exit();
+    assert!(
+        std::fs::read_to_string(paths::lock_path(&socket))
+            .unwrap()
+            .trim_end()
+            .ends_with(" stopping"),
+        "the dead hub's file still says stopping"
+    );
+    let out = cli(&root, &["ensure", "--timeout", "5"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(ping(&socket), "a hub serves again");
+    let out = cli(&root, &["stop", "--timeout", "10"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
+
 /// The image PID runs: `/proc/PID/exe` on Linux; macOS has no `/proc`, so `proc_pidpath`.
 #[cfg(target_os = "linux")]
 fn image_of(pid: u32) -> std::path::PathBuf {

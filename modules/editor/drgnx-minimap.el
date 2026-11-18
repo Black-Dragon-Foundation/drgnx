@@ -19,12 +19,15 @@
 ;; at each parse (`nidhogg-treesit-highlight-query'), the classes' colours are the standard faces'.
 
 ;;; Code:
+(require 'cl-lib)
 (require 'seq)
 (require 'drgnx-modules)
 (require 'drgnx-ruler)
 (require 'drgnx-marks)
 (require 'drgnx-registry)
 (require 'drgnx-setting)
+
+(declare-function drgnx-sticky-pin-names "drgnx-sticky" (&optional buffer))
 
 (defvar drgnx-look-density-changed-hook)
 (defvar drgnx-hub--events)
@@ -155,7 +158,12 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
           (list :labels (if (eq drgnx-minimap-labels 'marks-only) 'marks-only t)
                 :label 'default :sub 'drgnx-text-muted :accent 'drgnx-accent :mark 'warning
                 :label-face 'drgnx-minimap-label))
-     (and file (list :file file)))))
+     (and file (list :file file))
+     ;; pinned regions (X5): the bands are the line model's `pin' marks (they move with edits in C); the spec names
+     ;; them in buffer order
+     (let ((names (and (fboundp 'drgnx-sticky-pin-names) (drgnx-sticky-pin-names (window-buffer window)))))
+       (and names (list :pin-kind (cl-position 'pin drgnx-ruler-kinds) :pin 'drgnx-marks-pin
+                        :pin-names (vconcat names)))))))
 
 (defun drgnx-minimap--hub-p ()
   "Non-nil when the hub's subscribed connection is up (the labels come there)."

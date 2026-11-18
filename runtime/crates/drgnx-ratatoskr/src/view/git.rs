@@ -525,12 +525,18 @@ fn read_and_publish(
 pub(crate) enum Heard {
     Changed,
     Stop,
+    /// Git took (true) or let go of (false) the lock file at this path.
+    Lock(PathBuf, bool),
 }
 
 /// A burst of changes is read once it is quiet this long...
 const SETTLE: Duration = Duration::from_millis(50);
 /// ...or this long after its first change (a `git commit` writes the index, the ref and the log in turn).
 const SETTLE_MAX: Duration = Duration::from_millis(250);
+/// While git holds a lock it took, its command isn't done (a commit's ref fsync can stall it past `SETTLE_MAX` under
+/// IO load): the burst goes on until it lets go, and is read anyway this long after its first change (a lock left by
+/// a git that died, or a commit waiting for its message in an editor).
+const HELD_MAX: Duration = Duration::from_secs(2);
 
 /// The gitdir and the common dir of the repository at ROOT: `.git` itself, or for a linked worktree the folder its
 /// `.git` file names and that folder's `commondir`; none outside a repository's top.
@@ -549,7 +555,8 @@ pub(crate) fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
 
 /// Watch the repository at ROOT for changes git makes (its gitdir's files: index, HEAD, packed-refs; the common
 /// dir's refs, for a branch moved from anywhere) and call READ once after each burst settles (`SETTLE`, at most
-/// `SETTLE_MAX`); a lock file's events and reads are not changes. TX is the watcher's sending end, RX hears it,
+/// `SETTLE_MAX`, or once git lets go of the locks it took: at most `HELD_MAX`); a lock file's events and reads are not
+/// changes. TX is the watcher's sending end, RX hears it,
 /// pokes (`Letters::poke`) and `Heard::Stop`. Ends on `Heard::Stop`, a closed channel, or READ answering false; the
 /// watcher goes with it. Nothing is watched outside a repository's top (the pokes still read).
 pub(crate) fn watch_repo(
@@ -559,14 +566,25 @@ pub(crate) fn watch_repo(
     read: &mut dyn FnMut() -> bool,
 ) {
     use notify::event::EventKind;
+    use notify::event::{ModifyKind, RenameMode};
     use notify::{RecursiveMode, Watcher};
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(ev) = &res {
-            let locks = !ev.paths.is_empty()
-                && ev
-                    .paths
-                    .iter()
-                    .all(|p| p.extension().is_some_and(|e| e == "lock"));
+            let is_lock = |p: &PathBuf| p.extension().is_some_and(|e| e == "lock");
+            // git takes a lock by creating it, and lets go by renaming it into place or removing it
+            let held = match ev.kind {
+                EventKind::Create(_) => Some(true),
+                EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+                    Some(false)
+                }
+                _ => None,
+            };
+            if let Some(held) = held {
+                for p in ev.paths.iter().filter(|p| is_lock(p)) {
+                    let _ = tx.send(Heard::Lock(p.clone(), held));
+                }
+            }
+            let locks = !ev.paths.is_empty() && ev.paths.iter().all(is_lock);
             if matches!(ev.kind, EventKind::Access(_)) || locks {
                 return;
             }
@@ -581,24 +599,52 @@ pub(crate) fn watch_repo(
         }
         let _ = w.watch(&common.join("refs"), RecursiveMode::Recursive);
     }
+    // the locks git holds now, as its events said (one inotify queue: in the order git took and let go of them)
+    let mut held: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    let note = |held: &mut std::collections::BTreeSet<PathBuf>, p: PathBuf, on: bool| {
+        if on {
+            held.insert(p);
+        } else {
+            held.remove(&p);
+        }
+    };
     loop {
         match rx.recv() {
             Ok(Heard::Changed) => {}
+            Ok(Heard::Lock(p, on)) => {
+                note(&mut held, p, on);
+                continue;
+            }
             Ok(Heard::Stop) | Err(_) => return,
         }
         // the watcher's thread waits for the file system, outside the hub: real time, whatever clock the hub runs on
-        let end = crate::clock::real_now() + SETTLE_MAX;
+        let first = crate::clock::real_now();
+        let mut end = first + SETTLE_MAX;
         loop {
-            let left = end.saturating_duration_since(crate::clock::real_now());
+            let now = crate::clock::real_now();
+            let until = if held.is_empty() {
+                end
+            } else {
+                first + HELD_MAX
+            };
+            let left = until.saturating_duration_since(now);
             if left.is_zero() {
                 break;
             }
             match rx.recv_timeout(SETTLE.min(left)) {
                 Ok(Heard::Changed) => {}
+                Ok(Heard::Lock(p, on)) => {
+                    note(&mut held, p, on);
+                    // what git writes after letting go is the same command's: quiet again before reading
+                    end = end.max(crate::clock::real_now() + SETTLE);
+                }
                 Ok(Heard::Stop) | Err(RecvTimeoutError::Disconnected) => return,
-                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Timeout) if held.is_empty() => break,
+                Err(RecvTimeoutError::Timeout) => {}
             }
         }
+        // a lock git still holds past HELD_MAX is no longer counted: its own release (if any) is a change again
+        held.clear();
         if !read() {
             return;
         }

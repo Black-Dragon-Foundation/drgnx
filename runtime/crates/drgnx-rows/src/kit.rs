@@ -280,6 +280,60 @@ impl CardShape {
     }
 }
 
+/// A segment's kind in a range bar (a lane of the Timeline): its colour and its letter on a terminal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SegKind {
+    #[default]
+    Read,
+    Search,
+    Web,
+    Think,
+    Edit,
+    Test,
+    Job,
+    WaitYou,
+    WaitMachine,
+    WaitPermission,
+    Stalled,
+}
+
+impl SegKind {
+    /// Its kit face.
+    fn face(self) -> FaceId {
+        match self {
+            SegKind::Read => FaceId::KitRangeBarSegRead,
+            SegKind::Search => FaceId::KitRangeBarSegSearch,
+            SegKind::Web => FaceId::KitRangeBarSegWeb,
+            SegKind::Think => FaceId::KitRangeBarSegThink,
+            SegKind::Edit => FaceId::KitRangeBarSegEdit,
+            SegKind::Test => FaceId::KitRangeBarSegTest,
+            SegKind::Job => FaceId::KitRangeBarSegJob,
+            SegKind::WaitYou | SegKind::WaitMachine | SegKind::WaitPermission => {
+                FaceId::KitRangeBarSegWait
+            }
+            SegKind::Stalled => FaceId::KitRangeBarLate,
+        }
+    }
+
+    /// Its letter on a terminal (thinking is the glyph `seg-think`: `·`, ASCII `.`).
+    fn letter(self) -> Option<char> {
+        match self {
+            SegKind::Read => Some('R'),
+            SegKind::Search => Some('S'),
+            SegKind::Web => Some('W'),
+            SegKind::Think => None,
+            SegKind::Edit => Some('E'),
+            SegKind::Test => Some('T'),
+            SegKind::Job => Some('J'),
+            SegKind::WaitYou => Some('Y'),
+            SegKind::WaitMachine => Some('M'),
+            SegKind::WaitPermission => Some('P'),
+            SegKind::Stalled => Some('!'),
+        }
+    }
+}
+
 /// A tab's size: an editor's tab row (34 px) or a panel's (30 px).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -298,6 +352,370 @@ impl TabSize {
     }
 }
 
+/// What a range bar shows: a scheduled span (`schedule`), spend against a limit (`cost`) or one span of a kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RangeVariant {
+    #[default]
+    Schedule,
+    Cost,
+    Segment(SegKind),
+}
+
+/// A range bar's state, which the hub decides; it picks the parts' colours and the terminal's word.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RangeState {
+    #[default]
+    OnTrack,
+    Behind,
+    Late,
+    Waiting,
+    Slipped,
+    Done,
+    Forecast,
+    OnTarget,
+    AtRisk,
+    LateVsTarget,
+}
+
+/// The values of a range bar's spans on the axis's scale (`from`..`to`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
+pub struct RangeSpans {
+    #[serde(default)]
+    pub done_to: Option<f64>,
+    #[serde(default)]
+    pub p50: Option<f64>,
+    #[serde(default)]
+    pub p90: Option<f64>,
+    #[serde(default)]
+    pub baseline: Option<f64>,
+    #[serde(default)]
+    pub target: Option<f64>,
+    #[serde(default)]
+    pub limit: Option<f64>,
+}
+
+/// A zone as its offset from UTC in minutes (east positive).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct Zone(pub i32);
+
+/// How much a time axis shows: what its labels are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AxisLevel {
+    TenMin,
+    #[default]
+    Hour,
+    FourHours,
+    Day,
+    Week,
+}
+
+/// A range bar's height in logical px by density: compact, comfortable, roomy.
+const RANGE_BAR_HEIGHTS: [u16; 3] = [8, 10, 12];
+/// A span is never drawn under this many device px.
+const MIN_SPAN_PX: u32 = 2;
+/// A tick (the baseline, the target, the limit) is this many device px wide.
+const TICK_PX: u32 = 2;
+
+/// A range bar's layers, bottom first: (FROM, TO, FACE) in device px of a bar TOTAL px wide, the top layer at each px
+/// the one drawn.
+fn range_layers(
+    variant: RangeVariant,
+    from: f64,
+    to: f64,
+    spans: &RangeSpans,
+    state: RangeState,
+    total: u32,
+) -> Vec<(u32, u32, FaceId)> {
+    let width = (to - from).max(f64::MIN_POSITIVE);
+    let at = |x: f64| round_half_up(f64::from(total) * ((x - from) / width).clamp(0.0, 1.0));
+    let span = |a: f64, z: f64, f: FaceId| {
+        let a = at(a);
+        let z = at(z).max(a + MIN_SPAN_PX).min(total.max(MIN_SPAN_PX));
+        (a.min(z.saturating_sub(MIN_SPAN_PX)), z, f)
+    };
+    let tick = |x: f64, f: FaceId| {
+        let c = at(x);
+        let a = c
+            .saturating_sub(TICK_PX / 2)
+            .min(total.saturating_sub(TICK_PX));
+        (a, a + TICK_PX, f)
+    };
+    let late = matches!(
+        state,
+        RangeState::Late | RangeState::Slipped | RangeState::LateVsTarget
+    );
+    let mut out = Vec::new();
+    match variant {
+        RangeVariant::Segment(k) => out.push(span(from, to, k.face())),
+        RangeVariant::Cost => {
+            let p50 = spans.p50.unwrap_or(from);
+            if let Some(p90) = spans.p90 {
+                out.push(span(p50, p90, FaceId::KitRangeBarTail));
+            }
+            out.push(span(from, p50, FaceId::KitRangeBar));
+            if let Some(l) = spans.limit {
+                out.push(tick(l, FaceId::KitRangeBarLate));
+            }
+        }
+        RangeVariant::Schedule => {
+            let done = if state == RangeState::Waiting {
+                FaceId::KitRangeBarWait
+            } else if late {
+                FaceId::KitRangeBarLate
+            } else {
+                FaceId::KitRangeBar
+            };
+            let done_to = spans.done_to.unwrap_or(from);
+            let p50 = spans.p50.unwrap_or(done_to);
+            if let Some(p90) = spans.p90 {
+                let tail = if late {
+                    FaceId::KitRangeBarLate
+                } else {
+                    FaceId::KitRangeBarTail
+                };
+                out.push(span(p50, p90, tail));
+            }
+            out.push(span(done_to, p50, FaceId::KitRangeBarForecast));
+            if spans.done_to.is_some() {
+                out.push(span(from, done_to, done));
+            }
+            if let Some(b) = spans.baseline {
+                out.push(tick(b, FaceId::KitRangeBar));
+            }
+            if let Some(t) = spans.target {
+                let f = match state {
+                    RangeState::AtRisk => FaceId::KitRangeBarWait,
+                    RangeState::LateVsTarget => FaceId::KitRangeBarLate,
+                    _ => FaceId::KitRangeBar,
+                };
+                out.push(tick(t, f));
+            }
+        }
+    }
+    out
+}
+
+/// The face on top at device px X of LAYERS (bottom first), none where nothing is drawn.
+fn range_top(layers: &[(u32, u32, FaceId)], x: u32) -> Option<FaceId> {
+    layers
+        .iter()
+        .rev()
+        .find(|(a, z, _)| *a <= x && x < *z)
+        .map(|l| l.2)
+}
+
+/// A range bar onto B (`drgnx-ui-kit--range-bar`): its spans as spaces of the parts' faces (the editor draws each as
+/// an image in the face's colour), the row's gaps between them plain; on a terminal a cell per 8 px (`█` to p50 done,
+/// `▓` to p50, `░` the tail, `┄` a forecast alone, a segment its letter then `█`) and for a late bar a `▌` and the word
+/// late; the hub's LABEL as its `help-echo`.
+#[allow(clippy::too_many_arguments)]
+fn range_bar(
+    b: &mut RowBuilder,
+    env: &KitEnv,
+    variant: RangeVariant,
+    from: f64,
+    to: f64,
+    spans: &RangeSpans,
+    state: RangeState,
+    label: &str,
+    width: u16,
+) {
+    let start = b.pos();
+    if env.tty {
+        let cells = round_half_up(f64::from(width) / f64::from(u32::from(BAR_CELL_PX))).max(1);
+        let layers = range_layers(
+            variant,
+            from,
+            to,
+            spans,
+            state,
+            cells * u32::from(BAR_CELL_PX),
+        );
+        // the glyph is the part's role (done, forecast, tail), the colour the state's: a late tail is still a tail
+        let plain = range_layers(
+            variant,
+            from,
+            to,
+            spans,
+            RangeState::OnTrack,
+            cells * u32::from(BAR_CELL_PX),
+        );
+        for i in 0..cells {
+            let mid = i * u32::from(BAR_CELL_PX) + u32::from(BAR_CELL_PX) / 2;
+            let top = range_top(&layers, mid);
+            let face = top.map(FaceId::name);
+            let role = range_top(&plain, mid);
+            let text = match (role, variant) {
+                (None, _) => " ".to_owned(),
+                (Some(_), RangeVariant::Segment(k)) if i == 0 => match k.letter() {
+                    Some(c) => c.to_string(),
+                    None => glyph(env, "seg-think").to_owned(),
+                },
+                (Some(_), RangeVariant::Segment(_)) => glyph(env, "bar-full").to_owned(),
+                (Some(FaceId::KitRangeBarForecast), _) if state == RangeState::Forecast => {
+                    glyph(env, "range-forecast").to_owned()
+                }
+                (Some(FaceId::KitRangeBarForecast), _) => glyph(env, "range-light").to_owned(),
+                (Some(FaceId::KitRangeBarTail), _) => glyph(env, "bar-empty").to_owned(),
+                (Some(_), _) => glyph(env, "bar-full").to_owned(),
+            };
+            b.push(&text, face);
+        }
+        if matches!(
+            state,
+            RangeState::Late | RangeState::Slipped | RangeState::LateVsTarget
+        ) {
+            b.push(
+                glyph(env, "range-late"),
+                Some(FaceId::KitRangeBarLate.name()),
+            );
+            b.push(" late", Some(FaceId::KitRangeBarLate.name()));
+        }
+    } else {
+        let total = px(width, env.scale);
+        let h = px(RANGE_BAR_HEIGHTS[env.density as usize], env.scale);
+        let layers = range_layers(variant, from, to, spans, state, total);
+        let mut cuts: Vec<u32> = vec![0, total];
+        for (a, z, _) in &layers {
+            cuts.push(*a);
+            cuts.push((*z).min(total));
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut parts: Vec<(u32, Option<FaceId>)> = Vec::new();
+        for w in cuts.windows(2) {
+            let (a, z) = (w[0], w[1]);
+            if z <= a || a >= total {
+                continue;
+            }
+            let f = range_top(&layers, a);
+            match parts.last_mut() {
+                Some((n, g)) if *g == f => *n += z - a,
+                _ => parts.push((z - a, f)),
+            }
+        }
+        for (n, f) in parts {
+            match f {
+                Some(f) => b.space(n, h, f.name()),
+                None => b.pad(n, None),
+            };
+        }
+    }
+    let end = b.pos();
+    if end > start && !label.is_empty() {
+        b.prop(start, end, "help-echo", Value::String(label.to_owned()));
+    }
+}
+
+/// The civil date of DAYS since 1970-01-01: (year, month 1-12, day 1-31).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    (y, m, d)
+}
+
+/// A tick's label at T (seconds since the epoch) in ZONE at LEVEL: `HH:MM` for the hour levels, the weekday for a day,
+/// the month and day for a week.
+fn axis_label(t: f64, zone: Zone, level: AxisLevel) -> String {
+    let local = t.floor() as i64 + i64::from(zone.0) * 60;
+    let days = local.div_euclid(86_400);
+    let secs = local.rem_euclid(86_400);
+    match level {
+        AxisLevel::TenMin | AxisLevel::Hour | AxisLevel::FourHours => {
+            format!("{:02}:{:02}", secs / 3600, secs % 3600 / 60)
+        }
+        AxisLevel::Day => ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"]
+            [days.rem_euclid(7) as usize]
+            .to_owned(),
+        AxisLevel::Week => {
+            let (_, m, d) = civil_from_days(days);
+            let name = [
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            ][m as usize - 1];
+            format!("{name} {d}")
+        }
+    }
+}
+
+/// A time axis onto B: the ticks every STEP from FROM to TO with their labels, each label at its tick's pixel (a stop;
+/// on a terminal its cell), and NOW as a marker in the now face.
+#[allow(clippy::too_many_arguments)]
+fn time_axis(
+    b: &mut RowBuilder,
+    env: &KitEnv,
+    from: f64,
+    to: f64,
+    step: f64,
+    zone: Zone,
+    now: Option<f64>,
+    level: AxisLevel,
+    width: u16,
+) {
+    let face = FaceId::KitTimeAxis.name();
+    let now_face = FaceId::KitTimeAxisNow.name();
+    let span = (to - from).max(f64::MIN_POSITIVE);
+    let mut marks: Vec<(f64, String, &str)> = Vec::new();
+    if step > 0.0 {
+        let mut t = (from / step).ceil() * step;
+        while t <= to + 1e-9 {
+            marks.push((t, axis_label(t, zone, level), face));
+            t += step;
+        }
+    }
+    if let Some(n) = now.filter(|n| *n >= from && *n <= to) {
+        marks.push((n, glyph(env, "axis-now").to_owned(), now_face));
+    }
+    marks.sort_by(|a, c| a.0.total_cmp(&c.0));
+    if env.tty {
+        let cells = round_half_up(f64::from(width) / f64::from(BAR_CELL_PX)).max(1) as usize;
+        let mut line: Vec<char> = vec![' '; cells];
+        let mut now_at = None;
+        for (t, text, f) in &marks {
+            let col =
+                round_half_up(cells as f64 * ((t - from) / span)).min(cells as u32 - 1) as usize;
+            if *f == now_face {
+                now_at = Some(col);
+                continue;
+            }
+            if text.chars().count() + col <= cells {
+                for (i, c) in text.chars().enumerate() {
+                    line[col + i] = c;
+                }
+            }
+        }
+        match now_at {
+            Some(col) => {
+                let before: String = line[..col].iter().collect();
+                let after: String = line[col + 1..].iter().collect();
+                b.push(&before, Some(face));
+                b.push(glyph(env, "axis-now"), Some(now_face));
+                b.push(&after, Some(face));
+            }
+            None => {
+                let text: String = line.iter().collect();
+                b.push(&text, Some(face));
+            }
+        }
+    } else {
+        let total = px(width, env.scale);
+        for (t, text, f) in &marks {
+            let x = round_half_up(f64::from(total) * ((t - from) / span));
+            b.stop(x);
+            b.push(text, Some(f));
+        }
+    }
+}
 /// A tab's icon size in logical px (window-dark.html's `.tab`: 14, as the chrome draws them).
 pub const TAB_ICON_PX: u16 = 14;
 /// The room each side of a tab's close mark in its 18 px slot, logical px.
@@ -420,6 +838,45 @@ pub enum Comp {
         #[serde(default)]
         kind: ProgressKind,
         value: f64,
+        #[serde(default)]
+        width: u16,
+    },
+    /// A range bar WIDTH logical px wide: the spans of SPANS on the axis FROM to TO, in STATE; LABEL is its
+    /// `help-echo` (the hub writes it).
+    RangeBar {
+        #[serde(default)]
+        variant: RangeVariant,
+        from: f64,
+        to: f64,
+        #[serde(default)]
+        spans: RangeSpans,
+        #[serde(default)]
+        state: RangeState,
+        #[serde(default)]
+        label: String,
+        #[serde(default)]
+        width: u16,
+    },
+    /// A time axis WIDTH logical px wide: ticks every STEP between FROM and TO labelled in ZONE at LEVEL, a marker at
+    /// NOW.
+    TimeAxis {
+        from: f64,
+        to: f64,
+        step: f64,
+        #[serde(default)]
+        zone: Zone,
+        #[serde(default)]
+        now: Option<f64>,
+        #[serde(default)]
+        level: AxisLevel,
+        #[serde(default)]
+        width: u16,
+    },
+    /// The now line through a row: a 1 px stop in the focus colour at AT on the axis FROM to TO, WIDTH logical px wide.
+    NowStop {
+        at: f64,
+        from: f64,
+        to: f64,
         #[serde(default)]
         width: u16,
     },
@@ -1155,6 +1612,40 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
         } => meter(
             b, env, *spent, *limit, *unit, *forecast, *state, *size, *width, text,
         ),
+        Comp::RangeBar {
+            variant,
+            from,
+            to,
+            spans,
+            state,
+            label,
+            width,
+        } => range_bar(b, env, *variant, *from, *to, spans, *state, label, *width),
+        Comp::TimeAxis {
+            from,
+            to,
+            step,
+            zone,
+            now,
+            level,
+            width,
+        } => time_axis(b, env, *from, *to, *step, *zone, *now, *level, *width),
+        Comp::NowStop {
+            at,
+            from,
+            to,
+            width,
+        } => {
+            let total = px(*width, env.scale);
+            let x = round_half_up(
+                f64::from(total)
+                    * ((at - from) / (to - from).max(f64::MIN_POSITIVE)).clamp(0.0, 1.0),
+            );
+            if !env.tty {
+                b.stop(x);
+                b.space(px(1, env.scale), 0, FaceId::Focus.name());
+            }
+        }
     }
 }
 
@@ -1634,6 +2125,212 @@ mod tests {
         );
         assert_eq!(CardShape::of(0, 2), CardShape::Top);
         assert_eq!(CardShape::of(1, 2), CardShape::Bottom);
+    }
+
+    fn range_env(scale: f32, tty: bool) -> KitEnv<'static> {
+        KitEnv {
+            scale,
+            tty,
+            glyphs: &[],
+            density: Density::Comfortable,
+            icons: None,
+        }
+    }
+
+    fn range(variant: RangeVariant, spans: RangeSpans, state: RangeState) -> Comp {
+        Comp::RangeBar {
+            variant,
+            from: 0.0,
+            to: 100.0,
+            spans,
+            state,
+            label: "build: on track".into(),
+            width: 200,
+        }
+    }
+
+    #[test]
+    fn range_bar_pixel_stops_at_scale_1_25() {
+        // 200 logical px at 1.25 = 250 device px; done to 40, p50 to 60, p90 to 80 of 100: 100, 150, 200 px; the parts
+        // are spaces 12.5 -> 13 px tall (10 logical), the rest of the bar a gap
+        let c = range(
+            RangeVariant::Schedule,
+            RangeSpans {
+                done_to: Some(40.0),
+                p50: Some(60.0),
+                p90: Some(80.0),
+                ..RangeSpans::default()
+            },
+            RangeState::OnTrack,
+        );
+        let r = &expand_rows(&range_env(1.25, false), "k", &c)[0];
+        assert_eq!(
+            r.spaces,
+            vec![(0, 100, 13), (1, 50, 13), (2, 50, 13), (3, 50, 0)]
+        );
+        assert_eq!(
+            r.runs,
+            vec![
+                (0, 1, FaceId::KitRangeBar.name().to_owned()),
+                (1, 2, FaceId::KitRangeBarForecast.name().to_owned()),
+                (2, 3, FaceId::KitRangeBarTail.name().to_owned())
+            ]
+        );
+        assert!(r.props.iter().any(|p| p.2 == "help-echo"));
+    }
+
+    #[test]
+    fn a_tiny_span_is_two_px() {
+        // a span of 1 % of 100 px is 1 px: drawn 2
+        let c = Comp::RangeBar {
+            variant: RangeVariant::Segment(SegKind::Edit),
+            from: 0.0,
+            to: 100.0,
+            spans: RangeSpans::default(),
+            state: RangeState::OnTrack,
+            label: String::new(),
+            width: 100,
+        };
+        let tiny = Comp::RangeBar {
+            variant: RangeVariant::Cost,
+            from: 0.0,
+            to: 1000.0,
+            spans: RangeSpans {
+                p50: Some(1.0),
+                ..RangeSpans::default()
+            },
+            state: RangeState::OnTrack,
+            label: String::new(),
+            width: 100,
+        };
+        let r = &expand_rows(&range_env(1.0, false), "k", &tiny)[0];
+        assert_eq!(r.spaces[0].1, 2, "{:?}", r.spaces);
+        let r = &expand_rows(&range_env(1.0, false), "k", &c)[0];
+        assert_eq!(r.spaces, vec![(0, 100, 10)]);
+    }
+
+    #[test]
+    fn seg_face_is_a_kit_face() {
+        for (k, f) in [
+            (SegKind::Read, FaceId::KitRangeBarSegRead),
+            (SegKind::Think, FaceId::KitRangeBarSegThink),
+            (SegKind::WaitMachine, FaceId::KitRangeBarSegWait),
+            (SegKind::Stalled, FaceId::KitRangeBarLate),
+        ] {
+            assert_eq!(k.face(), f);
+        }
+    }
+
+    #[test]
+    fn a_terminal_range_bar_is_cells_and_a_late_one_says_so() {
+        // 80 logical px: 10 cells; done to 30 %: 3 cells of █, to p50 (50 %) two of ▓, the tail of ░
+        let c = range(
+            RangeVariant::Schedule,
+            RangeSpans {
+                done_to: Some(30.0),
+                p50: Some(50.0),
+                p90: Some(100.0),
+                ..RangeSpans::default()
+            },
+            RangeState::Late,
+        );
+        let c = match c {
+            Comp::RangeBar {
+                variant,
+                from,
+                to,
+                spans,
+                state,
+                label,
+                ..
+            } => Comp::RangeBar {
+                variant,
+                from,
+                to,
+                spans,
+                state,
+                label,
+                width: 80,
+            },
+            c => c,
+        };
+        let r = &expand_rows(&range_env(1.0, true), "k", &c)[0];
+        assert_eq!(r.text, "███▓▓░░░░░▌ late");
+        let ascii = vec![
+            ("bar-full".to_owned(), "#".to_owned()),
+            ("range-light".to_owned(), "=".to_owned()),
+            ("bar-empty".to_owned(), "-".to_owned()),
+            ("range-late".to_owned(), "!".to_owned()),
+        ];
+        let env = KitEnv {
+            glyphs: &ascii,
+            ..range_env(1.0, true)
+        };
+        assert_eq!(expand_rows(&env, "k", &c)[0].text, "###==-----! late");
+    }
+
+    #[test]
+    fn a_terminal_segment_has_its_letter() {
+        let c = Comp::RangeBar {
+            variant: RangeVariant::Segment(SegKind::WaitYou),
+            from: 0.0,
+            to: 10.0,
+            spans: RangeSpans::default(),
+            state: RangeState::OnTrack,
+            label: String::new(),
+            width: 32,
+        };
+        assert_eq!(expand_rows(&range_env(1.0, true), "k", &c)[0].text, "Y███");
+        let think = Comp::RangeBar {
+            variant: RangeVariant::Segment(SegKind::Think),
+            from: 0.0,
+            to: 10.0,
+            spans: RangeSpans::default(),
+            state: RangeState::OnTrack,
+            label: String::new(),
+            width: 16,
+        };
+        assert_eq!(
+            expand_rows(&range_env(1.0, true), "k", &think)[0].text,
+            "·█"
+        );
+    }
+
+    #[test]
+    fn a_time_axis_labels_its_ticks_in_the_zone_and_marks_now() {
+        // 2026-11-18 00:00 UTC is 1_794_960_000; the zone +05:30 reads 05:30; ticks every hour for 3 hours at 100 px
+        let t0 = 1_794_960_000.0;
+        let c = Comp::TimeAxis {
+            from: t0,
+            to: t0 + 10_800.0,
+            step: 3600.0,
+            zone: Zone(330),
+            now: Some(t0 + 5400.0),
+            level: AxisLevel::Hour,
+            width: 120,
+        };
+        let r = &expand_rows(&range_env(1.0, false), "k", &c)[0];
+        assert_eq!(r.text, " 05:30 06:30 │ 07:30 08:30");
+        assert_eq!(
+            r.stops.iter().map(|s| s.1).collect::<Vec<_>>(),
+            vec![0, 40, 60, 80, 120]
+        );
+        assert_eq!(axis_label(t0, Zone(0), AxisLevel::Day), "Wed");
+        assert_eq!(axis_label(t0, Zone(0), AxisLevel::Week), "Nov 18");
+    }
+
+    #[test]
+    fn the_now_line_is_a_one_px_focus_stop() {
+        let c = Comp::NowStop {
+            at: 25.0,
+            from: 0.0,
+            to: 100.0,
+            width: 200,
+        };
+        let r = &expand_rows(&range_env(2.0, false), "k", &c)[0];
+        assert_eq!(r.stops, vec![(0, 100)]);
+        assert_eq!(r.spaces, vec![(1, 2, 0)]);
+        assert_eq!(r.runs, vec![(1, 2, FaceId::Focus.name().to_owned())]);
     }
 
     #[test]
