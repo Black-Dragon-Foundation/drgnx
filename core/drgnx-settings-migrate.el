@@ -342,7 +342,12 @@ moved.  A file whose copy or move fails stays where it is (one notice); it is st
 
 (defun drgnx-settings-migrate--save-report (report)
   "Keep REPORT in `drgnx-settings-migrate-report-file'.  Never signals."
-  (condition-case err (drgnx-file-write (drgnx-settings-migrate-report-file) report :pretty t)
+  (condition-case err (drgnx-file-write (drgnx-settings-migrate-report-file)
+                                        ;; the steps done since (the wrap step's mark and report) stay
+                                        (let ((old (drgnx-settings-migrate--steps)) (r (copy-sequence report)))
+                                          (dolist (k '(:steps :wrap) r)
+                                            (when (plist-member old k) (setq r (plist-put r k (plist-get old k))))))
+                                        :pretty t)
     (error (drgnx-settings-migrate--warn (format "the migration report was not kept: %s" (error-message-string err))))))
 
 (defun drgnx-settings-migrate-read-report ()
@@ -440,8 +445,10 @@ is still read."
   "REPORT as the text Settings: Migration Report shows."
   (let ((shown (lambda (f) (let ((file-name-handler-alist nil)) (abbreviate-file-name f)))))
     (with-temp-buffer
-      (insert (format "Settings: Migration Report (%s)\n\n" (plist-get report :date)))
+      (insert (format "Settings: Migration Report (%s)\n\n" (or (plist-get report :date)
+                                                                (plist-get (plist-get report :wrap) :date))))
       (pcase (plist-get report :status)
+        ('nil nil)                      ; only a later step ran (the wrap step, below)
         ('migrated
          (insert (format "Your old settings files moved into %s.\nThey are in %s, and a copy is in %s.\n"
                          (funcall shown (plist-get report :settings)) (funcall shown (plist-get report :moved-to))
@@ -474,6 +481,14 @@ to settings.el; or set its values in Settings):\n")
           (insert (format "  %s (custom.el line %s)\n" var line))))
       (when (eq (plist-get report :status) 'migrated)
         (insert "\nTwo machines: " (replace-regexp-in-string "\n" " " drgnx-settings-migrate--two-machines) "\n"))
+      (when-let* ((wrap (plist-get report :wrap)))
+        (insert (format "\nWord wrap (%s): `drgnx-face-line-wrap' is now `drgnx-editing-word-wrap'\n" (plist-get wrap :date)))
+        (dolist (part '((:reported . "Needs you:") (:done . "Done:")))
+          (when-let* ((items (plist-get wrap (car part))))
+            (insert "\n" (cdr part) "\n")
+            (dolist (i items)
+              (insert (format "  %s%s: %s\n" (funcall shown (plist-get i :file))
+                              (if (plist-get i :line) (format ":%d" (plist-get i :line)) "") (plist-get i :text)))))))
       (buffer-string))))
 
 ;;;; Commands
@@ -617,6 +632,248 @@ go to <config>/migrated-DATE/, a copy to <state>/backups/.  One that differs fro
           (message "Settings: %d old file%s moved to %s (a copy in %s)" (length moved) (if (= (length moved) 1) "" "s")
                    (abbreviate-file-name (car dirs)) (abbreviate-file-name (cdr dirs))))
         moved))))
+
+;;;; The wrap step: `drgnx-face-line-wrap' folds into `drgnx-editing-word-wrap' (wrap addendum §3.7)
+
+;; Once, first at a start (after the move above, safe mode too), then marked done in the report file's `:steps'.  Which
+;; store holds a value says who set it: every wrap entry of settings.el and of a private workspace file (W2) is the
+;; user's (only the user's actions write them), and so is a literal value in the user's Lisp; custom.el alone can hold
+;; drgnx's own value, which the old applier wrote through `customize-set-variable'.  A user-set value is kept and
+;; mapped, drgnx's own is dropped (the new default `auto' applies), and anything else is reported, never guessed.  It
+;; writes only settings.el and W2, through `drgnx-settings-file-put' and `-remove'; a shared .drgnx/settings.el (W1, the
+;; project's), custom.el and the user's Lisp are never written.  A file that refuses leaves the step undone (it runs
+;; again at the next start).
+
+(defconst drgnx-settings-migrate-wrap-id 'wrap-2026-11
+  "The wrap step's mark in the report file's `:steps' once it has finished.")
+
+(defconst drgnx-settings-migrate--wrap-old 'drgnx-face-line-wrap "The setting the wrap step folds away.")
+(defconst drgnx-settings-migrate--wrap-new 'drgnx-editing-word-wrap "The setting it folds into.")
+
+(defconst drgnx-settings-migrate--wrap-map '((word . on) (truncate . off) (on . on) (off . off))
+  "An old wrap value, or an editing one, and the `drgnx-editing-word-wrap' value it stands for.")
+
+(defvar drgnx-settings-migrate--wrap-log nil
+  "While the wrap step runs: (DONE . REPORTED), each a list of (:file :line :text), newest first.")
+
+(defun drgnx-settings-migrate--wrap-map (value)
+  "The `drgnx-editing-word-wrap' value old or editing VALUE stands for, or nil when it maps to none."
+  (and value (symbolp value) (cdr (assq value drgnx-settings-migrate--wrap-map))))
+
+(defun drgnx-settings-migrate--wrap-note (kind file line fmt &rest args)
+  "Log what the wrap step did (KIND `done') or reports (`reported') about FILE at LINE: FMT with ARGS."
+  (let ((item (list :file file :line line :text (apply #'format fmt args))))
+    (if (eq kind 'done) (push item (car drgnx-settings-migrate--wrap-log))
+      (push item (cdr drgnx-settings-migrate--wrap-log)))))
+
+(defun drgnx-settings-migrate--wrap-entry (doc var scope)
+  "DOC's entry of VAR in SCOPE, or nil."
+  (cl-find-if (lambda (e) (and (eq (drgnx-settings-entry-var e) var) (equal (drgnx-settings-entry-scope e) scope)))
+              (drgnx-settings-doc-entries doc)))
+
+(defun drgnx-settings-migrate--wrap-file (file head)
+  "Fold the old setting's entries of settings FILE (head HEAD) into `drgnx-editing-word-wrap', scope by scope: an
+entry of the new one in the same scope wins (a disagreement is reported); else the mapped value takes the old entry's
+place.  A value that maps to none is reported and left.  Signals `drgnx-settings-refused' when a write is refused."
+  (let ((doc (drgnx-settings-file-read file head)) (old drgnx-settings-migrate--wrap-old)
+        (new drgnx-settings-migrate--wrap-new) (drgnx-settings-file-tool "migrate:settings"))
+    (if (drgnx-settings-doc-failed doc)
+        (when (string-search (symbol-name old) (or (drgnx-settings-doc-text doc) ""))
+          (signal 'drgnx-settings-refused
+                  (list (format "%s does not read (%s): its word wrap entry was not changed; it is tried again at the \
+next start" (abbreviate-file-name file) (plist-get (car (drgnx-settings-doc-problems doc)) :text)))))
+      (when (eq head 'drgnx-settings)
+        (let ((kept (drgnx-settings-migrate--wrap-entry doc new nil)))
+          (when (and kept (drgnx-settings-migrate--wrap-map (drgnx-settings-entry-value kept)))
+            (drgnx-settings-migrate--wrap-note
+             'done file (drgnx-settings-entry-line kept) "%s %s is yours and stays (the new default is `auto': prose \
+wraps, code and data are cut)" new (drgnx-settings-entry-value kept)))))
+      (dolist (e (drgnx-settings-doc-entries doc))
+        (when (eq (drgnx-settings-entry-var e) old)
+          (let* ((scope (drgnx-settings-entry-scope e)) (value (drgnx-settings-entry-value e))
+                 (mapped (drgnx-settings-migrate--wrap-map value))
+                 (there (drgnx-settings-migrate--wrap-entry doc new scope)) (line (drgnx-settings-entry-line e)))
+            (cond
+             ((null mapped)
+              (drgnx-settings-migrate--wrap-note
+               'reported file line "%s %S is not `word' or `truncate': left as it is, and `auto' applies until you pick \
+a Word Wrap mode in Settings" old value))
+             (there
+              (drgnx-settings-file-remove file head scope old)
+              (if (eq mapped (drgnx-settings-migrate--wrap-map (drgnx-settings-entry-value there)))
+                  (drgnx-settings-migrate--wrap-note 'done file line "%s %s removed: %s %s (line %s) already says it"
+                                                     old value new (drgnx-settings-entry-value there)
+                                                     (drgnx-settings-entry-line there))
+                (drgnx-settings-migrate--wrap-note
+                 'reported file line "%s %s and %s %S (line %s) disagreed: the old entry is removed and %s %S stays"
+                 old value new (drgnx-settings-entry-value there) (drgnx-settings-entry-line there)
+                 new (drgnx-settings-entry-value there))))
+             (t
+              (drgnx-settings-file-put file head scope new mapped)
+              (drgnx-settings-file-remove file head scope old)
+              (drgnx-settings-migrate--wrap-note 'done file line "%s %s is now %s %s%s" old value new mapped
+                                                 (if scope (format " in %S" scope) ""))))))))))
+
+(defun drgnx-settings-migrate--wrap-shared (roots)
+  "Report the old setting's entries in each shared .drgnx/settings.el of ROOTS (W1, the project's file: never
+written)."
+  (require 'drgnx-settings-workspace)
+  (dolist (root (delete-dups (copy-sequence roots)))
+    (let ((file (expand-file-name drgnx-settings-workspace-shared-file root)))
+      (when (file-exists-p file)
+        (let ((doc (drgnx-settings-file-read file 'drgnx-workspace-settings)))
+          (dolist (e (drgnx-settings-doc-entries doc))
+            (when (eq (drgnx-settings-entry-var e) drgnx-settings-migrate--wrap-old)
+              (let ((mapped (drgnx-settings-migrate--wrap-map (drgnx-settings-entry-value e))))
+                (drgnx-settings-migrate--wrap-note
+                 'reported file (drgnx-settings-entry-line e) "the project's file sets %s %S, which is gone: it is not \
+changed here; %s, and `auto' applies there until then" drgnx-settings-migrate--wrap-old (drgnx-settings-entry-value e)
+                 (if mapped (format "edit it to %s %s" drgnx-settings-migrate--wrap-new mapped)
+                   (format "set %s there" drgnx-settings-migrate--wrap-new)))))))))))
+
+(defun drgnx-settings-migrate--custom-file ()
+  "The custom file: `custom-file', else custom.el in the config folder."
+  (or custom-file (expand-file-name "custom.el" (drgnx-user-dir))))
+
+(defun drgnx-settings-migrate--wrap-setters (file kinds)
+  "The index's setters of the old or new wrap setting in FILE whose kind is in KINDS (all when KINDS is t)."
+  (when (file-exists-p file)
+    (require 'drgnx-lisp-index)
+    (cl-remove-if-not (lambda (s) (and (memq (plist-get s :var) (list drgnx-settings-migrate--wrap-old
+                                                                      drgnx-settings-migrate--wrap-new))
+                                       (or (eq kinds t) (memq (plist-get s :kind) kinds))))
+                      (plist-get (drgnx-lisp-index-file file) :setters))))
+
+(defun drgnx-settings-migrate--wrap-global (settings custom)
+  "The `drgnx-editing-word-wrap' the user set for every buffer: settings.el's global entry (SETTINGS, the file), else
+a literal one among CUSTOM's setters; nil when neither holds one."
+  (let ((e (drgnx-settings-migrate--wrap-entry (drgnx-settings-file-read settings 'drgnx-settings)
+                                               drgnx-settings-migrate--wrap-new nil)))
+    (if e (drgnx-settings-entry-value e)
+      (plist-get (cl-find-if (lambda (s) (and (eq (plist-get s :var) drgnx-settings-migrate--wrap-new)
+                                              (plist-get s :const-p)))
+                             custom)
+                 :value))))
+
+(defun drgnx-settings-migrate--wrap-put-global (settings file line value what)
+  "Write `drgnx-editing-word-wrap' VALUE into settings.el (SETTINGS) for the old setting WHAT set at FILE:LINE, unless
+the user set the new one already (a disagreement is then reported).  Non-nil when it was written."
+  (let ((have (drgnx-settings-migrate--wrap-global settings (drgnx-settings-migrate--wrap-setters
+                                                             (drgnx-settings-migrate--custom-file) '(custom-set-variables))))
+        (new drgnx-settings-migrate--wrap-new))
+    (cond ((eq (drgnx-settings-migrate--wrap-map have) value)
+           (drgnx-settings-migrate--wrap-note 'done file line "%s: %s %s already applies" what new have) nil)
+          (have
+           (drgnx-settings-migrate--wrap-note 'reported file line "%s disagrees with your %s %S, which stays" what new
+                                              have)
+           nil)
+          (t (let ((drgnx-settings-file-tool "migrate:settings"))
+               (drgnx-settings-file-put settings 'drgnx-settings nil new value))
+             t))))
+
+(defun drgnx-settings-migrate--wrap-custom (settings)
+  "custom.el's old wrap value (never written): drgnx's own (`word' while the editing setting is `on' or unset,
+`truncate' while it is `off', as the old applier wrote it) is dropped; another literal one is the user's, its mapped
+value written to settings.el (SETTINGS); anything else is reported."
+  (let* ((file (drgnx-settings-migrate--custom-file))
+         (setters (drgnx-settings-migrate--wrap-setters file '(custom-set-variables))))
+    (dolist (s setters)
+      (when (eq (plist-get s :var) drgnx-settings-migrate--wrap-old)
+        (let* ((v (plist-get s :value)) (line (plist-get s :line)) (const (plist-get s :const-p))
+               (editing (drgnx-settings-migrate--wrap-map (drgnx-settings-migrate--wrap-global settings setters)))
+               (mapped (and const (drgnx-settings-migrate--wrap-map v)))
+               (old drgnx-settings-migrate--wrap-old) (new drgnx-settings-migrate--wrap-new))
+          (cond
+           ((and mapped (or (and (eq v 'word) (memq editing '(nil on))) (and (eq v 'truncate) (eq editing 'off))))
+            (drgnx-settings-migrate--wrap-note
+             'done file line "%s %s was drgnx's own copy of %s, not yours: dropped (nothing written), so `auto' applies; \
+to wrap everywhere, set Word Wrap to on in Settings (Settings: Tidy custom.el removes the line)" old v new))
+           (mapped
+            (when (drgnx-settings-migrate--wrap-put-global settings file line mapped (format "%s %s" old v))
+              (drgnx-settings-migrate--wrap-note 'done file line "%s %s is yours: settings.el now holds %s %s (custom.el \
+is not changed)" old v new mapped)))
+           (t (drgnx-settings-migrate--wrap-note
+               'reported file line "%s %S is not `word' or `truncate': left as it is, and `auto' applies until you pick a \
+Word Wrap mode in Settings" old v))))))))
+
+(defun drgnx-settings-migrate--wrap-lisp (settings)
+  "The old setting in the user's Lisp (config.el and `drgnx-user-lisp-files'; never edited): a literal value set at
+top level is the user's, its mapped value written to settings.el (SETTINGS) and the line reported with the form that
+replaces it; any other is reported, not guessed."
+  (require 'drgnx-lisp-index)
+  (let ((custom (expand-file-name (drgnx-settings-migrate--custom-file))) (old drgnx-settings-migrate--wrap-old)
+        (new drgnx-settings-migrate--wrap-new))
+    (dolist (file (drgnx-lisp-index--default-files))
+      (unless (equal (expand-file-name file) custom)
+        (dolist (s (drgnx-settings-migrate--wrap-setters file t))
+          (when (eq (plist-get s :var) old)
+            (let* ((v (plist-get s :value)) (line (plist-get s :line))
+                   (mapped (and (plist-get s :const-p) (not (plist-get s :conditional))
+                                (drgnx-settings-migrate--wrap-map v))))
+              (if (null mapped)
+                  (drgnx-settings-migrate--wrap-note
+                   'reported file line "%s is set to %S, which is not `word' or `truncate' as written: not guessed, and \
+`auto' applies; replace it with (setopt %s 'on) or 'off, or pick a Word Wrap mode in Settings" old v new)
+                (drgnx-settings-migrate--wrap-put-global settings file line mapped (format "%s %s" old v))
+                (drgnx-settings-migrate--wrap-note
+                 'reported file line "%s %s no longer does anything: replace it with (setopt %s '%s), or remove it (%s \
+%s is in settings.el unless it said otherwise)" old v new mapped new mapped)))))))))
+
+(defun drgnx-settings-migrate--steps ()
+  "The report file's data (a plist; nil when there is none)."
+  (let ((r (drgnx-file-read (drgnx-settings-migrate-report-file))))
+    (and (eq (plist-get r :status) 'ok) (plist-get r :data))))
+
+(defun drgnx-settings-migrate--record-step (id report done)
+  "Keep REPORT under `:wrap' in the report file, and ID in its `:steps' when DONE.  Never signals."
+  (let* ((data (copy-sequence (drgnx-settings-migrate--steps)))
+         (data (plist-put data :wrap report))
+         (data (if done (plist-put data :steps (cons id (remq id (plist-get data :steps)))) data)))
+    (condition-case err (drgnx-file-write (drgnx-settings-migrate-report-file) data :pretty t)
+      (error (drgnx-settings-migrate--warn (format "the word wrap step was not recorded: %s"
+                                                   (error-message-string err)))))))
+
+(defun drgnx-settings-migrate-wrap ()
+  "Fold `drgnx-face-line-wrap' into `drgnx-editing-word-wrap', once (wrap addendum §3.7): settings.el and the private
+workspace files are rewritten (a user-set value kept and mapped), drgnx's own value in custom.el is dropped, a literal
+value in the user's Lisp goes to settings.el, and a shared .drgnx/settings.el, a value that maps to none and a computed
+one are reported.  Called first at every start, after `drgnx-settings-migrate-maybe'; does nothing once the report
+file's `:steps' holds `drgnx-settings-migrate-wrap-id'.  A file that refuses leaves the step undone.  The step's
+report (:date :done :reported), or nil when it had run already.  Never signals and never prompts."
+  (condition-case err
+      (let ((inhibit-interaction t))
+        (unless (memq drgnx-settings-migrate-wrap-id (plist-get (drgnx-settings-migrate--steps) :steps))
+          (let ((drgnx-settings-migrate--wrap-log (cons nil nil)) (refused nil)
+                (settings (drgnx-config-file 'settings)))
+            (require 'drgnx-settings-workspace)
+            (let ((roots nil))
+              (dolist (f (cons settings (drgnx-settings-workspace--private-files)))
+                (let ((head (if (equal f settings) 'drgnx-settings 'drgnx-workspace-settings)))
+                  (condition-case why (drgnx-settings-migrate--wrap-file f head)
+                    (drgnx-settings-refused (setq refused t)
+                                            (drgnx-settings-migrate--wrap-note 'reported f nil "%s" (cadr why))))
+                  (unless (eq head 'drgnx-settings)
+                    (setq roots (append roots (drgnx-settings-workspace--roots
+                                               (drgnx-settings-file-read f 'drgnx-workspace-settings)))))))
+              (drgnx-settings-migrate--wrap-shared roots))
+            (dolist (part (list #'drgnx-settings-migrate--wrap-custom #'drgnx-settings-migrate--wrap-lisp))
+              (condition-case why (funcall part settings)
+                (drgnx-settings-refused (setq refused t)
+                                        (drgnx-settings-migrate--wrap-note 'reported settings nil "%s" (cadr why)))))
+            (let* ((reported (reverse (cdr drgnx-settings-migrate--wrap-log)))
+                   (report (list :date (format-time-string "%Y-%m-%d")
+                                 :done (reverse (car drgnx-settings-migrate--wrap-log)) :reported reported)))
+              (drgnx-settings-migrate--record-step drgnx-settings-migrate-wrap-id report (not refused))
+              (when reported
+                (require 'drgnx-notice)
+                (drgnx-notify 'config 'warn (format "Word wrap: %d setting%s need%s you (Settings: Migration Report)"
+                                                    (length reported) (if (cdr reported) "s" "")
+                                                    (if (cdr reported) "" "s"))
+                              :id 'settings-wrap :command 'settings-migration-report))
+              report))))
+    (error (drgnx-settings-migrate--warn (format "the word wrap settings were not reconciled: %s"
+                                                 (error-message-string err)))
+           nil)))
 
 ;;;; The shim
 
