@@ -108,11 +108,11 @@ at its end.  Each row's end (the newline after its tail) is in sight."
     (let* ((w (selected-window)) (other (split-window w (drgnx-px 170) 'left t)))
       (unwind-protect
           (progn
+            ;; as the side bar's Explorer: a dock window; the strip comes as the scroll bar mode places it, and the
+            ;; hub hears of the narrower body only through the env's own hooks (nothing here sends it)
+            (set-window-parameter w 'drgnx-role 'dock)
             (drgnx-scrollbar-mode 1)
-            (drgnx-ruler--place w)
             (drgnx-test-wait (lambda () (window-parameter w 'drgnx-ruler-fringe)) :secs 5 :what "the strip's fringe")
-            (redisplay t)
-            (drgnx-view-env-update drgnx-explorer-hub-view-name)
             (let ((rows 0) (cut nil))
               (cl-flet ((measure ()
                           (redisplay t)
@@ -140,6 +140,8 @@ at its end.  Each row's end (the newline after its tail) is in sight."
                                    :env (mapcar (lambda (c) (plist-get (cdr c) :width_px))
                                                 (drgnx-view-env--envs drgnx-explorer-hub-view-name)))))))))
         (drgnx-scrollbar-mode -1)
+        ;; Nidhogg's own record of the strip, and the role, go with it
+        (dolist (p '(glitnir--ruler glitnir--ruler-key drgnx-role)) (set-window-parameter w p nil))
         (when (window-live-p other) (delete-window other))))))
 
 (drgnx-look-gui-deftest drgnx-ui-look-explorer/a-section-shows-whole-rows ()
