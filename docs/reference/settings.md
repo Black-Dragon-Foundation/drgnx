@@ -1516,6 +1516,25 @@ right edge, and shrinks back 600 ms after the pointer leaves.
 | `:agents` | `grantable` |
 | `:schema` | - |
 
+## drgnx-minimap-coverage-files
+
+Where the coverage heat layer finds reports, relative to the file's worktree (`*' and `?' match in the last part):
+lcov tracefiles, Cobertura XML reports and llvm-cov JSON exports.  The newest that names the file is read, and read
+again when a test run writes it.
+
+| Key | Value |
+| --- | --- |
+| Default | `("lcov.info" "coverage/lcov.info" "coverage/*.info" "coverage.xml" "coverage/cobertura*.xml" "cobertura.xml" "coverage.json" "target/llvm-cov/*.json")` |
+| Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
 ## drgnx-minimap-hide-short
 
 Non-nil: the scroll bar hides while the window shows all of its content (it comes back once the content runs
@@ -1543,6 +1562,26 @@ MARK section; `marks-only', the MARK sections alone; nil, none.
 | --- | --- |
 | Default | `t` |
 | Type | `(choice (const :tag "Definitions and MARK sections" t) (const :tag "MARK sections only" marks-only) (const :tag "None" nil))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-layer
+
+The heat layer that recolours the minimap's bars, one at a time: `blame', each line's age (newest hottest);
+`coverage', covered lines (from the newest report `drgnx-minimap-coverage-files' names); `profile', each line's own
+samples (from the profile `minimap-layer' asks for); `agent-read', the lines agents read most; nil, none.  Marks stay
+on top.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const :tag "None" nil) (const :tag "Blame age" blame) (const :tag "Coverage" coverage) (const :tag "Profile" profile) (const :tag "Lines agents read" agent-read))` |
 | `:scope` | `global` |
 | `:workspace` | `data` |
 | `:merge` | `replace` |

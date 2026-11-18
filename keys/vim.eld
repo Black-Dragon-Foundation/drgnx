@@ -806,6 +806,7 @@
               (bookmark-go "SPC RET")
               (agent-edit-next "] a")
               (agent-edit-previous "[ a")
+              (minimap-layer "SPC u h")
               ;; Vim's z folds; evil's own fold keys act on drgnx's folds too (`evil-fold-list')
               (fold-toggle "z a")
               (fold-recursive "z C")

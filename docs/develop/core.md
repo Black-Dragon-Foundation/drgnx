@@ -1653,7 +1653,7 @@ lists at each publish.
   test loads the same file.
 - **The minimap.** `editor/minimap` hooks `drgnx-ruler-place-functions` (run with each window and whether it shows
   the strip, when its strip is placed: no Lisp per scroll). An editor window (`drgnx-minimap-window-p`: the strip
-  shown, `drgnx-minimap` on, a file or a `prog-mode`/`text-mode` buffer that is neither a Sjá view nor a special mode)
+  shown, `drgnx-minimap` on, a file or a `prog-mode`/`text-mode`/`diff-mode` buffer that is neither a Sjá view nor a special mode)
   gets the window parameter `glitnir-minimap`: `:width` (`drgnx-minimap-width`, 80–200), the colours, `:nesting`,
   and with `drgnx-minimap-labels` the labels' `:labels` (`t` or `marks-only`), their colours (`:label`, `:sub` for a
   nested definition, `:accent` for the one under the pointer, `:mark` for a MARK section), `:label-face` (the font)
@@ -1664,6 +1664,15 @@ lists at each publish.
   regions (`editor/sticky`'s `drgnx-pin-region`) adds `:pin-kind` (the line model's `pin` kind, `drgnx-ruler-kinds`),
   `:pin` (the face `drgnx-marks-pin`) and `:pin-names` (a vector, buffer order): the bands are the scroll bar's `pin`
   marks (owner `pins`, each with its END), which the line model moves with edits, so the spec never carries positions.
+  With a heat layer (`drgnx-minimap-layer`, design X3) the spec adds `:heat` (the layer's name: Sjá's `heat:NAME` of
+  `:file`, which is then sent with labels off too) and the ramp's ends `:heat-low` (`drgnx-border-strong`) and
+  `:heat-high` (`drgnx-agent-2`); the watch asks the hub for that layer (`minimap/watch`'s `heat`, with `coverage`,
+  the places of `drgnx-minimap-coverage-files`, or `profile`, `drgnx-minimap-profile-file`), again when the layer or
+  its inputs change. A diff buffer (no file needed: `diff-mode` gets the minimap) or a file with `drgnx-hunks-mode`
+  adds `:hunk-labels`, a vector of `[LINE TEXT]` (lines from 1, `hunk N · +A −R`), and `:hunk` (`drgnx-text-muted`):
+  `drgnx-marks-hunks` counts a diff buffer's @@ hunks once per text change and reads a file's from `drgnx-hunks--data`;
+  the lines are not moved by C, the next placement (the ruler's debounced refresh after an edit, or the change marks'
+  redraw) sends them again. `drgnx-marks-next-change` goes by those hunks there (`drgnx-marks-step-hunk`).
 - **Sticky lines.** `editor/sticky` with `drgnx-sticky-style` `lines` draws the scope start lines in a pooled child
   frame per window over its top rows (`drgnx-sticky--cards`), its window and frame marked `drgnx-minimap-exclude`. The
   header's memo `sticky-segment` (once per window start, text change above it, or hub answer) works out the scopes
