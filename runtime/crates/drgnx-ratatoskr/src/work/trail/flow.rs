@@ -6,9 +6,9 @@
 //! The model is the lens's own: a `task` node per task with the `flow` form's links (up and down), the lists `tasks`
 //! and `held` (the tasks a gate holds: the needs-you chips).
 
+use crate::view::kit_env;
 use crate::view::model::Doc;
 use drgnx_rows::faces::FaceId;
-use crate::view::kit_env;
 use drgnx_rows::fit::Measure;
 use drgnx_rows::kit::{self, ButtonStyle, Comp, Size, State as KitState};
 use drgnx_rows::{ImageId, Row, RowBuilder};

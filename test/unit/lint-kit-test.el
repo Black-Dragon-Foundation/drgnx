@@ -147,8 +147,8 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ("modules/ui/drgnx-topline.el" row 1) ("runtime/crates/drgnx-ratatoskr/src/notebook/views.rs" row 1)
     ("runtime/crates/drgnx-ratatoskr/src/notebook/views/tests.rs" row 2)
     ("wb/drgnx-explorer.el" row 2) ("wb/drgnx-view-nav.el" row 1)
-    ;; button and key-hint (Task 12): decor's buttons (Task 15 moves them out)
-    ("modules/ui/drgnx-decor.el" button 4)
+    ;; button and key-hint (Task 12): decor's buttons (Task 15 moves them out); the Flow's `g 1' key badge on a held chip
+    ("modules/tools/drgnx-work-flow.el" key-hint 1) ("modules/ui/drgnx-decor.el" button 4)
     ;; chip and status-dot (Task 14): the sites not moved onto the kit yet, each falling as its site moves
     ("core/drgnx-agent-identity.el" status-dot 1)
     ("core/drgnx-faces.el" chip 5)
