@@ -5052,11 +5052,12 @@ mod tests {
         );
     }
 
-    // [D] pure: a Linux runner has the features its probe offered, not the job's: a `gpu` job (then a `kvm` one) is
+    // [D] pure: a Linux runner has the features its probe offered, not the job's: a `gpu` job is
     // not placed on a runner whose probe lacks it, and is once its probe offers it
     #[tokio::test]
     async fn a_linux_runner_has_only_its_probes_features() {
-        for feature in ["gpu"] {
+        let feature = "gpu";
+        {
             let dir = tempfile::tempdir().unwrap();
             let (q, _rx) = test_queue(dir.path(), None, true);
             add(&q, "r1", 600);
