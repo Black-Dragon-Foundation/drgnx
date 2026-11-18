@@ -35,6 +35,9 @@ strings, comments and constants in your theme's colours for them, everything els
 come from the language pack's highlight query, or from the mode's own highlighting rules when the pack has none, and
 cover the whole file, including the parts you have never scrolled to.
 
+A pinned region (**Pin Region**, see Editing, "Sticky scroll") shows as a band in its own colour over its lines, with
+its name as a label, labels on or off.
+
 Definitions are named for files up to 8 MiB (they come from the same outline as the Outline view); MARK sections
 are found in files of any size.
 

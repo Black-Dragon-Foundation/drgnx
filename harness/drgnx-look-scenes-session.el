@@ -3031,5 +3031,33 @@ pointer's dwell is the GUI rows' to judge, `:open' stands for it here) once the 
   "The minimap open over a long Rust file, light."
   (drgnx-look-scene--minimap-open 'drgnx-light))
 
+(defvar drgnx-sticky-style)
+(defvar drgnx-sticky--pin-shown)
+(declare-function drgnx-sticky--fill "drgnx-sticky" (w positions))
+
+(defun drgnx-look-scene-sticky-lines ()
+  "minimap-folding.html's sticky lines (F6): the Rust file inside a function of an impl, the two scope lines over
+the window's top rows, dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "sticky-lines"
+    (let ((f (expand-file-name "runtime/src/parser.rs" drgnx-look-scene--project)))
+      (unless (file-exists-p f)
+        (make-directory (file-name-directory f) t)
+        (write-region (drgnx-look-scene--parser-rs) nil f nil 'silent)))
+    (drgnx-look-scene--goto "runtime/src/parser.rs" 40 4 30)
+    (require 'drgnx-sticky)
+    (setq drgnx-sticky-style 'lines)
+    (let* ((w (selected-window))
+           (scopes (save-excursion
+                     (goto-char (window-start w))
+                     (list (progn (re-search-backward "^impl ") (point))
+                           (progn (goto-char (window-start w)) (re-search-backward "^    fn ") (point))))))
+      ;; held: the header's own refill would show the same scopes; the shot must not race it
+      (setq drgnx-sticky--pin-shown (list (cons w 'scene)))
+      (drgnx-sticky--fill w scopes)
+      (drgnx-look-scene--settle-frame)))
+  (drgnx-look-scene--answer))
+
 (provide 'drgnx-look-scenes-session)
 ;;; drgnx-look-scenes-session.el ends here
