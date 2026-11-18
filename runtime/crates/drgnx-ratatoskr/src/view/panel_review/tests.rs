@@ -123,7 +123,7 @@ fn a_hunk_is_a_header_over_numbered_lines_in_card_faces() {
 
 // pattern: D
 #[test]
-fn a_request_is_a_ringed_line_over_allow_always_and_deny() {
+fn a_request_is_a_kit_question_card_over_allow_always_and_deny() {
     let e = env(400);
     let fonts = fonts();
     let p = [Permission {
@@ -140,24 +140,32 @@ fn a_request_is_a_ringed_line_over_allow_always_and_deny() {
         queue: &[],
     });
     let rows: Vec<Row> = rows.into_iter().filter(|r| r.key != "c:gap").collect();
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].key, "c:perm:7:0");
+    // the head, the choices and the room under them
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].key, "c:perm:7/0");
     assert!(text(&rows[0]).contains("Read the gateway's log?"));
     assert!(
         rows[0]
             .runs
             .iter()
-            .any(|(_, _, f)| f == FaceId::AgentPanelPermHead.name())
+            .any(|(_, _, f)| f == FaceId::KitQuestionCardHead.name())
     );
     assert_eq!(
         action_of(&rows[1], "card:"),
         ["card:allow:7", "card:always:7", "card:deny:7"]
     );
     assert!(text(&rows[1]).contains("Allow"));
-    // the key hints are in the buttons' help, not jammed onto their labels (audit A3)
-    for hint in ["Allow ↵", "Always A", "Deny D"] {
-        assert!(!text(&rows[1]).contains(hint), "{hint}");
-    }
+    // kit buttons, each with its key hint (y a n), no hand-built " Allow " label
+    let faces: Vec<&str> = rows[1].runs.iter().map(|r| r.2.as_str()).collect();
+    assert!(faces.contains(&FaceId::KitButtonPrimary.name()));
+    assert!(faces.contains(&FaceId::KitKeyHintCap.name()));
+    assert!(!text(&rows[1]).contains(" Allow "));
+    // the card for the commands that read it at point
+    assert!(rows.iter().all(|r| {
+        r.props
+            .iter()
+            .any(|(_, _, n, v)| n == "drgnx-agent-panel-card" && *v == json!(["perm", 7]))
+    }));
 }
 
 // pattern: D
