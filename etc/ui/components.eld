@@ -156,7 +156,7 @@
                      ((needs-you) :fg attention :inherit (drgnx-status-needs-you))
                      ((idle) :fg subtle :inherit (drgnx-text-subtle))
                      ((error) :fg error :inherit (drgnx-status-fail)))
-              :replaces nil :helpers (drgnx-ui-status) :lint t)
+              :replaces nil :helpers nil :lint t)
   ;; a range bar: a span of time or money on an axis, in the row's own width (`width' logical px).  `schedule': done
   ;; solid, to p50 light, p50 to p90 the tail, a baseline tick, the target's mark; `cost': p50 solid, p50 to p90 the
   ;; tail, the limit a rule; `segment': one span in its kind's colour, its letter inside on a terminal.  The bar is

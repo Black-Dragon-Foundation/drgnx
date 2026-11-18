@@ -62,14 +62,25 @@
     (should-not (cl-some (lambda (a) (stringp (face-attribute face a nil nil))) '(:foreground :background)))))
 
 (ert-deftest drgnx-ui-kit/status-gives-glyph-and-text-in-its-face ()
+  ;; the kit's dots: done `✓', error `✕', needs-you `●'; info and warn have no kit status, so they draw its plain dot
   (drgnx-ui-test--unicode
-   (pcase-dolist (`(,sev ,glyph ,face) '((ok "✓" drgnx-status-ok) (info "ℹ" drgnx-status-info) (warn "⚠" drgnx-status-warn)
-                                         (fail "✕" drgnx-status-fail) (needs-you "◐" drgnx-status-needs-you)))
+   (pcase-dolist (`(,sev ,glyph ,face) '((ok "✓" drgnx-status-ok) (info "●" drgnx-status-info) (warn "●" drgnx-status-warn)
+                                         (fail "✕" drgnx-status-fail) (needs-you "●" drgnx-status-needs-you)))
      (let ((s (drgnx-ui-status sev "text")))
        (should (equal (substring-no-properties s) (concat glyph " text")))
        (should (eq (get-text-property 0 'face s) face))
        (should (eq (get-text-property (1- (length s)) 'face s) face)))
      (should (equal (substring-no-properties (drgnx-ui-status sev)) glyph)))))
+
+(ert-deftest drgnx-ui-kit/status-is-the-kit-s-dot ()
+  ;; drgnx-ui-status is a wrapper: the dot of every severity (warn and info included) is what the kit's `status-dot'
+  ;; draws, in its unicode and its ASCII form
+  (pcase-dolist (`(,sev . ,status) '((ok . "done") (info . "needs-you") (warn . "needs-you") (fail . "error")
+                                     (needs-you . "needs-you")))
+    (dolist (tty '(nil ascii))
+      (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (&optional _f) (and tty t))))
+        (should (equal (substring-no-properties (drgnx-ui-status sev))
+                       (plist-get (drgnx-ui-kit-expand 'status-dot (list :c "status-dot" :status status) 1.0 tty) :text)))))))
 
 (ert-deftest drgnx-ui-kit/a-saved-glyph-option-still-applies ()
   ;; the option keeps its name: a value saved by customize before the move (the old 18 entries, with ok and
