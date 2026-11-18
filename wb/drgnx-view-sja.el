@@ -346,7 +346,10 @@ asked again the next time (it may be defined later)."
                        (setq lo (1+ pos)))
                     (1 (let ((spec (gethash a (drgnx-view-patch-images s))))
                          (put-text-property pos (1+ pos) 'display (if (or (null spec) (eq spec :alt)) b spec) text)))
-                    (2 (put-text-property pos (1+ pos) 'display `(space :width (,a) :height (,b)) text))
+                    ;; height 0 is the line's (a kit pad): a zero-height stretch is drawn as nothing
+                    (2 (put-text-property pos (1+ pos) 'display
+                                          (if (eql b 0) `(space :width (,a)) `(space :width (,a) :height (,b)))
+                                          text))
                     (3 (put-text-property pos (1+ pos) 'line-height
                                           (* a (if (> b 0) b (or drgnx-view--line-height
                                                                  (setq drgnx-view--line-height (default-line-height)))))

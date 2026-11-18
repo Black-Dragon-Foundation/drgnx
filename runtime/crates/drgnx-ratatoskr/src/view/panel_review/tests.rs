@@ -159,7 +159,8 @@ fn a_request_is_a_kit_question_card_over_allow_always_and_deny() {
     let faces: Vec<&str> = rows[1].runs.iter().map(|r| r.2.as_str()).collect();
     assert!(faces.contains(&FaceId::KitButtonPrimary.name()));
     assert!(faces.contains(&FaceId::KitKeyHintCap.name()));
-    assert!(!text(&rows[1]).contains(" Allow "));
+    // the pads are spaces of the kit's sizes, not blanks typed around the label
+    assert!(rows[1].spaces.len() >= 6, "{:?}", rows[1].spaces);
     // the card for the commands that read it at point
     assert!(rows.iter().all(|r| {
         r.props

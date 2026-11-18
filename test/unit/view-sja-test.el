@@ -81,6 +81,15 @@ decision.  MODEL: the model version the patch names (applied with it)."
     (should (equal '(1 2) (mapcar (lambda (s) (plist-get (cdr s) :version)) (reverse (view-sja-test--sent "view/ack")))))
     (should (= (drgnx-view-sja-row-start "b") (- (point) 2)))))
 
+(ert-deftest rows-sja/a-kit-pad-is-a-space-of-the-lines-height ()
+  ;; height 0 is the line's (a kit pad): a zero-height stretch is drawn as nothing and the text slides left, as in the
+  ;; patch path (`drgnx-view-patch--dress')
+  (view-sja-test--with
+    (view-sja-test--push view (list (list :reset (list (view-sja-test--row "a" "abc" :spaces [[0 16 0] [1 8 4]])))))
+    (view-sja-test--text)
+    (should (equal (get-text-property (point-min) 'display) '(space :width (16))))
+    (should (equal (get-text-property (1+ (point-min)) 'display) '(space :width (8) :height (4))))))
+
 (ert-deftest rows-sja/window-start-and-point-kept ()
   ;; a window's point stays on its row as rows go in above it; one at the end follows the tail
   (view-sja-test--with
