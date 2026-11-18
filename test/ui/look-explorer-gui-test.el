@@ -98,6 +98,29 @@ row that is not its background, scanning the row from the window's right edge in
 (defvar drgnx-scrollbar-mode)
 (declare-function drgnx-scrollbar-mode "drgnx-ruler" (&optional arg))
 
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-folded-section-s-row-ends-inside-the-body ()
+  "A folded dock section's one row (its header as buffer text: the Open section above the Explorer) ends at the body's
+edge: buffer text never paints the fringe, so a filler on into it only made the row wider than the body, and Emacs drew
+its truncation arrow there (under the scroll bar's strip: Glitnir's `‹' in the tiling scene)."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (delete-other-windows)
+  (let* ((w (selected-window)) (other (split-window w (drgnx-px 170) 'left t)))
+    (unwind-protect
+        (progn
+          ;; the dock's fringes with the strip: its own inset either side and the strip's 12 px on the right
+          (set-window-fringes w (drgnx-px 6) (drgnx-px 18))
+          (set-window-buffer w (drgnx-wb--collapsed-buffer 'look-test))
+          (redisplay t)
+          (with-current-buffer (window-buffer w)
+            (let ((px (car (window-text-pixel-size w (point-min) (pos-eol (point-min)) 10000 nil t))))
+              (unless (<= px (window-body-width w t))
+                (ert-fail (list "the folded row runs past the body" :row px :body (window-body-width w t)
+                                :fringes (window-fringes w)))))))
+      (set-window-fringes w nil nil)
+      (when (window-live-p other) (delete-window other))
+      (when-let* ((b (get-buffer " *drgnx-section-look-test*"))) (kill-buffer b)))))
+
 ;; the scenes' badge: two agents' marks (`drgnx-explorer-badge-functions'), a run of text in the row's own face
 (defun drgnx-ui-look-explorer--badge (_ordinals _dirp) "  ●●")
 

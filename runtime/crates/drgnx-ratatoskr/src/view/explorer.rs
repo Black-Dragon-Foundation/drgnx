@@ -478,6 +478,9 @@ pub struct RowLook {
     pub gui: Option<(u32, u32, u32)>,
     /// The listing has one root, whose row is hidden (the island's header names it).
     pub one_root: bool,
+    /// The editor's who-is-here badge (the env's `badge`): `((file_each, file_limit), (folder_each, folder_limit),
+    /// more)`; none: no badge.
+    pub badge: Option<((u32, u32), (u32, u32), u32)>,
 }
 
 impl RowLook {
@@ -489,6 +492,20 @@ impl RowLook {
             gui: matches!(env.display, Display::Gui)
                 .then(|| (px(indent as f32), px(icons::SIZE), px(6.0))),
             one_root: roots == 1,
+            badge: env.badge,
+        }
+    }
+
+    /// The width of the badge of N agents on a folder's row (DIR) or a file's (`drgnx-agents-editor-here--badge`);
+    /// 0 with no badge.
+    pub fn badge_px(&self, dir: bool, n: usize) -> u32 {
+        match self.badge {
+            Some((file, folder, more)) if n > 0 => {
+                let (each, limit) = if dir { folder } else { file };
+                let shown = n.min(limit as usize) as u32;
+                shown * each + if n > limit as usize { more } else { 0 }
+            }
+            _ => 0,
         }
     }
 }

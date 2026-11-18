@@ -55,6 +55,12 @@ pub struct ViewEnv {
     /// (`drgnx_rows::fit_row::Room::tail`). None: the view's rows get no tail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail: Option<(u32, u32)>,
+    /// What the editor draws right after a row's name, before its tail: the Explorer's who-is-here badge
+    /// (`drgnx-explorer-badge-functions`), as `[[file_each, file_limit], [folder_each, folder_limit], more]` px (a
+    /// terminal's: columns): each agent shown takes EACH (a space and its mark, a file's with its initial), up to LIMIT
+    /// shown, and MORE for the `+N` of the rest. A row with agents here ends its name that much shorter. None: no badge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<((u32, u32), (u32, u32), u32)>,
     /// `[role, colour]`: the SVG writer's colours, from the theme.
     #[serde(default)]
     pub palette: Vec<(String, String)>,
