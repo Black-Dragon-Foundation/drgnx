@@ -2593,6 +2593,24 @@ sizes ignored (a dock's side window keeps its width otherwise); the pixels it mo
     (unless (zerop d) (window-resize window d t t t))
     (- (window-pixel-width window) from)))
 
+(defun drgnx-look-scene--widths-save ()
+  "The selected frame's windows with their pixel widths, to put back after a window's resize."
+  (mapcar (lambda (w) (cons w (window-pixel-width w))) (window-list nil 'nomini)))
+
+(defun drgnx-look-scene--widths-restore (sizes)
+  "Give each window of SIZES (`drgnx-look-scene--widths-save') its width back.  A resize takes the pixels from a
+neighbour, so giving one window back its width moves another: pass again until none moves (at most four passes).
+Without this each checked window leaves its neighbours (the Explorer too) wider or narrower for the next one."
+  (let ((window-resize-pixelwise t) (n 0))
+    (while (and (< n 4)
+                (let ((moved nil))
+                  (pcase-dolist (`(,w . ,px) sizes)
+                    (when (and (window-live-p w) (/= px (window-pixel-width w)))
+                      (ignore-errors (window-resize w (- px (window-pixel-width w)) t t t))
+                      (setq moved t)))
+                  moved))
+      (setq n (1+ n)))))
+
 (defconst drgnx-look-scene-widths-slack 10
   "The px the hub keeps short of a segment's end (`drgnx_rows::fit::SLACK').")
 
@@ -2772,7 +2790,7 @@ resized again.  What was measured goes to FILE."
           (setq cuts (drgnx-look-scene--cut-rows w "settled")))
         (unless (gethash key drgnx-look-scene--widths-seen)
           (puthash key t drgnx-look-scene--widths-seen)
-          (let ((moved 0) (wide nil))
+          (let ((moved 0) (wide nil) (sizes (drgnx-look-scene--widths-save)))
             (unwind-protect
                 (pcase-dolist (`(,how . ,delta) (list (cons "narrow" (- (min 300 (/ (window-body-width w t) 3))))
                                                       (cons "wide" 300)))
@@ -2791,6 +2809,7 @@ to resize a fed window, or name it in `drgnx-look-scene-widths-fixed')" view (bu
                     (if (equal how "wide") (setq wide (drgnx-look-scene--row-texts w))
                       (setq cuts (append cuts (drgnx-look-scene--cut-rows w how))))))
               (unless (zerop moved) (window-resize w (- moved) t t t))
+              (drgnx-look-scene--widths-restore sizes)
               (drgnx-look-scene--rows-settle buffer "back"))
             (when wide
               (let ((over (delq nil (mapcar (lambda (c) (drgnx-look-scene--over-cut c wide buffer)) cuts))))
@@ -3270,6 +3289,74 @@ the window's top rows, dark."
       (drgnx-look-scene--settle-frame)))
   (drgnx-look-scene--answer))
 
+;;; Tiling (tiling.html): six tiles; the switcher, Resize Tiles and full size are the scenes' keys
+
+(declare-function drgnx-groups-list "drgnx-groups")
+(declare-function drgnx-pane-hide "drgnx-panes")
+(declare-function drgnx-pane-window "drgnx-panes")
+(declare-function drgnx-grid-split-tile "drgnx-grid" (window side))
+(declare-function drgnx-grid--make-editor "drgnx-grid" (window))
+(defvar drgnx-look-scene--term nil "The tiling scenes' terminal (the panel's tile j).")
+
+(defun drgnx-look-scene--six-tiles ()
+  "tiling.html's six tiles, dark: the Explorer (a), the gateway file (s, current), an editor with three tabs (d), the
+agent panel (f), the panel's terminal under the editors (j) and the Work map under the agent (k)."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "six tiles"
+    (unless (buffer-live-p drgnx-look-scene--panel) (error "No agent panel (the mock agent did not run)"))
+    ;; one editor to start from: the other groups an earlier scene left go (`delete-other-windows' keeps tiles)
+    (let ((keep (car (drgnx-groups-list))))  ; the first in reading order: the editor area's, not the one under the agent
+      (dolist (g (drgnx-groups-list)) (unless (eq g keep) (delete-window g)))
+      (select-window keep))
+    (let ((map (drgnx-work-space-open nil t)))
+      (unless (get-buffer-window drgnx-look-scene--panel)
+        (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel))
+      (if (buffer-live-p drgnx-look-scene--term)
+          (unless (get-buffer-window drgnx-look-scene--term) (pop-to-buffer drgnx-look-scene--term))
+        (setq drgnx-look-scene--term (save-selected-window (drgnx-terminal-new))))
+      (let* ((s (progn (drgnx-wb-focus-editor) (selected-window)))
+             (d (drgnx-grid-split-tile s 'right))
+             (k (drgnx-grid-split-tile (get-buffer-window drgnx-look-scene--panel) 'below)))
+        (drgnx-grid--make-editor d)
+        (dolist (file '("README.md" "test/unit/hub-test.el" "test/unit/gateway-test.el"))
+          ;; the agent edited gateway-test.el and the setup left it changed: its buffer, not `find-file''s question
+          (let ((f (expand-file-name file drgnx-look-scene--project)))
+            (switch-to-buffer (or (get-file-buffer f) (find-file-noselect f)))))
+        (drgnx-grid--make-editor k)
+        (switch-to-buffer map)
+        (select-window s)
+        (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201))
+      (setq drgnx-look-scene--windows-rearranged t)
+      (drgnx-look-scene--until 15 "the Work map tile's rows" (lambda () (with-current-buffer map (drgnx-look-scene--row-ids ""))))
+      ;; the map shows its Detail in the right dock once its rows come: the agent's tile is the mockup's there
+      (dotimes (_ 3)                    ; it comes a round trip after the rows: hide it until it stays hidden
+        (when (drgnx-pane-window 'work-detail) (drgnx-pane-hide 'work-detail))
+        (drgnx-look-scene--settle-frame))
+      (unless (get-buffer-window drgnx-look-scene--panel)
+        (save-selected-window (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel)))
+      (drgnx-look-scene--settle-frame))))
+
+(defun drgnx-look-scene-tiling ()
+  "Six tiles with the switcher open (its keys, C-<escape>): a letter card on every tile."
+  (drgnx-look-scene--six-tiles)
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-tiling-resize ()
+  "Six tiles in Resize Tiles (its keys, C-k r), one step to the right taken, on the editor with the fewest tabs: its
+tab row has room for the chip (tiling.html's resize tile has one tab; a row whose tabs run past the window shows none
+of its right end, buttons included)."
+  (drgnx-look-scene--six-tiles)
+  (drgnx-look-scene--try "tiling-resize"
+    (select-window (car (sort (drgnx-grid-tiles nil 'editor)
+                              (lambda (a b) (< (length (drgnx-chrome-tabs a)) (length (drgnx-chrome-tabs b))))))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-tiling-full ()
+  "The gateway file's tile at full size (its keys, C-k C-m); the same keys bring the tree back."
+  (drgnx-look-scene--six-tiles)
+  (drgnx-look-scene--answer))
+
 ;; the heat layer (X3) and the diff minimap (X6): drawn by the glue once Nidhogg's 13-N/17-N and hunk-labels steps
 ;; are on the pin; until then the bars draw by class and the scene checks only that the hub sent the layer
 
@@ -3331,65 +3418,21 @@ labelled, the minimap held open, dark."
         (drgnx-look-scene--minimap-hold w))))
   (drgnx-look-scene--answer))
 
-;;; Tiling (tiling.html): six tiles; the switcher, Resize Tiles and full size are the scenes' keys
-
-(declare-function drgnx-groups-list "drgnx-groups")
-(declare-function drgnx-pane-hide "drgnx-panes")
-(declare-function drgnx-pane-window "drgnx-panes")
-(declare-function drgnx-grid-split-tile "drgnx-grid" (window side))
-(declare-function drgnx-grid--make-editor "drgnx-grid" (window))
-(defvar drgnx-look-scene--term nil "The tiling scenes' terminal (the panel's tile j).")
-
-(defun drgnx-look-scene--six-tiles ()
-  "tiling.html's six tiles, dark: the Explorer (a), the gateway file (s, current), an editor with three tabs (d), the
-agent panel (f), the panel's terminal under the editors (j) and the Work map under the agent (k)."
-  (drgnx-look-scene--theme 'drgnx-dark)
-  (drgnx-look-scene--editor)
-  (drgnx-look-scene--try "six tiles"
-    (unless (buffer-live-p drgnx-look-scene--panel) (error "No agent panel (the mock agent did not run)"))
-    ;; one editor to start from: the other groups an earlier scene left go (`delete-other-windows' keeps tiles)
-    (let ((keep (car (drgnx-groups-list))))  ; the first in reading order: the editor area's, not the one under the agent
-      (dolist (g (drgnx-groups-list)) (unless (eq g keep) (delete-window g)))
-      (select-window keep))
-    (let ((map (drgnx-work-space-open nil t)))
-      (unless (get-buffer-window drgnx-look-scene--panel)
-        (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel))
-      (if (buffer-live-p drgnx-look-scene--term)
-          (unless (get-buffer-window drgnx-look-scene--term) (pop-to-buffer drgnx-look-scene--term))
-        (setq drgnx-look-scene--term (save-selected-window (drgnx-terminal-new))))
-      (let* ((s (progn (drgnx-wb-focus-editor) (selected-window)))
-             (d (drgnx-grid-split-tile s 'right))
-             (k (drgnx-grid-split-tile (get-buffer-window drgnx-look-scene--panel) 'below)))
-        (drgnx-grid--make-editor d)
-        (dolist (file '("README.md" "test/unit/hub-test.el" "test/unit/gateway-test.el"))
-          ;; the agent edited gateway-test.el and the setup left it changed: its buffer, not `find-file''s question
-          (let ((f (expand-file-name file drgnx-look-scene--project)))
-            (switch-to-buffer (or (get-file-buffer f) (find-file-noselect f)))))
-        (drgnx-grid--make-editor k)
-        (switch-to-buffer map)
-        (select-window s)
-        (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201))
-      (setq drgnx-look-scene--windows-rearranged t)
-      (drgnx-look-scene--until 15 "the Work map tile's rows" (lambda () (with-current-buffer map (drgnx-look-scene--row-ids ""))))
-      ;; the map shows its Detail in the right dock once its rows come: the agent's tile is the mockup's there
-      (when (drgnx-pane-window 'work-detail) (drgnx-pane-hide 'work-detail))
-      (unless (get-buffer-window drgnx-look-scene--panel)
-        (save-selected-window (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel)))
-      (drgnx-look-scene--settle-frame))))
-
-(defun drgnx-look-scene-tiling ()
-  "Six tiles with the switcher open (its keys, C-<escape>): a letter card on every tile."
-  (drgnx-look-scene--six-tiles)
-  (drgnx-look-scene--answer))
-
-(defun drgnx-look-scene-tiling-resize ()
-  "Six tiles in Resize Tiles (its keys, C-k r), one step to the right taken."
-  (drgnx-look-scene--six-tiles)
-  (drgnx-look-scene--answer))
-
-(defun drgnx-look-scene-tiling-full ()
-  "The gateway file's tile at full size (its keys, C-k C-m); the same keys bring the tree back."
-  (drgnx-look-scene--six-tiles)
+(defun drgnx-look-scene-cards-fit ()
+  "No tile switcher card cuts its text: in each visible card's window nothing is scrolled off (`window-hscroll' 0)
+and the text is no wider than the window's body (`window-text-pixel-size' with no limit against
+`window-body-width')."
+  (drgnx-look-scene--try "cards"
+    (dolist (f (frame-list))
+      (when (and (frame-parameter f 'drgnx-switcher-card) (frame-visible-p f))
+        (let* ((w (frame-root-window f)) (buf (window-buffer w)) (body (window-body-width w t))
+               (text (car (window-text-pixel-size w nil nil 10000 nil t))))
+          (when (or (> text body) (/= 0 (window-hscroll w)))
+            (push (format "cards: the switcher card %S is cut: its text is %d px, its window shows %d (hscroll %d, frame text width %d, fringes %S, margins %S, truncate-lines %S)"
+                          (with-current-buffer buf (string-trim (buffer-substring-no-properties (point-min) (point-max))))
+                          text body (window-hscroll w) (frame-text-width f) (window-fringes w) (window-margins w)
+                          (buffer-local-value 'truncate-lines buf))
+                  drgnx-look-scene--errors))))))
   (drgnx-look-scene--answer))
 
 (provide 'drgnx-look-scenes-session)

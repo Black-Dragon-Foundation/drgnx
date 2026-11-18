@@ -99,6 +99,8 @@ at the edge), and the current tile's card has the focus colour's ring, which fol
                                                                        fs))))))
                     (let ((w (frame-root-window (car e))))
                       (should (<= (car (window-text-pixel-size w nil nil t)) (window-body-width w t)))
+                      ;; the scroll bar's strip would take 12 px of the card's width: a card is no scroll surface
+                      (should (frame-parameter (car e) 'drgnx-minimap-exclude))
                       ;; each line's last character is drawn whole: nothing cut, no truncation glyph
                       (with-current-buffer (cdr e)
                         (goto-char (point-min))
