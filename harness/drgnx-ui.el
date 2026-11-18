@@ -25,6 +25,7 @@
 (declare-function drgnx-perf-run "drgnx-perf-run")
 (declare-function drgnx-perf-ab-env "drgnx-perf-run")
 (declare-function drgnx-perf-ab "drgnx-perf-run")
+(declare-function drgnx-perf-check-island "drgnx-perf" (&optional island allowed)) ; loaded by drgnx-perf-run
 (declare-function drgnx-bench-run "drgnx-bench")
 (declare-function drgnx-look-scenes-run "drgnx-look-scenes")
 
