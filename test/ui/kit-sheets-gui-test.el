@@ -552,6 +552,11 @@ past the pill's left edge: inside its start pad, clear of its rounded corners.  
       (kill-buffer main)
       (mapc #'disable-theme custom-enabled-themes))))
 
+(drgnx-look-gui-deftest drgnx-kit-sheet/diff-block ()
+  "The diff block's sheet: its head row in every theme and density, each pad exact."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'diff-block))
+
 (drgnx-look-gui-deftest drgnx-kit-sheet/state-table ()
   "The state table's rows in every theme and density: each state's fill, and no edge round a hovered or selected row."
   (skip-unless (display-graphic-p))

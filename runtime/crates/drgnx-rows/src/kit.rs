@@ -721,6 +721,40 @@ pub const TAB_ICON_PX: u16 = 14;
 /// The room each side of a tab's close mark in its 18 px slot, logical px.
 pub const TAB_CLOSE_PAD_PX: u16 = 2;
 
+/// What a line of a diff hunk is: context, added or removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiffLine {
+    Ctx,
+    Add,
+    Del,
+}
+
+impl DiffLine {
+    fn part(self) -> &'static str {
+        match self {
+            DiffLine::Ctx => "ctx",
+            DiffLine::Add => "add",
+            DiffLine::Del => "del",
+        }
+    }
+
+    fn sign(self) -> &'static str {
+        match self {
+            DiffLine::Ctx => " ",
+            DiffLine::Add => "+",
+            DiffLine::Del => "-",
+        }
+    }
+}
+
+/// One hunk of a diff block: its `@@` HEADER and its LINES (kind, the line's number, text).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct Hunk {
+    pub header: String,
+    pub lines: Vec<(DiffLine, u32, String)>,
+}
+
 /// A component with its props, as JSON `{"c": "row", …}`.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "c", rename_all = "kebab-case")]
@@ -770,6 +804,17 @@ pub enum Comp {
         state: State,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
+    },
+    /// A diff block: FILE's head row (its path, +ADDED -REMOVED, BUTTONS after them) over each hunk's `@@` row and lines.
+    /// As one component it expands to its head row; the rows of the whole block come from `expand_rows`.
+    DiffBlock {
+        file: String,
+        added: u32,
+        removed: u32,
+        #[serde(default)]
+        hunks: Vec<Hunk>,
+        #[serde(default)]
+        buttons: Vec<(String, Action)>,
     },
     /// One line of a card of KIND in SHAPE: TEXT with the card's room each side.
     Card {
@@ -1482,6 +1527,42 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 put_action(b, from, to, a);
             }
         }
+        Comp::DiffBlock {
+            file,
+            added,
+            removed,
+            buttons,
+            ..
+        } => {
+            let part = |p: &'static str| {
+                let variant = [p, env.density.name()];
+                comp_face(kit_gen::face(CompId::DiffBlock, &variant))
+            };
+            let g: Geom = kit_gen::geom(CompId::DiffBlock, &["head", env.density.name()]);
+            let head = part("head");
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), head);
+            b.push(file, head);
+            pad(b, env, px(g.gap, env.scale), 1, head);
+            b.push(&format!("+{added}"), part("add"));
+            b.push(" ", head);
+            b.push(&format!("\u{2212}{removed}"), part("del"));
+            for (label, action) in buttons {
+                pad(b, env, px(g.gap, env.scale), 1, head);
+                expand(
+                    b,
+                    env,
+                    &Comp::Button {
+                        label: label.clone(),
+                        style: ButtonStyle::Quiet,
+                        size: Size::Sm,
+                        state: State::Rest,
+                        key: None,
+                        action: Some(action.clone()),
+                    },
+                );
+            }
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), head);
+        }
         Comp::Card { kind, shape, text } => {
             let variant = [kind.name(), shape.name(), env.density.name()];
             let g: Geom = kit_gen::geom(CompId::Card, &variant);
@@ -1856,7 +1937,55 @@ fn progress(b: &mut RowBuilder, env: &KitEnv, kind: ProgressKind, value: f64, wi
 pub fn expand_rows(env: &KitEnv, key: &str, c: &Comp) -> Vec<Row> {
     let mut b = RowBuilder::new(format!("{key}/0"));
     expand(&mut b, env, c);
-    vec![b.finish()]
+    let head = b.finish();
+    let Comp::DiffBlock { hunks, .. } = c else {
+        return vec![head];
+    };
+    // the whole block: the head, then each hunk's `@@` row and its lines (gutter number, sign, text), in the card's ring
+    let g: Geom = kit_gen::geom(CompId::DiffBlock, &["ctx", env.density.name()]);
+    let face = |p: &str| comp_face(kit_gen::face(CompId::DiffBlock, &[p, env.density.name()]));
+    let mut rows = vec![head];
+    for (hi, h) in hunks.iter().enumerate() {
+        let mut b = RowBuilder::new(format!("{key}/h{hi}"));
+        let f = face("hunk");
+        pad(
+            &mut b,
+            env,
+            px(g.pad.0, env.scale),
+            usize::from(g.tty_pad),
+            f,
+        );
+        b.push(&h.header, f);
+        pad(
+            &mut b,
+            env,
+            px(g.pad.1, env.scale),
+            usize::from(g.tty_pad),
+            f,
+        );
+        rows.push(b.finish());
+        for (li, (kind, n, text)) in h.lines.iter().enumerate() {
+            let mut b = RowBuilder::new(format!("{key}/h{hi}/{li}"));
+            let f = face(kind.part());
+            pad(
+                &mut b,
+                env,
+                px(g.pad.0, env.scale),
+                usize::from(g.tty_pad),
+                f,
+            );
+            b.push(&format!("{n:>4} {} {text}", kind.sign()), f);
+            pad(
+                &mut b,
+                env,
+                px(g.pad.1, env.scale),
+                usize::from(g.tty_pad),
+                f,
+            );
+            rows.push(b.finish());
+        }
+    }
+    card_rows(env, CardKind::Plain, rows)
 }
 
 /// ROWS as the rows of one card of KIND: each row's text under the card's ring face of its shape (single, top, mid,
@@ -2344,6 +2473,60 @@ mod tests {
         assert_eq!(r.stops, vec![(0, 100)]);
         assert_eq!(r.spaces, vec![(1, 2, 0)]);
         assert_eq!(r.runs, vec![(1, 2, FaceId::Focus.name().to_owned())]);
+    }
+
+    #[test]
+    fn diff_block_rows_are_parts_in_the_cards_ring() {
+        // head, then each hunk's `@@` row and lines: every row in its part's face, the card's ring over it, open between rows
+        let env = KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            density: Density::Comfortable,
+            icons: None,
+            ascii: false,
+        };
+        let block = Comp::DiffBlock {
+            file: "a.rs".into(),
+            added: 1,
+            removed: 1,
+            hunks: vec![Hunk {
+                header: "@@ -1 +1 @@".into(),
+                lines: vec![
+                    (DiffLine::Del, 1, "old".into()),
+                    (DiffLine::Add, 1, "new".into()),
+                    (DiffLine::Ctx, 2, "same".into()),
+                ],
+            }],
+            buttons: vec![(
+                "Accept".into(),
+                Action {
+                    kind: "kit-test".into(),
+                    args: vec![],
+                },
+            )],
+        };
+        let rows = expand_rows(&env, "d", &block);
+        assert_eq!(rows.len(), 5);
+        let part_face = |i: usize| {
+            rows[i]
+                .runs
+                .iter()
+                .map(|r| r.2.as_str())
+                .find(|f| f.contains("diff-block"))
+        };
+        assert_eq!(part_face(0), Some(FaceId::KitDiffBlockHead.name()));
+        assert_eq!(part_face(1), Some(FaceId::KitDiffBlockHunk.name()));
+        assert_eq!(part_face(2), Some(FaceId::KitDiffBlockDel.name()));
+        assert_eq!(part_face(3), Some(FaceId::KitDiffBlockAdd.name()));
+        assert_eq!(part_face(4), Some(FaceId::KitDiffBlockCtx.name()));
+        assert_eq!(rows[2].text.trim(), "1 - old");
+        assert!(rows[0].text.contains("Accept"));
+        assert!(rows[0].props.iter().any(|p| p.2 == "drgnx-action"));
+        let ring = |i: usize| rows[i].runs.last().unwrap().2.clone();
+        assert_eq!(ring(0), FaceId::KitCardPlainTop.name());
+        assert_eq!(ring(2), FaceId::KitCardPlainMid.name());
+        assert_eq!(ring(4), FaceId::KitCardPlainBottom.name());
     }
 
     #[test]

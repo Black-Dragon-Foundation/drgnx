@@ -223,4 +223,15 @@
                     ((current) :bg sel-quiet :fg fg :inherit (drgnx-ui-text drgnx-selected-quiet) :font (drgnx-ui-text)))
              :replaces ((drgnx-work-lens-rail . drgnx-kit-segmented) (drgnx-work-lens-seg . drgnx-kit-segmented)
                         (drgnx-work-lens-current . drgnx-kit-segmented-current))
-             :helpers nil :lint t)))
+             :helpers nil :lint t)
+  ;; a diff block: a file's head row (path in the code font, +N -M, kit buttons), then each hunk's `@@' row and its lines
+  ;; (a gutter number, the sign, the text) in the code font, in the card's ring; the part names the row's face
+  (diff-block :variants ((part head hunk ctx add del)) :defaults (part ctx)
+              :geometry (:height 0 :pad (10 . 10) :gap 8 :box t :radius 8 :hit 0)
+              :tty (:pad 1) :label "diff"
+              :bind (((head) :bg panel :fg fg :inherit (drgnx-code-small) :font (drgnx-code-small))
+                     ((hunk) :bg panel :fg subtle :inherit (drgnx-code-small drgnx-text-subtle) :font (drgnx-code-small))
+                     ((ctx) :bg panel :fg muted :inherit (drgnx-code-small drgnx-text-muted) :font (drgnx-code-small))
+                     ((add) :bg add-bg :fg add-fg :inherit (drgnx-code-small diff-added) :font (drgnx-code-small))
+                     ((del) :bg del-bg :fg del-fg :inherit (drgnx-code-small diff-removed) :font (drgnx-code-small)))
+              :replaces nil :helpers nil :lint nil)))

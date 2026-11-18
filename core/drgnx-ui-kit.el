@@ -743,6 +743,23 @@ chip's face (the part of `drgnx-ui-kit--chip' a component draws inside its own r
       (drgnx-ui-kit--b-push (or (plist-get props :text) "") face)
       (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
       (drgnx-ui-kit--b-finish nil 0 0 nil nil))))
+(defun drgnx-ui-kit--diff-block (props scale tty)
+  "The `diff-block' component of PROPS (:file :added :removed): its head row at SCALE, see `drgnx-ui-kit--expand'.  The
+hub's buttons after the counts are not drawn here: `drgnx-ui-kit-diff-block' puts text buttons after the head."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'diff-block))
+           (face (lambda (part) (drgnx-ui-kit--face 'diff-block (drgnx-ui-kit--chosen entry (list part)))))
+           (g (plist-get entry :geometry)) (pad (plist-get g :pad)) (head (funcall face 'head))
+           (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0)))
+      (drgnx-ui-kit--b-pad (car pad) tty-pad head)
+      (drgnx-ui-kit--b-push (or (plist-get props :file) "") head)
+      (drgnx-ui-kit--b-pad (plist-get g :gap) 1 head)
+      (drgnx-ui-kit--b-push (format "+%d" (or (plist-get props :added) 0)) (funcall face 'add))
+      (drgnx-ui-kit--b-push " " head)
+      (drgnx-ui-kit--b-push (format "\u2212%d" (or (plist-get props :removed) 0)) (funcall face 'del))
+      (drgnx-ui-kit--b-pad (cdr pad) tty-pad head)
+      (drgnx-ui-kit--b-finish nil 0 0 nil nil))))
+
 (defun drgnx-ui-kit--round (x)
   "X rounded half up, as the hub rounds (`drgnx-px')."
   (floor (+ x 0.5 1e-9)))
@@ -1242,6 +1259,7 @@ px, HEIGHT the row's line height in device px or nil (one text line)."
     ('key-hint (drgnx-ui-kit--key-hint props scale tty))
     ('section-header (drgnx-ui-kit--section-header props scale tty))
     ('card (drgnx-ui-kit--card props scale tty))
+    ('diff-block (drgnx-ui-kit--diff-block props scale tty))
     ('agent-mark (drgnx-ui-kit--agent-mark props scale tty))
     ('progress (drgnx-ui-kit--progress props scale tty))
     ('meter (drgnx-ui-kit--meter props scale tty))
@@ -1539,6 +1557,45 @@ arguments, or (KIND . ARGS) of a kit action.  Each item's `help-echo' is its LAB
                        (list :c "segmented" :current current
                              :items (mapcar (lambda (i) (list (car i) (drgnx-ui-kit--action-spec (cdr i)))) items))
                        where frame))
+
+(defun drgnx-ui-kit-diff-block (file added removed hunks width &optional buttons)
+  "FILE's diff as a kit diff block WIDTH columns wide, one string: the head row (FILE, +ADDED \u2212REMOVED, then
+BUTTONS, ((LABEL HELP FN)...), as kit text buttons), then each of HUNKS, ((HEADER (KIND NUMBER TEXT)...)...), KIND
+`ctx', `add' or `del': its `@@' row and lines (number, sign, text) in the code font.  The rows are the card's, one
+box run each (see `drgnx-ui-kit-card-lines'), the ring open between them.  Its accessible text is \"FILE, N added, M
+removed\"."
+  (let* ((entry (drgnx-ui-kit-component 'diff-block)) (n 0) (rows nil)
+         (face (lambda (part) (drgnx-ui-kit--face 'diff-block (drgnx-ui-kit--chosen entry (list part))))))
+    (push (cons (concat (propertize file 'face (funcall face 'head)) (propertize "  " 'face (funcall face 'head))
+                        (propertize (format "+%d" added) 'face (funcall face 'add)) (propertize " " 'face (funcall face 'head))
+                        (propertize (format "\u2212%d" removed) 'face (funcall face 'del))
+                        (mapconcat (lambda (b) (concat (propertize " " 'face (funcall face 'head))
+                                                       (drgnx-ui-kit-text-button (nth 0 b) (nth 2 b) (nth 1 b) 'quiet 'sm)))
+                                   buttons ""))
+                'head)
+          rows)
+    (dolist (h hunks)
+      (push (cons (car h) 'hunk) rows)
+      (dolist (l (cdr h))
+        (push (cons (format "%4d %s %s" (nth 1 l) (pcase (car l) ('add "+") ('del "-") (_ " ")) (nth 2 l)) (car l)) rows)))
+    (setq rows (nreverse rows) n (length rows))
+    (let ((i 0) (out nil))
+      (dolist (r rows)
+        (let* ((text (car r)) (part (cdr r))
+               (shape (cond ((= n 1) 'single) ((= i 0) 'top) ((= i (1- n)) 'bottom) (t 'mid)))
+               (ring (drgnx-ui-kit--face 'card (drgnx-ui-kit--chosen (drgnx-ui-kit-component 'card) (list 'plain shape))))
+               (pf (funcall face part))
+               (row (if (eq part 'head)
+                        (concat text (propertize (make-string (max 0 (- width (string-width text))) ?\s) 'face pf))
+                      (propertize (truncate-string-to-width text width nil ?\s) 'face pf)))
+               (row (concat row (propertize " " 'display `(space :align-to ,(1+ width)) 'face pf))))
+          (setq i (1+ i))
+          ;; the ring under the row's own faces, over the whole row: one box run, open where the card goes on
+          (add-face-text-property 0 (length row) ring t row)
+          (push (concat row "\n") out)))
+      (let ((s (apply #'concat (nreverse out))))
+        (put-text-property 0 (length s) 'help-echo (format "%s, %d added, %d removed" file added removed) s)
+        s))))
 
 (defun drgnx-ui-kit-card-lines (lines kind width)
   "LINES (strings) as the rows of one card of KIND (`plain', `needs-you' or `selected') WIDTH columns wide, one string.

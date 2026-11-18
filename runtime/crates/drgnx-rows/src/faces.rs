@@ -1132,11 +1132,21 @@ pub enum FaceId {
     KitSegmented,
     /// `drgnx-kit-segmented-current`
     KitSegmentedCurrent,
+    /// `drgnx-kit-diff-block-head`
+    KitDiffBlockHead,
+    /// `drgnx-kit-diff-block-hunk`
+    KitDiffBlockHunk,
+    /// `drgnx-kit-diff-block-ctx`
+    KitDiffBlockCtx,
+    /// `drgnx-kit-diff-block-add`
+    KitDiffBlockAdd,
+    /// `drgnx-kit-diff-block-del`
+    KitDiffBlockDel,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 562] = [
+    pub const ALL: [FaceId; 567] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1699,6 +1709,11 @@ impl FaceId {
         FaceId::KitTabPreview,
         FaceId::KitSegmented,
         FaceId::KitSegmentedCurrent,
+        FaceId::KitDiffBlockHead,
+        FaceId::KitDiffBlockHunk,
+        FaceId::KitDiffBlockCtx,
+        FaceId::KitDiffBlockAdd,
+        FaceId::KitDiffBlockDel,
     ];
 
     /// The face's Emacs name.
@@ -2266,6 +2281,11 @@ impl FaceId {
             FaceId::KitTabPreview => "drgnx-kit-tab-preview",
             FaceId::KitSegmented => "drgnx-kit-segmented",
             FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
+            FaceId::KitDiffBlockHead => "drgnx-kit-diff-block-head",
+            FaceId::KitDiffBlockHunk => "drgnx-kit-diff-block-hunk",
+            FaceId::KitDiffBlockCtx => "drgnx-kit-diff-block-ctx",
+            FaceId::KitDiffBlockAdd => "drgnx-kit-diff-block-add",
+            FaceId::KitDiffBlockDel => "drgnx-kit-diff-block-del",
         }
     }
 
@@ -2834,6 +2854,11 @@ impl FaceId {
             "drgnx-kit-tab-preview" => FaceId::KitTabPreview,
             "drgnx-kit-segmented" => FaceId::KitSegmented,
             "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
+            "drgnx-kit-diff-block-head" => FaceId::KitDiffBlockHead,
+            "drgnx-kit-diff-block-hunk" => FaceId::KitDiffBlockHunk,
+            "drgnx-kit-diff-block-ctx" => FaceId::KitDiffBlockCtx,
+            "drgnx-kit-diff-block-add" => FaceId::KitDiffBlockAdd,
+            "drgnx-kit-diff-block-del" => FaceId::KitDiffBlockDel,
             _ => return None,
         })
     }

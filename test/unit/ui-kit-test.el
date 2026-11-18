@@ -559,6 +559,30 @@
     (should (equal (substring-no-properties s) "ab    \n"))
     (should (equal (get-text-property 5 'display s) '(space :align-to 6)))))
 
+(ert-deftest drgnx-ui-kit/diff-block-rows-carry-their-part-and-the-ring ()
+  "A diff block: the head row, the hunk's @@ row and its lines, each in its part's kit face, the ring open between
+rows; the head carries the counts and the buttons; its help-echo says the file and the counts."
+  (let* ((fired nil)
+         (s (drgnx-ui-kit-diff-block "a.rs" 1 1 '(("@@ -1 +1 @@" (del 1 "old") (add 1 "new") (ctx 2 "same"))) 40
+                                     (list (list "Accept" "keep it" (lambda () (setq fired t))))))
+         (rows (split-string s "\n" t)) (face-of (lambda (row regex) (car (ensure-list (get-text-property (string-match regex row) 'face row))))))
+    (should (= 5 (length rows)))
+    (should (eq 'drgnx-kit-diff-block-head (funcall face-of (nth 0 rows) "a.rs")))
+    (should (eq 'drgnx-kit-diff-block-add (funcall face-of (nth 0 rows) "\\+1")))
+    (should (eq 'drgnx-kit-diff-block-hunk (funcall face-of (nth 1 rows) "@@")))
+    (should (eq 'drgnx-kit-diff-block-del (funcall face-of (nth 2 rows) "old")))
+    (should (eq 'drgnx-kit-diff-block-add (funcall face-of (nth 3 rows) "new")))
+    (should (eq 'drgnx-kit-diff-block-ctx (funcall face-of (nth 4 rows) "same")))
+    (should (equal '(drgnx-kit-diff-block-del drgnx-kit-card-plain-mid)
+                   (get-text-property (1- (length (nth 2 rows))) 'face (nth 2 rows))))
+    (should (equal '(drgnx-kit-diff-block-ctx drgnx-kit-card-plain-bottom)
+                   (get-text-property 0 'face (nth 4 rows))))
+    (should (equal "a.rs, 1 added, 1 removed" (get-text-property 0 'help-echo s)))
+    (let ((pos (string-match "Accept" s)))
+      (should (button-at pos))
+      (push-button pos)
+      (should fired))))
+
 (ert-deftest drgnx-ui-kit/card-line-forms ()
   (let ((e (drgnx-ui-kit-expand 'card '(:c "card" :kind "selected" :shape "mid" :text "Go") 1.0 nil)))
     (should (equal (plist-get e :text) " Go "))

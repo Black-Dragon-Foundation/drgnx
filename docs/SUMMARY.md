@@ -120,6 +120,7 @@
     - [Key hint (kit)](design/components/key-hint.md)
     - [Section header (kit)](design/components/section-header.md)
     - [Card (kit)](design/components/card.md)
+    - [Diff block (kit)](design/components/diff-block.md)
     - [Agent mark (kit)](design/components/agent-mark.md)
     - [Progress (kit)](design/components/progress.md)
     - [Chip (kit)](design/components/chip.md)

@@ -35,6 +35,8 @@ pub enum CompId {
     Tab,
     /// `segmented`
     Segmented,
+    /// `diff-block`
+    DiffBlock,
 }
 
 /// A state of the state table (on the wire, its name: `"selected-inactive"`).
@@ -131,7 +133,7 @@ pub const GLYPHS: [(&str, &str, &str); 29] = [
 
 /// The whole standard glyph table (`drgnx-ui--default-glyphs`): `(name, Unicode, ASCII)`. A tab's icon is looked
 /// up here when the env has no glyph of its name, as the Lisp kit's tab does; other components keep [`GLYPHS`].
-pub const ALL_GLYPHS: [(&str, &str, &str); 145] = [
+pub const ALL_GLYPHS: [(&str, &str, &str); 150] = [
     ("handle", "⠿", "::"),
     ("close", "×", "x"),
     ("branch", "⑂", "Y"),
@@ -191,6 +193,11 @@ pub const ALL_GLYPHS: [(&str, &str, &str); 145] = [
     ("progress-2", "◑", "2"),
     ("progress-3", "◕", "3"),
     ("progress-4", "●", "4"),
+    ("range-light", "▓", "="),
+    ("range-late", "▌", "!"),
+    ("range-forecast", "┄", "."),
+    ("axis-now", "│", "|"),
+    ("seg-think", "·", "."),
     ("file-code", "‹›", "<>"),
     ("file-text", "≡", "="),
     ("file-cog", "⚙", "*"),
@@ -659,6 +666,38 @@ const SEGMENTED_GEOM: [[Geom; 3]; 1] = [
 const SEGMENTED_LABEL: [Option<&str>; 1] = [Some("selected")];
 const SEGMENTED_FACE: [FaceId; 1] = [FaceId::KitSegmented];
 
+const DIFF_BLOCK_AXES: &[&[&str]] = &[&["head", "hunk", "ctx", "add", "del"]];
+const DIFF_BLOCK_DEFAULTS: &[usize] = &[2];
+const DIFF_BLOCK_GEOM: [[Geom; 3]; 5] = [
+    [
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (10, 10), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const DIFF_BLOCK_LABEL: [Option<&str>; 5] = [Some("diff"), Some("diff"), Some("diff"), Some("diff"), Some("diff")];
+const DIFF_BLOCK_FACE: [FaceId; 5] = [FaceId::KitDiffBlockHead, FaceId::KitDiffBlockHunk, FaceId::KitDiffBlockCtx, FaceId::KitDiffBlockAdd, FaceId::KitDiffBlockDel];
+
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {
     match id {
@@ -714,6 +753,10 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant);
             SEGMENTED_GEOM[i][d]
         }
+        CompId::DiffBlock => {
+            let (i, d) = index(DIFF_BLOCK_AXES, DIFF_BLOCK_DEFAULTS, variant);
+            DIFF_BLOCK_GEOM[i][d]
+        }
     }
 }
 
@@ -733,6 +776,7 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::TimeAxis => TIME_AXIS_LABEL[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
         CompId::Tab => TAB_LABEL[index(TAB_AXES, TAB_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_LABEL[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
+        CompId::DiffBlock => DIFF_BLOCK_LABEL[index(DIFF_BLOCK_AXES, DIFF_BLOCK_DEFAULTS, variant).0],
     }
 }
 
@@ -752,5 +796,6 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::TimeAxis => TIME_AXIS_FACE[index(TIME_AXIS_AXES, TIME_AXIS_DEFAULTS, variant).0],
         CompId::Tab => TAB_FACE[index(TAB_AXES, TAB_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_FACE[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
+        CompId::DiffBlock => DIFF_BLOCK_FACE[index(DIFF_BLOCK_AXES, DIFF_BLOCK_DEFAULTS, variant).0],
     }
 }

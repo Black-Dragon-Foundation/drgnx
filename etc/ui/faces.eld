@@ -562,4 +562,9 @@
  drgnx-kit-tab-panel-current
  drgnx-kit-tab-preview
  drgnx-kit-segmented
- drgnx-kit-segmented-current)
+ drgnx-kit-segmented-current
+ drgnx-kit-diff-block-head
+ drgnx-kit-diff-block-hunk
+ drgnx-kit-diff-block-ctx
+ drgnx-kit-diff-block-add
+ drgnx-kit-diff-block-del)
