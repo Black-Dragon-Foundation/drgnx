@@ -723,7 +723,10 @@ fn a_cut_row_is_a_tinted_row_with_the_key_that_moves_the_window() {
     );
     // the arrow is one character, not three bytes: the key's place is counted in characters
     let key = up.text[..up.text.find("M-p").unwrap()].chars().count() as u32;
-    assert_eq!(faces_at(up, key, key + 3)[0], FaceId::KitChipNeutralSoft.name());
+    assert_eq!(
+        faces_at(up, key, key + 3)[0],
+        FaceId::KitChipNeutralSoft.name()
+    );
     let dlen = down.text.chars().count() as u32;
     assert_eq!(
         faces_at(down, 0, dlen).last().copied(),
@@ -745,7 +748,10 @@ fn a_cut_row_fits_the_panes_columns_with_its_key_chip_whole() {
     let rows = output_rows("c", &lines(2500), 1200, 7 + 12);
     let up = &rows[0];
     let key = up.text[..up.text.find("M-p").unwrap()].chars().count() as u32;
-    assert_eq!(faces_at(up, key, key + 3)[0], FaceId::KitChipNeutralSoft.name());
+    assert_eq!(
+        faces_at(up, key, key + 3)[0],
+        FaceId::KitChipNeutralSoft.name()
+    );
     let len = up.text.chars().count() as u32;
     assert_eq!(
         faces_at(up, 0, len).last().copied(),
@@ -786,7 +792,10 @@ fn the_lines_of_an_error_output_are_error_rows_and_other_lines_are_not() {
 #[test]
 fn the_logs_type_is_a_chip_and_an_error_entry_is_an_error_row() {
     let rows = log_rows(&[entry(1, "stream", "hi"), entry(2, "error", "a\nb")], 0);
-    assert_eq!(faces_at(&rows[0], 0, 6), [FaceId::KitChipNeutralSoft.name()]);
+    assert_eq!(
+        faces_at(&rows[0], 0, 6),
+        [FaceId::KitChipNeutralSoft.name()]
+    );
     assert!(
         faces_at(&rows[0], 6, 7).is_empty(),
         "the padding is no chip"

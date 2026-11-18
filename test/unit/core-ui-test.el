@@ -94,15 +94,15 @@
     (should (= (length drgnx-face-glyphs) 18))
     (drgnx-ui-test--unicode
      (should (equal (substring-no-properties (drgnx-ui-status 'ok "fine")) "OK fine"))
-     (should (equal (substring-no-properties (drgnx-ui-status 'needs-you)) "W"))
+     (should (equal (substring-no-properties (drgnx-ui-status 'needs-you)) "●"))
      (should (equal (substring-no-properties (drgnx-ui-status 'fail "failed: x")) "✕ failed: x"))
-     (should (equal (substring-no-properties (drgnx-ui-status 'info)) "ℹ"))
+     (should (equal (substring-no-properties (drgnx-ui-status 'info)) "●"))
      (should (equal (drgnx-face-glyph 'dismiss) "×"))
      (should (equal (drgnx-face-glyph 'bullet) "•")))
     (drgnx-ui-test--ascii
      (should (equal (substring-no-properties (drgnx-ui-status 'ok "fine")) "ok fine"))
      (should (equal (substring-no-properties (drgnx-ui-status 'fail "bad")) "X bad"))
-     (should (equal (substring-no-properties (drgnx-ui-status 'warn)) "!")))
+     (should (equal (substring-no-properties (drgnx-ui-status 'warn)) "*")))
     (should-not (drgnx-face-glyph 'no-such-glyph))))
 
 (ert-deftest drgnx-modules/list-statuses-use-the-kit ()

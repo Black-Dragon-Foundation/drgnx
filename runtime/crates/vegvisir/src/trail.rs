@@ -386,7 +386,10 @@ fn conclusion_rows(
             if i == 0 {
                 put_icon(&mut b, env, &c.kind, images);
                 b.push(&format!(" {name} "), Some(FaceId::WorkTitle.name()))
-                    .push(&format!(" {} ", c.n), Some(FaceId::KitChipAccentSolid.name()))
+                    .push(
+                        &format!(" {} ", c.n),
+                        Some(FaceId::KitChipAccentSolid.name()),
+                    )
                     .push(&format!(" {}", c.text), Some(FaceId::WorkTitle.name()));
                 if new {
                     // `new`, plain text at the card's right: a box of its own would break the ring

@@ -53,7 +53,7 @@
           :bind (((primary) :bg button-primary-bg :fg button-primary-fg :inherit (drgnx-control-primary) :font (drgnx-ui-text))
                  ((secondary) :bg sel-quiet :edge button-edge :inherit (drgnx-control) :font (drgnx-ui-text))
                  ((quiet) :inherit (drgnx-ui-text drgnx-text-muted))
-                 ((danger) :bg error-tint :fg error :inherit (drgnx-chip-error) :font (drgnx-ui-text)))
+                 ((danger) :bg error-tint :fg error :inherit (drgnx-ui-caption error drgnx-selected-quiet) :font (drgnx-ui-text)))
           :replaces ((drgnx-ui-button . drgnx-kit-button-secondary) (drgnx-ui-button-primary . drgnx-kit-button-primary)
                      (drgnx-button . drgnx-kit-button-secondary) (drgnx-work-flow-button . drgnx-kit-button-secondary)
                      (drgnx-work-flow-button-primary . drgnx-kit-button-primary))
