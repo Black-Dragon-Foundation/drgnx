@@ -51,20 +51,25 @@ fn a_test_job_that_ran_no_rows_does_not_pass() {
         "true",
         Duration::from_secs(5),
     );
-    assert_eq!(job.forseti_spec("x1", "1G").expect.min_ran, None);
+    assert_eq!(
+        job.forseti_spec("x1", "1G", &Default::default())
+            .expect
+            .min_ran,
+        None
+    );
     for (parser, min) in [("ert", Some(1)), ("cargo-test", Some(1)), ("plist", None)] {
         job.place.suite = Some(queue::Suite {
             parser: parser.into(),
             listed: vec!["a".into()],
         });
-        let s = job.forseti_spec("x1", "1G");
+        let s = job.forseti_spec("x1", "1G", &Default::default());
         assert_eq!(s.expect.min_ran, min, "{parser}");
     }
     job.place.suite = Some(queue::Suite {
         parser: "ert".into(),
         listed: vec![],
     });
-    let s = job.forseti_spec("x1", "1G");
+    let s = job.forseti_spec("x1", "1G", &Default::default());
     let none = forseti::cachekey::Counts {
         counts_rows: true,
         ..Default::default()
@@ -85,7 +90,7 @@ fn a_runner_is_told_the_jobs_folder_inside_its_tree() {
         "true",
         Duration::from_secs(5),
     );
-    let f = user.forseti_spec("x1", "1G");
+    let f = user.forseti_spec("x1", "1G", &Default::default());
     assert_eq!((f.tree, f.cwd), ("/p/proj".into(), ".".into()));
 
     let mut deep = spec(
@@ -95,7 +100,7 @@ fn a_runner_is_told_the_jobs_folder_inside_its_tree() {
         Duration::from_secs(5),
     );
     deep.worktree = Some("/p/proj".into());
-    let f = deep.forseti_spec("x2", "1G");
+    let f = deep.forseti_spec("x2", "1G", &Default::default());
     assert_eq!((f.tree, f.cwd), ("/p/proj".into(), "crates/x".into()));
 }
 
@@ -1742,7 +1747,7 @@ async fn a_mac_job_needs_its_projects_homebrew_packages() {
     assert!(mac.heavy);
     let mut job = spec(Starter::User, &at, "true", Duration::from_secs(5));
     job.place = mac;
-    let s = job.forseti_spec("x1", "1G");
+    let s = job.forseti_spec("x1", "1G", &Default::default());
     assert_eq!(s.os, forseti::Os::Macos);
     assert_eq!(
         s.features,
@@ -2523,7 +2528,7 @@ fn the_guard_limits_reach_the_job_and_a_runner() {
         Duration::from_secs(5),
     );
     s.user = user;
-    let f = s.forseti_spec("x1", "1G");
+    let f = s.forseti_spec("x1", "1G", &Default::default());
     assert_eq!(
         (f.derived.stall_s, f.derived.silent_s),
         (Some(60), Some(120))
@@ -2567,7 +2572,7 @@ fn the_lane_reaches_the_spec() {
     );
     s.place.lane = forseti::Lane::Timing { pinned: None };
     assert_eq!(
-        s.forseti_spec("x1", "1G").lane,
+        s.forseti_spec("x1", "1G", &Default::default()).lane,
         forseti::Lane::Timing { pinned: None }
     );
 }

@@ -193,7 +193,8 @@ cache for this).
   once and count only in the memory they use. A job that finds no room is recorded as queued and `job_start` answers
   at once ("queued (…) … you will be woken"): the agent ends its turn like for any job. The queued job (its row says
   `queued`, with no unit yet) starts when the machine admits it, in the queue's order (priority, then shortest
-  expected first, with fairness between projects), and also after a hub restart; `exec/stop` ends it without it ever
+  expected first, with fairness between projects: a project is the registered one its tree is in, `docs/guide/runners.md`,
+  "Projects"), and also after a hub restart; `exec/stop` ends it without it ever
   starting. A queued job that cannot start (its request is gone, the sandbox refuses) ends as `lost` with the reason in
   its log, and its starter is woken. Waiting for a job is a `job-wait` step.
 - **Tools in a hub-started session.** An agent the hub starts gets the coordination tools (including the job tools)

@@ -31200,6 +31200,163 @@
       "classes": [
         "user"
       ],
+      "doc": "a repository registered as a project: its root commits and origin recorded; every clone and worktree of it maps to its id. A shallow clone, or the same repository registered again, is refused",
+      "name": "jobs/project-add",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`jobs/project-add`'s params: the repository (any folder in it) and its display name (default: its top folder's).",
+        "properties": {
+          "name": {
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "ProjectAddParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A registered project: the hub's id, its display name, its origin URL (empty: none) and its root commits.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "roots": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "origin"
+        ],
+        "title": "Project",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the registered projects",
+      "name": "jobs/project-list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Project": {
+            "additionalProperties": false,
+            "description": "A registered project: the hub's id, its display name, its origin URL (empty: none) and its root commits.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "roots": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "origin"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`jobs/project-list`'s answer.",
+        "properties": {
+          "projects": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Project"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Projects",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a project removed from the registry, with the clones mapped to it",
+      "name": "jobs/project-remove",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`jobs/project-remove`'s params.",
+        "properties": {
+          "id": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ProjectRemoveParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the machines the hub knows: local, and those reported and not yet expired",
       "name": "machines/list",
       "params": {

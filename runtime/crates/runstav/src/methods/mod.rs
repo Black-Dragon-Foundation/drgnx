@@ -28,6 +28,7 @@ pub mod graph;
 pub mod history;
 pub mod hub;
 pub mod jobs;
+pub mod jobs_q;
 pub mod matrix;
 pub mod mcp;
 pub mod notebook;
@@ -496,6 +497,9 @@ params! {
     RunnersKeys(runners::KeysParams),
     RunnersKeysHeld(Empty),
     RunnersAudit(runners::AuditParams),
+    JobsProjectAdd(jobs_q::ProjectAddParams),
+    JobsProjectList(Empty),
+    JobsProjectRemove(jobs_q::ProjectRemoveParams),
     PairAnswer(pair::PairAnswer),
     PairReadAnswer(pair::PairReadAnswer),
     PairOpen(pair::OpenParams),
@@ -539,6 +543,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(changes::methods());
     v.extend(scm::methods());
     v.extend(runners::methods());
+    v.extend(jobs_q::methods());
     v.extend(extensions::methods());
     v.extend(plugins::methods());
     v.extend(history::methods());

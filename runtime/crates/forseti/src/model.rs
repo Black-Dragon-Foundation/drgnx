@@ -20,8 +20,10 @@ impl fmt::Display for JobId {
     }
 }
 
-/// A project's id: what a job belongs to, and what the user's per-project opt-ins name. Until the project registry
-/// (runners Task 46) it comes from the old folder rule (the tree's last component); 46 replaces the source, not the type.
+/// A project's id: what a job belongs to, and what the user's per-project opt-ins, allow-lists, budgets, caches and
+/// fairness name. The hub assigns it when the user registers the project (`jobs/project-add`), and a job's comes only
+/// from the hub's project registry (by the clone its tree is in), never from a folder name or a pack. Empty: the job's
+/// tree is no registered project.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProjectId(pub String);
@@ -96,6 +98,28 @@ impl Ord for Priority {
 impl PartialOrd for Priority {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+/// Whose run a job is: an author's (an agent's or the user's tip, the default) or a gate's (a merge or push gate's).
+/// Warm state and artifacts are kept apart by it: a gate never reads a build dir, cache or artifact an author run
+/// wrote.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    #[default]
+    Author,
+    Gate,
+}
+
+impl Role {
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Author => "author",
+            Role::Gate => "gate",
+        }
     }
 }
 
@@ -226,6 +250,9 @@ pub struct JobSpec {
     pub fresh: bool,
     pub stop_on_red: bool,
     pub project: ProjectId,
+    /// An author's run or a gate's ([`Role`]).
+    #[serde(default)]
+    pub role: Role,
     pub trust: JobTrust,
     /// The names of the keys the job needs (never values).
     pub keys: Vec<String>,
@@ -471,6 +498,9 @@ pub enum WaitReason {
     AwaitingConfirm,
     /// No machine is offered at all.
     NoRunner,
+    /// Its tree is in no registered project (or its clone is shallow, or matches two): no runner takes it. The text
+    /// says why and what to do (`jobs/project-add`, `git fetch --unshallow`).
+    NotRegistered(String),
 }
 
 /// The pressure names [`WaitReason::Pressure`] carries.

@@ -6,6 +6,7 @@
 use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Empty;
+use runstav::methods::jobs_q::{Project, ProjectAddParams, ProjectRemoveParams, Projects};
 use runstav::methods::runners::{
     AddParams, Audit, AuditParams, ByName, FeatureParams, KeyNames, KeysParams, ProbeParams,
     Probed, RemoveParams, Removed, Runner, Runners, SetParams,
@@ -20,6 +21,56 @@ fn error(code: ErrorCode, message: impl Into<String>) -> Error {
         message: message.into(),
         path: None,
     }
+}
+
+/// The wire's view of a registered project.
+fn project_view(p: crate::runners::projects::Project) -> Project {
+    Project {
+        id: p.id.0,
+        name: p.name,
+        origin: p.origin,
+        roots: p.roots,
+    }
+}
+
+/// `jobs/project-add`: the repository at the path registered (the user's alone; refusals are `invalid-params` at
+/// `path` with the reason and its fix).
+pub async fn project_add(f: &Front, _: &Caller, p: ProjectAddParams) -> Result<Project, Error> {
+    let projects = crate::exec::projects(f).await?;
+    let name = p.name.map(|n| n.into_inner());
+    let r = projects
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .add(std::path::Path::new(p.path.as_str()), name.as_deref());
+    r.map(project_view).map_err(|why| Error {
+        code: ErrorCode::InvalidParams,
+        message: why,
+        path: Some("path".into()),
+    })
+}
+
+/// `jobs/project-list`: every registered project.
+pub async fn project_list(f: &Front, _: &Caller, _: Empty) -> Result<Projects, Error> {
+    let projects = crate::exec::projects(f).await?;
+    let list = projects.lock().unwrap_or_else(|e| e.into_inner()).list();
+    Ok(Projects {
+        projects: list.into_iter().map(project_view).collect(),
+    })
+}
+
+/// `jobs/project-remove`: a project and its clones' mappings removed.
+pub async fn project_remove(f: &Front, _: &Caller, p: ProjectRemoveParams) -> Result<bool, Error> {
+    let projects = crate::exec::projects(f).await?;
+    let id = forseti::ProjectId(p.id.into_inner());
+    let r = projects
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
+    r.map(|()| true).map_err(|why| Error {
+        code: ErrorCode::InvalidParams,
+        message: why,
+        path: Some("id".into()),
+    })
 }
 
 #[cfg(all(unix, not(target_os = "android")))]

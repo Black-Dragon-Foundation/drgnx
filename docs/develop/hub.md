@@ -1531,6 +1531,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no |
 | `job/stop` | user | `{id: Id}` | `JobSummary` | yes |
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
+| `jobs/project-add` | user | `{name?: string, path: AbsPath}` | `{id: string, name: string, origin: string, roots?: [string]}` | yes |
+| `jobs/project-list` | user | `{}` | `{projects?: [Project]}` | no |
+| `jobs/project-remove` | user | `{id: string}` | `boolean` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/move` | user | `{machine: string, target: string}` | `{card?: string, moved: boolean, said: string}` | yes |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
@@ -4318,8 +4321,15 @@ job's log cut mid-stream and reattached equals the runner's file byte for byte.
 One queue holds every job but the user's servers (`runners/queue.rs`), for this machine and the runners alike. The
 job layer (`exec/`) records a job's folder and meta as before, then `Queue::submit`s it: its forseti `JobSpec`, its
 `Placement {machine (auto | local | runner), heavy, keys, local_only, background, writes, priority, send, machines_cell,
-image, weight, visibility, shared_overlay, origin_key, suite, net_hosts, os, features}`, its frozen inputs (below) and what to start it
-from (`Pending`). `os` is the start's `os` (`macos`: a Mac runner's host job, counted heavy, refused for a container
+image, weight, visibility, shared_overlay, origin_key, suite, net_hosts, os, features, unregistered}`, its frozen inputs (below)
+and what to start it from (`Pending`). Before that, the job's tree is resolved in the project registry
+(`runners/projects.rs`, `runtime.db` tables `projects` and `project_clones`, migration 12): its clone's git common dir
+maps to a project id, re-checked by one `git cat-file -e` of the root commit recorded with the mapping; a clone not
+seen yet (or whose re-check failed) walks to its roots once (`git rev-list --max-parents=0 --all`) and maps when its
+origin equals a project's and a root is shared; no match, two, or a shallow clone leave `JobSpec.project` empty and
+`unregistered` holding why. Such a job is no runner's candidate and, while it waits, its row shows that text
+(`WaitReason::NotRegistered`). The registry is loaded from `runtime.db` at its first use, and written in order by a
+task of its own; `jobs/project-add`, `jobs/project-list` and `jobs/project-remove` are the user's. `os` is the start's `os` (`macos`: a Mac runner's host job, counted heavy, refused for a container
 or `local_only` job); a Mac job's `features` are `xcode-clt` and a `brew:NAME` for each of the project's
 `drgnx-runners-mac-tools`, which the Mac's probe offers by name and at major.minor (`brew:cmake`, `brew:cmake@3.31`),
 and a `tool:PIN` for each of its `drgnx-runners-mac-toolchains` (`tool:rust@1.95`). The registry installs every

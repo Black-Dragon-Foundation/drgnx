@@ -32,7 +32,7 @@ pub use backfill::{Need, backfill_ok, budget_at, expected_end, reservation};
 pub use classify::{ExitEvidence, classify};
 pub use drain::{drain_abandon, drain_may_evict_p5, drain_may_start, drain_paused};
 pub use evict::{may_evict, preempt_victims};
-pub use fair::Drr;
+pub use fair::{Drr, FairOwner};
 pub use history::{HistRow, expected, history_key};
 pub use learn::{Ewma, Learned, Warmth};
 pub use model::*;

@@ -72,6 +72,7 @@ mod tests {
             fresh: false,
             stop_on_red: false,
             project: "p".into(),
+            role: Default::default(),
             trust: JobTrust::PrivateKeys,
             keys: vec!["TOKEN".into()],
             local_only: false,

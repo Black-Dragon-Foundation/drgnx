@@ -107,7 +107,7 @@ drgnx runner feature NAME sandbox|udmabuf|render|kvm on|off --project PROJECT
 | `kvm` | `--device=/dev/kvm` | the device |
 
 A runner offers a feature to a job only when all three hold: the runner is `mine` (a `my-cloud` or `shared`
-machine offers none, enabled or not), you enabled it for the job's project (the project id is the project's folder name until the project registry), and its probe found the device. A job that
+machine offers none, enabled or not), you enabled it for the job's project (by its id: see "Projects" below), and its probe found the device. A job that
 needs a feature no runner offers waits, and its card says it waits for `features`. The runner enforces the same rule
 again when it starts the container: a feature that was not allowed for the job's project is refused there, whatever the
 hub sent. `gpu` stays a plain finding. `udmabuf` is offered only this way. `kvm` on a `mine` runner is a plain finding too, for every
@@ -291,6 +291,32 @@ doesn't have yet waits too, and its row says that `drgnx runner check` on the Ma
 or KVM goes only to a Linux runner whose check found one the runner account can use (a GPU render node, NVIDIA's
 devices, `/dev/kvm`); for now that only picks the machine: the job's container doesn't get the device yet.
 
+
+## Projects
+
+A runner takes only jobs of a **registered project**. You register a repository once, through the hub's methods
+(`drgnx jobs project …` commands come with the `drgnx jobs` command line):
+
+| Method | Params | Does |
+|---|---|---|
+| `jobs/project-add` | `{path, name?}` | registers the repository `path` is in |
+| `jobs/project-list` | `{}` | the registered projects: id, name, origin, root commits |
+| `jobs/project-remove` | `{id}` | forgets a project and its clones |
+
+The hub records the repository's root commits (every one: a repository may have several), its origin URL and the name
+(default: the folder's), and gives the project an id. Every clone and worktree of that repository is that project: the
+hub maps a clone (by its git folder, which all its worktrees share) to the project the first time it sees it, by the
+same origin and a shared root commit, and afterwards checks the mapping with one object lookup, so a clone deleted and
+replaced by another repository at the same path is looked up again. A fork with another origin is another project (its
+caches are not the upstream's). Refused: a shallow clone (`git fetch --unshallow` first: its cut-off commit would look
+like a root), the same repository a second time, and a name already taken. Only you register or remove projects; an
+agent's connection is refused.
+
+Feature opt-ins (above), and later allow-lists, budgets, caches and fairness, name a project by its id. A job's
+project comes only from this registry, never from its folder's name or from what its job pack says (a pack whose
+`:project` is not the registered name is refused). A job whose tree is in no registered project still runs on this
+machine as before; it never goes to a runner, and while it waits its row says so, with the command that registers it
+(or, for a shallow clone or a clone that matches two projects, what to do).
 ## Which jobs go where
 
 All jobs wait in one queue, this machine's and your runners' alike, and each goes to the allowed machine that finishes
