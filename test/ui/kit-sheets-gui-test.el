@@ -117,8 +117,12 @@ line."
                (xm (+ (drgnx-kit-sheet--x (+ beg (aref sp 0)) s edges) (/ (aref sp 1) 2)))
                (rows (cl-loop for y from (max 0 (- top h)) below (+ top h h) ; the whole neighbourhood of the line: the bar is the only thing in the part's colour in this column
                               when (equal colour (drgnx-uitest-pixel snap xm y)) collect y)))
-          (should (equal (list what face 'range-bar-height (aref sp 2))
-                         (list what face 'range-bar-height (length rows)))))))))
+          (should (equal (list what face 'range-bar-height (aref sp 2) nil)
+                         ;; on a mismatch, where and what was read
+                         (list what face 'range-bar-height (length rows)
+                               (unless (= (length rows) (aref sp 2))
+                                 (list :colour colour :xm xm :top top :h h :found rows
+                                       :column (mapcar (lambda (y) (drgnx-uitest-pixel snap xm y)) (number-sequence top (+ top 12)))))))))))))
 
 (defun drgnx-kit-sheet--check-fill (what fill track want total height snap beg s edges)
   "The bar drawn at BEG (WHAT the cell, for the failures), TOTAL device px wide: down the column halfway into its
