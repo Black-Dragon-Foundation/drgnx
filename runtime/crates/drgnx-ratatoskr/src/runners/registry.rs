@@ -394,7 +394,7 @@ fn profile_word(p: Profile) -> &'static str {
     }
 }
 
-/// `serve`'s flags for what the user allowed of RECORD's account, and a workstation's set reserve.
+/// `serve`'s flags for what the user allowed of RECORD's account, a workstation's set reserve, and the timing island.
 fn serve_flags(r: &Record) -> Vec<String> {
     let mut f: Vec<String> = [
         (r.allow_own_account, "--allow-own-account"),
@@ -406,6 +406,9 @@ fn serve_flags(r: &Record) -> Vec<String> {
     .collect();
     if let Some(n) = r.reserve_mib {
         f.extend(["--reserve-mib".to_string(), n.to_string()]);
+    }
+    if let Some(cpus) = &r.island {
+        f.extend(["--island".to_string(), cpus.clone()]);
     }
     f
 }
@@ -1228,10 +1231,18 @@ impl Registry {
             (None, false) => None,
         };
         check_reserve(profile, reserve)?;
-        let new_profile = profile != rec.profile || reserve != rec.reserve_mib;
+        // the island stays until it is set again; empty removes it (`serve` checks it at its start)
+        let island = match &p.island {
+            Some(cpus) if cpus.is_empty() => None,
+            Some(cpus) => Some(cpus.to_string()),
+            None => rec.island.clone(),
+        };
+        let new_profile =
+            profile != rec.profile || reserve != rec.reserve_mib || island != rec.island;
         rec.trust = p.trust.unwrap_or(rec.trust);
         rec.profile = profile;
         rec.reserve_mib = reserve;
+        rec.island = island;
         rec.accept = p.accept.unwrap_or(rec.accept);
         self.cfg.store.put(&rec).await.map_err(failed)?;
         self.cfg.queue.set_runner(

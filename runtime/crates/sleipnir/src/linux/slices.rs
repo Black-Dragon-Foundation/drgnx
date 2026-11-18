@@ -126,20 +126,46 @@ pub fn direct_cpus(manager: &Path, slice: &str, cpus: &str) -> Result<(), String
 /// A timing job's own slice is `<root>-timing-<id>.slice` ([`timing_job_slice`]), so it runs on the island while the
 /// work slice runs on the rest (design §5.6).
 pub fn timing_slice(root: &str, island: &str) -> Result<String, String> {
-    let _ = (root, island);
-    Err("not yet".into())
+    if !plain(root) {
+        return Err(format!("the slice root {root:?} is not a plain name"));
+    }
+    cpus_of(island)?;
+    Ok(format!("{root}-timing.slice"))
 }
 
 /// The slice of timing job ID under ROOT: `<root>-timing-<id>.slice`.
 pub fn timing_job_slice(root: &str, id: &str) -> Result<String, String> {
-    let _ = (root, id);
-    Err("not yet".into())
+    job_slice(root, id).map(|_| format!("{root}-timing-{id}.slice"))
 }
 
 /// CPUS as a kernel CPU list, ranges joined (`6-11,18-23`).
 pub fn cpu_list(cpus: &[u32]) -> String {
-    let _ = cpus;
-    String::new()
+    let mut sorted = cpus.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut parts: Vec<String> = vec![];
+    let mut i = 0;
+    while i < sorted.len() {
+        let mut j = i;
+        while j + 1 < sorted.len() && sorted[j + 1] == sorted[j] + 1 {
+            j += 1;
+        }
+        parts.push(if i == j {
+            sorted[i].to_string()
+        } else {
+            format!("{}-{}", sorted[i], sorted[j])
+        });
+        i = j + 1;
+    }
+    parts.join(",")
+}
+
+/// The CPUs of LIST (a kernel CPU list), or why it is none.
+fn cpus_of(list: &str) -> Result<Vec<u32>, String> {
+    super::probe::parse_cpu_list(list)
+        .ok()
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| format!("{list:?} is not a CPU list (such as 0-5,12-17)"))
 }
 
 /// What the timing slice became: an isolated partition (no scheduler balancing across it), a root partition, or a
@@ -155,14 +181,53 @@ pub enum Partition {
 /// Makes SLICE (under the user manager's cgroup MANAGER) an isolated partition, else a root one, else leaves it a
 /// member; a fallback is said once per runner (SAID).
 pub fn set_partition(manager: &Path, slice: &str, said: &AtomicBool) -> Partition {
-    let _ = (manager, slice, said);
-    Partition::Isolated
+    let file = manager
+        .join(super::probe::slice_path(slice))
+        .join("cpuset.cpus.partition");
+    // the kernel takes a write it can't honour and reads back "<mode> invalid (why)"
+    let takes = |mode: &str| {
+        fs::write(&file, mode).is_ok()
+            && fs::read_to_string(&file)
+                .is_ok_and(|s| s.trim_start().starts_with(mode) && !s.contains("invalid"))
+    };
+    let p = if takes("isolated") {
+        Partition::Isolated
+    } else if takes("root") {
+        Partition::Root
+    } else {
+        let _ = fs::write(&file, "member");
+        Partition::Member
+    };
+    if p != Partition::Isolated && !said.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "sleipnir: the timing slice {slice} is a {} partition, not isolated: the island has its CPUs, and the 
+             scheduler may still balance across it",
+            if p == Partition::Root { "root" } else { "plain member (AllowedCPUs only)" }
+        );
+    }
+    p
 }
 
 /// Whether ISLAND (a CPU list) is whole L3 groups as CPU_DIR (`/sys/devices/system/cpu`) reads them: every CPU of an
 /// L3 group it touches is in it, so the island never shares a cache with the work.
 pub fn island_whole_l3(cpu_dir: &Path, island: &str) -> Result<(), String> {
-    let _ = (cpu_dir, island);
+    let want = cpus_of(island)?;
+    for cpu in &want {
+        let file = cpu_dir.join(format!("cpu{cpu}/cache/index3/shared_cpu_list"));
+        let text = fs::read_to_string(&file).map_err(|e| {
+            format!(
+                "the island's CPU {cpu}: its L3 group ({}): {e}",
+                file.display()
+            )
+        })?;
+        let group = cpus_of(text.trim())?;
+        if let Some(out) = group.iter().find(|c| !want.contains(c)) {
+            return Err(format!(
+                "the island {island} splits the L3 group {} (CPU {out} is outside it): an island is whole L3 groups",
+                text.trim()
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -176,8 +241,16 @@ pub fn island_on(
     by_systemd: bool,
     said: &AtomicBool,
 ) -> Result<Option<Partition>, String> {
-    let _ = (manager, root, on, by_systemd, said);
-    Ok(None)
+    let work = format!("{root}-work.slice");
+    let Some((island, rest)) = on else {
+        return set_cpus(manager, &work, "", by_systemd).map(|()| None);
+    };
+    let timing = timing_slice(root, island)?;
+    run::systemctl_ok(&["start", &timing])?;
+    // work first, so the island is free before the timing job starts on it
+    set_cpus(manager, &work, rest, by_systemd)?;
+    set_cpus(manager, &timing, island, by_systemd)?;
+    Ok(Some(set_partition(manager, &timing, said)))
 }
 
 #[cfg(test)]

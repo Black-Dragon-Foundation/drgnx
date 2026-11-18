@@ -1582,7 +1582,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |
 | `runners/probe-host` | user | `{host: string}` | `{effective: Effective, facts?: HostFacts, missing?: [Missing]}` | no |
 | `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
-| `runners/set` | user | `{accept?: "all" \| "heavy", name: Id, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/set` | user | `{accept?: "all" \| "heavy", island?: string, name: Id, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/unbench` | user | `{name: Id}` | `Runner` | yes |
 | `say/end` | user | `{id: Id}` | `boolean` | yes |
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |

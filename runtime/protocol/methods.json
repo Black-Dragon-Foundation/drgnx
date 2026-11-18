@@ -38002,6 +38002,14 @@
               }
             ]
           },
+          "island": {
+            "description": "The timing island (`--island`): a CPU list of whole L3 groups (`0-5,12-17`) timing jobs run on; empty removes\nit. A change reconnects the runner, whose `serve` checks it against the machine's caches.",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "$ref": "#/$defs/Id"
           },

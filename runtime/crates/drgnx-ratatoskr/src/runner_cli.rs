@@ -8,7 +8,7 @@
 //!                 [--reserve-mib N]
 //! runner check NAME | bench NAME | unbench NAME
 //! runner trust NAME mine|my-cloud|shared
-//! runner profile NAME dedicated|workstation [--reserve-mib N]   (applied at once)
+//! runner profile NAME dedicated|workstation [--reserve-mib N] [--island CPUS]   (applied at once)
 //! runner remove NAME [--yes]
 //! runner audit [--key K] [--job J]          (the keys sent to jobs and read by them, oldest first)
 //! runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]     (prints the role's policy; no hub call)
@@ -139,7 +139,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             "allow-admin",
             "reserve-mib",
         ],
-        "profile" => &["reserve-mib"],
+        "profile" => &["reserve-mib", "island"],
         "remove" => &["yes"],
         "audit" => &["key", "job"],
         "cloud" => &["hub", "regions", "sizes", "project", "member", "yes"],
@@ -244,11 +244,18 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             })
         }
         "profile" => {
-            want(2, "profile NAME dedicated|workstation [--reserve-mib N]")?;
+            want(
+                2,
+                "profile NAME dedicated|workstation [--reserve-mib N] [--island CPUS]",
+            )?;
             let profile = one_of("profile", words[1].clone(), &PROFILES)?;
             let mut params = json!({"name": words[0], "profile": profile});
             if let Some(n) = reserve()? {
                 params["reserve_mib"] = json!(n);
+            }
+            // the timing island, a CPU list (the runner checks it against its caches)
+            if let Some(cpus) = opt("island") {
+                params["island"] = json!(cpus);
             }
             Ok(RunnerCommand::Call {
                 method: "runners/set",

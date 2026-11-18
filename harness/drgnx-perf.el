@@ -1241,8 +1241,23 @@ differ, (:verdict no-regression) when all agree, (:verdict not-comparable) when 
   "Nil when this process runs on its timing ISLAND, else an error before anything is measured (runners design §5.6).
 ISLAND is a CPU list, by default $DRGNX_PERF_ISLAND (set by a runner for a job in the timing lane; none or empty: no
 island, nothing to check); ALLOWED is the CPUs this process may use, by default its `Cpus_allowed_list'."
-  (ignore island allowed)
-  nil)
+  (let* ((island (or island (getenv "DRGNX_PERF_ISLAND")))
+         (allowed (or allowed
+                      (with-temp-buffer
+                        (insert-file-contents "/proc/self/status")
+                        (and (re-search-forward "^Cpus_allowed_list:[ \t]*\\(.*\\)$" nil t)
+                             (match-string 1)))))
+         (cpus (lambda (list)
+                 (sort (delete-dups
+                        (mapcan (lambda (part)
+                                  (pcase (mapcar #'string-to-number (split-string part "-"))
+                                    (`(,a ,b) (number-sequence a b))
+                                    (`(,a) (list a))))
+                                (split-string (or list "") "," t "[ \t\n]+")))
+                       #'<))))
+    (when (and island (not (string-empty-p island))
+               (not (equal (funcall cpus island) (funcall cpus allowed))))
+      (error "perf: not on the island %s (this process may use %s)" island allowed))))
 
 (defun drgnx-perf-cpuset-args (cpus &optional topology)
   "The container run arguments that give the lab CPUS cores (\"2\" or \"4\", $DRGNX_PERF_CPUS; review M14):
