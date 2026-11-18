@@ -322,6 +322,8 @@ pub enum Outcome {
 pub struct Ticked {
     pub starts: Vec<String>,
     pub outcomes: Vec<Outcome>,
+    /// Jobs here evicted for a whole-machine run's drain: the job layer stops each and starts it again.
+    pub evict: Vec<String>,
 }
 
 /// A job's row as the queue knows it.
@@ -4410,6 +4412,112 @@ mod tests {
         );
         ran(&q, "t", 130);
         assert_eq!(q.tick(131).starts, vec!["w3".to_string()]);
+    }
+
+    /// A queue whose machine admits four jobs at once, and a whole-machine timing run T pinned to MACHINE.
+    fn drain_queue(dir: &std::path::Path) -> Arc<Queue> {
+        Queue::new(QueueCfg {
+            hub_id: "h".into(),
+            exec_root: dir.to_path_buf(),
+            local: LocalRunner::new(super::super::local::Admission::Fixed(4), dir),
+            db: None,
+        })
+        .0
+    }
+
+    fn whole_run(machine: Machine) -> Submit {
+        let mut t = job("t", Priority::P3, 64);
+        t.spec.lane = forseti::Lane::Timing { pinned: None };
+        t.place.machine = machine;
+        t
+    }
+
+    // [D] pure (design §5.6, `forseti::drain_abandon`): a drain that hasn't emptied its machine within its bound is
+    // given up, the run says so and admission there reopens; the drain starts again a bound later
+    #[test]
+    fn a_drain_that_cannot_finish_is_abandoned_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = drain_queue(dir.path());
+        q.submit(job("w1", Priority::P3, 64), 100);
+        assert_eq!(q.tick(100).starts, vec!["w1".to_string()]);
+        q.submit(whole_run(Machine::Local), 100);
+        q.tick(100);
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+        let gave_up = 100 + forseti::drain::DRAIN_ABANDON_S;
+        q.submit(job("w2", Priority::P3, 64), gave_up);
+        assert_eq!(
+            q.tick(gave_up).starts,
+            vec!["w2".to_string()],
+            "admission reopens"
+        );
+        assert_eq!(
+            q.row("t").unwrap().waiting.as_deref(),
+            Some(
+                "its machine didn't empty in 30 min: the drain gave up, and starts again in 30 min"
+            )
+        );
+        let again = gave_up + forseti::drain::DRAIN_ABANDON_S;
+        q.submit(job("w3", Priority::P3, 64), again);
+        assert!(q.tick(again).starts.is_empty());
+        assert_eq!(
+            q.row("w3").unwrap().waiting.as_deref(),
+            Some("the machine is draining")
+        );
+    }
+
+    // [D] pure (design §5.6, `forseti::drain_may_evict_p5`): once a drain has gone its eviction time, running P5
+    // restartable work on its machine is evicted for it, once each: here for the job layer to stop and start again,
+    // on a runner requeued; other work runs on
+    #[test]
+    fn p5_upkeep_is_evicted_for_the_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = drain_queue(dir.path());
+        q.submit(job("p5", Priority::P5, 64), 100);
+        q.submit(job("w", Priority::P4, 64), 100);
+        assert_eq!(q.tick(100).starts.len(), 2);
+        q.submit(whole_run(Machine::Local), 100);
+        assert!(q.tick(100).evict.is_empty());
+        let late = 100 + forseti::drain::DRAIN_EVICT_P5_S;
+        assert!(q.tick(late - 1).evict.is_empty(), "not before its time");
+        assert_eq!(q.tick(late).evict, vec!["p5".to_string()]);
+        assert!(q.tick(late + 1).evict.is_empty(), "once");
+    }
+
+    // [D] pure (a link fed by hand): the same on a runner: its P5 attempt is cancelled there and the job requeued,
+    // saying why; its P4 work runs on
+    #[tokio::test]
+    async fn p5_upkeep_on_a_runner_is_requeued_for_the_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        for (id, p) in [("p5", Priority::P5), ("w", Priority::P4)] {
+            let mut s = job(id, p, 64);
+            s.place.machine = Machine::Runner("r1".into());
+            q.submit(s, 100);
+        }
+        q.tick(100);
+        for id in ["p5", "w"] {
+            let r = current(&q, id);
+            admitted(&q, "r1", &r, 64, 101);
+            started(&q, "r1", &r, 102);
+        }
+        q.submit(whole_run(Machine::Runner("r1".into())), 103);
+        q.tick(103);
+        let late = 103 + forseti::drain::DRAIN_EVICT_P5_S;
+        q.tick(late);
+        let row = q.row("p5").unwrap();
+        assert_eq!(row.machine, None, "{row:?}");
+        assert!(
+            row.waiting
+                .as_deref()
+                .is_some_and(|w| w.contains("evicted for a whole-machine run")),
+            "{row:?}"
+        );
+        assert_eq!(q.row("w").unwrap().machine.as_deref(), Some("r1"));
     }
 
     // [D] pure (design §5.2 item 2): a job waits for its needs as `needs`, holding no slot and no reservation; it is
