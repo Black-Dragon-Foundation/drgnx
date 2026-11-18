@@ -47308,6 +47308,10 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`view/env`: how VIEW looks in display class CLASS, measured in the view's buffer. EPOCH is the editor's number for\nthis env (the hub echoes it on every patch); a new epoch makes the next patch a reset.",
         "properties": {
+          "ascii": {
+            "description": "The class's frame is a terminal that is not UTF-8 (`drgnx-ui-ascii-frame-p`): a glyph the hub takes from its own\ntable (a tab's icon, `drgnx_rows::kit::ALL_GLYPHS`) is drawn in its ASCII form.",
+            "type": "boolean"
+          },
           "attach": {
             "description": "The first env of a new buffer for this (view, class): a pair the hub already holds for the connection (no\n`view/close` came) is dropped and starts again, so the new buffer gets the rows whole.",
             "type": "boolean"

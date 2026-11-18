@@ -47,6 +47,7 @@ fn env(class: &str, epoch: u64) -> ViewEnv {
         tz: String::new(),
         reduced_motion: false,
         glyphs: Vec::new(),
+        ascii: false,
         density: Default::default(),
         attach: false,
         rows_in_sja: false,

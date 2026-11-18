@@ -71,6 +71,10 @@ pub struct ViewEnv {
     /// (`drgnx_rows::kit`).
     #[serde(default)]
     pub glyphs: Vec<(String, String)>,
+    /// The class's frame is a terminal that is not UTF-8 (`drgnx-ui-ascii-frame-p`): a glyph the hub takes from its own
+    /// table (a tab's icon, `drgnx_rows::kit::ALL_GLYPHS`) is drawn in its ASCII form.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ascii: bool,
     /// The user's density (`drgnx-look-density`): the kit's sizes that follow it (a tree level's indent). None:
     /// comfortable. A change is a new epoch, as a scale change is.
     #[serde(default)]
@@ -97,6 +101,7 @@ impl ViewEnv {
             scale: self.scale,
             tty: self.display == Display::Tty,
             glyphs: &self.glyphs,
+            ascii: self.ascii,
             density: self.density,
             icons: None,
         }

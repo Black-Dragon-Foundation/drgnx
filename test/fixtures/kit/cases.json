@@ -120,6 +120,8 @@
     {"name": "tab-modified", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "close": true, "modified": true}},
     {"name": "tab-panel", "comp": {"c": "tab", "title": "Terminal", "size": "panel"}},
     {"name": "tab-panel-selected", "comp": {"c": "tab", "title": "Debug Console", "size": "panel", "state": "selected", "action": {"kind": "ui-button", "args": ["area-show"]}}},
+    {"name": "tab-icon", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "icon": "file-code", "close": true}},
+    {"name": "tab-panel-icon", "comp": {"c": "tab", "title": "Debug Console", "size": "panel", "state": "selected", "icon": "terminal"}},
     {"name": "segmented", "comp": {"c": "segmented", "current": 1, "items": [["Map", {"kind": "ui-button", "args": ["map"]}], ["Board", {"kind": "ui-button", "args": ["board"]}], ["Flow", {"kind": "ui-button", "args": ["flow"]}]]}}
   ]
 }

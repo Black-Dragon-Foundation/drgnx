@@ -283,6 +283,8 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
                                           :tz (format-time-string "%z")
                                           :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)
                                           :glyphs (drgnx-view-env--kit-glyphs (window-frame w))
+                                          ;; a terminal that is not UTF-8: the hub's own glyphs (a tab's icon) in ASCII
+                                          :ascii (if (drgnx-ui-ascii-frame-p (window-frame w)) t :false)
                                           ;; the user's density: the kit's sizes that follow it (a change is a new epoch)
                                           :density (symbol-name (or (bound-and-true-p drgnx-look-density) 'comfortable))
                                           ;; rows only read, never drawn: the hub fits them to no window

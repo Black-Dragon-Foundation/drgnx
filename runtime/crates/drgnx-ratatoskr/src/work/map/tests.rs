@@ -1303,6 +1303,7 @@ fn kit_env(scale: f32) -> drgnx_rows::kit::KitEnv<'static> {
         scale,
         tty: false,
         glyphs: &[],
+        ascii: false,
         density: drgnx_rows::kit::Density::Comfortable,
         icons: None,
     }
