@@ -207,10 +207,7 @@
               ((panel-current) :bg sel-quiet :fg fg :edge sel-quiet :ring (1 6)
                :inherit (drgnx-ui-text drgnx-selected-quiet tab-line-tab-current) :font (drgnx-ui-text))
               ((preview) :attrs (:slant italic)))
-       :replaces ((drgnx-chrome-tab . drgnx-kit-tab) (drgnx-chrome-tab-active . drgnx-kit-tab-current)
-                  (drgnx-chrome-tab-current . drgnx-kit-tab-current-inactive) (drgnx-wb-tab . drgnx-kit-tab)
-                  (drgnx-wb-tab-current . drgnx-kit-tab-panel-current) (drgnx-work-lens-title . drgnx-kit-tab-current)
-                  (drgnx-chrome-tab-preview . drgnx-kit-tab-preview))
+       :replaces ((drgnx-work-lens-title . drgnx-kit-tab-current))
        :helpers nil :lint t)
   ;; a segmented switch: its items in one track (a 1 px ring in the border's colour, radius 6), the current one on the
   ;; quiet selection in the body text's colour, the others muted; each item an action.  The current item's label is

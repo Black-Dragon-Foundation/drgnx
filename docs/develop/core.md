@@ -3654,7 +3654,8 @@ tiles**, ordinary windows of the frame's window tree, not side windows. Callers 
 `-hide`, `-focus`, `-window` and `-resize`; the backend is registered in `drgnx-pane--backends` from
 `wb/drgnx-grid.el`.
 
-- A **tool tile** has the role `tile` (chrome `tile`: the tab row of its stack on its tab line, no mode line),
+- A **tool tile** has the role `tile` (chrome `tile`: the tab row of its stack on its tab line, each kind the kit's
+  panel tab, `drgnx-ui-kit-tab`, the shown one selected; no mode line),
   `drgnx-pane-stack` (its kinds, the shown one first), `drgnx-tile-id` (an integer, per frame), `drgnx-tile-dock`
   (`left`, `right`, `bottom`, nil once moved off its home), `no-delete-other-windows`, `no-other-window`, and a
   `delete-window` parameter that hides it. It is dedicated (`drgnx`), so `display-buffer` never puts another buffer
@@ -3937,8 +3938,9 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
 - `(drgnx-ui-kit-tab TITLE SIZE STATE ICON CLOSE WHERE &optional MODIFIED FRAME)` and `(drgnx-ui-kit-segmented ITEMS
   CURRENT WHERE &optional FRAME)` (ITEMS `((LABEL . ACTION)...)`, ACTION as a button's) build them as strings. The
   editor's tab line (`drgnx-chrome--tab`), an area's tab row (`drgnx-area`), the Detail island's title and the Work lens
-  bar (`drgnx-work-lens-string`) draw with them; `drgnx-wb-tab*`, `drgnx-chrome-tab`, `-active`, `-current` and the
-  `drgnx-work-lens-*` faces are aliases of the kit faces once `ui/look` is on. The action kind `ui-window-button`
+  bar (`drgnx-work-lens-string`) and a tool tile's tab row (`drgnx-grid--tab-row`) draw with them; the
+  `drgnx-work-lens-*` faces are aliases of the kit faces once `ui/look` is on (the old `drgnx-wb-tab*` and
+  `drgnx-chrome-tab*` faces are gone). The action kind `ui-window-button`
   selects the clicked window before it runs its action (a lens item switches the lens of the window it is in).
 
 ### The text input (flow Task 22a)

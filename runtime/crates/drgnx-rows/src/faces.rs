@@ -222,24 +222,12 @@ pub enum FaceId {
     UiButtonPrimary,
     /// `drgnx-ui-close`
     UiClose,
-    /// `drgnx-wb-tab`
-    WbTab,
-    /// `drgnx-wb-tab-current`
-    WbTabCurrent,
     /// `drgnx-buffers-close`
     BuffersClose,
     /// `drgnx-buffers-modified`
     BuffersModified,
     /// `drgnx-buffers-active`
     BuffersActive,
-    /// `drgnx-chrome-tab`
-    ChromeTab,
-    /// `drgnx-chrome-tab-current`
-    ChromeTabCurrent,
-    /// `drgnx-chrome-tab-active`
-    ChromeTabActive,
-    /// `drgnx-chrome-tab-preview`
-    ChromeTabPreview,
     /// `drgnx-chrome-crumb`
     ChromeCrumb,
     /// `drgnx-explorer-root`
@@ -1144,7 +1132,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 566] = [
+    pub const ALL: [FaceId; 560] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1252,15 +1240,9 @@ impl FaceId {
         FaceId::UiButton,
         FaceId::UiButtonPrimary,
         FaceId::UiClose,
-        FaceId::WbTab,
-        FaceId::WbTabCurrent,
         FaceId::BuffersClose,
         FaceId::BuffersModified,
         FaceId::BuffersActive,
-        FaceId::ChromeTab,
-        FaceId::ChromeTabCurrent,
-        FaceId::ChromeTabActive,
-        FaceId::ChromeTabPreview,
         FaceId::ChromeCrumb,
         FaceId::ExplorerRoot,
         FaceId::ExplorerDirectory,
@@ -1823,15 +1805,9 @@ impl FaceId {
             FaceId::UiButton => "drgnx-ui-button",
             FaceId::UiButtonPrimary => "drgnx-ui-button-primary",
             FaceId::UiClose => "drgnx-ui-close",
-            FaceId::WbTab => "drgnx-wb-tab",
-            FaceId::WbTabCurrent => "drgnx-wb-tab-current",
             FaceId::BuffersClose => "drgnx-buffers-close",
             FaceId::BuffersModified => "drgnx-buffers-modified",
             FaceId::BuffersActive => "drgnx-buffers-active",
-            FaceId::ChromeTab => "drgnx-chrome-tab",
-            FaceId::ChromeTabCurrent => "drgnx-chrome-tab-current",
-            FaceId::ChromeTabActive => "drgnx-chrome-tab-active",
-            FaceId::ChromeTabPreview => "drgnx-chrome-tab-preview",
             FaceId::ChromeCrumb => "drgnx-chrome-crumb",
             FaceId::ExplorerRoot => "drgnx-explorer-root",
             FaceId::ExplorerDirectory => "drgnx-explorer-directory",
@@ -2395,15 +2371,9 @@ impl FaceId {
             "drgnx-ui-button" => FaceId::UiButton,
             "drgnx-ui-button-primary" => FaceId::UiButtonPrimary,
             "drgnx-ui-close" => FaceId::UiClose,
-            "drgnx-wb-tab" => FaceId::WbTab,
-            "drgnx-wb-tab-current" => FaceId::WbTabCurrent,
             "drgnx-buffers-close" => FaceId::BuffersClose,
             "drgnx-buffers-modified" => FaceId::BuffersModified,
             "drgnx-buffers-active" => FaceId::BuffersActive,
-            "drgnx-chrome-tab" => FaceId::ChromeTab,
-            "drgnx-chrome-tab-current" => FaceId::ChromeTabCurrent,
-            "drgnx-chrome-tab-active" => FaceId::ChromeTabActive,
-            "drgnx-chrome-tab-preview" => FaceId::ChromeTabPreview,
             "drgnx-chrome-crumb" => FaceId::ChromeCrumb,
             "drgnx-explorer-root" => FaceId::ExplorerRoot,
             "drgnx-explorer-directory" => FaceId::ExplorerDirectory,

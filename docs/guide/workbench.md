@@ -299,7 +299,8 @@ Hovering a file tab lights that one only, the whole tab. Tabs are dimmed; the sh
 in the body text's colour in the active editor group and muted in another group). The breadcrumb row is the header
 line, on the editor's colour, so the shown tab, the breadcrumb and the code are one surface. The other rows of chrome
 (tab line, dock titles, panel tabs, the top line) are the theme's tab-line background. All of them are in the UI font.
-Customize `drgnx-chrome-tab*`, `header-line` and `drgnx-wb-bar` to change them.
+Customize the kit's tab faces (`drgnx-kit-tab*`, the preview tab's italic included), `header-line` and
+`drgnx-wb-bar` to change them.
 
 **On a graphical frame** the tab row is `tab-row` high (34 logical pixels at the comfortable density) on the `panel`
 surface, six pixels in from the card's edge, with a hairline (the `drgnx-border-subtle` face) along its bottom; tabs
