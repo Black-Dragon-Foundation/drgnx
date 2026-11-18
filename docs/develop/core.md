@@ -3882,7 +3882,10 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
 - `tab` (variant `size` editor, panel): an editor tab is 34 px with 10 px before and 8 px after, the shown tab on the
   editor's surface in the body text's colour (`drgnx-kit-tab-current`; a shown tab of another group muted,
   `drgnx-kit-tab-current-inactive`), the others muted on the row (`drgnx-kit-tab`); a panel tab (an area's tab row) is
-  30 px with 9 px each side, the shown one a pill on the quiet selection (`drgnx-kit-tab-panel-current`). Neither is
+  30 px with 9 px each side, the shown one a pill on the quiet selection (`drgnx-kit-tab-panel-current`). The area's
+  row is 32 px with the tabs' text in its middle, and under Glitnir the shown tab's pill is 24 px of it (a box fit to
+  its text, `drgnx-area--tab-row-parts`); the tabs' text takes the kit face's size as an absolute height, since the
+  header line's relative UI size would otherwise apply twice. Neither is
   ever bold. Its parts: the icon (14 px, an image where the frame draws SVG icons, else its glyph and a space), the
   title, then with a close mark the gap and an 18 px slot: 2 px, the `x` icon (the `close` glyph on a terminal; the
   `dot` glyph, muted, when the file is modified), 2 px. The close mark is hidden (`drgnx-control-hidden`) on a tab
