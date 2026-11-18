@@ -113,6 +113,10 @@ at its end.  Each row's end (the newline after its tail) is in sight."
             (set-window-parameter w 'drgnx-role 'dock)
             (drgnx-scrollbar-mode 1)
             (drgnx-test-wait (lambda () (window-parameter w 'drgnx-ruler-fringe)) :secs 5 :what "the strip's fringe")
+            ;; narrowed as the scenes' widths check narrows the side bar's Explorer (226 to 154 px of body), the frame's
+            ;; preserved sizes ignored
+            (redisplay t)
+            (window-resize w (- (drgnx-px 154) (window-body-width w t)) t t t)
             (let ((rows 0) (cut nil))
               (cl-flet ((measure ()
                           (redisplay t)
