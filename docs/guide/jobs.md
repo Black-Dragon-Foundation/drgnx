@@ -71,6 +71,15 @@ it does not depend on the agent that started it or on the editor, and it survive
   never stuck behind a need that a lower priority would let be evicted. A start with `os: macos` (a Naglfar build, macOS tests) runs only
   on a Mac runner, as a host job (never in a container): it counts as heavy, and waits for a Mac that has its
   project's `drgnx-runners-mac-tools` and `drgnx-runners-mac-toolchains`.
+- **Timing runs.** A start with `lane: "timing"` is a measurement: it runs on its runner's timing island (a whole L3
+  group the runner's profile declares) while no other timing job holds it ("the timing island is busy"), and while it
+  runs work there has the other cores only. A machine without an island refuses it ("its machine has no timing
+  island"): a timing run never takes a whole machine unasked. To measure on the whole machine, add
+  `whole_machine: true` and name the `machine`: the run waits while any priority 1–2 job is queued or running
+  ("behind priority 2 work"), then its machine drains (new jobs there wait, "the machine is draining"), it starts once
+  the machine is empty, and the machine stays its own until it ends. `whole_machine` without the timing lane or a
+  named machine refuses the start. The time box a runner is offered is the job's own, at most three times the p95 of
+  its last runs there (else elsewhere).
 
 ### The editor's jobs
 

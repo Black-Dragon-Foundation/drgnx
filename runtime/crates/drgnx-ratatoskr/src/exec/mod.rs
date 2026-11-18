@@ -476,6 +476,7 @@ impl ExecSpec {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         s.local_only = self.place.local_only;
+        s.lane = self.place.lane.clone();
         s.keys = self.place.keys.clone();
         s.writes = self.place.writes.clone();
         if self.place.heavy {
@@ -3155,8 +3156,31 @@ async fn placement(
 /// The lane `exec/start` asks for (`lane`, `whole_machine`): a timing run is an island run unless it asks for the whole
 /// machine, which needs the timing lane and a named machine (design §5.6).
 pub(crate) fn lane_of(p: &StartParams) -> Result<forseti::Lane, Error> {
-    let _ = p;
-    Ok(forseti::Lane::Work)
+    use runstav::methods::exec::JobLane;
+    let timing = p.lane == Some(JobLane::Timing);
+    if p.whole_machine != Some(true) {
+        return Ok(if timing {
+            forseti::Lane::Timing { pinned: Some(0) }
+        } else {
+            forseti::Lane::Work
+        });
+    }
+    if !timing {
+        return Err(crate::agents::session::invalid(
+            "whole_machine",
+            "a whole-machine run is a timing run: lane \"timing\"",
+        ));
+    }
+    if matches!(
+        Machine::parse(p.machine.as_ref().map(|m| m.as_str())),
+        Machine::Auto
+    ) {
+        return Err(crate::agents::session::invalid(
+            "whole_machine",
+            "a whole-machine run names its machine (`machine`)",
+        ));
+    }
+    Ok(forseti::Lane::Timing { pinned: None })
 }
 
 /// The hosts a container job's network grant reaches (its cell over the caps' `drgnx-agents-net-hosts`): what its

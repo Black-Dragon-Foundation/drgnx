@@ -82,14 +82,43 @@ pub fn budget(m: &MachineState, limits: &Limits) -> Budget {
         - limits.reserve_user_mib as i64
         - ours as i64
         - others as i64;
-    let cpu = f64::from(limits.cores_usable) - m.running.iter().map(cpu_counted).sum::<f64>();
+    // while a timing job holds the island, work has the other cores; the timing job's own CPU is the island's
+    let held = m
+        .island
+        .as_ref()
+        .and_then(|i| i.busy.as_ref().map(|j| (i.cpus, j)));
+    let island = held.map_or(0.0, |(cpus, _)| f64::from(cpus));
+    let used: f64 = m
+        .running
+        .iter()
+        .filter(|r| held.is_none_or(|(_, j)| r.id != *j))
+        .map(cpu_counted)
+        .sum();
+    let cpu = f64::from(limits.cores_usable) - island - used;
     Budget { mem_mib, cpu }
 }
 
-/// Whether `job` may start on `m` now. The checks, in order: the count (fixed slots); power; the gap since the last
-/// start; memory (`budget ≥ mem_min`); CPU (`budget ≥` the expected CPU, with overcommit while the running jobs are
-/// mostly idle); the PSI limits; the disk after the job's need. `eff` is the job's effective priority; F1's checks
-/// don't read it.
+/// The timing lane (design §5.6): an island run needs the machine's island, free; a whole-machine run needs the
+/// machine empty (its drain, [`crate::drain`], has emptied it). Work passes.
+fn timing(job: &Job, m: &MachineState) -> Result<(), WaitReason> {
+    match job.spec.lane {
+        Lane::Work => Ok(()),
+        Lane::Timing { pinned: Some(_) } => match &m.island {
+            None => Err(WaitReason::NoIsland),
+            Some(i) if i.busy.is_some() => Err(WaitReason::IslandBusy),
+            Some(_) => Ok(()),
+        },
+        Lane::Timing { pinned: None } if m.running.iter().any(|r| r.id != job.id) => {
+            Err(WaitReason::DrainWaits)
+        }
+        Lane::Timing { pinned: None } => Ok(()),
+    }
+}
+
+/// Whether `job` may start on `m` now. The checks, in order: the timing lane ([`timing`]); the count (fixed
+/// slots); power; the gap since the last start; memory (`budget ≥ mem_min`); CPU (`budget ≥` the expected CPU, with
+/// overcommit while the running jobs are mostly idle); the PSI limits; the disk after the job's need. `eff` is the
+/// job's effective priority; F1's checks don't read it.
 pub fn admit(
     job: &Job,
     eff: Priority,
@@ -99,6 +128,7 @@ pub fn admit(
     limits: &Limits,
 ) -> Result<(), WaitReason> {
     let _ = eff;
+    timing(job, m)?;
     if let Some(n) = limits.fixed_slots {
         return if m.running.len() as u64 >= u64::from(n) {
             Err(WaitReason::Threads)
@@ -296,16 +326,20 @@ mod tests {
             running("t1", Priority::P3, m.now - 60, 512, 512),
             running("w1", Priority::P3, m.now - 60, 512, 512),
         ];
+        // busy jobs (3 of their 4 cores): no overcommit
+        for r in &mut m.running {
+            r.expected.cpu = 3.0;
+        }
         m.island = Some(Island {
             cpus: 12,
             busy: None,
         });
-        assert_eq!(budget(&m, &lim).cpu, 22.0);
+        assert_eq!(budget(&m, &lim).cpu, 18.0);
         m.island.as_mut().unwrap().busy = Some(JobId("t1".into()));
-        assert_eq!(budget(&m, &lim).cpu, 24.0 - 12.0 - 1.0);
-        // a work job wanting more than the rest waits for cores
+        assert_eq!(budget(&m, &lim).cpu, 24.0 - 12.0 - 3.0);
+        // a work job wanting more than the rest waits for cores (it would fit the whole machine's 18)
         let mut big = job("big", Priority::P3, 0);
-        big.spec.cores.min = 12;
+        big.spec.cores.min = 10;
         let b = budget(&m, &lim);
         assert_eq!(
             admit(
@@ -313,7 +347,7 @@ mod tests {
                 Priority::P3,
                 &Expected {
                     minutes: 10.0,
-                    cpu: 12.0,
+                    cpu: 10.0,
                     mem_p95_mib: Some(512)
                 },
                 &m,
