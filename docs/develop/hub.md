@@ -1531,7 +1531,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
-| `minimap/watch` | user | `{file: string, on: boolean}` | `boolean` | no |
+| `minimap/watch` | user | `{coverage?: [string], file: string, heat?: string, on: boolean, profile?: string}` | `boolean` | no |
 | `notebook/clear` | user | `{cell?: string, id: string}` | `boolean` | no |
 | `notebook/close` | user | `{id: string}` | `boolean` | no |
 | `notebook/execute` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
@@ -3264,6 +3264,28 @@ With the labels goes the file's `folds` layer (`items: [[first line, last line, 
 fetched pack's in its parse worker; [packs.md](packs.md), "Fold queries"). A file with no grammar has no `folds`
 layer. Nidhogg takes it as the line model's `hub` fold source for a buffer that has no tree-sitter parser of its own;
 one with a parser folds by the same query in the editor.
+
+With `heat` (`blame`, `coverage`, `profile` or `agent-read`) the watch also sends that heat layer, `heat:S` with
+`items: [[first line, last line, value]]`, value 0 to 1000, lines from 1 (`view/heat.rs`, design X3), with the labels
+and again when they go again:
+
+- `blame`: git's blame of the file (`git/blame`'s, the editor's text where the history tracks it): each line's commit
+  time between the file's oldest commit (0) and newest (1000); lines not committed are 1000.
+- `coverage`: the newest report among the watch's `coverage` paths (relative to the file's worktree; `*` and `?` match
+  in the last part) that names the file: an lcov tracefile, a Cobertura XML report or llvm-cov's JSON export. A
+  covered line is 1000, an uncovered one 0. The reports' folders are watched: a report written there (a test run)
+  sends the layer again after `QUIET`.
+- `profile`: the watch's `profile` file: pprof (gzipped or not), `perf script` text with source lines (`-F +srcline`)
+  or a speedscope file. Each line's own samples (a pprof sample's first value goes to its leaf's innermost line; a
+  speedscope evented profile's self time); the hottest line is 1000.
+- `agent-read`: the Work space's `read` steps of the file (`step_detail`, by its absolute or worktree-relative name;
+  `norn::read::work::reads_of`): how many reads cover each line, the most-read 1000.
+
+A report names a file by its absolute path or a path relative to where it ran: a relative name matches the file when
+it is a suffix of it at a `/`. Reports and profiles over 256 MiB are not read. Each span also has a fact for the peek
+("2 days ago · 9f3c21e read tables lazily · r.okafor", "covered · 3 hits", "12.5 % of this file's samples",
+"read 2× · claude"); it is kept in the hub until Sjá takes a 4th item element. A watch with another layer, or none,
+or `on: false`, first removes the layer the last one asked for (`items: null`).
 
 ### Folds remembered (`folds/save`, `folds/load`)
 

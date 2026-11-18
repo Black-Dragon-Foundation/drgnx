@@ -2958,6 +2958,7 @@ palette's child frame is not judged, one under any other child frame is an error
 (declare-function nidhogg-view-minimap "nidhogg-views" (what file &optional layer))
 (declare-function drgnx-minimap--spec "drgnx-minimap" (window))
 (declare-function drgnx-minimap--file "drgnx-minimap" (buffer))
+(declare-function drgnx-ruler--place "drgnx-ruler" (window))
 
 (defun drgnx-look-scene--parser-rs ()
   "minimap-folding.html's parser.rs, about 2,850 lines: five MARK sections, each a struct and an impl of eight
@@ -3057,6 +3058,67 @@ the window's top rows, dark."
       (setq drgnx-sticky--pin-shown (list (cons w 'scene)))
       (drgnx-sticky--fill w scopes)
       (drgnx-look-scene--settle-frame)))
+  (drgnx-look-scene--answer))
+
+;; the heat layer (X3) and the diff minimap (X6): drawn by the glue once Nidhogg's 13-N/17-N and hunk-labels steps
+;; are on the pin; until then the bars draw by class and the scene checks only that the hub sent the layer
+
+(defvar drgnx-minimap-layer)
+
+(defun drgnx-look-scene--minimap-hold (w)
+  "WINDOW W's minimap held open for the shot (as `drgnx-look-scene--minimap-open')."
+  (set-window-parameter w 'drgnx-look-scene-minimap-open t)
+  (advice-add 'drgnx-minimap--spec :around #'drgnx-look-scene--minimap-held)
+  (set-window-parameter w 'glitnir-minimap (drgnx-minimap--spec w))
+  (drgnx-look-scene--settle-frame))
+
+(defun drgnx-look-scene-minimap-heat ()
+  "minimap-layers.html's heat layer: blame age over a Rust file whose first half was committed a year before its
+second half, the minimap held open, dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-heat"
+    (drgnx-look-scene--hub)
+    (let* ((rel "runtime/src/heat.rs") (f (expand-file-name rel drgnx-look-scene--project))
+           (text (drgnx-look-scene--parser-rs)) (half (/ (length text) 2)))
+      (unless (file-exists-p f)
+        (make-directory (file-name-directory f) t)
+        (pcase-dolist (`(,upto ,date) `((,(string-search "\n" text half) "2025-06-01T12:00:00")
+                                        (,(length text) "2026-06-01T12:00:00")))
+          (write-region (substring text 0 upto) nil f nil 'silent)
+          (let ((process-environment (append (list (concat "GIT_AUTHOR_DATE=" date) (concat "GIT_COMMITTER_DATE=" date))
+                                             process-environment)))
+            (drgnx-look-scene--git drgnx-look-scene--project "add" rel)
+            (drgnx-look-scene--git drgnx-look-scene--project "commit" "-q" "-m" (format "heat.rs to %s" date)))))
+      (setq drgnx-minimap-layer 'blame)
+      (drgnx-look-scene--goto rel 812 4 800)
+      (let* ((w (selected-window)) (file (drgnx-minimap--file (window-buffer w))))
+        (drgnx-ruler--place w)
+        (unless (drgnx-look-scene--until 20 "minimap heat"
+                                         (lambda () (and file (nidhogg-view-minimap 'get file "heat:blame"))))
+          (push (format "minimap-heat: no heat:blame layer for %s" file) drgnx-look-scene--errors))
+        (drgnx-look-scene--minimap-hold w))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-minimap-diff ()
+  "minimap-layers.html's diff minimap: the project's uncommitted changes as a diff buffer (no file), each hunk
+labelled, the minimap held open, dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-diff"
+    (let ((b (get-buffer-create "*vc-diff*")))
+      (with-current-buffer b
+        (let ((inhibit-read-only t) (default-directory drgnx-look-scene--project))
+          (erase-buffer)
+          (call-process "git" nil t nil "diff" "HEAD")
+          (diff-mode)
+          (goto-char (point-min))))
+      (switch-to-buffer b)
+      (let ((w (selected-window)))
+        (drgnx-ruler--place w)
+        (unless (length> (plist-get (drgnx-minimap--spec w) :hunk-labels) 0)
+          (push "minimap-diff: no hunk labels in the spec" drgnx-look-scene--errors))
+        (drgnx-look-scene--minimap-hold w))))
   (drgnx-look-scene--answer))
 
 (provide 'drgnx-look-scenes-session)

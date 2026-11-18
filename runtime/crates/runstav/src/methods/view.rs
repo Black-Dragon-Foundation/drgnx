@@ -367,12 +367,59 @@ pub struct OutlineScopes {
 /// `minimap/watch`: the editor shows FILE (absolute) in a minimap (ON), or no longer (not ON).  While a connection
 /// watches it, the hub sends the file's minimap labels (its definitions as the Outline reads them, up to
 /// `MINIMAP_LABELS_MAX` bytes of text) on the model's raw path (`view-model` with `minimap`, docs/develop/hub.md,
-/// "The minimap's layers"), at once and again after the editor's edits to it pause; never per keystroke.
+/// "The minimap's layers"), at once and again after the editor's edits to it pause; never per keystroke.  With HEAT
+/// it also sends that heat layer (`heat:HEAT`), and removes the one an earlier watch asked for.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MinimapWatch {
     pub file: String,
     pub on: bool,
+    /// The heat layer shown: `blame`, `coverage`, `profile` or `agent-read`; none: no heat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heat: Option<String>,
+    /// Where coverage reports are, relative to the file's worktree (`*` and `?` match in the last part): the newest
+    /// that names the file is read, and read again when it changes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coverage: Vec<String>,
+    /// The profile the heat layer `profile` reads (absolute): pprof, `perf script` text or speedscope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+/// The heat layers `minimap/watch` knows.
+pub const MINIMAP_HEAT: [&str; 4] = ["blame", "coverage", "profile", "agent-read"];
+
+fn check_minimap_watch(p: &MinimapWatch) -> Result<(), Error> {
+    check_outline_file(&p.file)?;
+    if p.heat
+        .as_deref()
+        .is_some_and(|h| !MINIMAP_HEAT.contains(&h))
+    {
+        return Err(invalid(
+            "heat",
+            "one of blame, coverage, profile, agent-read",
+        ));
+    }
+    if p.coverage.len() > 32
+        || p.coverage
+            .iter()
+            .any(|c| c.is_empty() || c.len() > OUTLINE_FILE_MAX)
+    {
+        return Err(invalid(
+            "coverage",
+            "at most 32 paths of at most 4096 bytes",
+        ));
+    }
+    if p.profile
+        .as_deref()
+        .is_some_and(|f| check_outline_file(f).is_err())
+    {
+        return Err(invalid(
+            "profile",
+            "an absolute file name of at most 4096 bytes",
+        ));
+    }
+    Ok(())
 }
 
 fn check_outline_file(f: &str) -> Result<(), Error> {
@@ -450,8 +497,8 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "minimap/watch", MinimapWatch(MinimapWatch) -> bool,
             classes: [User], writes: false,
-            doc: "the editor shows a file in a minimap, or no longer: while it does, the hub sends the file's labels (its definitions, up to 8 MiB of text) on the model's raw path, again after edits pause",
-            check: |p: &MinimapWatch| check_outline_file(&p.file),
+            doc: "the editor shows a file in a minimap, or no longer: while it does, the hub sends the file's labels (its definitions, up to 8 MiB of text) and the heat layer asked for (blame, coverage, profile or agent-read) on the model's raw path, again after edits pause",
+            check: check_minimap_watch,
         ),
         method!(
             "outline/scopes", OutlineScopes(OutlineScopesParams) -> OutlineScopes,

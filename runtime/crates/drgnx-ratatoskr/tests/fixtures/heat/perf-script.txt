@@ -1,0 +1,14 @@
+app  1234 100.000001:     250000 cycles:
+	    5555 hot+0x10 (/usr/bin/app)
+  /r/src/a.rs:7
+	    5600 main+0x20 (/usr/bin/app)
+  /r/src/a.rs:2
+
+app  1234 100.000002:     250000 cycles:
+	    5555 hot+0x10 (/usr/bin/app)
+  /r/src/a.rs:7
+
+app  1234 100.000003:     250000 cycles:
+	    5900 lib+0x4 (/usr/lib/libc.so.6)
+	    5600 main+0x24 (/usr/bin/app)
+  /r/src/a.rs:3
