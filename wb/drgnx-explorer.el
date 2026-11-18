@@ -978,7 +978,8 @@ read on the same connection (`git/letters'), which a new hub has lost.  At attac
   "On the rows path, the tail overlay of each drawn row by its key (`drgnx-wb-row-tail-overlay'), moved with the row.")
 
 (defvar-local drgnx-explorer--badges nil
-  "On the rows path, the who-is-here badge overlay (empty, at the name's end, its `after-string') of each drawn row that has one, by key.")
+  "On the rows path, the who-is-here badge overlay (empty, at the name's end, its `after-string') of each drawn row
+that has one, by key.")
 
 (defvar drgnx-explorer-badge-functions nil
   "Called with (ORDINALS DIRP) for a row the hub says agents are at (`drgnx-agents-here': their ordinals, ascending;

@@ -15,7 +15,7 @@ use crate::front::Front;
 use drgnx_rows::faces::FaceId;
 use drgnx_rows::{ImageId, Row, RowBuilder, Tail};
 use runstav::methods::search::{ExplorerParams, ExplorerStarted};
-use runstav::methods::view::{Display, ViewEnv};
+use runstav::methods::view::{Badge, Display, ViewEnv};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::cmp::Ordering as Cmp;
@@ -480,7 +480,7 @@ pub struct RowLook {
     pub one_root: bool,
     /// The editor's who-is-here badge (the env's `badge`): `((file_each, file_limit), (folder_each, folder_limit),
     /// more)`; none: no badge.
-    pub badge: Option<((u32, u32), (u32, u32), u32)>,
+    pub badge: Option<Badge>,
 }
 
 impl RowLook {

@@ -108,9 +108,10 @@ its truncation arrow there (under the scroll bar's strip: Glitnir's `‹' in the
   (let* ((w (selected-window)) (other (split-window w (drgnx-px 170) 'left t)))
     (unwind-protect
         (progn
-          ;; the dock's fringes with the strip: its own inset either side and the strip's 12 px on the right
-          (set-window-fringes w (drgnx-px 6) (drgnx-px 18))
+          ;; the dock's fringes with the strip: its own inset either side and the strip's 12 px on the right (after the
+          ;; buffer, which would put the buffer's own back)
           (set-window-buffer w (drgnx-wb--collapsed-buffer 'look-test))
+          (set-window-fringes w (drgnx-px 6) (drgnx-px 18))
           (redisplay t)
           (with-current-buffer (window-buffer w)
             (let ((px (car (window-text-pixel-size w (point-min) (pos-eol (point-min)) 10000 nil t))))
