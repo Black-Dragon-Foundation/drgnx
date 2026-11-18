@@ -96,7 +96,6 @@ buttons are not here: their ring and radius are `drgnx-control''s, from the them
   '(drgnx-chip drgnx-badge drgnx-focus-ring drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single
                drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom drgnx-card-sel-single
                drgnx-hover drgnx-focus drgnx-control drgnx-control-primary drgnx-pill drgnx-pill-on region isearch lazy-highlight
-               drgnx-wb-tab drgnx-wb-tab-current
                diff-refine-added diff-refine-removed diff-refine-changed
                ;; the Search view's preview and sheet: a diff line's rounded tint and its words'
                drgnx-replace-preview-del drgnx-replace-preview-add drgnx-replace-preview-word-old

@@ -549,4 +549,10 @@
  drgnx-kit-status-dot-running
  drgnx-kit-status-dot-needs-you
  drgnx-kit-status-dot-idle
- drgnx-kit-status-dot-error)
+ drgnx-kit-status-dot-error
+ drgnx-kit-tab
+ drgnx-kit-tab-current
+ drgnx-kit-tab-current-inactive
+ drgnx-kit-tab-panel-current
+ drgnx-kit-segmented
+ drgnx-kit-segmented-current)

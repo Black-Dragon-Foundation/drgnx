@@ -407,7 +407,12 @@ tile in for the map's side panel) drops the tab row too; putting another buffer 
 its title; the row's close is the Lucide x at 16 px, still the kit's close button (its face, click and help)."
   (drgnx-area-test--with
    (cl-letf (((symbol-function 'drgnx-look-icon)
-              (lambda (name &optional face size) (propertize " " 'display (list 'area-test-icon name size) 'face face))))
+              (lambda (name &optional face size) (propertize " " 'display (list 'area-test-icon name size) 'face face)))
+             ;; the tab is the kit's: its icon an image where the frame draws them (a graphical one, stubbed)
+             ((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+             ((symbol-function 'drgnx-pixels-font-extent) (lambda (&rest _) '(12 . 4)))
+             ((symbol-function 'drgnx-ui-kit-icon-function)
+              (lambda (_frame) (lambda (name px) (list 'area-test-icon name px)))))
      (drgnx-wb-define-tab 'panel 'area-test-icon :title "Iconed" :icon 'terminal)
      (unwind-protect
          (let* ((w (drgnx-wb-area-show 'panel 'area-test-icon))

@@ -195,7 +195,7 @@
 (ert-deftest drgnx-chrome/a-tab-closes-with-the-themed-close-mark ()
   "One close mark everywhere: the tab's comes from the glyph table (ASCII on a terminal that is not UTF-8)."
   (drgnx-chrome-test--with dir
-    (cl-letf (((symbol-function 'drgnx-face-glyph) (lambda (name &optional _frame) (and (eq name 'close) "x"))))
+    (let ((drgnx-face-glyphs (cons '(close "x" . "x") drgnx-face-glyphs)))
       (drgnx-chrome-test--open dir "a.txt")
       (let ((tabs (window-parameter (selected-window) 'tab-line-format)))
         (should (string-search " a.txt x " tabs))
@@ -234,29 +234,31 @@
     (let* ((tabs (window-parameter (selected-window) 'tab-line-format))
            (face-of (lambda (name) (get-text-property (string-search name tabs) 'face tabs))))
       (should (string-search "  a.txt " tabs))            ; 2-space padding
-      (should (eq (funcall face-of "a.txt") 'drgnx-chrome-tab))
-      (should (eq (funcall face-of "b.txt") 'drgnx-chrome-tab-active)))
+      ;; the kit's tab faces (etc/ui/components.eld `tab')
+      (should (eq (funcall face-of "a.txt") 'drgnx-kit-tab))
+      (should (eq (funcall face-of "b.txt") 'drgnx-kit-tab-current)))
     ;; no height of their own: a relative 1.0 kept the tab line's height and cost a font spec copy per tab run
-    (dolist (f '(drgnx-chrome-tab drgnx-chrome-tab-current drgnx-chrome-tab-active))
+    (dolist (f '(drgnx-kit-tab drgnx-kit-tab-current drgnx-kit-tab-current-inactive))
       (should (eq (face-attribute f :height nil nil) 'unspecified))))
   ;; the look (design §4 tabs, §3.8 Current): the shown tab joins the editor in the body text's colour, no link colour,
-  ;; line or bold; the shown tab of another group is muted (the `t' clause: a graphical frame's; a batch frame is a
-  ;; terminal one, whose clause adds the weight)
-  (dolist (f '(drgnx-chrome-tab-active drgnx-chrome-tab-current))
+  ;; line or bold; the shown tab of another group is muted
+  (dolist (f '(drgnx-kit-tab-current drgnx-kit-tab-current-inactive))
     (let ((gui (alist-get t (face-default-spec f))))
       (should-not (plist-get gui :overline))
       (should-not (plist-get gui :weight))
       (should-not (memq 'link (ensure-list (plist-get gui :inherit))))))
-  (should (memq 'drgnx-text-muted (ensure-list (face-attribute 'drgnx-chrome-tab-current :inherit nil nil)))))
+  (should (memq 'drgnx-text-muted (ensure-list (face-attribute 'drgnx-kit-tab-current-inactive :inherit nil nil)))))
 
-(ert-deftest drgnx-chrome/the-shown-tabs-are-bold-on-a-terminal ()
-  "On a terminal frame (8 colours tell the shown tab by its colour alone) the shown tabs are bold, and only that: the
-terminal clause is the graphical one plus `:weight bold'."
-  (dolist (f '(drgnx-chrome-tab-active drgnx-chrome-tab-current))
-    (let* ((spec (face-default-spec f))
-           (tty (seq-find (lambda (c) (equal (car c) '((type tty)))) spec)))
-      (should (equal (list f (cdr tty)) (list f (append (alist-get t spec) '(:weight bold)))))
-      (should (eq (face-attribute f :weight nil t) 'bold)))))        ; a batch frame is a terminal one
+(ert-deftest drgnx-chrome/the-shown-tabs-take-the-state-tables-terminal-forms ()
+  "On a terminal frame (the row and the editor are one colour there) drgnx's themes draw the shown tab in inverse video
+and a shown tab of another group underlined, the state table's terminal forms of selected and selected-inactive."
+  (require 'drgnx-theme-gen (expand-file-name "themes/drgnx-theme-gen" drgnx-dir))
+  (dolist (v '(dark light hc))
+    (pcase-dolist (`(,face ,attr) '((drgnx-kit-tab-current :inverse-video) (drgnx-kit-tab-current-inactive :underline)))
+      (let* ((spec (cadr (assq face (drgnx-theme--specs v))))
+             (tty (seq-find (lambda (c) (equal (car c) '((type tty) (min-colors 2)))) spec)))
+        (should (equal (list v face t) (list v face (plist-get (cdr tty) attr))))
+        (should-not (plist-get (cdr tty) :weight))))))
 
 (ert-deftest drgnx-chrome/the-breadcrumb-sits-on-the-editor ()
   "The look (design §4 editor): the breadcrumb row is part of the editor's surface, under the shown tab: the header is
@@ -333,7 +335,7 @@ row colour (light's tab row had dark's lift above the shown tab): the row's colo
           (face-bg (symbol-function 'face-background)))
       (cl-letf (((symbol-function 'drgnx-chrome--tab) (lambda (&rest args) (setq made (1+ made)) (apply orig args)))
                 ((symbol-function 'face-background)
-                 (lambda (face &rest r) (if (eq face 'drgnx-chrome-tab) bg (apply face-bg face r)))))
+                 (lambda (face &rest r) (if (eq face 'drgnx-kit-tab) bg (apply face-bg face r)))))
         (drgnx-chrome--tab-line w)
         (setq made 0)
         (drgnx-chrome--tab-line w)
@@ -352,7 +354,7 @@ row colour (light's tab row had dark's lift above the shown tab): the row's colo
           (face-bg (symbol-function 'face-background)))
       (cl-letf (((symbol-function 'drgnx-chrome--tab) (lambda (&rest args) (setq made (1+ made)) (apply orig args)))
                 ((symbol-function 'face-background)
-                 (lambda (face &rest r) (if (eq face 'drgnx-chrome-tab) bg (apply face-bg face r)))))
+                 (lambda (face &rest r) (if (eq face 'drgnx-kit-tab) bg (apply face-bg face r)))))
         (run-hook-with-args 'enable-theme-functions 'drgnx-light)
         (should (= made 1))
         (setq bg "#000000")
@@ -452,7 +454,7 @@ string; a new symbol or an edit makes it again."
     (dolist (fn '(drgnx-chrome--windows-changed drgnx-chrome--editor-changed drgnx-chrome--apply-changed drgnx-chrome--memo-current-p drgnx-chrome--memo-set drgnx-chrome-apply drgnx-chrome--apply-window
                                                 drgnx-chrome--role drgnx-chrome--set drgnx-chrome--tab-line drgnx-chrome--note drgnx-chrome--note-history
                                                 drgnx-chrome-tabs drgnx-chrome-breadcrumb drgnx-chrome--project-root drgnx-chrome--text
-                                                drgnx-chrome--tab-buffer-p drgnx-chrome--close-glyph drgnx-chrome--rows-key))
+                                                drgnx-chrome--tab-buffer-p drgnx-chrome--rows-key))
       (unless (compiled-function-p (symbol-function fn))      ; the tests load drgnx from source: measure what users run
         (let ((byte-compile-warnings nil)) (byte-compile fn))))
     (let ((window-min-width 2) (window-min-height 2))        ; a small batch frame
@@ -748,7 +750,7 @@ split, then more.  Pattern D (the frame's kind and fonts are stubbed)."
                 (should (equal '(space :width (6)) (get-text-property 1 'display line)))
                 ;; the shown tab: lifted by the row's colour, no hairline
                 (should (equal '(0 . 4) (plist-get (drgnx-chrome-test--face-key line pb :box) :line-width)))
-                (should (equal (face-background 'drgnx-chrome-tab nil t)
+                (should (equal (face-background 'drgnx-kit-tab nil t)
                                (plist-get (drgnx-chrome-test--face-key line pb :box) :color)))
                 (should-not (drgnx-chrome-test--face-key line pb :underline))
                 ;; another tab, the gap after it and the buttons: the hairline
@@ -770,9 +772,12 @@ split, then more.  Pattern D (the frame's kind and fonts are stubbed)."
   (drgnx-chrome-test--with dir
     (let ((w (selected-window)) (a (drgnx-chrome-test--open dir "a.el")) (other (generate-new-buffer "*terminal: box*")))
       (unwind-protect
-          (cl-letf (((symbol-function 'drgnx-look-icon) (lambda (name &rest _) (format "<%s>" name))))
-            (should (string-search (format "<%s>" (drgnx-look-file-name-icon-name "a.el"))
-                                   (drgnx-chrome--tab w a t t t)))
+          ;; the kit draws the icon (an image on a graphical frame, else its glyph): each a glyph that names it
+          (let* ((kind (drgnx-look-file-name-icon-name "a.el"))
+                 (drgnx-face-glyphs (append (list (cons kind (cons (format "<%s>" kind) (format "<%s>" kind)))
+                                                  '(server "<server>" . "<server>"))
+                                            drgnx-face-glyphs)))
+            (should (string-search (format "<%s>" kind) (drgnx-chrome--tab w a t t t)))
             (with-current-buffer other (setq-local drgnx-chrome-tab-icon 'server))
             (should (string-search "<server>" (drgnx-chrome--tab w other t t t))))
         (kill-buffer other)))))
