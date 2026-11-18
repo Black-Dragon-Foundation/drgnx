@@ -377,12 +377,12 @@ mod tests {
     #[test]
     fn slow_but_printing_never_stops() {
         let slow = |m: u64| Reading {
-            log_bytes: u64::from(m % 15 == 0) * 2,
+            log_bytes: u64::from(m.is_multiple_of(15)) * 2,
             ..Reading::default()
         };
         assert_eq!(run(119, slow), None);
         let rows = |m: u64| Reading {
-            rows: u64::from(m % 15 == 0),
+            rows: u64::from(m.is_multiple_of(15)),
             ..Reading::default()
         };
         assert_eq!(run(119, rows), None);
