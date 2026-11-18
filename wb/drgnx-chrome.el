@@ -30,19 +30,7 @@
 (declare-function drgnx-groups-split-right "drgnx-groups")
 (declare-function drgnx-outline-scopes "drgnx-outline" (buffer line callback))
 
-;; No `:height' in the tab faces: a relative 1.0 scales by one, and costs a font spec copy at every run of the tab line.
-(defface drgnx-chrome-tab '((t :inherit (shadow tab-line-tab-inactive) :box nil))
-  "A tab in an editor's tab line: dimmed." :group 'drgnx)
-;; On a terminal frame the shown tabs are bold too: 8 colours would tell them by colour alone (the tty-frames state table).
-(defface drgnx-chrome-tab-current '((((type tty)) :inherit (drgnx-text-muted tab-line-tab-current) :box nil :weight bold)
-                                    (t :inherit (drgnx-text-muted tab-line-tab-current) :box nil))
-  "The shown tab of an editor group that is not the active one: on the editor's colour, muted." :group 'drgnx)
-(defface drgnx-chrome-tab-active '((((type tty)) :inherit tab-line-tab-current :box nil :weight bold)
-                                   (t :inherit tab-line-tab-current :box nil))
-  "The shown tab of the active editor group: it joins the editor, in the body text's colour (the look, §3.8)."
-  :group 'drgnx)
-(defface drgnx-chrome-tab-preview '((t :slant italic))
-  "A tab that is only there while it is shown (the scratch buffer, the start page): italic." :group 'drgnx)
+;; The tabs' own faces, a preview tab's italic included, are the kit's (`drgnx-ui-kit-tab', etc/ui/components.eld `tab').
 (defface drgnx-chrome-crumb '((t :inherit (drgnx-text-subtle shadow))) "The folders of a breadcrumb." :group 'drgnx)
 
 (defun drgnx-chrome--role (w)

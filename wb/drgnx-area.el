@@ -21,9 +21,6 @@
 (require 'tab-line)                     ; the tab faces we inherit
 (require 'drgnx-ui-kit)                 ; the tabs: `drgnx-ui-kit-tab'
 
-(defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
-(defface drgnx-wb-tab-current '((t :inherit tab-line-tab-current)) "The shown tab in an area's tab row." :group 'drgnx)
-
 (defvar drgnx-wb--areas nil "Alist AREA → plist (:side SIDE :size N :lone LONE :tabs ((TAB . PLIST) …)).")
 
 (cl-defun drgnx-wb-define-area (area &key side size lone)
