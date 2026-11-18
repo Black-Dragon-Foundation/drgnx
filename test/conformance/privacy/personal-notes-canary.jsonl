@@ -33,7 +33,7 @@
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"excised": 0}}}
 {"do": "sql_expect", "sql": "select count(*) from entity where id = 'plan:$HOME/proj/plans/old.md'", "rows": [[1]]}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "$SCENARIOS/../../bin/drgnx work scan $HOME $HOME/org"], "expect_code": 0, "expect_stdout": "refused: $HOME/org (the work tracker never reads a project inside ~/org (personal notes))"}
-{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'todo' and retired_tx is null and json_extract(data, '$.records.file') = '$HOME/org/board.org' and title like '%marker-board-19c%'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'task' and retired_tx is null and json_extract(data, '$.records.file') = '$HOME/org/board.org' and title like '%marker-board-19c%'", "rows": [[1]]}
 {"do": "sql_expect", "sql": "select count(*) from entity where kind = 'spec' and retired_tx is null and json_extract(data, '$.records.file') = '$HOME/org/reading.org' and instr(title, '$reading') > 0", "rows": [[1]]}
 {"do": "sql_expect", "sql": "select count(*) from entity where kind = 'plan' and retired_tx is null and json_extract(data, '$.records.file') in ('$HOME/proj/plans/a.md', '$HOME/proj/plans/b.md', '$HOME/proj/plans/c.md', '$HOME/proj/plans/d.md')", "rows": [[4]]}
 {"do": "sql_expect", "sql": "select count(*) from entity where instr(replace(replace(id || ' ' || coalesce(source, '') || ' ' || data, '$HOME/org/board.org', ''), '$HOME/org/reading.org', ''), '$HOME/org/') > 0", "rows": [[0]]}
