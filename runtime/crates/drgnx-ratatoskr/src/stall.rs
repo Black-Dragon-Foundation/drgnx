@@ -77,6 +77,15 @@ fn mine() -> Arc<Slot> {
     })
 }
 
+/// The named task this thread is polling now, if any (none on a blocking thread, or with the watchdog off).
+pub fn polling() -> Option<Cow<'static, str>> {
+    MINE.with(|m| {
+        m.borrow()
+            .as_ref()
+            .and_then(|s| lock(&s.now).as_ref().map(|(name, _)| name.clone()))
+    })
+}
+
 /// Whether tasks are named for the watchdog (set once, before the first task is spawned).
 pub fn on() -> bool {
     ON.load(Ordering::Relaxed)
