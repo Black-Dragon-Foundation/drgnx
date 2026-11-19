@@ -27,12 +27,12 @@ agents with the map shown or hidden, say whether the premise holds and take it a
        (load ,(drgnx-perf-work--fixture-file) nil t)
        (defvar drgnx-perf--work-buf nil "The map's buffer.")
        (defvar drgnx-perf--work-shown nil "Whether the workload's map is shown.")
-       (defun drgnx-perf--work-up (shown &optional mode)
-         "30 agents streaming and the map of their workspace on the hub's rows, SHOWN or hidden, as a graph or, with MODE
-`list', a List; an error when that does not hold."
+       (defun drgnx-perf--work-up (shown)
+         "30 agents streaming and the map of their workspace on the hub's rows, SHOWN or hidden; an error when that does
+not hold."
          (require 'drgnx-view)
          (drgnx-work-thirty-start drgnx-perf--hub-bin)
-         (setq drgnx-perf--work-shown shown drgnx-perf--work-buf (drgnx-work-thirty-map shown mode))
+         (setq drgnx-perf--work-shown shown drgnx-perf--work-buf (drgnx-work-thirty-map shown))
          ;; the lane says which path it ran: without Sjá the map has no rows to draw
          (unless (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf)
            (error "Premise: the map is not on the hub's rows (Sjá: %s)" (if (fboundp 'nidhogg-view--call) "yes" "no")))
@@ -65,10 +65,6 @@ agents with the map shown or hidden, say whether the premise holds and take it a
 answer with no patch before it, counts as lost), and the lab's p95 needs 100 samples; each command waits up to a
 second for the layout before it to be drawn."
   (cl-loop repeat 40 append (mapcar (lambda (k) (list :keys k)) '("f" "o" "1" "2" "3" "4" "5" "6"))))
-
-(defun drgnx-perf-work--filter-keys ()
-  "360 filter switches: `.' (Active, Completed, All), 120 times; the lab's p95 needs 100 samples."
-  (make-list 360 (list :keys ".")))
 
 (defconst drgnx-perf-work--relayout-form
   (prin1-to-string
@@ -629,12 +625,7 @@ step is not reached or Sjá held more than the window."
                   :handled_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats handled))
                   :pages (length pages) :list_max most :keys n
                   :reached t))))
-      (defun drgnx-perf--tl-list-mode ()
-        "The map as a List: the Schedule is the List's rows with a bar each."
-        (with-current-buffer drgnx-perf--work-buf (drgnx-work-map-mode-list))
-        (drgnx-perf--tl-wait 30 (lambda () (redisplay t) (> (buffer-size drgnx-perf--work-buf) 0))))
       (defun drgnx-perf--tl-down ()
-        (ignore-errors (delete-other-windows))
         (when (buffer-live-p drgnx-perf--tl-buf) (kill-buffer drgnx-perf--tl-buf))
         (setq drgnx-perf--tl-buf nil)
         (drgnx-perf--hub-stop))
@@ -761,97 +752,102 @@ above applied.  An error when it is not on the rows path."
    '(progn
       (require 'drgnx-view)
       (require 'drgnx-work-trail)
-      (defun drgnx-perf--tl-wait (secs pred)
+      (defun drgnx-perf--tm-wait (secs pred)
         "Let the session run until PRED holds (SECS at most); whether it does."
         (let ((end (+ (float-time) secs)))
           (while (and (not (funcall pred)) (< (float-time) end)) (accept-process-output nil 0.01))
           (and (funcall pred) t)))
-      (defvar drgnx-perf--tl-buf nil "The Timeline's buffer (Schedule or Activity) on the 30-agent map.")
-      (defvar drgnx-perf--tl-phases nil "Where the open's time went: (:open_ms the call, :rows_ms the hub's first rows, :draw_ms their drawing).")
-      (defvar drgnx-perf--tl-draws nil "Wall ms of each draw of the Timeline's view since the arm.")
-      (defvar drgnx-perf--tl-calls 0 "Hub calls of the Timeline's own (`work/trail/*', `work/schedule/*') since the arm.")
-      (defun drgnx-perf--tl-draw (orig buffer)
+      (defvar drgnx-perf--tm-buf nil "The Timeline's buffer (Schedule or Activity) on the 30-agent map.")
+      (defvar drgnx-perf--tm-phases nil "Where the open's time went: (:open_ms the call, :rows_ms the hub's first rows, :draw_ms their drawing).")
+      (defvar drgnx-perf--tm-draws nil "Wall ms of each draw of the Timeline's view since the arm.")
+      (defvar drgnx-perf--tm-calls 0 "Hub calls of the Timeline's own (`work/trail/*', `work/schedule/*') since the arm.")
+      (defun drgnx-perf--tm-draw (orig buffer)
         (let ((t0 (float-time)))
           (prog1 (funcall orig buffer)
-            (when (eq buffer drgnx-perf--tl-buf) (push (* 1000 (- (float-time) t0)) drgnx-perf--tl-draws)))))
-      (defun drgnx-perf--tl-call (orig method &rest args)
-        (when (string-match-p "\\`work/\\(trail\\|schedule\\)/" method) (cl-incf drgnx-perf--tl-calls))
+            (when (eq buffer drgnx-perf--tm-buf) (push (* 1000 (- (float-time) t0)) drgnx-perf--tm-draws)))))
+      (defun drgnx-perf--tm-call (orig method &rest args)
+        (when (string-match-p "\\`work/\\(trail\\|schedule\\)/" method) (cl-incf drgnx-perf--tm-calls))
         (apply orig method args))
-      (defun drgnx-perf--tl-await (buf)
+      (defun drgnx-perf--tm-await (buf)
         "One bounded wait (30 s) until BUF's view has nothing pending."
         (let ((deadline (+ (float-time) 30)))
           (while (and (drgnx-perf-view-pending-p buf) (< (float-time) deadline))
             (accept-process-output nil 0.01))))
-      (defun drgnx-perf--tl-show (form)
+      (defun drgnx-perf--tm-show (form)
         "The Timeline in FORM on the map, shown, with its first rows drawn; the ms that took."
-        (when (buffer-live-p drgnx-perf--tl-buf) (kill-buffer drgnx-perf--tl-buf))
+        (when (buffer-live-p drgnx-perf--tm-buf) (kill-buffer drgnx-perf--tm-buf))
         (let* ((t0 (float-time)) (buf (drgnx-work-timeline-open drgnx-perf--work-buf form)) (t1 (float-time)) t2)
           (set-window-buffer (selected-window) buf)
           (unless (buffer-local-value 'drgnx-view-patch buf)
             (error "Premise: the Timeline is not on the hub's rows (Sjá: %s)" (if (fboundp 'nidhogg-view--call) "yes" "no")))
-          (unless (drgnx-perf--tl-wait 30 (lambda () (and (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch buf))
+          (unless (drgnx-perf--tm-wait 30 (lambda () (and (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch buf))
                                                           (> (buffer-size buf) 0))))
             (error "The %s's first rows did not come" form))
           (setq t2 (float-time))
-          (drgnx-perf--tl-await buf)
+          (drgnx-perf--tm-await buf)
           (redisplay t)
-          (setq drgnx-perf--tl-buf buf
-                drgnx-perf--tl-phases (list :open_ms (drgnx-perf--round (* 1000 (- t1 t0))) :rows_ms (drgnx-perf--round (* 1000 (- t2 t1)))
+          (setq drgnx-perf--tm-buf buf
+                drgnx-perf--tm-phases (list :open_ms (drgnx-perf--round (* 1000 (- t1 t0))) :rows_ms (drgnx-perf--round (* 1000 (- t2 t1)))
                                             :draw_ms (drgnx-perf--round (* 1000 (- (float-time) t2)))))
           (drgnx-perf--round (* 1000 (- (float-time) t0)))))
-      (defun drgnx-perf--tl-open-measure (form)
+      (defun drgnx-perf--tm-open-measure (form)
         "(:first_rows MS :rows N): the Timeline in FORM opened until its first rows are drawn."
-        (let ((ms (drgnx-perf--tl-show form)))
-          (append (list :first_rows ms :rows (drgnx-perf-view-rows drgnx-perf--tl-buf)) drgnx-perf--tl-phases)))
-      (defun drgnx-perf--tl-zoom-measure ()
+        (let ((ms (drgnx-perf--tm-show form)))
+          (append (list :first_rows ms :rows (drgnx-perf-view-rows drgnx-perf--tm-buf)) drgnx-perf--tm-phases)))
+      (defun drgnx-perf--tm-zoom-measure ()
         "(:relayout STATS): 110 zooms of the Schedule (week and day, alternately), each timed to the rows of the new
 window drawn."
-        (drgnx-perf--tl-show 'schedule)
+        (drgnx-perf--tm-show 'schedule)
         (let (ms)
-          (with-current-buffer drgnx-perf--tl-buf
+          (with-current-buffer drgnx-perf--tm-buf
             (dotimes (i 110)
               (let* ((dp drgnx-view-patch) (v (drgnx-view-patch-version dp)) (t0 (float-time)))
                 (if (cl-evenp i) (drgnx-work-timeline-zoom-out) (drgnx-work-timeline-zoom-in))
-                (unless (drgnx-perf--tl-wait 5 (lambda () (and (not (equal v (drgnx-view-patch-version dp)))
-                                                               (not (drgnx-perf-view-pending-p drgnx-perf--tl-buf)))))
+                (unless (drgnx-perf--tm-wait 5 (lambda () (and (not (equal v (drgnx-view-patch-version dp)))
+                                                               (not (drgnx-perf-view-pending-p drgnx-perf--tm-buf)))))
                   (error "Premise: zoom %d brought no rows (version %S)" i v))
                 (push (* 1000 (- (float-time) t0)) ms))))
           (list :relayout (mapcar #'drgnx-perf--round (drgnx-perf-stats ms)))))
-      (defun drgnx-perf--tl-step-measure ()
+      (defun drgnx-perf--tm-step-measure ()
         "(:patch STATS): the draws of the Activity (a lane per agent, the 30 streaming) until 100 are seen (90 s at most)."
-        (drgnx-perf--tl-show 'activity)
-        (setq drgnx-perf--tl-draws nil)
-        (drgnx-perf-advise-draws :around #'drgnx-perf--tl-draw)
+        (drgnx-perf--tm-show 'activity)
+        (setq drgnx-perf--tm-draws nil)
+        (drgnx-perf-advise-draws :around #'drgnx-perf--tm-draw)
         (unwind-protect
-            (unless (drgnx-perf--tl-wait 90 (lambda () (>= (length drgnx-perf--tl-draws) 100)))
-              (error "Premise: %d draws of the Activity in 90 s" (length drgnx-perf--tl-draws)))
-          (drgnx-perf-unadvise-draws #'drgnx-perf--tl-draw))
-        (list :patch (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--tl-draws))))
-      (defun drgnx-perf--tl-typing-measure ()
+            (unless (drgnx-perf--tm-wait 90 (lambda () (>= (length drgnx-perf--tm-draws) 100)))
+              (error "Premise: %d draws of the Activity in 90 s" (length drgnx-perf--tm-draws)))
+          (drgnx-perf-unadvise-draws #'drgnx-perf--tm-draw))
+        (list :patch (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--tm-draws))))
+      (defun drgnx-perf--tm-typing-measure ()
         "(:delta N): the Timeline's own hub calls while 100 keys are typed in a file beside the Activity (none a key)."
-        (drgnx-perf--tl-show 'activity)
-        (setq drgnx-perf--tl-calls 0)
-        (advice-add 'drgnx-work-client--call :around #'drgnx-perf--tl-call)
+        (drgnx-perf--tm-show 'activity)
+        (setq drgnx-perf--tm-calls 0)
+        (advice-add 'drgnx-work-client--call :around #'drgnx-perf--tm-call)
         (unwind-protect
             (with-temp-buffer
               (dotimes (_ 100) (insert "x") (accept-process-output nil 0.005)))
-          (advice-remove 'drgnx-work-client--call #'drgnx-perf--tl-call))
-        (list :delta drgnx-perf--tl-calls))
-      (defun drgnx-perf--tl-now-measure ()
+          (advice-remove 'drgnx-work-client--call #'drgnx-perf--tm-call))
+        (list :delta drgnx-perf--tm-calls))
+      (defun drgnx-perf--tm-now-measure ()
         "(:rows_per_5s N): the row patches the following Schedule takes in 5 s with the 30 agents streaming."
-        (drgnx-perf--tl-show 'schedule)
+        (drgnx-perf--tm-show 'schedule)
         (let ((n 0))
           (drgnx-perf-watch-patches t)
           (add-hook 'drgnx-perf-patch-functions (lambda (_v _k) (cl-incf n)))
-          (unwind-protect (drgnx-perf--tl-wait 5 (lambda () nil))
+          (unwind-protect (drgnx-perf--tm-wait 5 (lambda () nil))
             (drgnx-perf-watch-patches nil) (setq drgnx-perf-patch-functions nil))
           (list :rows_per_5s n)))
-      (defun drgnx-perf--tl-down ()
-        (advice-remove 'drgnx-work-client--call #'drgnx-perf--tl-call)
-        (drgnx-perf-unadvise-draws #'drgnx-perf--tl-draw)
+      (defun drgnx-perf--tm-list-mode ()
+        "The map as a List: the Schedule is the List's rows with a bar each."
+        (with-current-buffer drgnx-perf--work-buf (drgnx-work-map-mode-list))
+        (drgnx-perf--tm-wait 30 (lambda () (redisplay t) (> (buffer-size drgnx-perf--work-buf) 0))))
+      (defun drgnx-perf--tm-down ()
+        (ignore-errors (delete-other-windows))
+        (advice-remove 'drgnx-work-client--call #'drgnx-perf--tm-call)
+        (drgnx-perf-unadvise-draws #'drgnx-perf--tm-draw)
         (dolist (b (buffer-list))
           (when (string-match-p "\\`\\*drgnx work \\(schedule\\|timeline\\):" (buffer-name b)) (kill-buffer b)))
-        (setq drgnx-perf--tl-buf nil)
+        (setq drgnx-perf--tm-buf nil)
         t)
       t))
   "The Timeline workloads' session side (flow plan Task 21a): the Schedule and the Activity on the 30-agent map.")
@@ -864,8 +860,8 @@ trails and the Board are on the hub's rows (with Sjá; a workload without it fai
   (let* ((lib (drgnx-perf-work--lib-form))
          (type (lambda (s) (list :type s)))
          (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
-         (up (lambda (shown extra &optional mode)
-               (concat "(progn " lib " (drgnx-perf--work-up " (if shown "t" "nil") (and mode (format " '%s" mode)) ") " extra " t)")))
+         (up (lambda (shown extra)
+               (concat "(progn " lib " (drgnx-perf--work-up " (if shown "t" "nil") ") " extra " t)")))
          (down (concat "(progn (drgnx-perf--work-down) " kill-fixture " t)"))
          (typing-each (lambda (&optional extra)
                         (concat "(progn " visit " (drgnx-perf--work-premise) " extra " t)")))
@@ -875,19 +871,6 @@ trails and the Board are on the hub's rows (with Sjá; a workload without it fai
                 :actions ,(drgnx-perf-work--nav-keys)
                 :check "(and (drgnx-perf--work-premise) (buffer-local-value 'drgnx-work-map--selection drgnx-perf--work-buf) t)"
                 :teardown ,down)
-      ;; the List's keys (plan frontend-flow, Task 20): the work-nav keys on the map as a List
-      (work-list-nav :setup ,(funcall up t "" 'list)
-                     :each "(progn (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t)"
-                     :actions ,(drgnx-perf-work--nav-keys)
-                     :check "(and (drgnx-perf--work-premise) (eq (buffer-local-value 'drgnx-work-map--list-or-graph drgnx-perf--work-buf) 'list) (buffer-local-value 'drgnx-work-map--selection drgnx-perf--work-buf) t)"
-                     :teardown ,down)
-      ;; the List's filter switch: `.' (Active, Completed, All) on the same map, each answer's rows drawn
-      (work-list-filter :setup ,(funcall up t drgnx-perf-work--relayout-form 'list)
-                        :each "(drgnx-perf--rl-guard (lambda () (drgnx-perf--rl-arm) (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t))"
-                        :actions ,(drgnx-perf-work--filter-keys)
-                        :measure "(drgnx-perf--rl-guard #'drgnx-perf--rl-measure)"
-                        :check "(and (drgnx-perf--work-premise) (or (>= (length drgnx-perf--rl-ms) 100) (error \"Premise: %d layouts drawn\" (length drgnx-perf--rl-ms))))"
-                        :teardown ,(concat "(progn (drgnx-perf--rl-teardown) " down ")"))
       (work-relayout :setup ,(funcall up t drgnx-perf-work--relayout-form)
                      :each "(drgnx-perf--rl-guard (lambda () (drgnx-perf--rl-arm) (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t))"
                      :actions ,(drgnx-perf-work--relayout-keys)
@@ -925,14 +908,14 @@ trails and the Board are on the hub's rows (with Sjá; a workload without it fai
                   :teardown "(drgnx-perf--wb-down)")
       ;; the Timeline on the 30-agent map: the Schedule and the Activity (flow plan Task 21a)
       ,@(mapcar (lambda (w)
-                  (list (car w) :setup (funcall up t (if (memq (car w) '(schedule-open schedule-zoom now-line)) (concat drgnx-perf-work--timeline-form " (drgnx-perf--tl-list-mode)") drgnx-perf-work--timeline-form)) :measure (cdr w)
-                        :teardown (concat "(progn (drgnx-perf--tl-down) " down ")")))
-                '((schedule-open . "(drgnx-perf--tl-open-measure 'schedule)")
-                  (schedule-zoom . "(drgnx-perf--tl-zoom-measure)")
-                  (activity-open . "(drgnx-perf--tl-open-measure 'activity)")
-                  (activity-step . "(drgnx-perf--tl-step-measure)")
-                  (activity-typing . "(drgnx-perf--tl-typing-measure)")
-                  (now-line . "(drgnx-perf--tl-now-measure)")))
+                  (list (car w) :setup (funcall up t (if (memq (car w) '(schedule-open schedule-zoom now-line)) (concat drgnx-perf-work--timeline-form " (drgnx-perf--tm-list-mode)") drgnx-perf-work--timeline-form)) :measure (cdr w)
+                        :teardown (concat "(progn (drgnx-perf--tm-down) " down ")")))
+                '((schedule-open . "(drgnx-perf--tm-open-measure 'schedule)")
+                  (schedule-zoom . "(drgnx-perf--tm-zoom-measure)")
+                  (activity-open . "(drgnx-perf--tm-open-measure 'activity)")
+                  (activity-step . "(drgnx-perf--tm-step-measure)")
+                  (activity-typing . "(drgnx-perf--tm-typing-measure)")
+                  (now-line . "(drgnx-perf--tm-now-measure)")))
       (work-trail :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " drgnx-perf-work--trail-form " (drgnx-perf--trail-up) t)")
                   :each "(progn (drgnx-perf--trail-premise) t)"
                   :measure "(drgnx-perf--trail-measure)"
