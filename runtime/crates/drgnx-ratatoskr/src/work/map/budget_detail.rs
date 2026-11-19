@@ -218,6 +218,18 @@ pub fn start_of(f: &Forecast, offset: i64) -> Start {
     }
 }
 
+/// The forecast of each plan Detail has read, by item id (`plan:ID`).
+pub type ForecastCache = std::collections::HashMap<String, Forecast>;
+
+/// [`facts_of`] with the forecast of ITEM read from CACHE (none yet: the forecast has not arrived, the lines say nothing of it).
+pub fn facts_for(
+    views: &[runstav::methods::timeline::BudgetView],
+    item: &str,
+    cache: &ForecastCache,
+) -> Facts {
+    facts_of(views, cache.get(item))
+}
+
 /// What `budget/get` says along the chain, ready for Detail: a line for each unit the scope names (its limits and its
 /// spends, the binding one not alone) and the scopes above it with what they have left.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -712,6 +724,38 @@ mod tests {
                 .join("\n")
                 .contains("Target: none"),
             "an unset target says so"
+        );
+    }
+    /// [D] Detail reads the forecast p50 and p90: once the plan's job forecast is in the cache, each unit's forecast is
+    /// filled and "Set to p90" shows where p90 is over the limit; before it arrives (and for another plan) there is none.
+    #[test]
+    fn detail_facts_read_the_plans_cached_forecast() {
+        let own = view("plan:p1", &[("usd", 40.0)], &[("usd", 9.0)], &[]);
+        let fc = forecast(
+            json!([{"unit": "usd", "p50": 30.0, "p90": 46.0, "estimate": false}]),
+            json!([]),
+            "profile",
+        );
+        let mut cache = ForecastCache::new();
+        assert_eq!(
+            facts_for(&[own.clone()], "plan:p1", &cache).units[0].forecast,
+            None,
+            "before it arrives"
+        );
+        cache.insert("plan:p1".into(), fc);
+        let f = facts_for(&[own.clone()], "plan:p1", &cache);
+        assert_eq!(
+            f.units[0].forecast,
+            Some(Range {
+                p50: 30.0,
+                p90: 46.0
+            })
+        );
+        assert_eq!(set_to_p90(&f.units[0]).as_deref(), Some("Set to p90 ($46)"));
+        assert_eq!(
+            facts_for(&[own], "plan:p2", &cache).units[0].forecast,
+            None,
+            "another plan's forecast is not this one's"
         );
     }
 }
