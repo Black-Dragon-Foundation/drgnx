@@ -432,4 +432,53 @@ mod tests {
         assert_eq!(agents_on(&entries, "a.rs"), ["s1", "s2"]);
         assert!(agents_on(&entries, "c.rs").is_empty());
     }
+
+    /// Flow Task 24: the side's cards are the kit's pieces: a card is an `AgentMark`, the task title, a state line with
+    /// the kit's `Progress`, and one kit `Button` (primary when it needs you); "Earlier" is a kit section header.
+    #[test]
+    fn cards_are_kit_cards_needs_you_first_with_one_kit_button() {
+        let kit = drgnx_rows::kit::KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            ascii: false,
+            density: Default::default(),
+            icons: None,
+        };
+        let mut ask = s("ask", State::NeedsYou, 1, false);
+        ask.progress = Some((2, 4));
+        let run = s("run", State::Running, 90, false);
+        let old = s("old", State::Finished, 5, true);
+        let rows = rows(&[run, ask, old], &kit);
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert!(keys[0].starts_with("card:ask:"), "needs-you first: {keys:?}");
+        // the agent's mark rides on the card's head row
+        assert!(rows[0].props.iter().any(|p| p.2 == "drgnx-agent-mark"));
+        // one button on the card: primary for Answer, with the action the editor runs
+        let card: Vec<&Row> = rows.iter().filter(|r| r.key.starts_with("card:ask:")).collect();
+        let buttons: Vec<&str> = card
+            .iter()
+            .flat_map(|r| r.runs.iter().map(|x| x.2.as_str()))
+            .filter(|f| f.starts_with("drgnx-kit-button"))
+            .collect();
+        assert!(buttons.contains(&drgnx_rows::faces::FaceId::KitButtonPrimary.name()), "{buttons:?}");
+        assert_eq!(
+            card.iter()
+                .flat_map(|r| r.props.iter())
+                .filter(|p| p.2 == "drgnx-action")
+                .count(),
+            1
+        );
+        // the plan's progress is the kit's meter, not words
+        assert!(card
+            .iter()
+            .flat_map(|r| r.runs.iter())
+            .any(|x| x.2.starts_with("drgnx-kit-progress")));
+        // "Earlier" is a kit section header
+        let earlier = rows.iter().find(|r| r.key == "earlier").expect("Earlier");
+        assert!(earlier
+            .runs
+            .iter()
+            .any(|x| x.2 == drgnx_rows::faces::FaceId::KitSectionHeader.name()));
+    }
 }
