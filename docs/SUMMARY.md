@@ -122,6 +122,8 @@
     - [Card (kit)](design/components/card.md)
     - [Diff block (kit)](design/components/diff-block.md)
     - [Empty state (kit)](design/components/empty-state.md)
+    - [Toast (kit)](design/components/toast.md)
+    - [Tooltip (kit)](design/components/tooltip.md)
     - [Agent mark (kit)](design/components/agent-mark.md)
     - [Progress (kit)](design/components/progress.md)
     - [Chip (kit)](design/components/chip.md)
