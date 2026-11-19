@@ -629,7 +629,12 @@ step is not reached or Sjá held more than the window."
                   :handled_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats handled))
                   :pages (length pages) :list_max most :keys n
                   :reached t))))
+      (defun drgnx-perf--tl-list-mode ()
+        "The map as a List: the Schedule is the List's rows with a bar each."
+        (with-current-buffer drgnx-perf--work-buf (drgnx-work-map-mode-list))
+        (drgnx-perf--tl-wait 30 (lambda () (redisplay t) (> (buffer-size drgnx-perf--work-buf) 0))))
       (defun drgnx-perf--tl-down ()
+        (ignore-errors (delete-other-windows))
         (when (buffer-live-p drgnx-perf--tl-buf) (kill-buffer drgnx-perf--tl-buf))
         (setq drgnx-perf--tl-buf nil)
         (drgnx-perf--hub-stop))
@@ -762,6 +767,7 @@ above applied.  An error when it is not on the rows path."
           (while (and (not (funcall pred)) (< (float-time) end)) (accept-process-output nil 0.01))
           (and (funcall pred) t)))
       (defvar drgnx-perf--tl-buf nil "The Timeline's buffer (Schedule or Activity) on the 30-agent map.")
+      (defvar drgnx-perf--tl-phases nil "Where the open's time went: (:open_ms the call, :rows_ms the hub's first rows, :draw_ms their drawing).")
       (defvar drgnx-perf--tl-draws nil "Wall ms of each draw of the Timeline's view since the arm.")
       (defvar drgnx-perf--tl-calls 0 "Hub calls of the Timeline's own (`work/trail/*', `work/schedule/*') since the arm.")
       (defun drgnx-perf--tl-draw (orig buffer)
@@ -779,21 +785,24 @@ above applied.  An error when it is not on the rows path."
       (defun drgnx-perf--tl-show (form)
         "The Timeline in FORM on the map, shown, with its first rows drawn; the ms that took."
         (when (buffer-live-p drgnx-perf--tl-buf) (kill-buffer drgnx-perf--tl-buf))
-        (let* ((t0 (float-time)) (buf (drgnx-work-timeline-open drgnx-perf--work-buf form)))
+        (let* ((t0 (float-time)) (buf (drgnx-work-timeline-open drgnx-perf--work-buf form)) (t1 (float-time)) t2)
           (set-window-buffer (selected-window) buf)
           (unless (buffer-local-value 'drgnx-view-patch buf)
             (error "Premise: the Timeline is not on the hub's rows (Sjá: %s)" (if (fboundp 'nidhogg-view--call) "yes" "no")))
           (unless (drgnx-perf--tl-wait 30 (lambda () (and (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch buf))
                                                           (> (buffer-size buf) 0))))
             (error "The %s's first rows did not come" form))
+          (setq t2 (float-time))
           (drgnx-perf--tl-await buf)
           (redisplay t)
-          (setq drgnx-perf--tl-buf buf)
+          (setq drgnx-perf--tl-buf buf
+                drgnx-perf--tl-phases (list :open_ms (drgnx-perf--round (* 1000 (- t1 t0))) :rows_ms (drgnx-perf--round (* 1000 (- t2 t1)))
+                                            :draw_ms (drgnx-perf--round (* 1000 (- (float-time) t2)))))
           (drgnx-perf--round (* 1000 (- (float-time) t0)))))
       (defun drgnx-perf--tl-open-measure (form)
         "(:first_rows MS :rows N): the Timeline in FORM opened until its first rows are drawn."
         (let ((ms (drgnx-perf--tl-show form)))
-          (list :first_rows ms :rows (drgnx-perf-view-rows drgnx-perf--tl-buf))))
+          (append (list :first_rows ms :rows (drgnx-perf-view-rows drgnx-perf--tl-buf)) drgnx-perf--tl-phases)))
       (defun drgnx-perf--tl-zoom-measure ()
         "(:relayout STATS): 110 zooms of the Schedule (week and day, alternately), each timed to the rows of the new
 window drawn."
@@ -916,7 +925,7 @@ trails and the Board are on the hub's rows (with Sjá; a workload without it fai
                   :teardown "(drgnx-perf--wb-down)")
       ;; the Timeline on the 30-agent map: the Schedule and the Activity (flow plan Task 21a)
       ,@(mapcar (lambda (w)
-                  (list (car w) :setup (funcall up t drgnx-perf-work--timeline-form) :measure (cdr w)
+                  (list (car w) :setup (funcall up t (if (memq (car w) '(schedule-open schedule-zoom now-line)) (concat drgnx-perf-work--timeline-form " (drgnx-perf--tl-list-mode)") drgnx-perf-work--timeline-form)) :measure (cdr w)
                         :teardown (concat "(progn (drgnx-perf--tl-down) " down ")")))
                 '((schedule-open . "(drgnx-perf--tl-open-measure 'schedule)")
                   (schedule-zoom . "(drgnx-perf--tl-zoom-measure)")
