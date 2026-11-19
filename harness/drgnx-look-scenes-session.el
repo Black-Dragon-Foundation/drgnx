@@ -3096,7 +3096,7 @@ chrome faces, frame metrics, windows, modules."
 frame whose buffer's name COVERS (a regexp, the scene's :covers in `drgnx-look-scenes': its menu, card or drop-down)
 matches.  Any other cover, a toast say, is an error, so an unexpected child frame still fails the scene."
   (or (and (boundp 'drgnx-palette-frame--frame) (eq f drgnx-palette-frame--frame))
-      (frame-parameter f 'drgnx-switcher-card)
+      (frame-parameter f 'drgnx-switcher-card) (frame-parameter f 'drgnx-resize-line)
       (and covers (string-match-p covers (buffer-name (window-buffer (frame-root-window f)))))))
 
 (defun drgnx-look-scene--ruler-set (window spec minimap)
