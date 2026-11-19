@@ -1261,7 +1261,7 @@ fn button_px(m: &dyn Measure, env: &ViewEnv, label: &str, key: &str, primary: bo
 
 /// ROW's width in device px: its pads their own width, the rest each run's text in its face (the last run over a
 /// char wins, as an overlay does).
-fn row_px(m: &dyn Measure, row: &drgnx_rows::Row) -> u32 {
+pub(crate) fn row_px(m: &dyn Measure, row: &drgnx_rows::Row) -> u32 {
     let mut total = 0.0f32;
     let mut piece = String::new();
     let mut face: Option<&str> = None;
@@ -2258,6 +2258,7 @@ mod tests {
             cell: (8, 16),
             width_px: (1280.0 * scale) as u32,
             tail: None,
+            badge: None,
             palette: vec![],
             tty_widths: vec![],
             tz: String::new(),

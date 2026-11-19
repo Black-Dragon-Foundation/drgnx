@@ -101,6 +101,7 @@ fn tty() -> RowLook {
     RowLook {
         gui: None,
         one_root: true,
+        badge: None,
     }
 }
 

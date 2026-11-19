@@ -696,10 +696,18 @@ fn view_rows(
         .into_values()
         .filter(|it| it.kind == Kind::Machine && !items.contains_key(&it.id))
         .collect();
-    let (strip, mut images) = render::strip(&scene, &m.needs_you(), &machines, extra, &renv, fonts);
+    let (strip, mut images) = render::strip(
+        &scene,
+        &m.needs_you(),
+        &machines,
+        extra,
+        &renv,
+        fonts,
+        &crate::view::kit_env(env),
+    );
     let mut rows = vec![strip];
     if let Some(entries) = &list {
-        rows.extend(render::list_rows(entries, v.selected.as_ref()));
+        rows.extend(list::rows(m, entries, v.selected.as_ref(), env, fonts));
     } else {
         rows.extend(drawn.rows);
         images.extend(drawn.images);
@@ -2432,6 +2440,7 @@ pub async fn run(front: Arc<Front>) {
 }
 
 mod detail;
+mod list;
 mod model;
 #[cfg(test)]
 mod tests;

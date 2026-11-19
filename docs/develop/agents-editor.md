@@ -100,7 +100,9 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   tree (the hub works that out); it is shown only when that checkout is a workspace root. Without Sjá nothing of
   this is shown. In the Explorer
   the hub puts the ordinals on the row (`drgnx-agents-here`, hub.md "The Explorer's listing as a tree") and
-  `drgnx-agents-editor-here--explorer-badge`, on `drgnx-explorer-badge-functions`, makes the badge (the Explorer of a
+  `drgnx-agents-editor-here--explorer-badge`, on `drgnx-explorer-badge-functions`, makes the badge and
+  `drgnx-agents-editor-here--explorer-badge-widths`, on `drgnx-explorer-badge-width-functions`, says how wide it is
+  drawn (the env's `badge`, so the hub ends the name short of it) (the Explorer of a
   remote root, listed in Lisp, shows none); the status bar through `drgnx-statusbar-define-segment` and `agents-here` set after
   `agents` in `drgnx-statusbar-left`. Ordinals are the hub's: the client keeps each session's `(ordinal .
   last_active)` from its `agent` snapshots (and `agents/list` at setup and on each new connection), forgets a session

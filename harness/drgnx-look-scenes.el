@@ -44,6 +44,8 @@
     (org :mockup magit)
     (shell-heredoc)
     (work-flow :mockup hub-orchestration)
+    (review-screen)
+    (work-list :mockup work-now :seed "map")
     (start-page)
     (start-page-light)
     (notebook-dark :mockup notebook)
@@ -167,6 +169,8 @@ OUT at SCALE (TAG: `s1', `s2'); return (SHOTS . ERRORS), each in drawing order, 
                                                     (drgnx-ui-el (expand-file-name (format "%s-%s-facts.eld" name tag)
                                                                                    out))
                                                     name))))
+              ;; no switcher card cuts its text
+              (setq errs (append errs (drgnx-look-scenes--call sess "(drgnx-look-scene-cards-fit)")))
               ;; every scrollable surface has the scroll bar, drawn exactly when its content runs past it
               (setq errs (append errs (drgnx-look-scenes--call
                                        sess (format "(drgnx-look-scene-scrollbars %s %s)"

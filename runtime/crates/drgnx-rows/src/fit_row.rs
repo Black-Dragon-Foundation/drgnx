@@ -249,15 +249,17 @@ pub fn roles_key(at: &[usize], inks: &[Ink], s: usize, e: usize) -> String {
 /// editor leaves the control out of the row's tail.
 pub const SHORT: &str = "drgnx-row-tail-short";
 
-/// The px ROW keeps clear at the window's right edge for what its tail always draws (ROOM's `tail` places).
+/// The px ROW keeps clear at the window's right edge for what its tail always draws (ROOM's `tail` places), and for
+/// what the editor draws between its text and its tail ([`Row::keep`], the Explorer's badge).
 fn kept(row: &Row, room: &Room) -> u32 {
-    match (row.tail, room.tail) {
-        (Some(Tail::Mark), Some((mark, _))) => mark,
-        (Some(Tail::Control), Some((_, control))) => control,
-        // a terminal shows the control always
-        (Some(Tail::Hover), Some((_, control))) if room.tty.is_some() => control,
-        _ => 0,
-    }
+    row.keep
+        + match (row.tail, room.tail) {
+            (Some(Tail::Mark), Some((mark, _))) => mark,
+            (Some(Tail::Control), Some((_, control))) => control,
+            // a terminal shows the control always
+            (Some(Tail::Hover), Some((_, control))) if room.tty.is_some() => control,
+            _ => 0,
+        }
 }
 
 /// ROW fitted to ROOM: each segment that runs past its end cut with an ellipsis, and `fonts` set to the roles its
@@ -370,7 +372,8 @@ pub fn fit_row(row: &mut Row, m: &dyn Measure, room: &Room) -> bool {
             .flatten()
             .map(|px| px + plain.placed)
             .unwrap_or_else(|| w[s..].iter().sum());
-        if x0 + total > room.width_px.saturating_sub(control) as f32 {
+        // the badge after the text counts as text
+        if x0 + total + row.keep as f32 > room.width_px.saturating_sub(control) as f32 {
             let end = chars.len() as u32;
             row.props
                 .push((0, end, SHORT.to_owned(), serde_json::Value::Bool(true)));

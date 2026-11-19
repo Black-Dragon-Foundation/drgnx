@@ -36303,6 +36303,112 @@
       "classes": [
         "user"
       ],
+      "doc": "a review screen is shown no more",
+      "name": "review-screen/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view id: `review-screen/close`.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "ViewId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a change to a review screen: refresh reads the change and its effects again",
+      "name": "review-screen/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`review-screen/set`: a change to VIEW: REFRESH reads the change and its effects again.",
+        "properties": {
+          "refresh": {
+            "default": false,
+            "type": "boolean"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Set",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a hub-fed view shows one change under review (an agent session's code, or a document against its last reviewed text): what changed, the effect on tasks, the reason of each change, then the actions, as rows",
+      "name": "review-screen/subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`review-screen/subscribe`: VIEW shows one change under review. Exactly one of `session` (the code an agent's\nsession changed against its branch's base) and `doc` (a spec or plan, against its text at `from`, a git blob id;\nwithout `from`, against the document as the last commit has it).",
+        "properties": {
+          "doc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Subscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "what a spec, plan or code change would do to the tasks under way or queued: a removed task (or a retired plan or spec) stops, a running task whose brief changes gets a steer, a task whose agent edits or reads a changed file would need to rebase; tasks not started or done are left out",
       "name": "review/effects",
       "params": {
@@ -47616,6 +47722,56 @@
           "attach": {
             "description": "The first env of a new buffer for this (view, class): a pair the hub already holds for the connection (no\n`view/close` came) is dropped and starts again, so the new buffer gets the rows whole.",
             "type": "boolean"
+          },
+          "badge": {
+            "description": "What the editor draws right after a row's name, before its tail: the Explorer's who-is-here badge\n(`drgnx-explorer-badge-functions`), as `[[file_each, file_limit], [folder_each, folder_limit], more]` px (a\nterminal's: columns): each agent shown takes EACH (a space and its mark, a file's with its initial), up to LIMIT\nshown, and MORE for the `+N` of the rest. A row with agents here ends its name that much shorter. None: no badge.",
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            ],
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "cell": {
             "description": "The frame's character cell, `[width, height]` px.",

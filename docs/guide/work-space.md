@@ -195,6 +195,10 @@ A branch in the merge queue shows "queue 2/3" on its card, and "conflicts with r
 its side panel says the same in words. These come from the hub's own record; a branch the hub sent no queue for shows
 nothing. Merging and pushing stay on their cards.
 
+### The review screen
+
+`E` on an agent opens its **review screen** (the Review layout fills it): one screen, in this order. What changed since the last version (for code, the branch's hunks against its base; for a document, its text against the last reviewed one). The effect on tasks: one line per task under way or queued, with its status dot and word ("not started" for a task that has not begun) and what the change would do to it, "Task 3 running: it would stop." for example. The reason of each change, from what the agent recorded; "No reason recorded" when it recorded none. Then the actions: **Accept** (`A`, every hunk), **Request changes** (`r`, a text input; `C-c C-c` sends what you wrote, `C-c C-k` drops it; it steers the agent, queued, and never cancels it), and on a hunk `a` accepts it and `D` rejects it. A merge or a push is never a button here: it stays on its card.
+
 ### Files an agent is editing
 
 A file in the worktree of an agent that is still alive (running, waiting, waiting for you, or paused) opens **read-only**,

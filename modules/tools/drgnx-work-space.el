@@ -56,6 +56,14 @@
 (declare-function drgnx-work-review-second "drgnx-work-review")
 (declare-function drgnx-work-review-accept "drgnx-work-review")
 (declare-function drgnx-work-review-reject "drgnx-work-review")
+(unless (featurep (quote drgnx-review-screen))
+  (load (expand-file-name "drgnx-review-screen" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-review-screen-show "drgnx-review-screen")
+(declare-function drgnx-review-screen-teardown "drgnx-review-screen")
+(declare-function drgnx-review-screen-accept "drgnx-review-screen")
+(declare-function drgnx-review-screen-request-changes "drgnx-review-screen")
+(declare-function drgnx-review-request-send "drgnx-review-screen")
+(declare-function drgnx-review-request-cancel "drgnx-review-screen")
 (declare-function drgnx-work-trail-buffers "drgnx-work-trail")
 (declare-function drgnx-work-timeline-buffers "drgnx-work-trail")
 (declare-function drgnx-work-trail-show "drgnx-work-trail")
@@ -201,10 +209,12 @@ it (a notes repository with the code repositories inside it)."
               work-flow-evidence work-flow-rules work-flow-run-red work-flow-tell-agent work-flow-waive work-trail
               work-steer work-pause work-resume work-stop work-keys-sheet work-conclusion-steps work-step-conclusions
               work-review work-second-reviewer work-review-accept work-review-reject
+              work-review-screen review-screen-accept review-screen-request-changes
+              review-screen-request-send review-screen-request-cancel
               work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
               work-collapse-layer-5 work-collapse-layer-6 work-collapse-layer-7 work-collapse-layer-8
-              work-expand-layers work-cycle-filter work-mode-list work-mode-graph work-mode-toggle work-search
+              work-expand-layers work-cycle-filter work-show-active work-show-completed work-show-all work-mode-list work-mode-graph work-mode-toggle work-search
               work-escape work-take-wheel work-files work-who-is-here work-move-machine
               work-diffs work-diff-quit work-diff-accept-hunk work-diff-reject-hunk)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
@@ -755,6 +765,21 @@ windows; the commands."
   (drgnx-command-define 'work-review-reject :category "Work" :title "Reject the Hunk Here"
                         :command #'drgnx-work-review-reject :map 'drgnx-work-review-mode-map
                         :doc "The file goes back to pending and the agent is told, queued; the agent is not cancelled")
+  (drgnx-command-define 'work-review-screen :category "Work" :title "Open the Review Screen"
+                        :command #'drgnx-review-screen-show :map 'drgnx-work-lens-map
+                        :doc "The selected agent's change: what changed, the effect on tasks, the reasons, then Accept and Request changes")
+  (drgnx-command-define 'review-screen-accept :category "Work" :title "Accept Every Hunk"
+                        :command #'drgnx-review-screen-accept :map 'drgnx-review-screen-mode-map
+                        :doc "A review mark per hunk of every file; nothing is merged or pushed")
+  (drgnx-command-define 'review-screen-request-changes :category "Work" :title "Request Changes"
+                        :command #'drgnx-review-screen-request-changes :map 'drgnx-review-screen-mode-map
+                        :doc "A text input; what you write steers the agent, queued, never a cancel")
+  (drgnx-command-define 'review-screen-request-send :category "Work" :title "Send the Requested Changes"
+                        :command #'drgnx-review-request-send :map 'drgnx-review-request-mode-map
+                        :doc "Steer the agent with what you wrote, queued; the agent is not cancelled")
+  (drgnx-command-define 'review-screen-request-cancel :category "Work" :title "Drop the Requested Changes"
+                        :command #'drgnx-review-request-cancel :map 'drgnx-review-request-mode-map
+                        :doc "Close the input without sending")
   (drgnx-command-define 'work-conclusion-steps :category "Work" :title "Light the Steps of a Conclusion"
                         :command #'drgnx-work-trail-show-steps :map 'drgnx-work-trail-mode-map
                         :doc "On a conclusion: light the steps it rests on and go through them")
@@ -772,6 +797,9 @@ windows; the commands."
                    (work-mode-graph "Show as a Graph" drgnx-work-map-mode-graph "The map as layers and the edges between them")
                    (work-mode-toggle "Switch Between List and Graph" drgnx-work-map-mode-toggle "m on the map does the same")
                    (work-expand-layers "Expand All Layers" drgnx-work-map-expand-layers "Every layer open again")
+                   (work-show-active "Show What Is Active" drgnx-work-map-show-active "The Active · Completed · All switch")
+                   (work-show-completed "Show What Is Completed" drgnx-work-map-show-completed "The Active · Completed · All switch")
+                   (work-show-all "Show Everything" drgnx-work-map-show-all "The Active · Completed · All switch")
                    (work-cycle-filter "Cycle Work Filter" drgnx-work-map-cycle-filter "Active, then Completed, then All")
                    (work-search "Narrow the Map" drgnx-work-map-search "Dim what does not match; Enter selects the first match")
                    (work-escape "Clear Search, Filters, then Close" drgnx-work-map-escape
@@ -820,6 +848,8 @@ windows lose the layout motion's parameters and the map buffers go."
                      (drgnx-work-review-buffers)))
     (kill-buffer b))
   (dolist (b (drgnx-work-detail-buffers)) (kill-buffer b))
+  (drgnx-review-screen-teardown)
+  (when-let* ((b (get-buffer "*Request changes*"))) (kill-buffer b))
   (drgnx-work-code-teardown)
   (dolist (b (buffer-list))
     (when (eq (buffer-local-value 'major-mode b) 'drgnx-work-files-mode) (kill-buffer b)))
