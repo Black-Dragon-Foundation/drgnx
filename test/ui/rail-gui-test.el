@@ -125,11 +125,13 @@ logical px from the rail's text area (the item: 6 inset, 8 icon inset, 16 icon, 
             ;; over a line the window cannot end), read in the gap above the first item
             (surface (funcall at 0 43 -3)))
         (should (equal (list 'bar bar) (list 'bar (near bar (funcall at 0 7 16)))))
-        (should (equal (list 'beside-the-cell nil)
+        (should (equal (list 'beside-the-cell nil surface)
                        (list 'beside-the-cell
-                             (cl-find-if-not (lambda (p) (equal p surface))
-                                             (cl-loop for dx from 39 to 43
-                                                      append (cl-loop for dy from 4 to 28 collect (funcall at 0 dx dy)))))))))))
+                             (cl-loop for dx from 39 to 43
+                                      thereis (cl-loop for dy from 4 to 28
+                                                       for p = (funcall at 0 dx dy)
+                                                       unless (equal p surface) return (list dx dy p)))
+                             surface)))))))
 
 (drgnx-look-gui-deftest drgnx-rail-ui/rail-is-44-px-at-every-scale ()
   "The rail is 44 logical px wide at the run's scale and at a UI scale of 125 %, sits above the status bar, which still

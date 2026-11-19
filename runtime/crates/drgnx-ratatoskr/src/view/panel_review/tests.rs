@@ -201,12 +201,18 @@ fn the_permission_card_takes_the_panels_width_so_its_ring_closes_on_every_row() 
             .unwrap();
         assert_eq!((card.0, card.1), (0, n), "{}", r.key);
     }
-    let head = rows[0]
+    // the head's tint (a run of its own face over the pad, one over the whole row) runs to the edge too
+    let head_end = rows[0]
         .runs
         .iter()
-        .find(|(_, _, f)| f == FaceId::KitQuestionCardHead.name())
+        .filter(|(_, _, f)| f == FaceId::KitQuestionCardHead.name())
+        .map(|r| r.1)
+        .max()
         .unwrap();
-    assert_eq!(head.1, u32::try_from(rows[0].text.chars().count()).unwrap());
+    assert_eq!(
+        head_end,
+        u32::try_from(rows[0].text.chars().count()).unwrap()
+    );
 }
 
 // pattern: D
