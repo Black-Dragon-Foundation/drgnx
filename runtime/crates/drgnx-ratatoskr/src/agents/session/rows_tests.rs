@@ -506,4 +506,42 @@ mod block_rows {
         assert!(pulses(false));
         assert!(!pulses(true));
     }
+
+    /// An edit is a kit diff block head: the path, `+N −M`, and Open, Revert and Comment as kit buttons.
+    #[test]
+    fn an_edit_block_has_open_revert_and_comment() {
+        let b = [Block::Edit {
+            path: "core/a.rs".into(),
+            plus: 4,
+            minus: 1,
+            hunks: vec![super::super::blocks::HunkRef { start_line: 2, end_line: 6 }],
+        }];
+        let rows = block_list_rows(&b, &BTreeSet::new(), &kit(), false);
+        let t = text(&rows);
+        assert!(t.contains("core/a.rs") && t.contains("+4") && t.contains("\u{2212}1"), "{t}");
+        let kinds: Vec<String> = rows
+            .iter()
+            .flat_map(|r| r.props.iter())
+            .filter(|p| p.2 == "drgnx-action")
+            .filter_map(|p| p.3.get(0).and_then(Value::as_str).map(str::to_owned))
+            .collect();
+        assert_eq!(kinds, ["block-open", "block-revert", "block-comment"]);
+    }
+
+    /// A question the agent asks is the kit's question card with its choices; a permission's keys are y, a, n.
+    #[test]
+    fn an_ask_block_is_a_question_card() {
+        let b = [Block::Ask {
+            kind: super::super::blocks::AskKind::Permission,
+            text: "Read the gateway's log?".into(),
+            options: vec![("Allow".into(), 'y'), ("Always".into(), 'a'), ("Deny".into(), 'n')],
+        }];
+        let rows = block_list_rows(&b, &BTreeSet::new(), &kit(), false);
+        assert!(rows[0].text.contains("Read the gateway's log?"), "{}", rows[0].text);
+        assert!(rows.iter().flat_map(|r| r.runs.iter()).any(|x| x.2 == FaceId::KitQuestionCardHead.name()));
+        let t = text(&rows);
+        for label in ["Allow", "Always", "Deny"] {
+            assert!(t.contains(label), "{t}");
+        }
+    }
 }
