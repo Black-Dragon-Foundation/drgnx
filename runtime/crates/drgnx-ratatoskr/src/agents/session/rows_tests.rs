@@ -431,3 +431,79 @@ fn an_allowed_step_says_how_it_was_allowed() {
     let rows = rows_with(&stepped("completed"), &look, &facts, false, None);
     assert!(under(&rows).is_empty());
 }
+
+// Flow Task 23, S3: the transcript from the conversation blocks (`blocks.rs`), one block type each.  The interface:
+// `block_list_rows(blocks, open, kit, reduced_motion)`, rows keyed `k:N/...` for block N, each row carrying
+// `drgnx-block` N; `open` holds the indexes of the Explored blocks the user opened.
+mod block_rows {
+    use super::super::blocks::Block;
+    use super::*;
+    use drgnx_rows::kit::KitEnv;
+    use std::collections::BTreeSet;
+
+    fn kit() -> KitEnv<'static> {
+        KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            ascii: false,
+            density: Default::default(),
+            icons: None,
+        }
+    }
+
+    fn text(rows: &[Row]) -> String {
+        rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("\n")
+    }
+
+    /// The user's message is a plain card, a bubble, with its words.
+    #[test]
+    fn a_you_block_is_a_bubble() {
+        let rows = block_list_rows(&[Block::You { text: "fix the tests".into() }], &BTreeSet::new(), &kit(), false);
+        assert!(rows[0].key.starts_with("k:0"), "{:?}", rows[0].key);
+        assert!(text(&rows).contains("fix the tests"));
+        assert!(rows.iter().all(|r| r.props.iter().any(|p| p.2 == "drgnx-block" && p.3 == json!(0))));
+    }
+
+    /// Reads and searches fold into one collapsible section header, "Explored · N files · t"; it opens by a click.
+    #[test]
+    fn an_explored_block_is_a_collapsible_header_that_opens_its_steps() {
+        let b = [Block::Explored { reads: 3, searches: 2, secs: 12, steps: vec![] }];
+        let closed = block_list_rows(&b, &BTreeSet::new(), &kit(), false);
+        assert_eq!(closed.len(), 1);
+        assert!(closed[0].text.contains("Explored") && closed[0].text.contains('5') && closed[0].text.contains("12"), "{}", closed[0].text);
+        let toggles: Vec<&Value> = closed[0].props.iter().filter(|p| p.2 == "drgnx-action").map(|p| &p.3).collect();
+        assert_eq!(toggles, [&json!(["block-toggle", 0])]);
+        // opened: the header says so (its twisty), and a click closes it
+        let open = block_list_rows(&b, &BTreeSet::from([0]), &kit(), false);
+        assert_ne!(closed[0].text, open[0].text);
+    }
+
+    /// A subagent's blocks nest under its head, indented.
+    #[test]
+    fn a_subagent_nests_and_indents() {
+        let b = [Block::Subagent {
+            call_id: "c1".into(),
+            title: "Survey the tests".into(),
+            blocks: vec![Block::You { text: "inner".into() }],
+        }];
+        let rows = block_list_rows(&b, &BTreeSet::new(), &kit(), false);
+        let head = rows.iter().find(|r| r.text.contains("Survey the tests")).expect("the head");
+        let inner = rows.iter().find(|r| r.text.contains("inner")).expect("the nested block");
+        let lead = |r: &Row| r.text.chars().take_while(|c| *c == ' ').count();
+        assert!(lead(inner) > lead(head), "{:?} vs {:?}", inner.text, head.text);
+    }
+
+    /// The live line pulses, and stands still under reduced motion.
+    #[test]
+    fn the_live_line_pulses_unless_reduced_motion() {
+        let b = [Block::Live { text: "reading the log".into() }];
+        let pulses = |rm: bool| {
+            block_list_rows(&b, &BTreeSet::new(), &kit(), rm)
+                .iter()
+                .any(|r| r.props.iter().any(|p| p.2 == "drgnx-pulse"))
+        };
+        assert!(pulses(false));
+        assert!(!pulses(true));
+    }
+}
