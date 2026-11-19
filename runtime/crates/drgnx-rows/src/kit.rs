@@ -2327,6 +2327,24 @@ mod tests {
         let faces: Vec<&str> = choices.runs.iter().map(|r| r.2.as_str()).collect();
         assert!(faces.contains(&primary.name()));
         assert!(faces.contains(&secondary.name()));
+        // the first button is the primary one, the others secondary
+        let face_at = |word: &str| {
+            let at = u32::try_from(
+                choices.text[..choices.text.find(word).unwrap()]
+                    .chars()
+                    .count(),
+            )
+            .unwrap();
+            choices
+                .runs
+                .iter()
+                .find(|r| {
+                    r.0 <= at && at < r.1 && (r.2 == primary.name() || r.2 == secondary.name())
+                })
+                .map(|r| r.2.as_str())
+        };
+        assert_eq!(face_at("Allow once"), Some(primary.name()));
+        assert_eq!(face_at("Always"), Some(secondary.name()));
         // y, a and n, each through the button's action
         for (word, key) in [("Allow once", "y"), ("Always", "a"), ("Deny", "n")] {
             assert!(

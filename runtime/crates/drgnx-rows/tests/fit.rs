@@ -514,3 +514,29 @@ fn a_row_ends_short_of_what_its_tail_always_draws() {
     assert!(!fitted_with_tail(&mut room, 120, (35, 24), &s));
     assert!(!short(&room));
 }
+
+/// [D] What the editor draws between a row's text and its tail (the Explorer's who-is-here badge, `keep`) counts as
+/// text: the text ends that much shorter, and a clean row whose text and badge reach the ⋯'s place is short.
+#[test]
+fn a_row_keeps_room_for_its_badge() {
+    let s = tens();
+    // a marked row with a 20 px badge: text and badge end short of the mark (85 px), so 65 px of text at most
+    let mut marked = tail_row("abcdefghij", drgnx_rows::Tail::Mark);
+    marked.keep = 20;
+    assert!(fitted_with_tail(&mut marked, 120, (35, 24), &s));
+    assert!(
+        marked.text.ends_with('…') && marked.text.chars().count() * 10 <= 65,
+        "{}",
+        marked.text
+    );
+    // a clean row of 80 px fits, but with its 20 px badge reaches the ⋯'s place (96 px)
+    let mut clean = tail_row("abcdefgh", drgnx_rows::Tail::Hover);
+    clean.keep = 20;
+    assert!(!fitted_with_tail(&mut clean, 120, (35, 24), &s));
+    assert!(short(&clean), "text and badge reach the ⋯'s place");
+    // past the body with its badge: cut, so text and badge end inside it
+    let mut long = tail_row("abcdefghijk", drgnx_rows::Tail::Hover);
+    long.keep = 20;
+    assert!(fitted_with_tail(&mut long, 120, (35, 24), &s));
+    assert!(long.text.chars().count() * 10 <= 100, "{}", long.text);
+}

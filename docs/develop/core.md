@@ -2438,7 +2438,8 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   did; past the limit, and in every timer, hook or follower path, the answer is drawn when it comes. The tail overlays
   (the ⋯ control, the git mark) are made only for rows within a page of what a window shows, the rest when scrolled to
   (`drgnx-explorer--rows-tails-in`). A row keeps clear only what its tail always draws (the env's `tail`,
-  docs/develop/hub.md): a clean row's name runs to the edge, and when it reaches the ⋯'s place
+  docs/develop/hub.md) and its who-is-here badge (the env's `badge`; the badge is an empty overlay's `after-string`
+  above the tail's, so it comes before the tail): a clean row's name runs to the edge, and when it reaches the ⋯'s place
   (`drgnx-row-tail-short`) its tail leaves the ⋯ out and the pointer on the row draws it over the end of the name, as
   VS Code's hover actions (`drgnx-wb-cover-sense`, a Nidhogg mouse sensor on the row: one overlay per window that
   displays the name's characters from the ⋯'s place as a stretch to that place and the ⋯, so a click there lands on it;
@@ -2517,7 +2518,10 @@ folded at the top of the dock and given the island header after (`drgnx-wb-islan
 otherwise keep the island header in its height and have no row left (the Open header missing until a frame swap laid
 the dock out again: `drgnx-live/echo-swap-keeps-the-whole-workbench`). The island header's tab line also grows once its font is
 measured, after that refresh: the folded section's buffer resizes its window again whenever its body changes
-(`drgnx-wb--fold-refit` on `window-size-change-functions`), or the row is left a few pixels under the Files header.
+(`drgnx-wb--fold-refit` on `window-size-change-functions`), or the row is left a few pixels under the Files header. The folded
+row is buffer text, so its bar's filler ends at the body's edge (`drgnx-wb-bar`'s BODY): buffer text never paints the
+fringe, and a filler on into it (as a header line's, which does) made the row wider than the body, so Emacs drew its
+truncation arrow in the right fringe (Glitnir's `‹` under the scroll bar's strip).
 
 A section fitted while its island header was still short (the title font not yet measured) is squeezed below its tab
 and header lines once the header grows: its header line is drawn past its bottom and the section below draws over

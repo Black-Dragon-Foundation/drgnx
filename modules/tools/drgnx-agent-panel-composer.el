@@ -37,6 +37,7 @@
 (declare-function drgnx-agent-panel--one-line "drgnx-agent-panel")
 (declare-function drgnx-history-fork-here "drgnx-history-revert")
 (defvar drgnx-agent-panel--steps)
+(defvar drgnx-agent-companion--head)
 
 ;;;; Context: what the next message is about, as removable items
 
@@ -47,7 +48,8 @@
 (defun drgnx-agent-panel-context-add (item)
   "Add the context ITEM to this composer's list, once."
   (unless (member item drgnx-agent-panel--context)
-    (setq drgnx-agent-panel--context (append drgnx-agent-panel--context (list item))))
+    (setq drgnx-agent-panel--context (append drgnx-agent-panel--context (list item)))
+    (drgnx-agent-panel-composer--refresh))
   drgnx-agent-panel--context)
 
 (defun drgnx-agent-panel-context-remove (item)
@@ -125,6 +127,32 @@ whichever frame is selected when the panel updates."
     (with-selected-frame frame
       (with-current-buffer buffer (drgnx-agent-panel-composer--bar-in frame)))))
 
+(defvar-local drgnx-agent-panel--intent 'steer
+  "What the next message asks of the agent: `steer' (the default: it queues or steers, never cancels) or `ask'
+\(answer only: no plan change, no file touched).  An ask is for one message: Send puts it back to `steer'.")
+
+(defun drgnx-agent-panel-composer--segmented ()
+  "The Steer | Ask control (a kit segmented control): the chosen segment is the primary button, the other the quiet one."
+  (let ((ask (eq drgnx-agent-panel--intent 'ask)))
+    (concat (drgnx-agent-panel-composer--click " Steer " #'drgnx-agent-panel-intent-steer
+                                               (if ask 'drgnx-kit-button-secondary 'drgnx-kit-button-primary)
+                                               "Steer: the message queues or steers the agent, and never cancels it")
+            (drgnx-agent-panel-composer--click " Ask " #'drgnx-agent-panel-intent-ask
+                                               (if ask 'drgnx-kit-button-primary 'drgnx-kit-button-secondary)
+                                               "Ask: the agent answers only, with no change to its plan and no file touched"))))
+
+(defun drgnx-agent-panel-intent-steer ()
+  "Steer: the next message queues or steers the agent (the default)."
+  (interactive)
+  (setq drgnx-agent-panel--intent 'steer)
+  (drgnx-agent-panel-composer--refresh))
+
+(defun drgnx-agent-panel-intent-ask ()
+  "Ask: the next message is a question the agent answers without changing its plan or touching a file."
+  (interactive)
+  (setq drgnx-agent-panel--intent 'ask)
+  (drgnx-agent-panel-composer--refresh))
+
 (defun drgnx-agent-panel-composer--bar-in (frame)
   "`drgnx-agent-panel-composer--bar''s text, built with FRAME selected."
   (let* ((snap drgnx-agent-panel--snap) (model (plist-get snap :model)) (mode (plist-get snap :mode))
@@ -139,7 +167,9 @@ whichever frame is selected when the panel updates."
                           (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'arrow-up) " ")
                                                              #'drgnx-agent-panel-send 'drgnx-kit-button-primary
                                                              "RET: send to the agent; while it works it is queued"))))
-    (concat (if (stringp model)
+    (concat (drgnx-agent-panel-composer--segmented)
+            " "
+            (if (stringp model)
                 (concat (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'sparkle) " " model " ")
                                                            #'drgnx-agent-panel-switch-model
                                                            'drgnx-agent-panel-chip "Switch the model")
@@ -152,6 +182,9 @@ whichever frame is selected when the panel updates."
               "")
             (if pair (concat (drgnx-agent-panel-composer--click pair #'drgnx-agent-panel-pair nil "C: pair with the agent") " ")
               "")
+            ;; Stop is a quiet button of its own, apart from the Send group on the right: Send never cancels
+            (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'square) " Stop ") #'drgnx-agent-panel-stop
+                                               'drgnx-kit-button-secondary "x: stop the agent (its turn ends after the current step)")
             (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width buttons)
                                                                      (drgnx-agent-panel-composer--pad frame))))))
             buttons)))
@@ -296,16 +329,42 @@ to, or nil."
                       (put-text-property 0 1 'cursor t s)    ; the cursor at its start, not after it
                       s))))
 
+(defun drgnx-agent-panel-composer--lines-px (window)
+  "The pixel height of the composer's lines in WINDOW: the lines the overlay above the field adds, the field's and the
+bar's, each as tall as the window's default line."
+  (let ((above (if-let* ((s (and (overlayp drgnx-agent-companion--head) (overlay-get drgnx-agent-companion--head 'before-string))))
+                   (seq-count (lambda (c) (eq c ?\n)) s)
+                 0)))
+    ;; at least the text's own height (a long line wraps)
+    (max (* (window-default-line-height window) (+ above (count-lines (point-min) (point-max))))
+         (cdr (window-text-pixel-size window (point-min) (point-max))))))
+
+(defun drgnx-agent-panel-composer--fit-tile (window px)
+  "Make composer WINDOW of a conversation tile PX tall (at most a third of its tile), taking the room from, or giving it
+to, the transcript above it."
+  (let* ((window-resize-pixelwise t)
+         (most (/ (window-pixel-height (or (window-parent window) window)) 3))
+         (want (min px most)) (delta (- want (window-body-height window t))))
+    (unless (zerop delta)
+      (ignore-errors (window-resize window delta nil nil t)))))
+
 (defun drgnx-agent-panel-composer--refit ()
   "The composer's text changed: each area window that shows it below a panel, whose text height is not the one it was
 last fitted to (a line more or less, a wrap, a chip), is fitted again; a keystroke that changes no height fits nothing."
   (let (heights)
     (dolist (w (get-buffer-window-list (current-buffer) nil t))
-      (when-let* (((window-parameter w 'drgnx-area-part)) (area (window-parameter w 'drgnx-role)))
+      (cond
+       ((and (window-parameter w 'drgnx-area-part) (window-parameter w 'drgnx-role))
         (let ((h (cdr (window-text-pixel-size w (point-min) (point-max)))))
           (push (cons w h) heights)
           (unless (eql h (alist-get w drgnx-agent-companion--fit-heights))
-            (drgnx-wb-area-fit-companions area (window-frame w))))))
+            (drgnx-wb-area-fit-companions (window-parameter w 'drgnx-role) (window-frame w)))))
+       ;; the composer of a conversation tile (an atomic tile of the grid): as tall as its lines, at most a third of the tile
+       ((window-parameter w 'drgnx-grid-companion)
+        (let ((h (drgnx-agent-panel-composer--lines-px w)))
+          (push (cons w h) heights)
+          (unless (eql h (alist-get w drgnx-agent-companion--fit-heights))
+            (drgnx-agent-panel-composer--fit-tile w h))))))
     (setq drgnx-agent-companion--fit-heights heights)))
 
 (defun drgnx-agent-panel-composer--changed (&rest _)
@@ -331,7 +390,67 @@ its end, and is a field of its own (line moves stop at it); typing at the field'
       (delete-region (drgnx-agent-panel-composer--field-end) (point-max))
       (goto-char (point-max))
       (insert bar)))
+  (drgnx-agent-panel-composer--draw-head)
   (drgnx-agent-panel-composer--refit))   ; a chip more or less may wrap the bar
+
+(defvar-local drgnx-agent-companion--head nil "The composer's overlay above the field: the queued note and the context chips.")
+
+(defun drgnx-agent-panel-composer--chip-label (item)
+  "The label of context ITEM's chip: \"@ drgnx-inbox.el\", \"@ lines 120–184\" or \"@ task 2\"."
+  (cond ((plist-get item :item) (format "@ %s %s" (car (plist-get item :item)) (cdr (plist-get item :item))))
+        ((plist-get item :lines)
+         (format "@ lines %d–%d" (car (plist-get item :lines)) (cdr (plist-get item :lines))))
+        (t (format "@ %s" (file-name-nondirectory (directory-file-name (or (plist-get item :file) "")))))))
+
+(defun drgnx-agent-panel-composer--head-string ()
+  "What shows above the composer's field: the note waiting for the agent's next step, then the context items as chips
+that a click removes; nil when there is neither.  Each line ends in a newline."
+  (let* ((queue (drgnx-agent-panel-composer--queue))
+         (note (and queue
+                    (concat (propertize "↳ Queued for its next step: " 'face 'drgnx-text-subtle)
+                            (propertize (truncate-string-to-width (replace-regexp-in-string "[\n\t ]+" " " (format "%s" (car queue)))
+                                                                  60 nil nil "…")
+                                        'face 'drgnx-ui-text)
+                            (if (cdr queue) (propertize (format " (+%d)" (length (cdr queue))) 'face 'drgnx-text-subtle) "")
+                            "\n")))
+         (chips (and drgnx-agent-panel--context
+                     (concat (mapconcat
+                              (lambda (item)
+                                (propertize (format " %s × " (drgnx-agent-panel-composer--chip-label item))
+                                            'face 'drgnx-agent-panel-chip 'mouse-face 'drgnx-hover
+                                            'drgnx-agent-composer-chip item
+                                            'keymap (let ((m (make-sparse-keymap)))
+                                                      (define-key m [mouse-1] #'drgnx-agent-panel-composer-chip-remove) m)
+                                            'help-echo "Click to remove from this message's context"))
+                              drgnx-agent-panel--context " ")
+                             "\n"))))
+    (and (or note chips) (concat note chips))))
+
+(defun drgnx-agent-panel-composer--draw-head ()
+  "Draw the overlay above the composer's field from the panel's state."
+  (unless (overlayp drgnx-agent-companion--head)
+    (setq drgnx-agent-companion--head (make-overlay (point-min) (point-min) nil t nil)))
+  (move-overlay drgnx-agent-companion--head (point-min) (point-min))
+  (overlay-put drgnx-agent-companion--head 'before-string (drgnx-agent-panel-composer--head-string))
+  ;; before the placeholder's string: the queued note and the chips come first, the field's hint under them
+  (overlay-put drgnx-agent-companion--head 'priority -10))
+
+(defun drgnx-agent-panel-composer-chip-remove (event)
+  "A click on a context chip of the composer: the item leaves the message's context."
+  (interactive "e")
+  (let* ((str (posn-string (event-start event)))
+         (item (and (stringp (car-safe str)) (get-text-property (cdr str) 'drgnx-agent-composer-chip (car str)))))
+    (when item
+      (with-current-buffer (window-buffer (posn-window (event-start event)))
+        (drgnx-agent-panel--companion-take)
+        (unwind-protect (progn (drgnx-agent-panel-context-remove item) (drgnx-agent-panel-composer--refresh))
+          (drgnx-agent-panel--companion-give))))))
+
+(defun drgnx-agent-panel-composer--refresh ()
+  "Draw the composer again after its state changed in the current buffer: the composer itself, or the panel."
+  (if (buffer-live-p drgnx-agent-companion--main)
+      (drgnx-agent-panel-composer--draw-bar)
+    (drgnx-agent-panel-composer-redraw)))
 
 (defun drgnx-agent-panel-composer-redraw ()
   "The snapshot changed: the composer's bar is drawn again."
@@ -381,9 +500,14 @@ comes whatever buffer is current)."
   (setq text (drgnx-agent-panel-with-context text))
   (when (equal (format "%s" (plist-get drgnx-agent-panel--snap :mode)) "interrupt")
     (user-error "This agent's mode would cancel its turn for a message; change its mode first"))
-  (let ((busy (equal (format "%s" (plist-get drgnx-agent-panel--snap :status)) "busy")))
-    (drgnx-agent-panel--ask "agents/send" (list :id drgnx-agent-panel--session :text text))
-    (message (if busy "Agent: queued, it goes in after the current turn" "Agent: sent"))))
+  (let ((busy (equal (format "%s" (plist-get drgnx-agent-panel--snap :status)) "busy"))
+        (ask (eq drgnx-agent-panel--intent 'ask)))
+    (drgnx-agent-panel--ask "agents/send" (append (list :id drgnx-agent-panel--session :text text)
+                                                  (and ask (list :intent "ask"))))
+    ;; an ask is for one message: the control goes back to Steer
+    (when ask (setq drgnx-agent-panel--intent 'steer))
+    (message (cond (ask "Agent: asked, it answers only") (busy "Agent: queued, it goes in after the current turn")
+                   (t "Agent: sent")))))
 
 (defun drgnx-agent-panel-send ()
   "Send the composer's message to the agent and empty the field.  While it works the message is queued; it is not
@@ -395,7 +519,8 @@ cancelled.  An empty field sends nothing.  From the panel or its header it sends
       (let ((text (string-trim (drgnx-agent-panel-composer--field-text))))
         (unless (string-empty-p text)
           (drgnx-agent-panel-composer--send-text text)
-          (delete-region (point-min) (drgnx-agent-panel-composer--field-end)))))))
+          (delete-region (point-min) (drgnx-agent-panel-composer--field-end))
+          (drgnx-agent-panel-composer--refresh))))))
 
 (defun drgnx-agent-panel-composer-newline ()
   "Break the line in the composer's message; nothing is sent."

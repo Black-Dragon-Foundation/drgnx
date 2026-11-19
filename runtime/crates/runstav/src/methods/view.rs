@@ -34,6 +34,10 @@ pub enum Display {
 /// when it names none: the hub then measures through the editor), INDEX the face in a collection, the rest in px.
 pub type FontFact = (String, Option<String>, u32, f32, f32, f32, f32, f32);
 
+/// The Explorer's who-is-here badge (`view/env`'s `badge`): `((file_each, file_limit), (folder_each, folder_limit),
+/// more)`, px (a terminal's: columns).
+pub type Badge = ((u32, u32), (u32, u32), u32);
+
 /// `view/env`: how VIEW looks in display class CLASS, measured in the view's buffer. EPOCH is the editor's number for
 /// this env (the hub echoes it on every patch); a new epoch makes the next patch a reset.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -55,6 +59,12 @@ pub struct ViewEnv {
     /// (`drgnx_rows::fit_row::Room::tail`). None: the view's rows get no tail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail: Option<(u32, u32)>,
+    /// What the editor draws right after a row's name, before its tail: the Explorer's who-is-here badge
+    /// (`drgnx-explorer-badge-functions`), as `[[file_each, file_limit], [folder_each, folder_limit], more]` px (a
+    /// terminal's: columns): each agent shown takes EACH (a space and its mark, a file's with its initial), up to LIMIT
+    /// shown, and MORE for the `+N` of the rest. A row with agents here ends its name that much shorter. None: no badge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<Badge>,
     /// `[role, colour]`: the SVG writer's colours, from the theme.
     #[serde(default)]
     pub palette: Vec<(String, String)>,

@@ -166,7 +166,7 @@ its rows came: a version is enough.  A view the env registry knows with rows but
   ;; their hub seeds the map's graph, which the other scenes' hub (the plan run's Flow agent) cannot share: a full
   ;; run draws them in a second session (`drgnx-look-scenes-run' groups the scenes by :seed)
   (should (equal (mapcar #'car (seq-filter (lambda (s) (equal (plist-get (cdr s) :seed) "map")) drgnx-look-scenes))
-                 '(work-space-dark work-space-light work-space-hc)))
+                 '(work-list work-space-dark work-space-light work-space-hc)))
   (should-not (seq-find (lambda (s) (and (plist-get (cdr s) :seed) (plist-get (cdr s) :agent))) drgnx-look-scenes)))
 
 ;; The scenes that follow one another share a session: what a scene leaves is what the next one starts from.

@@ -604,6 +604,18 @@ pub struct SendParams {
     /// sent and the answer is `false` (busy).  For the editor's own deliveries, which never join a running turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub if_free: Option<bool>,
+    /// What the message asks of the agent: `steer` (the default: queued, or steering, as the mode says) or `ask`
+    /// (answer only: the agent answers the question without changing its plan or touching a file).  Neither cancels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<SendIntent>,
+}
+
+/// What a message asks of the agent (`agents/send`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SendIntent {
+    Steer,
+    Ask,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -830,7 +842,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "agents/send", AgentsSend(SendParams) -> bool,
             classes: [User], writes: true,
-            doc: "a prompt to the session (queued or steering as its mode says; with if_free, only when it is free, else false)",
+            doc: "a prompt to the session (queued or steering as its mode says; intent ask: answer only, no plan change and no file touched; with if_free, only when it is free, else false)",
         ),
         method!(
             "agents/stop", AgentsStop(ById) -> bool,

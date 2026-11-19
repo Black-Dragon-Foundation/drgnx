@@ -96,6 +96,12 @@ impl RowBuilder {
         self
     }
 
+    /// PX the editor draws after this row's text, before its tail ([`Row::keep`]).
+    pub fn keep(&mut self, px: u32) -> &mut Self {
+        self.row.keep = px;
+        self
+    }
+
     pub fn finish(self) -> Row {
         self.row
     }

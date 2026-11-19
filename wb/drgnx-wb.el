@@ -57,13 +57,16 @@ follower is not a jank-guard violation (invariant I9).")
   "The kit's close button on a header line: `drgnx-ui-close-button' with COMMAND, HELP and PROPS."
   (drgnx-ui-close-button command help :props props))
 
-(defun drgnx-wb-bar (string &optional filled)
+(defun drgnx-wb-bar (string &optional filled body)
   "STRING as a header row: `drgnx-wb-bar' behind it (under any face it has), and a filler to the window's right edge,
 over the right fringe too (the dock's sections have one: the rows' inset), so the whole row is the bar's colour and
-not the header line's.  FILLED: STRING already reaches the edge."
+not the header line's.  FILLED: STRING already reaches the edge.  BODY: STRING is buffer text (a folded section's
+row), whose filler ends at the body's edge: buffer text never paints the fringe, and past the edge it only made the row
+wider than the body, so Emacs drew its truncation arrow in the fringe."
   (let ((s (copy-sequence string)))
     (add-face-text-property 0 (length s) 'drgnx-wb-bar t s)
-    (if filled s (concat s (propertize " " 'display '(space :align-to (+ right right-fringe)) 'face 'drgnx-wb-bar)))))
+    (if filled s (concat s (propertize " " 'display (if body '(space :align-to right) '(space :align-to (+ right right-fringe)))
+                                       'face 'drgnx-wb-bar)))))
 
 (defun drgnx-wb-header-with-close (title command help &rest props)
   "TITLE, then the close button for COMMAND (see `drgnx-wb-close-button') at the right edge of the window."
@@ -80,13 +83,13 @@ not the header line's.  FILLED: STRING already reaches the edge."
     m)
   "The keymap of a dock section's header: a click folds or unfolds the section.")
 
-(defun drgnx-wb-section-header (title &optional collapsed)
+(defun drgnx-wb-section-header (title &optional collapsed body)
   "A dock section's header, window-dark.html `.sec': the chevron (down, or right when COLLAPSED) and TITLE (nil: a
 section without one, such as a pane kind defined with no `:title') in `drgnx-wb-section', on the island's surface.  A
 click on it folds or unfolds the section (`drgnx-wb-section-click').  Hiding the sidebar is on the island header's ⋯
-\(`drgnx-wb-island-menu')."
+\(`drgnx-wb-island-menu').  BODY: as buffer text, a folded section's row (`drgnx-wb-bar')."
   (propertize
-   (drgnx-wb-bar (drgnx-ui-kit-section-header (string-trim-left (or title "")) t collapsed nil 'header-line))
+   (drgnx-wb-bar (drgnx-ui-kit-section-header (string-trim-left (or title "")) t collapsed nil 'header-line) nil body)
    'local-map drgnx-wb--section-map 'pointer 'hand))
 
 ;;;; The island header: the sidebar's name and its buttons (window-dark.html `.ph')
@@ -678,7 +681,7 @@ killing it would delete the folded windows of the other frames (they are dedicat
   (let ((buf-name (format " *drgnx-section-%s*" name)))
     (with-current-buffer (get-buffer-create buf-name)
       (let ((inhibit-read-only t)) (erase-buffer))
-      (insert (drgnx-wb-section-header (drgnx-wb--section-title name) t))
+      (insert (drgnx-wb-section-header (drgnx-wb--section-title name) t t))
       (setq-local cursor-type nil truncate-lines t mode-line-format nil header-line-format nil)
       ;; its row again when the body changes: the island header put on the dock's top window grows once its font is
       ;; measured, after the fold, and left the folded row 9 px of 32 (the user's side bar: Open under Files)

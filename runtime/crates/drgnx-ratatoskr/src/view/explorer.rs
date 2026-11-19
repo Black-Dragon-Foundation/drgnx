@@ -15,7 +15,7 @@ use crate::front::Front;
 use drgnx_rows::faces::FaceId;
 use drgnx_rows::{ImageId, Row, RowBuilder, Tail};
 use runstav::methods::search::{ExplorerParams, ExplorerStarted};
-use runstav::methods::view::{Display, ViewEnv};
+use runstav::methods::view::{Badge, Display, ViewEnv};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::cmp::Ordering as Cmp;
@@ -478,6 +478,9 @@ pub struct RowLook {
     pub gui: Option<(u32, u32, u32)>,
     /// The listing has one root, whose row is hidden (the island's header names it).
     pub one_root: bool,
+    /// The editor's who-is-here badge (the env's `badge`): `((file_each, file_limit), (folder_each, folder_limit),
+    /// more)`; none: no badge.
+    pub badge: Option<Badge>,
 }
 
 impl RowLook {
@@ -489,6 +492,20 @@ impl RowLook {
             gui: matches!(env.display, Display::Gui)
                 .then(|| (px(indent as f32), px(icons::SIZE), px(6.0))),
             one_root: roots == 1,
+            badge: env.badge,
+        }
+    }
+
+    /// The width of the badge of N agents on a folder's row (DIR) or a file's (`drgnx-agents-editor-here--badge`);
+    /// 0 with no badge.
+    pub fn badge_px(&self, dir: bool, n: usize) -> u32 {
+        match self.badge {
+            Some((file, folder, more)) if n > 0 => {
+                let (each, limit) = if dir { folder } else { file };
+                let shown = n.min(limit as usize) as u32;
+                shown * each + if n > limit as usize { more } else { 0 }
+            }
+            _ => 0,
         }
     }
 }
@@ -593,7 +610,8 @@ pub fn marks_of(
 /// or folder icon as images with the gap either side), then the name; the path over all of it, the git status over
 /// the name (`drgnx-git-status`, which the editor draws as the mark at the right edge), an ignored name dimmed. A
 /// single root's row is invisible. The ordinals of the agents here go over the name too (`drgnx-agents-here`, a list:
-/// the editor draws their badge, whose marks and colours are its own). Icons go into IMAGES.
+/// the editor draws their badge, whose marks and colours are its own, and the row keeps room for it, the env's `badge`).
+/// Icons go into IMAGES.
 fn entry_row(
     e: &Entry,
     mark: Option<git::Kind>,
@@ -668,6 +686,8 @@ fn entry_row(
     });
     if let Some(ords) = here.filter(|o| !o.is_empty()) {
         b.prop(name, end, "drgnx-agents-here", json!(ords));
+        // the editor draws their badge after the name: the name ends short of it
+        b.keep(look.badge_px(e.dir, ords.len()));
     }
     b.prop(0, end, "drgnx-work-id", json!(e.path));
     if hidden {

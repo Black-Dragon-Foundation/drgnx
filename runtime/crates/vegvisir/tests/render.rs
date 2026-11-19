@@ -43,6 +43,18 @@ fn frame() -> (BTreeMap<ItemId, Item>, Vec<Edge>, Layout) {
     (items, f.edges, f.layout)
 }
 
+/// The kit's env of a graphical display at scale 1 (no glyphs of its own, no icons).
+fn kit() -> drgnx_rows::kit::KitEnv<'static> {
+    drgnx_rows::kit::KitEnv {
+        scale: 1.0,
+        tty: false,
+        glyphs: &[],
+        ascii: false,
+        density: drgnx_rows::kit::Density::Comfortable,
+        icons: None,
+    }
+}
+
 fn gui(palette: &Palette) -> Env<'_> {
     Env {
         epoch: 1,
@@ -430,16 +442,19 @@ fn strip_chips_rows() {
         .filter(|i| i.id.0.starts_with("machine:"))
         .cloned()
         .collect();
-    let row = render::strip(&s, &f.needs_you, &machines, &[], &gui(&pal), &Cols).0;
+    let row = render::strip(&s, &f.needs_you, &machines, &[], &gui(&pal), &Cols, &kit()).0;
     assert_eq!(row.key, "strip");
+    assert!(row.text.contains("Codex asks: cargo clippy"), "{row:?}");
+    assert!(row.text.contains("g1"), "{row:?}");
     assert!(
-        row.text.contains("⚑ Codex asks: cargo clippy  g1"),
-        "{row:?}"
+        row.runs
+            .iter()
+            .any(|r| r.2 == FaceId::KitChipWarnSoft.name())
     );
+    assert!(row.runs.iter().any(|r| r.2 == FaceId::KitKeyHintCap.name()));
     assert!(row.text.contains("desk 3/16"), "{row:?}");
     // the card covers the agent that needs you: no chip of its own
     assert!(!row.text.contains("fx-sess needs you"), "{row:?}");
-    assert!(row.runs.iter().any(|r| r.2 == FaceId::WorkNeedsYou.name()));
     assert!(row.runs.iter().any(|r| r.2 == FaceId::WorkChip.name()));
     // the machines' chips end at the right edge
     let (pos, px) = *row.stops.last().expect("a stop before the machines");
@@ -459,7 +474,7 @@ fn strip_chips_rows() {
             ..f.needs_you[0].clone()
         })
         .collect();
-    let row = render::strip(&s, &many, &machines, &[], &gui(&pal), &Cols).0;
+    let row = render::strip(&s, &many, &machines, &[], &gui(&pal), &Cols, &kit()).0;
     assert!(
         row.text.contains("g9") && !row.text.contains("g10") && row.text.contains("+4"),
         "{}",
@@ -628,8 +643,12 @@ fn a_long_strip_entry_is_cut_and_the_row_is_ui_text() {
             .into(),
         ..f.needs_you[0].clone()
     }];
-    let row = render::strip(&s, &long, &[], &[], &gui(&pal), &Cols).0;
-    assert!(row.text.contains("…  g1"), "{:?}", row.text);
+    let row = render::strip(&s, &long, &[], &[], &gui(&pal), &Cols, &kit()).0;
+    assert!(
+        row.text.contains('…') && row.text.contains("g1"),
+        "{:?}",
+        row.text
+    );
     assert!(!row.text.contains("some more words"), "{:?}", row.text);
     let end = u32::try_from(row.text.chars().count()).unwrap();
     assert!(
@@ -722,7 +741,7 @@ fn the_strip_has_the_forecast_and_cost_chips_before_the_machines() {
         .cloned()
         .collect();
     let extra = vec!["wk 41 % ▲ Thu".to_owned(), "$31 / $40".to_owned()];
-    let row = render::strip(&s, &[], &machines, &extra, &gui(&pal), &Cols).0;
+    let row = render::strip(&s, &[], &machines, &extra, &gui(&pal), &Cols, &kit()).0;
     let wk = row.text.find("wk 41 % ▲ Thu").expect("the forecast chip");
     let cost = row.text.find("$31 / $40").expect("the cost chip");
     let desk = row.text.find("desk 3/16").expect("a machine");
@@ -813,7 +832,7 @@ fn a_machine_chip_on_the_strip_has_its_icon() {
         .filter(|i| i.id.0.starts_with("machine:"))
         .cloned()
         .collect();
-    let (row, images) = render::strip(&s, &[], &machines, &[], &gui(&pal), &Cols);
+    let (row, images) = render::strip(&s, &[], &machines, &[], &gui(&pal), &Cols, &kit());
     assert_eq!(row.images.len(), machines.len(), "{row:?}");
     assert!(!images.is_empty());
     let svg = images
@@ -901,8 +920,17 @@ fn a_cut_gate_chip_still_says_what_it_is() {
         text: "2 tasks, about 0.00 USD (some costs unknown): approve to start".into(),
         ..f.needs_you[0].clone()
     };
-    let row = render::strip(&s, &[gate.clone(), gate], &[], &[], &gui(&pal), &Cols).0;
-    assert!(row.text.contains("⚑ Sign off: 2 tasks"), "{:?}", row.text);
+    let row = render::strip(
+        &s,
+        &[gate.clone(), gate],
+        &[],
+        &[],
+        &gui(&pal),
+        &Cols,
+        &kit(),
+    )
+    .0;
+    assert!(row.text.contains("Sign off: 2 tasks"), "{:?}", row.text);
     assert!(row.text.contains("g2"), "{:?}", row.text);
 }
 
@@ -955,7 +983,7 @@ fn strip_chip_text_is_not_truncated() {
     let s = scene(&items, &edges, &layout, &new);
     let long = format!("Codex asks: {}", "x".repeat(300));
     let needs = vec![card("1", vegvisir::CardKind::Permission, &long)];
-    let (row, _) = render::strip(&s, &needs, &[], &[], &gui(&pal), &Cols);
+    let (row, _) = render::strip(&s, &needs, &[], &[], &gui(&pal), &Cols, &kit());
     assert!(row.text.contains('…'), "the fit cuts it: {row:?}");
     assert!(
         row.text.chars().count() < 200,
