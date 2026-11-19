@@ -8,6 +8,11 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
+(defconst agent-proposals-gui--repo
+  (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
+(dolist (d '("core" "wb" "harness" "themes"))
+  (add-to-list 'load-path (expand-file-name d agent-proposals-gui--repo)))
+(add-to-list 'custom-theme-load-path (expand-file-name "themes" agent-proposals-gui--repo))
 (require 'drgnx)
 (require 'drgnx-hub-client)
 (require 'drgnx-ui-kit)
