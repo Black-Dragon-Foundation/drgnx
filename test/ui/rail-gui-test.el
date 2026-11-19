@@ -74,15 +74,15 @@ every frame BODY made deleted after, the modes as they were."
                               do (forward-line 1)))))
            (heights (cl-loop for (a b) on tops while b collect (- b a))))
       (should (equal (list gap) (list (car heights))))
-      ;; no item is cut by the window's edge (a line, with the space the display puts at its end, that does not fit ends in a `$'): each is narrower than the
-      ;; text area
+      ;; no item is wider than the window's text area (a line as wide as the window is cut off): each is narrower than
+      ;; the text area
       (let ((body (window-body-width rail t))
             (widths (with-current-buffer (window-buffer rail)
                       (save-excursion
                         (goto-char (point-min))
                         (cl-loop until (eobp)
                                  when (> (- (line-end-position) (line-beginning-position)) 1)
-                                 collect (car (window-text-pixel-size rail (line-beginning-position) (1+ (line-end-position))))
+                                 collect (car (window-text-pixel-size rail (line-beginning-position) (line-end-position)))
                                  do (forward-line 1))))))
         (should (equal (list 'cut nil)
                        (list 'cut (and (seq-some (lambda (w) (>= w body)) widths) (list 'body body 'widths widths))))))
@@ -120,8 +120,16 @@ logical px from the rail's text area (the item: 6 inset, 8 icon inset, 16 icon, 
     ;; fill is the kit sheet's row: `drgnx-kit-sheet/rail-item' reads it per pad)
     (cl-flet ((near (want got) (if (cl-every (lambda (a b) (<= (abs (- a b)) 16)) want got) want got)))
       ;; (the dot is read in the scenes' pictures: its place on the cell's corner is a look, not a pixel)
-      (let ((bar (drgnx-rail-ui-test--rgb (drgnx-look-token 'accent variant))))
-        (should (equal (list 'bar bar) (list 'bar (near bar (funcall at 0 7 16)))))))))
+      (let ((bar (drgnx-rail-ui-test--rgb (drgnx-look-token 'accent variant)))
+            ;; the surface's colour beside the cell (the last 6 px of the text area, where a truncation `$' is drawn
+            ;; over a line the window cannot end), read in the gap above the first item
+            (surface (funcall at 0 43 -3)))
+        (should (equal (list 'bar bar) (list 'bar (near bar (funcall at 0 7 16)))))
+        (should (equal (list 'beside-the-cell nil)
+                       (list 'beside-the-cell
+                             (cl-find-if-not (lambda (p) (equal p surface))
+                                             (cl-loop for dx from 39 to 43
+                                                      append (cl-loop for dy from 4 to 28 collect (funcall at 0 dx dy)))))))))))
 
 (drgnx-look-gui-deftest drgnx-rail-ui/rail-is-44-px-at-every-scale ()
   "The rail is 44 logical px wide at the run's scale and at a UI scale of 125 %, sits above the status bar, which still
