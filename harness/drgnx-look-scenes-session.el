@@ -1092,6 +1092,28 @@ what changed: the buffers whose text did, each window's body width before and af
   (drgnx-look-scene--try "settled" (drgnx-look-scene--panel-unsettled drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 
+(defvar drgnx-agent-panel--snap)
+(defvar drgnx-agent-panel--session)
+(declare-function drgnx-agent-panel-open-tab "drgnx-agent-panel" (session))
+(declare-function drgnx-agent-panel-context-add "drgnx-agent-panel-composer" (item))
+(declare-function drgnx-agent-panel-intent-ask "drgnx-agent-panel-composer" ())
+(declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer" ())
+
+(defun drgnx-look-scene-conversation-tab ()
+  "The conversation as an editor tab (Flow Task 23): the header above, the transcript and the composer below, in one
+tile beside the editor; the composer with Ask chosen, a note waiting for the next step and one context chip."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "tab"
+    (unless (buffer-live-p drgnx-look-scene--panel) (error "No agent panel (the mock agent did not run)"))
+    (drgnx-agent-panel-open-tab (buffer-local-value 'drgnx-agent-panel--session drgnx-look-scene--panel))
+    (with-current-buffer drgnx-look-scene--panel
+      (setq drgnx-agent-panel--snap (plist-put (copy-sequence drgnx-agent-panel--snap) :queue (vector "also run the lint")))
+      (drgnx-agent-panel-context-add '(:file "src/main.el"))
+      (drgnx-agent-panel-intent-ask))
+    (drgnx-agent-panel-composer-redraw)
+    (drgnx-look-scene--panel-settle drgnx-look-scene--panel))
+  (drgnx-look-scene--answer))
+
 (defun drgnx-look-scene--panel-top (buffer)
   "An error unless the header window above BUFFER, the agent panel's transcript, holds the hub's header row (`p:head')
 and the transcript's window, its point at the end, shows the end whole on its last line (or the whole transcript at

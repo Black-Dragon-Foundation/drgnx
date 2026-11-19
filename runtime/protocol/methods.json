@@ -9495,7 +9495,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a prompt to the session (queued or steering as its mode says; with if_free, only when it is free, else false)",
+      "doc": "a prompt to the session (queued or steering as its mode says; intent ask: answer only, no plan change and no file touched; with if_free, only when it is free, else false)",
       "name": "agents/send",
       "params": {
         "$defs": {
@@ -9508,6 +9508,14 @@
           "Prompt": {
             "description": "a prompt or a message: at most 1 MiB (1048576 characters)",
             "maxLength": 1048576,
+            "type": "string"
+          },
+          "SendIntent": {
+            "description": "What a message asks of the agent (`agents/send`).",
+            "enum": [
+              "steer",
+              "ask"
+            ],
             "type": "string"
           }
         },
@@ -9522,6 +9530,17 @@
               "boolean",
               "null"
             ]
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SendIntent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the message asks of the agent: `steer` (the default: queued, or steering, as the mode says) or `ask`\n(answer only: the agent answers the question without changing its plan or touching a file).  Neither cancels."
           },
           "text": {
             "$ref": "#/$defs/Prompt"

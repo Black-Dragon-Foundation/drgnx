@@ -6,7 +6,9 @@ windows: the header at the top (who it is and what it is doing, a row of chips, 
 the Agent Panel** (`C-k p` in the VS Code profile, `SPC a p` in Vim).
 There is one tab for each open agent. With the tiled grid on, a second agent opens in a tile of its own beside the
 first, with its own header and composer, and a third and later stack as tabs onto that tile; one agent stays in the
-right dock.
+right dock. **Agents: Open the Conversation as a Tab** (`agents-panel-open-tab`) shows one agent's conversation as an
+editor tab instead: one tile beside the editor, with the header above, the transcript and the composer below. It
+tears out and moves like any tile; the compact form in the right dock gives that conversation up while the tab shows it.
 
 With no agent running, the panel opens as a **new chat** (also **Agents: New Chat**), as VS Code's chat does: an empty
 input with "Ask an agent about this project…" in it and the default profile named in its header. Return sends (Shift+Return
@@ -131,6 +133,13 @@ of its own, is the composer: a buffer where you write the message ("Steer the ag
 empty), and under it a bar with the model and mode chips and three buttons: **Fork** (**Fork the Chat**: a second
 agent from the chat's last step), the pause icon (stop after this step, as `p`) and Send, an arrow (as `RET`). The bar takes no typing; the message is an
 ordinary text you can edit, move in and complete in. A draft stays until you send it.
+
+The bar also has the **Steer | Ask** control and a **Stop** button of its own, apart from Send. **Steer**, the
+default, queues the message or steers the agent as its mode says. **Ask** sends it as a question: the agent answers
+only, without changing its plan or touching a file (`agents/send` with `intent: "ask"`); the control goes back to Steer
+after the message is sent. Above the field, a note waiting for the agent's next step shows as "↳ Queued for its next
+step: …", and the message's context (a file, lines, a task) shows as chips (`@ drgnx-inbox.el`, `@ lines 120–184`,
+`@ task 2`) that a click removes. Sending never presses Stop.
 
 | | VS Code | Emacs | Vim |
 |---|---|---|---|

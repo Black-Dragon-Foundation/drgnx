@@ -1353,7 +1353,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/presence/subscribe` | user | `{file?: string, view?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
-| `agents/send` | user | `{id: Id, if_free?: boolean, text: Prompt}` | `boolean` | yes |
+| `agents/send` | user | `{id: Id, if_free?: boolean, intent?: "steer" \| "ask", text: Prompt}` | `boolean` | yes |
 | `agents/side/close` | user | `{view: string}` | `boolean` | no |
 | `agents/side/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
 | `agents/side/subscribe` | user | `{view: string}` | `boolean` | no |
