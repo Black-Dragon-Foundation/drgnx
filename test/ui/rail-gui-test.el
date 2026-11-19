@@ -122,8 +122,8 @@ logical px from the rail's text area (the item: 6 inset, 8 icon inset, 16 icon, 
       ;; (the dot is read in the scenes' pictures: its place on the cell's corner is a look, not a pixel)
       (let ((bar (drgnx-rail-ui-test--rgb (drgnx-look-token 'accent variant)))
             ;; the surface's colour beside the cell (the last 6 px of the text area, where a truncation `$' is drawn
-            ;; over a line the window cannot end), read in the gap above the first item
-            (surface (funcall at 0 43 -3)))
+            ;; over a line the window cannot end), read in the gap above the second item
+            (surface (funcall at 1 43 -3)))
         (should (equal (list 'bar bar) (list 'bar (near bar (funcall at 0 7 16)))))
         (should (equal (list 'beside-the-cell nil surface)
                        (list 'beside-the-cell
