@@ -36,5 +36,45 @@ for no explanation."
       (should (equal '("task" "t7") picked))
       (should-not asked))))
 
+(defun drgnx-agent-panel-conversation-test--press (key verb)
+  "Press KEY on the button of the card whose verb is VERB (`allow', `always' or `deny') for request 7: the commands the
+action runs, in order.  The key's own transform rewrites the button's args, as `kit-activate' does."
+  (let* ((def (gethash 'agent-panel-card drgnx-ui-kit--actions)) calls)
+    (should def)
+    (should (eq 'drgnx-ui-kit-activate (lookup-key (nth 2 def) (kbd key))))
+    (let ((transform (cdr (assoc key (nth 1 def)))) (last-input-event (aref (kbd key) 0)))
+      (should (functionp transform))
+      (cl-letf (((symbol-function 'drgnx-agent-panel-allow) (lambda () (push 'allow calls)))
+                ((symbol-function 'drgnx-agent-panel-always) (lambda () (push 'always calls)))
+                ((symbol-function 'drgnx-agent-panel-reject) (lambda () (push 'deny calls))))
+        (funcall (nth 0 def) (funcall transform (list (format "card:%s:7" verb))))))
+    (nreverse calls)))
+
+(ert-deftest drgnx-agent-panel-conversation/y-on-a-permission-card-button-allows-once ()
+  "`y' on a button of a permission card allows the request once, whichever button point is on."
+  (drgnx-agent-panel-conversation-test--with
+    (should (equal '(allow) (drgnx-agent-panel-conversation-test--press "y" "deny")))))
+
+(ert-deftest drgnx-agent-panel-conversation/a-on-a-permission-card-button-allows-always ()
+  "`a' on a button of a permission card allows the request from now on."
+  (drgnx-agent-panel-conversation-test--with
+    (should (equal '(always) (drgnx-agent-panel-conversation-test--press "a" "allow")))))
+
+(ert-deftest drgnx-agent-panel-conversation/n-on-a-permission-card-button-denies ()
+  "`n' on a button of a permission card denies the request."
+  (drgnx-agent-panel-conversation-test--with
+    (should (equal '(deny) (drgnx-agent-panel-conversation-test--press "n" "allow")))))
+
+(ert-deftest drgnx-agent-panel-conversation/ret-on-a-button-runs-that-buttons-verb ()
+  "RET on a button of a permission card runs that button's own verb (a mouse click is the panel's dispatcher's)."
+  (drgnx-agent-panel-conversation-test--with
+    (let ((def (gethash 'agent-panel-card drgnx-ui-kit--actions)) calls (last-input-event ?\r))
+      (should def)
+      (cl-letf (((symbol-function 'drgnx-agent-panel-allow) (lambda () (push 'allow calls)))
+                ((symbol-function 'drgnx-agent-panel-always) (lambda () (push 'always calls)))
+                ((symbol-function 'drgnx-agent-panel-reject) (lambda () (push 'deny calls))))
+        (dolist (verb '("allow" "always" "deny")) (funcall (nth 0 def) (list (format "card:%s:7" verb)))))
+      (should (equal '(allow always deny) (nreverse calls))))))
+
 (provide 'agent-panel-conversation-test)
 ;;; agent-panel-conversation-test.el ends here

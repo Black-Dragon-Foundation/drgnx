@@ -217,13 +217,30 @@ take before their next command, and tell the hub."
 (declare-function drgnx-agent-panel-act "drgnx-agent-panel-steps" (event))
 (declare-function drgnx-ui-kit-define-action "drgnx-ui-kit" (kind function keys))
 
-(defun drgnx-agent-panel--kit-card (_args)
-  "The action kind `agent-panel-card' of the kit buttons on a permission card: a click runs the panel's own dispatcher
-\(`drgnx-agent-panel-act', which reads the button's `drgnx-agent-panel-action'); RET on the card allows it once."
-  (if (mouse-event-p last-input-event) (drgnx-agent-panel-act last-input-event) (drgnx-agent-panel-allow)))
+(defun drgnx-agent-panel--kit-card (args)
+  "The action kind `agent-panel-card' of the kit buttons on a permission card.  A click runs the panel's own dispatcher
+\(`drgnx-agent-panel-act', which reads the button's `drgnx-agent-panel-action'); a key runs the verb of ARGS, which
+is (\"card:VERB:ID\"): `allow', `always' or `deny', on the card at point (RET on a button is that button's verb;
+`y', `a' and `n' rewrite it first, `drgnx-agent-panel--kit-card-keys').  Without a verb, RET allows it once."
+  (if (mouse-event-p last-input-event)
+      (drgnx-agent-panel-act last-input-event)
+    (pcase (nth 1 (split-string (format "%s" (car args)) ":"))
+      ("always" (drgnx-agent-panel-always))
+      ("deny" (drgnx-agent-panel-reject))
+      (_ (drgnx-agent-panel-allow)))))
+
+(defun drgnx-agent-panel--kit-card-verb (verb)
+  "A transform of the action's ARGS that puts VERB in place of the button's own: (\"card:VERB:ID\")."
+  (lambda (args)
+    (list (replace-regexp-in-string "\\`card:[^:]*:" (format "card:%s:" verb) (format "%s" (car args))))))
+
+(defconst drgnx-agent-panel--kit-card-keys '(("y" . "allow") ("a" . "always") ("n" . "deny"))
+  "The keys on a permission card's buttons and what each answers: y allows once, a allows always, n denies.")
 
 (defun drgnx-agent-panel-cards-setup ()
-  (drgnx-ui-kit-define-action 'agent-panel-card #'drgnx-agent-panel--kit-card nil)
+  (drgnx-ui-kit-define-action 'agent-panel-card #'drgnx-agent-panel--kit-card
+                              (mapcar (lambda (k) (cons (car k) (drgnx-agent-panel--kit-card-verb (cdr k))))
+                                      drgnx-agent-panel--kit-card-keys))
   (dolist (c '((agents-panel-pin "Pin the Card" drgnx-agent-panel-pin "Pin the card or step at point under the chips; again to unpin")
                (agents-panel-ledger "List the Edits" drgnx-agent-panel-ledger
                                     "The files the agent edited, and how many edits came since you last looked")
