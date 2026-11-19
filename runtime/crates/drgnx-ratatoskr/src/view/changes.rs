@@ -7,6 +7,7 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::view::{Key, Views};
 use crate::work::changes::TaskGroup;
+use drgnx_rows::kit::{self, Action, Comp, DiffLine, Hunk, KitEnv, RowKind, State, Status};
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::changes::{Set, Subscribe, ViewId};
 use runstav::wire::{Error, ErrorCode};
@@ -39,14 +40,18 @@ impl Views {
         else {
             return false;
         };
-        self.publish_built(f, key, |_, _| (rows(&groups), Vec::new()));
+        self.publish_built(f, key, |env, _| {
+            (rows(&groups, &super::kit_env(env)), Vec::new())
+        });
         true
     }
 
     /// CONN's VIEW shows GROUPS now: every class gets the rows that changed.
     fn changes_show(&self, f: &Front, conn: u64, view: &str, groups: Vec<TaskGroup>) {
         lock(&self.changes.views).insert((conn, view.to_owned()), groups.clone());
-        self.publish_rows(f, conn, view, rows(&groups));
+        for class in self.classes(conn, view) {
+            self.changes_build(f, &(conn, view.to_owned(), class));
+        }
     }
 }
 
@@ -81,15 +86,56 @@ pub fn close(f: &Front, c: &Caller, p: ViewId) -> Result<bool, Error> {
         .is_some())
 }
 
-/// The rows of GROUPS: a task row, its file rows, each file's hunk rows, in that order.
-pub fn rows(groups: &[TaskGroup]) -> Vec<Row> {
+/// A slot 1–12 for AGENT's mark (its name's bytes, so the same agent has the same colour in every view).
+fn slot_of(agent: &str) -> u8 {
+    (agent.bytes().map(u32::from).sum::<u32>() % 12) as u8 + 1
+}
+
+/// The rows of GROUPS in ENV's class, drawn with the kit: a task is a section header (its title, the number of files)
+/// then the agent's mark and name and the running status dot with its word (a group is a live session's edits); each file
+/// a tree row with its path and `+N −M` that opens it; each hunk a diff block (head with Open, Comment and Revert, the
+/// `@@` row, and the hunk's reason in the agent's words, or the plain fact that there is none).  The hunk's identity
+/// (`drgnx-hunk`) rides on every row of its block.
+pub fn rows(groups: &[TaskGroup], env: &KitEnv) -> Vec<Row> {
     let mut out = Vec::new();
     for (n, g) in groups.iter().enumerate() {
         let mut b = RowBuilder::new(format!("task:{n}"));
-        b.push(&g.title, None);
+        kit::expand(
+            &mut b,
+            env,
+            &Comp::SectionHeader {
+                title: g.title.clone(),
+                collapsible: false,
+                collapsed: false,
+                count: u32::try_from(g.files.len()).ok(),
+                state: State::Rest,
+                action: None,
+            },
+        );
         if let Some(a) = &g.agent {
-            b.push(&format!(" · {a}"), None);
+            b.push(" ", None);
+            kit::expand(
+                &mut b,
+                env,
+                &Comp::AgentMark {
+                    slot: slot_of(a),
+                    handle: a
+                        .chars()
+                        .next()
+                        .map(|c| c.to_uppercase().to_string())
+                        .unwrap_or_default(),
+                },
+            );
+            b.push(&format!(" {a} "), None);
         }
+        kit::expand(
+            &mut b,
+            env,
+            &Comp::StatusDot {
+                status: Status::Running,
+                word: true,
+            },
+        );
         let end = b.pos();
         if let Some(t) = &g.task {
             b.prop(0, end, "drgnx-work-id", json!(format!("task:{t}")));
@@ -97,38 +143,73 @@ pub fn rows(groups: &[TaskGroup]) -> Vec<Row> {
         out.push(b.finish());
         for (m, f) in g.files.iter().enumerate() {
             let mut b = RowBuilder::new(format!("file:{n}:{m}"));
-            b.push(&format!("  {}  +{} −{}", f.path, f.plus, f.minus), None);
-            let end = b.pos();
-            b.prop(0, end, "drgnx-action", json!(["open", f.path, 1]));
+            kit::expand(
+                &mut b,
+                env,
+                &Comp::Row {
+                    kind: RowKind::Tree,
+                    depth: 1,
+                    twisty: None,
+                    text: format!("{}  +{} \u{2212}{}", f.path, f.plus, f.minus),
+                    state: State::Rest,
+                    icon: None,
+                    action: Some(Action {
+                        kind: "open".into(),
+                        args: vec![json!(f.path), json!(1)],
+                    }),
+                },
+            );
             out.push(b.finish());
             for h in &f.hunks {
-                let mut b = RowBuilder::new(format!("hunk:{n}:{m}:{}", h.index));
-                b.push(&format!("    lines {}–{}", h.start_line, h.end_line), None);
-                if let Some(a) = &h.agent {
-                    b.push(&format!(" · {a}"), None);
+                let action = |kind: &str, args: Vec<serde_json::Value>| Action {
+                    kind: kind.into(),
+                    args,
+                };
+                let reason = h
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "no reason recorded".to_owned());
+                let who = h.agent.clone().unwrap_or_default();
+                let block = Comp::DiffBlock {
+                    file: f.path.clone(),
+                    added: 0,
+                    removed: 0,
+                    hunks: vec![Hunk {
+                        header: format!(
+                            "@@ lines {}\u{2013}{} \u{b7} {who} @@",
+                            h.start_line, h.end_line
+                        ),
+                        lines: vec![(DiffLine::Ctx, h.start_line, reason)],
+                    }],
+                    buttons: vec![
+                        (
+                            "Open".into(),
+                            action("open", vec![json!(f.path), json!(h.start_line)]),
+                        ),
+                        (
+                            "Comment".into(),
+                            action(
+                                "comment",
+                                vec![json!(f.path), json!(h.start_line), json!(h.session)],
+                            ),
+                        ),
+                        (
+                            "Revert".into(),
+                            action(
+                                "revert",
+                                vec![json!(f.path), json!(h.op), json!(h.index), json!(h.session)],
+                            ),
+                        ),
+                    ],
+                    icon: None,
+                    width: None,
+                };
+                let hunk = json!({"path": f.path, "op": h.op, "index": h.index, "agent": h.agent, "session": h.session});
+                for mut r in kit::expand_rows(env, &format!("hunk:{n}:{m}:{}", h.index), &block) {
+                    let end = u32::try_from(r.text.chars().count()).unwrap_or(u32::MAX);
+                    r.props.push((0, end, "drgnx-hunk".into(), hunk.clone()));
+                    out.push(r);
                 }
-                b.push(
-                    &match &h.reason {
-                        Some(r) => format!(" · {r}"),
-                        None => " · no reason recorded".to_owned(),
-                    },
-                    None,
-                );
-                b.push("  open  comment  revert", None);
-                let end = b.pos();
-                b.prop(
-                    0,
-                    end,
-                    "drgnx-action",
-                    json!(["open", f.path, h.start_line]),
-                );
-                b.prop(
-                    0,
-                    end,
-                    "drgnx-hunk",
-                    json!({"path": f.path, "op": h.op, "index": h.index, "agent": h.agent, "session": h.session}),
-                );
-                out.push(b.finish());
             }
         }
     }
@@ -139,7 +220,6 @@ pub fn rows(groups: &[TaskGroup]) -> Vec<Row> {
 mod tests {
     use super::*;
     use crate::work::changes::{FileGroup, HunkRef};
-    use drgnx_rows::kit::KitEnv;
 
     fn kit() -> KitEnv<'static> {
         KitEnv {

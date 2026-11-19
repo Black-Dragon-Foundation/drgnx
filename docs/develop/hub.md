@@ -1696,6 +1696,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `work/trail/subscribe` | user | `{filter?: "all" \| "edits" \| "waits", follow?: boolean, lanes?: [{label: string, session: string}], session?: string, view: string, window?: {from: number, to: number}}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
 
+The Changes view's rows are the kit's (`view/changes.rs`, built per display class): a task is a section header with its file count, the agent's mark and name and a running status dot with its word; a file is a tree row (`+N −M`) that opens it; a hunk is a diff block (`c:hunk:T:F:H/0` head with Open, Comment and Revert, `/h0` the `@@` row, `/h0/0` the reason in the agent's words or "no reason recorded"), every row carrying `drgnx-hunk`.
+
 ### Classes
 
 A connection's class is what it proved. `test/conformance/class-matrix.json` is a hand-written copy of every
