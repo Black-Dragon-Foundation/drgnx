@@ -119,19 +119,13 @@ logical px from the rail's text area (the item: 6 inset, 8 icon inset, 16 icon, 
     ;; an SVG picture is antialiased and colour-managed: a pixel inside it is its colour to within 16 a channel (the cell's
     ;; fill is the kit sheet's row: `drgnx-kit-sheet/rail-item' reads it per pad)
     (cl-flet ((near (want got) (if (cl-every (lambda (a b) (<= (abs (- a b)) 16)) want got) want got)))
-      ;; (the dot is read in the scenes' pictures: its place on the cell's corner is a look, not a pixel)
-      (let ((bar (drgnx-rail-ui-test--rgb (drgnx-look-token 'accent variant)))
-            ;; the surface's colour beside the cell (the last 6 px of the text area, where a truncation `$' is drawn
-            ;; over a line the window cannot end), read in the gap above the second item
-            (surface (funcall at 1 43 -3)))
+      ;; (the dot, and that no line ends in a truncation `$', are read in the scenes' pictures: a pixel beside the cell
+      ;; cannot tell the test frame's own font from the rail's)
+      (let ((bar (drgnx-rail-ui-test--rgb (drgnx-look-token 'accent variant))))
         (should (equal (list 'bar bar) (list 'bar (near bar (funcall at 0 7 16)))))
-        (should (equal (list 'beside-the-cell nil surface)
-                       (list 'beside-the-cell
-                             (cl-loop for dx from 39 to 43
-                                      thereis (cl-loop for dy from 4 to 28
-                                                       for p = (funcall at 0 dx dy)
-                                                       unless (equal p surface) return (list dx dy p)))
-                             surface)))))))
+        ;; the rail's default face is as small as a face gets, so the space that ends a line fits the window
+        (should (equal '((default (:height 10)))
+                       (buffer-local-value 'face-remapping-alist (window-buffer rail))))))))
 
 (drgnx-look-gui-deftest drgnx-rail-ui/rail-is-44-px-at-every-scale ()
   "The rail is 44 logical px wide at the run's scale and at a UI scale of 125 %, sits above the status bar, which still
