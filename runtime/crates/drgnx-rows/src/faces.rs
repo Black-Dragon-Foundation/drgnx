@@ -1132,11 +1132,19 @@ pub enum FaceId {
     KitTextInputMultiMid,
     /// `drgnx-kit-text-input-multi-bottom`
     KitTextInputMultiBottom,
+    /// `drgnx-kit-rail-item`
+    KitRailItem,
+    /// `drgnx-kit-rail-item-current`
+    KitRailItemCurrent,
+    /// `drgnx-kit-rail-item-bar`
+    KitRailItemBar,
+    /// `drgnx-kit-rail-item-dot`
+    KitRailItemDot,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 562] = [
+    pub const ALL: [FaceId; 566] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1699,6 +1707,10 @@ impl FaceId {
         FaceId::KitTextInputMultiTop,
         FaceId::KitTextInputMultiMid,
         FaceId::KitTextInputMultiBottom,
+        FaceId::KitRailItem,
+        FaceId::KitRailItemCurrent,
+        FaceId::KitRailItemBar,
+        FaceId::KitRailItemDot,
     ];
 
     /// The face's Emacs name.
@@ -2266,6 +2278,10 @@ impl FaceId {
             FaceId::KitTextInputMultiTop => "drgnx-kit-text-input-multi-top",
             FaceId::KitTextInputMultiMid => "drgnx-kit-text-input-multi-mid",
             FaceId::KitTextInputMultiBottom => "drgnx-kit-text-input-multi-bottom",
+            FaceId::KitRailItem => "drgnx-kit-rail-item",
+            FaceId::KitRailItemCurrent => "drgnx-kit-rail-item-current",
+            FaceId::KitRailItemBar => "drgnx-kit-rail-item-bar",
+            FaceId::KitRailItemDot => "drgnx-kit-rail-item-dot",
         }
     }
 
@@ -2834,6 +2850,10 @@ impl FaceId {
             "drgnx-kit-text-input-multi-top" => FaceId::KitTextInputMultiTop,
             "drgnx-kit-text-input-multi-mid" => FaceId::KitTextInputMultiMid,
             "drgnx-kit-text-input-multi-bottom" => FaceId::KitTextInputMultiBottom,
+            "drgnx-kit-rail-item" => FaceId::KitRailItem,
+            "drgnx-kit-rail-item-current" => FaceId::KitRailItemCurrent,
+            "drgnx-kit-rail-item-bar" => FaceId::KitRailItemBar,
+            "drgnx-kit-rail-item-dot" => FaceId::KitRailItemDot,
             _ => return None,
         })
     }

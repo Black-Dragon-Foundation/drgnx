@@ -25,7 +25,7 @@
 drawn at rest only.")
 
 (defconst drgnx-kit-catalogue--hub '(row button key-hint agent-mark progress section-header card chip status-dot tab
-                                         segmented range-bar text-input)
+                                         segmented range-bar text-input rail-item)
   "The components the hub expands: their cells are drawn as hub rows.")
 
 (defconst drgnx-kit-catalogue--input-states '(rest focus-visible disabled)
@@ -89,6 +89,7 @@ drawn at rest only.")
                          :chips (list (list :label "kit.rs" :tone "neutral"
                                             :remove (list :kind "kit-catalogue" :args (list "kit.rs"))))
                          :state (symbol-name state))))
+    ('rail-item (list :c "rail-item" :place "Search" :icon "search" :state (symbol-name state) :dot :false))
     ('segmented (list :c "segmented" :current 1
                       :items (mapcar (lambda (l) (list l (list :kind "kit-catalogue" :args (list (downcase l)))))
                                      '("Map" "Board" "Timeline"))))

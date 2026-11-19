@@ -29,6 +29,7 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Question card (kit)](question-card.md) | what an agent asks you: a permission, a question or a sign-off, on one needs-you card |
 | [Segmented switch (kit)](segmented.md) | one ringed track of choices, the current one on the quiet selection |
 | [Text input (kit)](text-input.md) | the field round a real buffer's text: one line or several, with context chips |
+| [Rail item (kit)](rail-item.md) | a place of the rail: its icon in a 32 px square, the current place on the quiet selection, a warn dot when it changed |
 
 ## How to read a page
 

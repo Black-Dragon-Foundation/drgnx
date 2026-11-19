@@ -39,6 +39,8 @@ pub enum CompId {
     Segmented,
     /// `text-input`
     TextInput,
+    /// `rail-item`
+    RailItem,
 }
 
 /// A state of the state table (on the wire, its name: `"selected-inactive"`).
@@ -738,6 +740,18 @@ const TEXT_INPUT_GEOM: [[Geom; 3]; 8] = [
 const TEXT_INPUT_LABEL: [Option<&str>; 8] = [Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field")];
 const TEXT_INPUT_FACE: [FaceId; 8] = [FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInputMultiTop, FaceId::KitTextInputMultiMid, FaceId::KitTextInputMultiBottom];
 
+const RAIL_ITEM_AXES: &[&[&str]] = &[];
+const RAIL_ITEM_DEFAULTS: &[usize] = &[];
+const RAIL_ITEM_GEOM: [[Geom; 3]; 1] = [
+    [
+        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const RAIL_ITEM_LABEL: [Option<&str>; 1] = [Some("changed")];
+const RAIL_ITEM_FACE: [FaceId; 1] = [FaceId::KitRailItem];
+
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {
     match id {
@@ -801,6 +815,10 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant);
             TEXT_INPUT_GEOM[i][d]
         }
+        CompId::RailItem => {
+            let (i, d) = index(RAIL_ITEM_AXES, RAIL_ITEM_DEFAULTS, variant);
+            RAIL_ITEM_GEOM[i][d]
+        }
     }
 }
 
@@ -822,6 +840,7 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::QuestionCard => QUESTION_CARD_LABEL[index(QUESTION_CARD_AXES, QUESTION_CARD_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_LABEL[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
         CompId::TextInput => TEXT_INPUT_LABEL[index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant).0],
+        CompId::RailItem => RAIL_ITEM_LABEL[index(RAIL_ITEM_AXES, RAIL_ITEM_DEFAULTS, variant).0],
     }
 }
 
@@ -843,5 +862,6 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::QuestionCard => QUESTION_CARD_FACE[index(QUESTION_CARD_AXES, QUESTION_CARD_DEFAULTS, variant).0],
         CompId::Segmented => SEGMENTED_FACE[index(SEGMENTED_AXES, SEGMENTED_DEFAULTS, variant).0],
         CompId::TextInput => TEXT_INPUT_FACE[index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant).0],
+        CompId::RailItem => RAIL_ITEM_FACE[index(RAIL_ITEM_AXES, RAIL_ITEM_DEFAULTS, variant).0],
     }
 }
