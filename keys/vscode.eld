@@ -325,6 +325,7 @@
               (doc-comment-add :none "right-click > Comment on Paragraph")
               (doc-comments-open :none "in the palette")
               (doc-comment-reply "r")
+              (work-target-set :none "Detail's Target field, or the palette")
               (work-budget-set "$")
               (work-budget-send "RET")
               (work-budget-cancel "<escape>")

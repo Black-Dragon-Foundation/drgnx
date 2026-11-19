@@ -1610,6 +1610,7 @@ The commands of modules that need no installed package are in it, the later stag
                               work-review-screen review-screen-accept review-screen-request-changes
                               review-screen-request-send review-screen-request-cancel
                               doc-comment-add doc-comments-open doc-comment-reply
+                              work-target-set
                               ;; the Timeline's forms (flow Task 21a)
                               work-timeline-toggle work-zoom-in work-zoom-out work-pan-earlier work-pan-later work-go-now
                               work-zoom-back work-timeline-filter work-timeline-group work-budget-page

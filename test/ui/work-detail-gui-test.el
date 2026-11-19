@@ -30,12 +30,12 @@
     (drgnx-work-target-set "plan:p1" "2026-12-01")
     (let ((c (cdr (cl-find "work/target/set" calls :key #'car :test #'equal))))
       (should (equal "plan:p1" (plist-get c :item)))
-      (should (= (float-time (date-to-time "2026-12-01 00:00:00")) (plist-get c :at))))
+      (should (= (float-time (date-to-time "2026-12-01 00:00:00")) (plist-get c :target_at))))
     ;; an empty field clears it
     (drgnx-work-target-set "plan:p1" "")
     (let ((c (cdr (car calls))))
       (should (equal "plan:p1" (plist-get c :item)))
-      (should-not (plist-get c :at)))))
+      (should-not (plist-get c :target_at)))))
 
 (ert-deftest drgnx-ui-work-detail/a-target-is-for-a-spec-or-a-plan-only ()
   (drgnx-ui-work-detail--with calls

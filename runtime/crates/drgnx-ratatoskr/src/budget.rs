@@ -872,6 +872,22 @@ impl Budgets {
         }
     }
 
+    /// SCOPE's view and each ancestor's, nearest first: what the scope counts toward.
+    pub fn views_along(&self, scope: &BudgetScope) -> Vec<BudgetView> {
+        let scopes: Vec<BudgetScope> = {
+            let st = self.st();
+            chain(&st, &key(scope))
+                .iter()
+                .filter_map(|k| st.scopes.get(k).cloned())
+                .collect()
+        };
+        let mut out: Vec<BudgetView> = scopes.iter().map(|s| self.view(s)).collect();
+        if out.is_empty() {
+            out.push(self.view(scope));
+        }
+        out
+    }
+
     /// SCOPE's view: its limits, its spend, what remains.
     pub fn view(&self, scope: &BudgetScope) -> BudgetView {
         let st = self.st();

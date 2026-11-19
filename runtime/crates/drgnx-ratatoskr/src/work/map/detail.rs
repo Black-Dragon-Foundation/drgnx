@@ -674,3 +674,57 @@ pub(crate) fn rows(lines: &[Line], kit: &KitEnv, width_px: u32, m: &dyn Measure)
         })
         .collect()
 }
+
+/// [`lines`] with the Budget section read from FACTS (`budget/get` along the chain: a line for each unit, "Counts toward"
+/// with the binding scope, "Set to p90" where it applies) and a Schedule section; while there are no facts and the item has
+/// a budget, "forecasting…". The model's own binding-budget lines give way to them.
+pub(crate) fn lines_with_facts(
+    m: &Model,
+    sel: Option<&ItemId>,
+    now: u64,
+    facts: Option<&super::budget_detail::Facts>,
+) -> Vec<Line> {
+    use super::budget_detail as bd;
+    let mut out = lines(m, sel, now);
+    let Some(it) = sel.and_then(|s| m.item(s)) else {
+        return out;
+    };
+    let had = out.iter().any(|l| l.0 == "budget");
+    out.retain(|l| l.0 != "budget");
+    let mut section: Vec<Line> = Vec::new();
+    match facts {
+        Some(f) if !f.units.is_empty() => {
+            section.push(("budget", "Budget".into(), None));
+            for l in bd::budget_lines(&f.units) {
+                section.push(("budget", format!("  {l}"), None));
+            }
+            if !f.chain.is_empty() {
+                section.push(("budget", "  Counts toward".into(), None));
+                for l in bd::counts_toward(&f.chain) {
+                    section.push(("budget", format!("    {l}"), None));
+                }
+            }
+        }
+        Some(_) => {}
+        None if had => {
+            section.push(("budget", "Budget".into(), None));
+            section.push(("budget", "  forecasting…".into(), None));
+        }
+        None => {}
+    }
+    // the Schedule section: a spec's or plan's target, a task's nothing yet known
+    let kind = word(&it.kind);
+    if matches!(kind.as_str(), "spec" | "plan") {
+        let s = bd::ScheduleFacts {
+            target: it.fields.target_at.map(|t| (t.0, String::new())),
+            ..bd::ScheduleFacts::default()
+        };
+        section.push(("schedule", "Schedule".into(), None));
+        for l in bd::schedule_lines(&s, &kind, 0) {
+            section.push(("schedule", format!("  {l}"), None));
+        }
+    }
+    let at = out.iter().position(|l| l.0 == "why").unwrap_or(out.len());
+    out.splice(at..at, section);
+    out
+}

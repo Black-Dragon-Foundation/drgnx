@@ -80,6 +80,9 @@
 (declare-function drgnx-work-start-none "drgnx-work-start")
 (declare-function drgnx-work-start-cancel "drgnx-work-start")
 (defvar drgnx-work-start-mode-map)
+(unless (featurep (quote drgnx-work-target))
+  (load (expand-file-name "drgnx-work-target" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-target-set "drgnx-work-target")
 (declare-function drgnx-review-screen-show "drgnx-review-screen")
 (declare-function drgnx-review-screen-teardown "drgnx-review-screen")
 (declare-function drgnx-review-screen-accept "drgnx-review-screen")
@@ -243,6 +246,7 @@ it (a notes repository with the code repositories inside it)."
               work-review work-second-reviewer work-review-accept work-review-reject
               work-review-screen review-screen-accept review-screen-request-changes
               doc-comment-add doc-comments-open doc-comment-reply
+              work-target-set
               work-budget-set work-budget-send work-budget-cancel work-budget-unit
               work-start-plan work-start-go work-start-none work-start-cancel
               work-timeline-toggle work-zoom-in work-zoom-out work-pan-earlier work-pan-later work-go-now work-zoom-back
@@ -834,6 +838,9 @@ windows; the commands."
                    (work-start-none "Start with No Budget" drgnx-work-start-none "Start the plan with no budget")
                    (work-start-cancel "Cancel the Start" drgnx-work-start-cancel "Leave the start step; the job stays proposed")))
     (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-start-mode-map :doc doc))
+  (drgnx-command-define 'work-target-set :category "Work" :title "Set the Target Date"
+                        :command #'drgnx-work-target-set
+                        :doc "The target date of the selected spec or plan; an empty answer clears it")
   (drgnx-command-define 'doc-comment-add :category "Work" :title "Comment on This Paragraph"
                         :command #'drgnx-doc-agents-comment-add
                         :doc "A comment thread on the paragraph at point, steered to the agent writing the document, never cancelling it")

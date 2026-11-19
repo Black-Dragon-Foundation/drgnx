@@ -1486,8 +1486,13 @@ impl Map {
         class: Option<&str>,
     ) {
         let view = detail::view_of(&key.view);
-        let lines =
-            detail::lines_or_default(m, v.selected.as_ref(), crate::clock::wall_secs() as u64);
+        let now = crate::clock::wall_secs() as u64;
+        // every budget the selected item's scope names, and what it counts toward (`budget/get` along the chain)
+        let facts = detail_facts(f, v.selected.as_ref());
+        let lines = match v.selected.as_ref().filter(|s| m.item(s).is_some()) {
+            Some(sel) => detail::lines_with_facts(m, Some(sel), now, facts.as_ref()),
+            None => detail::lines_or_default(m, v.selected.as_ref(), now),
+        };
         for c in f.core.views.classes(key.conn, &view) {
             if class.is_some_and(|only| only != c) {
                 continue;
@@ -2142,6 +2147,21 @@ fn strip_text(job: &str, title: &str) -> String {
         Some(head) => format!("Sign off ({job}): {head}"),
         None => title.to_string(),
     }
+}
+
+/// The budget facts of the spec, plan or task SEL names: each unit it names and what its ancestors have left, read from the
+/// budget store (a spec, plan or task is its own scope; an agent's is its session's).
+fn detail_facts(f: &Front, sel: Option<&ItemId>) -> Option<budget_detail::Facts> {
+    let (kind, id) = sel?.0.split_once(':')?;
+    if !matches!(kind, "spec" | "plan" | "task") {
+        return None;
+    }
+    let scope: runstav::methods::timeline::BudgetScope =
+        serde_json::from_value(json!({ kind: format!("{kind}:{id}") })).ok()?;
+    Some(budget_detail::facts_of(
+        &f.core.budgets.views_along(&scope),
+        None,
+    ))
 }
 
 /// The stripped ids (`kind:` removed) of the entities the old scanner made, `plan:/abs/path` and `spec:/abs/path`, whose
