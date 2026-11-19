@@ -5,6 +5,7 @@
 (require 'seq)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/grid-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-backend" drgnx-dir) nil t)
 
 (ert-deftest drgnx-grid/stack-switch-keeps-the-window ()
   ;; R1: a kind already in a stack comes to the front in the same window; nothing moves

@@ -4,6 +4,7 @@
 (require 'cl-lib)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-backend" drgnx-dir) nil t)
 (require 'drgnx-area)
 (require 'drgnx-panes)
 (defvar drgnx-view-patch-twin-of)       ; drgnx-view.el: in a view's twin, the view's own buffer

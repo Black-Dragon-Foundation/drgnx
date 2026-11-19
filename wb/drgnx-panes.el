@@ -23,9 +23,10 @@
 (require 'drgnx-notice)
 
 
-(defvar drgnx-pane-backend 'areas
-  "Where pane kinds live: `areas' (the docks) or `grid'.
-`areas' is the left dock, the bottom panel and the right dock.")
+(defvar drgnx-pane-backend 'grid
+  "Where pane kinds live: `grid', the tiles (wb/drgnx-grid.el registers it in `drgnx-pane--backends').  The areas'
+own backend, the docks as side windows, is gone: its functions (`drgnx-pane--areas-define', `-show', ...) are the data
+layer the grid's docks call, and test/fixtures/areas-backend.el registers them as a backend for the tests of that layer.")
 
 (defvar drgnx-pane--kinds nil
   "Alist KIND → plist (:title :buffer :placeholder :home :size :view :slot :height :fill :on-show
@@ -223,13 +224,11 @@ kind has no size of its own: nil, nothing noted."
           (dolist (x windows) (window-preserve-size x horizontal t))
           w)))))
 
-(defvar drgnx-pane--backends
-  `((areas :define drgnx-pane--areas-define :show drgnx-pane--areas-show :hide drgnx-pane--areas-hide
-           :window drgnx-pane--areas-window :focus drgnx-pane--areas-focus :resize drgnx-pane--areas-resize))
+(defvar drgnx-pane--backends nil
   "Alist BACKEND → plist of the functions that carry out each pane operation.  The dispatch point:
 the grid registers `grid' here.  :define takes (KIND SPEC OLD-SPEC), :show (KIND BUFFER SELECT), :hide (KIND),
 :window (KIND FRAME), :focus (KIND), :resize (KIND PX HORIZONTAL), :move (KIND TARGET ZONE), :stack (KIND
-ONTO).  The `areas' backend has no :move and no :stack: moving panes needs the grid.  Optional, called when present:
+ONTO).  Optional, called when present:
 :defined (KIND) after KIND is defined, :undefined (KIND) after it is removed, and :keeps (KIND FRAME), non-nil when
 a module turned off leaves KIND where it shows on FRAME (the grid's tiles keep their place, with a placeholder).")
 

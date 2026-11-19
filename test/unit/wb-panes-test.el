@@ -6,6 +6,7 @@
 (require 'drgnx-panes)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-backend" drgnx-dir) nil t)
 
 (defmacro drgnx-panes-test--with (&rest body)
   "BODY with fresh pane, section, area and rule tables, one editor window and the docks hidden."
