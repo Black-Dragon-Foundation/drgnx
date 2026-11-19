@@ -74,7 +74,7 @@ every frame BODY made deleted after, the modes as they were."
                               do (forward-line 1)))))
            (heights (cl-loop for (a b) on tops while b collect (- b a))))
       (should (equal (list gap) (list (car heights))))
-      ;; no item is cut by the window's edge (a line as wide as the window ends in a `$'): each is narrower than the
+      ;; no item is cut by the window's edge (a line, with the space the display puts at its end, that does not fit ends in a `$'): each is narrower than the
       ;; text area
       (let ((body (window-body-width rail t))
             (widths (with-current-buffer (window-buffer rail)
@@ -82,7 +82,7 @@ every frame BODY made deleted after, the modes as they were."
                         (goto-char (point-min))
                         (cl-loop until (eobp)
                                  when (> (- (line-end-position) (line-beginning-position)) 1)
-                                 collect (car (window-text-pixel-size rail (line-beginning-position) (line-end-position)))
+                                 collect (car (window-text-pixel-size rail (line-beginning-position) (1+ (line-end-position))))
                                  do (forward-line 1))))))
         (should (equal (list 'cut nil)
                        (list 'cut (and (seq-some (lambda (w) (>= w body)) widths) (list 'body body 'widths widths))))))
