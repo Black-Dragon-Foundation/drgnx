@@ -82,9 +82,12 @@
           (redisplay t)
           (length (drgnx-grid-tiles))))
       (defun drgnx-perf--tile-restore-measure ()
-        "The ten tiles' snapshot put back five times (the median): (:tiles MS :mode_load_ms MS)."
+        "The ten tiles' snapshot put back five times, each after all but one window were deleted (the median): (:tiles MS :mode_load_ms MS)."
         (let ((snap (drgnx-grid-snapshot 'perf)) ms)
           (dotimes (_ 5)
+            ;; a layout to rebuild: the tiles gone first (a restore of the layout already there is a no-op)
+            (let ((ignore-window-parameters t)) (delete-other-windows))
+            (redisplay t)
             (let ((t0 (float-time)))
               (condition-case nil (drgnx-grid-restore snap) (error nil))
               (redisplay t)
