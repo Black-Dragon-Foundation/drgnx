@@ -21,6 +21,7 @@
 (require 'drgnx-perf-workloads)
 (require 'drgnx-perf-work)
 (require 'drgnx-perf-agents)
+(require 'drgnx-perf-tiling)
 
 (defvar drgnx-perf-run--fixture nil "The typing fixture of this run (one file, reused, deleted at the end).")
 
@@ -3051,6 +3052,8 @@ a :measure without :actions each have :timeout seconds to answer (120)."
       ,@(drgnx-perf-work-workloads (drgnx-perf-run--visit-fixture-form) kill-fixture)
       ;; the agents in the editor: five streaming mock agents, a 3,000-line file (harness/drgnx-perf-agents.el)
       ,@(drgnx-perf-agents-workloads)
+      ;; the tiling rows: six and ten tiles (harness/drgnx-perf-tiling.el)
+      ,@(drgnx-perf-tiling-workloads)
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
@@ -3556,6 +3559,8 @@ version and the commit, as JSON in FILE."
     (search-lists . "its bar is the lists' draw time (:draw_ms :p95 ≤ 5 ms, spec §8); no keys are typed")
     (search-scopes . "its rows are git's and the disk's time (spec §8: reported, never failed); no keys are typed")
     (search-regroup . "its bar is the regroup's first window (:first_ms :p95 ≤ 50 ms, spec §8); the follow-up drain and the key during it are reported")
+    ,@(mapcar (lambda (w) (cons w "tiling: its time budget is judged; allocation, CPU and rows follow once its first runs on the desktop island set them"))
+              '(tile-switcher-show tile-focus tile-move layout-restore pane-drag))
     (search-sheet . "its bar is the sheet shown (:show_ms :p95 ≤ 300 ms, spec §8); the hunk in it is reported; no keys are typed")
     (search-apply-open . "its bar is the Lisp writing 50 open buffers (:lisp_ms :p95 ≤ 100 ms, spec §8); the write's end is reported; no keys are typed")
     (search-edit . "its bars are Edit Results open (:open_ms :p95 ≤ 400 ms) and save (:save_ms :p95 ≤ 600 ms, spec §8); no keys are typed")
