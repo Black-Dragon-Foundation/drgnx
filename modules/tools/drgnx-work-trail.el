@@ -85,6 +85,9 @@
 
 ;;;; The hub's rows: the trail and the Timeline built in the hub (`work/trail/subscribe')
 
+(defvar-local drgnx-work-trail--hub-method "work/trail/subscribe"
+  "The subscribe method of this buffer: a Timeline's Schedule form asks `work/schedule/subscribe'.")
+
 (defvar-local drgnx-work-trail--hub-params nil
   "What `work/trail/subscribe' takes besides the view: (:session SID) or (:lanes [...]).")
 
@@ -97,7 +100,7 @@
 (defun drgnx-work-trail--hub-subscribe ()
   "Ask the hub for this buffer's trail or Timeline (again after a reconnect, as its env's RESUBSCRIBE)."
   (when drgnx-view-patch
-    (drgnx-work-client--call "work/trail/subscribe"
+    (drgnx-work-client--call drgnx-work-trail--hub-method
                              (append (list :view (drgnx-view-patch-view drgnx-view-patch)) drgnx-work-trail--hub-params)
                              #'ignore)))
 
@@ -415,6 +418,27 @@ reaches, which the hub keeps), in the chain's face."
 (defface drgnx-work-seg-wait '((t :inherit ansi-color-yellow :inverse-video t)) "Waiting for you or a machine in the Timeline."
   :group 'drgnx-work-space)
 
+(defconst drgnx-work-timeline-spans '(600 3600 14400 86400 604800)
+  "The windows a Timeline zooms through, in seconds: 10 minutes, an hour, 4 hours, a day, a week.  Activity shows the
+first four (its levels 10m / 1h / 4h / Day); Schedule's Hour · Day · Week are the 2nd, 4th and 5th.")
+
+(defvar-local drgnx-work-timeline--form 'activity
+  "`schedule' (a bar per row) or `activity' (a lane per agent).  A Timeline not made by `drgnx-work-timeline-open'
+is Activity.")
+(defvar-local drgnx-work-timeline--span 86400 "The width of the window, seconds; one of `drgnx-work-timeline-spans'.")
+(defvar-local drgnx-work-timeline--to nil "The window's end, epoch seconds; nil follows now.")
+(defvar-local drgnx-work-timeline--filter 'all "Activity's filter: `all', `edits' or `waits'.")
+(defvar-local drgnx-work-timeline--group 'plan "Schedule's grouping: `plan' (the List's) or `machine'.")
+(defvar-local drgnx-work-timeline--crumbs nil "The zoom chain above the axis, newest first: ((LABEL . STATE-PLIST) …).")
+(defvar-local drgnx-work-timeline--lanes nil "The lanes an Activity of one task shows ({session, label}); nil: the map's agents.")
+
+(defun drgnx-work-timeline--form-p (form) (and (derived-mode-p 'drgnx-work-timeline-mode) (eq drgnx-work-timeline--form form)))
+
+(defun drgnx-work-timeline--window ()
+  "The window now: (:from F :to T) from the span and the end (now when following)."
+  (let ((to (or drgnx-work-timeline--to (float-time))))
+    (list :from (- to drgnx-work-timeline--span) :to to)))
+
 (defvar drgnx-work-timeline-mode-map
   (let ((m (make-sparse-keymap))) (set-keymap-parent m drgnx-work-lens-map) m)
   "Keys of the Timeline.  The key profiles bind them (`drgnx-command-define' with the lens map).")
@@ -426,18 +450,28 @@ reaches, which the hub keeps), in the chain's face."
 (defun drgnx-work-timeline-buffers ()
   (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-work-timeline-mode) (not (drgnx-view-patch-twin-p b)))) (buffer-list)))
 
-(defun drgnx-work-timeline-open (map-buffer)
-  "The Timeline of MAP-BUFFER, made when there is none: the hub builds a lane per agent of the map's model, lit by the
-map's selection there."
-  (let ((buffer (get-buffer-create (format "*drgnx work timeline: %s*" (string-trim (buffer-name map-buffer) "\\*drgnx work: " "\\*")))))
+(defun drgnx-work-timeline-open (map-buffer &optional form)
+  "The Timeline of MAP-BUFFER in FORM (`schedule', the default, or `activity'), made when there is none.  Schedule is the
+List with a bar per row (`work/schedule/subscribe'); Activity is a lane per agent of the map's model (or of one task's
+agents), lit by the map's selection there (`work/trail/subscribe')."
+  (let* ((form (or form 'schedule))
+         (buffer (get-buffer-create (format "*drgnx work %s: %s*" (if (eq form 'schedule) "schedule" "timeline")
+                                            (string-trim (buffer-name map-buffer) "\\*drgnx work: " "\\*")))))
     (with-current-buffer buffer
       (unless (derived-mode-p 'drgnx-work-timeline-mode)
         (drgnx-work-timeline-mode)
-        (setq drgnx-work-lens-nav #'drgnx-work-timeline--nav)
+        (setq drgnx-work-timeline--form form
+              drgnx-work-timeline--span (if (eq form 'schedule) 86400 3600)
+              drgnx-work-lens-nav #'drgnx-work-timeline--nav)
         (if (drgnx-work-trail--map-rows-p map-buffer)
-            (progn
-              (drgnx-work-trail--rows-attach (format "timeline/%s" (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch map-buffer)))
-                                             (list :lanes (vconcat (drgnx-work-timeline--model-lanes map-buffer))))
+            (let ((view (drgnx-work-timeline--map-view map-buffer)))
+              (if (eq form 'schedule)
+                  (progn (setq drgnx-work-trail--hub-method "work/schedule/subscribe")
+                         (drgnx-work-trail--rows-attach (format "schedule/%s" view)
+                                                        (list :window (drgnx-work-timeline--window) :group "plan")))
+                (drgnx-work-trail--rows-attach (format "timeline/%s" view)
+                                               (list :lanes (vconcat (or drgnx-work-timeline--lanes (drgnx-work-timeline--model-lanes map-buffer)))
+                                                     :window (drgnx-work-timeline--window) :follow t :filter "all")))
               (drgnx-work-timeline-rows-attached))
           (drgnx-work-trail--no-rows)))
       (setq drgnx-work-lens--map map-buffer
@@ -458,8 +492,159 @@ map's selection there."
 (defun drgnx-work-timeline--nav (dir)
   "A key of the lens in the Timeline: DIR moves to the earlier or later step of the lane (`left' `right'), the lane
 above or below (`up' `down', `previous-agent' `next-agent'), or opens the step (`open' `open-beside'); the model's
-links say where (`drgnx-work-trail--rows-nav')."
-  (drgnx-work-trail--rows-nav dir))
+links say where (`drgnx-work-trail--rows-nav').  `open' zooms: a Schedule row into Activity, a segment into its trail."
+  (if (and (eq dir 'open)
+           (or (drgnx-work-timeline--form-p 'schedule)
+               (and (drgnx-work-timeline--form-p 'activity) (get-text-property (pos-bol) 'drgnx-work-step))))
+      (progn (drgnx-work-timeline-zoom-into) t)
+    (drgnx-work-trail--rows-nav dir)))
+
+;;;; The Timeline's two forms: Schedule and Activity (flow plan Task 21a)
+
+(defun drgnx-work-timeline--map-view (map-buffer)
+  "The hub view id of MAP-BUFFER's map; the Timeline's own are named after it."
+  (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch map-buffer)))
+
+(defun drgnx-work-timeline--view ()
+  (and drgnx-view-patch (drgnx-view-patch-view drgnx-view-patch)))
+
+(defun drgnx-work-timeline--push ()
+  "Tell the hub the window, the follow flag and the filter or grouping this buffer has now (no new subscription)."
+  (when-let* ((view (drgnx-work-timeline--view)))
+    (if (eq drgnx-work-timeline--form 'schedule)
+        (drgnx-work-client--call "work/schedule/set"
+                                 (list :view view :window (drgnx-work-timeline--window)
+                                       :group (symbol-name drgnx-work-timeline--group))
+                                 #'ignore)
+      (drgnx-work-client--call "work/trail/set"
+                               (append (list :view view :window (drgnx-work-timeline--window)
+                                             :filter (symbol-name drgnx-work-timeline--filter))
+                                       (and (null drgnx-work-timeline--to) (list :follow t)))
+                               #'ignore))))
+
+(defun drgnx-work-timeline--zoom (step)
+  "Move the span STEP rungs along `drgnx-work-timeline-spans' (activity stops at the day); the hub gets the new window."
+  (let* ((rungs (if (eq drgnx-work-timeline--form 'activity) (butlast drgnx-work-timeline-spans) drgnx-work-timeline-spans))
+         (i (or (seq-position rungs drgnx-work-timeline--span) (1- (length rungs))))
+         (j (max 0 (min (1- (length rungs)) (+ i step)))))
+    (if (= i j)
+        (message "Work: the Timeline is at its %s zoom" (if (< step 0) "closest" "widest"))
+      (setq drgnx-work-timeline--span (nth j rungs))
+      (drgnx-work-timeline--push))))
+
+(defun drgnx-work-timeline-zoom-in () "Zoom the Timeline in: a narrower window." (interactive) (drgnx-work-timeline--zoom -1))
+(defun drgnx-work-timeline-zoom-out () "Zoom the Timeline out: a wider window." (interactive) (drgnx-work-timeline--zoom 1))
+
+(defun drgnx-work-timeline--pan (dir)
+  "Move the window half its width, DIR -1 earlier or 1 later; at now it follows again."
+  (let ((to (+ (or drgnx-work-timeline--to (float-time)) (* dir (/ drgnx-work-timeline--span 2.0)))))
+    (setq drgnx-work-timeline--to (and (< to (float-time)) to))
+    (drgnx-work-timeline--push)))
+
+(defun drgnx-work-timeline-pan-earlier () "Pan the Timeline earlier by half its window." (interactive) (drgnx-work-timeline--pan -1))
+(defun drgnx-work-timeline-pan-later () "Pan the Timeline later by half its window." (interactive) (drgnx-work-timeline--pan 1))
+
+(defun drgnx-work-timeline-go-now ()
+  "Follow now again: the window ends at the present and moves with it."
+  (interactive)
+  (setq drgnx-work-timeline--to nil)
+  (drgnx-work-timeline--push))
+
+(defun drgnx-work-timeline-filter ()
+  "Activity: cycle the filter All, Edits, Waits."
+  (interactive)
+  (unless (drgnx-work-timeline--form-p 'activity) (user-error "The filter is Activity's"))
+  (setq drgnx-work-timeline--filter (pcase drgnx-work-timeline--filter ('all 'edits) ('edits 'waits) (_ 'all)))
+  (drgnx-work-timeline--push)
+  (message "Work: Activity shows %s" drgnx-work-timeline--filter))
+
+(defun drgnx-work-timeline-group ()
+  "Schedule: group its rows by plan or by machine."
+  (interactive)
+  (unless (drgnx-work-timeline--form-p 'schedule) (user-error "The grouping is Schedule's"))
+  (setq drgnx-work-timeline--group (if (eq drgnx-work-timeline--group 'plan) 'machine 'plan))
+  (drgnx-work-timeline--push)
+  (message "Work: Schedule by %s" drgnx-work-timeline--group))
+
+(defun drgnx-work-timeline--map ()
+  (and (boundp 'drgnx-work-lens--map) (buffer-live-p drgnx-work-lens--map) drgnx-work-lens--map))
+
+(defun drgnx-work-timeline--show-form (form state)
+  "Show the other form of this Timeline in this window with STATE (a plist :span :to :filter :group :lanes) kept."
+  (let ((map (or (drgnx-work-timeline--map) (user-error "No Work map for this Timeline"))))
+    (let ((buffer (drgnx-work-timeline-open map form)))
+      (with-current-buffer buffer
+        (setq drgnx-work-timeline--span (or (plist-get state :span) drgnx-work-timeline--span)
+              drgnx-work-timeline--to (plist-get state :to)
+              drgnx-work-timeline--filter (or (plist-get state :filter) drgnx-work-timeline--filter)
+              drgnx-work-timeline--group (or (plist-get state :group) drgnx-work-timeline--group))
+        (when (and (plist-member state :lanes) (eq drgnx-work-timeline--form 'activity)
+                   (not (equal drgnx-work-timeline--lanes (plist-get state :lanes))))
+          ;; another scope: the lanes are the subscription's, so the hub is asked again
+          (setq drgnx-work-timeline--lanes (plist-get state :lanes)
+                drgnx-work-trail--hub-params
+                (plist-put drgnx-work-trail--hub-params :lanes
+                           (vconcat (or drgnx-work-timeline--lanes (drgnx-work-timeline--model-lanes map)))))
+          (drgnx-work-trail--hub-subscribe))
+        (drgnx-work-timeline--push))
+      (pop-to-buffer-same-window buffer))))
+
+(defun drgnx-work-timeline--state ()
+  (list :span (if (eq drgnx-work-timeline--form 'schedule)
+                  (min drgnx-work-timeline--span 86400) drgnx-work-timeline--span)
+        :to drgnx-work-timeline--to :filter drgnx-work-timeline--filter :group drgnx-work-timeline--group))
+
+(defun drgnx-work-timeline-toggle ()
+  "Switch the Timeline between Schedule and Activity, keeping its window."
+  (interactive)
+  (unless (derived-mode-p 'drgnx-work-timeline-mode) (user-error "Not in the Timeline"))
+  (drgnx-work-timeline--show-form (if (eq drgnx-work-timeline--form 'schedule) 'activity 'schedule)
+                                  (append (drgnx-work-timeline--state) (list :lanes nil))))
+
+(defun drgnx-work-timeline--agents-of (task)
+  "The lanes ({session, label}) of the map's agents working on TASK (the row's id, `task:ID' or a bare ID)."
+  (let ((bare (string-remove-prefix "task:" task)) (map (drgnx-work-timeline--map)))
+    (when map
+      (seq-filter (lambda (lane)
+                    (with-current-buffer map
+                      (equal (string-remove-prefix "task:" (or (drgnx-view-nav-field "task" (concat "agent:" (plist-get lane :session))) ""))
+                             bare)))
+                  (drgnx-work-timeline--model-lanes map)))))
+
+(defun drgnx-work-timeline-zoom-into ()
+  "RET on a Schedule row: Activity of the agents working on that task; on an Activity segment: the trail at that step."
+  (interactive)
+  (cond
+   ((drgnx-work-timeline--form-p 'schedule)
+    (let ((id (get-text-property (pos-bol) 'drgnx-work-id)))
+      (unless (and id (string-prefix-p "task:" id)) (user-error "Select a task's bar to zoom into its agents"))
+      (push (cons "Schedule" (drgnx-work-timeline--state)) drgnx-work-timeline--crumbs)
+      (let ((crumbs drgnx-work-timeline--crumbs) (lanes (or (drgnx-work-timeline--agents-of id) (user-error "No agent works on %s" id))))
+        (drgnx-work-timeline--show-form 'activity (append (list :span 3600 :lanes lanes) (drgnx-work-timeline--state)))
+        (setq drgnx-work-timeline--crumbs crumbs))))
+   ((drgnx-work-timeline--form-p 'activity)
+    (let ((step (get-text-property (pos-bol) 'drgnx-work-step)))
+      (unless step (user-error "Select a segment to open its trail"))
+      (pcase-let ((`(,session ,seq) (append step nil)))
+        (let ((crumbs (cons (cons "Activity" (drgnx-work-timeline--state)) drgnx-work-timeline--crumbs)))
+          (pop-to-buffer-same-window (drgnx-work-trail-open (drgnx-work-timeline--map) session))
+          (setq drgnx-work-timeline--crumbs crumbs)
+          (message "Work: the trail of %s at step %s" session seq)))))
+   (t (user-error "Not in the Timeline"))))
+
+(defun drgnx-work-timeline-zoom-back ()
+  "Pop one crumb: back to the form and window the zoom came from."
+  (interactive)
+  (let ((crumb (car drgnx-work-timeline--crumbs)) (rest (cdr drgnx-work-timeline--crumbs)))
+    (unless crumb (user-error "Nothing to go back to"))
+    (drgnx-work-timeline--show-form (if (equal (car crumb) "Schedule") 'schedule 'activity) (cdr crumb))
+    (setq drgnx-work-timeline--crumbs rest)))
+
+(defun drgnx-work-timeline-budget-page ()
+  "The Budgets page scoped to the selection (Task 22c); until it lands, say so."
+  (interactive)
+  (if (fboundp 'drgnx-work-budget-page-open) (drgnx-work-budget-page-open)
+    (message "Budgets page arrives with Task 22c")))
 
 (provide 'drgnx-work-trail)
 ;;; drgnx-work-trail.el ends here

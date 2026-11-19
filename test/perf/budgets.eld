@@ -345,6 +345,12 @@
  ;; a 10,000-step trail opened on the hub's rows until its first rows are drawn; a new step is the hub's patch (its
  ;; Lisp append and its row, :append_ms, went with Task 34: view-patch and work-live measure a patch's insert)
  (work-trail (:draw_ms) 100)
+ ;; the Timeline on the 30-agent map (flow plan Task 21a, spec section 15a): the Schedule and the Activity open until their first rows
+ ;; are drawn within 100 ms; a zoom of the Schedule draws its new window within 50 ms (p95 of 110); an Activity draw while 30
+ ;; agents stream within 4 ms (p95 of 100); typing beside it makes no Timeline hub call (at most 1); the following Schedule
+ ;; takes at most one row patch in 5 s.
+ (schedule-open (:first_rows) 100) (schedule-zoom (:relayout :p95) 50) (activity-open (:first_rows) 100)
+ (activity-step (:patch :p95) 4) (activity-typing (:delta) 1) (now-line (:rows_per_5s) 1)
  ;; the agents in the editor, the panel and pair mode (agent system part 3, "Budget rows"): typing p95 within a frame and no
  ;; freeze over 100 ms; the +1 ms against `agents-typing-none' and the pair writes applied >= 0.80 are `drgnx-perf-run--relative-fails'
  (agents-typing (:input :p95) 16) (agents-typing (:stalls) 0)

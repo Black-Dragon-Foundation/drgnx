@@ -66,6 +66,16 @@
 (declare-function drgnx-review-request-cancel "drgnx-review-screen")
 (declare-function drgnx-work-trail-buffers "drgnx-work-trail")
 (declare-function drgnx-work-timeline-buffers "drgnx-work-trail")
+(declare-function drgnx-work-timeline-toggle "drgnx-work-trail")
+(declare-function drgnx-work-timeline-zoom-in "drgnx-work-trail")
+(declare-function drgnx-work-timeline-zoom-out "drgnx-work-trail")
+(declare-function drgnx-work-timeline-pan-earlier "drgnx-work-trail")
+(declare-function drgnx-work-timeline-pan-later "drgnx-work-trail")
+(declare-function drgnx-work-timeline-go-now "drgnx-work-trail")
+(declare-function drgnx-work-timeline-zoom-back "drgnx-work-trail")
+(declare-function drgnx-work-timeline-filter "drgnx-work-trail")
+(declare-function drgnx-work-timeline-group "drgnx-work-trail")
+(declare-function drgnx-work-timeline-budget-page "drgnx-work-trail")
 (declare-function drgnx-work-trail-show "drgnx-work-trail")
 (declare-function drgnx-work-trail-steer "drgnx-work-trail")
 (declare-function drgnx-work-trail-pause "drgnx-work-trail")
@@ -210,6 +220,8 @@ it (a notes repository with the code repositories inside it)."
               work-steer work-pause work-resume work-stop work-keys-sheet work-conclusion-steps work-step-conclusions
               work-review work-second-reviewer work-review-accept work-review-reject
               work-review-screen review-screen-accept review-screen-request-changes
+              work-timeline-toggle work-zoom-in work-zoom-out work-pan-earlier work-pan-later work-go-now work-zoom-back
+              work-timeline-filter work-timeline-group work-budget-page
               review-screen-request-send review-screen-request-cancel
               work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
@@ -765,6 +777,18 @@ windows; the commands."
   (drgnx-command-define 'work-review-reject :category "Work" :title "Reject the Hunk Here"
                         :command #'drgnx-work-review-reject :map 'drgnx-work-review-mode-map
                         :doc "The file goes back to pending and the agent is told, queued; the agent is not cancelled")
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((work-timeline-toggle "Timeline: Schedule or Activity" drgnx-work-timeline-toggle "Switch the Timeline between Schedule (a bar per row) and Activity (a lane per agent), keeping its window")
+                   (work-zoom-in "Timeline: Zoom In" drgnx-work-timeline-zoom-in "A narrower window: week, day, 4 hours, hour, 10 minutes")
+                   (work-zoom-out "Timeline: Zoom Out" drgnx-work-timeline-zoom-out "A wider window")
+                   (work-pan-earlier "Timeline: Pan Earlier" drgnx-work-timeline-pan-earlier "Half a window back in time")
+                   (work-pan-later "Timeline: Pan Later" drgnx-work-timeline-pan-later "Half a window forward; at now it follows again")
+                   (work-go-now "Timeline: Go to Now" drgnx-work-timeline-go-now "Follow now again")
+                   (work-zoom-back "Timeline: Zoom Back" drgnx-work-timeline-zoom-back "Pop one crumb: back to where the zoom came from")
+                   (work-timeline-filter "Timeline: Filter Activity" drgnx-work-timeline-filter "Activity: All, Edits, Waits")
+                   (work-timeline-group "Timeline: Group Schedule" drgnx-work-timeline-group "Schedule: by plan or by machine")
+                   (work-budget-page "Open the Budgets Page" drgnx-work-timeline-budget-page "The Budgets page scoped to the selection")))
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-timeline-mode-map :doc doc))
   (drgnx-command-define 'work-review-screen :category "Work" :title "Open the Review Screen"
                         :command #'drgnx-review-screen-show :map 'drgnx-work-lens-map
                         :doc "The selected agent's change: what changed, the effect on tasks, the reasons, then Accept and Request changes")

@@ -764,6 +764,8 @@ the map's model holds no tracker tasks, so the Board is not an instance in the m
 
 ### The Timeline and the trail
 
+The Timeline has two forms, each its own buffer on its own hub view: **Schedule** (`work/schedule/subscribe`, the List with a bar per row) and **Activity** (`work/trail/subscribe`, a lane per agent). `drgnx-work-timeline-open MAP [FORM]` makes either (Schedule by default). The window (`drgnx-work-timeline-spans`: 10 minutes, hour, 4 hours, day, week), its end (nil follows now), Activity's filter and Schedule's grouping are buffer-local state; every change goes to the hub as `work/schedule/set` or `work/trail/set` (a window given without `follow` stops following), never as a new subscription, except when the lanes change. `RET` on a Schedule task row opens the Activity of the agents working on it (found by the `task` field of the map's agent nodes) and pushes a crumb; `RET` on an Activity segment opens that agent's trail; `<backspace>` pops a crumb. The 21a perf rows are in `test/perf/budgets.eld`.
+
 `modules/tools/drgnx-work-trail.el` holds both, and the steering commands. The hub builds both (`work::trail`): their
 rows, and a model of their own in Sjá. A step's kind (`drgnx-work-trail-kind`) comes from its class and `detail.kind`,
 never its prose.
