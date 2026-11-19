@@ -73,7 +73,7 @@ BODY's docstring and keywords stay first."
   (let (head)
     (when (and (stringp (car body)) (cdr body)) (push (pop body) head))
     (while (keywordp (car body)) (push (pop body) head) (push (pop body) head))
-    `(ert-deftest ,name ,args ,@(nreverse head) (drgnx-look-gui-check-clean) (if drgnx-look-gui-grid (drgnx-test-with-grid-on ,@body) (progn ,@body)) (drgnx-look-gui-check-clean))))
+    `(ert-deftest ,name ,args ,@(nreverse head) (drgnx-test-grid-clear-params) (drgnx-look-gui-check-clean) (if drgnx-look-gui-grid (drgnx-test-with-grid-on ,@body) (progn ,@body)) (drgnx-look-gui-check-clean))))
 
 (provide 'drgnx-look-gui-fixture)
 ;;; look-gui-fixture.el ends here

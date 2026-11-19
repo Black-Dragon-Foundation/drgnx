@@ -2,6 +2,16 @@
 ;; Docks and areas are tiles of the grid (there are no side windows): a batch test that shows one runs with the grid on.
 (defvar drgnx-grid-mode)
 
+(defun drgnx-test-grid-clear-params ()
+  "Every frame and window of the session without the grid's bookkeeping (its tile ids and the editors' window
+parameters, its frame parameters): a row that replaced frames meanwhile leaves them on the one that is left."
+  (dolist (f (frame-list))
+    (dolist (p '(drgnx-grid-next-id drgnx-grid-memory drgnx-grid--good drgnx-grid--docks))
+      (set-frame-parameter f p nil))
+    (dolist (w (window-list f))
+      (dolist (p '(drgnx-tile-id no-delete-other-windows delete-window))
+        (set-window-parameter w p nil)))))
+
 (defmacro drgnx-test-with-grid-on (&rest body)
   "BODY with `drgnx-grid-mode' on, and as it was after."
   (declare (indent 0))
@@ -13,12 +23,7 @@
        (unless grid-was
          (drgnx-grid-mode -1)
          ;; a row that made or replaced frames meanwhile: every frame and window is as it was before the grid
-         (dolist (f (frame-list))
-           (dolist (p '(drgnx-grid-next-id drgnx-grid-memory drgnx-grid--good drgnx-grid--docks))
-             (set-frame-parameter f p nil))
-           (dolist (w (window-list f))
-             (dolist (p '(drgnx-tile-id no-delete-other-windows delete-window))
-               (set-window-parameter w p nil))))))))
+         (drgnx-test-grid-clear-params)))))
 
 ;; The GUI rows of a file that shows docks and areas all run with the grid on: the file loads this and calls
 ;; `drgnx-test-grid-on-for-file'.
