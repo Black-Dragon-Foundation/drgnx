@@ -90,7 +90,7 @@ Ends (non-nil) when the paragraph or the buffer is gone."
       (unless drgnx-doc-agents--pulse-timer
         (setq drgnx-doc-agents--pulse-timer
               (drgnx-timer-poll (cons 'drgnx-doc-agents-pulse (current-buffer)) 1.0 #'drgnx-doc-agents--pulse-tick
-                                :deadline 3600 :args (list (current-buffer)) :owner 'drgnx-doc-agents)))
+                                :deadline 3600 :args (list (current-buffer)))))
     (when drgnx-doc-agents--pulse-timer
       (drgnx-timer-cancel drgnx-doc-agents--pulse-timer)
       (setq drgnx-doc-agents--pulse-timer nil))))
