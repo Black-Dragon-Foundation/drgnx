@@ -2182,21 +2182,20 @@ fn detail_facts(f: &Front, sel: Option<&ItemId>) -> Option<budget_detail::Facts>
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(item.clone())
+        && let Some(fr) = f.core.map.front.get().and_then(std::sync::Weak::upgrade)
     {
-        if let Some(fr) = f.core.map.front.get().and_then(std::sync::Weak::upgrade) {
-            let (plan, key) = (id.to_owned(), item.clone());
-            crate::clock::spawn("map:detail-forecast", async move {
-                if let Some(fc) = plan_forecast(&fr, &plan).await {
-                    fr.core
-                        .map
-                        .forecasts
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(key, fc);
-                    fr.core.map.redraw_details(&fr);
-                }
-            });
-        }
+        let (plan, key) = (id.to_owned(), item.clone());
+        crate::clock::spawn("map:detail-forecast", async move {
+            if let Some(fc) = plan_forecast(&fr, &plan).await {
+                fr.core
+                    .map
+                    .forecasts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(key, fc);
+                fr.core.map.redraw_details(&fr);
+            }
+        });
     }
     let cache = f
         .core
