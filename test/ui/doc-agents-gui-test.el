@@ -105,5 +105,17 @@ on CALLS as (METHOD . PARAMS); `comments/add' answers a thread sent to the write
     (should-not (cl-remove-if-not (lambda (ov) (overlay-get ov 'drgnx-doc-agents-comments)) (overlays-in (point-min) (point-max))))
     (should (equal '("A paragraph that is gone") (mapcar (lambda (th) (plist-get (plist-get th :anchor) :quote)) (drgnx-doc-agents--orphans))))))
 
+(ert-deftest drgnx-ui-doc-agents/writing-paragraph-pulses-unless-reduced-motion ()
+  "The writer's paragraph pulses (one repeating timer, owned by the mode) and stops with reduced motion or the mode off."
+  (drgnx-ui-doc-agents--with calls
+    (drgnx-ui-doc-agents--line "Places: Work")
+    (let ((line (line-number-at-pos)) (drgnx-reduced-motion nil))
+      (drgnx-doc-agents-mark-writer line line 3 "C")
+      (should (timerp drgnx-doc-agents--pulse-timer)))
+    (let ((drgnx-reduced-motion t))
+      (drgnx-ui-doc-agents--line "Each agent is a card")
+      (let ((line (line-number-at-pos))) (drgnx-doc-agents-mark-writer line line 3 "C"))
+      (should-not drgnx-doc-agents--pulse-timer))))
+
 (provide 'doc-agents-gui-test)
 ;;; doc-agents-gui-test.el ends here
