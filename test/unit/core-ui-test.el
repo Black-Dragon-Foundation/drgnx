@@ -119,10 +119,10 @@
        (should (eq (get-text-property 0 'face (funcall st 't/a)) 'drgnx-status-ok))
        (should (equal (substring-no-properties (funcall st 't/b)) "✕ failed: kaputt"))
        (should (eq (get-text-property 0 'face (funcall st 't/b)) 'drgnx-status-fail))
-       (should (equal (substring-no-properties (funcall st 't/c)) "⚠ needs magit"))
+       (should (equal (substring-no-properties (funcall st 't/c)) "● needs magit"))
        (should (eq (get-text-property 0 'face (funcall st 't/c)) 'drgnx-status-warn))
        (should (equal (funcall st 't/d) "not run yet"))
-       (should (equal (substring-no-properties (funcall st 't/e)) "ℹ off"))       ; turned off in this session
+       (should (equal (substring-no-properties (funcall st 't/e)) "● off"))       ; turned off in this session
        (should (eq (get-text-property 0 'face (funcall st 't/e)) 'drgnx-status-info)))
       (drgnx-ui-test--ascii
        (should (equal (substring-no-properties (funcall st 't/b)) "X failed: kaputt"))))))

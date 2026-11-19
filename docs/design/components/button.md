@@ -56,10 +56,10 @@ None: the row's own text is what a screen reader speaks.
 
 | Binding | Face | Fill | Text | Edge |
 |---|---|---|---|---|
-| primary | `drgnx-kit-button-primary` | button-primary-bg | button-primary-fg | - |
+| primary | `drgnx-kit-button-primary` | button-primary-bg | button-primary-fg | button-primary-bg |
 | secondary | `drgnx-kit-button-secondary` | sel-quiet | - | button-edge |
 | quiet | `drgnx-kit-button-quiet` | - | - | - |
-| danger | `drgnx-kit-button-danger` | error-tint | error | - |
+| danger | `drgnx-kit-button-danger` | error-tint | error | error-tint |
 
 ## States
 
