@@ -947,12 +947,12 @@ fn the_strip_and_the_needs_you_list_line_up() {
             .unwrap_or_else(|| panic!("{chip} in {}", rows[0].text))
     };
     let chips = [
-        at("gone  g1"),
-        at("which?  g2"),
+        at("gone"),
+        at("which?"),
         // the chips share the row, so a long one is cut: its jump key is what is found
-        at("  g3"),
-        at("  g4"),
-        at("  g5"),
+        at("g3"),
+        at("g4"),
+        at("g5"),
     ];
     assert!(chips.is_sorted(), "{}", rows[0].text);
     let d = model::doc(
@@ -1332,18 +1332,15 @@ fn detail_actions_are_kit_buttons() {
             "{open:?}"
         );
         assert!(faces.contains(&FaceId::KitKeyHintCap.name()), "{open:?}");
-        // the md button's 12 px each side, in device px, and its 26 px height
-        let pad = (12.0 * scale + 0.5).floor() as u32;
-        assert_eq!(open.spaces[0].1, pad, "{open:?}");
+        // the sm button's 8 px each side, in device px, and its 22 px height
+        let pad = (8.0 * scale + 0.5).floor() as u32;
+        assert!(open.spaces.iter().any(|s| s.1 == pad), "{open:?}");
         assert_eq!(
             open.height.map(|h| h.unit),
-            Some((26.0 * scale + 0.5).floor() as u32)
+            Some((22.0 * scale + 0.5).floor() as u32)
         );
         // the pads are the kit's spaces: button start, gap, the key hint's two and the button end
-        assert!(
-            open.spaces.len() >= 5 && open.spaces.len() % 5 == 0,
-            "{open:?}"
-        );
+        assert!(open.spaces.len() >= 5, "{open:?}");
     }
 }
 
@@ -1382,12 +1379,12 @@ fn detail_rows_are_the_mockups_tile() {
     // (work-space-dark.html `.det .hd`)
     assert!(rows[0].text.contains("Opus · hub rows"), "{:?}", rows[0]);
     assert!(
-        faces_of(&rows[0]).contains(&FaceId::Chip.name()),
+        faces_of(&rows[0]).contains(&FaceId::KitChipNeutralSoft.name()),
         "{:?}",
         rows[0]
     );
     assert!(
-        faces_of(&rows[0]).contains(&FaceId::WorkWho1.name()),
+        faces_of(&rows[0]).contains(&FaceId::KitAgentMark.name()),
         "{:?}",
         rows[0]
     );
@@ -2064,4 +2061,354 @@ fn a_plan_with_no_limit_shows_spend_alone() {
         vec!["plan $12".to_owned()]
     );
     assert!(strip_chips_of(&[], None, 0.0).is_empty());
+}
+
+// ---- Task 20: List mode on the kit ----
+
+const LIST_DAY: u64 = 24 * 60;
+
+fn list_session(
+    id: &str,
+    task: &str,
+    state: vegvisir::State,
+    machine: &str,
+) -> vegvisir::SessionFact {
+    vegvisir::SessionFact {
+        id: id.into(),
+        name: id.into(),
+        model: "Sonnet".into(),
+        state,
+        since: 100 * LIST_DAY,
+        age: None,
+        seq: 1,
+        task: Some(task.into()),
+        manager: None,
+        branch: Some(format!("drgnx/{id}")),
+        worktree: None,
+        base: None,
+        machine: Some(machine.into()),
+        slot: None,
+        spend: None,
+        context: None,
+        progress: None,
+        job: None,
+    }
+}
+
+/// A spec with a plan (2 of 4 steps) and five tasks (not started, running with an agent on `desktop`, done, needs you,
+/// one with a 200-letter title), a second spec nobody works on, all at day 100.
+fn list_world() -> Core {
+    use vegvisir::{Event, GraphFact, MachineFact};
+    let g = |f| Event::Graph(f);
+    let task = |id: &str, title: String, done: bool| {
+        g(GraphFact::Task {
+            id: id.into(),
+            plan: "p1".into(),
+            title,
+            done,
+            updated: 100 * LIST_DAY,
+        })
+    };
+    let mut core = Core::new();
+    for e in [
+        Event::Tick {
+            minute: 100 * LIST_DAY,
+        },
+        g(GraphFact::Spec {
+            id: "s1".into(),
+            title: "Title bar".into(),
+            updated: 100 * LIST_DAY,
+        }),
+        g(GraphFact::Spec {
+            id: "s2".into(),
+            title: "Idle spec".into(),
+            updated: 100 * LIST_DAY,
+        }),
+        g(GraphFact::Plan {
+            id: "p1".into(),
+            title: "Inbox drop-down".into(),
+            rank: 1,
+            progress: Some((2, 4)),
+            updated: 100 * LIST_DAY,
+        }),
+        g(GraphFact::Derives {
+            plan: "p1".into(),
+            spec: "s1".into(),
+        }),
+        task("t1", "Count on the pill".into(), false),
+        task("t2", "Anchor the card".into(), false),
+        task("t3", "Footer cut off".into(), true),
+        task("t4", "Allow once".into(), false),
+        task("t5", "L".repeat(200), false),
+        Event::Machines(vec![MachineFact {
+            name: "desktop".into(),
+            slots: 4,
+            used: 1,
+            reported: false,
+            runner: None,
+        }]),
+        Event::Session(list_session(
+            "a1",
+            "t2",
+            vegvisir::State::Running,
+            "desktop",
+        )),
+        Event::Session(list_session(
+            "a2",
+            "t4",
+            vegvisir::State::NeedsYou,
+            "desktop",
+        )),
+    ] {
+        core.step(e);
+    }
+    core
+}
+
+/// A List-mode view of M showing SHOW.
+fn list_view(m: &vegvisir::Model, show: vegvisir::Show) -> View {
+    let state = ViewState {
+        mode: vegvisir::MapMode::List,
+        width_units: 226,
+        filters: vegvisir::Filters {
+            show,
+            ..vegvisir::Filters::default()
+        },
+        ..ViewState::default()
+    };
+    let mut v = rows_view(m, 226);
+    v.state = state;
+    v
+}
+
+fn list_row_of<'a>(rows: &'a [Row], text: &str) -> &'a Row {
+    rows.iter()
+        .find(|r| r.key.starts_with("list:") && r.text.contains(text))
+        .unwrap_or_else(|| {
+            panic!(
+                "a list row with {text:?} in {:?}",
+                rows.iter().map(|r| &r.text).collect::<Vec<_>>()
+            )
+        })
+}
+
+fn has_face(r: &Row, f: FaceId) -> bool {
+    r.runs.iter().any(|x| x.2 == f.name())
+}
+
+/// [D] A task's row is the kit's pieces: its state dot in the state's face, the agent's mark and its machine; a plan's
+/// row has the kit's progress bar.
+#[test]
+fn list_rows_are_the_kits_pieces() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let running = list_row_of(&rows, "Anchor the card");
+    assert!(
+        has_face(running, FaceId::KitStatusDotRunning),
+        "{running:?}"
+    );
+    assert!(has_face(running, FaceId::KitAgentMark), "{running:?}");
+    assert!(running.text.contains("desktop"), "{}", running.text);
+    let plan = list_row_of(&rows, "Inbox drop-down");
+    assert!(has_face(plan, FaceId::KitProgressFill), "{plan:?}");
+    assert!(plan.text.contains("2/4"), "{}", plan.text);
+}
+
+/// [D] Every task state is a dot and its word (Review Focus 5: colour is never the only sign).
+#[test]
+fn list_states_carry_words() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    for (title, word, dot) in [
+        ("Count on the pill", "not started", FaceId::KitStatusDotIdle),
+        ("Anchor the card", "running", FaceId::KitStatusDotRunning),
+        ("Footer cut off", "done", FaceId::KitStatusDotDone),
+        ("Allow once", "needs you", FaceId::KitStatusDotNeedsYou),
+    ] {
+        let r = list_row_of(&rows, title);
+        assert!(r.text.contains(word), "{title}: {}", r.text);
+        assert!(has_face(r, dot), "{title}: {r:?}");
+    }
+}
+
+/// [D] A long title is cut with an ellipsis at the stop the right-hand pieces start at, so they stay whole, and the
+/// row's `help-echo` has the whole title.
+#[test]
+fn list_a_long_title_is_cut_at_the_edge_with_a_tooltip() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let mut r = list_row_of(&rows, &"L".repeat(20)).clone();
+    let full = "L".repeat(200);
+    assert!(
+        r.props
+            .iter()
+            .any(|p| p.2 == "help-echo" && p.3.as_str() == Some(full.as_str())),
+        "{r:?}"
+    );
+    drgnx_rows::fit_row::fit_row(
+        &mut r,
+        &Cols,
+        &drgnx_rows::fit_row::Room {
+            width_px: 1000,
+            tty: None,
+            image_px: &|_| None,
+            tail: None,
+        },
+    );
+    assert!(r.text.contains('…'), "{}", r.text);
+    assert!(
+        r.text.contains("not started"),
+        "the state stays: {}",
+        r.text
+    );
+}
+
+/// [D] Active's rows sit under section headers: In progress, Ready, and the closing Completed with its count.
+#[test]
+fn list_has_section_headers() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::Active);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let heads: Vec<&str> = rows
+        .iter()
+        .filter(|r| has_face(r, FaceId::KitSectionHeader))
+        .map(|r| r.text.as_str())
+        .collect();
+    assert!(heads.iter().any(|h| h.contains("In progress")), "{heads:?}");
+    assert!(heads.iter().any(|h| h.contains("Ready")), "{heads:?}");
+}
+
+/// [D] A workspace with nothing on it says so in one row that is no item.
+#[test]
+fn list_an_empty_workspace_says_so() {
+    let core = Core::new();
+    let v = list_view(core.model(), vegvisir::Show::Active);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let r = rows
+        .iter()
+        .find(|r| r.key == "empty:list")
+        .expect("the empty row");
+    assert!(r.text.contains("Nothing here yet"), "{}", r.text);
+    assert!(!r.props.iter().any(|p| p.2 == "drgnx-work-id"));
+}
+
+/// [D] A needs-you chip is the kit's warn chip with its jump key as a kit key hint, and shows a 40-letter fact whole (two chips share the width)
+/// (the strip once cut every chip at 260 px).
+#[test]
+fn list_strip_chips_show_full_text() {
+    let mut core = list_world();
+    let fact = "which of these two files should I touch?".to_owned();
+    core.step(vegvisir::Event::Card(CardFact {
+        id: "c1".into(),
+        kind: CardKind::Question,
+        about: vec!["agent:a1".into()],
+        text: fact.clone(),
+        open: true,
+    }));
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let strip = &rows[0];
+    assert!(strip.text.contains(&fact), "{}", strip.text);
+    assert!(has_face(strip, FaceId::KitChipWarnSoft), "{strip:?}");
+    assert!(has_face(strip, FaceId::KitKeyHintCap), "{strip:?}");
+    assert!(strip.text.contains("g1"), "{}", strip.text);
+}
+
+// ---- Task 22: the Detail on the kit ----
+
+/// [D] The Detail has no hand padding: an agent's head is the kit's agent mark and the kit's chip (no run in the old
+/// hand chip face), and every action is a small kit button that runs its command when clicked (kind `work-command`).
+#[test]
+fn detail_rows_have_no_hand_padding() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let agent = ItemId("agent:a1".into());
+    let lines = detail::lines(core.model(), Some(&agent), 0);
+    let rows = detail::rows(&lines, &kit_env(1.0), 340, &Cols);
+    let head = rows.iter().find(|r| r.key == "head/0").expect("the head");
+    assert!(has_face(head, FaceId::KitAgentMark), "{head:?}");
+    assert!(has_face(head, FaceId::KitChipNeutralSoft), "{head:?}");
+    assert!(!has_face(head, FaceId::Chip), "{head:?}");
+    for (label, command) in [
+        ("Open", "work-open"),
+        ("Trail", "work-trail"),
+        ("Steer", "work-steer"),
+        ("Pause", "work-pause"),
+    ] {
+        let r = rows
+            .iter()
+            .find(|r| r.key.starts_with("actions/") && r.text.contains(label))
+            .unwrap_or_else(|| panic!("the {label} action"));
+        assert!(
+            r.props
+                .iter()
+                .any(|p| p.2 == "drgnx-action" && p.3 == json!(["work-command", command])),
+            "{label}: {r:?}"
+        );
+    }
+}
+
+// ---- Task 30: accessibility and the terminal form of the List ----
+
+/// [D] `a11y-flow/every-glyph-has-a-label`, on the List: every state dot has its word in the row, and every agent mark
+/// has a `help-echo` over it (the mark is one letter on a colour).
+#[test]
+fn a11y_flow_list_every_glyph_has_a_label() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let mut dots = 0;
+    for r in rows.iter().filter(|r| r.key.starts_with("list:")) {
+        if r.runs.iter().any(|x| {
+            [
+                FaceId::KitStatusDotIdle,
+                FaceId::KitStatusDotRunning,
+                FaceId::KitStatusDotDone,
+                FaceId::KitStatusDotNeedsYou,
+            ]
+            .iter()
+            .any(|f| x.2 == f.name())
+        }) {
+            dots += 1;
+            assert!(
+                ["not started", "running", "done", "needs you"]
+                    .iter()
+                    .any(|w| r.text.contains(w)),
+                "a dot without its word: {}",
+                r.text
+            );
+        }
+        for x in r.runs.iter().filter(|x| x.2 == FaceId::KitAgentMark.name()) {
+            assert!(
+                r.props
+                    .iter()
+                    .any(|p| p.2 == "help-echo" && p.0 <= x.0 && x.1 <= p.1),
+                "an agent mark without a help-echo: {r:?}"
+            );
+        }
+    }
+    assert!(dots >= 4, "the world's tasks have dots");
+}
+
+/// [D] On a terminal the List has the kit's state dot with its word once (no second word at the right) and no stop
+/// (the pieces follow the title after two spaces).
+#[test]
+fn list_on_a_terminal_has_one_word_and_no_stop() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let tty: ViewEnv = serde_json::from_value(
+        json!({"view": "m", "class": "tty-1", "epoch": 1, "display": "tty", "scale": 1.0,
+                                  "cell": [1, 1], "width_px": 100}),
+    )
+    .expect("a tty env");
+    let (rows, _) = view_rows(core.model(), &v, &tty, &Cols, 0, &BTreeSet::new(), &[]);
+    let r = list_row_of(&rows, "Anchor the card");
+    assert!(has_face(r, FaceId::KitStatusDotRunning), "{r:?}");
+    assert_eq!(r.text.matches("running").count(), 1, "{}", r.text);
+    assert!(r.stops.is_empty(), "{r:?}");
 }

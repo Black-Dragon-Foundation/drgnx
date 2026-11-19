@@ -44,6 +44,7 @@
     (shell-heredoc)
     (work-flow :mockup hub-orchestration)
     (review-screen)
+    (work-list :mockup work-now :seed "map")
     (start-page)
     (start-page-light)
     (notebook-dark :mockup notebook)
