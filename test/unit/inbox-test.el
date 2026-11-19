@@ -1,6 +1,7 @@
 ;;; inbox-test.el --- batch tests: the needs-you inbox's rows, answers, keys and kept choice -*- lexical-binding: t -*-
 ;; test-class: det
 (require 'ert)
+(set-terminal-coding-system 'utf-8-unix)             ; the kit's dot is the glyph the frame can write: these rows read it as ●
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx)

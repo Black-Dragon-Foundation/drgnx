@@ -5,6 +5,7 @@
 ;; No hub: the map buffer gets the hub's patches and model by hand, what it sends is recorded.  Each test names its
 ;; pattern (A: every order, orders-fixture.el; D: pure).
 (require 'ert)
+(set-terminal-coding-system 'utf-8-unix)             ; the kit's dot is the glyph the frame can write: these rows read it as ●
 (require 'cl-lib)
 (require 'drgnx-paths)
 (require 'drgnx-modules)

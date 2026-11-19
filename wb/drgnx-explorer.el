@@ -358,7 +358,7 @@ name's face, the hover highlight, the icons, the git status and the ⋯ control.
               (unless (invisible-p (point)) (drgnx-explorer--icons (point) depth name-start (aref v 2) (aref v 0)))
               (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start))
             (when (and drgnx-explorer--selection (member (drgnx-explorer--path v) drgnx-explorer--selection))
-              (add-face-text-property name-start (pos-eol) 'drgnx-row-selected)))
+              (add-face-text-property name-start (pos-eol) 'drgnx-explorer-selected)))
           (forward-line 1)
           (setq i (1+ i))))))
   `(jit-lock-bounds ,beg . ,end))
@@ -739,7 +739,7 @@ selected when its row is there."
   "On the rows path, the file a reveal waits for: its folders were opened and the hub asked; the draw that brings its
 row selects it (`drgnx-explorer--rows-patched').")
 
-(defconst drgnx-explorer--nav-faces '(("ticked" . drgnx-row-selected) ("selected") ("dim"))
+(defconst drgnx-explorer--nav-faces '(("ticked" . drgnx-explorer-selected) ("selected") ("dim"))
   "The Explorer's classes on the rows path (`drgnx-view-nav-faces'): the marks are Sjá's ticked set; the selected row is
 the workbench's (`drgnx-wb-selection-sync', the look's fill and ring at point), so Sjá's `selected' class draws none;
 and `dim' draws none: Sjá dims the rows off the selection's chain, and the Explorer has no chain (every other row).")
