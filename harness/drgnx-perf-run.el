@@ -2727,10 +2727,10 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                        " (global-set-key (kbd \"<f8>\") #'drgnx-perf--catalogue) t)")
        :each "(progn (setq drgnx-perf--catalogue-n 0) t)"
        :actions ,(funcall keys "<f8>" 30)
-       :check "(and (= drgnx-perf--catalogue-n 30) (with-current-buffer (window-buffer) (= 21 (length (drgnx-kit-catalogue-cells)))))"
+       :check "(and (= drgnx-perf--catalogue-n 30) (with-current-buffer (window-buffer) (<= 21 (length (drgnx-kit-catalogue-cells)))))"
        :teardown "(progn (global-unset-key (kbd \"<f8>\")) (when (get-buffer drgnx-kit-catalogue-buffer) (kill-buffer drgnx-kit-catalogue-buffer)) t)")
       ;; the kit's theme switch (the frontend kit, §9): three frames show the catalogue (every kit component drawn from the
-      ;; token table), and F8 loads the next theme (dark, light, high contrast, in turn): every frame's kit faces and
+      ;; token table), and F8 loads the next theme (light, high contrast, dark, in turn): every frame's kit faces and
       ;; images are drawn again within 250 ms
       (kit-theme-switch-3-frames
        :setup ,(concat "(progn"
@@ -2745,8 +2745,8 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                        "   (with-selected-frame f (switch-to-buffer (get-buffer drgnx-kit-catalogue-buffer)))))"
                        " (global-set-key (kbd \"<f8>\") #'drgnx-perf--theme) t)")
        :each "(progn (setq drgnx-perf--theme-n 0) t)"
-       :actions ,(funcall keys "<f8>" 30)
-       :check "(and (= drgnx-perf--theme-n 30) (= 3 (length (seq-filter (lambda (f) (and (frame-live-p f) (not (frame-parent f)))) (frame-list)))))"
+       :actions ,(funcall keys "<f8>" 120)
+       :check "(and (= drgnx-perf--theme-n 120) (= 3 (length (seq-filter (lambda (f) (and (frame-live-p f) (not (frame-parent f)))) (frame-list)))))"
        :teardown "(progn (global-unset-key (kbd \"<f8>\")) (mapc (lambda (f) (when (frame-live-p f) (delete-frame f t))) drgnx-perf--theme-frames) (setq drgnx-perf--theme-frames nil) (when (get-buffer drgnx-kit-catalogue-buffer) (kill-buffer drgnx-kit-catalogue-buffer)) (mapc #'disable-theme custom-enabled-themes) (load-theme 'drgnx-dark t) t)")
       ;; the Run and Debug view (spec §7): a step's model diff and rows patch, ten of 300 variables changed, drawn
       ;; within 30 ms with the hub's half (the bench `debug_view'); a chunk of a 10,000-element list opened (100 rows

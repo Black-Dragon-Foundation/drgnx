@@ -220,11 +220,12 @@ named here."
   (and (featurep 'glitnir) (fboundp 'glitnir-active-p) (glitnir-active-p) t))
 
 (defun drgnx-look--card-window-p (window)
-  "Non-nil when WINDOW is a card: a docked pane (the Explorer, the panel, the right dock) or an editor group.
+  "Non-nil when WINDOW is a card: a docked pane (the Explorer, the panel, the right dock), a tool tile of the grid or an
+editor group.
 An editor group is an ordinary window: not the minibuffer, a package's side window or a popup lane."
   (let ((role (window-parameter window 'drgnx-role)))
     (if role
-        (and (memq role '(dock panel right)) t)
+        (and (memq role '(dock panel right tile)) t)
       (not (or (window-minibuffer-p window) (window-parameter window 'window-side)
                (window-parameter window 'drgnx-popup))))))
 
