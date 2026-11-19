@@ -13,6 +13,7 @@
 (declare-function drgnx-changes-group-by "drgnx-changes")
 (declare-function drgnx-changes-open-hunk "drgnx-changes")
 (declare-function drgnx-changes-revert-hunk "drgnx-changes")
+(declare-function drgnx-changes-for-item "drgnx-changes" (kind id))
 (defvar drgnx-changes-by)
 (defvar drgnx-hub--events)
 
@@ -57,3 +58,17 @@
                 ((symbol-function 'drgnx-hub--call-on) (lambda (_c m p _cb &rest _) (push (cons m p) calls))))
         (drgnx-changes-revert-hunk)
         (should (equal '("history/revert/hunk" :worktree "/wt/s1" :op 7 :path "a.rs" :hunk 2) (car calls)))))))
+
+(ert-deftest drgnx-changes/e-from-work-filters-to-the-task ()
+  "Flow Task 27: `e' on a task or an agent in Work (`drgnx-changes-for-item' KIND ID) opens the Changes place by task, and
+asks the hub for the view filtered to that task or agent (`changes/set' with `:filter')."
+  (dolist (case '(("task" "t1" (:task "t1")) ("agent" "a1" (:agent "a1"))))
+    (let (calls shown (drgnx-hub--events nil))
+      (cl-letf (((symbol-function 'drgnx-changes--hub-p) (lambda () t))
+                ((symbol-function 'drgnx-changes--buffer) (lambda () (get-buffer-create "*changes-stand-in*")))
+                ((symbol-function 'switch-to-buffer) (lambda (b &rest _) (push (buffer-name b) shown)))
+                ((symbol-function 'drgnx-hub--call-on) (lambda (_c m p _cb &rest _) (push (cons m p) calls))))
+        (drgnx-changes-for-item (nth 0 case) (nth 1 case)))
+      (should (equal "*changes-stand-in*" (car shown)))
+      (should (equal (append '("changes/set" :view "changes" :refresh t) (list :filter (nth 2 case))) (car calls)))
+      (kill-buffer "*changes-stand-in*"))))

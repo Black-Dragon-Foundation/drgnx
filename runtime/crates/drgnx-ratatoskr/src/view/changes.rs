@@ -315,4 +315,48 @@ mod tests {
         assert_eq!(kinds, ["open", "comment", "revert"]);
         assert!(rows[4].props.iter().any(|p| p.2 == "drgnx-hunk"));
     }
+
+    fn two_tasks() -> Vec<TaskGroup> {
+        let mut b = groups();
+        b[0].task = Some("t2".into());
+        b[0].title = "Second".into();
+        b[0].agent = Some("b".into());
+        let mut all = groups();
+        all.extend(b);
+        all
+    }
+
+    /// Flow Task 27: `e` on a task or agent in Work opens the Changes place filtered to it: `changes/set` takes a
+    /// filter, and the view's groups are only that task's (or that agent's).
+    #[test]
+    fn a_task_filter_keeps_only_that_tasks_group() {
+        let f = runstav::methods::changes::Filter {
+            task: Some("t2".into()),
+            agent: None,
+        };
+        let kept = filter_groups(two_tasks(), Some(&f));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].task.as_deref(), Some("t2"));
+    }
+
+    #[test]
+    fn an_agent_filter_keeps_that_agents_groups() {
+        let f = runstav::methods::changes::Filter {
+            task: None,
+            agent: Some("a".into()),
+        };
+        let kept = filter_groups(two_tasks(), Some(&f));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].agent.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn no_filter_keeps_every_group_and_a_filter_that_matches_nothing_keeps_none() {
+        assert_eq!(filter_groups(two_tasks(), None).len(), 2);
+        let f = runstav::methods::changes::Filter {
+            task: Some("nope".into()),
+            agent: None,
+        };
+        assert!(filter_groups(two_tasks(), Some(&f)).is_empty());
+    }
 }
