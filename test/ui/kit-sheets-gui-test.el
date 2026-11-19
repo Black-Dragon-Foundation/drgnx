@@ -12,7 +12,6 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
-(setq drgnx-look-gui-grid nil)               ; the catalogue's own frames, no dock
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
 
@@ -543,7 +542,7 @@ the pill and the empty row alike.  Red first: the row had none."
         (with-selected-frame root
           (drgnx-uitest-bare-frame)
           (load-theme 'drgnx-dark t)
-          (delete-other-windows)
+          (let ((ignore-window-parameters t)) (delete-other-windows))
           (switch-to-buffer main)
           (drgnx-state-mode 1)
           (set-frame-parameter root 'drgnx-wb-areas nil)
@@ -648,7 +647,7 @@ inset.  `view' is the view's name."
          (view (format "kit-sel-%d" (cl-incf drgnx-kit-sheet--n))))
      (drgnx-uitest-bare-frame)
      (load-theme 'drgnx-dark t)
-     (delete-other-windows)
+     (let ((ignore-window-parameters t)) (delete-other-windows))
      (unwind-protect
          (progn
            (switch-to-buffer buf)
@@ -675,7 +674,7 @@ inset.  `view' is the view's name."
        (with-current-buffer buf (drgnx-view-nav--sel-clear))
        (drgnx-test-wait-presented)                ; Glitnir drops its own copy of the blocks at the next redisplay
        (drgnx-view-patch-teardown)
-       (delete-other-windows)
+       (let ((ignore-window-parameters t)) (delete-other-windows))
        (kill-buffer buf)
        (mapc #'disable-theme custom-enabled-themes))))
 

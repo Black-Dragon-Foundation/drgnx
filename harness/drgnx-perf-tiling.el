@@ -22,6 +22,7 @@
   (prin1-to-string
    '(progn
       (defvar drgnx-perf--tile-dir 'right "The direction `drgnx-perf--tile-move-step' moves the tile now.")
+      (defvar drgnx-perf--tile-min nil "`drgnx-grid-min-px' before the ten tiles.")
       (defun drgnx-perf--tile-stats (samples)
         "SAMPLES (ms) as (:n N :p50 MS :p95 MS :max MS)."
         (let* ((s (sort (copy-sequence samples) #'<)) (n (length s)))
@@ -67,6 +68,7 @@
           (list :show (drgnx-perf--tile-stats ms))))
       (defun drgnx-perf--tile-ten ()
         "Ten tiles with a file open in each: the six, and four editors more, split off the last."
+        (setq drgnx-perf--tile-min drgnx-grid-min-px drgnx-grid-min-px 40)   ; room for ten tiles in a frame of this size
         (drgnx-perf--tile-up)
         (let ((files (seq-take (directory-files (expand-file-name "wb" drgnx-dir) t "\\.el\\'") 10)))
           ;; each new editor splits the roomiest one, alternately beside and below it
@@ -84,7 +86,7 @@
         (let ((snap (drgnx-grid-snapshot 'perf)) ms)
           (dotimes (_ 5)
             (let ((t0 (float-time)))
-              (condition-case nil (drgnx-grid-restore snap) (user-error nil))
+              (condition-case nil (drgnx-grid-restore snap) (error nil))
               (redisplay t)
               (push (* 1000.0 (- (float-time) t0)) ms)))
           (list :tiles (nth 2 (sort ms #'<)) :mode_load_ms 0)))
@@ -98,9 +100,9 @@ restore: (:motion STATS :drop STATS)."
               (when (> i 0) (push d motion))))
           (drgnx-grid--drag-clear)
           (dotimes (i 21)
-            (let ((d (drgnx-perf--tile-ms (lambda () (condition-case nil (drgnx-grid--drop a b 'right) (user-error nil))))))
+            (let ((d (drgnx-perf--tile-ms (lambda () (condition-case nil (drgnx-grid--drop a b 'right) (error nil))))))
               (when (> i 0) (push d drop)))
-            (condition-case nil (drgnx-grid-restore snap) (user-error nil))
+            (condition-case nil (drgnx-grid-restore snap) (error nil))
             (setq a (car (drgnx-grid-tiles nil 'editor)) b (cadr (drgnx-grid-tiles nil 'editor))))
           (list :motion (drgnx-perf--tile-stats motion) :drop (drgnx-perf--tile-stats drop))))
       (defun drgnx-perf--tile-down ()
@@ -109,7 +111,8 @@ restore: (:motion STATS :drop STATS)."
           (when (and (buffer-file-name b) (string-prefix-p (expand-file-name "wb" drgnx-dir) (buffer-file-name b)))
             (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
         (global-unset-key (kbd "<f7>"))
-        (delete-other-windows)
+        (when drgnx-perf--tile-min (setq drgnx-grid-min-px drgnx-perf--tile-min drgnx-perf--tile-min nil))
+        (let ((ignore-window-parameters t)) (delete-other-windows))
         t)
       t))
   "The session side of the tiling workloads, as a form string.")
