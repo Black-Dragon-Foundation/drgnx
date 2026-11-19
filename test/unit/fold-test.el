@@ -14,6 +14,12 @@
 (declare-function nidhogg-treesit-refold "treesit.c" (parser))
 (declare-function treesit-parser-create "treesit.c" (language &optional buffer no-reuse tag))
 (defvar treesit-extra-load-path)
+(defvar drgnx-hub--events)
+(defvar drgnx-minimap--watched)
+(defvar drgnx-ruler--marks)
+(defvar drgnx-fold-source)
+(defvar drgnx-fold-remember)
+(defvar drgnx-fold-summary)
 
 (defconst fold-test--text
   "def a():\n    x = 1\n    if x:\n        y = 2\n    z = 3\ndef b():\n    w = 4\n"
@@ -55,6 +61,98 @@
     (should-not (fold-test--hidden))
     (should (= (fold-test--model-hidden) 0))
     (should-error (drgnx-fold-unfold) :type 'user-error)))
+
+(ert-deftest drgnx-fold/the-summary-counts-the-hidden-problems-and-agent-edits ()
+  "Under `full' a fold's summary adds the errors, warnings and agent edits on its hidden lines (`✕ 1 ⚠ 2 ✦ 1'),
+each only when there is one, and none outside the fold; under `lines' only the count."
+  (fold-test--with
+    (require 'drgnx-marks)
+    (setq drgnx-ruler--marks
+          (mapcar (lambda (m) (list (fold-test--line (car m)) 0 'error 0 'bar nil (cdr m)))
+                  '((2 . agent) (3 . error) (4 . warning) (4 . warning) (6 . error) (7 . agent))))
+    (drgnx-fold-fold)
+    (let ((ov (car (drgnx-fold--overlays))))
+      (should (string-match-p "⋯ 4 lines ✕ 1 ⚠ 2 ✦ 1 " (overlay-get ov 'display)))
+      (let ((drgnx-fold-summary 'lines))
+        (should (string-match-p "⋯ 4 lines $" (drgnx-fold--summary ov)))))
+    (drgnx-fold-unfold)
+    ;; only warnings hidden: no error or agent count
+    (setq drgnx-ruler--marks (list (list (fold-test--line 4) 0 'warning 0 'bar nil 'warning)))
+    (drgnx-fold-fold)
+    (should (string-match-p "⋯ 4 lines ⚠ 1 $" (overlay-get (car (drgnx-fold--overlays)) 'display)))))
+
+(defmacro fold-test--with-hub (&rest body)
+  "BODY as `fold-test--with', the buffer visiting FILE (a temporary .txt, no parser), the hub's connection taken as
+up: CALLS holds the `minimap/watch' params sent, oldest first; TOOK is what `nidhogg-lines-take-hub-folds' gives
+\(its real value when `real')."
+  (declare (indent 0))
+  `(let ((calls nil) (took 'real) (file (make-temp-file "drgnx-fold" nil ".txt"))
+         (real-take (symbol-function 'nidhogg-lines-take-hub-folds))
+         (drgnx-hub--events 'fold-test-hub) (drgnx-fold-remember nil))
+     (unwind-protect
+         (cl-letf* (((symbol-function 'drgnx-fold--hub-p) (lambda () t))
+                    ((symbol-function 'nidhogg-lines-take-hub-folds)
+                     (lambda (b f) (if (eq took 'real) (funcall real-take b f) took)))
+                    ((symbol-function 'drgnx-hub--call-on)
+                     (lambda (_proc method params &rest _)
+                       (when (equal method "minimap/watch") (setq calls (append calls (list params)))))))
+           (fold-test--with
+             (setq buffer-file-name file)
+             ,@body))
+       (delete-file file))))
+
+(ert-deftest drgnx-fold/a-buffer-with-no-parser-folds-by-the-hubs-layer ()
+  "In `auto', a file's buffer with no parser asks the hub to watch its file (one `minimap/watch') at its first fold
+command and takes the hub's ranges; while the hub has none, indentation folds it and a fold command works; with the
+hub's ranges, indentation is off."
+  (skip-unless (fboundp 'nidhogg-lines-take-hub-folds))
+  (fold-test--with-hub
+    (drgnx-fold-fold)
+    (should (equal (fold-test--hidden) '(2 3 4 5)))
+    (should (equal calls (list (list :file (file-truename file) :on t))))
+    (should (eq drgnx-fold--sources 'hub))
+    (should (= (plist-get (nidhogg-lines-describe) :folds) 3))
+    (drgnx-fold-unfold)
+    ;; the hub's layer came: indentation goes; the watch is not sent again
+    (setq took t)
+    (drgnx-fold-ranges)
+    (should (= (plist-get (nidhogg-lines-describe) :folds) 0))
+    (should (= (length calls) 1))))
+
+(ert-deftest drgnx-fold/the-hub-watch-stops-with-folding ()
+  "The folds' watch ends (`:on :false') when the buffer leaves the hub's source (`indent'), when it is killed and when
+the module is turned off; a watch the minimap holds on the same file is left on, and the minimap's own end keeps the
+watch while folding takes the layer."
+  (skip-unless (fboundp 'nidhogg-lines-take-hub-folds))
+  (fold-test--with-hub
+    (let ((on (list :file (file-truename file) :on t)) (off (list :file (file-truename file) :on :false)))
+      (drgnx-fold-ranges)
+      (let ((drgnx-fold-source 'indent)) (drgnx-fold-ranges))
+      (should (equal calls (list on off)))
+      (should (eq drgnx-fold--sources 'indent))
+      ;; killed
+      (drgnx-fold-ranges)
+      (drgnx-fold--killed)
+      (should (equal calls (list on off on off)))
+      ;; the minimap watches the file too: folding sends nothing, and leaves it on
+      (setq calls nil drgnx-fold--sources nil)
+      (setq-local drgnx-minimap--watched (file-truename file))
+      (drgnx-fold-ranges)
+      (drgnx-fold--watch nil)
+      (should-not calls)
+      ;; the minimap ends its watch while folding takes the layer: the watch stays on, without the heat
+      (drgnx-fold-ranges)
+      (load (expand-file-name "modules/editor/drgnx-minimap" drgnx-dir) nil t)
+      (cl-letf (((symbol-function 'drgnx-minimap--hub-p) (lambda () t)))
+        (drgnx-minimap--watch (current-buffer) nil))
+      (should (equal calls (list on)))
+      ;; the module off: the watch ends
+      (kill-local-variable 'drgnx-minimap--watched)
+      (drgnx-fold-ranges)
+      (let ((drgnx-fold-source 'indent)) (drgnx-fold-ranges))
+      (setq calls nil)
+      (drgnx-test-with-modules '(editor/fold) (drgnx-fold-ranges) (should (equal calls (list on))))
+      (should (equal calls (list on off))))))
 
 (ert-deftest drgnx-fold/fold-on-a-folded-line-folds-the-block-around-it ()
   (fold-test--with
