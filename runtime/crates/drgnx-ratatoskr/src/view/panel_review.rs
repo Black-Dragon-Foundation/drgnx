@@ -16,7 +16,7 @@ use drgnx_rows::kit::{self, Action, Choice, Comp, DiffLine, Hunk as KitHunk, Que
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::agents::{Permission, RpcId};
 use runstav::methods::view::ViewEnv;
-use serde_json::{Value, json};
+use serde_json::json;
 
 /// The most files that get diff cards, and the most lines of a hunk a card shows.
 pub const MAX_FILES: usize = 20;

@@ -436,7 +436,7 @@ fn an_allowed_step_says_how_it_was_allowed() {
 // `block_list_rows(blocks, open, kit, reduced_motion)`, rows keyed `k:N/...` for block N, each row carrying
 // `drgnx-block` N; `open` holds the indexes of the Explored blocks the user opened.
 mod block_rows {
-    use super::super::blocks::Block;
+    use crate::agents::session::blocks::Block;
     use super::*;
     use drgnx_rows::kit::KitEnv;
     use std::collections::BTreeSet;
@@ -514,7 +514,7 @@ mod block_rows {
             path: "core/a.rs".into(),
             plus: 4,
             minus: 1,
-            hunks: vec![super::super::blocks::HunkRef { start_line: 2, end_line: 6 }],
+            hunks: vec![crate::agents::session::blocks::HunkRef { start_line: 2, end_line: 6 }],
         }];
         let rows = block_list_rows(&b, &BTreeSet::new(), &kit(), false);
         let t = text(&rows);
@@ -532,7 +532,7 @@ mod block_rows {
     #[test]
     fn an_ask_block_is_a_question_card() {
         let b = [Block::Ask {
-            kind: super::super::blocks::AskKind::Permission,
+            kind: crate::agents::session::blocks::AskKind::Permission,
             text: "Read the gateway's log?".into(),
             options: vec![("Allow".into(), 'y'), ("Always".into(), 'a'), ("Deny".into(), 'n')],
         }];
