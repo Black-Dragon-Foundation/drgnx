@@ -21,7 +21,7 @@
 (declare-function drgnx-term-start-directory "drgnx-term" (dir))
 (declare-function drgnx-term-usable-p "drgnx-term")
 (declare-function drgnx-wb-area-toggle-tab "drgnx-area" (area tab &optional start))
-(declare-function drgnx-wb-define-tab "drgnx-area")
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
 
 (defun drgnx-terminal-shell ()
@@ -108,7 +108,7 @@ the tab's placeholder, whose folder is wherever it was made)."
                      (lambda ()
                        (require 'drgnx-area)
                        ;; a click on the Terminal tab with no terminal opens one, as VS Code's
-                       (drgnx-wb-define-tab 'panel 'terminal :start #'drgnx-terminal--tab-start)
+                       (drgnx-pane-define-kind 'terminal :home 'bottom :start #'drgnx-terminal--tab-start)
                        (drgnx-command-define 'terminal-new :category "Terminal" :title "New Terminal" :scope 'window
                                              :command #'drgnx-terminal-new :doc "A new terminal in the panel")
                        (drgnx-command-define 'terminal-toggle :category "Terminal" :title "Toggle Terminal" :scope 'window

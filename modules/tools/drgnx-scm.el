@@ -21,7 +21,7 @@
 (declare-function drgnx-view-patch-attach "drgnx-view" (view class &rest keys))
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe headless))
 (declare-function drgnx-view-env-unregister "drgnx-view-env" (view))
-(declare-function drgnx-wb-define-section "drgnx-wb" (name &rest spec))
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-wb-show-view "drgnx-wb" (view))
 (declare-function drgnx-wb-focus-section "drgnx-wb" (name))
 (declare-function drgnx-wb-editor-window "drgnx-wb" (&optional frame))
@@ -648,12 +648,12 @@ ended."
                        (drgnx-scm--define 'scm-commit-message "Source Control: Commit from Message" #'drgnx-scm-commit
                                           "Commit with the message box's text" :map 'drgnx-scm-message-mode-map
                                           :when (lambda () (derived-mode-p 'drgnx-scm-message-mode)))
-                       (when (fboundp 'drgnx-wb-define-section)
+                       (when (fboundp 'drgnx-pane-define-kind)
                          (drgnx-module-alist-put 'drgnx-wb-island-views 'scm '(:title "Source Control"))
-                         (drgnx-wb-define-section 'scm-message :view 'scm :slot 0 :own-header t :fit 0.15 :min-rows 1
-                                                  :buffer #'drgnx-scm--message-buffer)
-                         (drgnx-wb-define-section 'scm :view 'scm :slot 1 :own-header t
-                                                  :buffer #'drgnx-scm--buffer))
+                         (drgnx-pane-define-kind 'scm-message :home 'left :view 'scm :slot 0 :own-header t :fit 0.15
+                                                 :min-rows 1 :buffer #'drgnx-scm--message-buffer)
+                         (drgnx-pane-define-kind 'scm :home 'left :view 'scm :slot 1 :own-header t
+                                                 :buffer #'drgnx-scm--buffer))
                        (drgnx-changes-setup)
                        (add-hook 'drgnx-hub-event-functions #'drgnx-scm--hub-event)
                        (add-hook 'after-save-hook #'drgnx-scm--saved)

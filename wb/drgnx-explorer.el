@@ -2091,12 +2091,13 @@ is over — its release will not come here (Wayland)."
 
 (defun drgnx-explorer-setup ()
   "Put the Explorer in the dock and let it follow the editor."
-  (drgnx-wb-define-section 'explorer :slot 0 :buffer #'drgnx-explorer--buffer
-                           :title (lambda () (if drgnx-explorer--find
-                                                 (format "Files — %s" (plist-get drgnx-explorer--find :query))
-                                               "Files"))
-                           ;; Like VS Code: showing the Explorer reveals the active editor's file.
-                           :on-show (lambda (_w) (drgnx-explorer--follow (window-buffer (drgnx-wb-editor-window)))))
+  (require 'drgnx-panes)
+  (drgnx-pane-define-kind 'explorer :home 'left :slot 0 :buffer #'drgnx-explorer--buffer
+                          :title (lambda () (if drgnx-explorer--find
+                                                (format "Files — %s" (plist-get drgnx-explorer--find :query))
+                                              "Files"))
+                          ;; Like VS Code: showing the Explorer reveals the active editor's file.
+                          :on-show (lambda (_w) (drgnx-explorer--follow (window-buffer (drgnx-wb-editor-window)))))
   (drgnx-signal-subscribe 'editor-changed #'drgnx-explorer--follow)
   (drgnx-state-subscribe 'selected-changed #'drgnx-wb--selected-changed)
   (drgnx-wb-rows-follow)                ; rows of the density, at the scale of the frame that shows them

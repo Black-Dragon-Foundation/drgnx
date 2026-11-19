@@ -30,7 +30,7 @@
 (declare-function drgnx-agent-session-paused "drgnx-agents")
 (declare-function drgnx-agents-kill "drgnx-agents")
 (declare-function drgnx-agents-get "drgnx-agents")
-(declare-function drgnx-wb-define-tab "drgnx-area")
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
 (defvar drgnx-agents-changed-functions)
@@ -281,9 +281,9 @@ the runs are forgotten and the Review tab is closed."
                      :setup
                      (lambda ()
                        (add-hook 'drgnx-agents-changed-functions #'drgnx-review--changed)
-                       (when (fboundp 'drgnx-wb-define-tab)
-                         (drgnx-wb-define-tab 'panel 'review :title "Branch Review" :contextual t
-                                              :empty "No review yet. Review Branch has an agent read this branch's diff; its findings appear here."))
+                       (when (fboundp 'drgnx-pane-define-kind)
+                         (drgnx-pane-define-kind 'review :home 'bottom :title "Branch Review" :contextual t
+                                                 :empty "No review yet. Review Branch has an agent read this branch's diff; its findings appear here."))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((review-branch "Review Branch" drgnx-review-branch "An agent reviews this branch before you push")
                                         (review-view "Review: Show Findings" drgnx-review-view "The Review tab")

@@ -116,11 +116,18 @@ Kept out of frame parameters: a buffer object in one would make the saved frame 
       kind :slot (or (plist-get spec :slot) 0) :title (plist-get spec :title)
       :buffer (lambda () (drgnx-pane--buffer (drgnx-pane--spec kind) kind))
       :height (plist-get spec :height) :view (plist-get spec :view)
+      :own-header (plist-get spec :own-header) :fit (plist-get spec :fit) :min-rows (plist-get spec :min-rows)
+      :collapsed (plist-get spec :collapsed)
       :on-show (plist-get spec :on-show) :on-focus (plist-get spec :on-focus)))
     ((or 'bottom 'right)
      (drgnx-wb-define-tab (alist-get (plist-get spec :home) drgnx-pane--areas) kind
                           :title (plist-get spec :title)
-                          :placeholder (lambda () (drgnx-pane--buffer (drgnx-pane--spec kind) kind))
+                          ;; a tab with neither shows the area's own placeholder (its EMPTY text)
+                          :placeholder (and (or (plist-get spec :buffer) (plist-get spec :placeholder))
+                                            (lambda () (drgnx-pane--buffer (drgnx-pane--spec kind) kind)))
+                          :icon (plist-get spec :icon) :start (plist-get spec :start)
+                          :actions (plist-get spec :actions) :empty (plist-get spec :empty)
+                          :content (plist-get spec :content)
                           :companions (plist-get spec :companions) :contextual (plist-get spec :contextual)))
     ('editor
      (when-let* ((matcher (drgnx-pane--editor-matcher spec)))
@@ -294,7 +301,8 @@ module it belongs to was turned off, and on again, while the area stayed up."
 ;;;; The API
 
 (cl-defun drgnx-pane-define-kind (kind &key title buffer placeholder home size view slot height fill on-show
-                                       on-focus stack companions contextual sidebar instance instance-key)
+                                       on-focus stack companions contextual sidebar instance instance-key
+                                       icon start actions empty content own-header fit min-rows collapsed)
   "Define pane KIND (a symbol); re-defining replaces.  Returns KIND.
 HOME is `left', `bottom', `right' or `editor' (default `bottom').  TITLE is a string (a left kind's may be a
 function).  BUFFER: a function returning the kind's buffer, or a buffer, or a buffer name (made when
@@ -312,6 +320,10 @@ their own (a `right' kind; `drgnx-wb-define-tab').
 CONTEXTUAL: a bottom or right kind's tab is in its area's tab row only while shown (`drgnx-wb-define-tab').
 SIDEBAR: a `left' kind that is the whole side bar (the grid's `side-bar'): it shows, hides and sizes the left dock
 with the current view's sections, and has no section of its own.
+ICON, START, ACTIONS, EMPTY and CONTENT: a bottom or right kind's tab (`drgnx-wb-define-tab'): its icon, the function
+that makes its buffer when a click on the tab finds none, the pieces drawn at the right of its row, what the default
+placeholder says, and the function giving the buffer it shows when it has none saved.  OWN-HEADER, FIT, MIN-ROWS and
+COLLAPSED: a left kind's section (`drgnx-wb-define-section').
 INSTANCE and INSTANCE-KEY: a kind with one buffer per key (the agent panel's sessions).  INSTANCE is a function of a
 KEY returning its buffer; INSTANCE-KEY a function of a buffer returning its KEY, or nil for none of them.  With the
 grid on, a shown buffer of a second key gets a tile of its own, whose stack holds the entry (KIND . KEY); from the
@@ -325,7 +337,9 @@ still the one defined here.  Defining a new KIND that is in front in an area tha
     (let ((spec (list :title title :buffer buffer :placeholder placeholder :home home :size size :view view
                       :slot slot :height height :fill fill :on-show on-show :on-focus on-focus :stack stack
                       :companions companions :contextual contextual :sidebar sidebar
-                      :instance instance :instance-key instance-key))
+                      :instance instance :instance-key instance-key :icon icon :start start :actions actions
+                      :empty empty :content content :own-header own-header :fit fit :min-rows min-rows
+                      :collapsed collapsed))
           (old (drgnx-pane-kind kind)) (old-owner (drgnx-state-kind-owner kind)))
       (drgnx-pane--call :define kind spec old)         ; first: an error leaves the kinds as they were
       (if old (setf (alist-get kind drgnx-pane--kinds) spec)       ; a new kind goes last, a redefined one stays put

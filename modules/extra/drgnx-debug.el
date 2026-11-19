@@ -29,7 +29,7 @@
 (require 'drgnx-debug-disassembly
          (expand-file-name "drgnx-debug-disassembly" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-statusbar-left)
-(declare-function drgnx-wb-define-tab "drgnx-area")
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (defvar drgnx-hub-event-functions)
 
@@ -369,10 +369,10 @@ console's tab shows without taking the focus."
                               ;; the Debug Console tab of the panel (drgnx-debug-console.el); its input's keys in its
                               ;; own map.  The panel is the workbench's: without it (a bare Emacs) there is no tab
                               ;; to define, as for Review's
-                              (when (fboundp 'drgnx-wb-define-tab)
-                                (drgnx-wb-define-tab 'panel 'debug-console :title "Debug Console" :icon 'terminal
-                                                     :content #'drgnx-debug-console--buffer
-                                                     :actions #'drgnx-debug-console-tab-actions))
+                              (when (fboundp 'drgnx-pane-define-kind)
+                                (drgnx-pane-define-kind 'debug-console :home 'bottom :title "Debug Console" :icon 'terminal
+                                                        :content #'drgnx-debug-console--buffer
+                                                        :actions #'drgnx-debug-console-tab-actions))
                               (let ((in-console (lambda () (derived-mode-p 'drgnx-debug-console-mode))))
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-console-commands)
                                   (if (memq id '(debug-console debug-console-clear))
@@ -387,8 +387,8 @@ console's tab shows without taking the focus."
                                                       '(:title "Run and Debug"
                                                                :buttons ((file-cog "Open launch.json" run-and-debug
                                                                                    . debug-open-launch-json))))
-                              (drgnx-wb-define-section 'run-and-debug :view 'debug :slot 0 :title " RUN AND DEBUG"
-                                                       :own-header t :buffer #'drgnx-debug-view--buffer)
+                              (drgnx-pane-define-kind 'run-and-debug :home 'left :view 'debug :slot 0 :title " RUN AND DEBUG"
+                                                      :own-header t :buffer #'drgnx-debug-view--buffer)
                               (let ((in-view (lambda () (derived-mode-p 'drgnx-debug-view-mode))))
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-view-commands)
                                   (if (memq id drgnx-debug-view-global-commands)
@@ -396,9 +396,9 @@ console's tab shows without taking the focus."
                                     (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
                                                           :map 'drgnx-debug-view-mode-map :when in-view))))
                               ;; the heap graph (drgnx-debug-heap.el): the panel's Graph tab, its key in its own map
-                              (when (fboundp 'drgnx-wb-define-tab)
-                                (drgnx-wb-define-tab 'panel 'debug-graph :title "Heap Graph" :contextual t
-                                                     :empty "No graph yet. Stop at a breakpoint and choose Show as Graph on a variable to draw its objects here."))
+                              (when (fboundp 'drgnx-pane-define-kind)
+                                (drgnx-pane-define-kind 'debug-graph :home 'bottom :title "Heap Graph" :contextual t
+                                                        :empty "No graph yet. Stop at a breakpoint and choose Show as Graph on a variable to draw its objects here."))
                               (drgnx-command-define 'debug-heap-select :category "Debug" :title "Graph: Select Card"
                                                     :command #'drgnx-debug-heap-select
                                                     :doc "Ring the card at point and show its references"
