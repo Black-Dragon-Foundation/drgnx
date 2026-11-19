@@ -906,6 +906,7 @@ other sections).  Returns non-nil when NAME was defined."
   "The left dock as a tile of the grid: SECTIONS' windows ((NAME . SPEC) …, in slot order), the first split from its
 dock's neighbour at the dock's width (`drgnx-grid-split-dock'), the others parts of its atom below it, each its
 `:height' of the dock when it has one, else half the window above."
+  (require 'drgnx-grid)
   (let* ((first (drgnx-grid-split-dock 'left (or (frame-parameter nil 'drgnx-wb-dock-px)
                                                  (* drgnx-wb-dock-columns (frame-char-width)))))
          (height (window-pixel-height first)) (prev nil))
@@ -937,20 +938,7 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
     (let ((selected (selected-window)) (view (drgnx-wb-sidebar-view)))
       (let ((sections (sort (seq-filter (lambda (s) (drgnx-wb--in-view-p (cdr s) view)) drgnx-wb--sections)
                             (lambda (a b) (< (plist-get (cdr a) :slot) (plist-get (cdr b) :slot))))))
-        (if (drgnx-wb-grid-p)
-            (drgnx-wb--show-dock-tile sections)
-          (pcase-dolist (`(,name . ,spec) sections)
-            (let ((drgnx-rules--placing t))
-              (display-buffer-in-side-window
-               (funcall (plist-get spec :buffer))
-               `((side . left) (slot . ,(plist-get spec :slot)) (window-width . ,drgnx-wb-dock-columns)
-                 ,@(when (plist-get spec :height) `((window-height . ,(plist-get spec :height))))
-                 (dedicated . t)
-                 (window-parameters . ,(drgnx-wb--section-parameters name spec))))))))
-      (when-let* (((not (drgnx-wb-grid-p)))            ; a tile is split at its width
-                  (px (frame-parameter nil 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
-        (let ((window-resize-pixelwise t))              ; or the width is rounded to whole columns
-          (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t))))
+        (drgnx-wb--show-dock-tile sections))
       (dolist (w (drgnx-wb--dock-windows))
         (set-window-scroll-bars w nil nil nil nil t)        ; a clean sidebar, like VS Code's
         ;; After the scroll bars: Emacs keeps the width only while it equals the body width it recorded (I11)
@@ -979,11 +967,8 @@ The width is noted `:by auto' (`drgnx-state-note-intent'): a width you chose is 
   "Delete the dock's WINDOWS.  Their width goes to the editor groups in proportion to their widths, as showing the
 dock takes it back, so a hide and a show leave each group as wide as it was.  A dock that is a tile of the grid goes
 whole, its width to the tiles along its edge (R3, `drgnx-grid-remove-dock')."
-  (if (drgnx-wb-grid-p)
-      (when-let* ((main (seq-find (lambda (w) (not (window-parameter w 'drgnx-tile-part))) windows)))
-        (drgnx-grid-remove-dock main))
-    (let ((window-combination-resize t))
-      (dolist (w windows) (when (window-live-p w) (delete-window w))))))
+  (when-let* ((main (seq-find (lambda (w) (not (window-parameter w 'drgnx-tile-part))) windows)))
+    (drgnx-grid-remove-dock main)))
 
 (defvar drgnx-wb-view-providers nil
   "Alist VIEW → function that defines VIEW's sections now.  A module that sets up late can register one in its setup,

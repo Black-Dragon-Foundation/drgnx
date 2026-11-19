@@ -376,6 +376,7 @@ preserves is the body without one, else the bar's own root-level window takes th
 (defun drgnx-area--create-tile (area buffer)
   "AREA's window as its dock's tile of the grid (`drgnx-grid-split-dock'): at the size it had, else its `:size' in
 lines or columns; showing BUFFER, dedicated."
+  (require 'drgnx-grid)
   (let* ((spec (alist-get area drgnx-wb--areas))
          (w (drgnx-grid-split-dock (plist-get spec :side)
                                    (or (frame-parameter nil (drgnx-area--px-param area))
@@ -387,21 +388,9 @@ lines or columns; showing BUFFER, dedicated."
     w))
 
 (defun drgnx-area--create (area buffer)
-  (let* ((spec (alist-get area drgnx-wb--areas)) (side (plist-get spec :side))
-         (horizontal (drgnx-area--horizontal-p area))
-         (grid (drgnx-wb-grid-p))
-         (w (if grid (drgnx-area--create-tile area buffer)
-              (let ((drgnx-rules--placing t))           ; ours: not redirected by the rules
-                (display-buffer-in-side-window
-                 buffer `((side . ,side) (slot . 0)
-                          (,(if horizontal 'window-width 'window-height) . ,(plist-get spec :size))
-                          (dedicated . drgnx)
-                          (window-parameters . ,(drgnx-area--parameters area))))))))
-    (when-let* (((not grid))                            ; a tile is split at its size
-                (px (frame-parameter nil (drgnx-area--px-param area))))
-      (let ((window-resize-pixelwise t))             ; or the size is rounded to whole lines
-        (ignore-errors (window-resize w (- px (if horizontal (window-pixel-width w) (window-pixel-height w)))
-                                      horizontal nil t))))
+  "AREA's window, a tile of the grid split at its size (`drgnx-area--create-tile'), showing BUFFER."
+  (let* ((horizontal (drgnx-area--horizontal-p area))
+         (w (drgnx-area--create-tile area buffer)))
     (set-window-parameter w 'quit-restore nil)  ; `q' there must not go back to the window of its birth
     (set-window-scroll-bars w nil nil nil nil t)
     ;; After the scroll bars: Emacs keeps the size only while it equals the body size it recorded (I11)
@@ -486,7 +475,7 @@ kept instead of the one a popup squeezed the area to."
     (when (memq (selected-window) (cons w (drgnx-area--companion-windows area))) (drgnx-wb-focus-editor))
     (mapc #'drgnx-area--delete-companion (drgnx-area--companion-windows area))
     (set-window-parameter w 'delete-window nil)
-    (if (drgnx-wb-grid-p) (drgnx-grid-remove-dock w) (delete-window w))))
+    (drgnx-grid-remove-dock w)))
 
 (defun drgnx-area--delete-window (window)
   "`delete-window' on an area's window (C-x 0, or a package deleting a window it once had): hide the
@@ -532,23 +521,18 @@ else its window; nil while it is hidden."
   "Delete companion window W itself: not through the area's `delete-window', which hides the whole area."
   (when (window-live-p w)
     (set-window-parameter w 'delete-window nil)
-    (if (drgnx-wb-grid-p) (drgnx-grid-delete-part w) (delete-window w))))
+    (drgnx-grid-delete-part w)))
 
 (defun drgnx-area--make-companion (area part buffer)
   "A new companion window PART of AREA showing BUFFER, split from the area's side, dedicated as the area's window is.
 With the grid on it is a part of the area's tile (`drgnx-grid-add-part'), so the tile moves and hides as one."
   (let* ((params `((drgnx-role . ,area) (drgnx-area-part . ,part) (no-delete-other-windows . t) (no-other-window . t)
                    (mode-line-format . none) (header-line-format . none) (delete-window . drgnx-area--delete-window)))
-         (w (if (drgnx-wb-grid-p)
-                (let ((w (drgnx-grid-add-part (drgnx-wb-area-window area) part)))
-                  (pcase-dolist (`(,k . ,v) params) (set-window-parameter w k v))
-                  (set-window-buffer w buffer)
-                  (set-window-dedicated-p w 'drgnx)
-                  w)
-              (let ((drgnx-rules--placing t))           ; ours: not redirected by the rules
-                (display-buffer-in-side-window
-                 buffer `((side . ,(plist-get (alist-get area drgnx-wb--areas) :side)) (slot . ,(if (eq part 'above) -1 1))
-                          (dedicated . drgnx) (window-parameters . ,params)))))))
+         (w (let ((w (drgnx-grid-add-part (drgnx-wb-area-window area) part)))
+              (pcase-dolist (`(,k . ,v) params) (set-window-parameter w k v))
+              (set-window-buffer w buffer)
+              (set-window-dedicated-p w 'drgnx)
+              w)))
     (set-window-parameter w 'quit-restore nil)
     (set-window-scroll-bars w nil nil nil nil t)
     (window-preserve-size w t t)                       ; the width, as the area's window keeps it
