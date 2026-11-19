@@ -250,6 +250,52 @@ fn band_row(
     b.finish()
 }
 
+/// How many task cards of one plan a row shows before the rest collapse into one "+N" chip (flow-day-v2).
+pub const TASKS_SHOWN: usize = 6;
+
+/// CARDS of a row with a plan's tasks past [`TASKS_SHOWN`] collapsed: the first six, left to right, stay; the next card shows
+/// "+N" (N the tasks left out) in its place and the others are not drawn. A task an agent works on never collapses.
+fn collapse_tasks<'a>(
+    s: &Scene,
+    cards: Vec<(&'a ItemId, Vec<Line>)>,
+) -> Vec<(&'a ItemId, Vec<Line>)> {
+    let worked = |id: &ItemId| {
+        s.edges.iter().any(|e| {
+            e.kind == EdgeKind::CameFrom
+                && &e.from == id
+                && s.items.get(&e.to).is_some_and(|a| a.kind == Kind::Agent)
+        })
+    };
+    // a plan's task chips may wrap over several rows: they count across them, in reading order (row, then column)
+    let mut by_plan: BTreeMap<Option<&ItemId>, Vec<((u32, u32), &ItemId)>> = BTreeMap::new();
+    for (id, it) in s.items.iter().filter(|(_, it)| it.kind == Kind::Task) {
+        if let Some(r) = s.layout.at.get(id).filter(|_| !worked(id)) {
+            by_plan
+                .entry(it.block.as_ref())
+                .or_default()
+                .push(((r.y, r.x), id));
+        }
+    }
+    let mut hidden: BTreeSet<&ItemId> = BTreeSet::new();
+    let mut more: BTreeMap<&ItemId, usize> = BTreeMap::new();
+    for (_, mut tasks) in by_plan {
+        tasks.sort();
+        if tasks.len() > TASKS_SHOWN {
+            let rest = &tasks[TASKS_SHOWN..];
+            more.insert(rest[0].1, rest.len());
+            hidden.extend(rest.iter().map(|t| t.1));
+        }
+    }
+    cards
+        .into_iter()
+        .filter_map(|(id, lines)| match more.get(id) {
+            Some(n) => Some((id, vec![Line::plain(format!("+{n}"))])),
+            None if hidden.contains(id) => None,
+            None => Some((id, lines)),
+        })
+        .collect()
+}
+
 /// How many text lines layout row R holds: five for a rich agent row, two for a compact one, else one.
 fn row_lines(r: &crate::layout::Row) -> u32 {
     match (r.layer, r.height_units) {
@@ -278,6 +324,7 @@ fn card_rows(
         .iter()
         .filter_map(|id| s.items.get(id).map(|it| (id, card_lines(s, it))))
         .collect();
+    let cards = collapse_tasks(s, cards);
     let lanes: Vec<(u32, ImageId, String)> = e
         .lanes(i, g)
         .into_iter()
@@ -463,7 +510,22 @@ fn segment(
     } else if let Some((_, alt)) = l.1 {
         b.push(alt, None);
     }
+    let body_at = b.pos();
     body.push_fitted(b, &fitted);
+    // a machine's job chips link to the agents that started them (`drgnx-work-link`), when the line is not cut
+    if fitted == body.text()
+        && let Some(it) = s.items.get(id)
+    {
+        let text = body.text();
+        for j in &it.chips {
+            let (Some(agent), Some(off)) = (&j.links_to, text.find(&job_chip_text(j))) else {
+                continue;
+            };
+            let from = body_at + text[..off].chars().count() as u32;
+            let to = from + job_chip_text(j).chars().count() as u32;
+            b.prop(from, to, "drgnx-work-link", Value::String(agent.0.clone()));
+        }
+    }
     if let Some((t, f)) = &tail {
         b.push(t, *f);
     }
@@ -813,6 +875,11 @@ fn icon(name: &str) -> &'static str {
     }
 }
 
+/// A job's chip text: its name and state, in the chip's own room.
+fn job_chip_text(j: &crate::model::JobChip) -> String {
+    format!(" {} · {} ", j.name, j.state)
+}
+
 /// The one line of a chip item: ask, spec, plan, branch, file or machine.
 fn chip_line(it: &Item) -> Line {
     let f = &it.fields;
@@ -916,6 +983,13 @@ fn chip_line(it: &Item) -> Line {
             l.push(format!(" · {}", extra.join(" · ")), None);
         }
         _ => {}
+    }
+    // a machine's jobs, one chip each (the chip links to the agent that started it: `segment` puts the link on it)
+    if it.kind == Kind::Machine {
+        for j in &it.chips {
+            l.push(" ", None)
+                .push(job_chip_text(j), Some(FaceId::WorkChip.name()));
+        }
     }
     if it.warn {
         l.push(" ⚠", Some(FaceId::WorkOverlap.name()));

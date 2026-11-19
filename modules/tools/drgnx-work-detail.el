@@ -115,12 +115,19 @@ Press it again for what came since."
 (defun drgnx-work-move--target ()
   "What `drgnx-work-move-machine' moves, as `machines/move' names it: the job on this row of a Detail's queue
 (\"job:ID\"), else the selected agent's session (\"session:ID\": its next jobs), the map's selection in a Detail."
-  (if-let* ((job (get-text-property (line-beginning-position) 'drgnx-work-job)))
-      (concat "job:" job)
+  (cond
+   ((get-text-property (line-beginning-position) 'drgnx-work-job)
+    (concat "job:" (get-text-property (line-beginning-position) 'drgnx-work-job)))
+   ;; a job chip on a machine's card in the Graph links to the agent that started it: its next jobs move
+   ((let ((link (or (get-text-property (point) 'drgnx-work-link)
+                    (when-let* ((at (text-property-not-all (line-beginning-position) (line-end-position) 'drgnx-work-link nil)))
+                      (get-text-property at 'drgnx-work-link)))))
+      (and (stringp link) (string-prefix-p "agent:" link) (concat "session:" (substring link 6)))))
+   (t
     (concat "session:"
             (if (and (derived-mode-p 'drgnx-work-detail-mode) (buffer-live-p drgnx-work-detail--map))
                 (with-current-buffer drgnx-work-detail--map (drgnx-work-trail--agent-sid))
-              (drgnx-work-trail--agent-sid)))))
+              (drgnx-work-trail--agent-sid))))))
 
 (defun drgnx-work-move--machines ()
   "The machines work can move to: this one (\"local\") and every runner the hub keeps."

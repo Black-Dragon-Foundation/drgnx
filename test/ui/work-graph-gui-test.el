@@ -12,12 +12,11 @@
 
 (defconst drgnx-work-graph-gui--repo
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
-(dolist (d '("core" "wb" "modules/ui"))
+(dolist (d '("core" "wb" "modules/ui" "modules/tools"))
   (add-to-list 'load-path (expand-file-name d drgnx-work-graph-gui--repo)))
 (require 'drgnx)
 (require 'drgnx-view)
-(defvar drgnx-work-lens-map)
-(defvar drgnx-work-item-map)
+(require 'drgnx-work-board)
 (load (expand-file-name "test/fixtures/work-space-thirty-fixture" drgnx-work-graph-gui--repo) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-work-graph-gui--repo) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-work-graph-gui--repo) nil t)
@@ -67,12 +66,20 @@
       (should links)
       (should (cl-every (lambda (l) (string-prefix-p "agent:" l)) links)))))
 
-(ert-deftest drgnx-work-graph/m-still-switches-to-map ()
-  "`m' is the map lens and `M' moves a task to another machine: two commands, two keys."
-  (drgnx-work-graph-gui--with
-    (should (eq (lookup-key drgnx-work-lens-map "m") #'drgnx-work-lens-show-map))
-    (should (eq (lookup-key drgnx-work-item-map "M") #'drgnx-work-move-machine))
-    (should-not (eq (lookup-key drgnx-work-lens-map "m") (lookup-key drgnx-work-item-map "M")))))
+
+(ert-deftest drgnx-work-graph/M-on-a-job-chip-targets-its-agent-and-m-still-switches-to-map ()
+  "Task 21: on a machine card's job chip (the chip links to the agent that started it) `M' moves that agent's jobs, not the
+selected item; `m' is still the map lens (`work-view-map'), never the move."
+  (require 'drgnx-work-detail)
+  (with-temp-buffer
+    (insert (propertize "desktop  cargo test\n" 'drgnx-work-id "machine:desktop" 'drgnx-work-link "agent:a1"))
+    (goto-char (point-min))
+    (should (equal "session:a1" (drgnx-work-move--target))))
+  (let (lens)
+    (cl-letf (((symbol-function 'drgnx-work-lens-switch) (lambda (l) (setq lens l)))
+              ((symbol-function 'drgnx-work-move-machine) (lambda (&rest _) (error "m must not move"))))
+      (with-temp-buffer (drgnx-work-lens-show-map))
+      (should (eq lens 'map)))))
 
 (provide 'work-graph-gui-test)
 ;;; work-graph-gui-test.el ends here

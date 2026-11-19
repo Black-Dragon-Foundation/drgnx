@@ -35,6 +35,13 @@ pub enum GraphFact {
         item: String,
         budget: Option<ItemBudget>,
     },
+    /// What a task or plan not yet run is forecast to cost and take (`task:ID` or `plan:ID`; hub H12's `forecast/plan`): dollars
+    /// and hours, each as (p50, p90); none: no forecast.
+    Forecast {
+        item: String,
+        usd: Option<(Num, Num)>,
+        hours: Option<(Num, Num)>,
+    },
     /// `plan:ID`; `rank` orders the plans (and so their blocks).
     Plan {
         id: String,
@@ -272,6 +279,13 @@ pub struct RefFact {
 pub struct Num(pub f64);
 impl Eq for Num {}
 
+/// What a plan or task not yet run is forecast to cost and take: dollars and hours as (p50, p90).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemForecast {
+    pub usd: Option<(Num, Num)>,
+    pub hours: Option<(Num, Num)>,
+}
+
 /// What an item has spent against its binding limit (the unit whose remaining share is least; the hub's
 /// `BudgetState` as `ok`, `nearing`, `reached` or `none`).  `limit` is none when only an ancestor's limit counts.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,6 +321,9 @@ pub struct Fields {
     /// Spec, plan, task and agent items: spend against the binding limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget: Option<ItemBudget>,
+    /// A plan or task not yet run: its forecast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forecast: Option<ItemForecast>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -546,6 +563,8 @@ struct Facts {
     waiting: BTreeMap<Sym, u32>,
     /// spec, plan, task or agent → its budget
     budgets: BTreeMap<Sym, ItemBudget>,
+    /// plan or task → its forecast before it runs
+    forecasts: BTreeMap<Sym, ItemForecast>,
     /// spec, plan and task → when its record last changed (minutes)
     stamps: BTreeMap<Sym, u64>,
     /// task → (plan, title, done)
@@ -581,6 +600,8 @@ pub(crate) struct ItemD {
     pub(crate) done: bool,
     /// Not started: nothing has worked on it yet.
     pub(crate) ready: bool,
+    /// A machine's job chips ride on its card: the room they take, in layout units (4 px).
+    pub(crate) job_units: u32,
     /// The latest change of the item or of what is under it, in minutes.
     pub(crate) touched: u64,
 }
@@ -833,6 +854,7 @@ impl Model {
             Kind::Task => {
                 fields.task_state = Some(self.task_state(&self.names.id(y)));
                 fields.budget = f.budgets.get(&y).cloned();
+                fields.forecast = f.forecasts.get(&y).cloned();
                 f.tasks[&y].1.clone()
             }
             Kind::Agent | Kind::Subagent => {
@@ -1061,6 +1083,22 @@ impl Model {
                     match now {
                         Some(w) => f.waiting.insert(y, w),
                         None => f.waiting.remove(&y),
+                    };
+                    touched.insert(y);
+                }
+                GraphFact::Forecast { item, usd, hours } => {
+                    let (kind, id) = item
+                        .split_once(':')
+                        .filter(|(k, _)| matches!(*k, "plan" | "task"))?;
+                    let y = n.intern_as(kind, id);
+                    let new =
+                        (usd.is_some() || hours.is_some()).then_some(ItemForecast { usd, hours });
+                    if f.forecasts.get(&y) == new.as_ref() {
+                        return None;
+                    }
+                    match new {
+                        Some(v) => f.forecasts.insert(y, v),
+                        None => f.forecasts.remove(&y),
                     };
                     touched.insert(y);
                 }
@@ -1441,6 +1479,7 @@ impl Model {
             done: false,
             ready: false,
             touched: 0,
+            job_units: 0,
         };
         for &a in f.asks.keys() {
             d.items
@@ -1482,6 +1521,16 @@ impl Model {
         }
         for &m in f.machines.keys() {
             d.items.insert(m, item(Kind::Machine, true, None, None, 0));
+            let units: u32 = f
+                .sessions
+                .values()
+                .filter(|s| s.parent.is_none() && s.machine == Some(m))
+                .filter_map(|s| s.fact.job.as_ref())
+                .map(|j| (j.name.chars().count() + j.state.chars().count() + 6) as u32 * 2)
+                .sum();
+            if let Some(it) = d.items.get_mut(&m) {
+                it.job_units = units;
+            }
         }
 
         // the edges, between present items only
