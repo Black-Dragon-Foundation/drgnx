@@ -1841,7 +1841,18 @@ fn rail_item(
     let face = Some(f);
     pad(b, env, px(g.pad.0, env.scale), 0, None);
     let from = b.pos();
-    pad(b, env, px(g.gap, env.scale), usize::from(g.tty_pad), face);
+    // a space as high as the cell in FACE (the editor draws it as a picture), the cell's own colours under it
+    let tall = |b: &mut RowBuilder, face: FaceId| {
+        let at = b.pos();
+        b.space(px(g.gap, env.scale), px(g.height, env.scale), face.name());
+        let end = b.pos();
+        b.face(at, end, f);
+    };
+    if shown && !env.tty {
+        tall(b, FaceId::KitRailItemBar);
+    } else {
+        pad(b, env, px(g.gap, env.scale), usize::from(g.tty_pad), face);
+    }
     if let Some(name) = icon {
         let mark = icon_glyph(env, name);
         let image = env
@@ -1860,11 +1871,13 @@ fn rail_item(
             None => {}
         }
     }
-    if dot {
+    if dot && env.tty {
         let at = b.pos();
         b.push(glyph(env, "dot"), Some(FaceId::KitRailItemDot.name()));
         let end = b.pos();
         b.face(at, end, f);
+    } else if dot {
+        tall(b, FaceId::KitRailItemDot);
     } else {
         pad(b, env, px(g.gap, env.scale), usize::from(g.tty_pad), face);
     }

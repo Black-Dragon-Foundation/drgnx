@@ -61,7 +61,8 @@ every frame BODY made deleted after, the modes as they were."
                         (mapcar (lambda (w) (list (window-parameter w 'drgnx-role) (window-parameter w 'window-side)))
                                 (window-list frame 'nomini)))))
     (should (eq 'left (window-parameter rail 'window-side)))
-    (should (= (drgnx-px drgnx-rail-width frame) (window-pixel-width rail)))
+    ;; the items are 44 logical px wide: the text area is, whatever the window has round it (the gap's divider)
+    (should (= (drgnx-px drgnx-rail-width frame) (window-body-width rail t)))
     (should (= 0 (nth 0 (window-pixel-edges rail))))
     ;; the 6 px inset, then each item its 32 px row and the 6 px gap below it: the tops of the lines, top down
     (let* ((item (drgnx-px 32 frame)) (gap (drgnx-px 6 frame))
@@ -85,12 +86,40 @@ every frame BODY made deleted after, the modes as they were."
           (should (>= (nth 0 (window-pixel-edges root)) (nth 2 (window-pixel-edges rail))))
           (should (<= (nth 3 (window-pixel-edges root)) (nth 1 (window-pixel-edges bar)))))))))
 
+(defun drgnx-rail-ui-test--rgb (hex)
+  "HEX as the (A R G B) a snapshot gives."
+  (cons 255 (mapcar (lambda (i) (string-to-number (substring hex i (+ i 2)) 16)) '(1 3 5))))
+
+(defun drgnx-rail-ui-test--check-pictures (rail)
+  "At a UI scale of 100 %: the current item (the first) has its accent bar down the cell's left edge and the cell's
+fill beside it; the changed one (Changes, the fourth) has the warn dot on its cell's top right corner.  Offsets are
+logical px from the rail's text area (the item: 6 inset, 8 icon inset, 16 icon, 8 right inset; its row 32 high)."
+  (let* ((frame (window-frame rail)) (s (drgnx-uitest-device-scale frame)) (edges (window-inside-pixel-edges rail))
+         (variant (drgnx-look-variant frame))
+         (line (lambda (i) (with-current-buffer (window-buffer rail)
+                             (save-excursion (goto-char (point-min)) (forward-line (1+ (* 2 i))) (point)))))
+         (snap (drgnx-uitest-snapshot frame))
+         (at (lambda (i dx dy)
+               (let ((top (cdr (posn-x-y (posn-at-point (funcall line i) rail)))))
+                 (drgnx-uitest-pixel snap (round (* s (+ (car edges) dx))) (round (* s (+ (cadr edges) top dy))))))))
+    (should (= 1 (drgnx-pixels-scale frame)))
+    (should (equal (list 'bar (drgnx-rail-ui-test--rgb (drgnx-look-token 'accent variant)))
+                   (list 'bar (funcall at 0 7 16))))
+    (should (equal (list 'fill (drgnx-rail-ui-test--rgb (drgnx-look-token 'sel-quiet variant)))
+                   (list 'fill (funcall at 0 18 16))))
+    (should (equal (list 'dot (drgnx-rail-ui-test--rgb (drgnx-look-token 'warn variant)))
+                   (list 'dot (funcall at 3 33 6))))))
+
 (drgnx-look-gui-deftest drgnx-rail-ui/rail-is-44-px-at-every-scale ()
   "The rail is 44 logical px wide at the run's scale and at a UI scale of 125 %, sits above the status bar, which still
 spans the frame, and the grid's root is right of it and above the bar."
   (skip-unless (display-graphic-p))
   (drgnx-rail-ui-test--with-rail
+    ;; a current place (its accent bar) and a changed one (its dot): the picture parts are as high as the rest
+    (set-frame-parameter nil 'drgnx-rail-place 'work)
+    (drgnx-rail-mark-changed 'changes)
     (drgnx-rail-ui-test--check-geometry)
+    (when (= 1 (drgnx-pixels-scale)) (drgnx-rail-ui-test--check-pictures (drgnx-rail-ui-test--window 'rail)))
     (unwind-protect
         (progn
           (drgnx-look-scale-apply-frame (selected-frame) 125)
@@ -100,7 +129,9 @@ spans the frame, and the grid's root is right of it and above the bar."
           (drgnx-test-wait-presented)
           (drgnx-rail-ui-test--check-geometry))
       (dolist (f (drgnx-look-scale--roots)) (drgnx-look-scale-apply-frame f 100))
-      (drgnx-look-scale--follow))))
+      (drgnx-look-scale--follow)
+      (drgnx-rail-clear-changed 'changes)
+      (set-frame-parameter nil 'drgnx-rail-place nil))))
 
 (provide 'rail-gui-test)
 ;;; rail-gui-test.el ends here

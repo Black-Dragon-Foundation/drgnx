@@ -18,7 +18,7 @@
              (drgnx-rail-mark-changed 'changes)
              (drgnx-rail--ensure frame)
              (let ((rail (drgnx-rail-window frame)))
-               (list (and rail (window-total-width rail))
+               (list (and rail (window-body-width rail))
                      (and rail (with-current-buffer (window-buffer rail) (buffer-substring-no-properties (point-min) (point-max))))
                      (mapcar (lambda (p) (drgnx-face-glyph (nth 2 p) frame)) drgnx-rail-places)
                      (drgnx-face-glyph 'dot frame))))

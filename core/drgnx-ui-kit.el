@@ -1235,6 +1235,14 @@ the hub's `kit::segmented'."
 ;; The rail item's icon, logical px (sidebars.html `.rb': a 14 px glyph in a 32 px square, drawn here at the kit's 16)
 (defconst drgnx-ui-kit-rail-icon-px 16 "A rail item's icon size, logical px (the hub's `kit::RAIL_ICON_PX').")
 
+(defun drgnx-ui-kit--b-space (logical-w logical-h face-above face-under)
+  "A space LOGICAL-W x LOGICAL-H px (rounded at the builder's scale) on the builder in FACE-ABOVE, FACE-UNDER below."
+  (let ((at drgnx-ui-kit--bpos))
+    (push (list at (drgnx-px logical-w nil drgnx-ui-kit--bscale) (drgnx-px logical-h nil drgnx-ui-kit--bscale))
+          drgnx-ui-kit--bspaces)
+    (drgnx-ui-kit--b-push " " face-above)
+    (drgnx-ui-kit--b-under at drgnx-ui-kit--bpos face-under)))
+
 (defun drgnx-ui-kit--rail-item (props scale tty)
   "The `rail-item' component of PROPS (:place :icon :state :dot :action) at SCALE, see `drgnx-ui-kit--expand' and the
 hub's `kit::rail_item'.  :place is the place's name (the item's label), :dot t when the place changed."
@@ -1246,19 +1254,22 @@ hub's `kit::rail_item'.  :place is the place's name (the item's label), :dot t w
            (face (if shown 'drgnx-kit-rail-item-current (drgnx-ui-kit--face 'rail-item nil)))
            (name (or (plist-get props :place) "")) (icon (plist-get props :icon))
            (dot (eq (plist-get props :dot) t)))
-      ;; the surface's inset, then the cell: its icon inset (the cell is 32 px, the icon 16), the icon, the dot or the inset
+      ;; the surface's inset, then the cell: its left edge (the current place's accent bar, else the icon's inset), the
+      ;; icon, the dot on the corner or the inset, then the surface's inset
       (drgnx-ui-kit--b-pad (car (plist-get g :pad)) 0 nil)
       (let ((from drgnx-ui-kit--bpos))
-        (drgnx-ui-kit--b-pad (plist-get g :gap) tty-pad face)
+        (if (and shown (not tty))
+            (drgnx-ui-kit--b-space (plist-get g :gap) (plist-get g :height) 'drgnx-kit-rail-item-bar face)
+          (drgnx-ui-kit--b-pad (plist-get g :gap) tty-pad face))
         (when icon
           (let* ((sym (intern icon))
                  (img (and drgnx-ui-kit--icons (not tty) (funcall drgnx-ui-kit--icons sym drgnx-ui-kit-rail-icon-px)))
                  (mark (drgnx-ui-kit--glyph sym tty)))
             (cond (img (drgnx-ui-kit--b-mark img nil face nil))
                   ((and mark (not (string-empty-p mark))) (drgnx-ui-kit--b-push mark face)))))
-        (if dot
-            (drgnx-ui-kit--b-mark nil (drgnx-ui-kit--glyph 'dot tty) 'drgnx-kit-rail-item-dot face)
-          (drgnx-ui-kit--b-pad (plist-get g :gap) tty-pad face))
+        (cond ((and dot tty) (drgnx-ui-kit--b-mark nil (drgnx-ui-kit--glyph 'dot tty) 'drgnx-kit-rail-item-dot face))
+              (dot (drgnx-ui-kit--b-space (plist-get g :gap) (plist-get g :height) 'drgnx-kit-rail-item-dot face))
+              (t (drgnx-ui-kit--b-pad (plist-get g :gap) tty-pad face)))
         (let ((to drgnx-ui-kit--bpos))
           (drgnx-ui-kit--b-pad (cdr (plist-get g :pad)) 0 nil)
           (drgnx-ui-kit--b-finish
@@ -1340,7 +1351,8 @@ above 0: a progress bar's) makes it that high."
     ("drgnx-kit-range-bar-late" . fill) ("drgnx-kit-range-bar-wait" . fill)
     ("drgnx-kit-range-bar-seg-read" . fill) ("drgnx-kit-range-bar-seg-search" . fill) ("drgnx-kit-range-bar-seg-web" . fill)
     ("drgnx-kit-range-bar-seg-think" . fill) ("drgnx-kit-range-bar-seg-edit" . fill) ("drgnx-kit-range-bar-seg-test" . fill)
-    ("drgnx-kit-range-bar-seg-job" . fill) ("drgnx-kit-range-bar-seg-wait" . fill))
+    ("drgnx-kit-range-bar-seg-job" . fill) ("drgnx-kit-range-bar-seg-wait" . fill)
+    ("drgnx-kit-rail-item-bar" . rail-bar) ("drgnx-kit-rail-item-dot" . rail-dot))
   "The faces of a progress bar's, a meter's or a range bar's parts, by name, with the shape each draws.")
 
 (defvar drgnx-ui-kit--bar-images (make-hash-table :test #'equal)
@@ -1380,6 +1392,37 @@ line in its middle; `tick-full' all of it."
                     'svg t :ascent 'center :scale 1)
                    drgnx-ui-kit--bar-images)))))
 
+(defconst drgnx-ui-kit-rail-radius-px 8 "A rail item's corner radius, logical px (sidebars.html `.rb').")
+(defconst drgnx-ui-kit-rail-bar-px 2 "The current rail item's accent bar, logical px (`inset 2px 0 0').")
+(defconst drgnx-ui-kit-rail-dot-px 7 "A changed rail item's dot, logical px: its top 3 px from the cell's top.")
+
+(defun drgnx-ui-kit-rail-image (shape width height scale)
+  "The picture of a rail item's `rail-bar' (the accent bar along the cell's rounded left edge: the crescent between the
+cell's outline and the outline 2 px in) or `rail-dot' (the warn dot, on the cell's top right corner), WIDTH x HEIGHT
+device px, the cell's left or right 8 px column, in `currentColor', centred on its face's font's centre line."
+  (let* ((r (drgnx-px drgnx-ui-kit-rail-radius-px nil scale))
+         (key (list 'rail shape width height scale)))
+    (or (gethash key drgnx-ui-kit--bar-images)
+        (progn
+          (when (>= (hash-table-count drgnx-ui-kit--bar-images) 256) (clrhash drgnx-ui-kit--bar-images))
+          (puthash key
+                   (create-image
+                    (concat
+                     (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\">" width height)
+                     (if (eq shape 'rail-bar)
+                         (let ((tk (drgnx-px drgnx-ui-kit-rail-bar-px nil scale)))
+                           (format (concat "<path fill-rule=\"evenodd\" fill=\"currentColor\" d=\""
+                                           "M%d,0 A%d,%d 0 0 0 0,%d L0,%d A%d,%d 0 0 0 %d,%d Z "
+                                           "M%d,%d A%d,%d 0 0 0 %d,%d L%d,%d A%d,%d 0 0 0 %d,%d Z\"/>")
+                                   width r r r (- height r) r r width height
+                                   width tk (- r tk) (- r tk) tk r tk (- height r) (- r tk) (- r tk) width (- height tk)))
+                       (let ((d (drgnx-px drgnx-ui-kit-rail-dot-px nil scale)) (top (drgnx-px 3 nil scale)))
+                         (format "<circle cx=\"%s\" cy=\"%s\" r=\"%s\" fill=\"currentColor\"/>"
+                                 (/ d 2.0) (+ top (/ d 2.0)) (/ d 2.0))))
+                     "</svg>")
+                    'svg t :ascent 'center :scale 1)
+                   drgnx-ui-kit--bar-images)))))
+
 (defun drgnx-ui-kit-bar-display (spaces runs scale)
   "((POS . DISPLAY)...): the image each progress bar part among SPACES ((POS WIDTH HEIGHT)...) is drawn as, at SCALE;
 a part is a space of a height under a run (FROM TO FACE, FACE a symbol or its name) of `drgnx-ui-kit--bar-faces',
@@ -1402,10 +1445,13 @@ stay spaces).  Called per hub row: loops, no closures."
           (let* ((sp (cdr part)) (pos (car sp)) (w (nth 1 sp)) (h (nth 2 sp))
                  (shape (pcase (car part)
                           ('tick (if hc 'tick-full 'tick)) ('span (if hc 'box 'fill)) (s s))))
-            ;; a tick (narrower than two radii) is square: a corner radius would clip its column
-            (push (cons pos (drgnx-ui-kit-bar-image w h (if (< w (* 2 r)) 0 (min r (/ h 2))) (not (memql (1- pos) at))
-                                                    (not (memql (1+ pos) at)) shape line))
-                  out)))))))
+            ;; the rail item's accent bar and warn dot are pictures of their own
+            (if (memq shape '(rail-bar rail-dot))
+                (push (cons pos (drgnx-ui-kit-rail-image shape w h scale)) out)
+              ;; a tick (narrower than two radii) is square: a corner radius would clip its column
+              (push (cons pos (drgnx-ui-kit-bar-image w h (if (< w (* 2 r)) 0 (min r (/ h 2))) (not (memql (1- pos) at))
+                                                      (not (memql (1+ pos) at)) shape line))
+                    out))))))))
 
 (defconst drgnx-ui-kit--type-faces '(drgnx-ui-text drgnx-ui-heading drgnx-ui-caption drgnx-ui-title drgnx-code-small)
   "The type faces (core/drgnx-type-faces.el) a kit face takes its size from: its binding's `:font', else the first of

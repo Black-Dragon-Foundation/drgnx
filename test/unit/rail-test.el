@@ -118,7 +118,7 @@ command is logged in `drgnx-rail-test--log'."
       (should bar)
       (should (eq 'left (window-parameter rail 'window-side)))
       (should (= 0 (nth 0 (window-edges rail))))
-      (should (= 3 (window-total-width rail)))             ; a terminal's: 3 columns
+      (should (= 3 (window-body-width rail)))             ; a terminal's: 3 columns
       ;; the bar spans the frame and is the root's last child, under the rail
       (should (eq (window-parent bar) (frame-root-window)))
       (should (null (window-next-sibling bar)))

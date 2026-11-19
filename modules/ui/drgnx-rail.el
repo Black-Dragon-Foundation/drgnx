@@ -179,7 +179,9 @@ line that holds an image."
                                           (if (eq (nth 0 p) current) 'selected 'rest)
                                           (and (memq (nth 0 p) drgnx-rail--changed) t)
                                           'text frame (nth 3 p))))
-        (push (concat (if gui (drgnx-rail--tall item height frame) item) "\n") lines)
+        ;; the item without its last character, the surface's inset after the cell: a line as wide as the window (a pad
+        ;; made of a fraction of a character may round a pixel up) is cut off and ends in `$'
+        (push (concat (substring (if gui (drgnx-rail--tall item height frame) item) 0 -1) "\n") lines)
         (when gui (push (drgnx-rail--gap-line gap) lines))))
     (apply #'concat (nreverse lines))))
 
@@ -210,15 +212,15 @@ changes), then S's properties (a scale change moves only those) over them."
        (with-selected-frame frame (drgnx-wb-grid-p))))
 
 (defun drgnx-rail--fit (window)
-  "WINDOW as wide as the rail is, in px on a graphical frame, in columns on a terminal, and kept so."
+  "WINDOW's text area as wide as the rail is (the rail's 44 px: its items' width), in px on a graphical frame, in
+columns on a terminal, and kept so.  The window is wider by what Emacs puts round the text (the divider that is the gap
+between cards)."
   (let ((frame (window-frame window)))
     (if (display-graphic-p frame)
-        (let ((want (drgnx-px drgnx-rail-width frame)) (window-resize-pixelwise t))
-          (unless (= want (window-pixel-width window))
-            (ignore-errors (window-resize window (- want (window-pixel-width window)) t t t))))
-      (let ((want 3))
-        (unless (= want (window-total-width window))
-          (ignore-errors (window-resize window (- want (window-total-width window)) t t)))))
+        (let* ((want (drgnx-px drgnx-rail-width frame)) (have (window-body-width window t)) (window-resize-pixelwise t))
+          (unless (= want have) (ignore-errors (window-resize window (- want have) t t t))))
+      (let ((want 3) (have (window-body-width window)))
+        (unless (= want have) (ignore-errors (window-resize window (- want have) t t)))))
     (window-preserve-size window t t)))
 
 (defun drgnx-rail--ensure (frame)
