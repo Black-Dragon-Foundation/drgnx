@@ -33,14 +33,13 @@ fn px(v: f32, scale: f32) -> u32 {
     (f64::from(v) * f64::from(scale) + 0.5 + 1e-9).floor() as u32
 }
 
-/// A gap of about V logical px in B: spaces (a 4 px space is the least the fonts draw), one on a terminal.
+/// A gap of V logical px in B: the kit's pad (exactly its device px), one space on a terminal.
 fn gap(b: &mut RowBuilder, kit: &KitEnv, v: f32) {
-    let n = if kit.tty {
-        1
+    if kit.tty {
+        b.push(" ", None);
     } else {
-        (v / 4.0).round().max(1.0) as usize
-    };
-    b.push(&" ".repeat(n), None);
+        b.pad(px(v, kit.scale), None);
+    }
 }
 
 /// The kit's unit of a budget's unit name (the hub's `Unit`, kebab-case).

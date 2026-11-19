@@ -1240,10 +1240,16 @@ const CHIP_OVERHEAD: f32 = 64.0;
 /// The room a kit chip's own pads take beyond its text, logical px (both sides).
 const EXTRA_CHIP_PAD: f32 = 16.0;
 
-/// A gap of about PX logical px in B: spaces (one on a terminal).
+/// A gap of PX logical px in B: the kit's pad (exactly its device px), one space on a terminal.
 fn gap(b: &mut RowBuilder, kit: &kit::KitEnv, px: u32) {
-    let n = if kit.tty { 1 } else { (px / 4).max(1) as usize };
-    b.push(&" ".repeat(n), None);
+    if kit.tty {
+        b.push(" ", None);
+    } else {
+        b.pad(
+            (f64::from(px) * f64::from(kit.scale) + 0.5).floor() as u32,
+            None,
+        );
+    }
 }
 
 /// The needs-you strip (the header line), one row `strip`: a chip with its jump key for each of the first nine
