@@ -1124,6 +1124,18 @@ pub enum FaceId {
     KitSegmented,
     /// `drgnx-kit-segmented-current`
     KitSegmentedCurrent,
+    /// `drgnx-kit-diff-block-head`
+    KitDiffBlockHead,
+    /// `drgnx-kit-diff-block-hunk`
+    KitDiffBlockHunk,
+    /// `drgnx-kit-diff-block-ctx`
+    KitDiffBlockCtx,
+    /// `drgnx-kit-diff-block-add`
+    KitDiffBlockAdd,
+    /// `drgnx-kit-diff-block-del`
+    KitDiffBlockDel,
+    /// `drgnx-kit-empty-state`
+    KitEmptyState,
     /// `drgnx-kit-text-input`
     KitTextInput,
     /// `drgnx-kit-text-input-multi-top`
@@ -1132,11 +1144,15 @@ pub enum FaceId {
     KitTextInputMultiMid,
     /// `drgnx-kit-text-input-multi-bottom`
     KitTextInputMultiBottom,
+    /// `drgnx-kit-toast`
+    KitToast,
+    /// `drgnx-kit-tooltip`
+    KitTooltip,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 562] = [
+    pub const ALL: [FaceId; 570] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1695,10 +1711,18 @@ impl FaceId {
         FaceId::KitQuestionCardHead,
         FaceId::KitSegmented,
         FaceId::KitSegmentedCurrent,
+        FaceId::KitDiffBlockHead,
+        FaceId::KitDiffBlockHunk,
+        FaceId::KitDiffBlockCtx,
+        FaceId::KitDiffBlockAdd,
+        FaceId::KitDiffBlockDel,
+        FaceId::KitEmptyState,
         FaceId::KitTextInput,
         FaceId::KitTextInputMultiTop,
         FaceId::KitTextInputMultiMid,
         FaceId::KitTextInputMultiBottom,
+        FaceId::KitToast,
+        FaceId::KitTooltip,
     ];
 
     /// The face's Emacs name.
@@ -2262,10 +2286,18 @@ impl FaceId {
             FaceId::KitQuestionCardHead => "drgnx-kit-question-card-head",
             FaceId::KitSegmented => "drgnx-kit-segmented",
             FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
+            FaceId::KitDiffBlockHead => "drgnx-kit-diff-block-head",
+            FaceId::KitDiffBlockHunk => "drgnx-kit-diff-block-hunk",
+            FaceId::KitDiffBlockCtx => "drgnx-kit-diff-block-ctx",
+            FaceId::KitDiffBlockAdd => "drgnx-kit-diff-block-add",
+            FaceId::KitDiffBlockDel => "drgnx-kit-diff-block-del",
+            FaceId::KitEmptyState => "drgnx-kit-empty-state",
             FaceId::KitTextInput => "drgnx-kit-text-input",
             FaceId::KitTextInputMultiTop => "drgnx-kit-text-input-multi-top",
             FaceId::KitTextInputMultiMid => "drgnx-kit-text-input-multi-mid",
             FaceId::KitTextInputMultiBottom => "drgnx-kit-text-input-multi-bottom",
+            FaceId::KitToast => "drgnx-kit-toast",
+            FaceId::KitTooltip => "drgnx-kit-tooltip",
         }
     }
 
@@ -2830,10 +2862,18 @@ impl FaceId {
             "drgnx-kit-question-card-head" => FaceId::KitQuestionCardHead,
             "drgnx-kit-segmented" => FaceId::KitSegmented,
             "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
+            "drgnx-kit-diff-block-head" => FaceId::KitDiffBlockHead,
+            "drgnx-kit-diff-block-hunk" => FaceId::KitDiffBlockHunk,
+            "drgnx-kit-diff-block-ctx" => FaceId::KitDiffBlockCtx,
+            "drgnx-kit-diff-block-add" => FaceId::KitDiffBlockAdd,
+            "drgnx-kit-diff-block-del" => FaceId::KitDiffBlockDel,
+            "drgnx-kit-empty-state" => FaceId::KitEmptyState,
             "drgnx-kit-text-input" => FaceId::KitTextInput,
             "drgnx-kit-text-input-multi-top" => FaceId::KitTextInputMultiTop,
             "drgnx-kit-text-input-multi-mid" => FaceId::KitTextInputMultiMid,
             "drgnx-kit-text-input-multi-bottom" => FaceId::KitTextInputMultiBottom,
+            "drgnx-kit-toast" => FaceId::KitToast,
+            "drgnx-kit-tooltip" => FaceId::KitTooltip,
             _ => return None,
         })
     }

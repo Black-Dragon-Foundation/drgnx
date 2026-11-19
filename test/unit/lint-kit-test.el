@@ -180,8 +180,7 @@ in a comment, a raw string or a lifetime's neighbour does not."
     ;; the hub's card rows name the old card faces (aliases of the kit's; decor draws their rings outside the line, scaled)
     ("runtime/crates/drgnx-ratatoskr/src/view/panel_cards.rs" card 4)
     ("runtime/crates/drgnx-ratatoskr/src/view/panel_cards/tests.rs" card 6)
-    ("runtime/crates/drgnx-ratatoskr/src/view/panel_review.rs" card 5)
-    ("runtime/crates/drgnx-ratatoskr/src/view/panel_review/tests.rs" card 3)
+    ("runtime/crates/drgnx-ratatoskr/src/view/panel_review.rs" card 2)
     ("runtime/crates/drgnx-ratatoskr/src/work/trail/board.rs" card 3) ("runtime/crates/vegvisir/src/render.rs" card 8)
     ("runtime/crates/vegvisir/src/trail.rs" card 2))
   "((FILE ID COUNT)...): the forms of a role that is on, left in FILE (only falls).  A branch merged later adds its

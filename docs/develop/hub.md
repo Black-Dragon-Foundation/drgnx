@@ -1696,6 +1696,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `work/trail/subscribe` | user | `{filter?: "all" \| "edits" \| "waits", follow?: boolean, lanes?: [{label: string, session: string}], session?: string, view: string, window?: {from: number, to: number}}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
 
+The Changes view's rows are the kit's (`view/changes.rs`, built per display class): a task is a section header with its file count, the agent's mark and name and a running status dot with its word; a file is a tree row (`+N −M`) that opens it; a hunk is a diff block (`c:hunk:T:F:H/0` head with Open, Comment and Revert, `/h0` the `@@` row, `/h0/0` the reason in the agent's words or "no reason recorded"), every row carrying `drgnx-hunk`.
+
 ### Classes
 
 A connection's class is what it proved. `test/conformance/class-matrix.json` is a hand-written copy of every
@@ -3401,9 +3403,10 @@ click dispatcher (`drgnx-agent-panel-act`) answers by calling the existing comma
 panel; the editor inserts them in that order, with no key prefix or special case.
 
 The cards under the transcript are the hub's too (`view/panel_review.rs`; Reject and Accept
-are boxed buttons, the line numbers muted): a diff card for each hunk of each file the
-agent edited (`c:diff:PATH:I:h` the header with the file's icon, name, which lines and hunk, Reject and Accept; then
-`c:diff:PATH:I:N` the numbered lines in the added, removed and context faces, 30 at most) and a permission card for each
+are kit buttons): a diff card for each hunk of each file the
+agent edited, the kit's diff block (`kit::expand_rows` of `Comp::DiffBlock`: `c:diff:PATH:I/0` the head row with the file,
+which hunk, `+N −M`, Reject and Accept; `c:diff:PATH:I/h0` the `@@` row; `c:diff:PATH:I/h0/N` the numbered lines in the
+kit's diff block faces, 30 at most, in the plain card's ring) and a permission card for each
 request in the snapshot (`c:perm:ID:0` the ringed line, `c:perm:ID:1` Allow, Always and Deny). The hub reads each file's
 diff (`work/hunks`, 20 files at most) when the count of finished edits changes, as it does the ledger's files. A button is
 a `card:accept:PATH:I`, `card:reject:PATH:I`, `card:allow:ID`, `card:always:ID` or `card:deny:ID` value of
@@ -3431,7 +3434,7 @@ the rows themselves are `agents/session/rows.rs`, pure).
   your Always`); `e:I/t`, `e:I/t:N` its thinking, folded to a line count or open (40 lines); `e:I/d:N` its output
   when open (12 lines, or a large one's first and last 10 around a count of the hidden lines), in
   `drgnx-agent-panel-output`; `e:I/h:N` its diff hunks when open (ACP `diff` items, or a paired chat's `edit_file` old
-  and new text), at most 30 lines a row, unchanged lines in `drgnx-agent-panel-context` (the panel's own text is in the
+  and new text), at most 30 lines a row, unchanged lines in `drgnx-kit-diff-block-ctx` (the kit's diff block faces; the panel's own text is in the
   UI font, so every code line names a code face);
   `b:I:N` block N of an agent message, its Markdown spans as runs; `more` above the first row when earlier entries
   are not shown. A subagent's step is indented and drawn in one of the six agent faces, by its `Task` call.

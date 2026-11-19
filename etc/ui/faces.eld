@@ -559,7 +559,15 @@
  drgnx-kit-question-card-head
  drgnx-kit-segmented
  drgnx-kit-segmented-current
+ drgnx-kit-diff-block-head
+ drgnx-kit-diff-block-hunk
+ drgnx-kit-diff-block-ctx
+ drgnx-kit-diff-block-add
+ drgnx-kit-diff-block-del
+ drgnx-kit-empty-state
  drgnx-kit-text-input
  drgnx-kit-text-input-multi-top
  drgnx-kit-text-input-multi-mid
- drgnx-kit-text-input-multi-bottom)
+ drgnx-kit-text-input-multi-bottom
+ drgnx-kit-toast
+ drgnx-kit-tooltip)

@@ -100,3 +100,11 @@ loses its timer; a repeat that replaces a toast starts it again."
 
 (provide 'notice-toast-test)
 ;;; notice-toast-test.el ends here
+
+(ert-deftest drgnx-notice-toast/buttons-are-kit-buttons ()
+  "The toast's buttons are the kit's (their faces are `drgnx-kit-button-*'), keys in the label as before."
+  (let* ((notice (notice-toast-test--notice 1 :command 'fix-it))
+         (s (drgnx-notice-toast--render notice)) (pos (string-match "Dismiss" s)))
+    (should pos)
+    (should (cl-some (lambda (f) (string-match-p "drgnx-kit-button" (symbol-name f)))
+                     (ensure-list (get-text-property pos 'face s))))))

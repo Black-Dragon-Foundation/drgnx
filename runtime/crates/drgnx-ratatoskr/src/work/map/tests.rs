@@ -2296,6 +2296,12 @@ fn list_an_empty_workspace_says_so() {
         .expect("the empty row");
     assert!(r.text.contains("Nothing here yet"), "{}", r.text);
     assert!(!r.props.iter().any(|p| p.2 == "drgnx-work-id"));
+    // the kit's empty state face
+    assert!(
+        r.runs
+            .iter()
+            .any(|run| run.2 == drgnx_rows::faces::FaceId::KitEmptyState.name())
+    );
 }
 
 /// [D] A needs-you chip is the kit's warn chip with its jump key as a kit key hint, and shows a 40-letter fact whole (two chips share the width)

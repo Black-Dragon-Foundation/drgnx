@@ -85,8 +85,8 @@ fn hunks_split_at_30_lines() {
         );
     }
     assert!(hunks[0].text.starts_with("    a.el  @@"));
-    assert!(faces(hunks[0]).contains(&FaceId::AgentPanelRemoved.name()));
-    assert!(faces(hunks[5]).contains(&FaceId::AgentPanelAdded.name()));
+    assert!(faces(hunks[0]).contains(&FaceId::KitDiffBlockDel.name()));
+    assert!(faces(hunks[5]).contains(&FaceId::KitDiffBlockAdd.name()));
 }
 
 /// agent-panel.html: the panel's prose is in the UI font, its output and diffs in the code font, so every line of a
@@ -121,7 +121,7 @@ fn output_and_hunk_lines_are_code() {
         .find(|r| r.key == "e:3/h:0")
         .expect("a hunk row");
     assert!(
-        faces(h).contains(&FaceId::AgentPanelContext.name()),
+        faces(h).contains(&FaceId::KitDiffBlockCtx.name()),
         "{:?}",
         faces(h)
     );

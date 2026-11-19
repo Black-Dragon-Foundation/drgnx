@@ -159,9 +159,9 @@ thing waiting on you)."
             (if detail (concat (propertize detail 'face 'drgnx-text-subtle) "\n") "")
             (mapconcat (lambda (b)
                          (let ((action (plist-get b :action)))
-                           (drgnx-ui-button (if (plist-get b :key) (format "%s (%s)" (plist-get b :label) (plist-get b :key))
-                                              (plist-get b :label))
-                                            (lambda () (drgnx-notice-toast--run action)))))
+                           (drgnx-ui-kit-text-button (if (plist-get b :key) (format "%s (%s)" (plist-get b :label) (plist-get b :key))
+                                                       (plist-get b :label))
+                                                     (lambda () (drgnx-notice-toast--run action)) nil 'quiet 'sm)))
                        (drgnx-notice-toast-buttons notice) "  "))))
 
 (defun drgnx-notice-toast--params (parent)
