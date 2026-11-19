@@ -4,6 +4,7 @@
 (require 'cl-lib)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/grid-on-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/areas-backend" drgnx-dir) nil t)
 (require 'drgnx-area)
 (require 'drgnx-panes)
@@ -32,7 +33,7 @@
        (drgnx-rules-mode 1)
        (drgnx-wb-define-tab 'right 'withparts :title "With" :companions #'drgnx-area-companions-test--parts)
        (drgnx-wb-define-tab 'right 'plain :title "Plain")
-       (unwind-protect (progn ,@body)
+       (unwind-protect (drgnx-test-with-grid-on ,@body)
          (drgnx-rules-mode -1)
          (drgnx-wb-area-hide 'right)
          (drgnx-wb-undefine-tab 'right 'withparts)
@@ -42,7 +43,7 @@
 
 (defun drgnx-area-companions-test--right-windows ()
   "The right side's windows, top to bottom."
-  (sort (seq-filter (lambda (w) (eq (window-parameter w 'window-side) 'right)) (window-list nil 'nomini))
+  (sort (seq-filter (lambda (w) (eq (window-parameter w 'drgnx-role) 'right)) (window-list nil 'nomini))
         (lambda (a b) (< (nth 1 (window-edges a)) (nth 1 (window-edges b))))))
 
 (ert-deftest drgnx-area-companions/a-tab-shows-its-companions-above-and-below-it ()

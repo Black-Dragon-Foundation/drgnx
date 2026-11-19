@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx)
+(require 'drgnx-grid)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-teardown--not-yet

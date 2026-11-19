@@ -4,6 +4,7 @@
 (require 'drgnx-actions)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/grid-on-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-wb-focus-test--with (&rest body)
   "BODY with the sidebar (two dummy sections) on the left of one editor group, rules and chrome on."
@@ -16,10 +17,11 @@
        (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-focus-top*")))
        (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-focus-bottom*")))
        (unwind-protect
-           (progn (switch-to-buffer (get-buffer-create "*drgnx-focus-a*"))
-                  (drgnx-chrome-apply nil t)
-                  (drgnx-wb-show-sidebar)
-                  ,@body)
+           (drgnx-test-with-grid-on
+             (switch-to-buffer (get-buffer-create "*drgnx-focus-a*"))
+             (drgnx-chrome-apply nil t)
+             (drgnx-wb-show-sidebar)
+             ,@body)
          (drgnx-wb-hide-sidebar)
          (drgnx-chrome-mode -1)
          (drgnx-rules-mode -1)

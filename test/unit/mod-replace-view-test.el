@@ -2,6 +2,7 @@
 ;; test-class: cond
 (require 'ert)
 (require 'drgnx-paths)
+(require 'drgnx-grid)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx)
 (require 'eglot)

@@ -7,6 +7,7 @@
 (require 'drgnx-buffers)
 (require 'drgnx-explorer)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/grid-on-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-wb-undefine-test--with (&rest body)
   "BODY with fresh registries (copies of the real ones), one editor window and no cleanup stacks."
@@ -19,7 +20,7 @@
        (delete-other-windows)
        (set-frame-parameter nil 'drgnx-wb-areas nil)
        (set-frame-parameter nil 'drgnx-wb-right-px nil)
-       (unwind-protect (progn ,@body)
+       (unwind-protect (drgnx-test-with-grid-on ,@body)
          (drgnx-wb-hide-sidebar)
          (drgnx-wb-area-hide 'right)
          (delete-other-windows)
