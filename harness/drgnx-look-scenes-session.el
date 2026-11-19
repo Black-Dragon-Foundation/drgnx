@@ -1374,6 +1374,19 @@ Its session's hub seeds the map's own graph (`drgnx-look-scene-seed' \"map\", th
 (declare-function drgnx-work-flow-rules "drgnx-work-flow")
 (declare-function drgnx-view-nav "drgnx-view")
 
+(defun drgnx-look-scene-work-list ()
+  "The Work map as a List on Active (the mockup work-now): the top bar's switches, the strip's chips, the groups with
+their tasks, each with its state, agent and machine, on the hub's seeded graph (the `map' seed)."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "work list"
+    (when-let* ((map (drgnx-look-scene--work-map)))
+      (unless (get-buffer-window map) (set-window-buffer (drgnx-wb-editor-window) map))
+      (with-current-buffer map (drgnx-work-map-set-mode 'list))
+      (unless (drgnx-look-scene--until 15 "the List's task rows"
+                                       (lambda () (with-current-buffer map (drgnx-look-scene--row-ids "task:"))))
+        (error "The List has no task rows: is it the `map' seed?"))))
+  (drgnx-look-scene--answer))
+
 (defun drgnx-look-scene-work-flow ()
   "The Flow lens beside the scene's map (the mockup hub-orchestration), on the hub's seeded plan run: its tasks in each
 gate state, the held one, the batch.  A Flow without the run's task rows (its waiting or off-path text) is an error."
