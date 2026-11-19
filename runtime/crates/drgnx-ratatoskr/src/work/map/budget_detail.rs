@@ -406,4 +406,100 @@ mod tests {
         assert!(start_of(&forecast(json!([]), pace(Some(0.1), false), "prior"), 0).prior);
         assert!(!start_of(&forecast(json!([]), pace(Some(0.1), false), "profile"), 0).prior);
     }
+    // ---- round 3: every budget the plan names, the chain and the schedule ----
+
+    fn view(scope: &str, limits: &[(&str, f64)], spent: &[(&str, f64)], remaining: &[(&str, f64)]) -> runstav::methods::timeline::BudgetView {
+        let l = |xs: &[(&str, f64)]| -> serde_json::Value {
+            json!(xs.iter().map(|(u, a)| json!({"unit": u, "amount": a})).collect::<Vec<_>>())
+        };
+        serde_json::from_value(json!({"scope": scope_json(scope), "limits": l(limits), "spent": l(spent), "remaining": l(remaining)}))
+            .expect("a budget view")
+    }
+
+    fn scope_json(scope: &str) -> serde_json::Value {
+        let (kind, id) = scope.split_once(':').unwrap_or((scope, ""));
+        json!({ kind: id })
+    }
+
+    /// [D] The Detail reads every budget the item's scope names (`budget/get`), not only the binding one: a unit for each
+    /// of its limits and its spends.
+    #[test]
+    fn facts_list_every_unit_the_scope_names_not_only_the_binding_one() {
+        let own = view("plan:p1", &[("usd", 12.0), ("limit-share", 0.15)], &[("usd", 9.0), ("limit-share", 0.11)], &[("usd", 3.0)]);
+        let f = facts_of(&[own], None);
+        let units: Vec<Unit> = f.units.iter().map(|u| u.unit).collect();
+        assert_eq!(units, vec![Unit::Usd, Unit::LimitShare], "{f:?}");
+        assert_eq!(f.units[0].spent, 9.0);
+        assert_eq!(f.units[1].limit, Some(0.15));
+        // a unit with only a spend is listed too, with no limit
+        let tokens = view("plan:p1", &[], &[("tokens", 2_000_000.0)], &[]);
+        let f = facts_of(&[tokens], None);
+        assert_eq!(f.units.len(), 1);
+        assert_eq!(f.units[0].limit, None);
+    }
+
+    /// [D] "Counts toward": each ancestor with what it has left in the units it limits, the item's own scope not among them.
+    #[test]
+    fn facts_chain_names_each_ancestor_with_what_it_has_left() {
+        let own = view("task:t1", &[("usd", 5.0)], &[("usd", 1.0)], &[("usd", 4.0)]);
+        let plan = view("plan:p1", &[("usd", 40.0)], &[("usd", 31.0)], &[("usd", 9.0)]);
+        let spec = view("spec:s1", &[("usd", 100.0)], &[("usd", 40.0)], &[("usd", 60.0)]);
+        let f = facts_of(&[own, plan, spec], None);
+        let chain: Vec<(&str, f64)> = f.chain.iter().map(|l| (l.scope, l.remaining)).collect();
+        assert_eq!(chain, vec![("plan", 9.0), ("spec", 60.0)], "{f:?}");
+        assert!(counts_toward(&f.chain).last().is_some_and(|l| l == "binding: plan, $9 left"));
+    }
+
+    /// [D] The forecast's totals land on the unit they are in: dollars from the cost ranges, the week's share from the
+    /// pace effects.
+    #[test]
+    fn facts_carry_the_forecast_of_each_unit() {
+        let own = view("plan:p1", &[("usd", 40.0), ("limit-share", 0.15)], &[("usd", 9.0), ("limit-share", 0.11)], &[]);
+        let fc = forecast(json!([{"unit": "usd", "p50": 30.0, "p90": 46.0, "estimate": false}]), pace(Some(0.16), false), "profile");
+        let f = facts_of(&[own], Some(&fc));
+        assert_eq!(f.units[0].forecast, Some(Range { p50: 30.0, p90: 46.0 }));
+        assert_eq!(f.units[1].forecast, Some(Range { p50: 0.08, p90: 0.16 }));
+        // p90 over the limit in both: both offer "Set to p90"
+        assert!(set_to_p90(&f.units[0]).is_some() && set_to_p90(&f.units[1]).is_some());
+    }
+
+    /// [D] Spec §7.2's Schedule section: started, the finish range, the baseline and the slip, active against wall time,
+    /// the machine. Times are weekdays and hours in the zone given.
+    #[test]
+    fn schedule_lines_show_finish_range_baseline_slip_and_active_against_wall() {
+        let t0 = 1_700_000_000.0; // Tue 22:13 UTC
+        let s = ScheduleFacts {
+            started: Some(t0),
+            finish: Some(Range { p50: t0 + 3.0 * 3600.0, p90: t0 + 5.0 * 3600.0 }),
+            baseline_finish: Some(t0 + 2.0 * 3600.0),
+            active_secs: Some(3.0 * 3600.0),
+            wall_secs: Some(5.0 * 3600.0),
+            machine: Some("desktop".into()),
+            target: None,
+            basis: None,
+        };
+        let lines = schedule_lines(&s, "plan", 0);
+        let all = lines.join("\n");
+        assert!(all.contains("started Tue 22:13"), "{all}");
+        assert!(all.contains("finish Wed 01:13–Wed 03:13"), "{all}");
+        assert!(all.contains("baseline Wed 00:13 · slipped 1 h"), "{all}");
+        assert!(all.contains("active 3 h of 5 h wall"), "{all}");
+        assert!(all.contains("machine desktop"), "{all}");
+    }
+
+    /// [D] A spec's or plan's Schedule has the Target field and its state; a task has none but shows its basis label.
+    #[test]
+    fn a_plan_row_has_its_target_field_and_a_task_its_basis_label() {
+        let t0 = 1_700_000_000.0;
+        let mut s = ScheduleFacts { target: Some((t0 + 86_400.0, "at risk".into())), basis: Some("12 implement tasks on sonnet, this project".into()), ..ScheduleFacts::default() };
+        let plan = schedule_lines(&s, "plan", 0).join("\n");
+        assert!(plan.contains("Target Wed 22:13 · at risk"), "{plan}");
+        assert!(!plan.contains("12 implement tasks"), "{plan}");
+        let task = schedule_lines(&s, "task", 0).join("\n");
+        assert!(task.contains("Basis: 12 implement tasks on sonnet, this project"), "{task}");
+        assert!(!task.contains("Target"), "{task}");
+        s.target = None;
+        assert!(schedule_lines(&s, "spec", 0).join("\n").contains("Target: none"), "an unset target says so");
+    }
+
 }
