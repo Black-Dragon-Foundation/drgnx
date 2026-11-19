@@ -8,10 +8,13 @@ use std::collections::BTreeSet;
 
 use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::Measure;
-use drgnx_rows::kit::{self, ChipFill, Comp, KitEnv, ProgressKind, RowKind, Status, Tone};
+use drgnx_rows::kit::{
+    self, ChipFill, Comp, KitEnv, MeterSize, MeterState, MeterUnit, ProgressKind, RowKind, Status,
+    Tone,
+};
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::view::ViewEnv;
-use serde_json::Value;
+use serde_json::{Value, json};
 use vegvisir::list::{COMPLETED_MORE, ListChip, ListEntry};
 use vegvisir::{Group, ItemId, Kind, Model, TaskState, Visibility};
 
@@ -38,6 +41,27 @@ fn gap(b: &mut RowBuilder, kit: &KitEnv, v: f32) {
         (v / 4.0).round().max(1.0) as usize
     };
     b.push(&" ".repeat(n), None);
+}
+
+/// The kit's unit of a budget's unit name (the hub's `Unit`, kebab-case).
+fn meter_unit(unit: &str) -> MeterUnit {
+    match unit {
+        "usd-est" => MeterUnit::UsdEst,
+        "tokens" => MeterUnit::Tokens,
+        "count" => MeterUnit::Count,
+        "limit-share" | "share" => MeterUnit::Share,
+        _ => MeterUnit::Usd,
+    }
+}
+
+/// The kit's state of a budget's state (`ok`, `nearing`, `reached` or `none`).
+fn meter_state(state: &str) -> MeterState {
+    match state {
+        "nearing" => MeterState::Nearing,
+        "reached" => MeterState::Reached,
+        "none" => MeterState::None,
+        _ => MeterState::Ok,
+    }
 }
 
 fn status_of(s: TaskState) -> Status {
@@ -290,7 +314,30 @@ fn right(b: &mut RowBuilder, m: &Model, e: &ListEntry, kit: &KitEnv, slot: &dyn 
             }
             ListChip::Meter(bm) => {
                 sep(b);
-                chip(b, vegvisir::render::meter_text(bm));
+                let from = b.pos();
+                let text = vegvisir::render::meter_text(bm);
+                kit::expand(
+                    b,
+                    kit,
+                    &Comp::Meter {
+                        spent: bm.spent.0,
+                        limit: bm.limit.map(|l| l.0),
+                        unit: meter_unit(&bm.unit),
+                        forecast: None,
+                        state: meter_state(&bm.state),
+                        size: MeterSize::Row,
+                        width: 0,
+                        // the kit says "no limit" itself
+                        text: text.strip_suffix(" · no limit").unwrap_or(&text).to_owned(),
+                    },
+                );
+                let to = b.pos();
+                b.prop(
+                    from,
+                    to,
+                    "drgnx-work-meter",
+                    json!({"item": e.item.0, "unit": bm.unit, "limit": bm.limit.map(|l| l.0)}),
+                );
             }
             ListChip::State(s) => {
                 // a terminal's state dot has its word already

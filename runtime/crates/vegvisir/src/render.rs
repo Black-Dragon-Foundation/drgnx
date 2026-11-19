@@ -1219,6 +1219,8 @@ const ICON_PX: u32 = 16;
 
 /// What a needs-you chip takes besides its text, logical px: its own padding and its key hint.
 const CHIP_OVERHEAD: f32 = 64.0;
+/// The room a kit chip's own pads take beyond its text, logical px (both sides).
+const EXTRA_CHIP_PAD: f32 = 16.0;
 
 /// A gap of about PX logical px in B: spaces (one on a terminal).
 fn gap(b: &mut RowBuilder, kit: &kit::KitEnv, px: u32) {
@@ -1277,7 +1279,9 @@ pub fn strip(
             fit::width_in(m, Some(CARD_FONT), c) + if i.is_some() { icon_px as f32 } else { 0.0 }
         })
         .sum::<f32>()
-        + fit::width_in(m, Some(CARD_FONT), " ") * chips.len().saturating_sub(1) as f32;
+        + fit::width_in(m, Some(CARD_FONT), " ") * chips.len().saturating_sub(1) as f32
+        // the pace and budget chips are the kit's, with their own pads
+        + EXTRA_CHIP_PAD * env.scale * extra.len() as f32;
     // the needs-you chips share what the right-hand chips leave, each cut to its share (no chip runs under them): the
     // chip's own padding and its key hint come off the share
     let shown = entries.len().clamp(1, 9);
@@ -1336,6 +1340,25 @@ pub fn strip(
             b.push(" ", None);
         }
         let start = b.pos();
+        if i < extra.len() {
+            // a pace or plan-budget chip: the kit's, warn-toned when the week runs out or the budget is nearing
+            let warn = ["runs out", "nearing", "reached"]
+                .iter()
+                .any(|w| c.contains(w));
+            kit::expand(
+                &mut b,
+                kit,
+                &Comp::Chip {
+                    label: c.trim().to_owned(),
+                    tone: if warn { Tone::Warn } else { Tone::Neutral },
+                    fill: ChipFill::Soft,
+                    icon: None,
+                    state: kit::State::Rest,
+                    action: None,
+                },
+            );
+            continue;
+        }
         let drawn = icon.and_then(|n| {
             let svg = crate::icons::svg(n, env.palette.colour("chip-fg"), icon_px)?;
             Some((ImageId::of(svg.as_bytes(), env.epoch), svg))
