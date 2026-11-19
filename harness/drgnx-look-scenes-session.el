@@ -1088,16 +1088,19 @@ panel's width (the other cards do), it is not as wide as its content."
         (if (not (re-search-backward "Allow" nil t))
             (push "agent-panel: no permission card (no Allow button)" drgnx-look-scene--errors)
           (redisplay t)
-          (let ((widths (mapcar (lambda (n)
-                                  (save-excursion
-                                    (forward-line n)
-                                    (car (window-text-pixel-size win (line-beginning-position) (line-end-position)))))
-                                '(-1 0 1)))
-                (body (window-body-width win t)))
-            (unless (and (<= (- (apply #'max widths) (apply #'min widths)) 1) (>= (apply #'min widths) (* 0.85 body)))
-              (push (format "agent-panel: the permission card's rows end at %S px, the panel's text area is %d px wide: its ring does not close at one right edge near the panel's"
-                            widths body)
-                    drgnx-look-scene--errors))))))))
+          ;; the long transcript's card may be scrolled partly out of the window: only a card drawn whole is measured
+          (when (and (pos-visible-in-window-p (save-excursion (forward-line -1) (point)) win)
+                     (pos-visible-in-window-p (save-excursion (forward-line 1) (line-end-position)) win))
+            (let ((widths (mapcar (lambda (n)
+                                    (save-excursion
+                                      (forward-line n)
+                                      (car (window-text-pixel-size win (line-beginning-position) (line-end-position)))))
+                                  '(-1 0 1)))
+                  (body (window-body-width win t)))
+              (unless (and (<= (- (apply #'max widths) (apply #'min widths)) 1) (>= (apply #'min widths) (* 0.85 body)))
+                (push (format "agent-panel: the permission card's rows end at %S px, the panel's text area is %d px wide: its ring does not close at one right edge near the panel's"
+                              widths body)
+                      drgnx-look-scene--errors)))))))))
 
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)

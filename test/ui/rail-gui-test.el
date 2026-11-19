@@ -13,10 +13,11 @@
 
 (defconst drgnx-rail-ui-test--repo
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
-(dolist (d '("core" "wb" "harness"))
+(dolist (d '("core" "wb" "harness" "themes"))
   (add-to-list 'load-path (expand-file-name d drgnx-rail-ui-test--repo)))
 (require 'drgnx)
 (require 'drgnx-state)
+(require 'drgnx-theme-gen)
 (dolist (m '("drgnx-look-scale" "drgnx-statusbar" "drgnx-rail"))
   (load (expand-file-name (concat "modules/ui/" m) drgnx-rail-ui-test--repo) nil t))
 
@@ -73,6 +74,18 @@ every frame BODY made deleted after, the modes as they were."
                               do (forward-line 1)))))
            (heights (cl-loop for (a b) on tops while b collect (- b a))))
       (should (equal (list gap) (list (car heights))))
+      ;; no item is cut by the window's edge (a line as wide as the window ends in a `$'): each is narrower than the
+      ;; text area
+      (let ((body (window-body-width rail t))
+            (widths (with-current-buffer (window-buffer rail)
+                      (save-excursion
+                        (goto-char (point-min))
+                        (cl-loop until (eobp)
+                                 when (> (- (line-end-position) (line-beginning-position)) 1)
+                                 collect (car (window-text-pixel-size rail (line-beginning-position) (line-end-position)))
+                                 do (forward-line 1))))))
+        (should (equal (list 'cut nil)
+                       (list 'cut (and (seq-some (lambda (w) (>= w body)) widths) (list 'body body 'widths widths))))))
       ;; heights: gap, item, gap, item, ...
       (should (equal (cl-loop for i from 1 below (* 2 (length drgnx-rail-places)) collect (if (cl-oddp i) item gap))
                      (seq-take (cdr heights) (1- (* 2 (length drgnx-rail-places)))))))
