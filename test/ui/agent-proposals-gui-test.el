@@ -75,8 +75,10 @@ and Accept and Revert as kit buttons."
       (drgnx-agent-proposals-set (current-buffer) agent-proposals-gui--frame)
       (should-not (drgnx-agent-proposals--overlays))
       (buffer-enable-undo)
-      (goto-char (point-max)) (insert "four\n")
       (undo-boundary)
+      (goto-char (point-max)) (insert "four\n")
+      ;; no boundary after the edit: `primitive-undo' takes the group at the head of the list, and a boundary there is
+      ;; an empty group (the edit would stay)
       (primitive-undo 1 buffer-undo-list)
       (should (equal "one\ntwo\nthree\n" (buffer-string))))))
 
