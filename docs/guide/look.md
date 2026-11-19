@@ -352,6 +352,13 @@ and a start swaps nothing. `classic` gives the row back. The change applies at o
 windows, buffers, selected window, size and place (a frame whose minibuffer is in use waits until it ends). A terminal
 frame keeps its row either way, and turning ui/look off gives every frame its row back.
 
+## Component catalogue
+
+**Design: Component Catalogue** (from the palette) opens one buffer with every component of drgnx's kit (rows, buttons,
+chips, cards, the rail's items, text inputs and the rest) in every variant and state, drawn as the editor draws them in
+the theme, density and scale in force. Open it to see what a theme or a density change does to the whole kit at once.
+How the catalogue is built and checked is in `docs/develop/design-system.md`.
+
 ## Icons
 
 The icon set, with where each icon is used, is generated in the design system ([Icons](../design/icons.md)).
