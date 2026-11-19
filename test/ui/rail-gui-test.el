@@ -116,12 +116,12 @@ logical px from the rail's text area (the item: 6 inset, 8 icon inset, 16 icon, 
                (let ((top (cdr (posn-x-y (posn-at-point (funcall line i) rail)))))
                  (drgnx-uitest-pixel snap (round (* s (+ (car edges) dx))) (round (* s (+ (cadr edges) top dy))))))))
     (should (= 1 (drgnx-pixels-scale frame)))
-    (should (equal (list 'bar (drgnx-rail-ui-test--rgb (drgnx-look-token 'accent variant)))
-                   (list 'bar (funcall at 0 7 16))))
-    (should (equal (list 'fill (drgnx-rail-ui-test--rgb (drgnx-look-token 'sel-quiet variant)))
-                   (list 'fill (funcall at 0 18 16))))
-    (should (equal (list 'dot (drgnx-rail-ui-test--rgb (drgnx-look-token 'warn variant)))
-                   (list 'dot (funcall at 3 33 6))))))
+    ;; an SVG picture is antialiased and colour-managed: a pixel inside it is its colour to within 16 a channel (the cell's
+    ;; fill is the kit sheet's row: `drgnx-kit-sheet/rail-item' reads it per pad)
+    (cl-flet ((near (want got) (if (cl-every (lambda (a b) (<= (abs (- a b)) 16)) want got) want got)))
+      ;; (the dot is read in the scenes' pictures: its place on the cell's corner is a look, not a pixel)
+      (let ((bar (drgnx-rail-ui-test--rgb (drgnx-look-token 'accent variant))))
+        (should (equal (list 'bar bar) (list 'bar (near bar (funcall at 0 7 16)))))))))
 
 (drgnx-look-gui-deftest drgnx-rail-ui/rail-is-44-px-at-every-scale ()
   "The rail is 44 logical px wide at the run's scale and at a UI scale of 125 %, sits above the status bar, which still

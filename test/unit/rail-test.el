@@ -158,5 +158,17 @@ command is logged in `drgnx-rail-test--log'."
     (should-not (cl-some (lambda (b) (string-prefix-p drgnx-rail-buffer-prefix (buffer-name b))) (buffer-list)))
     (should-not (drgnx-state--lane-of 'windows-changed #'drgnx-rail--windows-changed))))
 
+(ert-deftest drgnx-rail/pads-are-pixels-not-the-windows-characters ()
+  ;; the kit's text-mode pad is a width in the frame's canonical characters, drawn in the window's own font: wider than
+  ;; the cell where that font is larger, which pushes the line past the window's edge (`$').  The rail draws pixels.
+  (let* ((cw (frame-char-width))
+         (item (concat (propertize " " 'display `(space :width ,(/ 12.0 cw)))
+                       (propertize " " 'display `(space :width ,(/ 8.0 cw) :height (32)))
+                       (propertize "x" 'display '(image :type svg))))
+         (out (drgnx-rail--pixel-pads (copy-sequence item) nil)))
+    (should (equal '(space :width (12)) (get-text-property 0 'display out)))
+    (should (equal '(space :width (8) :height (32)) (get-text-property 1 'display out)))
+    (should (equal '(image :type svg) (get-text-property 2 'display out)))))
+
 (provide 'rail-test)
 ;;; rail-test.el ends here

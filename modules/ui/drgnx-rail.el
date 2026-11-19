@@ -156,15 +156,37 @@ differ in scale and in the current place."
 (defun drgnx-rail--tall (item height frame)
   "ITEM (a kit rail item) with its cell's first pad HEIGHT device px tall, the text centred in it: the cell's fill fills
 the whole line, so the cell is as tall as its row.  `line-height' and `line-spacing' on the newline do not reach a
-line that holds an image."
-  (let* ((disp (get-text-property 1 'display item))
-         (extent (drgnx-pixels-font-extent 'drgnx-kit-rail-item frame)))
-    (when (and (eq (car-safe disp) 'space) extent (> height (+ (car extent) (cdr extent))))
-      (let ((below (+ (cdr extent) (/ (- height (car extent) (cdr extent)) 2))))
-        (put-text-property 1 2 'display
-                           `(space :width ,(plist-get (cdr disp) :width) :height (,height)
-                                   :ascent ,(min 100 (ceiling (* 100.0 (- height below)) height)))
-                           item)))
+line that holds an image.  The accent bar and the dot, pictures HEIGHT tall, are centred the same way (the kit leaves
+only the descent below them, for a row with a line height of its own: here the lines have none, and a picture that
+did not agree with the first pad would make the line taller)."
+  (let* ((extent (drgnx-pixels-font-extent 'drgnx-kit-rail-item frame)))
+    (when (and extent (> height (+ (car extent) (cdr extent))))
+      (let* ((below (+ (cdr extent) (/ (- height (car extent) (cdr extent)) 2)))
+             (percent (min 100 (ceiling (* 100.0 (- height below)) height))))
+        (dotimes (i (length item))
+          (let ((disp (get-text-property i 'display item)))
+            (cond ((and (= i 1) (eq (car-safe disp) 'space))
+                   (put-text-property i (1+ i) 'display
+                                      `(space :width ,(plist-get (cdr disp) :width) :height (,height) :ascent ,percent)
+                                      item))
+                  ((and (eq (car-safe disp) 'image) (numberp (plist-get (cdr disp) :ascent)))
+                   (put-text-property i (1+ i) 'display
+                                      (cons 'image (plist-put (copy-sequence (cdr disp)) :ascent percent))
+                                      item)))))))
+    item))
+
+(defun drgnx-rail--pixel-pads (item frame)
+  "ITEM (a kit rail item built for buffer text) with each pad a width in device px.  The kit's text-mode pad is a width
+in FRAME's canonical characters, drawn in the window's own font: where that font is larger than the frame's, the cell is
+wider than its 44 px and its line past the window's edge."
+  (let ((cw (frame-char-width frame)))
+    (dotimes (i (length item))
+      (let ((d (get-text-property i 'display item)))
+        (when (and (eq (car-safe d) 'space) (floatp (plist-get (cdr d) :width)))
+          (put-text-property i (1+ i) 'display
+                             `(space ,@(plist-put (copy-sequence (cdr d)) :width
+                                                  (list (round (* cw (plist-get (cdr d) :width))))))
+                             item))))
     item))
 
 (defun drgnx-rail--string (frame)
@@ -181,7 +203,7 @@ line that holds an image."
                                           'text frame (nth 3 p))))
         ;; the item without its last character, the surface's inset after the cell: a line as wide as the window (a pad
         ;; made of a fraction of a character may round a pixel up) is cut off and ends in `$'
-        (push (concat (if gui (substring (drgnx-rail--tall item height frame) 0 -1) item) "\n") lines)
+        (push (concat (if gui (substring (drgnx-rail--tall (drgnx-rail--pixel-pads item frame) height frame) 0 -1) item) "\n") lines)
         (when gui (push (drgnx-rail--gap-line gap) lines))))
     (apply #'concat (nreverse lines))))
 
