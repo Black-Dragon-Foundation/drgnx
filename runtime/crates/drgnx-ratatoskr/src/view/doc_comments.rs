@@ -23,10 +23,13 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// A view's record and the threads it last read, by (connection, view).
+type Shown = HashMap<(u64, String), (String, Vec<Thread>)>;
+
 /// What each view shows: its record and the threads last read.
 #[derive(Default)]
 pub struct DocComments {
-    views: Mutex<HashMap<(u64, String), (String, Vec<Thread>)>>,
+    views: Mutex<Shown>,
 }
 
 impl DocComments {
