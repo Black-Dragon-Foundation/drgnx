@@ -14,6 +14,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
+(require 'text-property-search)
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
 
@@ -34,7 +35,6 @@
 (defun drgnx-work-start--insert (view)
   "Draw VIEW (the `forecast/start' answer) in the current buffer."
   (let ((inhibit-read-only t))
-    (erase-buffer)
     (insert (propertize "Start the plan\n\n" 'face 'bold 'read-only t 'rear-nonsticky t))
     (when-let* ((w (plist-get view :week_warning)))
       (insert (propertize (concat w "\n") 'face 'warning 'read-only t 'rear-nonsticky t)))
@@ -88,6 +88,7 @@
                         (drgnx-hub-call "forecast/start" (list :job id :utc_offset (car (current-time-zone)))
                                         (lambda (view err2)
                                           (if err2 (message "Start: %s" err2)
+                                            (when (get-buffer "*Start plan*") (kill-buffer "*Start plan*"))
                                             (with-current-buffer (get-buffer-create "*Start plan*")
                                               (drgnx-work-start-mode)
                                               (setq drgnx-work-start--job id)

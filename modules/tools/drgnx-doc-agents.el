@@ -17,6 +17,8 @@
 (require 'subr-x)
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+(defvar drgnx-hub--events)
 (declare-function drgnx-ui-kit-agent-mark "drgnx-ui-kit")
 (declare-function drgnx-review-request-open "drgnx-review-screen")
 
@@ -64,10 +66,15 @@
 
 ;;;; Comments
 
+(defun drgnx-doc-agents--view-call (method params)
+  "Ask the hub METHOD on the events connection, where the comment-thread view lives."
+  (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+    (drgnx-hub--call-on drgnx-hub--events method params #'ignore)))
+
 (defun drgnx-doc-agents--refresh ()
   "Ask the thread card to read the threads again."
   (when drgnx-doc-agents--record
-    (drgnx-hub-call "doc-comments/set" (list :view (concat "doc-comments/" drgnx-doc-agents--record) :refresh t) #'ignore)))
+    (drgnx-doc-agents--view-call "doc-comments/set" (list :view (concat "doc-comments/" drgnx-doc-agents--record) :refresh t))))
 
 (defun drgnx-doc-agents-comment-add (text)
   "Comment on the paragraph at point: a new thread, steered to the agent writing the record (never cancelling its turn);
@@ -179,8 +186,8 @@ with none writing, it waits."
           (drgnx-view-patch-attach view "unshown" :sja t)
           (require 'drgnx-view-env)
           (drgnx-view-env-register view (current-buffer)
-                                   (lambda (_v) (drgnx-hub-call "doc-comments/subscribe" (list :view view :record record) #'ignore)))
-          (drgnx-hub-call "doc-comments/subscribe" (list :view view :record record) #'ignore))))
+                                   (lambda (_v) (drgnx-doc-agents--view-call "doc-comments/subscribe" (list :view view :record record))))
+          (drgnx-doc-agents--view-call "doc-comments/subscribe" (list :view view :record record)))))
     (pop-to-buffer buffer)))
 
 (provide 'drgnx-doc-agents)

@@ -1614,7 +1614,8 @@ The commands of modules that need no installed package are in it, the later stag
                               work-timeline-toggle work-zoom-in work-zoom-out work-pan-earlier work-pan-later work-go-now
                               work-zoom-back work-timeline-filter work-timeline-group work-budget-page
                               ;; budgets on List rows, set in place (flow Task 20a)
-                              work-budget-set work-budget-send work-budget-cancel work-budget-unit))
+                              work-budget-set work-budget-send work-budget-cancel work-budget-unit
+                              work-start-plan work-start-go work-start-none work-start-cancel))
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

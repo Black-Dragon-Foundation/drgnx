@@ -17,6 +17,7 @@
 (require 'drgnx)
 (require 'drgnx-ui-kit)
 (require 'drgnx-doc-agents)
+(defvar drgnx-hub--events)
 
 (defconst drgnx-ui-doc-agents--text
   "# Side bars\n\n1. Intent\n\nGet back to Files in one click.\n\n2. The left rail\n\nPlaces: Work, Files, Search.\n\n3. Agents on the right\n\nEach agent is a card.\n")
@@ -32,12 +33,14 @@ on CALLS as (METHOD . PARAMS); `comments/add' answers a thread sent to the write
                   (push (cons method params) ,calls)
                   (when (and cb (equal method "comments/add"))
                     (funcall cb (list :comment "c1" :sent_to "s1" :anchor (plist-get params :anchor)) nil))))
-               ((symbol-function 'drgnx-hub--call-on) (lambda (&rest _) nil)))
+               ((symbol-function 'process-live-p) (lambda (p) (eq p 'stub)))
+               ((symbol-function 'drgnx-hub--call-on) (lambda (_c method params &rest _) (push (cons method params) ,calls) nil)))
        (with-temp-buffer
          (insert drgnx-ui-doc-agents--text)
+         (setq drgnx-hub--events (quote stub))
          (setq drgnx-doc-agents--record "plan:p1")
          (drgnx-doc-agents-mode 1)
-         (unwind-protect (progn ,@body) (drgnx-doc-agents-mode -1))))))
+         (unwind-protect (progn ,@body) (drgnx-doc-agents-mode -1) (setq drgnx-hub--events nil))))))
 
 (defun drgnx-ui-doc-agents--line (text)
   "Go to the start of the line holding TEXT."
