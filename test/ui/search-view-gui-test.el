@@ -6,6 +6,8 @@
 ;; its calls are recorded and its rows are handed in as `view-patch' events, shaped as the hub's tests check them
 ;; (`view/search/tests.rs').  Needs a Nidhogg with Sjá (`nidhogg-view-push'); skipped elsewhere.
 (require 'ert)
+(load (expand-file-name "../fixtures/grid-on-fixture" (file-name-directory (macroexp-file-name))) nil t)
+(drgnx-test-grid-on-for-file)
 (require 'cl-lib)
 (require 'drgnx-uitest)
 

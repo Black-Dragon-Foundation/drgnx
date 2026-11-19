@@ -7,6 +7,8 @@
 ;; reset.  They need Nidhogg's Sjá (`nidhogg-view-rows') and a hub built with test hooks (DRGNX_RATATOSKR_BIN).
 
 (require 'ert)
+(load (expand-file-name "../fixtures/grid-on-fixture" (file-name-directory (macroexp-file-name))) nil t)
+(drgnx-test-grid-on-for-file)
 (require 'cl-lib)
 
 (defconst drgnx-panel-docks-ui-test--repo

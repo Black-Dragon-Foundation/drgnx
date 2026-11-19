@@ -7,6 +7,8 @@
 ;; (Linux or macOS) with only the hub built: nothing here needs a Linux harness.
 
 (require 'ert)
+(load (expand-file-name "../fixtures/grid-on-fixture" (file-name-directory (macroexp-file-name))) nil t)
+(drgnx-test-grid-on-for-file)
 (require 'cl-lib)
 
 (defconst drgnx-rows-fit-ui-test--repo

@@ -5,6 +5,8 @@
 ;; trash and keeps the buffers until the file is gone (M3b-15); (3) a chain of open single folders is one row (M3b-1).
 ;; Every folder is a temp dir; the trash is a temp HOME's (never ~); the failing `gio' is a script in a temp dir.
 (require 'ert)
+(load (expand-file-name "../fixtures/grid-on-fixture" (file-name-directory (macroexp-file-name))) nil t)
+(drgnx-test-grid-on-for-file)
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))

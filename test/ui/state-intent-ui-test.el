@@ -1,6 +1,8 @@
 ;;; state-intent-ui-test.el --- GUI tests: a size you set by hand is intent and docks keep it (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: cond
 (require 'ert)
+(load (expand-file-name "../fixtures/grid-on-fixture" (file-name-directory (macroexp-file-name))) nil t)
+(drgnx-test-grid-on-for-file)
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
