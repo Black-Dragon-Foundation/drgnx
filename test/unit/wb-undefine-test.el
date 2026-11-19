@@ -51,6 +51,7 @@
    (drgnx-wb-undefine-test--setup 'test/s
      (drgnx-wb-define-section 'mine :slot 1 :title "MINE" :buffer (drgnx-wb-undefine-test--buffer "*drgnx-test-mine*")))
    (drgnx-wb-show-sidebar)
+   (message "DBG dock %S sections %S size %S" (mapcar (lambda (w) (window-parameter w 'drgnx-section)) (window-list nil 'nomini)) (mapcar #'car drgnx-wb--sections) (list (frame-width) (frame-height)))
    (should (window-live-p (drgnx-wb-section-window 'mine)))
    (select-window (drgnx-wb-section-window 'mine))   ; selected: focus must leave first
    (should-not (drgnx-wb-undefine-test--teardown 'test/s))

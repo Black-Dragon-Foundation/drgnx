@@ -118,17 +118,18 @@ bar's keymaps), one editor window, no view or bar left over."
   (delete-other-windows)
   (set-frame-parameter nil 'drgnx-wb-view nil)
   (drgnx-test-with-grid-on
-    (drgnx-test-with-modules '(tools/replace) :strict t
-                             (should (eq (plist-get (cdr (assq 'tools/replace drgnx-modules--table)) :stage) 'startup))
-                             (call-interactively #'drgnx-wb-view-search)
-                             (should (eq (selected-window) (drgnx-wb-section-window 'search)))
-                             (with-current-buffer (drgnx-replace-view-test--view)
-                               (should (eq (widget-field-at (point)) (drgnx-replace--widget 'find))))
-                             (drgnx-git-test-with-repo
-                               (drgnx-git-test-write repo "f.txt" "foo\n")
-                               (drgnx-replace-view-test--visit repo "f.txt" 1)
-                               (drgnx-replace-in-file)
-                               (should (get-buffer-window (drgnx-replace-view-test--bar))))))
+    (let ((drgnx-pane--kinds nil) (drgnx-state--kind-owners nil) (drgnx-wb--sections nil))
+      (drgnx-test-with-modules '(tools/replace) :strict t
+                               (should (eq (plist-get (cdr (assq 'tools/replace drgnx-modules--table)) :stage) 'startup))
+                               (call-interactively #'drgnx-wb-view-search)
+                               (should (eq (selected-window) (drgnx-wb-section-window 'search)))
+                               (with-current-buffer (drgnx-replace-view-test--view)
+                                 (should (eq (widget-field-at (point)) (drgnx-replace--widget 'find))))
+                               (drgnx-git-test-with-repo
+                                 (drgnx-git-test-write repo "f.txt" "foo\n")
+                                 (drgnx-replace-view-test--visit repo "f.txt" 1)
+                                 (drgnx-replace-in-file)
+                                 (should (get-buffer-window (drgnx-replace-view-test--bar)))))))
   (should-not (get-buffer drgnx-replace-buffer-name))
   (should-not (get-buffer drgnx-replace-bar-buffer-name))
   (set-frame-parameter nil 'drgnx-wb-view nil)
