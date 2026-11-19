@@ -50,10 +50,11 @@
   (button :variants ((style primary secondary quiet danger) (size md sm)) :defaults (style secondary size md)
           :geometry (:height (:by size (md 26) (sm 22)) :pad (:by size (md (12 . 12)) (sm (8 . 8))) :gap 6 :box t :radius 6 :hit 4)
           :tty (:pad 1) :label nil
-          :bind (((primary) :bg button-primary-bg :fg button-primary-fg :inherit (drgnx-control-primary) :font (drgnx-ui-text))
-                 ((secondary) :bg sel-quiet :edge button-edge :inherit (drgnx-control) :font (drgnx-ui-text))
+          ;; the 1 px ring carries the radius where Glitnir rounds (:ring (WIDTH RADIUS)); a filled button rings in its own fill
+          :bind (((primary) :bg button-primary-bg :fg button-primary-fg :edge button-primary-bg :ring (1 6) :inherit (drgnx-control-primary) :font (drgnx-ui-text))
+                 ((secondary) :bg sel-quiet :edge button-edge :ring (1 6) :inherit (drgnx-control) :font (drgnx-ui-text))
                  ((quiet) :inherit (drgnx-ui-text drgnx-text-muted))
-                 ((danger) :bg error-tint :fg error :inherit (drgnx-ui-caption error drgnx-selected-quiet) :font (drgnx-ui-text)))
+                 ((danger) :bg error-tint :fg error :edge error-tint :ring (1 6) :inherit (drgnx-ui-caption error drgnx-selected-quiet) :font (drgnx-ui-text)))
           :replaces ((drgnx-ui-button . drgnx-kit-button-secondary) (drgnx-ui-button-primary . drgnx-kit-button-primary)
                      (drgnx-button . drgnx-kit-button-secondary))
           :helpers nil :lint t)
