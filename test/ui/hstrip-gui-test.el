@@ -16,6 +16,7 @@
 (setq drgnx-dir (or (bound-and-true-p drgnx-dir) drgnx-ui-hstrip--repo))
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-ui-hstrip--repo) nil t)
 (require 'drgnx-ruler)
+(require 'drgnx-pkg)   ; the module's setup loads it: its hook default is loaded here, before the census
 
 (defvar drgnx-minimap-hstrip)
 (declare-function drgnx-minimap--hub-p "drgnx-minimap")

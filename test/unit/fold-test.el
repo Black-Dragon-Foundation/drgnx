@@ -72,26 +72,29 @@ each only when there is one, and none outside the fold; under `lines' only the c
                   '((2 . agent) (3 . error) (4 . warning) (4 . warning) (6 . error) (7 . agent))))
     (drgnx-fold-fold)
     (let ((ov (car (drgnx-fold--overlays))))
-      (should (string-match-p "⋯ 4 lines ✕ 1 ⚠ 2 ✦ 1 " (overlay-get ov 'display)))
+      ;; the glyphs as this frame draws them (a batch frame that is not UTF-8: their ASCII forms)
+      (should (string-search (format "⋯ 4 lines %s 1 %s 2 %s 1 " (drgnx-face-glyph 'fail) (drgnx-face-glyph 'warning)
+                                     (drgnx-face-glyph 'sparkle))
+                             (overlay-get ov 'display)))
       (let ((drgnx-fold-summary 'lines))
         (should (string-match-p "⋯ 4 lines $" (drgnx-fold--summary ov)))))
     (drgnx-fold-unfold)
     ;; only warnings hidden: no error or agent count
     (setq drgnx-ruler--marks (list (list (fold-test--line 4) 0 'warning 0 'bar nil 'warning)))
     (drgnx-fold-fold)
-    (should (string-match-p "⋯ 4 lines ⚠ 1 $" (overlay-get (car (drgnx-fold--overlays)) 'display)))))
+    (should (string-suffix-p (format "⋯ 4 lines %s 1 " (drgnx-face-glyph 'warning))
+                             (overlay-get (car (drgnx-fold--overlays)) 'display)))))
 
 (defmacro fold-test--with-hub (&rest body)
-  "BODY as `fold-test--with', the buffer visiting FILE (a temporary .txt, no parser), the hub's connection taken as
-up: CALLS holds the `minimap/watch' params sent, oldest first; TOOK is what `nidhogg-lines-take-hub-folds' gives
-\(its real value when `real')."
+  "BODY as `fold-test--with', the buffer visiting FILE (a temporary .txt, no parser), the hub's connection a live
+pipe (the hub is not run): CALLS holds the `minimap/watch' params sent on it, oldest first; TOOK is what
+`nidhogg-lines-take-hub-folds' gives (its real value when `real')."
   (declare (indent 0))
   `(let ((calls nil) (took 'real) (file (make-temp-file "drgnx-fold" nil ".txt"))
          (real-take (symbol-function 'nidhogg-lines-take-hub-folds))
-         (drgnx-hub--events 'fold-test-hub) (drgnx-fold-remember nil))
+         (drgnx-hub--events (make-pipe-process :name "fold-test-hub" :noquery t)) (drgnx-fold-remember nil))
      (unwind-protect
-         (cl-letf* (((symbol-function 'drgnx-fold--hub-p) (lambda () t))
-                    ((symbol-function 'nidhogg-lines-take-hub-folds)
+         (cl-letf* (((symbol-function 'nidhogg-lines-take-hub-folds)
                      (lambda (b f) (if (eq took 'real) (funcall real-take b f) took)))
                     ((symbol-function 'drgnx-hub--call-on)
                      (lambda (_proc method params &rest _)
@@ -99,6 +102,7 @@ up: CALLS holds the `minimap/watch' params sent, oldest first; TOOK is what `nid
            (fold-test--with
              (setq buffer-file-name file)
              ,@body))
+       (delete-process drgnx-hub--events)
        (delete-file file))))
 
 (ert-deftest drgnx-fold/a-buffer-with-no-parser-folds-by-the-hubs-layer ()
@@ -143,8 +147,7 @@ watch while folding takes the layer."
       ;; the minimap ends its watch while folding takes the layer: the watch stays on, without the heat
       (drgnx-fold-ranges)
       (load (expand-file-name "modules/editor/drgnx-minimap" drgnx-dir) nil t)
-      (cl-letf (((symbol-function 'drgnx-minimap--hub-p) (lambda () t)))
-        (drgnx-minimap--watch (current-buffer) nil))
+      (drgnx-minimap--watch (current-buffer) nil)
       (should (equal calls (list on)))
       ;; the module off: the watch ends
       (kill-local-variable 'drgnx-minimap--watched)
