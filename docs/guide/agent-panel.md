@@ -113,6 +113,11 @@ when the hub sends the first rows. The panel draws no steps of its own.
 
 ## What opens
 
+Under the header's first row, when the agent works on a task, a row of chips names what it works under (the task; the
+plan and the spec above it join when the hub reads them): a click selects that node in Work. The chips carry the
+worktree the agent works in (the name under `.claude/worktrees/`, else the folder's own name). When the agent made a
+plan, a row of status dots, one for each plan item with its words (done, running, to do), comes under the chips.
+
 The strip under the chips reads **Expand steps:** and has a pill for each step type (thinking, read, search, edit, execute,
 fetch, other), a ring, filled when it is on; **make default** is at its right end. In a narrow panel the pills go on as
 many lines as they need, and they follow the panel's width when you resize it. A type that is on shows the detail of its
@@ -170,8 +175,8 @@ What the agent changed and what it asks sit under the transcript as cards.
   agent is told, in a queued message, to take it back. The panel never writes to an agent's worktree and keeps no queue
   of its own; both keys are the review view's own functions (module `tools/work-space`).
 - **Permission cards:** a request the agent waits on: what it asks, on the attention tint and ringed in the attention
-  colour, and under it the buttons **Allow**, **Always** and **Deny** (their keys are in the buttons' hover text). `RET` allows it once, `A` always, `D`
-  denies it. The card goes when the hub's next snapshot no longer holds the request. A chat (an agent that is not a
+  colour, and under it the buttons **Allow**, **Always** and **Deny**: the kit's question card, with the keys
+  `y`, `a` and `n` on its buttons. In the panel `RET` allows it once, `A` always, `D` denies it. The card goes when the hub's next snapshot no longer holds the request. A chat (an agent that is not a
   worker or a manager) never edits or runs commands in its project outside Pair: the permission matrix answers such a
   request itself (`code.edit` is Never for chat in every preset), so no card shows and the agent hears "rejected".
 - The cards and the Edits line reach the panel's right edge, 12 px in.

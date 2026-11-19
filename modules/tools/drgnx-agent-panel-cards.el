@@ -17,6 +17,7 @@
 (require 'subr-x)
 (require 'drgnx-view)
 (require 'drgnx-registry)
+(require 'drgnx-ui-kit)                 ; the question card's action kind
 
 (declare-function drgnx-agent-panel--send-look "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
@@ -163,6 +164,22 @@ On a paired chat's ledger line: take that hunk back through the edit history, ke
       (drgnx-agent-panel--answer r (or always (drgnx-agent-panel-cards--option r '("allow_once" "allow"))))
       (when always (drgnx-agent-panel-explain-note-always r)))))
 
+;;;; The question card's buttons (the kit's action kind `agent-panel-card')
+
+(defun drgnx-agent-panel-cards--kit-act (args)
+  "A button of a permission request's question card: ARGS is (VERB ID), VERB `allow', `always' or `deny'.  It answers
+request ID of this panel's session with the option of that verb, as the card's commands do at point."
+  (let* ((verb (nth 0 args))
+         (main (or (drgnx-agent-panel--main-of (current-buffer)) (current-buffer))))
+    (with-current-buffer main
+      (when-let* ((r (drgnx-agent-panel-cards--request (nth 1 args))))
+        (pcase verb
+          ("allow" (drgnx-agent-panel--answer r (drgnx-agent-panel-cards--option r '("allow_once" "allow"))))
+          ("always" (let ((always (drgnx-agent-panel-cards--option r '("allow_always"))))
+                      (drgnx-agent-panel--answer r (or always (drgnx-agent-panel-cards--option r '("allow_once" "allow"))))
+                      (when always (drgnx-agent-panel-explain-note-always r))))
+          (_ (drgnx-agent-panel--answer r (drgnx-agent-panel-cards--option r '("reject_once" "reject_always")))))))))
+
 ;;;; Pinned cards and the edits ledger (the hub's cards; the to-do list is the hub's alone)
 
 (defvar-local drgnx-agent-panel--pins nil "Pinned cards of this chat, newest last: a list of (KEY . TEXT).")
@@ -214,6 +231,11 @@ take before their next command, and tell the hub."
   (drgnx-agent-panel--send-look))
 
 (defun drgnx-agent-panel-cards-setup ()
+  ;; y allows, a allows always, n denies: on a question card's button, each key runs the action with its verb
+  (drgnx-ui-kit-define-action 'agent-panel-card #'drgnx-agent-panel-cards--kit-act
+                              (list (cons "y" (lambda (args) (cons "allow" (cdr args))))
+                                    (cons "a" (lambda (args) (cons "always" (cdr args))))
+                                    (cons "n" (lambda (args) (cons "deny" (cdr args))))))
   (dolist (c '((agents-panel-pin "Pin the Card" drgnx-agent-panel-pin "Pin the card or step at point under the chips; again to unpin")
                (agents-panel-ledger "List the Edits" drgnx-agent-panel-ledger
                                     "The files the agent edited, and how many edits came since you last looked")

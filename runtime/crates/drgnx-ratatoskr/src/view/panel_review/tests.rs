@@ -123,7 +123,7 @@ fn a_hunk_is_a_header_over_numbered_lines_in_card_faces() {
 
 // pattern: D
 #[test]
-fn a_request_is_a_ringed_line_over_allow_always_and_deny() {
+fn a_request_is_a_needs_you_question_card_answered_with_y_a_n() {
     let e = env(400);
     let fonts = fonts();
     let p = [Permission {
@@ -140,23 +140,43 @@ fn a_request_is_a_ringed_line_over_allow_always_and_deny() {
         queue: &[],
     });
     let rows: Vec<Row> = rows.into_iter().filter(|r| r.key != "c:gap").collect();
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].key, "c:perm:7:0");
-    assert!(text(&rows[0]).contains("Read the gateway's log?"));
+    // the kit's question card (`kit::expand_rows`): its rows are `c:perm:7/N`, the head names the request
+    assert!(!rows.is_empty());
     assert!(
-        rows[0]
-            .runs
-            .iter()
-            .any(|(_, _, f)| f == FaceId::AgentPanelPermHead.name())
+        rows.iter().all(|r| r.key.starts_with("c:perm:7/")),
+        "{:?}",
+        rows.iter().map(|r| r.key.clone()).collect::<Vec<_>>()
     );
+    assert!(
+        text(&rows[0]).contains("Read the gateway's log?"),
+        "{}",
+        text(&rows[0])
+    );
+    // each choice is a button of the kit's action kind `agent-panel-card`: [kind, verb, id]
+    let actions: Vec<Value> = rows
+        .iter()
+        .flat_map(|r| r.props.iter())
+        .filter(|(_, _, n, _)| n == "drgnx-action")
+        .map(|(_, _, _, v)| v.clone())
+        .collect();
     assert_eq!(
-        action_of(&rows[1], "card:"),
-        ["card:allow:7", "card:always:7", "card:deny:7"]
+        actions,
+        [
+            json!(["agent-panel-card", "allow", "7"]),
+            json!(["agent-panel-card", "always", "7"]),
+            json!(["agent-panel-card", "deny", "7"]),
+        ]
     );
-    assert!(text(&rows[1]).contains("Allow"));
-    // the key hints are in the buttons' help, not jammed onto their labels (audit A3)
-    for hint in ["Allow ↵", "Always A", "Deny D"] {
-        assert!(!text(&rows[1]).contains(hint), "{hint}");
+    // the card's rows still name the request (the panel's commands read the card at point), and carry the kit's
+    // key hints: y allows, a allows always, n denies
+    assert!(rows.iter().all(|r| {
+        r.props
+            .iter()
+            .any(|(_, _, n, v)| n == "drgnx-agent-panel-card" && *v == json!(["perm", "7"]))
+    }));
+    let all: String = rows.iter().map(text).collect::<Vec<_>>().join("\n");
+    for hint in ["y", "a", "n"] {
+        assert!(all.contains(hint), "{hint}: {all}");
     }
 }
 
