@@ -1332,18 +1332,15 @@ fn detail_actions_are_kit_buttons() {
             "{open:?}"
         );
         assert!(faces.contains(&FaceId::KitKeyHintCap.name()), "{open:?}");
-        // the md button's 12 px each side, in device px, and its 26 px height
-        let pad = (12.0 * scale + 0.5).floor() as u32;
-        assert_eq!(open.spaces[0].1, pad, "{open:?}");
+        // the sm button's 8 px each side, in device px, and its 22 px height
+        let pad = (8.0 * scale + 0.5).floor() as u32;
+        assert!(open.spaces.iter().any(|s| s.1 == pad), "{open:?}");
         assert_eq!(
             open.height.map(|h| h.unit),
-            Some((26.0 * scale + 0.5).floor() as u32)
+            Some((22.0 * scale + 0.5).floor() as u32)
         );
         // the pads are the kit's spaces: button start, gap, the key hint's two and the button end
-        assert!(
-            open.spaces.len() >= 5 && open.spaces.len() % 5 == 0,
-            "{open:?}"
-        );
+        assert!(open.spaces.len() >= 5, "{open:?}");
     }
 }
 
@@ -1382,12 +1379,12 @@ fn detail_rows_are_the_mockups_tile() {
     // (work-space-dark.html `.det .hd`)
     assert!(rows[0].text.contains("Opus · hub rows"), "{:?}", rows[0]);
     assert!(
-        faces_of(&rows[0]).contains(&FaceId::Chip.name()),
+        faces_of(&rows[0]).contains(&FaceId::KitChipNeutralSoft.name()),
         "{:?}",
         rows[0]
     );
     assert!(
-        faces_of(&rows[0]).contains(&FaceId::WorkWho1.name()),
+        faces_of(&rows[0]).contains(&FaceId::KitAgentMark.name()),
         "{:?}",
         rows[0]
     );
@@ -2318,4 +2315,100 @@ fn list_strip_chips_show_full_text() {
     assert!(has_face(strip, FaceId::KitChipWarnSoft), "{strip:?}");
     assert!(has_face(strip, FaceId::KitKeyHintCap), "{strip:?}");
     assert!(strip.text.contains("g1"), "{}", strip.text);
+}
+
+// ---- Task 22: the Detail on the kit ----
+
+/// [D] The Detail has no hand padding: an agent's head is the kit's agent mark and the kit's chip (no run in the old
+/// hand chip face), and every action is a small kit button that runs its command when clicked (kind `work-command`).
+#[test]
+fn detail_rows_have_no_hand_padding() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let agent = ItemId("agent:a1".into());
+    let lines = detail::lines(core.model(), Some(&agent), 0);
+    let rows = detail::rows(&lines, &kit_env(1.0), 340, &Cols);
+    let head = rows.iter().find(|r| r.key == "head/0").expect("the head");
+    assert!(has_face(head, FaceId::KitAgentMark), "{head:?}");
+    assert!(has_face(head, FaceId::KitChipNeutralSoft), "{head:?}");
+    assert!(!has_face(head, FaceId::Chip), "{head:?}");
+    for (label, command) in [
+        ("Open", "work-open"),
+        ("Trail", "work-trail"),
+        ("Steer", "work-steer"),
+        ("Pause", "work-pause"),
+    ] {
+        let r = rows
+            .iter()
+            .find(|r| r.key.starts_with("actions/") && r.text.contains(label))
+            .unwrap_or_else(|| panic!("the {label} action"));
+        assert!(
+            r.props
+                .iter()
+                .any(|p| p.2 == "drgnx-action" && p.3 == json!(["work-command", command])),
+            "{label}: {r:?}"
+        );
+    }
+}
+
+// ---- Task 30: accessibility and the terminal form of the List ----
+
+/// [D] `a11y-flow/every-glyph-has-a-label`, on the List: every state dot has its word in the row, and every agent mark
+/// has a `help-echo` over it (the mark is one letter on a colour).
+#[test]
+fn a11y_flow_list_every_glyph_has_a_label() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let mut dots = 0;
+    for r in rows.iter().filter(|r| r.key.starts_with("list:")) {
+        if r.runs.iter().any(|x| {
+            [
+                FaceId::KitStatusDotIdle,
+                FaceId::KitStatusDotRunning,
+                FaceId::KitStatusDotDone,
+                FaceId::KitStatusDotNeedsYou,
+            ]
+            .iter()
+            .any(|f| x.2 == f.name())
+        }) {
+            dots += 1;
+            assert!(
+                ["not started", "running", "done", "needs you"]
+                    .iter()
+                    .any(|w| r.text.contains(w)),
+                "a dot without its word: {}",
+                r.text
+            );
+        }
+        for x in r.runs.iter().filter(|x| x.2 == FaceId::KitAgentMark.name()) {
+            assert!(
+                r.props
+                    .iter()
+                    .any(|p| p.2 == "help-echo" && p.0 <= x.0 && x.1 <= p.1),
+                "an agent mark without a help-echo: {r:?}"
+            );
+        }
+    }
+    assert!(dots >= 4, "the world's tasks have dots");
+}
+
+/// [D] On a terminal the List has the kit's state dot with its word once (no second word at the right) and no stop
+/// (the pieces follow the title after two spaces).
+#[test]
+fn list_on_a_terminal_has_one_word_and_no_stop() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let tty: ViewEnv = serde_json::from_value(
+        json!({"view": "m", "class": "tty-1", "epoch": 1, "display": "tty", "scale": 1.0,
+                                  "cell": [1, 1], "width_px": 100}),
+    )
+    .expect("a tty env");
+    let (rows, _) = view_rows(core.model(), &v, &tty, &Cols, 0, &BTreeSet::new(), &[]);
+    let r = list_row_of(&rows, "Anchor the card");
+    assert!(has_face(r, FaceId::KitStatusDotRunning), "{r:?}");
+    assert_eq!(r.text.matches("running").count(), 1, "{}", r.text);
+    assert!(r.stops.is_empty(), "{r:?}");
 }

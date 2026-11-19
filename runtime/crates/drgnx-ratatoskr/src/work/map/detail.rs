@@ -474,6 +474,20 @@ fn wrap(text: &str, room: f32, m: &dyn Measure) -> Vec<String> {
     lines
 }
 
+/// The registered command a button of the Detail's actions runs, by its label.
+fn command_of(label: &str) -> Option<&'static str> {
+    match label {
+        "Open" => Some("work-open"),
+        "Files" => Some("work-files"),
+        "Diffs" => Some("work-diffs"),
+        "Trail" => Some("work-trail"),
+        "Steer" => Some("work-steer"),
+        "Pause" => Some("work-pause"),
+        "Review" => Some("work-review"),
+        _ => None,
+    }
+}
+
 /// The width of the key column, logical px.
 const KEY_PX: f32 = 66.0;
 
@@ -521,26 +535,31 @@ pub(crate) fn rows(lines: &[Line], kit: &KitEnv, width_px: u32, m: &dyn Measure)
                     let badge = parts[0];
                     let letter = badge.chars().next().unwrap_or('?');
                     let number = badge.chars().last().unwrap_or('1');
-                    let from = b.pos();
-                    b.push(&format!(" {letter} "), None);
-                    let to = b.pos();
-                    b.face(
-                        from,
-                        to,
-                        FaceId::WORK_WHO[number.to_digit(10).unwrap_or(1).clamp(1, 6) as usize - 1]
-                            .name(),
+                    kit::expand(
+                        &mut b,
+                        kit,
+                        &Comp::AgentMark {
+                            slot: number.to_digit(10).unwrap_or(1).clamp(1, 12) as u8,
+                            handle: letter.to_string(),
+                        },
                     );
                     b.push(" ", None)
                         .push(parts.get(1).unwrap_or(&""), Some(FaceId::UiHeading.name()));
                     if let Some(chip) = parts.get(2).filter(|c| !c.is_empty()) {
-                        let width =
-                            fit::width_in(m, Some(FaceId::Chip.name()), &format!(" {chip} "))
-                                .ceil();
-                        b.stop(width_px.saturating_sub(width as u32 + pad));
-                        let from = b.pos();
-                        b.push(&format!(" {chip} "), None);
-                        let to = b.pos();
-                        b.face(from, to, FaceId::Chip.name());
+                        // the kit's chip at the right edge: measured as the kit expands it
+                        let comp = Comp::Chip {
+                            label: (*chip).to_owned(),
+                            tone: kit::Tone::Neutral,
+                            fill: kit::ChipFill::Soft,
+                            icon: None,
+                            state: State::Rest,
+                            action: None,
+                        };
+                        let mut scratch = RowBuilder::new("measure");
+                        kit::expand(&mut scratch, kit, &comp);
+                        let width = crate::work::trail::flow::row_px(m, &scratch.finish());
+                        b.stop(width_px.saturating_sub(width + pad));
+                        kit::expand(&mut b, kit, &comp);
                     }
                 }
                 ("actions", Some(_)) => {
@@ -556,10 +575,14 @@ pub(crate) fn rows(lines: &[Line], kit: &KitEnv, width_px: u32, m: &dyn Measure)
                             &Comp::Button {
                                 label: pair[0].to_owned(),
                                 style: ButtonStyle::Secondary,
-                                size: Size::Md,
+                                size: Size::Sm,
                                 state: State::Rest,
                                 key: pair.get(1).map(|k| (*k).to_owned()),
-                                action: None,
+                                // a click runs the action's command in this window (`work-command`, as the Flow's)
+                                action: command_of(pair[0]).map(|id| kit::Action {
+                                    kind: "work-command".to_owned(),
+                                    args: vec![Value::String(id.to_owned())],
+                                }),
                             },
                         );
                     }
