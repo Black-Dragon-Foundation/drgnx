@@ -213,7 +213,16 @@ take before their next command, and tell the hub."
   (setq drgnx-agent-panel--ledger-open (not drgnx-agent-panel--ledger-open))
   (drgnx-agent-panel--send-look))
 
+(declare-function drgnx-agent-panel-act "drgnx-agent-panel-steps" (event))
+(declare-function drgnx-ui-kit-define-action "drgnx-ui-kit" (kind function keys))
+
+(defun drgnx-agent-panel--kit-card (_args)
+  "The action kind `agent-panel-card' of the kit buttons on a permission card: a click runs the panel's own dispatcher
+\(`drgnx-agent-panel-act', which reads the button's `drgnx-agent-panel-action'); RET on the card allows it once."
+  (if (mouse-event-p last-input-event) (drgnx-agent-panel-act last-input-event) (drgnx-agent-panel-allow)))
+
 (defun drgnx-agent-panel-cards-setup ()
+  (drgnx-ui-kit-define-action 'agent-panel-card #'drgnx-agent-panel--kit-card nil)
   (dolist (c '((agents-panel-pin "Pin the Card" drgnx-agent-panel-pin "Pin the card or step at point under the chips; again to unpin")
                (agents-panel-ledger "List the Edits" drgnx-agent-panel-ledger
                                     "The files the agent edited, and how many edits came since you last looked")

@@ -155,11 +155,11 @@ the single root's row is invisible, with no tail."
                         (seq-filter (lambda (o) (overlay-get o 'drgnx-row-tail)) (overlays-in (point-min) (point-max))))))))
 
 (defun drgnx-explorer-rows-nav-test--badges ()
-  "Each line's badge (an empty overlay's `before-string') as (LINE . STRING), in line order."
+  "Each line's badge (an empty overlay's `after-string') as (LINE . STRING), in line order."
   (let (out)
     (dolist (o (overlays-in (point-min) (point-max)))
-      (when (and (= (overlay-start o) (overlay-end o)) (overlay-get o 'before-string))
-        (push (cons (1- (line-number-at-pos (overlay-start o))) (overlay-get o 'before-string)) out)))
+      (when (and (= (overlay-start o) (overlay-end o)) (overlay-get o 'after-string))
+        (push (cons (1- (line-number-at-pos (overlay-start o))) (overlay-get o 'after-string)) out)))
     (sort out (lambda (a b) (< (car a) (car b))))))
 
 (ert-deftest drgnx-explorer-rows/who-is-here-badges-from-the-hub ()

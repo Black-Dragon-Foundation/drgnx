@@ -71,6 +71,63 @@
       (should (string-search "+1" badge))
       (should (= 3 (drgnx-agents-editor-here-test--marks (substring badge 0 (string-search "+1" badge))))))))
 
+(declare-function drgnx-explorer--badge-env "drgnx-explorer")
+(declare-function drgnx-agents-editor-here--explorer-badge "drgnx-agents-editor-here")
+
+(ert-deftest drgnx-agents-editor/the-hub-keeps-room-for-every-badge ()
+  "Pattern D: the Explorer's env says how wide a badge is (`badge': each agent's room on a file's and a folder's row,
+how many are shown, the +N), and the room the hub keeps from it is never less than the badge drawn, for one agent up
+to past the limit; with the module off there is no badge and no room."
+  (require 'drgnx-explorer)
+  (drgnx-agents-editor-here-test--with
+    (pcase-let* ((`[[,file-each ,file-limit] [,dir-each ,dir-limit] ,more] (drgnx-explorer--badge-env (selected-window)))
+                 (room (lambda (n each limit) (+ (* (min n limit) each) (if (> n limit) more 0)))))
+      (should (and (= file-limit 3) (= dir-limit 6)))
+      (dolist (n (number-sequence 1 9))
+        (let ((ords (number-sequence 1 n)))
+          (should (<= (string-width (drgnx-agents-editor-here--explorer-badge ords nil)) (funcall room n file-each file-limit)))
+          (should (<= (string-width (drgnx-agents-editor-here--explorer-badge ords t)) (funcall room n dir-each dir-limit)))))))
+  (should-not (drgnx-explorer--badge-env (selected-window))))
+
+(defvar drgnx-view-env--views)
+(defvar drgnx-view-env--sent)
+(defvar drgnx-view-env--glyphs)
+(defvar drgnx-view-env--hooked)
+(defvar drgnx-view-env-send-function)
+(defvar drgnx-view-env-badge)
+(defvar drgnx-explorer-hub-view-name)
+(declare-function drgnx-view-env-register "drgnx-view-env")
+(declare-function drgnx-view-env-teardown "drgnx-view-env")
+
+(ert-deftest drgnx-agents-editor/turning-the-module-on-or-off-sends-the-explorer-s-env ()
+  "Pattern D: the Explorer's env goes to the hub again when who is here is turned on (with the badge's widths) and
+off (without them), so the room the hub keeps for a badge follows at once, not at the next window change."
+  (require 'drgnx-explorer)
+  (require 'drgnx-view-env)
+  (let* ((sent nil)
+         (drgnx-view-env--views (make-hash-table :test #'equal))
+         (drgnx-view-env--sent (make-hash-table :test #'equal))
+         (drgnx-view-env--glyphs (make-hash-table :test #'equal))
+         (drgnx-view-env--hooked nil)
+         (drgnx-view-env-send-function (lambda (m p) (when (equal m "view/env") (push p sent))))
+         (buf (generate-new-buffer " *explorer-env-test*")))
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer buf)
+      (setq-local drgnx-view-env-badge #'drgnx-explorer--badge-env)
+      (unwind-protect
+          (progn
+            (drgnx-view-env-register drgnx-explorer-hub-view-name buf)
+            (should (= 1 (length sent)))
+            (should-not (plist-get (car sent) :badge))
+            (drgnx-agents-editor-here-test--with
+              (should (= 2 (length sent)))
+              (should (plist-get (car sent) :badge)))
+            (should (= 3 (length sent)))
+            (should-not (plist-get (car sent) :badge)))
+        (drgnx-view-env-teardown)
+        (kill-buffer buf)))))
+
 (ert-deftest drgnx-agents-editor/folder-dots-per-agent ()
   (drgnx-agents-editor-here-test--with
     (should (= 2 (drgnx-agents-editor-here-test--marks (drgnx-agents-editor-here--badge '(1 2) 6 nil))))

@@ -2258,6 +2258,7 @@ mod tests {
             cell: (8, 16),
             width_px: (1280.0 * scale) as u32,
             tail: None,
+            badge: None,
             palette: vec![],
             tty_widths: vec![],
             tz: String::new(),

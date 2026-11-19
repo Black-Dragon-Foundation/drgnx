@@ -1092,6 +1092,28 @@ what changed: the buffers whose text did, each window's body width before and af
   (drgnx-look-scene--try "settled" (drgnx-look-scene--panel-unsettled drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 
+(defvar drgnx-agent-panel--snap)
+(defvar drgnx-agent-panel--session)
+(declare-function drgnx-agent-panel-open-tab "drgnx-agent-panel" (session))
+(declare-function drgnx-agent-panel-context-add "drgnx-agent-panel-composer" (item))
+(declare-function drgnx-agent-panel-intent-ask "drgnx-agent-panel-composer" ())
+(declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer" ())
+
+(defun drgnx-look-scene-conversation-tab ()
+  "The conversation as an editor tab (Flow Task 23): the header above, the transcript and the composer below, in one
+tile beside the editor; the composer with Ask chosen, a note waiting for the next step and one context chip."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "tab"
+    (unless (buffer-live-p drgnx-look-scene--panel) (error "No agent panel (the mock agent did not run)"))
+    (drgnx-agent-panel-open-tab (buffer-local-value 'drgnx-agent-panel--session drgnx-look-scene--panel))
+    (with-current-buffer drgnx-look-scene--panel
+      (setq drgnx-agent-panel--snap (plist-put (copy-sequence drgnx-agent-panel--snap) :queue (vector "also run the lint")))
+      (drgnx-agent-panel-context-add '(:file "src/main.el"))
+      (drgnx-agent-panel-intent-ask))
+    (drgnx-agent-panel-composer-redraw)
+    (drgnx-look-scene--panel-settle drgnx-look-scene--panel))
+  (drgnx-look-scene--answer))
+
 (defun drgnx-look-scene--panel-top (buffer)
   "An error unless the header window above BUFFER, the agent panel's transcript, holds the hub's header row (`p:head')
 and the transcript's window, its point at the end, shows the end whole on its last line (or the whole transcript at
@@ -2649,11 +2671,31 @@ card, a chip), whose width its row's layout sets, not the text's."
                              (and (stringp b) (not (equal b bg))))))))
               faces)))
 
+(defun drgnx-look-scene--kept-at-end (window eol)
+  "The px a row ending at EOL in WINDOW keeps clear of its text at the right edge, as the hub fits it: its tail's git
+mark's place (or an always-shown control's: the env's `tail', `drgnx-view-env-tail') and the who-is-here badge drawn
+after its text (an empty overlay's `after-string' at EOL).  `drgnx-look-scene--px' leaves both out, so without them a
+name cut short of its mark (`test/unit/gateway-test.el' in tiling-resize at s2) read as cut where it fits."
+  (let ((tail-fn (bound-and-true-p drgnx-view-env-tail)) (kept 0))
+    ;; the tail's overlay spans its row (it ends at EOL), the badge's is empty at EOL
+    (dolist (o (delete-dups (append (overlays-in (max (point-min) (1- eol)) eol) (overlays-in eol eol))))
+      (cond
+       ((overlay-get o 'drgnx-row-tail)
+        (pcase-let ((`(,mark ,_ ,control . ,_) (overlay-get o 'drgnx-row-tail))
+                    (`(,at-mark ,at-control) (and tail-fn (funcall tail-fn window))))
+          (cond ((and mark at-mark) (setq kept (+ kept at-mark)))
+                ((and (stringp control) at-control (get-text-property 0 'face control))
+                 (setq kept (+ kept at-control))))))
+       ((and (= (overlay-start o) eol) (= (overlay-end o) eol) (stringp (overlay-get o 'after-string)))
+        (setq kept (+ kept (string-pixel-width (overlay-get o 'after-string) (current-buffer)))))))
+    kept))
+
 (defun drgnx-look-scene--free-after (window bol pos eol)
   "The px free after POS on its row BOL..EOL in WINDOW: the blanks and stops' spaces from POS on, and, when they reach
-EOL, the body's px past the row's end.  A blank in a block's face (`drgnx-look-scene--filled-p': a card's fill or
-edge) ends the count: when the row ends in that block, its end pad less the row's start pad in the same face (the
-block's own padding, kept on both sides) counts, and the px past the block are not the text's."
+EOL, the body's px past the row's end less what the row keeps clear there (`drgnx-look-scene--kept-at-end').  A blank
+in a block's face (`drgnx-look-scene--filled-p': a card's fill or edge) ends the count: when the row ends in that
+block, its end pad less the row's start pad in the same face (the block's own padding, kept on both sides) counts, and
+the px past the block are not the text's."
   (let ((q pos) (frame (window-frame window)) (block nil))
     (while (and (< q eol) (drgnx-look-scene--blank-p q) (not block))
       (if (drgnx-look-scene--filled-p q frame) (setq block q) (setq q (1+ q))))
@@ -2661,7 +2703,8 @@ block's own padding, kept on both sides) counts, and the px past the block are n
       (cond
        ((not block)
         (+ free (if (< q eol) 0
-                  (max 0 (- (window-body-width window t) (drgnx-look-scene--px window bol eol))))))
+                  (max 0 (- (window-body-width window t) (drgnx-look-scene--px window bol eol)
+                            (drgnx-look-scene--kept-at-end window eol))))))
        (t
         (let ((e block) (face (get-text-property block 'face)) (s bol))
           (while (and (< e eol) (drgnx-look-scene--blank-p e) (equal (get-text-property e 'face) face))
@@ -3309,6 +3352,8 @@ the window's top rows, dark."
 (declare-function drgnx-pane-window "drgnx-panes")
 (declare-function drgnx-grid-split-tile "drgnx-grid" (window side))
 (declare-function drgnx-grid--make-editor "drgnx-grid" (window))
+(declare-function drgnx-grid-tiles "drgnx-grid" (&optional frame filter))
+(declare-function drgnx-chrome-tabs "drgnx-chrome" (w))
 (defvar drgnx-look-scene--term nil "The tiling scenes' terminal (the panel's tile j).")
 
 (defun drgnx-look-scene--six-tiles ()

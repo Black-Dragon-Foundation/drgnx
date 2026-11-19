@@ -11,10 +11,11 @@ use super::icons;
 use crate::agents::session::rows::one_line;
 use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::{self, FontSet};
+use drgnx_rows::kit::{self, Action, Choice, Comp, QuestionKind};
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::agents::{Permission, RpcId};
 use runstav::methods::view::{Display, ViewEnv};
-use serde_json::{Value, json};
+use serde_json::json;
 
 /// The most files that get diff cards, and the most lines of a hunk a card shows.
 pub const MAX_FILES: usize = 20;
@@ -296,72 +297,51 @@ fn diff_card(
     rows
 }
 
-/// Request P as a card: what the agent asks, one line ringed in the attention colour, and under it Allow, Always and
-/// Deny.
-fn perm_card(i: &In, images: &mut Vec<(ImageId, String)>, p: &Permission) -> Vec<Row> {
-    let env = i.env;
+/// Request P as a kit question card: the needs-you ring, the head (the status dot and what the agent asks) on the
+/// attention tint, then Allow, Always and Deny as kit buttons with their key hints (`y a n`). A click runs the panel's
+/// own action (`drgnx-agent-panel-action` = `card:allow:ID`…), and every row carries the card for the commands that read
+/// the card at point.
+fn perm_card(i: &In, _images: &mut Vec<(ImageId, String)>, p: &Permission) -> Vec<Row> {
     let id = id_of(&p.id);
-    let title = p.title.as_deref().unwrap_or("the agent asks");
-    let card = json!(["perm", id]);
-    let mut b = RowBuilder::new(format!("c:perm:{id}:0"));
-    b.push(" ", None);
-    icon(
-        &mut b,
-        images,
-        "shield",
-        "⛨",
-        px(env, 16.0),
-        FaceId::AgentPanelPermHead.name(),
+    let title = format!(
+        "{}?",
+        one_line(p.title.as_deref().unwrap_or("the agent asks"), 70)
     );
-    b.push(&format!(" {}?", one_line(title, 70)), None);
-    b.stop(env.width_px.saturating_sub(px(env, 12.0)));
-    let end = b.pos();
-    b.face(0, end, FaceId::AgentPanelPermHead.name());
-    b.face(0, end, FaceId::CardSingle.name());
-    b.prop(0, end, "drgnx-agent-panel-card", card.clone());
-    let head = b.finish();
-    let mut b = RowBuilder::new(format!("c:perm:{id}:1"));
-    b.push(" ", None);
-    for (k, (label, face, action, help)) in [
-        (
-            " Allow ",
-            FaceId::KitButtonPrimary.name(),
-            "allow",
-            "RET: allow it once",
-        ),
-        (
-            " Always ",
-            FaceId::KitButtonSecondary.name(),
-            "always",
-            "A: allow it from now on",
-        ),
-        (
-            " Deny ",
-            FaceId::KitButtonSecondary.name(),
-            "deny",
-            "D: deny it",
-        ),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        if k > 0 {
-            b.push(" ", None);
+    let choices = [("Allow", "allow"), ("Always", "always"), ("Deny", "deny")]
+        .iter()
+        .map(|(label, act)| Choice {
+            label: (*label).to_owned(),
+            key: String::new(),
+            action: Action {
+                kind: "agent-panel-card".to_owned(),
+                args: vec![json!(format!("card:{act}:{id}"))],
+            },
+        })
+        .collect();
+    let card = Comp::QuestionCard {
+        kind: QuestionKind::Permission,
+        title,
+        body: String::new(),
+        choices,
+    };
+    let mut rows = kit::expand_rows(&i.env.kit(), &format!("c:perm:{id}"), &card);
+    let at = json!(["perm", id]);
+    for r in &mut rows {
+        let clicks: Vec<(u32, u32, String)> = r
+            .props
+            .iter()
+            .filter(|p| p.2 == "drgnx-action")
+            .filter_map(|p| Some((p.0, p.1, p.3.get(1)?.as_str()?.to_owned())))
+            .collect();
+        for (from, to, act) in clicks {
+            r.props
+                .push((from, to, "drgnx-agent-panel-action".to_owned(), json!(act)));
         }
-        let s = b.pos();
-        b.push(label, Some(face));
-        let e = b.pos();
-        b.prop(
-            s,
-            e,
-            "drgnx-agent-panel-action",
-            json!(format!("card:{action}:{id}")),
-        );
-        b.prop(s, e, "help-echo", Value::String(help.to_owned()));
+        let end = u32::try_from(r.text.chars().count()).unwrap_or(u32::MAX);
+        r.props
+            .push((0, end, "drgnx-agent-panel-card".to_owned(), at.clone()));
     }
-    let end = b.pos();
-    b.prop(0, end, "drgnx-agent-panel-card", card);
-    vec![head, b.finish()]
+    rows
 }
 
 /// Queued note N as one line: "  ⏸ queued 1  text   (e edit · d drop)".

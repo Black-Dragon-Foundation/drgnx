@@ -904,6 +904,22 @@ shown one selected, then the ✕."
             ((and (plist-get place :below-map) (drgnx-grid-room-p map 'below))
              (drgnx-grid--new-tile map 'below (list kind)))))))
 
+(defun drgnx-grid-show-beside-editor (entry buffer select)
+  "Show BUFFER, an instance of a kind (ENTRY is (KIND . KEY), as `:instance-key' gives it), in a tile of its own split
+off the selected editor tile: an editor tab's place, with the kind's companions (an atomic tile).  A tile that already
+holds ENTRY comes to the front instead; with no room beside the editor tile, the kind shows as it always does.  Returns
+the window."
+  (let* ((frame (selected-frame))
+         (editor (or (drgnx-state-editor-window frame) (car (drgnx-grid-tiles frame 'editor)))))
+    (cond ((drgnx-grid--tile-of entry frame) (drgnx-grid-show entry :buffer buffer :select select))
+          ((and (window-live-p editor) (drgnx-grid-room-p editor 'right))
+           (let ((w (drgnx-grid--new-tile editor 'right (list entry))))
+             (drgnx-grid--put-buffer w entry frame buffer)
+             (drgnx-grid--put-row w)
+             (when select (select-window w))
+             w))
+          (t (drgnx-grid-show entry :buffer buffer :select select)))))
+
 (defun drgnx-grid--instance-windows (kind frame)
   "The windows on FRAME showing an instance of KIND: its docked window, then the tiles holding its instances."
   (let ((docked (and (drgnx-grid--docked-p kind) (drgnx-pane--areas-window kind frame))))

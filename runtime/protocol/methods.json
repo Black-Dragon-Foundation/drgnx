@@ -9495,7 +9495,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a prompt to the session (queued or steering as its mode says; with if_free, only when it is free, else false)",
+      "doc": "a prompt to the session (queued or steering as its mode says; intent ask: answer only, no plan change and no file touched; with if_free, only when it is free, else false)",
       "name": "agents/send",
       "params": {
         "$defs": {
@@ -9508,6 +9508,14 @@
           "Prompt": {
             "description": "a prompt or a message: at most 1 MiB (1048576 characters)",
             "maxLength": 1048576,
+            "type": "string"
+          },
+          "SendIntent": {
+            "description": "What a message asks of the agent (`agents/send`).",
+            "enum": [
+              "steer",
+              "ask"
+            ],
             "type": "string"
           }
         },
@@ -9522,6 +9530,17 @@
               "boolean",
               "null"
             ]
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SendIntent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the message asks of the agent: `steer` (the default: queued, or steering, as the mode says) or `ask`\n(answer only: the agent answers the question without changing its plan or touching a file).  Neither cancels."
           },
           "text": {
             "$ref": "#/$defs/Prompt"
@@ -47919,6 +47938,56 @@
           "attach": {
             "description": "The first env of a new buffer for this (view, class): a pair the hub already holds for the connection (no\n`view/close` came) is dropped and starts again, so the new buffer gets the rows whole.",
             "type": "boolean"
+          },
+          "badge": {
+            "description": "What the editor draws right after a row's name, before its tail: the Explorer's who-is-here badge\n(`drgnx-explorer-badge-functions`), as `[[file_each, file_limit], [folder_each, folder_limit], more]` px (a\nterminal's: columns): each agent shown takes EACH (a space and its mark, a file's with its initial), up to LIMIT\nshown, and MORE for the `+N` of the rest. A row with agents here ends its name that much shorter. None: no badge.",
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            ],
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "cell": {
             "description": "The frame's character cell, `[width, height]` px.",

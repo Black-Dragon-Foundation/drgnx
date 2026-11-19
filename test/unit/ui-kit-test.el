@@ -207,6 +207,17 @@
     (should (equal (plist-get (cdr normal) :background) "ok-tint"))
     (should-not (plist-get (cdr normal) :box))))
 
+(ert-deftest drgnx-ui-kit/buttons-are-rounded-under-glitnir ()
+  ;; the button's geometry names radius 6: a ringed button face (secondary, primary and danger: the filled ones ring in
+  ;; their own fill) carries it as its box's corner radius where Glitnir draws it, none otherwise
+  (let ((tok (lambda (token) (symbol-name token))))
+    (dolist (style '(primary secondary danger))
+      (let* ((name (intern (format "drgnx-kit-button-%s" style)))
+             (round (plist-get (cdr (assq name (drgnx-ui-kit-theme-specs tok nil nil t))) :box))
+             (plain (plist-get (cdr (assq name (drgnx-ui-kit-theme-specs tok nil nil nil))) :box)))
+        (should (eql (plist-get round :corner-radius) 6))
+        (should-not (plist-get plain :corner-radius))))))
+
 (ert-deftest drgnx-ui-kit/chip-geometry ()
   (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :height) 20))
   (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :pad) '(7 . 7)))

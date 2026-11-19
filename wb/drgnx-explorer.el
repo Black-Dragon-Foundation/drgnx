@@ -31,6 +31,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-file-stream)
 (defvar drgnx-view-env-tail)
+(defvar drgnx-view-env-badge)
 (require 'drgnx-quick-open)                ; Find's rows from the hub (`search/files')
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
@@ -978,15 +979,30 @@ read on the same connection (`git/letters'), which a new hub has lost.  At attac
   "On the rows path, the tail overlay of each drawn row by its key (`drgnx-wb-row-tail-overlay'), moved with the row.")
 
 (defvar-local drgnx-explorer--badges nil
-  "On the rows path, the who-is-here badge overlay (empty, at the name's end) of each drawn row that has one, by key.")
+  "On the rows path, the who-is-here badge overlay (empty, at the name's end, its `after-string') of each drawn row
+that has one, by key.")
 
 (defvar drgnx-explorer-badge-functions nil
   "Called with (ORDINALS DIRP) for a row the hub says agents are at (`drgnx-agents-here': their ordinals, ascending;
 DIRP for a folder with a file of theirs inside); the first string returned is the row's badge, drawn after the name.
 The marks and colours of an ordinal are the display's: who is here (tools/agents-in-editor) adds its function.")
 
+(defvar drgnx-explorer-badge-width-functions nil
+  "Called with a window showing the Explorer: the first non-nil value is how wide the badges of
+`drgnx-explorer-badge-functions' are drawn there, the env's `badge' ([[FILE-EACH FILE-LIMIT] [FOLDER-EACH
+FOLDER-LIMIT] MORE], pixels or a terminal's columns: each agent shown takes EACH, LIMIT shown at most, the rest a
+\"+N\" of MORE).  The hub keeps that room after a name.  Who is here (tools/agents-in-editor) adds its function.")
+
+(defun drgnx-explorer--badge-env (window)
+  "The Explorer's `drgnx-view-env-badge': WINDOW's badge widths from `drgnx-explorer-badge-width-functions', or nil."
+  (run-hook-with-args-until-success 'drgnx-explorer-badge-width-functions window))
+
 (defun drgnx-explorer--rows-badge (key eol ords)
-  "Put KEY's badge for the agents ORDS (a list or vector from the hub, or nil) at EOL, moving its overlay; none: gone."
+  "Put KEY's badge for the agents ORDS (a list or vector from the hub, or nil) at EOL, moving its overlay; none: gone.
+The badge is its empty overlay's `after-string', above the tail's priority: Emacs draws every after-string at a
+position before any before-string there, and after-strings by falling priority, so the badge comes after the name and
+before the tail (`drgnx-explorer--rows-tail'), whose stretch then ends the row at the body's edge.  As a before-string
+it came after the tail and ran past the edge by its width."
   (let* ((badges (or drgnx-explorer--badges (setq drgnx-explorer--badges (make-hash-table :test #'equal))))
          (o (gethash key badges))
          (s (and ords (> (length ords) 0)
@@ -996,7 +1012,7 @@ The marks and colours of an ordinal are the display's: who is here (tools/agents
         (when o (delete-overlay o) (remhash key badges))
       (if (and o (overlay-buffer o)) (move-overlay o eol eol) (setq o (make-overlay eol eol)) (puthash key o badges))
       (overlay-put o 'priority 5)
-      (overlay-put o 'before-string s))))
+      (overlay-put o 'after-string s))))
 
 (defun drgnx-explorer--rows-tail (key beg eol)
   "Give KEY's drawn row (BEG to EOL) its tail at the right edge, its overlay moved rather than made again: the ⋯
@@ -1139,6 +1155,8 @@ Explorer buffer's: the twin's kill leaves them."
     (require 'drgnx-view-env)
     ;; each row's tail is drawn from the window's right edge: the hub ends a row's text short of what it draws
     (setq-local drgnx-view-env-tail #'drgnx-wb-tail-px)
+    ;; and its badge after the name: the hub ends the name short of it too
+    (setq-local drgnx-view-env-badge #'drgnx-explorer--badge-env)
     (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--rows-subscribe)
     (drgnx-explorer--rows-subscribe)))
 

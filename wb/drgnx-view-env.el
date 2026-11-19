@@ -263,6 +263,16 @@ in other display classes share), or nil."
   (when-let* ((fn (and (buffer-live-p buffer) (buffer-local-value 'drgnx-view-env-tail buffer))))
     (apply #'vector (funcall fn window))))
 
+(defvar-local drgnx-view-env-badge nil
+  "In a hub-fed view's buffer whose rows get a badge between their text and their tail (the Explorer's who-is-here
+badge), a function of a window: the env's `badge', [[FILE-EACH FILE-LIMIT] [FOLDER-EACH FOLDER-LIMIT] MORE] in pixels
+(a terminal's: columns), or nil for none.  The hub ends the text of a row with agents at it that much shorter.")
+
+(defun drgnx-view-env--badge (window buffer)
+  "The env's `badge' for WINDOW from `drgnx-view-env-badge' of BUFFER (the view's own), or nil."
+  (when-let* ((fn (and (buffer-live-p buffer) (buffer-local-value 'drgnx-view-env-badge buffer))))
+    (funcall fn window)))
+
 (defun drgnx-view-env--envs (view &optional wins)
   "VIEW's env per display class it shows in now: a list of (CLASS . PARAMS), PARAMS without the epoch.  WIDTH_PX is
 the narrowest window of the class (Call 2: one buffer per class, which holds one fit).  WINS: VIEW's windows with
@@ -271,7 +281,8 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
     (dolist (wf (or wins (drgnx-view-env--window-classes view)))
       (let* ((w (car wf)) (facts (cdr wf)) (class (drgnx-view-env--class facts))
              (width (drgnx-view-env--width w facts)) (have (assoc class classes))
-             (tail (drgnx-view-env--tail w (car (gethash view drgnx-view-env--views)))))
+             (tail (drgnx-view-env--tail w (car (gethash view drgnx-view-env--views))))
+             (badge (drgnx-view-env--badge w (car (gethash view drgnx-view-env--views)))))
         (if have
             (setf (plist-get (cdr have) :width_px) (min width (plist-get (cdr have) :width_px)))
           (push (cons class (append (list :view view :class class :display (plist-get facts :display)
@@ -290,7 +301,9 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
                                           ;; rows only read, never drawn: the hub fits them to no window
                                           :headless (if (gethash view drgnx-view-env--headless) t :false))
                                     ;; where a row's tail is drawn, from the right edge
-                                    (and tail (list :tail tail))))
+                                    (and tail (list :tail tail))
+                                    ;; how wide a row's badge is, between its text and its tail
+                                    (and badge (list :badge badge))))
                 classes))))
     (nreverse classes)))
 
