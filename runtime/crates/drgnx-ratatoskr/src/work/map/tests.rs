@@ -2562,19 +2562,64 @@ fn detail_with_facts_shows_every_unit_the_chain_and_set_to_p90() {
     let task = ItemId("task:t2".into());
     let facts = Facts {
         units: vec![
-            UnitLine { unit: Unit::Usd, spent: 9.0, limit: Some(12.0), forecast: Some(Range { p50: 10.0, p90: 14.0 }) },
-            UnitLine { unit: Unit::LimitShare, spent: 0.11, limit: Some(0.15), forecast: None },
+            UnitLine {
+                unit: Unit::Usd,
+                spent: 9.0,
+                limit: Some(12.0),
+                forecast: Some(Range {
+                    p50: 10.0,
+                    p90: 14.0,
+                }),
+            },
+            UnitLine {
+                unit: Unit::LimitShare,
+                spent: 0.11,
+                limit: Some(0.15),
+                forecast: None,
+            },
         ],
-        chain: vec![Link { scope: "plan", unit: Unit::Usd, remaining: 3.0 }, Link { scope: "spec", unit: Unit::Usd, remaining: 50.0 }],
+        chain: vec![
+            Link {
+                scope: "plan",
+                unit: Unit::Usd,
+                remaining: 3.0,
+            },
+            Link {
+                scope: "spec",
+                unit: Unit::Usd,
+                remaining: 50.0,
+            },
+        ],
     };
     let lines = detail::lines_with_facts(core.model(), Some(&task), 0, Some(&facts));
-    let text: Vec<&str> = lines.iter().filter(|l| l.0 == "budget").map(|l| l.1.as_str()).collect();
-    assert!(text.iter().any(|l| l.contains("usd") && l.contains("$9 of $12") && l.contains("Set to p90 ($14)")), "{text:?}");
-    assert!(text.iter().any(|l| l.contains("% wk") && l.contains("11 % of 15 %")), "{text:?}");
+    let text: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.0 == "budget")
+        .map(|l| l.1.as_str())
+        .collect();
+    assert!(
+        text.iter().any(|l| l.contains("usd")
+            && l.contains("$9 of $12")
+            && l.contains("Set to p90 ($14)")),
+        "{text:?}"
+    );
+    assert!(
+        text.iter()
+            .any(|l| l.contains("% wk") && l.contains("11 % of 15 %")),
+        "{text:?}"
+    );
     assert!(text.iter().any(|l| l.contains("Counts toward")), "{text:?}");
-    assert!(text.iter().any(|l| l.contains("binding: plan, $3 left")), "{text:?}");
+    assert!(
+        text.iter().any(|l| l.contains("binding: plan, $3 left")),
+        "{text:?}"
+    );
     let pending = detail::lines_with_facts(core.model(), Some(&task), 0, None);
-    assert!(pending.iter().any(|l| l.0 == "budget" && l.1.contains("forecasting")), "{pending:?}");
+    assert!(
+        pending
+            .iter()
+            .any(|l| l.0 == "budget" && l.1.contains("forecasting")),
+        "{pending:?}"
+    );
 }
 
 /// [D] `work-list/meter-shows-spend-and-limit`, the forecast words: a not-started row at 900 px or more shows
@@ -2585,20 +2630,28 @@ fn list_not_started_row_shows_the_forecast_words_when_wide() {
     let mut core = list_world();
     core.step(Event::Graph(GraphFact::Forecast {
         item: "task:t1".into(),
-        usd: Some((12.0, 19.0)),
-        hours: Some((2.0, 4.0)),
+        usd: Some((vegvisir::model::Num(12.0), vegvisir::model::Num(19.0))),
+        hours: Some((vegvisir::model::Num(2.0), vegvisir::model::Num(4.0))),
     }));
     let v = list_view(core.model(), vegvisir::Show::All);
     let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
     let r = list_row_of(&rows, "Count on the pill");
     assert!(r.text.contains("fc $12–19 · 2–4 h"), "{}", r.text);
     // a started task has no forecast words
-    assert!(!list_row_of(&rows, "Anchor the card").text.contains("fc $"), "only a not-started row");
+    assert!(
+        !list_row_of(&rows, "Anchor the card").text.contains("fc $"),
+        "only a not-started row"
+    );
     // narrower than 900 px: nothing
     let narrow: ViewEnv = serde_json::from_value(
         json!({"view": "m", "class": "gui-2", "epoch": 1, "display": "gui", "scale": 1.0, "cell": [8, 16], "width_px": 700}),
     )
     .expect("a narrow env");
     let (rows, _) = view_rows(core.model(), &v, &narrow, &Cols, 0, &BTreeSet::new(), &[]);
-    assert!(!list_row_of(&rows, "Count on the pill").text.contains("fc $"), "narrow: no forecast words");
+    assert!(
+        !list_row_of(&rows, "Count on the pill")
+            .text
+            .contains("fc $"),
+        "narrow: no forecast words"
+    );
 }

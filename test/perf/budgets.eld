@@ -331,6 +331,11 @@
  (work-relayout (:relayout :p95) 50) (work-relayout (:stalls) 0)
  (work-list-nav (:input :p95) 8) (work-list-nav (:stalls) 0)
  (work-list-filter (:relayout :p95) 50) (work-list-filter (:stalls) 0)
+ ;; allocation, CPU and rows of the List's two input workloads (flow Task 20, measured on the desktop island, check f20a-g4: nav
+ ;; alloc p50 700, cpu p90 1.7 ms, rows 0; filter alloc p50 35299, cpu p90 11.61 ms, rows 0): about 15 % over what was
+ ;; measured, 30 % on the 1.7 ms
+ (work-list-nav (:alloc :p50) 810) (work-list-nav (:cpu_ms :p90) 2.2) (work-list-nav (:rows) 0)
+ (work-list-filter (:alloc :p50) 40600) (work-list-filter (:cpu_ms :p90) 13.4) (work-list-filter (:rows) 0)
  (work-live (:draw_ms_s) 40) (work-live (:slice_ms :max) 4) (work-live (:stalls) 0)
  ;; The map on the hub's rows (render offload; read in the combined pass).  work-live's draw is at most 40 kB p50 (it was
  ;; 831 kB, Lisp drawing the frames; that path and its paired row, work-live-old, went with Task 34).  The work-nav and

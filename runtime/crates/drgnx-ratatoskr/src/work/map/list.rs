@@ -25,6 +25,8 @@ use crate::work::trail::flow::row_px;
 const BAR_PX: u16 = 46;
 /// Room kept at the right edge, logical px: the window's fringe and its truncation glyph are not drawn on.
 const EDGE_PX: f32 = 28.0;
+/// The row width, device px, from which a not-started row shows its forecast words.
+const WIDE_PX: u32 = 900;
 /// The gutter edge's width, logical px.
 const GUTTER_PX: f32 = 3.0;
 
@@ -146,7 +148,8 @@ pub(crate) fn rows(
             out.push(r);
             continue;
         }
-        let draw_right = |b: &mut RowBuilder| right(b, m, e, &kit, &slot);
+        let wide = env.width_px >= WIDE_PX;
+        let draw_right = |b: &mut RowBuilder| right(b, m, e, &kit, &slot, wide);
         let rw = {
             let mut scratch = RowBuilder::new("measure");
             draw_right(&mut scratch);
@@ -261,7 +264,14 @@ fn left(b: &mut RowBuilder, e: &ListEntry, kit: &KitEnv) -> u32 {
 }
 
 /// The right part of E's row in B, each piece after a gap.
-fn right(b: &mut RowBuilder, m: &Model, e: &ListEntry, kit: &KitEnv, slot: &dyn Fn(&ItemId) -> u8) {
+fn right(
+    b: &mut RowBuilder,
+    m: &Model,
+    e: &ListEntry,
+    kit: &KitEnv,
+    slot: &dyn Fn(&ItemId) -> u8,
+    wide: bool,
+) {
     let chip = |b: &mut RowBuilder, label: String| {
         kit::expand(
             b,
@@ -310,6 +320,13 @@ fn right(b: &mut RowBuilder, m: &Model, e: &ListEntry, kit: &KitEnv, slot: &dyn 
             ListChip::Branch(x) => {
                 sep(b);
                 chip(b, x.clone());
+            }
+            // the forecast words of a not-started row, on a wide row only (900 px: the title keeps its room), muted
+            ListChip::Forecast(words) => {
+                if wide {
+                    sep(b);
+                    b.push(words, Some(FaceId::TextMuted.name()));
+                }
             }
             ListChip::Meter(bm) => {
                 sep(b);
