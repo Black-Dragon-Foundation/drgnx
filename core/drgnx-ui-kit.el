@@ -1468,9 +1468,13 @@ line in its middle; `tick-full' all of it."
 (defun drgnx-ui-kit-rail-image (shape width height scale)
   "The picture of a rail item's `rail-bar' (the accent bar along the cell's rounded left edge: the crescent between the
 cell's outline and the outline 2 px in) or `rail-dot' (the warn dot, on the cell's top right corner), WIDTH x HEIGHT
-device px, the cell's left or right 8 px column, in `currentColor', centred on its face's font's centre line."
+device px, the cell's left or right 8 px column, in `currentColor'.  Its ascent leaves the face's font's descent below it:
+the line the cell is on is HEIGHT tall (its `line-height') with the text's baseline that far above its bottom, so a
+picture centred on the font's centre line (`center') would stand a line taller than the cell."
   (let* ((r (drgnx-px drgnx-ui-kit-rail-radius-px nil scale))
-         (key (list 'rail shape width height scale)))
+         (below (cdr (drgnx-pixels-font-extent 'drgnx-kit-rail-item-bar)))
+         (ascent (if (and below (> height below)) (min 100 (ceiling (* 100.0 (- height below)) height)) 'center))
+         (key (list 'rail shape width height scale ascent)))
     (or (gethash key drgnx-ui-kit--bar-images)
         (progn
           (when (>= (hash-table-count drgnx-ui-kit--bar-images) 256) (clrhash drgnx-ui-kit--bar-images))
@@ -1489,7 +1493,7 @@ device px, the cell's left or right 8 px column, in `currentColor', centred on i
                          (format "<circle cx=\"%s\" cy=\"%s\" r=\"%s\" fill=\"currentColor\"/>"
                                  (/ d 2.0) (+ top (/ d 2.0)) (/ d 2.0))))
                      "</svg>")
-                    'svg t :ascent 'center :scale 1)
+                    'svg t :ascent ascent :scale 1)
                    drgnx-ui-kit--bar-images)))))
 
 (defun drgnx-ui-kit-bar-display (spaces runs scale)
