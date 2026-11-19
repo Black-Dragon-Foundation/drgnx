@@ -100,29 +100,6 @@ fn id_of(id: &Option<RpcId>) -> String {
     }
 }
 
-/// One icon: its image (the SVG goes with the row) or, on a terminal, its alternative.
-fn icon(
-    b: &mut RowBuilder,
-    images: &mut Vec<(ImageId, String)>,
-    name: &str,
-    alt: &str,
-    size: u32,
-    face: &str,
-) {
-    let start = b.pos();
-    match icons::svg(name, size) {
-        Some((id, svg)) => {
-            images.push((id, svg));
-            b.image(id, alt);
-        }
-        None => {
-            b.push(alt, None);
-        }
-    }
-    let end = b.pos();
-    b.face(start, end, face);
-}
-
 /// Hunk N of PATH as a kit diff block (`drgnx_rows::kit::Comp::DiffBlock`): the head row (the file, which hunk, the
 /// counts, Reject and Accept) over the hunk's lines, numbered (the new file's numbers, a removed line the old file's),
 /// each cut to MAX_CHARS.  The buttons keep the panel's own click props, which the editor's dispatcher reads.
