@@ -1624,19 +1624,31 @@ mod tests {
     fn a_task_card_has_the_kits_status_dot_and_its_word() {
         use crate::TaskState;
         for (state, face, word) in [
-            (TaskState::NotStarted, FaceId::KitStatusDotIdle, "not started"),
+            (
+                TaskState::NotStarted,
+                FaceId::KitStatusDotIdle,
+                "not started",
+            ),
             (TaskState::Running, FaceId::KitStatusDotRunning, "running"),
-            (TaskState::NeedsYou, FaceId::KitStatusDotNeedsYou, "needs you"),
+            (
+                TaskState::NeedsYou,
+                FaceId::KitStatusDotNeedsYou,
+                "needs you",
+            ),
             (TaskState::Done, FaceId::KitStatusDotDone, "done"),
         ] {
             let mut it = machine("ready", false);
             it.kind = Kind::Task;
             it.label = "Footer cut off".into();
-            it.fields = Fields { task_state: Some(state), ..Fields::default() };
+            it.fields = Fields {
+                task_state: Some(state),
+                ..Fields::default()
+            };
             let l = chip_line(&it);
             assert!(l.text().contains(word), "{word}: {:?}", l.text());
             assert!(
-                l.0.iter().any(|(t, f)| t == state.glyph() && *f == Some(face.name())),
+                l.0.iter()
+                    .any(|(t, f)| t == state.glyph() && *f == Some(face.name())),
                 "{word}: {:?}",
                 l.0
             );
