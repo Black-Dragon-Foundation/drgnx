@@ -35,6 +35,7 @@
 (defvar drgnx-look-density-changed-hook)
 (defvar drgnx-hunks-mode)
 (defvar drgnx-hub--events)
+(defvar drgnx-fold--watched)
 (declare-function drgnx-hub--call-on "drgnx-hub-client" (conn method params callback &rest keys))
 (declare-function drgnx-notify "drgnx-notice")
 (declare-function nidhogg-lines-enable "nidhogg-lines" (&optional buffer wait))
@@ -236,7 +237,11 @@ it reads."
       (unless (and (equal file drgnx-minimap--watched) (equal ask drgnx-minimap--asked))
         (when (drgnx-minimap--hub-p)
           (when (and drgnx-minimap--watched (not (equal file drgnx-minimap--watched)))
-            (drgnx-hub--call-on drgnx-hub--events "minimap/watch" (list :file drgnx-minimap--watched :on :false)
+            ;; folding still takes that file's `folds' layer (drgnx-fold): the watch stays, without the heat
+            (drgnx-hub--call-on drgnx-hub--events "minimap/watch"
+                                (list :file drgnx-minimap--watched
+                                      :on (if (equal drgnx-minimap--watched (bound-and-true-p drgnx-fold--watched))
+                                              t :false))
                                 #'ignore))
           (when file
             (drgnx-hub--call-on drgnx-hub--events "minimap/watch" (append (list :file file :on t) ask) #'ignore))

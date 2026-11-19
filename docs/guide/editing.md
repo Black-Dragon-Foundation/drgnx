@@ -128,11 +128,14 @@ again, **Toggle Fold** does whichever applies. Fold on a line already folded fol
 
 Where blocks come from (`drgnx-fold-source`): in code with a tree-sitter mode, the syntax tree, by the language pack's
 fold query — functions, classes, comments, imports, tests and blocks as the language has them, kept current as you type
-(a pack without its own fold query folds its definitions); in other code, indentation — a line and the lines after it
+(a pack without its own fold query folds its definitions); in a file with no tree-sitter mode whose language the hub
+knows, the hub's syntax tree by the same query (the hub watches the file while you fold, as it does for the minimap;
+indentation until its blocks arrive); in other code, indentation — a line and the lines after it
 indented deeper, as VS Code's indentation folding; in Markdown, headings (each to the next heading of its level or above); in a notebook,
 its cells; Org folds its own headings (Fold, Unfold, Toggle Fold, Fold All, Unfold All and Fold Level act on them). `indent`
 uses indentation everywhere, `off` leaves only the folds you make. `drgnx-fold-summary` sets what a folded line shows
-(`full`, `lines`, or an ellipsis); `drgnx-fold-max` caps the blocks a file keeps (20,000; the smallest go first). The
+(`full`: the count and what the hidden lines hold, as `⋯ 38 lines ✕ 1 ⚠ 2 ✦ 1` for errors, warnings and agent
+edits; `lines`: the count only; or an ellipsis); `drgnx-fold-max` caps the blocks a file keeps (20,000; the smallest go first). The
 blocks live in Nidhogg's line model, kept with every edit, so a fold command reads them at once and the scroll bar
 leaves folded lines out. The Emacs keys are hideshow's (`C-c @ C-c` toggle, `C-c @ C-M-h` / `C-c @ C-M-s` all,
 `C-c @ C-l` level, `C-c @ C-n` from the selection); hideshow's own folds, if you turn `hs-minor-mode` on, are separate.

@@ -6,7 +6,8 @@
 ;; Folding as in VS Code, on Nidhogg's line model (docs/guide/editing.md, "Folding"; docs/develop/core.md, "The ruler
 ;; and the minimap").  The model keeps one table of fold ranges per buffer text, shifted with every edit, from its
 ;; sources: the buffer's tree-sitter parser, through its language pack's fold query, which Nidhogg runs at each reparse
-;; (`nidhogg-treesit-fold-query'); indentation and Markdown headings the model finds itself
+;; (`nidhogg-treesit-fold-query'); for a file with no parser, the hub's `folds' layer by the same query, watched while
+;; the buffer folds (`nidhogg-lines-take-hub-folds'); indentation and Markdown headings the model finds itself
 ;; (`nidhogg-lines-set-fold-sources'); notebook cells and manual folds this module sends (`nidhogg-lines-set-folds').  A command looks a range up
 ;; (`nidhogg-lines-fold-at', `nidhogg-lines-folds') and hides it with an `invisible' overlay whose `display' is the
 ;; summary (`⋯ N lines'); isearch opens a fold it passes through.  The hidden ranges go back to the model, which leaves
@@ -27,6 +28,8 @@
 (require 'drgnx-timer)
 
 (declare-function drgnx-notify "drgnx-notice")
+(declare-function drgnx-marks--count "drgnx-marks" (kinds beg end))
+(declare-function drgnx-face-glyph "drgnx-ui-kit" (name &optional frame))
 (declare-function nidhogg-lines-enable "nidhogg-lines" (&optional buffer wait))
 (declare-function nidhogg-lines-folds "nidhogg-lines" (buffer &optional beg end))
 (declare-function nidhogg-lines-fold-at "nidhogg-lines" (buffer pos))
@@ -53,12 +56,16 @@
 (declare-function drgnx-notebook--rescan "drgnx-notebook")
 (defvar drgnx-notebook--cells)
 (defvar evil-fold-list)
+(defvar drgnx-hub--events)
+(defvar drgnx-minimap--watched)
+(declare-function drgnx-hub--call-on "drgnx-hub-client" (conn method params callback &rest keys))
+(declare-function nidhogg-lines-take-hub-folds "nidhogg-lines.c" (buffer file))
 
 ;;;; Settings and faces
 
 (defvar-local drgnx-fold--sources nil
-  "The sources the buffer's line model was last given: `treesit', `indent', `headings', `cells' or `off'; nil, none
-yet.")
+  "The sources the buffer's line model was last given: `treesit', `hub', `indent', `headings', `cells' or `off'; nil,
+none yet.")
 
 (defvar-local drgnx-fold--bounds nil
   "The accessible region (BEG . END) the buffer's tree-sitter folds were last run over: a narrowing that changed it
@@ -180,7 +187,55 @@ and a Nidhogg that runs it; nil when none."
         ((derived-mode-p 'markdown-mode) 'headings)
         ((derived-mode-p 'drgnx-notebook-mode) 'cells)
         ((drgnx-fold--parser) 'treesit)
+        ((drgnx-fold--hub-file) 'hub)
         (t 'indent)))
+
+;;;; The hub's folds for a buffer with no parser
+
+(defconst drgnx-fold--source-hub 1 "The model's source number of the hub's folds (`nidhogg-lines-take-hub-folds').")
+
+(defvar-local drgnx-fold--watched nil
+  "The file name the hub was told this buffer folds by its `folds' layer (`minimap/watch'), or nil.")
+
+(defvar-local drgnx-fold--hub-took 'none
+  "What `nidhogg-lines-take-hub-folds' last gave in this buffer: t (the hub's ranges), nil (none: indentation), or
+`none' (not asked since the sources changed).")
+
+(defun drgnx-fold--hub-p ()
+  "Non-nil when the hub's subscribed connection is up (the `folds' layer comes there)."
+  (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events) (fboundp 'drgnx-hub--call-on)))
+
+(defun drgnx-fold--hub-file ()
+  "The name the current buffer's file has in the hub's layers (its true name) when the hub can fold it and Nidhogg
+takes its ranges; else nil."
+  (when-let* (((fboundp 'nidhogg-lines-take-hub-folds))
+              ((drgnx-fold--hub-p))
+              (f buffer-file-name)
+              ((not (file-remote-p f))))
+    (file-truename f)))
+
+(defun drgnx-fold--minimap-watches-p ()
+  "Whether the minimap's own watch of the current buffer's file is on (its labels carry the `folds' layer too)."
+  (and drgnx-fold--watched (equal (bound-and-true-p drgnx-minimap--watched) drgnx-fold--watched)))
+
+(defun drgnx-fold--watch (file)
+  "Tell the hub the current buffer folds FILE by its `folds' layer (nil: no longer), when that changed.  A watch the
+minimap holds on the same file is left alone: the hub keeps one per connection and file."
+  (unless (equal file drgnx-fold--watched)
+    (when (drgnx-fold--hub-p)
+      (when (and drgnx-fold--watched (not (drgnx-fold--minimap-watches-p)))
+        (drgnx-hub--call-on drgnx-hub--events "minimap/watch" (list :file drgnx-fold--watched :on :false) #'ignore))
+      (when (and file (not (equal file (bound-and-true-p drgnx-minimap--watched))))
+        (drgnx-hub--call-on drgnx-hub--events "minimap/watch" (list :file file :on t) #'ignore)))
+    (setq drgnx-fold--watched file)))
+
+(defun drgnx-fold--take-hub (file)
+  "The hub's ranges of FILE into the model, else indentation while the hub has none."
+  (drgnx-fold--watch file)
+  (let ((took (nidhogg-lines-take-hub-folds nil file)))
+    (unless (eq took drgnx-fold--hub-took)
+      (setq drgnx-fold--hub-took took)
+      (nidhogg-lines-set-fold-sources nil (not took) nil))))
 
 (defun drgnx-fold--send-cells ()
   "The notebook's cells to the line model, each from its first line to its last."
@@ -213,11 +268,16 @@ buffer cannot fold through the model (no Nidhogg, or Org)."
         (kill-local-variable 'nidhogg-treesit-fold-query)
         (nidhogg-lines-set-folds nil drgnx-fold--source-treesit nil drgnx-fold-max))
       (unless (eq want drgnx-fold--sources)
-        (setq drgnx-fold--sources want drgnx-fold--bounds nil)
+        ;; off the hub's folds: its watch and its ranges go
+        (when (eq drgnx-fold--sources 'hub)
+          (drgnx-fold--watch nil)
+          (nidhogg-lines-set-folds nil drgnx-fold--source-hub nil drgnx-fold-max))
+        (setq drgnx-fold--sources want drgnx-fold--bounds nil drgnx-fold--hub-took 'none)
         (nidhogg-lines-set-fold-sources nil (eq want 'indent) (and (eq want 'headings) drgnx-fold-markdown-heading))
         (unless (eq want 'cells) (nidhogg-lines-set-folds nil drgnx-fold--source-cells nil drgnx-fold-max)))
       (pcase want
         ('cells (drgnx-fold--send-cells))
+        ('hub (drgnx-fold--take-hub (drgnx-fold--hub-file)))
         ('treesit
          ;; Nidhogg publishes each reparse's changed ranges itself; a query set after the parse, or a narrowing
          ;; that moved, runs over the whole tree once
@@ -270,6 +330,15 @@ starting on POS's line, else the innermost holding POS)."
     (seq-find (lambda (o) (and (= (overlay-start o) s) (= (overlay-end o) (nth 1 range))))
               (drgnx-fold--overlays s (1+ s)))))
 
+(defun drgnx-fold--inside (beg end)
+  "What BEG..END holds, for a summary: ` ✕ E ⚠ W ✦ A' (errors, warnings, agent edits; each only when there is one),
+counted once by the line model (`nidhogg-lines-counts', else the scroll bar's marks)."
+  (when (fboundp 'drgnx-marks--count)
+    (mapconcat (lambda (k)
+                 (let ((n (drgnx-marks--count (list (car k)) beg end)))
+                   (if (> n 0) (format " %s %d" (drgnx-face-glyph (cdr k)) n) "")))
+               '((error . fail) (warning . warning) (agent . sparkle)) "")))
+
 (defun drgnx-fold--summary (ov)
   "The display string of fold overlay OV: its name, then `⋯ N lines' (`drgnx-fold-summary')."
   (let* ((s (overlay-start ov)) (e (overlay-end ov))
@@ -278,7 +347,8 @@ starting on POS's line, else the innermost holding POS)."
          (name (overlay-get ov 'drgnx-fold-name))
          (count (pcase drgnx-fold-summary
                   ('nil "⋯")
-                  (_ (format "⋯ %d line%s" n (if (= n 1) "" "s"))))))
+                  ('lines (format "⋯ %d line%s" n (if (= n 1) "" "s")))
+                  (_ (concat (format "⋯ %d line%s" n (if (= n 1) "" "s")) (drgnx-fold--inside s e))))))
     (concat " "
             (and name (concat (propertize (format " %s " name) 'face 'drgnx-fold-name) " "))
             (propertize (format " %s " count) 'face 'drgnx-fold-summary))))
@@ -629,6 +699,7 @@ not folded) and each other folded range, with its kind in the fold table."
 (defun drgnx-fold--killed ()
   "`kill-buffer-hook': the buffer's folds go to the hub, and its wait for the fold table ends."
   (drgnx-fold--save)
+  (drgnx-fold--watch nil)
   (drgnx-timer-cancel (cons 'drgnx-fold-restore (current-buffer))))
 
 (defun drgnx-fold--save-idle (buffer)
@@ -799,7 +870,8 @@ is dropped.  Non-nil when done, as the poll of `drgnx-fold--loaded' wants."
       (mapc #'delete-overlay (drgnx-fold--overlays))
       (drgnx-fold--report)
       (when (local-variable-p 'nidhogg-treesit-fold-query) (kill-local-variable 'nidhogg-treesit-fold-query))
-      (setq drgnx-fold--sources nil drgnx-fold--manual nil drgnx-fold--level nil drgnx-fold--bounds nil
+      (drgnx-fold--watch nil)
+      (setq drgnx-fold--hub-took 'none drgnx-fold--sources nil drgnx-fold--manual nil drgnx-fold--level nil drgnx-fold--bounds nil
             drgnx-fold--sent nil drgnx-fold--pending nil)))
   (setq drgnx-fold--unsent nil)
   (clrhash drgnx-fold--queries))
