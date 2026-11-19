@@ -459,6 +459,13 @@ panel's window at either scale.")
     (push "agent: no ratatoskr binary (DRGNX_RATATOSKR_BIN)" drgnx-look-scene--errors))
    (t
     (drgnx-look-scene--try "agent"
+      ;; a hub an earlier scene started (`drgnx-look-scene--hub') knows no `replay' profile and would answer the ping of
+      ;; the replay's: it ends first, and the replay's hub is the scenes' hub from here on
+      (when (drgnx-hub-running-p)
+        (ignore-errors (drgnx-hub-disconnect))
+        (dolist (p (process-list))
+          (when (string-prefix-p "ratatoskr" (process-name p)) (signal-process p 'term)))
+        (drgnx-look-scene--until 15 "the scenes' hub ended" (lambda () (not (drgnx-hub-running-p)))))
       (load (expand-file-name "test/fixtures/panel-replay-fixture" (bound-and-true-p drgnx-dir)) nil t)
       ;; the mockup's three steps; the `agent-panel-long' scene makes the transcript long with the second turn below
       (setq drgnx-panel-replay-prefix 3)
