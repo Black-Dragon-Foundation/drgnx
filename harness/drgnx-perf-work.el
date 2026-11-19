@@ -27,12 +27,12 @@ agents with the map shown or hidden, say whether the premise holds and take it a
        (load ,(drgnx-perf-work--fixture-file) nil t)
        (defvar drgnx-perf--work-buf nil "The map's buffer.")
        (defvar drgnx-perf--work-shown nil "Whether the workload's map is shown.")
-       (defun drgnx-perf--work-up (shown)
-         "30 agents streaming and the map of their workspace on the hub's rows, SHOWN or hidden; an error when that does
-not hold."
+       (defun drgnx-perf--work-up (shown &optional mode)
+         "30 agents streaming and the map of their workspace on the hub's rows, SHOWN or hidden, as a graph or, with MODE
+`list', a List; an error when that does not hold."
          (require 'drgnx-view)
          (drgnx-work-thirty-start drgnx-perf--hub-bin)
-         (setq drgnx-perf--work-shown shown drgnx-perf--work-buf (drgnx-work-thirty-map shown))
+         (setq drgnx-perf--work-shown shown drgnx-perf--work-buf (drgnx-work-thirty-map shown mode))
          ;; the lane says which path it ran: without Sjá the map has no rows to draw
          (unless (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf)
            (error "Premise: the map is not on the hub's rows (Sjá: %s)" (if (fboundp 'nidhogg-view--call) "yes" "no")))
@@ -65,6 +65,10 @@ not hold."
 answer with no patch before it, counts as lost), and the lab's p95 needs 100 samples; each command waits up to a
 second for the layout before it to be drawn."
   (cl-loop repeat 40 append (mapcar (lambda (k) (list :keys k)) '("f" "o" "1" "2" "3" "4" "5" "6"))))
+
+(defun drgnx-perf-work--filter-keys ()
+  "360 filter switches: `.' (Active, Completed, All), 120 times; the lab's p95 needs 100 samples."
+  (make-list 360 (list :keys ".")))
 
 (defconst drgnx-perf-work--relayout-form
   (prin1-to-string
@@ -860,8 +864,8 @@ trails and the Board are on the hub's rows (with Sjá; a workload without it fai
   (let* ((lib (drgnx-perf-work--lib-form))
          (type (lambda (s) (list :type s)))
          (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
-         (up (lambda (shown extra)
-               (concat "(progn " lib " (drgnx-perf--work-up " (if shown "t" "nil") ") " extra " t)")))
+         (up (lambda (shown extra &optional mode)
+               (concat "(progn " lib " (drgnx-perf--work-up " (if shown "t" "nil") (and mode (format " '%s" mode)) ") " extra " t)")))
          (down (concat "(progn (drgnx-perf--work-down) " kill-fixture " t)"))
          (typing-each (lambda (&optional extra)
                         (concat "(progn " visit " (drgnx-perf--work-premise) " extra " t)")))
@@ -871,6 +875,19 @@ trails and the Board are on the hub's rows (with Sjá; a workload without it fai
                 :actions ,(drgnx-perf-work--nav-keys)
                 :check "(and (drgnx-perf--work-premise) (buffer-local-value 'drgnx-work-map--selection drgnx-perf--work-buf) t)"
                 :teardown ,down)
+      ;; the List's keys (plan frontend-flow, Task 20): the work-nav keys on the map as a List
+      (work-list-nav :setup ,(funcall up t "" 'list)
+                     :each "(progn (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t)"
+                     :actions ,(drgnx-perf-work--nav-keys)
+                     :check "(and (drgnx-perf--work-premise) (eq (buffer-local-value 'drgnx-work-map--list-or-graph drgnx-perf--work-buf) 'list) (buffer-local-value 'drgnx-work-map--selection drgnx-perf--work-buf) t)"
+                     :teardown ,down)
+      ;; the List's filter switch: `.' (Active, Completed, All) on the same map, each answer's rows drawn
+      (work-list-filter :setup ,(funcall up t drgnx-perf-work--relayout-form 'list)
+                        :each "(drgnx-perf--rl-guard (lambda () (drgnx-perf--rl-arm) (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t))"
+                        :actions ,(drgnx-perf-work--filter-keys)
+                        :measure "(drgnx-perf--rl-guard #'drgnx-perf--rl-measure)"
+                        :check "(and (drgnx-perf--work-premise) (or (>= (length drgnx-perf--rl-ms) 100) (error \"Premise: %d layouts drawn\" (length drgnx-perf--rl-ms))))"
+                        :teardown ,(concat "(progn (drgnx-perf--rl-teardown) " down ")"))
       (work-relayout :setup ,(funcall up t drgnx-perf-work--relayout-form)
                      :each "(drgnx-perf--rl-guard (lambda () (drgnx-perf--rl-arm) (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t))"
                      :actions ,(drgnx-perf-work--relayout-keys)
