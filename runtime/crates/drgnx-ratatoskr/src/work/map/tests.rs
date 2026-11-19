@@ -2325,3 +2325,23 @@ fn list_strip_chips_show_full_text() {
     assert!(has_face(strip, FaceId::KitKeyHintCap), "{strip:?}");
     assert!(strip.text.contains("g1"), "{}", strip.text);
 }
+
+/// [D] The chain a session works under, as the conversation's header shows it (Flow Task 23): spec, plan, task, each
+/// with its kind, id and title, read from the Work model; empty for an item the model does not hold.
+#[test]
+fn a_tasks_breadcrumb_is_its_spec_then_its_plan_then_itself() {
+    let core = list_world();
+    let id = |s: &str| vegvisir::ItemId(s.to_owned());
+    let crumbs = core.model().breadcrumb(&id("task:t1"));
+    let want = |k: &str, i: &str, t: &str| (k.to_owned(), i.to_owned(), t.to_owned());
+    assert_eq!(
+        crumbs,
+        vec![
+            want("spec", "s1", "Title bar"),
+            want("plan", "p1", "Inbox drop-down"),
+            want("task", "t1", "Count on the pill"),
+        ]
+    );
+    // an item the model does not hold has no breadcrumb
+    assert!(core.model().breadcrumb(&id("task:nope")).is_empty());
+}
