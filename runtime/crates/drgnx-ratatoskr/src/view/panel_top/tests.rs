@@ -464,8 +464,8 @@ fn rows_of_empty(
 fn the_chips_name_the_worktree_the_agent_works_in() {
     let (e, f, l, open) = (env(600), fonts(), lens(), BTreeSet::new());
     let s = snap(json!({"cwd": "/work/proj/.claude/worktrees/r6-flow-23"}));
-    let (rows, _) = rows(&s, &cx_of(&e, &f, &l, &open, &[], &[]));
-    let chips: String = rows
+    let (first, _) = rows(&s, &cx_of(&e, &f, &l, &open, &[], &[]));
+    let chips: String = first
         .iter()
         .filter(|r| r.key.starts_with(CHIPS))
         .map(|r| r.text.as_str())
