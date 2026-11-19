@@ -8,6 +8,7 @@ use super::icons;
 use crate::agents::session::rows::STEP_TYPES;
 use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::{self, FontSet};
+use drgnx_rows::kit::{Comp, Status};
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::agents::{SessionStatus, Snapshot};
 use runstav::methods::view::{Display, ViewEnv};
@@ -18,6 +19,19 @@ use std::collections::BTreeSet;
 pub const HEAD: &str = "p:head";
 pub const CHIPS: &str = "p:chips";
 pub const STRIP: &str = "p:strip";
+/// The chain row (spec › plan › task) under the header, and the plan strip (a status dot and its word per item of the
+/// agent's plan) between the chips and the step-type strip.
+pub const CHAIN: &str = "p:chain";
+pub const PLAN: &str = "p:plan";
+
+/// One link of the chain the agent works under: a node of the Work graph (`spec`, `plan` or `task`), its id and its
+/// label.  A click selects it in Work (`select:KIND:ID`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChainLink {
+    pub kind: String,
+    pub id: String,
+    pub label: String,
+}
 
 /// What the editor chose for the lens: the presets' names and the one in force (1-based), none in force: 0.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -39,6 +53,10 @@ pub struct Cx<'a> {
     /// How many files the session edited, and how many of its steps hold a checkpoint, when the hub knows.
     pub files_edited: Option<usize>,
     pub checkpoints: Option<usize>,
+    /// The chain the agent works under, outermost first (none: no row).
+    pub chain: &'a [ChainLink],
+    /// The agent's plan as (status, content) items (none: no plan strip).
+    pub plan: &'a [(String, String)],
 }
 
 /// What the agent is doing, for the header: "Claude · running 6 min", "held by you", "Pair · editing your checkout".
@@ -80,7 +98,9 @@ pub fn rows(s: &Snapshot, cx: &Cx) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut images = Vec::new();
     let head = header(s, cx, &mut images);
     let mut rows = vec![head];
+    rows.extend(chain(cx));
     rows.extend(chips(s, cx));
+    rows.extend(plan_strip(cx));
     rows.extend(strip(cx));
     (rows, images)
 }
@@ -367,11 +387,83 @@ fn strip(cx: &Cx) -> Vec<Row> {
 
 /// The chips the snapshot feeds (the context the agent has used, what the session cost, its mode), none when it
 /// feeds none, in as many rows as the panel's width asks: the first row is `CHIPS`, the next ones `p:chips:1`, ….
+/// The chain as one row of chips joined by `›`; each chip selects its node in Work.
+fn chain(cx: &Cx) -> Option<Row> {
+    if cx.chain.is_empty() {
+        return None;
+    }
+    let mut b = RowBuilder::new(CHAIN);
+    b.push(" ", None);
+    for (i, link) in cx.chain.iter().enumerate() {
+        if i > 0 {
+            b.push(" › ", Some(FaceId::AgentPanelSubtle.name()));
+        }
+        let start = b.pos();
+        b.push(
+            &format!(" {} ", link.label),
+            Some(FaceId::AgentPanelChip.name()),
+        );
+        let end = b.pos();
+        b.prop(
+            start,
+            end,
+            FaceId::AgentPanelChip.name(),
+            json!(format!("select:{}:{}", link.kind, link.id)),
+        );
+    }
+    Some(b.finish())
+}
+
+/// The plan as one row: a kit status dot and the item's words, for each item of the agent's plan.
+fn plan_strip(cx: &Cx) -> Option<Row> {
+    if cx.plan.is_empty() {
+        return None;
+    }
+    let kit = super::kit_env(cx.env);
+    let mut b = RowBuilder::new(PLAN);
+    b.push(" ", None);
+    for (i, (status, content)) in cx.plan.iter().enumerate() {
+        if i > 0 {
+            b.push("  ", None);
+        }
+        let status = match status.as_str() {
+            "completed" => Status::Done,
+            "in_progress" => Status::Running,
+            _ => Status::Idle,
+        };
+        drgnx_rows::kit::expand(
+            &mut b,
+            &kit,
+            &Comp::StatusDot {
+                status,
+                word: false,
+            },
+        );
+        let word: String = content.chars().take(28).collect();
+        b.push(&format!(" {word}"), None);
+    }
+    Some(b.finish())
+}
+
+/// The worktree the agent works in, for its chip: the name under `.claude/worktrees/`, else the folder's own name.
+fn worktree_of(cwd: &str) -> Option<String> {
+    let parts: Vec<&str> = cwd.split('/').filter(|p| !p.is_empty()).collect();
+    match parts.iter().position(|p| *p == "worktrees") {
+        Some(i) if i > 0 && parts[i - 1] == ".claude" && parts.get(i + 1).is_some() => {
+            Some(parts[i + 1].to_owned())
+        }
+        _ => parts.last().map(|p| (*p).to_owned()),
+    }
+}
+
 fn chips(s: &Snapshot, cx: &Cx) -> Vec<Row> {
     // (what a click explains, or none; text)
     let mut list: Vec<(Option<&str>, String)> = Vec::new();
     if let Some(m) = s.model.as_deref().filter(|m| !m.is_empty()) {
         list.push((Some("model"), m.to_owned()));
+    }
+    if let Some(w) = s.cwd.as_deref().and_then(worktree_of) {
+        list.push((None, w));
     }
     if let Some(u) = &s.usage {
         if let (Some(used), Some(size)) = (u.used, u.size)

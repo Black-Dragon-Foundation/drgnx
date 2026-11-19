@@ -620,6 +620,18 @@ impl Panels {
             .map(|(_, map)| map.values().filter(|f| f.revertible && !f.undone).count());
         // the top view (the header window) is the header, the chips and the strip; the transcript view is the rest
         if is_top(&key.1) {
+            // the chain the agent works under: its task (the plan and the spec above it join when the hub reads them)
+            let chain: Vec<panel_top::ChainLink> = snapshot
+                .task
+                .as_deref()
+                .map(|t| panel_top::ChainLink {
+                    kind: "task".into(),
+                    id: t.to_owned(),
+                    label: snapshot.name.clone().unwrap_or_else(|| t.to_owned()),
+                })
+                .into_iter()
+                .collect();
+            let plan = s.plan_items().unwrap_or_default();
             let (mut rows, images) = panel_top::rows(
                 &snapshot,
                 &panel_top::Cx {
@@ -631,6 +643,8 @@ impl Panels {
                     now,
                     files_edited,
                     checkpoints,
+                    chain: &chain,
+                    plan: &plan,
                 },
             );
             hover(&mut rows);

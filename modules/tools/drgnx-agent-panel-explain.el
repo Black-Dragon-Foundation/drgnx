@@ -22,6 +22,7 @@
 (defvar drgnx-agent-panel--steps)
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
+(declare-function drgnx-work-select "drgnx-work-map" (kind id))
 (declare-function drgnx-agent-panel--entry "drgnx-agent-panel")
 (declare-function drgnx-agents-hooks--preview-text "drgnx-agents-hooks")
 
@@ -214,11 +215,15 @@ own part drawn from SNAP and the steps loaded here."
   (interactive (list (or (let ((chip (get-text-property (point) 'drgnx-agent-panel-chip)))
                            (and chip (intern (format "%s" chip))))
                          (intern (completing-read "Chip: " (mapcar #'symbol-name drgnx-agent-panel-explain-items) nil t)))))
-  (let ((buffer (current-buffer)))
-    (drgnx-agent-panel--ask "agents/explain" (list :id drgnx-agent-panel--session :item (symbol-name item))
-                            (lambda (r err)
-                              (if err (message "agents/explain: %s" err)
-                                (drgnx-agent-panel-explain--show buffer item (plist-get r :facts)))))))
+  (let ((buffer (current-buffer)) (name (symbol-name item)))
+    (if (string-match "\\`select:\\([^:]*\\):\\(.*\\)\\'" name)
+        ;; a chain chip of the header (spec › plan › task): the node is selected in Work
+        (progn (require 'drgnx-work-map nil t)
+               (drgnx-work-select (match-string 1 name) (match-string 2 name)))
+      (drgnx-agent-panel--ask "agents/explain" (list :id drgnx-agent-panel--session :item name)
+                              (lambda (r err)
+                                (if err (message "agents/explain: %s" err)
+                                  (drgnx-agent-panel-explain--show buffer item (plist-get r :facts))))))))
 
 (defun drgnx-agent-panel-explain-setup ()
   (dolist (c '((agents-panel-chip "Explain a Chip" drgnx-agent-panel-chip
