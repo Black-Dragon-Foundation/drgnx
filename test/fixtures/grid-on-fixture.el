@@ -12,8 +12,13 @@
      (unwind-protect (progn ,@body)
        (unless grid-was
          (drgnx-grid-mode -1)
-         (dolist (p '(drgnx-grid-next-id drgnx-grid-memory drgnx-grid--good drgnx-grid--docks))
-           (set-frame-parameter nil p nil))))))
+         ;; a row that made or replaced frames meanwhile: every frame and window is as it was before the grid
+         (dolist (f (frame-list))
+           (dolist (p '(drgnx-grid-next-id drgnx-grid-memory drgnx-grid--good drgnx-grid--docks))
+             (set-frame-parameter f p nil))
+           (dolist (w (window-list f))
+             (dolist (p '(drgnx-tile-id no-delete-other-windows delete-window))
+               (set-window-parameter w p nil))))))))
 
 ;; The GUI rows of a file that shows docks and areas all run with the grid on: the file loads this and calls
 ;; `drgnx-test-grid-on-for-file'.
