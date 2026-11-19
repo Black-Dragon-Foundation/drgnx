@@ -235,36 +235,49 @@ fn diff_card(
     rows
 }
 
-/// Request P as the kit's question card (`kit::expand_rows`): what the agent asks as the needs-you head, and under it
-/// Allow, Always and Deny as kit buttons (keys `y`, `a`, `n`).  A button runs the kit action `agent-panel-card` with
-/// its verb and the request's id; each row of the card still names the request (`drgnx-agent-panel-card`), which the
-/// panel's own commands read at point.
-fn perm_card(i: &In, p: &Permission) -> Vec<Row> {
+/// Request P as a kit question card: the needs-you ring, the head (the status dot and what the agent asks) on the
+/// attention tint, then Allow, Always and Deny as kit buttons with their key hints (`y a n`). A click runs the panel's
+/// own action (`drgnx-agent-panel-action` = `card:allow:ID`…), and every row carries the card for the commands that read
+/// the card at point.
+fn perm_card(i: &In, _images: &mut Vec<(ImageId, String)>, p: &Permission) -> Vec<Row> {
     let id = id_of(&p.id);
-    let title = p.title.as_deref().unwrap_or("the agent asks");
-    let choice = |label: &str, verb: &str| Choice {
-        label: label.to_owned(),
-        key: String::new(),
-        action: Action {
-            kind: "agent-panel-card".to_owned(),
-            args: vec![json!(verb), json!(id)],
-        },
-    };
+    let title = format!(
+        "{}?",
+        one_line(p.title.as_deref().unwrap_or("the agent asks"), 70)
+    );
+    let choices = [("Allow", "allow"), ("Always", "always"), ("Deny", "deny")]
+        .iter()
+        .map(|(label, act)| Choice {
+            label: (*label).to_owned(),
+            key: String::new(),
+            action: Action {
+                kind: "agent-panel-card".to_owned(),
+                args: vec![json!(format!("card:{act}:{id}"))],
+            },
+        })
+        .collect();
     let card = Comp::QuestionCard {
         kind: QuestionKind::Permission,
-        title: format!("{}?", one_line(title, 70)),
+        title,
         body: String::new(),
-        choices: vec![
-            choice("Allow", "allow"),
-            choice("Always", "always"),
-            choice("Deny", "deny"),
-        ],
+        choices,
     };
-    let mut rows = kit::expand_rows(&super::kit_env(i.env), &format!("c:perm:{id}"), &card);
+    let mut rows = kit::expand_rows(&i.env.kit(), &format!("c:perm:{id}"), &card);
+    let at = json!(["perm", id]);
     for r in &mut rows {
-        let end = r.text.chars().count() as u32;
+        let clicks: Vec<(u32, u32, String)> = r
+            .props
+            .iter()
+            .filter(|p| p.2 == "drgnx-action")
+            .filter_map(|p| Some((p.0, p.1, p.3.get(1)?.as_str()?.to_owned())))
+            .collect();
+        for (from, to, act) in clicks {
+            r.props
+                .push((from, to, "drgnx-agent-panel-action".to_owned(), json!(act)));
+        }
+        let end = u32::try_from(r.text.chars().count()).unwrap_or(u32::MAX);
         r.props
-            .push((0, end, "drgnx-agent-panel-card".into(), json!(["perm", id])));
+            .push((0, end, "drgnx-agent-panel-card".to_owned(), at.clone()));
     }
     rows
 }
@@ -298,7 +311,7 @@ pub fn rows(i: &In) -> (Vec<Row>, Vec<(ImageId, String)>) {
         }
     }
     for p in i.permissions {
-        out.extend(perm_card(i, p));
+        out.extend(perm_card(i, &mut images, p));
     }
     out.extend(
         i.queue

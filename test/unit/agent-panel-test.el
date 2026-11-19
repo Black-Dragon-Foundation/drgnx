@@ -232,6 +232,17 @@ the card its row names, point on that row."
         (drgnx-agent-panel-act click))
       (should (equal '("agents/permission" :id "s1" :request 7 :option "allow") (car drgnx-agent-panel-test--calls))))))
 
+(ert-deftest drgnx-agent-panel/a-kit-buttons-click-reaches-the-dispatcher ()
+  "The kit buttons of a permission card carry the action kind `agent-panel-card': its click is the panel's own
+dispatcher's, RET on the card allows it once."
+  (let (got (event '(mouse-1 (nil nil nil))))
+    (cl-letf (((symbol-function 'drgnx-agent-panel-act) (lambda (e) (setq got e)))
+              ((symbol-function 'drgnx-agent-panel-allow) (lambda () (setq got 'allowed))))
+      (let ((last-input-event event)) (drgnx-agent-panel--kit-card nil))
+      (should (equal got event))
+      (let ((last-input-event ?\r)) (drgnx-agent-panel--kit-card nil))
+      (should (eq got 'allowed)))))
+
 (ert-deftest drgnx-agent-panel/accept-and-reject-ask-the-hub-for-the-diff-first ()
   "A diff card's Accept writes the review mark with the hash of the diff the hub holds, and Reject marks the file pending
 and queues the take-it-back message: the panel keeps no diffs, so it asks `work/hunks' for the file first."

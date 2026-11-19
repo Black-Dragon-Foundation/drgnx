@@ -36,34 +36,5 @@ for no explanation."
       (should (equal '("task" "t7") picked))
       (should-not asked))))
 
-(defconst drgnx-agent-panel-conversation-test--request
-  (list :id 7 :title "Read the gateway's log"
-        :options (vector (list :kind "allow_once" :optionId "o-once") (list :kind "allow_always" :optionId "o-always")
-                         (list :kind "reject_once" :optionId "o-no")))
-  "A request the agent waits on, as the snapshot carries it.")
-
-(ert-deftest drgnx-agent-panel-conversation/a-question-card-button-answers-the-request ()
-  "The kit action `agent-panel-card' (a question card's button: VERB and the request id) answers the request with the
-option of that verb: allow once, allow always, or reject."
-  (drgnx-agent-panel-conversation-test--with
-    (let ((def (gethash 'agent-panel-card drgnx-ui-kit--actions)) answered)
-      (should def)
-      (with-current-buffer buf
-        (setq drgnx-agent-panel--snap (list :permissions (vector drgnx-agent-panel-conversation-test--request)))
-        (cl-letf (((symbol-function 'drgnx-agent-panel--answer) (lambda (_r option) (push option answered))))
-          (dolist (verb '("allow" "always" "deny")) (funcall (nth 0 def) (list verb "7")))))
-      (should (equal '("o-once" "o-always" "o-no") (nreverse answered))))))
-
-(ert-deftest drgnx-agent-panel-conversation/the-card-keys-are-y-a-n ()
-  "On a question card's button, y allows, a allows always and n denies: each key calls the action with its verb."
-  (drgnx-agent-panel-conversation-test--with
-    (let ((def (gethash 'agent-panel-card drgnx-ui-kit--actions)))
-      (should def)
-      (dolist (row '(("y" "allow") ("a" "always") ("n" "deny")))
-        (should (eq 'drgnx-ui-kit-activate (lookup-key (nth 2 def) (kbd (car row)))))
-        (let ((transform (cdr (assoc (car row) (nth 1 def)))))
-          (should (functionp transform))
-          (should (equal (list (cadr row) "7") (funcall transform '("anything" "7")))))))))
-
 (provide 'agent-panel-conversation-test)
 ;;; agent-panel-conversation-test.el ends here
