@@ -143,7 +143,12 @@ differ in scale and in the current place."
       (with-current-buffer (generate-new-buffer (concat drgnx-rail-buffer-prefix "*"))
         (setq-local cursor-type nil cursor-in-non-selected-windows nil truncate-lines t mode-line-format nil
                     header-line-format nil tab-line-format nil buffer-read-only t window-size-fixed 'width
-                    show-trailing-whitespace nil)
+                    show-trailing-whitespace nil
+                    ;; a line ends in a space of the default face's width (the room for the cursor): a character wide
+                    ;; past the cell's 38 px, which the 44 px window cannot hold, and a line that does not fit is cut
+                    ;; off and ends in `$' over the cell's right edge.  The rail holds pictures and spaces only: its
+                    ;; default face is as small as a face gets, and the line fits.
+                    face-remapping-alist '((default (:height 10))))
         (buffer-disable-undo)
         (puthash frame (current-buffer) drgnx-rail--buffers)
         (current-buffer)))))
@@ -201,8 +206,8 @@ wider than its 44 px and its line past the window's edge."
                                           (if (eq (nth 0 p) current) 'selected 'rest)
                                           (and (memq (nth 0 p) drgnx-rail--changed) t)
                                           'text frame (nth 3 p))))
-        ;; the item without its last character, the surface's inset after the cell: a line as wide as the window (a pad
-        ;; made of a fraction of a character may round a pixel up) is cut off and ends in `$'
+        ;; the item without its last character, the surface's inset after the cell: the line is 38 px, not the window's
+        ;; 44, so its end (see `drgnx-rail--buffer') fits
         (push (concat (if gui (substring (drgnx-rail--tall (drgnx-rail--pixel-pads item frame) height frame) 0 -1) item) "\n") lines)
         (when gui (push (drgnx-rail--gap-line gap) lines))))
     (apply #'concat (nreverse lines))))
