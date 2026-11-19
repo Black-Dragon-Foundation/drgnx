@@ -89,6 +89,45 @@ to past the limit; with the module off there is no badge and no room."
           (should (<= (string-width (drgnx-agents-editor-here--explorer-badge ords t)) (funcall room n dir-each dir-limit)))))))
   (should-not (drgnx-explorer--badge-env (selected-window))))
 
+(defvar drgnx-view-env--views)
+(defvar drgnx-view-env--sent)
+(defvar drgnx-view-env--glyphs)
+(defvar drgnx-view-env--hooked)
+(defvar drgnx-view-env-send-function)
+(defvar drgnx-view-env-badge)
+(defvar drgnx-explorer-hub-view-name)
+(declare-function drgnx-view-env-register "drgnx-view-env")
+(declare-function drgnx-view-env-teardown "drgnx-view-env")
+
+(ert-deftest drgnx-agents-editor/turning-the-module-on-or-off-sends-the-explorer-s-env ()
+  "Pattern D: the Explorer's env goes to the hub again when who is here is turned on (with the badge's widths) and
+off (without them), so the room the hub keeps for a badge follows at once, not at the next window change."
+  (require 'drgnx-explorer)
+  (require 'drgnx-view-env)
+  (let* ((sent nil)
+         (drgnx-view-env--views (make-hash-table :test #'equal))
+         (drgnx-view-env--sent (make-hash-table :test #'equal))
+         (drgnx-view-env--glyphs (make-hash-table :test #'equal))
+         (drgnx-view-env--hooked nil)
+         (drgnx-view-env-send-function (lambda (m p) (when (equal m "view/env") (push p sent))))
+         (buf (generate-new-buffer " *explorer-env-test*")))
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer buf)
+      (setq-local drgnx-view-env-badge #'drgnx-explorer--badge-env)
+      (unwind-protect
+          (progn
+            (drgnx-view-env-register drgnx-explorer-hub-view-name buf)
+            (should (= 1 (length sent)))
+            (should-not (plist-get (car sent) :badge))
+            (drgnx-agents-editor-here-test--with
+              (should (= 2 (length sent)))
+              (should (plist-get (car sent) :badge)))
+            (should (= 3 (length sent)))
+            (should-not (plist-get (car sent) :badge)))
+        (drgnx-view-env-teardown)
+        (kill-buffer buf)))))
+
 (ert-deftest drgnx-agents-editor/folder-dots-per-agent ()
   (drgnx-agents-editor-here-test--with
     (should (= 2 (drgnx-agents-editor-here-test--marks (drgnx-agents-editor-here--badge '(1 2) 6 nil))))
