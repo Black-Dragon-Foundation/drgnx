@@ -93,5 +93,23 @@ in the side, with the file as a removable chip in its composer; it sends nothing
         (when-let* ((b (get-buffer (format "*drgnx agent: %s*" "s1")))) (kill-buffer b))
         (delete-file file)))))
 
+(declare-function drgnx-agents-side-raise "drgnx-agent-panel-list" (card))
+(declare-function drgnx-agents-side-stop-card "drgnx-agent-panel-list" (card))
+
+(ert-deftest agents-side/at-limit-card-raises-and-resumes ()
+  "Flow Task 24a: the at-limit card's Raise asks `budget/raise' for the card with `resume'; its Stop is `agents/stop' for a
+session's card and `job/card stop' for a job's."
+  (agents-side-test--with
+    (let (calls)
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params &rest _) (push (cons method params) calls))))
+        (drgnx-agents-side-raise '(:card 4 :unit "usd-est" :limit 8.0))
+        (should (equal "budget/raise" (car (car calls))))
+        (should (equal 4 (plist-get (cdr (car calls)) :card)))
+        (should (eq t (plist-get (cdr (car calls)) :resume)))
+        (drgnx-agents-side-stop-card '(:session "s1"))
+        (should (equal '("agents/stop" :id "s1") (car calls)))
+        (drgnx-agents-side-stop-card '(:job "j1"))
+        (should (equal "job/card" (car (car calls))))))))
+
 (provide 'agents-side-test)
 ;;; agents-side-test.el ends here

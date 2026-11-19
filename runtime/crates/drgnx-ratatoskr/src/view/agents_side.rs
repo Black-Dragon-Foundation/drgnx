@@ -481,4 +481,53 @@ mod tests {
             .iter()
             .any(|x| x.2 == drgnx_rows::faces::FaceId::KitSectionHeader.name()));
     }
+
+    fn kit_env() -> drgnx_rows::kit::KitEnv<'static> {
+        drgnx_rows::kit::KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            ascii: false,
+            density: Default::default(),
+            icons: None,
+        }
+    }
+
+    /// Flow Task 24a: a card whose spend nears its limit swaps the plan's progress for the budget meter, and never
+    /// draws two bars.
+    #[test]
+    fn a_nearing_card_swaps_progress_for_the_meter() {
+        let mut near = s("near", State::Running, 9, false);
+        near.progress = Some((1, 3));
+        near.budget = Some(Budget {
+            spent: 4.2,
+            limit: 5.0,
+        });
+        let rows = rows(&[near], &kit_env());
+        let faces: Vec<&str> = rows
+            .iter()
+            .flat_map(|r| r.runs.iter().map(|x| x.2.as_str()))
+            .collect();
+        assert!(faces.contains(&drgnx_rows::faces::FaceId::KitProgressMeterNear.name()), "{faces:?}");
+        assert!(
+            !faces.contains(&drgnx_rows::faces::FaceId::KitProgressFill.name()),
+            "never two bars: {faces:?}"
+        );
+    }
+
+    /// A card whose limit was reached is a needs-you card with the question: Raise or Stop, first in the side.
+    #[test]
+    fn a_reached_card_is_needs_you_with_the_question() {
+        let mut hit = s("hit", State::Paused, 1, false);
+        hit.budget = Some(Budget {
+            spent: 5.0,
+            limit: 5.0,
+        });
+        let busy = s("busy", State::Running, 99, false);
+        let rows = rows(&[busy, hit], &kit_env());
+        assert!(rows[0].key.starts_with("card:hit:"), "needs-you first: {:?}", rows[0].key);
+        let text: String = rows.iter().filter(|r| r.key.starts_with("card:hit:")).map(|r| r.text.as_str()).collect();
+        assert!(text.contains("Paused at its limit"), "{text:?}");
+        assert!(text.contains("$5.00 of $5.00"), "{text:?}");
+    }
 }
