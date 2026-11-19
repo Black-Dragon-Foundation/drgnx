@@ -18,9 +18,9 @@ The kit's `rail-item` component: one definition in `etc/ui/components.eld`, expa
 
 | Variant | Density | Height | Pad (start / end) | Gap | Box | Radius | Hit | Indent |
 |---|---|---|---|---|---|---|---|---|
-| - | compact | 32 | 6 / 6 | 8 | no | 6 | 0 | - |
-| - | comfortable | 32 | 6 / 6 | 8 | no | 6 | 0 | - |
-| - | roomy | 32 | 6 / 6 | 8 | no | 6 | 0 | - |
+| - | compact | 32 | 6 / 6 | 8 | no | 8 | 0 | - |
+| - | comfortable | 32 | 6 / 6 | 8 | no | 8 | 0 | - |
+| - | roomy | 32 | 6 / 6 | 8 | no | 8 | 0 | - |
 
 ## On a terminal
 
@@ -36,6 +36,7 @@ The kit's `rail-item` component: one definition in `etc/ui/components.eld`, expa
 |---|---|---|---|---|
 | own | `drgnx-kit-rail-item` | - | muted | - |
 | current | `drgnx-kit-rail-item-current` | sel-quiet | fg | sel-quiet |
+| bar | `drgnx-kit-rail-item-bar` | - | accent | - |
 | dot | `drgnx-kit-rail-item-dot` | - | warn | - |
 
 ## States

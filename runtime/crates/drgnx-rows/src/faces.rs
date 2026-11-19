@@ -1136,13 +1136,15 @@ pub enum FaceId {
     KitRailItem,
     /// `drgnx-kit-rail-item-current`
     KitRailItemCurrent,
+    /// `drgnx-kit-rail-item-bar`
+    KitRailItemBar,
     /// `drgnx-kit-rail-item-dot`
     KitRailItemDot,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 565] = [
+    pub const ALL: [FaceId; 566] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1707,6 +1709,7 @@ impl FaceId {
         FaceId::KitSegmentedCurrent,
         FaceId::KitRailItem,
         FaceId::KitRailItemCurrent,
+        FaceId::KitRailItemBar,
         FaceId::KitRailItemDot,
     ];
 
@@ -2277,6 +2280,7 @@ impl FaceId {
             FaceId::KitSegmentedCurrent => "drgnx-kit-segmented-current",
             FaceId::KitRailItem => "drgnx-kit-rail-item",
             FaceId::KitRailItemCurrent => "drgnx-kit-rail-item-current",
+            FaceId::KitRailItemBar => "drgnx-kit-rail-item-bar",
             FaceId::KitRailItemDot => "drgnx-kit-rail-item-dot",
         }
     }
@@ -2848,6 +2852,7 @@ impl FaceId {
             "drgnx-kit-segmented-current" => FaceId::KitSegmentedCurrent,
             "drgnx-kit-rail-item" => FaceId::KitRailItem,
             "drgnx-kit-rail-item-current" => FaceId::KitRailItemCurrent,
+            "drgnx-kit-rail-item-bar" => FaceId::KitRailItemBar,
             "drgnx-kit-rail-item-dot" => FaceId::KitRailItemDot,
             _ => return None,
         })

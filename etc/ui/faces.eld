@@ -565,4 +565,5 @@
  drgnx-kit-segmented-current
  drgnx-kit-rail-item
  drgnx-kit-rail-item-current
+ drgnx-kit-rail-item-bar
  drgnx-kit-rail-item-dot)

@@ -670,9 +670,9 @@ const RAIL_ITEM_AXES: &[&[&str]] = &[];
 const RAIL_ITEM_DEFAULTS: &[usize] = &[];
 const RAIL_ITEM_GEOM: [[Geom; 3]; 1] = [
     [
-        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
-        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
-        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 6, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 32, pad: (6, 6), gap: 8, boxed: false, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
     ],
 ];
 const RAIL_ITEM_LABEL: [Option<&str>; 1] = [Some("changed")];
