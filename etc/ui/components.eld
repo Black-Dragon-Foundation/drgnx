@@ -62,7 +62,7 @@
   (key-hint :variants ((variant cap menu)) :defaults (variant cap)
             :geometry (:height 0 :pad (:by variant (cap (5 . 5)) (menu (0 . 0))) :gap 0 :box (:by variant (cap t) (menu nil)) :radius 4)
             :tty (:pad 0) :label "key"
-            :bind (((cap) :edge key-hint-edge :inherit (drgnx-code-small drgnx-control) :font (drgnx-code-small))
+            :bind (((cap) :edge key-hint-edge :ring (1 4) :inside t :inherit (drgnx-code-small drgnx-control) :font (drgnx-code-small))
                    ((menu) :inherit (drgnx-code-small drgnx-text-subtle)))
             :replaces ((drgnx-keycap . drgnx-kit-key-hint-cap))
             :helpers nil :lint t)

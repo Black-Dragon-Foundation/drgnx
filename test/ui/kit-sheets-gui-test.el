@@ -375,6 +375,40 @@ picture goes to the evidence folder.  The caller skips a session with no graphic
       (when (buffer-live-p buf) (kill-buffer buf))
       (mapc #'disable-theme custom-enabled-themes))))
 
+(drgnx-look-gui-deftest drgnx-kit-sheet/a-keycap-does-not-split-its-buttons-ring ()
+  "A secondary button with a key hint (a keycap) under Glitnir: the button's ring runs unbroken over the keycap's
+characters (its top line at the button's own top, where the keycap's ring, as tall as its text, never reaches), in every
+theme.  Nidhogg's nested box (`:inside t') draws the keycap's ring inside it."
+  (skip-unless (and (display-graphic-p) (fboundp 'glitnir-active-p) (glitnir-active-p)))
+  (drgnx-uitest-bare-frame)
+  (let ((old (window-buffer)) (buf (generate-new-buffer " *keycap ring*")) (fs (drgnx-pixels-scale (selected-frame))))
+    (unwind-protect
+        (pcase-dolist (`(,variant . ,theme) drgnx-kit-sheet-themes)
+          (drgnx-kit-catalogue-open 'button theme 'comfortable fs)  ; loads the theme and the density
+          (with-current-buffer buf
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (insert (drgnx-ui-kit-string 'button '(:c "button" :label "Allow" :style "secondary" :size "md" :key "y")
+                                           'text nil)
+                      "\n")))
+          (switch-to-buffer buf)
+          (setq-local cursor-type nil)
+          (goto-char (point-min))
+          (drgnx-test-wait-presented)
+          (let* ((s (drgnx-uitest-device-scale (selected-frame))) (edges (window-inside-pixel-edges))
+                 (snap (drgnx-uitest-snapshot))
+                 (key (cl-loop for p from (point-min) below (point-max)
+                               when (memq 'drgnx-kit-key-hint-cap (ensure-list (get-text-property p 'face))) collect p))
+                 (mid (/ (+ (drgnx-kit-sheet--x (car key) s edges) (drgnx-kit-sheet--x (1+ (car (last key))) s edges)) 2))
+                 (top (round (* s (+ (cadr edges) (cdr (posn-x-y (posn-at-point (point-min))))))))
+                 (want (drgnx-kit-sheet--rgb (drgnx-look-token 'button-edge variant))))
+            (should key)
+            (should (equal (list variant 'ring-over-the-keycap want)
+                           (list variant 'ring-over-the-keycap (drgnx-uitest-pixel snap mid top))))))
+      (switch-to-buffer old)
+      (kill-buffer buf)
+      (mapc #'disable-theme custom-enabled-themes))))
+
 (drgnx-look-gui-deftest drgnx-kit-sheet/question-card ()
   "The question card's sheet: three kinds, the head on the attention tint, the needs-you ring, the first button primary,
 in every theme and density."

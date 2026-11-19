@@ -388,7 +388,8 @@ colours (`drgnx-ui-kit-theme-specs')."
 (defun drgnx-ui-kit-theme-specs (tok &optional table hc glitnir)
   "((FACE . ATTRIBUTES)...) of the kit faces of TABLE (default the components file) for one of drgnx's themes: the
 bindings' tokens as colours through TOK (a token name → a colour), the edge as a 1 px box inside the face (`:ring'
-\(WIDTH RADIUS OPEN...) makes it WIDTH px, and where GLITNIR draws, rounded to RADIUS and open on the sides OPEN), and
+\(WIDTH RADIUS OPEN...) makes it WIDTH px, and where GLITNIR draws, rounded to RADIUS and open on the sides OPEN;
+`:inside t' nests it in the ring of the run it sits in, a key in its button), and
 `:attrs' (raw face attributes: a weight), and an `:inverse' binding keeps its inverse video.  A binding with no colours
 \(the row's: a font only) keeps its `:inherit' (a theme's spec replaces the `defface''s).  A `:ring' is inside the
 line too (negative widths: nothing moves).  With HC (the high-contrast theme) a binding marked `:hc-ring' has no tint:
@@ -411,7 +412,11 @@ a 1 px ring in its text colour."
                          `(:box (:line-width ,(let ((w (- (or (car ring) 1)))) (cons w w)) :color ,(funcall tok (plist-get b :edge))
                                              ,@(and glitnir ring
                                                     `(:corner-radius ,(nth 1 ring)
-                                                                     ,@(and (nthcdr 2 ring) `(:open ,(nthcdr 2 ring)))))))))
+                                                                     ,@(and (nthcdr 2 ring) `(:open ,(nthcdr 2 ring)))
+                                                                     ;; a ring nested in the ring of the run it sits in
+                                                                     ;; (the key in its button): Nidhogg's key, which
+                                                                     ;; only a Glitnir build's faces take it
+                                                                     ,@(and (plist-get b :inside) '(:inside t))))))))
                 ,@(plist-get b :attrs)
                 ,@(and (plist-get b :inverse) '(:inverse-video t)))))
           (drgnx-ui-kit-face-bindings table)))
