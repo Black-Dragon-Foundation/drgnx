@@ -181,7 +181,7 @@ line that holds an image."
                                           'text frame (nth 3 p))))
         ;; the item without its last character, the surface's inset after the cell: a line as wide as the window (a pad
         ;; made of a fraction of a character may round a pixel up) is cut off and ends in `$'
-        (push (concat (substring (if gui (drgnx-rail--tall item height frame) item) 0 -1) "\n") lines)
+        (push (concat (if gui (substring (drgnx-rail--tall item height frame) 0 -1) item) "\n") lines)
         (when gui (push (drgnx-rail--gap-line gap) lines))))
     (apply #'concat (nreverse lines))))
 
