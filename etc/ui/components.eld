@@ -244,4 +244,20 @@
                      ((multi top) :bg editor :edge border :ring (1 6 bottom) :inherit (drgnx-ui-text default) :font (drgnx-ui-text))
                      ((multi mid) :bg editor :edge border :ring (1 6 top bottom) :inherit (drgnx-ui-text default) :font (drgnx-ui-text))
                      ((multi bottom) :bg editor :edge border :ring (1 6 top) :inherit (drgnx-ui-text default) :font (drgnx-ui-text)))
-              :replaces nil :helpers nil :lint t)))
+              :replaces nil :helpers nil :lint t)
+  ;; a rail item (the layout A rail, sidebars.html `.rb'): a 44 px cell, its 32 px square (the 6 px of surface each side)
+  ;; a 8-radius fill in the state's colour, the place's icon (16 px) centred in it; the current place is the quiet
+  ;; selection with the body text's colour and a 2 px accent bar on the cell's left edge (the mockup's `inset 2px 0 0'),
+  ;; the others muted; a place that changed has a 7 px warn dot on the cell's top right corner.  The bar and the dot are
+  ;; spaces as high as the cell, drawn as images in their faces' colour (`bar', `dot': the editor draws them, as it draws
+  ;; a range bar's parts); a terminal has the dot's glyph after the icon and no bar.  Its label is the place's name,
+  ;; with "changed" after it when it has the dot
+  (rail-item :variants nil :defaults nil
+             :geometry (:height 32 :pad (6 . 6) :gap 8 :box nil :radius 8 :hit 0)
+             :tty (:pad 1 :glyphs (dot)) :label "changed"
+             :bind ((() :fg muted :inherit (drgnx-ui-text drgnx-text-muted) :font (drgnx-ui-text))
+                    ((current) :bg sel-quiet :fg fg :edge sel-quiet :ring (1 8)
+                     :inherit (drgnx-ui-text drgnx-selected-quiet) :font (drgnx-ui-text))
+                    ((bar) :fg accent :inherit (drgnx-ui-text drgnx-accent) :font (drgnx-ui-text))
+                    ((dot) :fg warn :inherit (drgnx-ui-text warning) :font (drgnx-ui-text)))
+             :replaces nil :helpers nil :lint t)))

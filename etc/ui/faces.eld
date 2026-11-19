@@ -562,4 +562,8 @@
  drgnx-kit-text-input
  drgnx-kit-text-input-multi-top
  drgnx-kit-text-input-multi-mid
- drgnx-kit-text-input-multi-bottom)
+ drgnx-kit-text-input-multi-bottom
+ drgnx-kit-rail-item
+ drgnx-kit-rail-item-current
+ drgnx-kit-rail-item-bar
+ drgnx-kit-rail-item-dot)

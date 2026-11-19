@@ -2727,8 +2727,27 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                        " (global-set-key (kbd \"<f8>\") #'drgnx-perf--catalogue) t)")
        :each "(progn (setq drgnx-perf--catalogue-n 0) t)"
        :actions ,(funcall keys "<f8>" 30)
-       :check "(and (= drgnx-perf--catalogue-n 30) (with-current-buffer (window-buffer) (= 21 (length (drgnx-kit-catalogue-cells)))))"
+       :check "(and (= drgnx-perf--catalogue-n 30) (with-current-buffer (window-buffer) (<= 21 (length (drgnx-kit-catalogue-cells)))))"
        :teardown "(progn (global-unset-key (kbd \"<f8>\")) (when (get-buffer drgnx-kit-catalogue-buffer) (kill-buffer drgnx-kit-catalogue-buffer)) t)")
+      ;; the kit's theme switch (the frontend kit, §9): three frames show the catalogue (every kit component drawn from the
+      ;; token table), and F8 loads the next theme (light, high contrast, dark, in turn): every frame's kit faces and
+      ;; images are drawn again within 250 ms
+      (kit-theme-switch-3-frames
+       :setup ,(concat "(progn"
+                       (format " (load (expand-file-name \"modules/ui/drgnx-kit-catalogue\" %S) nil t)" drgnx-ui-repo-dir)
+                       " (defvar drgnx-perf--theme-n 0)"
+                       " (defvar drgnx-perf--theme-frames nil)"
+                       " (defun drgnx-perf--theme () (interactive)"
+                       "   (let ((theme (nth (% (cl-incf drgnx-perf--theme-n) 3) '(drgnx-light drgnx-high-contrast drgnx-dark))))"
+                       "     (mapc #'disable-theme custom-enabled-themes) (load-theme theme t)))"
+                       " (switch-to-buffer (drgnx-kit-catalogue-open))"
+                       " (dotimes (_ 2) (let ((f (make-frame))) (push f drgnx-perf--theme-frames)"
+                       "   (with-selected-frame f (switch-to-buffer (get-buffer drgnx-kit-catalogue-buffer)))))"
+                       " (global-set-key (kbd \"<f8>\") #'drgnx-perf--theme) t)")
+       :each "(progn (setq drgnx-perf--theme-n 0) t)"
+       :actions ,(funcall keys "<f8>" 120)
+       :check "(and (= drgnx-perf--theme-n 120) (= 3 (length (seq-filter (lambda (f) (and (frame-live-p f) (not (frame-parent f)))) (frame-list)))))"
+       :teardown "(progn (global-unset-key (kbd \"<f8>\")) (mapc (lambda (f) (when (frame-live-p f) (delete-frame f t))) drgnx-perf--theme-frames) (setq drgnx-perf--theme-frames nil) (when (get-buffer drgnx-kit-catalogue-buffer) (kill-buffer drgnx-kit-catalogue-buffer)) (mapc #'disable-theme custom-enabled-themes) (load-theme 'drgnx-dark t) t)")
       ;; the Run and Debug view (spec §7): a step's model diff and rows patch, ten of 300 variables changed, drawn
       ;; within 30 ms with the hub's half (the bench `debug_view'); a chunk of a 10,000-element list opened (100 rows
       ;; inserted from the hub's answer: the real hub, a test-hooks build, and its mock adapter) within 15 ms
@@ -3550,6 +3569,7 @@ version and the commit, as JSON in FILE."
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))
               '(work-typing-shown work-typing-hidden))
     (kit-catalogue-open . "the frontend kit's catalogue: its time budget is judged; allocation, CPU and rows are set from its first runs on the desktop island")
+    (kit-theme-switch-3-frames . "the frontend kit's theme switch with three frames open: its time budget is judged; allocation, CPU and rows are set from its first runs on the desktop island")
     (view-patch . "report-only until the render offload's combined pass (its numbers on the island)")
     (work-nav-rows . "report-only until the combined pass (gates after core, editor and agents); needs Sjá's Nidhogg")
     (search-context . "its bar is a ratio of its own runs (labels against none: first rows ≤ 1.10×, end ≤ 1.15×), read from :first_ratio and :done_ratio")

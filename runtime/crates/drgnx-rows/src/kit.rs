@@ -750,6 +750,8 @@ fn time_axis(
 pub const TAB_ICON_PX: u16 = 14;
 /// The room each side of a tab's close mark in its 18 px slot, logical px.
 pub const TAB_CLOSE_PAD_PX: u16 = 2;
+/// A rail item's icon size in logical px (sidebars.html `.rb`: a 32 px square round a 16 px icon).
+pub const RAIL_ICON_PX: u16 = 16;
 
 /// What a question card asks: a permission (`y` Allow once, `a` Always, `n` Deny), a question (its answers `1`…`9`) or a
 /// sign-off (`y` Approve, `n` Request changes).
@@ -931,6 +933,19 @@ pub enum Comp {
         items: Vec<(String, Action)>,
         #[serde(default)]
         current: usize,
+    },
+    /// A rail item: the place's name PLACE (its label), its ICON in a cell in STATE (`selected`: the current place), a
+    /// warn dot when DOT (the place changed).
+    RailItem {
+        place: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
+        #[serde(default)]
+        state: State,
+        #[serde(default)]
+        dot: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<Action>,
     },
     /// Progress: a bar WIDTH logical px wide or a ring, VALUE from 0 to 1.
     Progress {
@@ -1718,6 +1733,21 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             };
             text_input_row(b, env, c, 0, n);
         }
+        Comp::RailItem {
+            place,
+            icon,
+            state,
+            dot,
+            action,
+        } => rail_item(
+            b,
+            env,
+            place,
+            icon.as_deref(),
+            *state,
+            *dot,
+            action.as_ref(),
+        ),
         Comp::Progress { kind, value, width } => progress(b, env, *kind, *value, *width),
         Comp::Meter {
             spent,
@@ -1892,6 +1922,90 @@ fn segmented(b: &mut RowBuilder, env: &KitEnv, items: &[(String, Action)], curre
     }
     let end = b.pos();
     b.face(from, end, track);
+}
+
+/// A rail item onto B (`drgnx-ui-kit--rail-item`): the surface's inset, then the cell (the icon's inset, the ICON, the
+/// warn dot or the inset again) in the `current` face when STATE is shown, then the inset; any other state's face
+/// above the cell. Its label is its `help-echo`: PLACE, with the word after it when DOT.
+fn rail_item(
+    b: &mut RowBuilder,
+    env: &KitEnv,
+    place: &str,
+    icon: Option<&str>,
+    state: State,
+    dot: bool,
+    action: Option<&Action>,
+) {
+    let variant = [env.density.name()];
+    let g: Geom = kit_gen::geom(CompId::RailItem, &variant);
+    let shown = matches!(state, State::Selected | State::SelectedInactive);
+    let f = if shown {
+        FaceId::KitRailItemCurrent
+    } else {
+        kit_gen::face(CompId::RailItem, &variant)
+    }
+    .name();
+    let face = Some(f);
+    pad(b, env, px(g.pad.0, env.scale), 0, None);
+    let from = b.pos();
+    // a space as high as the cell in FACE (the editor draws it as a picture), the cell's own colours under it
+    let tall = |b: &mut RowBuilder, face: FaceId| {
+        let at = b.pos();
+        b.space(px(g.gap, env.scale), px(g.height, env.scale), face.name());
+        let end = b.pos();
+        b.face(at, end, f);
+    };
+    if shown && !env.tty {
+        tall(b, FaceId::KitRailItemBar);
+    } else {
+        pad(b, env, px(g.gap, env.scale), usize::from(g.tty_pad), face);
+    }
+    if let Some(name) = icon {
+        let mark = icon_glyph(env, name);
+        let image = env
+            .icons
+            .filter(|_| !env.tty)
+            .and_then(|i| (i.0)(name, px(RAIL_ICON_PX, env.scale)));
+        match image {
+            Some(id) => {
+                let at = b.pos();
+                b.image(id, mark);
+                b.face(at, at + 1, f);
+            }
+            None if !mark.is_empty() => {
+                b.push(mark, face);
+            }
+            None => {}
+        }
+    }
+    if dot && env.tty {
+        let at = b.pos();
+        b.push(glyph(env, "dot"), Some(FaceId::KitRailItemDot.name()));
+        let end = b.pos();
+        b.face(at, end, f);
+    } else if dot {
+        tall(b, FaceId::KitRailItemDot);
+    } else {
+        pad(b, env, px(g.gap, env.scale), usize::from(g.tty_pad), face);
+    }
+    let to = b.pos();
+    pad(b, env, px(g.pad.1, env.scale), 0, None);
+    let end = b.pos();
+    if !shown && let Some(s) = state_face(state) {
+        b.face_over(from, to, s.name());
+    }
+    if let Some(a) = action {
+        put_action(b, from, end, a);
+    }
+    let label = match kit_gen::label(CompId::RailItem, &variant).filter(|_| dot) {
+        Some(word) => format!("{place}, {word}"),
+        None => place.to_owned(),
+    };
+    b.prop(0, end, "help-echo", Value::String(label));
+    // the item is its own height, as a row is
+    if !env.tty && g.height > 0 {
+        b.height(1, px(g.height, env.scale));
+    }
 }
 
 /// SLOT's agent mark onto B (`drgnx-ui-kit--agent-mark`): the handle between the pads on the agent's colour (its face

@@ -509,6 +509,26 @@ window gets none.  Taking the cards off gives back the parameters and the divide
         (should-not (window-parameter editor p)))
       (should (equal before (list (frame-parameter f 'right-divider-width) (frame-parameter f 'bottom-divider-width)))))))
 
+(ert-deftest drgnx-chrome/wb-tool-tiles-are-cards ()
+  "Every tile of the grid is a card (tiling.html: each tile its own island on the gap): a tool tile (role `tile') gets
+the card parameters like a dock or an editor group; the rail's and the status bar's windows, which are not tiles, get none.
+Race-proof pattern D (pure): window parameters of one frame."
+  (drgnx-chrome-test--with _dir
+    (let* ((f (selected-frame)) (editor (selected-window))
+           (tile (split-window editor nil 'right))
+           (rail (split-window editor nil 'left))
+           (bar (split-window editor nil 'below)))
+      (set-window-parameter tile 'drgnx-role 'tile)
+      (set-window-parameter rail 'drgnx-role 'rail)
+      (set-window-parameter bar 'drgnx-role 'statusbar)
+      (drgnx-look--card-frame f)
+      (should (equal (window-parameter tile 'corner-radius) (drgnx-look--card-value 'corner-radius)))
+      (should (equal (window-parameter tile 'ring) (drgnx-look--card-value 'ring)))
+      (dolist (w (list rail bar))
+        (should-not (window-parameter w 'corner-radius))
+        (should-not (window-parameter w 'ring)))
+      (drgnx-look--card-restore f))))
+
 (ert-deftest drgnx-chrome/wb-card-gap-is-in-logical-pixels ()
   "The gap is logical: at a frame scale of 2 the dividers are twice the gap, in device pixels, and a change of the
 scale re-applies it.  Race-proof pattern D (pure: the scale is stubbed)."

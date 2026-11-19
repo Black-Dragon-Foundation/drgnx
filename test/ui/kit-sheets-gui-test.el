@@ -77,11 +77,11 @@ whose values VARIANTS all have.  In THEME `hc' a binding marked `:hc-ring' has n
 
 (defun drgnx-kit-sheet--tab-fill (id variants state)
   "A shown tab's fill token (its own, not the state table's `sel'): an editor tab's the editor's surface, a panel tab's
-the quiet selection; nil for any other cell."
-  (and (eq id 'tab) (memq state '(selected selected-inactive))
-       (plist-get (cdr (assq (if (equal variants '(panel)) 'panel-current 'current)
+the quiet selection, a rail item's current place the quiet selection; nil for any other cell."
+  (and (memq id '(tab rail-item)) (memq state '(selected selected-inactive))
+       (plist-get (cdr (assq (cond ((eq id 'rail-item) 'current) ((equal variants '(panel)) 'panel-current) (t 'current))
                              (mapcar (lambda (b) (cons (car-safe (car b)) (cdr b)))
-                                     (plist-get (drgnx-ui-kit-component 'tab) :bind))))
+                                     (plist-get (drgnx-ui-kit-component id) :bind))))
                   :bg)))
 
 (defvar drgnx-kit-sheet--edges nil
@@ -272,7 +272,9 @@ Returns the number of cells checked."
                             (and (eq id 'agent-mark)
                                  (intern (format "a%d" (plist-get (drgnx-kit-sheet--props id variants state) :slot))))
                             'editor))
-                 (x (+ (drgnx-kit-sheet--x beg s edges) (/ (aref (car spaces) 1) 2))))
+                 ;; the start pad: a rail item's is the cell's own, inside its surface inset
+                 (pad (if (eq id 'rail-item) (cadr spaces) (car spaces)))
+                 (x (+ (drgnx-kit-sheet--x (+ beg (aref pad 0)) s edges) (/ (aref pad 1) 2))))
             (let* ((want (drgnx-kit-sheet--rgb (drgnx-look-token token variant)))
                    (got (drgnx-uitest-pixel snap x y))
                    ;; on a mismatch, what is drawn there
@@ -519,6 +521,11 @@ ring and disabled, with a context chip and its close mark: each pad exact, the f
 border's ring, in every theme and density."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'text-input))
+(drgnx-look-gui-deftest drgnx-kit-sheet/rail-item ()
+  "The rail item's sheet: the 6 px inset each side of the cell exact, the current place on the quiet selection, the others
+on the rail's surface, in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'rail-item))
 
 (declare-function drgnx-wb-area-show "drgnx-wb")
 (declare-function drgnx-wb-area-hide "drgnx-wb")

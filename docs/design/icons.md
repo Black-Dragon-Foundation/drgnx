@@ -90,7 +90,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `replace-all` | `modules/tools/drgnx-replace.el` |
 | `rotate-ccw` | `core/drgnx-config.el`, `modules/tools/drgnx-work-space.el` |
 | `scroll-text` | - |
-| `search` | `core/drgnx-palette-frame.el`, `core/drgnx-palette.el`, `modules/ui/drgnx-topline.el` |
+| `search` | `core/drgnx-palette-frame.el`, `core/drgnx-palette.el`, `modules/ui/drgnx-kit-catalogue.el`, `modules/ui/drgnx-topline.el` |
 | `send` | - |
 | `server` | `modules/tools/drgnx-term.el` |
 | `settings` | `core/drgnx-palette.el` |

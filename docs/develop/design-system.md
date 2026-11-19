@@ -130,7 +130,8 @@ The comfortable sheet's picture is written to the evidence folder as `kit-sheet-
 - the states.
 
 A geometry change without a regeneration therefore fails `--check`. The perf workload `kit-catalogue-open` (budget
-500 ms p95) draws the whole catalogue again.
+500 ms p95) draws the whole catalogue again, and `kit-theme-switch-3-frames` (250 ms p95) loads dark, light and
+high contrast in turn with the catalogue open in three frames.
 
 ## Regenerating
 
