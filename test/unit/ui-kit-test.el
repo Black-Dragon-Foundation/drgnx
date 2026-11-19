@@ -218,6 +218,17 @@
         (should (eql (plist-get round :corner-radius) 6))
         (should-not (plist-get plain :corner-radius))))))
 
+(ert-deftest drgnx-ui-kit/a-key-hint-ring-sits-inside-its-button-under-glitnir ()
+  ;; a key in a button: Glitnir draws one box per face, so the key's own ring would split the button's; `:inside t'
+  ;; (Nidhogg's nested box) draws it whole inside the enclosing run's ring, radius 4.  Only Glitnir's faces take the key.
+  (let* ((tok (lambda (token) (symbol-name token)))
+         (box (lambda (glitnir)
+                (plist-get (cdr (assq 'drgnx-kit-key-hint-cap (drgnx-ui-kit-theme-specs tok nil nil glitnir))) :box))))
+    (should (eq t (plist-get (funcall box t) :inside)))
+    (should (eql 4 (plist-get (funcall box t) :corner-radius)))
+    (should-not (plist-member (funcall box nil) :inside))
+    (should-not (plist-get (funcall box nil) :corner-radius))))
+
 (ert-deftest drgnx-ui-kit/chip-geometry ()
   (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :height) 20))
   (should (equal (plist-get (drgnx-ui-kit-geometry 'chip '(ok soft)) :pad) '(7 . 7)))
