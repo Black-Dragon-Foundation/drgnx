@@ -6,6 +6,7 @@
 
 (require 'ert)
 (require 'cl-lib)
+(load (expand-file-name "grid-on-fixture" (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
 (defun drgnx-look-gui-session ()
   "What a look row may assume of the session: the root frame selected and focused, at its size, scale and bars, with
@@ -68,7 +69,7 @@ BODY's docstring and keywords stay first."
   (let (head)
     (when (and (stringp (car body)) (cdr body)) (push (pop body) head))
     (while (keywordp (car body)) (push (pop body) head) (push (pop body) head))
-    `(ert-deftest ,name ,args ,@(nreverse head) (drgnx-look-gui-check-clean) ,@body (drgnx-look-gui-check-clean))))
+    `(ert-deftest ,name ,args ,@(nreverse head) (drgnx-look-gui-check-clean) (drgnx-test-with-grid-on ,@body) (drgnx-look-gui-check-clean))))
 
 (provide 'drgnx-look-gui-fixture)
 ;;; look-gui-fixture.el ends here

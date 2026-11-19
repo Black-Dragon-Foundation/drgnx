@@ -165,6 +165,8 @@ rows.")
               ((drgnx-view-p view)))
     (drgnx-view-touch view)))
 
+(declare-function drgnx-pane-define-kind "drgnx-panes")
+
 (defun drgnx-agent-panel-list-setup ()
   (when (require 'drgnx-panes nil t)
     (drgnx-pane-define-kind 'agents :home 'right :title "Agents" :placeholder #'drgnx-agent-panel-list-buffer))

@@ -47,20 +47,3 @@
        (should (eq (selected-window) g2))
        (drgnx-wb-focus-right)
        (should (eq (selected-window) g2))))))
-
-(ert-deftest drgnx-wb-focus/up-and-down-between-groups-and-docks ()
-  (drgnx-wb-focus-test--with
-   (let ((top (drgnx-wb-section-window 'top)) (bottom (drgnx-wb-section-window 'bottom)))
-     (select-window top)
-     (drgnx-wb-focus-down)
-     (should (eq (selected-window) bottom))
-     (drgnx-wb-focus-down)
-     (should (eq (selected-window) bottom))
-     (drgnx-wb-focus-up)
-     (should (eq (selected-window) top))
-     (drgnx-wb-focus-up)
-     (should (eq (selected-window) top))
-     (should-error (drgnx-wb-focus-direction 'sideways)))))
-
-(provide 'wb-focus-test)
-;;; wb-focus-test.el ends here

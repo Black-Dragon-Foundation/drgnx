@@ -2,6 +2,7 @@
 ;; test-class: det
 ;; The hub's answers are scripted (`drgnx-hub-call' and `drgnx-hub-call-sync' replaced): what is tested is what the
 ;; editor sends.  Sessions come from `debug-state' events, fed to the module's handler as the hub would send them.
+(require 'drgnx-grid)
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
