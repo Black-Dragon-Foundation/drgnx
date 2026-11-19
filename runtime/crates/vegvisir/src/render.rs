@@ -902,6 +902,13 @@ fn chip_line(it: &Item) -> Line {
                 Some(FaceId::WorkChip.name()),
             );
         }
+        // a task card: the kit's status dot (its glyph in the state's face) and its word, never colour alone
+        (Kind::Task, _) if f.task_state.is_some() => {
+            let s = f.task_state.unwrap_or(crate::TaskState::NotStarted);
+            l.push(" · ", None)
+                .push(s.glyph(), Some(task_dot(s)))
+                .push(format!(" {}", s.word()), None);
+        }
         (Kind::Machine, _) if !extra.is_empty() => {
             l.push(format!(" {}", extra.join(" · ")), None);
         }
@@ -914,6 +921,17 @@ fn chip_line(it: &Item) -> Line {
         l.push(" ⚠", Some(FaceId::WorkOverlap.name()));
     }
     l
+}
+
+/// The kit's status-dot face of a task's state.
+fn task_dot(s: crate::TaskState) -> &'static str {
+    match s {
+        crate::TaskState::Done => FaceId::KitStatusDotDone,
+        crate::TaskState::Running => FaceId::KitStatusDotRunning,
+        crate::TaskState::NeedsYou => FaceId::KitStatusDotNeedsYou,
+        crate::TaskState::NotStarted => FaceId::KitStatusDotIdle,
+    }
+    .name()
 }
 
 // ---- the edges: band tiles and lanes -----------------------------------------------------------------------------
@@ -1597,6 +1615,31 @@ mod tests {
                 ..Fields::default()
             },
             chips: Vec::new(),
+        }
+    }
+
+    /// [D] `work-graph/tasks-layer…` (Task 21): a task's card in the graph carries the kit's status dot (its glyph in the state's
+    /// kit face) and its word, "not started" for the idle state: colour is never the only sign.
+    #[test]
+    fn a_task_card_has_the_kits_status_dot_and_its_word() {
+        use crate::TaskState;
+        for (state, face, word) in [
+            (TaskState::NotStarted, FaceId::KitStatusDotIdle, "not started"),
+            (TaskState::Running, FaceId::KitStatusDotRunning, "running"),
+            (TaskState::NeedsYou, FaceId::KitStatusDotNeedsYou, "needs you"),
+            (TaskState::Done, FaceId::KitStatusDotDone, "done"),
+        ] {
+            let mut it = machine("ready", false);
+            it.kind = Kind::Task;
+            it.label = "Footer cut off".into();
+            it.fields = Fields { task_state: Some(state), ..Fields::default() };
+            let l = chip_line(&it);
+            assert!(l.text().contains(word), "{word}: {:?}", l.text());
+            assert!(
+                l.0.iter().any(|(t, f)| t == state.glyph() && *f == Some(face.name())),
+                "{word}: {:?}",
+                l.0
+            );
         }
     }
 
