@@ -25,6 +25,11 @@
 (defvar-local drgnx-doc-agents--record nil "The record this buffer's document is: `spec:ID', `plan:ID', `decision:N' or `task:ID'.")
 (defvar-local drgnx-doc-agents--writer-ov nil "The overlay of the writing agent's paragraph.")
 (defvar-local drgnx-doc-agents--threads nil "The threads last shown, as `comments/list' gives them.")
+(defvar-local drgnx-doc-agents--pulse-timer nil "The key of the writer paragraph's pulse (a `drgnx-timer-poll'), or nil.")
+(defvar drgnx-reduced-motion nil "Non-nil: no pulses (the user's reduced-motion setting).")
+(declare-function drgnx-timer-poll "drgnx-timer")
+(declare-function drgnx-timer-cancel "drgnx-timer")
+(declare-function glitnir--reduced-motion-p "glitnir")
 
 (defun drgnx-doc-agents--paragraph (pos)
   "(START . END) of the paragraph at POS: the lines around it up to a blank line."
@@ -58,9 +63,40 @@
                                        handle)
                                      " ")
                              'help-echo (format "%s is writing this paragraph" handle)))
+    ;; one repeating timer for the buffer unless motion is reduced; reduced motion stops a pulse that runs
+    (drgnx-doc-agents--pulse (drgnx-doc-agents--motion-p))
     drgnx-doc-agents--writer-ov))
 
+(defun drgnx-doc-agents--motion-p ()
+  "Whether the writer's paragraph may pulse: motion is not reduced."
+  (not (or drgnx-reduced-motion
+           (eq (bound-and-true-p drgnx-look-motion) 'reduced)
+           (and (fboundp 'glitnir--reduced-motion-p) (glitnir--reduced-motion-p)))))
+
+(defun drgnx-doc-agents--pulse-tick (buffer)
+  "One beat of the pulse in BUFFER: the writer paragraph's fill steps between the quiet and the full selection.  Ends (non-nil)
+when the paragraph or the buffer is gone."
+  (if (and (buffer-live-p buffer)
+           (overlayp (buffer-local-value 'drgnx-doc-agents--writer-ov buffer))
+           (overlay-buffer (buffer-local-value 'drgnx-doc-agents--writer-ov buffer)))
+      (let ((ov (buffer-local-value 'drgnx-doc-agents--writer-ov buffer)))
+        (overlay-put ov 'face (if (eq (overlay-get ov 'face) 'drgnx-selected-quiet) 'drgnx-selected 'drgnx-selected-quiet))
+        nil)
+    t))
+
+(defun drgnx-doc-agents--pulse (on)
+  "Start the pulse when ON (and motion is allowed), else stop it: one timer for the buffer, owned by this library."
+  (if (and on (drgnx-doc-agents--motion-p))
+      (unless drgnx-doc-agents--pulse-timer
+        (setq drgnx-doc-agents--pulse-timer
+              (drgnx-timer-poll (cons 'drgnx-doc-agents-pulse (current-buffer)) 1.0 #'drgnx-doc-agents--pulse-tick
+                                :deadline 3600 :args (list (current-buffer)) :owner 'drgnx-doc-agents)))
+    (when drgnx-doc-agents--pulse-timer
+      (drgnx-timer-cancel drgnx-doc-agents--pulse-timer)
+      (setq drgnx-doc-agents--pulse-timer nil))))
+
 (defun drgnx-doc-agents--clear-writer ()
+  (drgnx-doc-agents--pulse nil)
   (when (overlayp drgnx-doc-agents--writer-ov) (delete-overlay drgnx-doc-agents--writer-ov))
   (setq drgnx-doc-agents--writer-ov nil))
 
