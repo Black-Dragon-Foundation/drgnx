@@ -2658,11 +2658,31 @@ card, a chip), whose width its row's layout sets, not the text's."
                              (and (stringp b) (not (equal b bg))))))))
               faces)))
 
+(defun drgnx-look-scene--kept-at-end (window eol)
+  "The px a row ending at EOL in WINDOW keeps clear of its text at the right edge, as the hub fits it: its tail's git
+mark's place (or an always-shown control's: the env's `tail', `drgnx-view-env-tail') and the who-is-here badge drawn
+after its text (an empty overlay's `after-string' at EOL).  `drgnx-look-scene--px' leaves both out, so without them a
+name cut short of its mark (`test/unit/gateway-test.el' in tiling-resize at s2) read as cut where it fits."
+  (let ((tail-fn (bound-and-true-p drgnx-view-env-tail)) (kept 0))
+    ;; the tail's overlay spans its row (it ends at EOL), the badge's is empty at EOL
+    (dolist (o (delete-dups (append (overlays-in (max (point-min) (1- eol)) eol) (overlays-in eol eol))))
+      (cond
+       ((overlay-get o 'drgnx-row-tail)
+        (pcase-let ((`(,mark ,_ ,control . ,_) (overlay-get o 'drgnx-row-tail))
+                    (`(,at-mark ,at-control) (and tail-fn (funcall tail-fn window))))
+          (cond ((and mark at-mark) (setq kept (+ kept at-mark)))
+                ((and (stringp control) at-control (get-text-property 0 'face control))
+                 (setq kept (+ kept at-control))))))
+       ((and (= (overlay-start o) eol) (= (overlay-end o) eol) (stringp (overlay-get o 'after-string)))
+        (setq kept (+ kept (string-pixel-width (overlay-get o 'after-string) (current-buffer)))))))
+    kept))
+
 (defun drgnx-look-scene--free-after (window bol pos eol)
   "The px free after POS on its row BOL..EOL in WINDOW: the blanks and stops' spaces from POS on, and, when they reach
-EOL, the body's px past the row's end.  A blank in a block's face (`drgnx-look-scene--filled-p': a card's fill or
-edge) ends the count: when the row ends in that block, its end pad less the row's start pad in the same face (the
-block's own padding, kept on both sides) counts, and the px past the block are not the text's."
+EOL, the body's px past the row's end less what the row keeps clear there (`drgnx-look-scene--kept-at-end').  A blank
+in a block's face (`drgnx-look-scene--filled-p': a card's fill or edge) ends the count: when the row ends in that
+block, its end pad less the row's start pad in the same face (the block's own padding, kept on both sides) counts, and
+the px past the block are not the text's."
   (let ((q pos) (frame (window-frame window)) (block nil))
     (while (and (< q eol) (drgnx-look-scene--blank-p q) (not block))
       (if (drgnx-look-scene--filled-p q frame) (setq block q) (setq q (1+ q))))
@@ -2670,7 +2690,8 @@ block's own padding, kept on both sides) counts, and the px past the block are n
       (cond
        ((not block)
         (+ free (if (< q eol) 0
-                  (max 0 (- (window-body-width window t) (drgnx-look-scene--px window bol eol))))))
+                  (max 0 (- (window-body-width window t) (drgnx-look-scene--px window bol eol)
+                            (drgnx-look-scene--kept-at-end window eol))))))
        (t
         (let ((e block) (face (get-text-property block 'face)) (s bol))
           (while (and (< e eol) (drgnx-look-scene--blank-p e) (equal (get-text-property e 'face) face))

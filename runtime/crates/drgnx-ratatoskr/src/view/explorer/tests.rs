@@ -141,6 +141,7 @@ fn explorer_model_and_rows() {
     let tty = RowLook {
         gui: None,
         one_root: false,
+        badge: None,
     };
     let (rows, images) = explorer_rows(&got, &Decor::default(), &tty);
     assert!(images.is_empty());
@@ -198,6 +199,7 @@ fn gui_env(scale: f32) -> ViewEnv {
         cell: (8, 16),
         width_px: 400,
         tail: None,
+        badge: None,
         palette: vec![],
         tty_widths: vec![],
         tz: String::new(),
@@ -310,6 +312,39 @@ fn explorer_rows_draw_the_look() {
     assert_eq!(two.gui, Some((14, 16, 6)));
     let (rows, _) = explorer_rows(&entries, &decor, &two);
     assert_eq!(prop(&rows[0], "invisible"), None);
+}
+
+/// Pattern D: a row with agents here keeps room after its name for the editor's badge (the env's `badge`): each agent
+/// shown takes a file's or a folder's EACH, up to its LIMIT, and the rest a `+N`; a row nobody is at keeps none.
+#[test]
+fn explorer_rows_keep_room_for_the_badge() {
+    let entries = vec![
+        entry("/r", 0, true, true),
+        entry("/r/src", 1, true, true),
+        entry("/r/src/a.rs", 2, false, false),
+        entry("/r/notes.md", 1, false, false),
+    ];
+    let here: Here = BTreeMap::from([
+        ("/r/src".to_owned(), BTreeSet::from([1, 2, 3, 4, 5, 6, 7])),
+        ("/r/src/a.rs".to_owned(), BTreeSet::from([3, 4])),
+    ]);
+    let decor = Decor {
+        git: Marks::new(),
+        here: Arc::new(here),
+    };
+    let mut env = gui_env(1.0);
+    env.badge = Some(((15, 3), (10, 6), 20));
+    let (rows, _) = explorer_rows(&entries, &decor, &RowLook::of(&env, 12, 1));
+    assert_eq!(rows[1].keep, 6 * 10 + 20, "a folder: six marks, then +1");
+    assert_eq!(
+        rows[2].keep,
+        2 * 15,
+        "a file: two marks with their initials"
+    );
+    assert_eq!(rows[3].keep, 0, "nobody here");
+    // without the editor's badge, no room
+    let (rows, _) = explorer_rows(&entries, &decor, &RowLook::of(&gui_env(1.0), 12, 1));
+    assert!(rows.iter().all(|r| r.keep == 0));
 }
 
 /// Pattern D: an untracked or ignored folder's entries take its status (git lists the folder, not what is in it).

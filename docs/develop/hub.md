@@ -1674,7 +1674,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
-| `view/env` | user | `{ascii?: boolean, attach?: boolean, cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tail?: [natnum, natnum], tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/env` | user | `{ascii?: boolean, attach?: boolean, badge?: [[natnum, natnum], [natnum, natnum], natnum], cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tail?: [natnum, natnum], tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, faces?: [{avg?: number, face: string, file?: string, index?: natnum, pad?: number, px?: number, role: string, wght?: number}], glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
@@ -2583,13 +2583,18 @@ All of it is in memory only.
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
   width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, glyphs: [[name, glyph]],
-  ascii?, density?, tail?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again.
+  ascii?, density?, tail?, badge?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again.
   `width_px` is the window's body. `tail: [mark, control]` is where the view's buffer draws a row's tail after it (the
   Explorer's and the Buffers panel's: `drgnx-view-env-tail`, `drgnx-wb-tail-px`), px from the right edge: the start
   of its git mark and of its control. A row ends its text short of what its tail always draws: the mark's place on a
   row with a git mark, the control's on a row whose control is always shown (a buffer's unsaved ●, every control on
   a terminal), nothing on a row whose control shows on hover only; such a row whose text reaches the control's place
-  gets `drgnx-row-tail-short`, and its tail leaves the control out (Glitnir paints it over the text on hover). `glyphs` are
+  gets `drgnx-row-tail-short`, and its tail leaves the control out (Glitnir paints it over the text on hover).
+  `badge: [[file_each, file_limit], [folder_each, folder_limit], more]` is how wide the buffer draws the Explorer's
+  who-is-here badge between a row's name and its tail (`drgnx-view-env-badge`, `drgnx-explorer-badge-width-functions`):
+  each agent shown takes EACH (a space and the widest mark, a file's with the widest initial), LIMIT shown at most,
+  and MORE for the `+N` of the rest. A row with agents at it keeps that room after its name too (the row's `keep`),
+  so name and badge end short of the tail, and count against the control's place for `drgnx-row-tail-short`. `glyphs` are
   the kit's glyphs as the class's frame draws them (ASCII on a terminal that is not UTF-8); `ascii: true` marks such a
   terminal, where a glyph the hub takes from its own whole table (a tab's icon, `kit::ALL_GLYPHS`, as the Lisp tab
   looks it up) is drawn in its ASCII form; `density` is the user's
@@ -3171,7 +3176,9 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   who is here, the hub keeps its paths' ordinals for the connection and puts `drgnx-agents-here` (the ordinals, a
   list) on the name of each entry an agent is changing, or holding such a file inside; a change draws the listings
   again. The editor makes the badge (`drgnx-explorer-badge-functions`: the marks and colours of an ordinal are the
-  display's) and draws it after the name.
+  display's) and draws it after the name, before the tail: an empty overlay's `after-string` above the tail's priority
+  (Emacs draws a position's after-strings before its before-strings, so a before-string badge came after the tail and
+  ran past the window's edge).
 
 ### The Buffers panel's rows (`buffers/set`)
 

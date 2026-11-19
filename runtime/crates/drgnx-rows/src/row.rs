@@ -84,6 +84,11 @@ pub struct Row {
     #[serde(skip)]
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub tail: Option<Tail>,
+    /// What the editor draws right after the row's text, before its tail (the Explorer's who-is-here badge), device px
+    /// (a terminal's: columns): the text ends that much shorter ([`crate::fit_row`]); the hub's own, never sent.
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub keep: u32,
 }
 
 /// The tail a row gets at the window's right edge (`drgnx-wb-row-tail`): the hub fits the row's text short of what it

@@ -735,7 +735,8 @@ How it works:
   error naming the view, its buffer, its class, the width and an example. **No row cut where its full text fits:** a
   `…` at the drawn or narrow width is checked against the same row at the wide width; the text it cut off (measured
   in the buffer with its faces), less the `…`, plus the hub's 10 px slack, must not fit the px free after the `…`
-  (blanks, a stop's space, the body past the row's end). A blank in a block's face (a box or a background of its own:
+  (blanks, a stop's space, the body past the row's end less what the row keeps clear there: its tail's git mark's
+  place, or an always-shown control's, and its who-is-here badge; `drgnx-look-scene--kept-at-end`). A blank in a block's face (a box or a background of its own:
   a card's fill, a chip) ends the count: when the row ends in that block, only its end pad less the row's start pad in
   that face counts (the block's own padding, kept on both sides), never the px past the block. A `…` in hidden text
   is not counted (the Explorer's root row is cut as any row, but it is hidden: its name is the side bar's title). When a text follows

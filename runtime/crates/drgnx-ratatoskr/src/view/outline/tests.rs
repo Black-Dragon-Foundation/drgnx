@@ -16,6 +16,7 @@ fn env(display: Display, scale: f32) -> ViewEnv {
         cell: (8, 16),
         width_px: 300,
         tail: None,
+        badge: None,
         palette: vec![],
         tty_widths: vec![],
         tz: String::new(),

@@ -564,6 +564,7 @@ fn rows_draw_names_values_chevrons_and_places() {
     let tty = RowLook {
         gui: None,
         one_root: false,
+        badge: None,
     };
     let fonts = drgnx_rows::fit::FontSet::new();
     // a terminal 40 columns of 10 px
@@ -606,6 +607,7 @@ fn rows_draw_names_values_chevrons_and_places() {
     let gui = RowLook {
         gui: Some((12, 16, 6)),
         one_root: false,
+        badge: None,
     };
     let (rs, images) = rows(&ls, &gui, &room);
     assert_eq!(images.len(), 2, "the two chevrons, each once");
@@ -633,6 +635,7 @@ fn a_value_no_wider_than_the_ellipsis_is_never_cut_to_it() {
     let gui = RowLook {
         gui: Some((12, 16, 6)),
         one_root: false,
+        badge: None,
     };
     // every char 8 px, the ellipsis too
     let mut fonts = drgnx_rows::fit::FontSet::new();
@@ -675,6 +678,7 @@ fn a_measured_value_that_fits_is_drawn_whole() {
     let gui = RowLook {
         gui: Some((12, 16, 6)),
         one_root: false,
+        badge: None,
     };
     // every char 8 px: the value 64
     let mut fonts = drgnx_rows::fit::FontSet::new();

@@ -95,6 +95,85 @@ row that is not its background, scanning the row from the window's right edge in
     (cl-loop for x from (round (* s (- (nth 2 e) 2))) downto (round (* s (nth 0 e)))
              unless (equal bg (cdr (drgnx-uitest-pixel snap x y))) return x)))
 
+(defvar drgnx-scrollbar-mode)
+(declare-function drgnx-scrollbar-mode "drgnx-ruler" (&optional arg))
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-folded-section-s-row-ends-inside-the-body ()
+  "A folded dock section's one row (its header as buffer text: the Open section above the Explorer) ends at the body's
+edge: buffer text never paints the fringe, so a filler on into it only made the row wider than the body, and Emacs drew
+its truncation arrow there (under the scroll bar's strip: Glitnir's `‹' in the tiling scene)."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (delete-other-windows)
+  (let* ((w (selected-window)) (other (split-window w (drgnx-px 170) 'left t)))
+    (unwind-protect
+        (progn
+          ;; the dock's fringes with the strip: its own inset either side and the strip's 12 px on the right (after the
+          ;; buffer, which would put the buffer's own back)
+          (set-window-buffer w (drgnx-wb--collapsed-buffer 'look-test))
+          (set-window-fringes w (drgnx-px 6) (drgnx-px 18))
+          (redisplay t)
+          (with-current-buffer (window-buffer w)
+            (let ((px (car (window-text-pixel-size w (point-min) (pos-eol (point-min)) 10000 nil t))))
+              (unless (<= px (window-body-width w t))
+                (ert-fail (list "the folded row runs past the body" :row px :body (window-body-width w t)
+                                :fringes (window-fringes w)))))))
+      (set-window-fringes w nil nil)
+      (when (window-live-p other) (delete-window other))
+      (when-let* ((b (get-buffer " *drgnx-section-look-test*"))) (kill-buffer b)))))
+
+;; the scenes' badge: two agents' marks (`drgnx-explorer-badge-functions'), a run of text in the row's own face
+(defun drgnx-ui-look-explorer--badge (_ordinals _dirp) "  ●●")
+
+(drgnx-look-gui-deftest drgnx-ui-look-explorer/a-badge-keeps-the-row-inside-the-body ()
+  "A row with a who-is-here badge (after its name) ends inside the body, as every other row: the badge comes before
+the tail, whose stretch then ends the row at the body's edge.  Drawn after the tail, the badge runs past the edge by
+its own width (under the scroll bar's strip: Glitnir's truncation arrow in the fringe; the tiling scene's `test' row)."
+  (skip-unless (and (display-graphic-p) (featurep 'glitnir-ruler)))
+  (require 'drgnx-ruler)
+  (drgnx-ui-look-explorer--with root
+    (let* ((w (selected-window)) (other (split-window w (drgnx-px 170) 'left t))
+           (drgnx-explorer-badge-functions (list #'drgnx-ui-look-explorer--badge)))
+      (unwind-protect
+          (progn
+            ;; as the side bar's Explorer: a dock window with the strip in its right fringe
+            (set-window-parameter w 'drgnx-role 'dock)
+            (drgnx-scrollbar-mode 1)
+            (drgnx-test-wait (lambda () (window-parameter w 'drgnx-ruler-fringe)) :secs 5 :what "the strip's fringe")
+            (cl-flet ((over ()
+                        ;; the visible rows wider than the body: (TEXT WIDTH)...
+                        (redisplay t)
+                        (let ((body (window-body-width w t)) (out nil) (rows 0))
+                          (with-current-buffer (window-buffer w)
+                            (save-excursion
+                              (goto-char (point-min))
+                              (while (not (eobp))
+                                (let ((bol (point)) (eol (line-end-position)))
+                                  (when (and (stringp (ignore-errors (drgnx-view-key-at bol))) (not (invisible-p bol))
+                                             (pos-visible-in-window-p bol w))
+                                    (setq rows (1+ rows))
+                                    (let ((px (car (window-text-pixel-size w bol eol 10000 nil t))))
+                                      (when (> px body) (push (list (buffer-substring-no-properties bol eol) px) out)))))
+                                (forward-line 1))))
+                          (cons rows out))))
+              ;; the hub's rows for the body the strip leaves, none over it
+              (drgnx-test-wait (lambda () (let ((o (over))) (and (> (car o) 2) (null (cdr o)))))
+                               :secs 5 :what "the rows fitted to the body")
+              (with-current-buffer (window-buffer w)
+                (save-excursion
+                  (goto-char (point-min))
+                  (re-search-forward "a\\.txt")
+                  (drgnx-explorer--rows-badge (drgnx-view-key-at (pos-bol)) (pos-eol) '(1 2))))
+              (let ((o (over)))
+                (should (= 1 (with-current-buffer (window-buffer w) (hash-table-count drgnx-explorer--badges))))
+                (unless (null (cdr o))
+                  (ert-fail (list "rows over the body" (cdr o) :body (window-body-width w t)
+                                  :fringes (window-fringes w)))))))
+        (drgnx-scrollbar-mode -1)
+        ;; Nidhogg's own record of the strip, and the role, go with it
+        (dolist (p '(glitnir--ruler glitnir--ruler-key drgnx-role)) (set-window-parameter w p nil))
+        (when (window-live-p other) (delete-window other))))))
+
 (drgnx-look-gui-deftest drgnx-ui-look-explorer/a-section-shows-whole-rows ()
   "Pattern D: a dock section with another below it ends at a whole row, so no part of a row (a glyph fragment) is
 drawn at its foot; the section below takes the pixels left over, and a second fit changes nothing."

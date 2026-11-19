@@ -132,6 +132,7 @@ fn debug_step_variables() {
     let gui = RowLook {
         gui: Some((12, 16, 6)),
         one_root: false,
+        badge: None,
     };
     let first = [session(a_stop(0, locals(0)))];
     let (mut old_lines, mut prev) = lines(&input(&first, &bps, &opened, &HashMap::new()));
@@ -206,6 +207,7 @@ fn held(pages: usize) -> (f64, [f64; 4], usize) {
     let gui = RowLook {
         gui: Some((12, 16, 6)),
         one_root: false,
+        badge: None,
     };
     let fonts = drgnx_rows::fit::FontSet::new();
     let room = Room {
