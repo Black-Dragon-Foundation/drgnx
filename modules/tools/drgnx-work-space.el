@@ -204,7 +204,7 @@ it (a notes repository with the code repositories inside it)."
               work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
               work-collapse-layer-5 work-collapse-layer-6 work-collapse-layer-7 work-collapse-layer-8
-              work-expand-layers work-cycle-filter work-mode-list work-mode-graph work-mode-toggle work-search
+              work-expand-layers work-cycle-filter work-show-active work-show-completed work-show-all work-mode-list work-mode-graph work-mode-toggle work-search
               work-escape work-take-wheel work-files work-who-is-here work-move-machine
               work-diffs work-diff-quit work-diff-accept-hunk work-diff-reject-hunk)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
@@ -772,6 +772,9 @@ windows; the commands."
                    (work-mode-graph "Show as a Graph" drgnx-work-map-mode-graph "The map as layers and the edges between them")
                    (work-mode-toggle "Switch Between List and Graph" drgnx-work-map-mode-toggle "m on the map does the same")
                    (work-expand-layers "Expand All Layers" drgnx-work-map-expand-layers "Every layer open again")
+                   (work-show-active "Show What Is Active" drgnx-work-map-show-active "The Active · Completed · All switch")
+                   (work-show-completed "Show What Is Completed" drgnx-work-map-show-completed "The Active · Completed · All switch")
+                   (work-show-all "Show Everything" drgnx-work-map-show-all "The Active · Completed · All switch")
                    (work-cycle-filter "Cycle Work Filter" drgnx-work-map-cycle-filter "Active, then Completed, then All")
                    (work-search "Narrow the Map" drgnx-work-map-search "Dim what does not match; Enter selects the first match")
                    (work-escape "Clear Search, Filters, then Close" drgnx-work-map-escape

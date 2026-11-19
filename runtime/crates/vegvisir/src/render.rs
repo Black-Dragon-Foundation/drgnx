@@ -22,6 +22,7 @@ use crate::layout::{Form, Layout};
 use crate::model::{Fields, JobFact, State};
 use crate::{Edge, EdgeKind, Item, ItemId, Kind};
 use drgnx_rows::faces::FaceId;
+use drgnx_rows::kit::{self, ChipFill, Comp, Tone};
 
 /// The layer labels' margin, logical px.
 pub const MARGIN: u32 = 84;
@@ -1216,8 +1217,14 @@ impl<'a> Edges<'a> {
 /// A chip's icon, logical px.
 const ICON_PX: u32 = 16;
 
-/// The widest a strip chip's text is, logical px.
-const CHIP_MAX: u32 = 260;
+/// What a needs-you chip takes besides its text, logical px: its own padding and its key hint.
+const CHIP_OVERHEAD: f32 = 64.0;
+
+/// A gap of about PX logical px in B: spaces (one on a terminal).
+fn gap(b: &mut RowBuilder, kit: &kit::KitEnv, px: u32) {
+    let n = if kit.tty { 1 } else { (px / 4).max(1) as usize };
+    b.push(&" ".repeat(n), None);
+}
 
 /// The needs-you strip (the header line), one row `strip`: a chip with its jump key for each of the first nine
 /// entries (`nav::strip_entries`: the cards, the agents that need you with no card, the open huddles), +N for the
@@ -1229,6 +1236,7 @@ pub fn strip(
     extra: &[String],
     env: &Env,
     m: &dyn Measure,
+    kit: &drgnx_rows::kit::KitEnv,
 ) -> (Row, Vec<(ImageId, String)>) {
     let entries: Vec<String> = crate::nav::strip_entries(needs, s.items)
         .into_iter()
@@ -1270,32 +1278,45 @@ pub fn strip(
         })
         .sum::<f32>()
         + fit::width_in(m, Some(CARD_FONT), " ") * chips.len().saturating_sub(1) as f32;
-    // the needs-you chips share what the right-hand chips leave, each cut to its share (no chip runs under them)
+    // the needs-you chips share what the right-hand chips leave, each cut to its share (no chip runs under them): the
+    // chip's own padding and its key hint come off the share
     let shown = entries.len().clamp(1, 9);
     let spare = (env.width_px as f32 - w - 44.0 * env.scale) / shown as f32;
-    let overhead = fit::width_in(m, Some(FaceId::WorkNeedsYou.name()), " ⚑   ")
-        + fit::width_in(m, Some(FaceId::WorkNeedsYouKey.name()), " g1 ")
-        + fit::width_in(m, Some(FaceId::WorkNeedsYou.name()), " ")
-        + 4.0 * env.scale;
-    let room = ((spare - overhead).max(40.0 * env.scale))
-        .min(CHIP_MAX as f32 * env.scale)
+    let room = (spare - CHIP_OVERHEAD * env.scale)
+        .max(40.0 * env.scale)
         .round() as u32;
     let mut b = RowBuilder::new("strip");
     for (i, e) in entries.iter().take(9).enumerate() {
         if i > 0 {
-            b.push(" ", None);
+            gap(&mut b, kit, 6);
         }
         let full = e.clone();
-        let e = fit_px(m, Some(FaceId::WorkNeedsYou.name()), e, room);
+        let e = fit_px(m, Some(FaceId::KitChipWarnSoft.name()), e, room);
         let start = b.pos();
-        b.push(&format!(" ⚑ {e} "), Some(FaceId::WorkNeedsYou.name()))
-            .push(
-                &format!(" g{} ", i + 1),
-                Some(FaceId::WorkNeedsYouKey.name()),
-            )
-            .push(" ", Some(FaceId::WorkNeedsYou.name()));
+        // a needs-you chip: the kit's warn chip, then its jump key as the kit's key hint
+        kit::expand(
+            &mut b,
+            kit,
+            &Comp::Chip {
+                label: e,
+                tone: Tone::Warn,
+                fill: ChipFill::Soft,
+                icon: None,
+                state: kit::State::Rest,
+                action: None,
+            },
+        );
+        gap(&mut b, kit, 4);
+        kit::expand(
+            &mut b,
+            kit,
+            &Comp::KeyHint {
+                keys: format!("g{}", i + 1),
+                variant: kit::KeyHintVariant::Cap,
+                state: kit::State::Rest,
+            },
+        );
         let end = b.pos();
-        b.face(start, end, FaceId::Chip.name());
         b.prop(start, end, "help-echo", Value::String(full));
     }
     if entries.len() > 9 {
@@ -1498,7 +1519,7 @@ fn outline_block(s: &Scene, id: &ItemId, cols: usize, env: &Env) -> Vec<Line> {
 
 /// A budget as plain text: "$31/$40", or "$12 · no limit" when no limit counts here; a unit that is no money follows
 /// the numbers ("30/50 limit-share").
-fn meter_text(m: &crate::model::ItemBudget) -> String {
+pub fn meter_text(m: &crate::model::ItemBudget) -> String {
     let money = matches!(m.unit.as_str(), "usd" | "usd-est");
     let sym = if money { "$" } else { "" };
     let n = |v: f64| {
@@ -1517,78 +1538,6 @@ fn meter_text(m: &crate::model::ItemBudget) -> String {
         Some(l) => format!("{sym}{}/{sym}{}{unit}", n(m.spent.0), n(l.0)),
         None => format!("{sym}{}{unit} · no limit", n(m.spent.0)),
     }
-}
-
-/// The rows of List mode: one per entry, keyed `list:N`, a fold mark and the label indented by depth (canonical
-/// characters, never pixels), a task's state glyph and word, then its agent, machine and chips. Each carries its
-/// item's id, which the editor's keys and clicks read. The kit draws these rows later; this is the plain form.
-pub fn list_rows(entries: &[crate::list::ListEntry], selected: Option<&ItemId>) -> Vec<Row> {
-    use crate::list::ListChip;
-    if entries.is_empty() {
-        // a workspace with nothing in it says so (the graph's layers have their labels; a list has no rows to show)
-        let mut b = RowBuilder::new("empty:list");
-        b.push(
-            "  Nothing here yet: an agent, a spec or a plan puts something on the map",
-            None,
-        );
-        let end = b.pos();
-        b.face(0, end, FaceId::WorkDim.name());
-        return vec![b.finish()];
-    }
-    entries
-        .iter()
-        .enumerate()
-        .map(|(n, e)| {
-            let mut b = RowBuilder::new(format!("list:{n}"));
-            let start = b.pos();
-            b.push(&"  ".repeat(usize::from(e.depth)), None);
-            let fold = match (e.depth, e.collapsed) {
-                (2, _) => "",
-                (_, true) => "▸ ",
-                _ => "▾ ",
-            };
-            b.push(fold, None);
-            if let Some(s) = e.chips.iter().find_map(|c| match c {
-                ListChip::State(s) => Some(*s),
-                _ => None,
-            }) {
-                b.push(&format!("{} ", s.glyph()), None);
-            }
-            b.push(&e.label, None);
-            if let Some(n) = e.count {
-                b.push(&format!(" · {n}"), None);
-            }
-            for c in &e.chips {
-                match c {
-                    ListChip::State(s) => b.push(&format!("  {}", s.word()), None),
-                    ListChip::Branch(x) => b.push(&format!("  ⑂ {x}"), None),
-                    ListChip::Files(f, l) => b.push(&format!("  {f} files {l} lines"), None),
-                    ListChip::Progress(d, t) => b.push(&format!("  {d}/{t}"), None),
-                    // the kit's meter replaces this plain form (Task 20a)
-                    ListChip::Meter(m) => b.push(&format!("  {}", meter_text(m)), None),
-                };
-            }
-            if let Some(a) = &e.agent {
-                b.push(
-                    &format!("  {}", a.as_str().trim_start_matches("agent:")),
-                    None,
-                );
-            }
-            if let Some(m) = &e.machine {
-                b.push(&format!("  on {m}"), None);
-            }
-            let end = b.pos();
-            b.face(start, end, FaceId::WorkCard.name());
-            if e.visibility == crate::Visibility::Faded {
-                b.face(start, end, FaceId::WorkDim.name());
-            }
-            if selected == Some(&e.item) {
-                b.face(start, end, FaceId::Selected.name());
-            }
-            b.prop(start, end, "drgnx-work-id", Value::String(e.item.0.clone()));
-            b.finish()
-        })
-        .collect()
 }
 
 #[cfg(test)]

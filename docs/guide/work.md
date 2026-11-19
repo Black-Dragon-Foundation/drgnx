@@ -58,6 +58,14 @@ hub tells which it refused (shown with the reason). The scan itself leaves out f
 denies, and a `**Spec:**` that names one (also through a link into `~/org`); see
 [Personal notes](security.md#personal-notes). The editor only reads `work.db`, and never creates it.
 
+## The top bar
+
+The map's bar has two switches and a filter button after the lens tabs: Active · Completed · All (`.` goes to the
+next one; each is also a command, `work-show-active`, `work-show-completed` and `work-show-all`) and List · Graph (`m`).
+Your choice is kept for each project. In the List a task's row shows its state as a dot and a word, and, at the right,
+its plan progress, its agent and its machine; a title too long for the window is cut with an ellipsis (hover for all of
+it). The chips above the list are the things that need you, each with its jump key (`g1` to `g9`).
+
 ## The first open of the map
 
 Opening the Work map adopts each of its folders' specs, plans, ledgers and other records into the graph

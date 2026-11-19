@@ -88,7 +88,8 @@ you, and approved specs and plans not yet started; Completed holds finished item
   (setq drgnx-work-map--list-or-graph mode)
   (when drgnx-work-space--view
     (setf (alist-get drgnx-work-space--view drgnx-work-map--mode-by-project nil nil #'equal) mode)
-    (drgnx-work-client-set drgnx-work-space--view :mode (symbol-name mode))))
+    (drgnx-work-client-set drgnx-work-space--view :mode (symbol-name mode)))
+  (drgnx-work-map--refresh-lens))
 
 (defun drgnx-work-map-mode-list () "Show the map as a list." (interactive) (drgnx-work-map-set-mode 'list))
 (defun drgnx-work-map-mode-graph () "Show the map as a graph." (interactive) (drgnx-work-map-set-mode 'graph))
@@ -583,10 +584,11 @@ segments lit on hover and did nothing)."
     (define-key m [header-line mouse-1] run)
     m))
 
-(defun drgnx-work-lens-string (&optional current name keys)
+(defun drgnx-work-lens-string (&optional current name keys extras)
   "The lens bar: the Work space's tab (Work · NAME, the workspace's name), then Map · Board · Timeline · Flow with
 CURRENT (`map', `board', `timeline' or `flow'; default `map') marked and the others in the label face (`m' `b' `t' `F'
-switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their key badges."
+switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their key badges, then the string EXTRAS (the
+lens's own switches) when given."
   (let* ((current (or current 'map))
          (bar
           (concat ;; a row of its own, 34 px high (the design's tab row), so the strip below does not touch it
@@ -607,6 +609,7 @@ switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their
                                          (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key))
                                  (and id (list 'keymap (drgnx-work-lens--click id) 'pointer 'hand)))))
                       keys "")
+           (or extras "")
            (drgnx-work-lens--controls))))
     (add-text-properties 0 (length bar) '(mouse-face drgnx-hover-row) bar)   ; the ⋯ shows while the bar is hovered
     bar))
@@ -619,9 +622,31 @@ switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their
 (defconst drgnx-work-map--lens-keys '(("focus" . "f") ("overlaps" . "o"))
   "The map's own keys on its lens bar: the filters, as pills with their keycaps.")
 
+(defun drgnx-work-map--switches ()
+  "The map's own part of the top bar: the Active · Completed · All switch, the List · Graph switch and the filter
+button, each a click on a registered command in the window the bar is on."
+  (let ((shows '(active completed all)))
+    (concat
+     "  "
+     (drgnx-ui-kit-segmented (mapcar (lambda (s) (cons (capitalize (symbol-name s))
+                                                       (list 'ui-window-button (intern (format "work-show-%s" s)))))
+                                     shows)
+                             (or (seq-position shows (drgnx-work-map--show)) 0) 'tab-line)
+     "  "
+     (drgnx-ui-kit-segmented '(("List" . (ui-window-button work-mode-list))
+                               ("Graph" . (ui-window-button work-mode-graph)))
+                             (if (eq (drgnx-work-map--mode) 'graph) 1 0) 'tab-line)
+     "  "
+     (drgnx-ui-kit-button "Filter" '(ui-window-button work-search) 'quiet 'sm 'rest nil 'tab-line))))
+
 (defun drgnx-work-map--lens-string ()
   "The lens bar of the map, the map marked."
-  (drgnx-work-lens-string 'map (drgnx-work-lens-name) drgnx-work-map--lens-keys))
+  (drgnx-work-lens-string 'map (drgnx-work-lens-name) drgnx-work-map--lens-keys (drgnx-work-map--switches)))
+
+(defun drgnx-work-map--refresh-lens ()
+  "Draw the lens bar again: a switch moved."
+  (setq drgnx-work-map--lens (drgnx-work-map--lens-string))
+  (force-mode-line-update t))
 
 ;;;; What needs you: the strip's entries, the model's list `needs-you'
 
@@ -695,16 +720,24 @@ arrow keys move inside the chain and send nothing."
   (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :overlaps (not (plist-get drgnx-work-map--filters :overlaps))))
   (drgnx-work-map--send-filters))
 
+(defun drgnx-work-map-set-show (show)
+  "Show SHOW, `active', `completed' or `all'; the project keeps the choice and the lens bar's switch follows."
+  (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :show show))
+  (when drgnx-work-space--view
+    (setf (alist-get drgnx-work-space--view drgnx-work-map--show-by-project nil nil #'equal) show))
+  (drgnx-work-map--send-filters)
+  (drgnx-work-map--refresh-lens)
+  (message "Work: %s" (capitalize (symbol-name show))))
+
+(defun drgnx-work-map-show-active () "Show what is active." (interactive) (drgnx-work-map-set-show 'active))
+(defun drgnx-work-map-show-completed () "Show what is completed." (interactive) (drgnx-work-map-set-show 'completed))
+(defun drgnx-work-map-show-all () "Show everything." (interactive) (drgnx-work-map-set-show 'all))
+
 (defun drgnx-work-map-cycle-filter ()
   "Show Active, then Completed, then All; the project keeps its choice."
   (interactive)
-  (let* ((rest (cdr (memq (drgnx-work-map--show) drgnx-work-map--shows)))
-         (next (or (car rest) (car drgnx-work-map--shows))))
-    (setq drgnx-work-map--filters (plist-put drgnx-work-map--filters :show next))
-    (when drgnx-work-space--view
-      (setf (alist-get drgnx-work-space--view drgnx-work-map--show-by-project nil nil #'equal) next))
-    (drgnx-work-map--send-filters)
-    (message "Work: %s" (capitalize (symbol-name next)))))
+  (let ((rest (cdr (memq (drgnx-work-map--show) drgnx-work-map--shows))))
+    (drgnx-work-map-set-show (or (car rest) (car drgnx-work-map--shows)))))
 
 (defun drgnx-work-map-collapse-layer (n)
   "Collapse layer N to one thin row, or expand it."
