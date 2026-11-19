@@ -793,13 +793,20 @@ the window's heading, so it has no breadcrumb row.")
 (defconst drgnx-chrome--own-tab-line '(:eval tab-line-format)
   "The tab line of a buffer that has its own (`drgnx-chrome-own-tab-line').")
 
+(defvar drgnx-grid--drag-shown)
+
 (defun drgnx-chrome--set (w param value)
   "Set W's line format PARAM (`tab-line-format', `header-line-format', `mode-line-format') to VALUE only if it
 changed, and then have W's lines drawn again: Emacs redraws a window for a new parameter only when a face filter names
 it, so without this the next redisplay may keep the old line (the window's text unchanged)."
-  (unless (equal-including-properties (window-parameter w param) value)
-    (set-window-parameter w param value)
-    (with-current-buffer (window-buffer w) (force-mode-line-update))))
+  (if-let* ((shown (bound-and-true-p drgnx-grid--drag-shown))
+            ((and (eq (car shown) w) (eq (nth 2 shown) param))))
+      ;; a drag's drop hint is on this line (`drgnx-grid--drag-show'): the hint stays, and the line the chrome wants
+      ;; is the one the drag gives back when it ends
+      (setf (nth 3 shown) value)
+    (unless (equal-including-properties (window-parameter w param) value)
+      (set-window-parameter w param value)
+      (with-current-buffer (window-buffer w) (force-mode-line-update)))))
 
 (defun drgnx-chrome--full (w value)
   "W's tab line VALUE after the grid's chips (`drgnx-chrome--grid-chips'), when it has any: a tile whose row has no
