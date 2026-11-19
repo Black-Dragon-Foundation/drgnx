@@ -762,6 +762,28 @@ the button is after the text and a `button.el' button."
       (funcall (get-text-property pos 'action s) nil)
       (should fired))))
 
+(ert-deftest drgnx-ui-kit/toast-buttons-are-kit-buttons ()
+  "A toast is its tone's status dot, the text in the toast's face and kit buttons that run their action."
+  (let* ((fired nil)
+         (s (drgnx-ui-kit-toast 'warn "Disk is nearly full" (list (list "Show" "show it" (lambda () (setq fired t)))) 'text)))
+    (should (string-match-p "Disk is nearly full" s))
+    (should (eq 'drgnx-kit-toast (car (ensure-list (get-text-property (string-match "Disk" s) 'face s)))))
+    (let ((pos (string-match "Show" s)))
+      (should (get-text-property pos 'button s))
+      (should (cl-some (lambda (f) (string-match-p "drgnx-kit-button" (symbol-name f)))
+                       (ensure-list (get-text-property pos 'face s))))
+      (funcall (get-text-property pos 'action s) nil)
+      (should fired))
+    (should (equal "warning: Disk is nearly full" (get-text-property 0 'help-echo s)))))
+
+(ert-deftest drgnx-ui-kit/tooltip-parameters-follow-the-kit ()
+  "The tooltip's frame parameters come from the kit's tooltip binding (pad 8 px, UI font) and the standard `tooltip'
+face inherits the kit's, so a theme that knows nothing of drgnx styles it too."
+  (let ((params (drgnx-ui-kit-tooltip-parameters (selected-frame))))
+    (should (= (drgnx-px 8 nil 1.0) (alist-get 'internal-border-width params)))
+    (should (facep 'drgnx-kit-tooltip))
+    (should (memq 'drgnx-kit-tooltip (ensure-list (face-attribute 'tooltip :inherit nil t))))))
+
 (ert-deftest drgnx-ui-kit/card-line-forms ()
   (let ((e (drgnx-ui-kit-expand 'card '(:c "card" :kind "selected" :shape "mid" :text "Go") 1.0 nil)))
     (should (equal (plist-get e :text) " Go "))

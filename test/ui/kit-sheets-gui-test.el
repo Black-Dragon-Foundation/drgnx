@@ -619,6 +619,11 @@ the pill and the empty row alike.  Red first: the row had none."
   (skip-unless (display-graphic-p))
   (drgnx-kit-sheet-check 'empty-state))
 
+(drgnx-look-gui-deftest drgnx-kit-sheet/toast ()
+  "The toast's sheet: info, warn and error, each pad exact, its fill, no shadow in high contrast, in every theme and density."
+  (skip-unless (display-graphic-p))
+  (drgnx-kit-sheet-check 'toast))
+
 (drgnx-look-gui-deftest drgnx-kit-sheet/state-table ()
   "The state table's rows in every theme and density: each state's fill, and no edge round a hovered or selected row."
   (skip-unless (display-graphic-p))

@@ -139,10 +139,21 @@ pub fn rows(groups: &[TaskGroup]) -> Vec<Row> {
 mod tests {
     use super::*;
     use crate::work::changes::{FileGroup, HunkRef};
+    use drgnx_rows::kit::KitEnv;
 
-    #[test]
-    fn rows_run_task_file_hunk_and_a_hunk_says_when_it_has_no_reason() {
-        let groups = vec![TaskGroup {
+    fn kit() -> KitEnv<'static> {
+        KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            ascii: false,
+            density: Default::default(),
+            icons: None,
+        }
+    }
+
+    fn groups() -> Vec<TaskGroup> {
+        vec![TaskGroup {
             task: Some("t1".into()),
             title: "First".into(),
             agent: Some("a".into()),
@@ -171,12 +182,57 @@ mod tests {
                     },
                 ],
             }],
-        }];
-        let rows = rows(&groups);
+        }]
+    }
+
+    #[test]
+    fn changes_by_task_groups_are_kit_rows_with_their_reasons() {
+        let rows = rows(&groups(), &kit());
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
-        assert_eq!(keys, ["task:0", "file:0:0", "hunk:0:0:0", "hunk:0:0:1"]);
-        assert!(rows[2].text.contains("fixed the race"), "{:?}", rows[2]);
-        assert!(rows[3].text.contains("no reason recorded"), "{:?}", rows[3]);
-        assert!(rows[2].props.iter().any(|p| p.2 == "drgnx-action"));
+        // the task's section header, its file row, then each hunk as a kit diff block (head, `@@` row, reason line)
+        assert_eq!(
+            keys,
+            [
+                "task:0",
+                "file:0:0",
+                "hunk:0:0:0/0",
+                "hunk:0:0:0/h0",
+                "hunk:0:0:0/h0/0",
+                "hunk:0:0:1/0",
+                "hunk:0:0:1/h0",
+                "hunk:0:0:1/h0/0"
+            ]
+        );
+        // the task: its title, the agent and the status word the kit's dot carries (a live session is running)
+        assert!(
+            rows[0].text.contains("First") && rows[0].text.contains("running"),
+            "{:?}",
+            rows[0]
+        );
+        assert!(rows[0].text.contains('a'), "{:?}", rows[0]);
+        assert!(rows[0].props.iter().any(|p| p.2 == "drgnx-work-id"));
+        // the file: its path and its counts, a tree row that opens the file
+        assert!(
+            rows[1].text.contains("a.rs")
+                && rows[1].text.contains("+4")
+                && rows[1].text.contains("\u{2212}1")
+        );
+        assert!(rows[1].props.iter().any(|p| p.2 == "drgnx-action"));
+        // the hunk's reason in the agent's words, or the plain fact that there is none
+        assert!(rows[4].text.contains("fixed the race"), "{:?}", rows[4]);
+        assert!(rows[7].text.contains("no reason recorded"), "{:?}", rows[7]);
+        // Open, Comment and Revert are kit buttons on the block's head; the hunk's identity rides on every row
+        let head = &rows[2];
+        for label in ["Open", "Comment", "Revert"] {
+            assert!(head.text.contains(label), "{:?}", head);
+        }
+        let kinds: Vec<String> = head
+            .props
+            .iter()
+            .filter(|p| p.2 == "drgnx-action")
+            .map(|p| p.3[0].as_str().unwrap_or_default().to_owned())
+            .collect();
+        assert_eq!(kinds, ["open", "comment", "revert"]);
+        assert!(rows[4].props.iter().any(|p| p.2 == "drgnx-hunk"));
     }
 }

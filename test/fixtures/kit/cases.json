@@ -150,6 +150,9 @@
     {"name": "input-multi-empty", "comp": {"c": "text-input", "lines": "multi", "placeholder": "Request changes"}},
     {"name": "input-multi-text", "comp": {"c": "text-input", "lines": "multi", "text": "first line\nsecond line\nthird line", "placeholder": "Request changes"}},
     {"name": "input-multi-1chip-focused", "comp": {"c": "text-input", "lines": "multi", "text": "one", "placeholder": "Request changes", "focused": true, "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}]}},
-    {"name": "input-multi-3chips", "comp": {"c": "text-input", "lines": "multi", "placeholder": "Request changes", "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}, {"label": "Plan step 2", "tone": "accent", "remove": {"kind": "composer-chip-remove", "args": ["step-2"]}}, {"label": "fix-explorer", "tone": {"agent": 3}, "remove": {"kind": "composer-chip-remove", "args": ["fix-explorer"]}}]}}
+    {"name": "input-multi-3chips", "comp": {"c": "text-input", "lines": "multi", "placeholder": "Request changes", "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}, {"label": "Plan step 2", "tone": "accent", "remove": {"kind": "composer-chip-remove", "args": ["step-2"]}}, {"label": "fix-explorer", "tone": {"agent": 3}, "remove": {"kind": "composer-chip-remove", "args": ["fix-explorer"]}}]}},
+    {"name": "toast-info", "comp": {"c": "toast", "tone": "info", "text": "Saved"}},
+    {"name": "toast-warn-buttons", "comp": {"c": "toast", "tone": "warn", "text": "Disk is nearly full", "buttons": [["Show", {"kind": "kit-test", "args": ["show"]}], ["Dismiss", {"kind": "kit-test", "args": ["dismiss"]}]]}},
+    {"name": "toast-error", "comp": {"c": "toast", "tone": "error", "text": "Build failed"}}
   ]
 }

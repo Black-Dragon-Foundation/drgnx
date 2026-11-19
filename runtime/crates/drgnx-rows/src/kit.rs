@@ -3058,6 +3058,58 @@ mod tests {
         assert_eq!(ring(4), FaceId::KitCardPlainBottom.name());
     }
 
+    #[test]
+    fn toast_is_a_status_dot_the_text_and_kit_buttons() {
+        let env = KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            density: Density::Comfortable,
+            icons: None,
+            ascii: false,
+        };
+        let act = |k: &str| Action {
+            kind: k.into(),
+            args: vec![],
+        };
+        let row = |tone, buttons| {
+            let mut b = RowBuilder::new("t");
+            expand(
+                &mut b,
+                &env,
+                &Comp::Toast {
+                    tone,
+                    text: "Disk is nearly full".into(),
+                    buttons,
+                },
+            );
+            b.finish()
+        };
+        let r = row(
+            ToastTone::Warn,
+            vec![
+                ("Show".into(), act("show")),
+                ("Dismiss".into(), act("dismiss")),
+            ],
+        );
+        assert!(
+            r.text.contains("Disk is nearly full")
+                && r.text.contains("Show")
+                && r.text.contains("Dismiss")
+        );
+        // the toast's frame face under the text, a kit button's action on each button
+        assert!(r.runs.iter().any(|(_, _, f)| f == FaceId::KitToast.name()));
+        assert_eq!(r.props.iter().filter(|p| p.2 == "drgnx-action").count(), 2);
+        // each tone's dot is the status dot's: info running, warn needs you, error error
+        let dot = |tone| {
+            let r = row(tone, vec![]);
+            r.runs.iter().map(|(_, _, f)| f.clone()).collect::<Vec<_>>()
+        };
+        assert!(dot(ToastTone::Info).contains(&FaceId::KitStatusDotRunning.name().to_owned()));
+        assert!(dot(ToastTone::Warn).contains(&FaceId::KitStatusDotNeedsYou.name().to_owned()));
+        assert!(dot(ToastTone::Error).contains(&FaceId::KitStatusDotError.name().to_owned()));
+    }
+
     struct Mono;
     impl fit::Measure for Mono {
         fn advance(&self, _role: &str, _ch: char) -> Option<f32> {
