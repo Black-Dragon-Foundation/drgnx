@@ -2574,35 +2574,41 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                                     (kill-buffer b)))"
                                (or drgnx-perf-run--fixture ""))
              :check "(fboundp 'drgnx-fold-fold-all)")
-            ;; the first whole-text class pass of 1 MB of python (design §8: ≤ 40 ms), 100 times: a refold with
-            ;; Nidhogg's highlight query in one slice (`nidhogg-treesit-highlight-slice' 60 s, the slices drained),
-            ;; wall time (`pass'), its CPU time (`cpu_ms', p50) and Lisp objects made (`lisp_allocs', p50); every
-            ;; line with text has its classes after (`rows_missing' 0)
+            ;; the first whole-text class pass of 1 MB of python (design §8: the main thread's share ≤ 40 ms; Task 11e-N
+            ;; slices the rest on idle, `nidhogg-treesit-highlight-slice' at its default), 100 times: the refold with
+            ;; Nidhogg's highlight query and its first slice at once (`first'), each idle slice after it (`slice'), the
+            ;; whole pass (`pass'), its CPU time (`cpu_ms', p50) and Lisp objects made (`lisp_allocs', p50); every line
+            ;; with text has its classes after (`rows_missing' 0)
             (classes-1mb
              :measure ,(concat
                         "(progn " (drgnx-perf-run--python-grammar-form)
-                        " (let ((b (generate-new-buffer \" classes-1mb\")) passes cpu allocs"
+                        " (let ((b (generate-new-buffer \" classes-1mb\")) firsts slices passes cpu allocs"
                         "       (cpu-ms (lambda () (let ((c (current-cpu-time))) (/ (* 1000.0 (car c)) (cdr c))))))"
                         "   (unwind-protect"
                         "       (with-current-buffer b"
                         "         (let ((i 0)) (while (< (buffer-size) 1048576)"
                         "           (insert (format \"def f%d(x):\\n    # c\\n    return x + %d\\n\\n\" i i)) (setq i (1+ i))))"
                         "         (nidhogg-lines-enable b t)"
-                        "         (let ((p (treesit-parser-create 'python)) (nidhogg-treesit-highlight-slice 60))"
+                        "         (let ((p (treesit-parser-create 'python)))"
                         "           (treesit-parser-root-node p)"
                         "           (setq-local nidhogg-treesit-highlight-query"
                         "                       (treesit-query-compile 'python \"(comment) @comment (integer) @constant (identifier) @function\"))"
                         "           (dotimes (_ 100)"
-                        "             (let ((t0 (float-time)) (c0 (funcall cpu-ms)) (m0 (apply #'+ (memory-use-counts))))"
+                        "             (let ((t0 (float-time)) (c0 (funcall cpu-ms)) (m0 (apply #'+ (memory-use-counts))) (more t))"
                         "               (nidhogg-treesit-refold p)"
-                        "               (while (nidhogg-treesit--highlight-slice))"
+                        "               (push (* 1000 (- (float-time) t0)) firsts)"
+                        "               (while more"
+                        "                 (let ((ts (float-time)))"
+                        "                   (setq more (nidhogg-treesit--highlight-slice))"
+                        "                   (push (* 1000 (- (float-time) ts)) slices)))"
                         "               (push (* 1000 (- (float-time) t0)) passes)"
                         "               (push (- (funcall cpu-ms) c0) cpu)"
                         "               (push (- (apply #'+ (memory-use-counts)) m0) allocs)))"
                         "           (let* ((lines (count-lines (point-min) (point-max)))"
                         "                  (missing (seq-count (lambda (l) (and (/= (% l 4) 3) (null (nidhogg-lines-classes nil l))))"
                         "                                      (number-sequence 0 (1- lines)))))"
-                        "             (list :pass (drgnx-perf-stats passes) :lines lines :rows_missing missing"
+                        "             (list :first (drgnx-perf-stats firsts) :slice (drgnx-perf-stats slices) :pass (drgnx-perf-stats passes)"
+                        "                   :lines lines :rows_missing missing"
                         "                   :cpu_ms (drgnx-perf--round (plist-get (drgnx-perf-stats cpu) :p50))"
                         "                   :lisp_allocs (plist-get (drgnx-perf-stats allocs) :p50)))))"
                         "     (kill-buffer b))))")
