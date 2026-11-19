@@ -1468,12 +1468,12 @@ line in its middle; `tick-full' all of it."
 (defun drgnx-ui-kit-rail-image (shape width height scale)
   "The picture of a rail item's `rail-bar' (the accent bar along the cell's rounded left edge: the crescent between the
 cell's outline and the outline 2 px in) or `rail-dot' (the warn dot, on the cell's top right corner), WIDTH x HEIGHT
-device px, the cell's left or right 8 px column, in `currentColor'.  Its ascent leaves the face's font's descent below it:
-the line the cell is on is HEIGHT tall (its `line-height') with the text's baseline that far above its bottom, so a
-picture centred on the font's centre line (`center') would stand a line taller than the cell."
+device px, the cell's left or right 8 px column, in `currentColor'.  Its ascent leaves the face's font's descent
+below it: the line the cell is on is HEIGHT tall (its `line-height') with the text's baseline that far above its
+bottom, so a picture centred on the font's centre line (`center') would stand a line taller than the cell."
   (let* ((r (drgnx-px drgnx-ui-kit-rail-radius-px nil scale))
          (below (cdr (drgnx-pixels-font-extent 'drgnx-kit-rail-item-bar)))
-         (ascent (if (and below (> height below)) (min 100 (ceiling (* 100.0 (- height below)) height)) 'center))
+         (ascent (if (and below (> height below)) (min 100 (floor (* 100.0 (- height below)) height)) 'center))
          (key (list 'rail shape width height scale ascent)))
     (or (gethash key drgnx-ui-kit--bar-images)
         (progn
