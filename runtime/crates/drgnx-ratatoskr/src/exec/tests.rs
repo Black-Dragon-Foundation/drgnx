@@ -2478,13 +2478,47 @@ async fn progress_local_busy_job_stops_at_silent() {
     local_stuck(d.path(), &row, &id, "silent");
 }
 
-/// [C] A job that prints every half second for longer than both limits is never stopped; it sees its deadline in
-/// `DRGNX_JOB_DEADLINE` (epoch seconds: its start plus its time box). A job with no limits named, no container and no
-/// test suite is not guarded.
+/// A guard whose readings the test paces.  With MORE_OUTPUT, after each reading the guard waits until the job's log has
+/// grown beyond what it was at that reading (the test's event, not a clock); without, it reads again at once.  The order of
+/// a job's output against the readings is the test's.
+fn paced_guard(root: &Path, more_output: bool) -> Runner {
+    let r = Runner::default();
+    let slice = idle_slice(root);
+    let exec = root.join("exec");
+    r.open(
+        exec.clone(),
+        Hooks {
+            guard_slice: Some(Arc::new(move |_| Some(slice.clone()))),
+            guard_read: Some(Arc::new(move |id| {
+                let log = exec.join(id).join("log");
+                Box::pin(async move {
+                    if !more_output {
+                        return;
+                    }
+                    let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+                    let at = len(&log);
+                    let _ = tokio::time::timeout(Duration::from_secs(60), async {
+                        while len(&log) <= at {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                    })
+                    .await;
+                })
+            })),
+            ..hooks()
+        },
+    );
+    r
+}
+
+/// [I] A job that prints is not stopped, and sees `DRGNX_JOB_DEADLINE` (epoch seconds: its start plus its time box). A
+/// job with no limits named, no container and no test suite is not guarded.  Order forced, not timed: after each
+/// reading the guard waits until the job has printed one more dot, so every reading window holds output however slow
+/// the machine is (stall 2 s, read every second: a loaded host once starved the job through two readings).
 #[tokio::test]
 async fn progress_local_printing_job_is_not_stopped() {
     let d = tempfile::tempdir().unwrap();
-    let r = guard_open(d.path(), Some(idle_slice(d.path())));
+    let r = paced_guard(d.path(), true);
     let start = now();
     let script = "echo deadline=$DRGNX_JOB_DEADLINE; i=0; while [ $i -lt 14 ]; do echo .; sleep 0.5; i=$((i+1)); done";
     let id = r.start(guarded_spec(d.path(), script)).await.unwrap();
@@ -2508,6 +2542,23 @@ async fn progress_local_printing_job_is_not_stopped() {
     plain.user.stall_s = None;
     let id = r.start(plain).await.unwrap();
     assert_eq!(ended(&r, &id).await.status, ExecStatus::Done);
+}
+
+/// [I] The order the flake had, forced: the guard's second reading comes before the job prints again, so two readings
+/// in a row see no output and the stall rule stops the job (`infra`, never a red).  The same job passes the test above
+/// when the readings wait for its output.
+#[tokio::test]
+async fn two_readings_without_output_stop_a_printing_job_at_stall() {
+    let d = tempfile::tempdir().unwrap();
+    // never held: the guard reads again at once, whatever the job has printed
+    let r = paced_guard(d.path(), false);
+    // one dot, then nothing for as long as the job lives
+    let id = r
+        .start(guarded_spec(d.path(), "echo .; sleep 30"))
+        .await
+        .unwrap();
+    let row = ended(&r, &id).await;
+    local_stuck(d.path(), &row, &id, "stall");
 }
 
 /// [D] `stall_s` and `silent_s` on `exec/start` (1 to 86400 each) reach the job and, for a runner, its spec.
