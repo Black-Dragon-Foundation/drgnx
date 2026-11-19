@@ -46,7 +46,8 @@
 
 (ert-deftest drgnx-wb-undefine/section-goes-and-its-window-closes ()
   (drgnx-wb-undefine-test--with
-   (drgnx-wb-undefine-test--sections)
+   ;; the dock is one tile whose sections are its parts: two parts (a third has no room in a batch frame)
+   (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (drgnx-wb-undefine-test--buffer "*drgnx-test-top*"))
    (drgnx-wb-undefine-test--setup 'test/s
      (drgnx-wb-define-section 'mine :slot 1 :title "MINE" :buffer (drgnx-wb-undefine-test--buffer "*drgnx-test-mine*")))
    (drgnx-wb-show-sidebar)
@@ -56,7 +57,6 @@
    (should-not (assq 'mine drgnx-wb--sections))
    (should-not (drgnx-wb-section-window 'mine))
    (should (window-live-p (drgnx-wb-section-window 'top)))      ; the dock keeps its other sections
-   (should (window-live-p (drgnx-wb-section-window 'bottom)))
    (should (drgnx-signal-editor-window-p (selected-window)))
    (should (drgnx-wb-sidebar-showing-p))
    ;; Idempotent, and a section that is not defined is no error.

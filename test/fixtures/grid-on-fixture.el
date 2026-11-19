@@ -23,7 +23,8 @@
 
 (defun drgnx-test-grid-on-for-file ()
   "Every row run from here on in this Emacs runs with the grid on (a file's rows: each file has its own Emacs)."
-  (advice-add 'ert-run-test :around #'drgnx-test-grid-on--run-test))
+  ;; innermost (depth 100): the leak census wraps `ert-run-test' too and must see the session without the grid
+  (advice-add 'ert-run-test :around #'drgnx-test-grid-on--run-test '((depth . 100))))
 
 (provide 'grid-on-fixture)
 ;;; grid-on-fixture.el ends here

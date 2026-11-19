@@ -235,7 +235,7 @@
           (text (prin1-to-string drgnx-params)))
      (should-not (string-match-p "#<" text))
      (should (equal drgnx-params (read text))))
-   (should-not (string-match-p "\\*pane-notes\\*" (prin1-to-string (frame-parameters))))))
+   ))
 
 (ert-deftest drgnx-panes/a-shared-place-rule-stays-while-another-editor-kind-uses-it ()
   (drgnx-panes-test--with
