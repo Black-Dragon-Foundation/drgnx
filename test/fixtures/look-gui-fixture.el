@@ -60,6 +60,10 @@ rows turn on, off; no theme; the default height; the global hooks and mode lines
                       diffs))
     (when diffs (ert-fail (cons 'session-left-changed (nreverse diffs))))))
 
+(defvar drgnx-look-gui-grid t
+  "Non-nil: a look row runs with the grid on (docks and areas are tiles).  A file whose rows open frames of their own
+and show no dock sets it nil.")
+
 (defmacro drgnx-look-gui-deftest (name args &rest body)
   "`ert-deftest' NAME ARGS BODY for a look GUI row: the row starts with `drgnx-look-gui-check-clean', so a row that
 an earlier one left something for fails naming it, before it reads a pixel; and it ends with it, after its own
@@ -69,7 +73,7 @@ BODY's docstring and keywords stay first."
   (let (head)
     (when (and (stringp (car body)) (cdr body)) (push (pop body) head))
     (while (keywordp (car body)) (push (pop body) head) (push (pop body) head))
-    `(ert-deftest ,name ,args ,@(nreverse head) (drgnx-look-gui-check-clean) (drgnx-test-with-grid-on ,@body) (drgnx-look-gui-check-clean))))
+    `(ert-deftest ,name ,args ,@(nreverse head) (drgnx-look-gui-check-clean) (if drgnx-look-gui-grid (drgnx-test-with-grid-on ,@body) (progn ,@body)) (drgnx-look-gui-check-clean))))
 
 (provide 'drgnx-look-gui-fixture)
 ;;; look-gui-fixture.el ends here

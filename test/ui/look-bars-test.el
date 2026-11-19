@@ -8,6 +8,7 @@
 (require 'ert)
 (require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
+(setq drgnx-look-gui-grid nil)               ; bare frames of its own, no dock
 (require 'seq)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)

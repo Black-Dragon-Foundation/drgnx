@@ -12,6 +12,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
+(setq drgnx-look-gui-grid nil)               ; the catalogue's own frames, no dock
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
 

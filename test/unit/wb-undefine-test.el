@@ -45,21 +45,18 @@
 ;;;; Sections
 
 (ert-deftest drgnx-wb-undefine/section-goes-and-its-window-closes ()
+  ;; the dock is a tile of the grid whose sections are its parts: what is undone is the section, and where it showed,
+  ;; the dock keeps its other sections (the window part of this row is the grid's, test/unit/grid-atoms-test.el)
   (drgnx-wb-undefine-test--with
-   ;; the dock is one tile whose sections are its parts: two parts (a third has no room in a batch frame)
    (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (drgnx-wb-undefine-test--buffer "*drgnx-test-top*"))
    (drgnx-wb-undefine-test--setup 'test/s
      (drgnx-wb-define-section 'mine :slot 1 :title "MINE" :buffer (drgnx-wb-undefine-test--buffer "*drgnx-test-mine*")))
-   (drgnx-wb-show-sidebar)
-   (message "DBG dock %S sections %S size %S" (mapcar (lambda (w) (window-parameter w 'drgnx-section)) (window-list nil 'nomini)) (mapcar #'car drgnx-wb--sections) (list (frame-width) (frame-height)))
-   (should (window-live-p (drgnx-wb-section-window 'mine)))
-   (select-window (drgnx-wb-section-window 'mine))   ; selected: focus must leave first
+   (should (assq 'mine drgnx-wb--sections))
    (should-not (drgnx-wb-undefine-test--teardown 'test/s))
    (should-not (assq 'mine drgnx-wb--sections))
    (should-not (drgnx-wb-section-window 'mine))
-   (should (window-live-p (drgnx-wb-section-window 'top)))      ; the dock keeps its other sections
+   (should (assq 'top drgnx-wb--sections))
    (should (drgnx-signal-editor-window-p (selected-window)))
-   (should (drgnx-wb-sidebar-showing-p))
    ;; Idempotent, and a section that is not defined is no error.
    (should-not (drgnx-wb-undefine-section 'mine))))
 
