@@ -336,6 +336,9 @@ fn at_limit_block_suggests_p90_rounded_up() {
     near(at_limit_suggestion(Unit::UsdEst, 5.0, 2.3), 8.0); // 7.30 -> 8
     near(at_limit_suggestion(Unit::Usd, 5.0, 3.0), 8.0); // 8.00 stays 8
     near(at_limit_suggestion(Unit::LimitShare, 0.31, 0.052), 0.37); // 36.2 % -> 37 %
-    near(at_limit_suggestion(Unit::Tokens, 450_000.0, 120_500.0), 600_000.0); // 570,500 -> 600k
+    near(
+        at_limit_suggestion(Unit::Tokens, 450_000.0, 120_500.0),
+        600_000.0,
+    ); // 570,500 -> 600k
     assert_eq!(at_limit_suggestion(Unit::Count, 3.0, 1.0), None);
 }

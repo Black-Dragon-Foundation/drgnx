@@ -14,7 +14,14 @@ fn kit() -> KitEnv<'static> {
     }
 }
 
-fn node(scope: Value, parent: Option<Value>, label: &str, limit: f64, spent: f64, share: Option<f64>) -> Value {
+fn node(
+    scope: Value,
+    parent: Option<Value>,
+    label: &str,
+    limit: f64,
+    spent: f64,
+    share: Option<f64>,
+) -> Value {
     json!({
         "scope": scope, "parent": parent, "label": label,
         "limits": [{"amount": limit, "unit": "usd-est"}],
@@ -45,7 +52,10 @@ fn pace(estimate: bool) -> Pace {
 }
 
 fn all_text(rows: &[drgnx_rows::Row]) -> String {
-    rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("\n")
+    rows.iter()
+        .map(|r| r.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The runs of a plan show their share of it, in the plan's binding unit.

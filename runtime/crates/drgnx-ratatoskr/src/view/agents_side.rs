@@ -451,17 +451,25 @@ mod tests {
         let old = s("old", State::Finished, 5, true);
         let rows = rows(&[run, ask, old], &kit);
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
-        assert!(keys[0].starts_with("card:ask:"), "needs-you first: {keys:?}");
+        assert!(
+            keys[0].starts_with("card:ask:"),
+            "needs-you first: {keys:?}"
+        );
         // the agent's mark rides on the card's head row
         assert!(rows[0].props.iter().any(|p| p.2 == "drgnx-agent-mark"));
         // one button on the card: primary for Answer, with the action the editor runs
-        let card: Vec<&Row> = rows.iter().filter(|r| r.key.starts_with("card:ask:")).collect();
-        let buttons: Vec<&str> = card
+        let card: Vec<&Row> = rows
+            .iter()
+            .filter(|r| r.key.starts_with("card:ask:"))
+            .collect();
+        let faces: Vec<&str> = card
             .iter()
             .flat_map(|r| r.runs.iter().map(|x| x.2.as_str()))
-            .filter(|f| f.starts_with("drgnx-kit-button"))
             .collect();
-        assert!(buttons.contains(&drgnx_rows::faces::FaceId::KitButtonPrimary.name()), "{buttons:?}");
+        assert!(
+            faces.contains(&drgnx_rows::faces::FaceId::KitButtonPrimary.name()),
+            "{faces:?}"
+        );
         assert_eq!(
             card.iter()
                 .flat_map(|r| r.props.iter())
@@ -470,16 +478,19 @@ mod tests {
             1
         );
         // the plan's progress is the kit's meter, not words
-        assert!(card
-            .iter()
-            .flat_map(|r| r.runs.iter())
-            .any(|x| x.2.starts_with("drgnx-kit-progress")));
+        assert!(
+            card.iter()
+                .flat_map(|r| r.runs.iter())
+                .any(|x| x.2 == drgnx_rows::faces::FaceId::KitProgress.name())
+        );
         // "Earlier" is a kit section header
         let earlier = rows.iter().find(|r| r.key == "earlier").expect("Earlier");
-        assert!(earlier
-            .runs
-            .iter()
-            .any(|x| x.2 == drgnx_rows::faces::FaceId::KitSectionHeader.name()));
+        assert!(
+            earlier
+                .runs
+                .iter()
+                .any(|x| x.2 == drgnx_rows::faces::FaceId::KitSectionHeader.name())
+        );
     }
 
     fn kit_env() -> drgnx_rows::kit::KitEnv<'static> {
@@ -508,7 +519,10 @@ mod tests {
             .iter()
             .flat_map(|r| r.runs.iter().map(|x| x.2.as_str()))
             .collect();
-        assert!(faces.contains(&drgnx_rows::faces::FaceId::KitProgressMeterNear.name()), "{faces:?}");
+        assert!(
+            faces.contains(&drgnx_rows::faces::FaceId::KitProgressMeterNear.name()),
+            "{faces:?}"
+        );
         assert!(
             !faces.contains(&drgnx_rows::faces::FaceId::KitProgressFill.name()),
             "never two bars: {faces:?}"
@@ -525,8 +539,16 @@ mod tests {
         });
         let busy = s("busy", State::Running, 99, false);
         let rows = rows(&[busy, hit], &kit_env());
-        assert!(rows[0].key.starts_with("card:hit:"), "needs-you first: {:?}", rows[0].key);
-        let text: String = rows.iter().filter(|r| r.key.starts_with("card:hit:")).map(|r| r.text.as_str()).collect();
+        assert!(
+            rows[0].key.starts_with("card:hit:"),
+            "needs-you first: {:?}",
+            rows[0].key
+        );
+        let text: String = rows
+            .iter()
+            .filter(|r| r.key.starts_with("card:hit:"))
+            .map(|r| r.text.as_str())
+            .collect();
         assert!(text.contains("Paused at its limit"), "{text:?}");
         assert!(text.contains("$5.00 of $5.00"), "{text:?}");
     }
