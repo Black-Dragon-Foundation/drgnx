@@ -17351,6 +17351,98 @@
       "classes": [
         "user"
       ],
+      "doc": "a comment-threads view is shown no more",
+      "name": "doc-comments/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view id: `doc-comments/close`.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "ViewId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a change to a comment-threads view: refresh reads the threads again",
+      "name": "doc-comments/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`doc-comments/set`: REFRESH reads the threads again (after a comment, a reply or an agent's answer).",
+        "properties": {
+          "refresh": {
+            "default": false,
+            "type": "boolean"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "Set",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a hub-fed view shows the comment threads of a record: a card for each thread (the paragraph quoted, the comment, its replies, whom it was sent to or that no agent is writing it), as rows",
+      "name": "doc-comments/subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`doc-comments/subscribe`: VIEW shows the threads of RECORD (`spec:ID`, `plan:ID`, `decision:N` or `task:ID`).",
+        "properties": {
+          "record": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "record"
+        ],
+        "title": "Subscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's login-shell variables the hub allows (never a key), for the agents and jobs it starts next",
       "name": "env/set",
       "params": {
@@ -22865,6 +22957,130 @@
           "made_at"
         ],
         "title": "Forecast",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the start step of a proposed job: its budget fields prefilled with the forecast's p90 rounded up in the plan's unit (% wk, usd, or both), the warning that the week runs out at p90, whether a task rests on the prior",
+      "name": "forecast/start",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`forecast/start`'s params: the proposed job whose start step is wanted.",
+        "properties": {
+          "job": {
+            "$ref": "#/$defs/Id"
+          },
+          "utc_offset": {
+            "default": 0,
+            "description": "Seconds east of UTC, for the weekday and time the week runs out at; none: UTC.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job"
+        ],
+        "title": "StartParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "StartField": {
+            "additionalProperties": false,
+            "description": "A budget field of the start step: the plan's limit in UNIT, prefilled with the forecast's p90 rounded up (none: empty,\nwith the NOTE saying why).",
+            "properties": {
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "prefill": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              }
+            },
+            "required": [
+              "unit"
+            ],
+            "type": "object"
+          },
+          "Unit": {
+            "description": "What a limit counts.  Limits compare only in the same unit.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tokens"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "count",
+                "description": "A number of things (agents started, jobs).",
+                "type": "string"
+              },
+              {
+                "const": "usd",
+                "description": "US dollars the gateway measured (exact).",
+                "type": "string"
+              },
+              {
+                "const": "usd-est",
+                "description": "US dollars at API prices from reported usage (an estimate).",
+                "type": "string"
+              },
+              {
+                "const": "limit-share",
+                "description": "A share of a subscription's limit window, 0 to 1 (an estimate).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The start step of a proposed job: its budget fields (`% wk` for subscription tasks, `usd` for gateway tasks, both for a\nmixed plan), the warning that the week runs out at p90 (never a block) and whether some task was forecast from the prior.",
+        "properties": {
+          "fields": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/StartField"
+            },
+            "type": "array"
+          },
+          "prior": {
+            "type": "boolean"
+          },
+          "week_warning": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "prior"
+        ],
+        "title": "StartView",
         "type": "object"
       },
       "writes": false

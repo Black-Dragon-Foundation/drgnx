@@ -17,6 +17,7 @@ pub mod debug_fork;
 pub mod debug_heap;
 pub mod debug_origin;
 pub mod debug_runs;
+pub mod doc_comments;
 pub mod editor;
 pub mod exec;
 pub mod extensions;
@@ -270,6 +271,7 @@ params! {
     PaceGet(timeline::PaceParams),
     ForecastGet(forecast::ForecastParams),
     ForecastPlan(forecast::ForecastPlanParams),
+    ForecastStart(forecast::StartParams),
     ForecastSession(forecast::SessionForecastParams),
     ForecastAccuracy(forecast::AccuracyParams),
     SayStart(say::SayStart),
@@ -410,6 +412,9 @@ params! {
     ReviewScreenSubscribe(review_screen::Subscribe),
     ReviewScreenSet(review_screen::Set),
     ReviewScreenClose(review_screen::ViewId),
+    DocCommentsSubscribe(doc_comments::Subscribe),
+    DocCommentsSet(doc_comments::Set),
+    DocCommentsClose(doc_comments::ViewId),
     ScmSubscribe(scm::Subscribe),
     ScmSet(scm::Set),
     ScmClose(scm::ViewId),
@@ -542,6 +547,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(agents_side::methods());
     v.extend(changes::methods());
     v.extend(review_screen::methods());
+    v.extend(doc_comments::methods());
     v.extend(scm::methods());
     v.extend(runners::methods());
     v.extend(extensions::methods());

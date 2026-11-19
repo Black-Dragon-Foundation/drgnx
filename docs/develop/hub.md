@@ -1436,6 +1436,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `debug/watch` | user | `{expr?: string, index?: natnum, op: string, root: string, to?: natnum}` | `[string]` | no |
 | `debug/write-memory` | user | `{allow_partial?: boolean, data: string, offset?: integer, reference: string, session: string}` | `{offset?: integer, written?: natnum}` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
+| `doc-comments/close` | user | `{view: string}` | `boolean` | no |
+| `doc-comments/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
+| `doc-comments/subscribe` | user | `{record: string, view: string}` | `boolean` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no |
@@ -1458,6 +1461,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `forecast/get` | user | `{job: Id, remaining?: boolean}` | `Forecast` | no |
 | `forecast/plan` | user | `{plans: [string]}` | `{forecast: Forecast, running?: [RunningPlan]}` | no |
 | `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
+| `forecast/start` | user | `{job: Id, utc_offset?: integer}` | `{fields?: [StartField], prior: boolean, week_warning?: string}` | no |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
 | `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no |
