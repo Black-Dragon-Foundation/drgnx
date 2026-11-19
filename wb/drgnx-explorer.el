@@ -42,6 +42,7 @@ the folders by them (`explorer/subscribe' `exclude'); a change applies at the ne
 
 (defvar drgnx-explorer--exclude-memo nil "(NAMES . REGEXP): `drgnx-explorer-exclude-names' as one regexp.")
 
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (defun drgnx-explorer--excluded-name-p (name)
   "Non-nil when NAME (one file or folder name) is one of `drgnx-explorer-exclude-names'."
   (unless (eq (car drgnx-explorer--exclude-memo) drgnx-explorer-exclude-names)

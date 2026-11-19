@@ -50,6 +50,7 @@ sidebar's one selection stays the only one." :group 'drgnx)
   (setq-local truncate-lines t cursor-type nil mode-line-format nil)
   (drgnx-wb-rows-setup))
 
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (defun drgnx-outline--hub-p ()
   "Non-nil when the hub's subscribed connection is up (the hub sends the rows there)."
   (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))

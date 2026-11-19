@@ -232,13 +232,20 @@ ONTO).  Optional, called when present:
 :defined (KIND) after KIND is defined, :undefined (KIND) after it is removed, and :keeps (KIND FRAME), non-nil when
 a module turned off leaves KIND where it shows on FRAME (the grid's tiles keep their place, with a placeholder).")
 
+(defun drgnx-pane--ensure-backend ()
+  "Load the grid when the backend is `grid' and has not registered yet (wb/drgnx-grid.el registers it at load)."
+  (when (and (eq drgnx-pane-backend 'grid) (not (alist-get 'grid drgnx-pane--backends)))
+    (require 'drgnx-grid)))
+
 (defun drgnx-pane--call-optional (op &rest args)
   "Run operation OP of the current `drgnx-pane-backend' with ARGS when it has one, else nil."
+  (drgnx-pane--ensure-backend)
   (when-let* ((fn (plist-get (alist-get drgnx-pane-backend drgnx-pane--backends) op)))
     (apply fn args)))
 
 (defun drgnx-pane--call (op &rest args)
   "Run operation OP (:define, :show, …) of the current `drgnx-pane-backend' with ARGS."
+  (drgnx-pane--ensure-backend)
   (let ((fn (plist-get (alist-get drgnx-pane-backend drgnx-pane--backends) op)))
     (unless fn (error "No %s operation for pane backend %s" op drgnx-pane-backend))
     (apply fn args)))

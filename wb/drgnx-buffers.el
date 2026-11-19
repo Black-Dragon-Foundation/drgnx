@@ -61,6 +61,7 @@ a closed one's goes at the next set change.")
 (defvar drgnx-buffers--sends 0 "How many `buffers/set' calls went (tests read it).")
 (defvar drgnx-buffers--pressed nil "Non-nil while a mouse button pressed in the panel is held.")
 
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (defun drgnx-buffers--id (b)
   "Buffer B's row id, given it when it has none."
   (or (gethash b drgnx-buffers--ids)

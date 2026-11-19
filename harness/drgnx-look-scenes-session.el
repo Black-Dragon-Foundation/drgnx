@@ -502,6 +502,9 @@ panel's window at either scale.")
 still said `editor': the next scene's start puts the layout back (`drgnx-look-scene--editor-layout').")
 
 (declare-function drgnx-groups-list "drgnx-groups")
+(declare-function drgnx-chrome-tabs "drgnx-chrome" (w))
+(declare-function drgnx-grid-tiles "drgnx-grid" (&optional frame kind))
+(declare-function drgnx-hub-disconnect "drgnx-hub-client")
 
 (defun drgnx-look-scene--one-editor ()
   "One editor group, the one used last, selected; the docks stay.  Not `delete-other-windows': under the grid an
