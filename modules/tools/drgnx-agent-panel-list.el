@@ -166,7 +166,7 @@ rows.")
     (drgnx-view-touch view)))
 
 (defun drgnx-agent-panel-list-setup ()
-  (when (fboundp 'drgnx-pane-define-kind)
+  (when (require 'drgnx-panes nil t)
     (drgnx-pane-define-kind 'agents :home 'right :title "Agents" :placeholder #'drgnx-agent-panel-list-buffer))
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-agent-panel-list-mode 'right :tab 'agents))
   (drgnx-module-hook 'drgnx-agents-changed-functions list-changed (session) :module 'tools/agent-panel (drgnx-agent-panel-list-changed session))

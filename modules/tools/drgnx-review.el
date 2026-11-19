@@ -281,7 +281,7 @@ the runs are forgotten and the Review tab is closed."
                      :setup
                      (lambda ()
                        (add-hook 'drgnx-agents-changed-functions #'drgnx-review--changed)
-                       (when (fboundp 'drgnx-pane-define-kind)
+                       (when (require 'drgnx-panes nil t)
                          (drgnx-pane-define-kind 'review :home 'bottom :title "Branch Review" :contextual t
                                                  :empty "No review yet. Review Branch has an agent read this branch's diff; its findings appear here."))
                        (pcase-dolist (`(,id ,title ,fn ,doc)

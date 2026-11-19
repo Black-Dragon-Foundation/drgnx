@@ -230,7 +230,7 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
                      (lambda ()
                        (add-hook 'git-commit-setup-hook #'drgnx-prs--commit-setup)
                        (drgnx-notice-define-source 'prs :title "Pull requests" :command 'prs-fetch)
-                       (when (fboundp 'drgnx-pane-define-kind) (drgnx-pane-define-kind 'prs :home 'right :title "Pull Requests"))
+                       (when (require 'drgnx-panes nil t) (drgnx-pane-define-kind 'prs :home 'right :title "Pull Requests"))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((prs-view "Pull Requests" drgnx-prs-view "This repository's pull requests (forge)")
                                         (prs-fetch "Pull Requests: Fetch" drgnx-prs-fetch "Ask the forge for them (network)")

@@ -648,7 +648,7 @@ ended."
                        (drgnx-scm--define 'scm-commit-message "Source Control: Commit from Message" #'drgnx-scm-commit
                                           "Commit with the message box's text" :map 'drgnx-scm-message-mode-map
                                           :when (lambda () (derived-mode-p 'drgnx-scm-message-mode)))
-                       (when (fboundp 'drgnx-pane-define-kind)
+                       (when (require 'drgnx-panes nil t)
                          (drgnx-module-alist-put 'drgnx-wb-island-views 'scm '(:title "Source Control"))
                          (drgnx-pane-define-kind 'scm-message :home 'left :view 'scm :slot 0 :own-header t :fit 0.15
                                                  :min-rows 1 :buffer #'drgnx-scm--message-buffer)

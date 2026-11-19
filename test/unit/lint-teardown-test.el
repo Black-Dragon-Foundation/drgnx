@@ -187,7 +187,10 @@ once in between).  Returns (STATUS . FAILURE): the status its setup reached, and
     (setq results (nreverse results))
     (drgnx-teardown--say checked results)
     ;; every module checked, each failure named with its module
-    (should (equal (delq nil (cl-mapcar (lambda (m r) (and (cdr r) (cons m (cdr r)))) checked results)) nil))))
+    (let ((fails (delq nil (cl-mapcar (lambda (m r) (and (cdr r) (cons m (cdr r)))) checked results))))
+      ;; the whole list in the log: a failure's own print is cut at three elements
+      (when fails (let ((print-length nil) (print-level nil)) (message "teardown leftovers: %S" fails)))
+      (should (equal fails nil)))))
 
 (ert-deftest drgnx-teardown/off-on-off-is-off ()
   (let (failures)

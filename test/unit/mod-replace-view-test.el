@@ -685,7 +685,8 @@ file order, as a search sends them."
 (ert-deftest drgnx-replace/setup-registers-and-off-takes-it-all-back ()
   ;; The persist advice and the Vim-profile initial states were top-level forms; now the module's own, and
   ;; the states go back also when evil had loaded (the Vim profile).
-  (let ((states (list (cons 'drgnx-replace-mode 'normal))))
+  (require 'drgnx-panes)
+  (let ((states (list (cons 'drgnx-replace-mode 'normal))) (drgnx-pane--kinds nil) (drgnx-state--kind-owners nil))
     (unwind-protect
         (cl-letf (((symbol-function 'evil-initial-state) (lambda (m &rest _) (alist-get m states)))
                   ((symbol-function 'evil-set-initial-state) (lambda (m s) (setf (alist-get m states) s))))

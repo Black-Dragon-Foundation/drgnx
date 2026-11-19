@@ -998,6 +998,7 @@ Branch's base and `±'."
   "Put the Search view in the sidebar (its `search' view), and define the view type of its result rows."
   (drgnx-view-define 'replace-results :render #'drgnx-replace--render-row :delay 0 :slice drgnx-view-slice
                      :key-test 'eq :patched #'drgnx-replace--rows-drawn)
+  (require 'drgnx-panes)
   (drgnx-pane-define-kind 'search :home 'left :view 'search :slot 0 :title " SEARCH" :buffer #'drgnx-replace--view-buffer
                           :on-focus #'drgnx-replace--focus-find))
 

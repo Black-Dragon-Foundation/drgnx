@@ -369,7 +369,7 @@ console's tab shows without taking the focus."
                               ;; the Debug Console tab of the panel (drgnx-debug-console.el); its input's keys in its
                               ;; own map.  The panel is the workbench's: without it (a bare Emacs) there is no tab
                               ;; to define, as for Review's
-                              (when (fboundp 'drgnx-pane-define-kind)
+                              (when (require 'drgnx-panes nil t)
                                 (drgnx-pane-define-kind 'debug-console :home 'bottom :title "Debug Console" :icon 'terminal
                                                         :content #'drgnx-debug-console--buffer
                                                         :actions #'drgnx-debug-console-tab-actions))
@@ -387,6 +387,7 @@ console's tab shows without taking the focus."
                                                       '(:title "Run and Debug"
                                                                :buttons ((file-cog "Open launch.json" run-and-debug
                                                                                    . debug-open-launch-json))))
+                              (require 'drgnx-panes)
                               (drgnx-pane-define-kind 'run-and-debug :home 'left :view 'debug :slot 0 :title " RUN AND DEBUG"
                                                       :own-header t :buffer #'drgnx-debug-view--buffer)
                               (let ((in-view (lambda () (derived-mode-p 'drgnx-debug-view-mode))))
@@ -396,7 +397,7 @@ console's tab shows without taking the focus."
                                     (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
                                                           :map 'drgnx-debug-view-mode-map :when in-view))))
                               ;; the heap graph (drgnx-debug-heap.el): the panel's Graph tab, its key in its own map
-                              (when (fboundp 'drgnx-pane-define-kind)
+                              (when (require 'drgnx-panes nil t)
                                 (drgnx-pane-define-kind 'debug-graph :home 'bottom :title "Heap Graph" :contextual t
                                                         :empty "No graph yet. Stop at a breakpoint and choose Show as Graph on a variable to draw its objects here."))
                               (drgnx-command-define 'debug-heap-select :category "Debug" :title "Graph: Select Card"
