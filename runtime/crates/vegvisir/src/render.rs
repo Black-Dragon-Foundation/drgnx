@@ -267,7 +267,9 @@ fn collapse_tasks<'a>(
         })
     };
     // a plan's task chips may wrap over several rows: they count across them, in reading order (row, then column)
-    let mut by_plan: BTreeMap<Option<&ItemId>, Vec<((u32, u32), &ItemId)>> = BTreeMap::new();
+    // (row, column) of each task chip, by the plan it belongs to
+    type Reading<'a> = Vec<((u32, u32), &'a ItemId)>;
+    let mut by_plan: BTreeMap<Option<&ItemId>, Reading> = BTreeMap::new();
     for (id, it) in s.items.iter().filter(|(_, it)| it.kind == Kind::Task) {
         if let Some(r) = s.layout.at.get(id).filter(|_| !worked(id)) {
             by_plan

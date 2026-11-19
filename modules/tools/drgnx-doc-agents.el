@@ -74,8 +74,8 @@
            (and (fboundp 'glitnir--reduced-motion-p) (glitnir--reduced-motion-p)))))
 
 (defun drgnx-doc-agents--pulse-tick (buffer)
-  "One beat of the pulse in BUFFER: the writer paragraph's fill steps between the quiet and the full selection.  Ends (non-nil)
-when the paragraph or the buffer is gone."
+  "One beat of the pulse in BUFFER: the writer paragraph's fill steps between the quiet and the full selection.
+Ends (non-nil) when the paragraph or the buffer is gone."
   (if (and (buffer-live-p buffer)
            (overlayp (buffer-local-value 'drgnx-doc-agents--writer-ov buffer))
            (overlay-buffer (buffer-local-value 'drgnx-doc-agents--writer-ov buffer)))
