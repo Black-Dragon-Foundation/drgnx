@@ -34,6 +34,7 @@
     (palette-hc :keys "C-S-p" :type "run te" :then "C-g")
     (window-light)
     (window-hc)
+    (rail-changed :mockup window-dark)
     (title-row-dark)
     (menu-list :keys "<f20> <down>" :then "<escape>" :covers "nhwl-menu-")
     (context-menu :keys "S-<f10> <down>" :then "<escape>" :covers "nhwl-menu-")
