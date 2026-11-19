@@ -567,7 +567,7 @@ count is positive.  NEED and AGENTS stand for the counts (the room the row keeps
      (when (> need 0)
        (list (drgnx-topline--item 'drgnx-topline-attention
                                   (concat (drgnx-topline--space 10)
-                                          (drgnx-topline--chip (format "● %d %s you" need (if (= need 1) "needs" "need")) 'drgnx-chip-attention 20 10))
+                                          (drgnx-topline--chip (format "%s %d %s you" (drgnx-face-glyph 'dot) need (if (= need 1) "needs" "need")) 'drgnx-chip-attention 20 10))
                                   (drgnx-topline--attention-command)
                                   "Waiting on you: click for the inbox")))
      (when (> agents 0)

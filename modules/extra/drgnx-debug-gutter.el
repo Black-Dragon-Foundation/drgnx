@@ -254,7 +254,7 @@ taller."
               (list '(margin left-margin)
                     (concat (drgnx-margins-pad 'debug)
                             (make-string (/ (1- (drgnx-debug-gutter--columns)) 2) ?\s)
-                            (propertize "●" 'face (list :inherit 'drgnx-ui-text :foreground bg)
+                            (propertize (drgnx-face-glyph 'dot) 'face (list :inherit 'drgnx-ui-text :foreground bg)
                                         'mouse-face (list :inherit 'drgnx-ui-text
                                                           :foreground (drgnx-color-over fg bg 0.38))
                                         'help-echo "Click to add a breakpoint")))))
@@ -467,7 +467,7 @@ lines finds it."
     (overlay-put o 'drgnx-debug-agent (plist-get bp :agent))
     (if (overlay-get o 'drgnx-debug-column)
         (overlay-put o 'before-string
-                     (propertize "●" 'face (if (eq kind 'off) 'drgnx-debug-unverified 'drgnx-debug-breakpoint-inline)
+                     (propertize (drgnx-face-glyph 'dot) 'face (if (eq kind 'off) 'drgnx-debug-unverified 'drgnx-debug-breakpoint-inline)
                                  'help-echo (overlay-get o 'drgnx-debug-help) 'mouse-face 'highlight 'pointer 'hand
                                  'keymap drgnx-debug-gutter--inline-map 'drgnx-debug-bp (plist-get bp :id)))
       (unless (overlay-get o 'drgnx-debug-under-stop)

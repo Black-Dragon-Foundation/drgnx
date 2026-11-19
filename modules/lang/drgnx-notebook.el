@@ -1683,8 +1683,8 @@ THEN-RUN-ALL: run every code cell once it is up."
   (when (derived-mode-p 'drgnx-notebook-mode)
     (if (null drgnx-notebook--kernel)
         (propertize "no kernel" 'face 'drgnx-text-muted)
-      (concat (propertize "●" 'face (pcase drgnx-notebook--state ("busy" 'drgnx-status-warn) ("dead" 'drgnx-status-fail)
-                                           ("starting" 'drgnx-status-info) (_ 'drgnx-status-ok)))
+      (concat (propertize (drgnx-face-glyph 'dot) 'face (pcase drgnx-notebook--state ("busy" 'drgnx-status-warn) ("dead" 'drgnx-status-fail)
+                                                               ("starting" 'drgnx-status-info) (_ 'drgnx-status-ok)))
               (format " %s · %s" drgnx-notebook--kernel drgnx-notebook--state)))))
 
 (defun drgnx-notebook--segments-define ()

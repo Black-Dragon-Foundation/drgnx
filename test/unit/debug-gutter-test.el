@@ -3,6 +3,7 @@
 ;; The hub's answers are scripted (`drgnx-hub-call' replaced): what is tested is what the editor asks, sends and draws.
 ;; The store itself has Rust tests (debug::tests_breakpoints, tests_registry).
 (require 'ert)
+(set-terminal-coding-system 'utf-8-unix)             ; the kit's dot is the glyph the frame can write: these rows read it as ●
 (require 'cl-lib)
 (require 'drgnx)
 (load (expand-file-name "modules/extra/drgnx-debug-gutter" drgnx-dir) nil t)

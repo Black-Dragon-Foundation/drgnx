@@ -1,6 +1,7 @@
 ;;; wb-chrome-test.el --- batch tests: chrome by role, tabs, breadcrumbs (I3) -*- lexical-binding: t -*-
 ;; test-class: det
 (require 'ert)
+(set-terminal-coding-system 'utf-8-unix)             ; the kit's dot is the glyph the frame can write: these rows read it as ●
 (require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)

@@ -680,7 +680,7 @@ while its buffer, file, root, symbol, modified flag, short form, rows and fonts 
                              (concat (propertize sep 'face 'drgnx-chrome-crumb)
                                      (propertize (drgnx-chrome--text symbol) 'face 'drgnx-text-muted))
                            ""))))
-             (if (and file (buffer-modified-p b)) " ●" ""))))
+             (if (and file (buffer-modified-p b)) (concat " " (drgnx-face-glyph 'dot)) ""))))
     (add-face-text-property 0 (length s) 'drgnx-ui-caption t s)
     s))
 

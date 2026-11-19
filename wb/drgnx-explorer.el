@@ -313,7 +313,7 @@ A row of a repository whose status is not read yet asks for it (`drgnx-explorer-
   (when (and drgnx-explorer-git (drgnx-git-unread-p path)) (drgnx-explorer--git-unread))
   (let* ((status (and drgnx-explorer-git (drgnx-git-status path)))
          (look (and status (drgnx-git-look status)))
-         (mark (and status (if (and dirp (not (memq status '(ignored untracked)))) "●" (drgnx-git-letter status)))))
+         (mark (and status (if (and dirp (not (memq status '(ignored untracked)))) (drgnx-face-glyph 'dot) (drgnx-git-letter status)))))
     ;; the name keeps the text colour (window-dark.html `.row'): the state is the mark; an ignored file is dimmed
     (when (eq status 'ignored) (add-face-text-property name-start eol (cadr look)))
     ;; a terminal window has no fringe: the overlay's padding keeps the last column free for the truncation `$'
@@ -358,7 +358,7 @@ name's face, the hover highlight, the icons, the git status and the ⋯ control.
               (unless (invisible-p (point)) (drgnx-explorer--icons (point) depth name-start (aref v 2) (aref v 0)))
               (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start))
             (when (and drgnx-explorer--selection (member (drgnx-explorer--path v) drgnx-explorer--selection))
-              (add-face-text-property name-start (pos-eol) 'drgnx-explorer-selected)))
+              (add-face-text-property name-start (pos-eol) 'drgnx-row-selected)))
           (forward-line 1)
           (setq i (1+ i))))))
   `(jit-lock-bounds ,beg . ,end))
@@ -739,7 +739,7 @@ selected when its row is there."
   "On the rows path, the file a reveal waits for: its folders were opened and the hub asked; the draw that brings its
 row selects it (`drgnx-explorer--rows-patched').")
 
-(defconst drgnx-explorer--nav-faces '(("ticked" . drgnx-explorer-selected) ("selected") ("dim"))
+(defconst drgnx-explorer--nav-faces '(("ticked" . drgnx-row-selected) ("selected") ("dim"))
   "The Explorer's classes on the rows path (`drgnx-view-nav-faces'): the marks are Sjá's ticked set; the selected row is
 the workbench's (`drgnx-wb-selection-sync', the look's fill and ring at point), so Sjá's `selected' class draws none;
 and `dim' draws none: Sjá dims the rows off the selection's chain, and the Explorer has no chain (every other row).")
@@ -1023,7 +1023,7 @@ gets it drawn over the name on hover (`drgnx-wb-cover-sense')."
          (status (and (assq status drgnx-git--looks) status))
          (mark (and status (if (and (not (memq status '(ignored untracked)))
                                     (eql 1 (drgnx-view-nav-field "dir" key)))
-                               "●" (drgnx-git-letter status))))
+                               (drgnx-face-glyph 'dot) (drgnx-git-letter status))))
          (short (and (< beg eol) (get-text-property beg 'drgnx-row-tail-short)))
          (o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) (and short 'none)
                                        (gethash key drgnx-explorer--tails)

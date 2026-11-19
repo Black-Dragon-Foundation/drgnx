@@ -136,7 +136,7 @@ the code font) and its kind's buttons, the first one primary; ANSWER, a label, w
                                           for first = t then nil
                                           collect (drgnx-inbox--button id label key first))
                                  " "))))
-    (propertize (concat (propertize "● " 'face (if faded 'drgnx-text-subtle 'drgnx-status-needs-you)) title source "\n"
+    (propertize (concat (propertize (concat (drgnx-face-glyph 'dot) " ") 'face (if faded 'drgnx-text-subtle 'drgnx-status-needs-you)) title source "\n"
                         (and detail (concat "  " detail "\n"))
                         "  " buttons "\n")
                 'drgnx-inbox-key key)))
