@@ -355,6 +355,18 @@ fn agent_head(it: &Item) -> Vec<(&'static str, String)> {
 }
 
 /// The lines of IT every kind has: head, why, touches, conclusions, actions.
+/// The hub's unit of a budget's unit name (kebab-case; an unknown one reads as dollars).
+fn unit_of(unit: &str) -> runstav::methods::matrix::Unit {
+    use runstav::methods::matrix::Unit;
+    match unit {
+        "usd-est" => Unit::UsdEst,
+        "tokens" => Unit::Tokens,
+        "count" => Unit::Count,
+        "limit-share" | "share" => Unit::LimitShare,
+        _ => Unit::Usd,
+    }
+}
+
 fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
     let f = &it.fields;
     let mut out = if word(&it.kind) == "agent" {
@@ -395,6 +407,19 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
             },
         ));
     }
+    // the Budget section: a line for each unit with a limit or a spend (the model holds the binding one), never summed
+    if let Some(b) = &f.budget {
+        out.push(("budget", "Budget".into()));
+        let u = super::budget_detail::UnitLine {
+            unit: unit_of(&b.unit),
+            spent: b.spent.0,
+            limit: b.limit.map(|l| l.0),
+            forecast: None,
+        };
+        for l in super::budget_detail::budget_lines(&[u]) {
+            out.push(("budget", format!("  {l}")));
+        }
+    }
     out.push(("why", "Why ↑".into()));
     let w = why(m, it);
     if w.is_empty() {
@@ -425,6 +450,9 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
             ("Pause", "p"),
             ("Review", "v"),
         ]
+    } else if word(&it.kind) == "plan" {
+        // Start has no key of its own: it is a button and a palette command
+        &[("Open", "⏎"), ("Start", "")]
     } else {
         &[("Open", "⏎")]
     };
@@ -483,6 +511,7 @@ fn command_of(label: &str) -> Option<&'static str> {
         "Trail" => Some("work-trail"),
         "Steer" => Some("work-steer"),
         "Pause" => Some("work-pause"),
+        "Start" => Some("work-start-plan"),
         "Review" => Some("work-review"),
         _ => None,
     }
@@ -577,7 +606,10 @@ pub(crate) fn rows(lines: &[Line], kit: &KitEnv, width_px: u32, m: &dyn Measure)
                                 style: ButtonStyle::Secondary,
                                 size: Size::Sm,
                                 state: State::Rest,
-                                key: pair.get(1).map(|k| (*k).to_owned()),
+                                key: pair
+                                    .get(1)
+                                    .filter(|k| !k.is_empty())
+                                    .map(|k| (*k).to_owned()),
                                 // a click runs the action's command in this window (`work-command`, as the Flow's)
                                 action: command_of(pair[0]).map(|id| kit::Action {
                                     kind: "work-command".to_owned(),

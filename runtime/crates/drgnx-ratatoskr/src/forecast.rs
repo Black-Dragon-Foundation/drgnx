@@ -2205,3 +2205,24 @@ mod tests {
         assert!(!include_str!("runner/tick.rs").contains("count < MAX_AGENTS"));
     }
 }
+
+/// `forecast/start`: the start step of a proposed job (docs/develop/hub.md, "The start step"): the forecast of the job, as
+/// [`crate::work::map::budget_detail::start_of`] reads it.
+pub async fn start(
+    front: &Front,
+    caller: &Caller,
+    p: wire::StartParams,
+) -> Result<wire::StartView, Error> {
+    let f = get(
+        front,
+        caller,
+        wire::ForecastParams {
+            job: p.job,
+            remaining: None,
+        },
+    )
+    .await?;
+    Ok(crate::work::map::budget_detail::view_of(
+        &crate::work::map::budget_detail::start_of(&f, p.utc_offset),
+    ))
+}

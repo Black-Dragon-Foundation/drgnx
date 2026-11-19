@@ -2439,6 +2439,7 @@ pub async fn run(front: Arc<Front>) {
     }
 }
 
+pub(crate) mod budget_detail;
 mod detail;
 mod list;
 mod model;

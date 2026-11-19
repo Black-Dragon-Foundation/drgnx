@@ -220,6 +220,40 @@ pub struct PlanForecast {
     pub running: Vec<RunningPlan>,
 }
 
+/// `forecast/start`'s params: the proposed job whose start step is wanted.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StartParams {
+    pub job: Id,
+    /// Seconds east of UTC, for the weekday and time the week runs out at; none: UTC.
+    #[serde(default)]
+    pub utc_offset: i64,
+}
+
+/// A budget field of the start step: the plan's limit in UNIT, prefilled with the forecast's p90 rounded up (none: empty,
+/// with the NOTE saying why).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StartField {
+    pub unit: Unit,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// The start step of a proposed job: its budget fields (`% wk` for subscription tasks, `usd` for gateway tasks, both for a
+/// mixed plan), the warning that the week runs out at p90 (never a block) and whether some task was forecast from the prior.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StartView {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub fields: Vec<StartField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub week_warning: Option<String>,
+    pub prior: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ForecastParams {
     pub job: Id,
@@ -272,6 +306,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "forecast/get", ForecastGet(ForecastParams) -> Forecast,
             classes: [User], writes: false,
             doc: "a job's forecast: tokens, time and cost per task and for the plan, from the history of similar tasks, with the effect on the week's pace; with remaining, what is left of a running job from now",
+        ),
+        method!(
+            "forecast/start", ForecastStart(StartParams) -> StartView,
+            classes: [User], writes: false,
+            doc: "the start step of a proposed job: its budget fields prefilled with the forecast's p90 rounded up in the plan's unit (% wk, usd, or both), the warning that the week runs out at p90, whether a task rests on the prior",
         ),
         method!(
             "forecast/plan", ForecastPlan(ForecastPlanParams) -> PlanForecast,

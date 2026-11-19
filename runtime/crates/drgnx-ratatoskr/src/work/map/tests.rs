@@ -2412,3 +2412,138 @@ fn list_on_a_terminal_has_one_word_and_no_stop() {
     assert_eq!(r.text.matches("running").count(), 1, "{}", r.text);
     assert!(r.stops.is_empty(), "{r:?}");
 }
+
+// ---- Task 20a: budgets on List rows ----
+
+/// The world of [`list_world`] with budgets: the running task at 9 of $12 (nearing), the needs-you task at its $5 limit
+/// (reached), the not-started one with a spend and no limit.
+fn list_budget_world() -> Core {
+    use vegvisir::model::{ItemBudget, Num};
+    use vegvisir::{Event, GraphFact};
+    let mut core = list_world();
+    for (item, spent, limit, state) in [
+        ("task:t2", 9.0, Some(12.0), "nearing"),
+        ("task:t4", 5.0, Some(5.0), "reached"),
+        ("task:t1", 1.5, None, "none"),
+    ] {
+        core.step(Event::Graph(GraphFact::Budget {
+            item: item.into(),
+            budget: Some(ItemBudget {
+                spent: Num(spent),
+                limit: limit.map(Num),
+                unit: "usd".into(),
+                state: state.into(),
+            }),
+        }));
+    }
+    core
+}
+
+/// [D] `work-list/meter-shows-spend-and-limit` and `meter-states-carry-words`: a row's meter is the kit's `row` meter,
+/// not a chip: its bar in the state's face, its text, and the state's word (a nearing one the share, a reached one "at
+/// limit", one with no limit "no limit": colour is never the only sign).
+#[test]
+fn list_meter_is_a_kit_meter_with_its_words() {
+    let core = list_budget_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let near = list_row_of(&rows, "Anchor the card");
+    assert!(has_face(near, FaceId::KitProgressMeterNear), "{near:?}");
+    assert!(near.text.contains("$9/$12"), "{}", near.text);
+    assert!(near.text.contains("75 %"), "{}", near.text);
+    let reached = list_row_of(&rows, "Allow once");
+    assert!(
+        has_face(reached, FaceId::KitProgressMeterReached),
+        "{reached:?}"
+    );
+    assert!(reached.text.contains("at limit"), "{}", reached.text);
+    let none = list_row_of(&rows, "Count on the pill");
+    assert!(none.text.contains("no limit"), "{}", none.text);
+}
+
+/// [D] The meter names its scope for the editor: over the meter's text the row has `drgnx-work-meter` with the item,
+/// the unit and the limit (none: null), which `work-budget-set` reads.
+#[test]
+fn list_meter_names_its_scope_and_limit_for_the_editor() {
+    let core = list_budget_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let near = list_row_of(&rows, "Anchor the card");
+    let p = near
+        .props
+        .iter()
+        .find(|p| p.2 == "drgnx-work-meter")
+        .unwrap_or_else(|| panic!("a meter property: {near:?}"));
+    assert_eq!(p.3["item"], "task:t2");
+    assert_eq!(p.3["unit"], "usd");
+    assert_eq!(p.3["limit"], 12.0);
+    let none = list_row_of(&rows, "Count on the pill");
+    let p = none
+        .props
+        .iter()
+        .find(|p| p.2 == "drgnx-work-meter")
+        .expect("a meter property");
+    assert!(p.3["limit"].is_null(), "{p:?}");
+}
+
+/// [D] `work-list/strip-shows-week-pace`: the strip's pace and plan-budget chips are kit chips (not the plain chip
+/// face), neutral, and warn-toned when the week runs out before its reset or the plan's budget is nearing.
+#[test]
+fn list_strip_pace_and_budget_chips_are_kit_chips_warn_when_they_run_out() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let extra = vec![
+        "Claude wk 41 % · +3.2 %/h".to_owned(),
+        "Codex wk 80 % · +5.0 %/h · runs out".to_owned(),
+        "plan $31/$40 · nearing".to_owned(),
+    ];
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &extra);
+    let strip = &rows[0];
+    assert!(strip.text.contains("Claude wk 41 %"), "{}", strip.text);
+    let warn = strip
+        .runs
+        .iter()
+        .filter(|r| r.2 == FaceId::KitChipWarnSoft.name())
+        .count();
+    let neutral = strip
+        .runs
+        .iter()
+        .filter(|r| r.2 == FaceId::KitChipNeutralSoft.name())
+        .count();
+    assert!(
+        neutral >= 1,
+        "a neutral chip for the pace that holds: {strip:?}"
+    );
+    // the needs-you card of the world and the two warning chips
+    assert!(warn >= 3, "warn chips for runs out and nearing: {strip:?}");
+}
+
+// ---- Task 22b: Detail's Budget section ----
+
+/// [D] `work-detail/budget-section-shows-meter-and-forecast` (the Rust half): an item with a binding budget has a Budget
+/// section under its head: its unit's word, spend, limit and share, in the Detail's own rows.
+#[test]
+fn detail_shows_the_budget_section_for_an_item_with_a_budget() {
+    let core = list_budget_world();
+    let task = ItemId("task:t2".into());
+    let lines = detail::lines(core.model(), Some(&task), 0);
+    let at = lines
+        .iter()
+        .position(|l| l.0 == "budget" && l.1 == "Budget")
+        .expect("a Budget heading");
+    assert!(lines[at + 1].1.contains("$9 of $12"), "{:?}", lines[at + 1]);
+    assert!(lines[at + 1].1.contains("75 %"), "{:?}", lines[at + 1]);
+    let rows = detail::rows(&lines, &kit_env(1.0), 340, &Cols);
+    assert!(
+        rows.iter()
+            .any(|r| r.key.starts_with("budget/") && r.text.contains("$9 of $12")),
+        "{rows:?}"
+    );
+    // an item with no budget has no section
+    let none = ItemId("task:t3".into());
+    assert!(
+        !detail::lines(core.model(), Some(&none), 0)
+            .iter()
+            .any(|l| l.0 == "budget")
+    );
+}
