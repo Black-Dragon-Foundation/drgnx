@@ -43,6 +43,10 @@ pub enum CompId {
     EmptyState,
     /// `text-input`
     TextInput,
+    /// `toast`
+    Toast,
+    /// `tooltip`
+    Tooltip,
 }
 
 /// A state of the state table (on the wire, its name: `"selected-inactive"`).
@@ -786,6 +790,40 @@ const TEXT_INPUT_GEOM: [[Geom; 3]; 8] = [
 const TEXT_INPUT_LABEL: [Option<&str>; 8] = [Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field"), Some("text field")];
 const TEXT_INPUT_FACE: [FaceId; 8] = [FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInput, FaceId::KitTextInputMultiTop, FaceId::KitTextInputMultiMid, FaceId::KitTextInputMultiBottom];
 
+const TOAST_AXES: &[&[&str]] = &[&["info", "warn", "error"]];
+const TOAST_DEFAULTS: &[usize] = &[0];
+const TOAST_GEOM: [[Geom; 3]; 3] = [
+    [
+        Geom { height: 0, pad: (12, 12), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (12, 12), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (12, 12), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (12, 12), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (12, 12), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (12, 12), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+    [
+        Geom { height: 0, pad: (12, 12), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (12, 12), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (12, 12), gap: 8, boxed: true, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const TOAST_LABEL: [Option<&str>; 3] = [Some("information"), Some("warning"), Some("error")];
+const TOAST_FACE: [FaceId; 3] = [FaceId::KitToast, FaceId::KitToast, FaceId::KitToast];
+
+const TOOLTIP_AXES: &[&[&str]] = &[];
+const TOOLTIP_DEFAULTS: &[usize] = &[];
+const TOOLTIP_GEOM: [[Geom; 3]; 1] = [
+    [
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: false, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: false, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+        Geom { height: 0, pad: (8, 8), gap: 8, boxed: false, radius: 8, hit: 0, indent: 0, tty_pad: 1, tty_indent: 0, glyph: None, twisty: None },
+    ],
+];
+const TOOLTIP_LABEL: [Option<&str>; 1] = [None];
+const TOOLTIP_FACE: [FaceId; 1] = [FaceId::KitTooltip];
+
 /// Component ID's geometry for VARIANT.
 pub fn geom(id: CompId, variant: &[&str]) -> Geom {
     match id {
@@ -857,6 +895,14 @@ pub fn geom(id: CompId, variant: &[&str]) -> Geom {
             let (i, d) = index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant);
             TEXT_INPUT_GEOM[i][d]
         }
+        CompId::Toast => {
+            let (i, d) = index(TOAST_AXES, TOAST_DEFAULTS, variant);
+            TOAST_GEOM[i][d]
+        }
+        CompId::Tooltip => {
+            let (i, d) = index(TOOLTIP_AXES, TOOLTIP_DEFAULTS, variant);
+            TOOLTIP_GEOM[i][d]
+        }
     }
 }
 
@@ -880,6 +926,8 @@ pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {
         CompId::DiffBlock => DIFF_BLOCK_LABEL[index(DIFF_BLOCK_AXES, DIFF_BLOCK_DEFAULTS, variant).0],
         CompId::EmptyState => EMPTY_STATE_LABEL[index(EMPTY_STATE_AXES, EMPTY_STATE_DEFAULTS, variant).0],
         CompId::TextInput => TEXT_INPUT_LABEL[index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant).0],
+        CompId::Toast => TOAST_LABEL[index(TOAST_AXES, TOAST_DEFAULTS, variant).0],
+        CompId::Tooltip => TOOLTIP_LABEL[index(TOOLTIP_AXES, TOOLTIP_DEFAULTS, variant).0],
     }
 }
 
@@ -903,5 +951,7 @@ pub fn face(id: CompId, variant: &[&str]) -> FaceId {
         CompId::DiffBlock => DIFF_BLOCK_FACE[index(DIFF_BLOCK_AXES, DIFF_BLOCK_DEFAULTS, variant).0],
         CompId::EmptyState => EMPTY_STATE_FACE[index(EMPTY_STATE_AXES, EMPTY_STATE_DEFAULTS, variant).0],
         CompId::TextInput => TEXT_INPUT_FACE[index(TEXT_INPUT_AXES, TEXT_INPUT_DEFAULTS, variant).0],
+        CompId::Toast => TOAST_FACE[index(TOAST_AXES, TOAST_DEFAULTS, variant).0],
+        CompId::Tooltip => TOOLTIP_FACE[index(TOOLTIP_AXES, TOOLTIP_DEFAULTS, variant).0],
     }
 }

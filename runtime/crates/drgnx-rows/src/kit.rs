@@ -827,6 +827,34 @@ pub struct Choice {
     pub action: Action,
 }
 
+/// A toast's tone: its status dot (`info` running, `warn` needs you, `error` error).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToastTone {
+    #[default]
+    Info,
+    Warn,
+    Error,
+}
+
+impl ToastTone {
+    fn name(self) -> &'static str {
+        match self {
+            ToastTone::Info => "info",
+            ToastTone::Warn => "warn",
+            ToastTone::Error => "error",
+        }
+    }
+
+    fn status(self) -> Status {
+        match self {
+            ToastTone::Info => Status::Running,
+            ToastTone::Warn => Status::NeedsYou,
+            ToastTone::Error => Status::Error,
+        }
+    }
+}
+
 /// A component with its props, as JSON `{"c": "row", …}`.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "c", rename_all = "kebab-case")]
@@ -905,6 +933,14 @@ pub enum Comp {
         /// The head's room in logical px: [`diff_block_rows`] fits the file's name to what the rest of the head leaves.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         width: Option<u32>,
+    },
+    /// A toast of TONE: its status dot, TEXT and quiet small buttons after it.
+    Toast {
+        #[serde(default)]
+        tone: ToastTone,
+        text: String,
+        #[serde(default)]
+        buttons: Vec<(String, Action)>,
     },
     /// An empty state: TEXT, and after it, when there is an ACTION, a quiet small button labelled so.
     EmptyState {
@@ -1692,6 +1728,42 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 );
             }
             pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), head);
+        }
+        Comp::Toast {
+            tone,
+            text,
+            buttons,
+        } => {
+            let variant = [tone.name(), env.density.name()];
+            let g: Geom = kit_gen::geom(CompId::Toast, &variant);
+            let face = comp_face(kit_gen::face(CompId::Toast, &variant));
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+            expand(
+                b,
+                env,
+                &Comp::StatusDot {
+                    status: tone.status(),
+                    word: false,
+                },
+            );
+            pad(b, env, px(g.gap, env.scale), 1, face);
+            b.push(text, face);
+            for (label, a) in buttons {
+                pad(b, env, px(g.gap, env.scale), 1, face);
+                expand(
+                    b,
+                    env,
+                    &Comp::Button {
+                        label: label.clone(),
+                        style: ButtonStyle::Quiet,
+                        size: Size::Sm,
+                        state: State::Rest,
+                        key: None,
+                        action: Some(a.clone()),
+                    },
+                );
+            }
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
         }
         Comp::EmptyState { text, action } => {
             let variant = [env.density.name()];

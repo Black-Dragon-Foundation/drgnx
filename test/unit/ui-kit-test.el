@@ -780,9 +780,12 @@ the button is after the text and a `button.el' button."
   "The tooltip's frame parameters come from the kit's tooltip binding (pad 8 px, UI font) and the standard `tooltip'
 face inherits the kit's, so a theme that knows nothing of drgnx styles it too."
   (let ((params (drgnx-ui-kit-tooltip-parameters (selected-frame))))
-    (should (= (drgnx-px 8 nil 1.0) (alist-get 'internal-border-width params)))
+    (should (= (drgnx-px 8 (selected-frame)) (alist-get 'internal-border-width params)))
     (should (facep 'drgnx-kit-tooltip))
-    (should (memq 'drgnx-kit-tooltip (ensure-list (face-attribute 'tooltip :inherit nil t))))))
+    (unwind-protect
+        (progn (load-theme 'drgnx-dark t)
+               (should (memq 'drgnx-kit-tooltip (ensure-list (face-attribute 'tooltip :inherit nil t)))))
+      (mapc #'disable-theme custom-enabled-themes))))
 
 (ert-deftest drgnx-ui-kit/card-line-forms ()
   (let ((e (drgnx-ui-kit-expand 'card '(:c "card" :kind "selected" :shape "mid" :text "Go") 1.0 nil)))

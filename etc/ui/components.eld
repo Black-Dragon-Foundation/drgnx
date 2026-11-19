@@ -251,7 +251,7 @@
                :geometry (:height 0 :pad (0 . 0) :gap 8 :box nil :radius 0 :hit 0)
                :tty (:pad 0) :label nil
                :bind ((() :fg muted :inherit (drgnx-text-muted drgnx-ui-text) :font (drgnx-ui-text)))
-               :replaces nil :helpers nil :lint nil)
+               :replaces nil :helpers nil :lint t)
   ;; a text input: the field the composer and the comment and review inputs draw round their real buffer text (the text
   ;; is the buffer's own; the kit draws the frame, the chips and the placeholder).  `single' is one 28 px line, `multi'
   ;; two text lines at least, its rows in the shapes of a card (the ring is open where the field goes on).  Context chips
@@ -263,4 +263,18 @@
                      ((multi top) :bg editor :edge border :ring (1 6 bottom) :inherit (drgnx-ui-text default) :font (drgnx-ui-text))
                      ((multi mid) :bg editor :edge border :ring (1 6 top bottom) :inherit (drgnx-ui-text default) :font (drgnx-ui-text))
                      ((multi bottom) :bg editor :edge border :ring (1 6 top) :inherit (drgnx-ui-text default) :font (drgnx-ui-text)))
-              :replaces nil :helpers nil :lint t)))
+              :replaces nil :helpers nil :lint t)
+  ;; a toast: a notice floating over the editor: its tone's status dot, the text, up to two quiet kit buttons; the
+  ;; overlay surface (the frame's radius 8 and shadow, none in high contrast, are the child frame's parameters)
+  (toast :variants ((tone info warn error)) :defaults (tone info)
+         :geometry (:height 0 :pad (12 . 12) :gap 8 :box t :radius 8 :hit 0)
+         :tty (:pad 1) :label (:by tone (info "information") (warn "warning") (error "error"))
+         :bind ((() :hc-ring t :bg overlay :fg fg :inherit (drgnx-ui-text secondary-selection) :font (drgnx-ui-text)))
+         :replaces nil :helpers nil :lint t)
+  ;; a tooltip: the overlay surface, 8 px of pad, the UI font at 12 px; it feeds the `tooltip' face and the tooltip
+  ;; frame's parameters (`drgnx-ui-kit-tooltip-parameters'); Lisp only, so it has no sheet
+  (tooltip :variants () :defaults () :sheet nil
+           :geometry (:height 0 :pad (8 . 8) :gap 8 :box nil :radius 8 :hit 0)
+           :tty (:pad 1) :label nil
+           :bind ((() :hc-ring t :bg overlay :fg fg :inherit (tooltip drgnx-ui-caption) :font (drgnx-ui-caption)))
+           :replaces nil :helpers nil :lint t)))

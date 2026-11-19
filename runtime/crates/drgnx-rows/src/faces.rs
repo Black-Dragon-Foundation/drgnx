@@ -1144,11 +1144,15 @@ pub enum FaceId {
     KitTextInputMultiMid,
     /// `drgnx-kit-text-input-multi-bottom`
     KitTextInputMultiBottom,
+    /// `drgnx-kit-toast`
+    KitToast,
+    /// `drgnx-kit-tooltip`
+    KitTooltip,
 }
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 568] = [
+    pub const ALL: [FaceId; 570] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1717,6 +1721,8 @@ impl FaceId {
         FaceId::KitTextInputMultiTop,
         FaceId::KitTextInputMultiMid,
         FaceId::KitTextInputMultiBottom,
+        FaceId::KitToast,
+        FaceId::KitTooltip,
     ];
 
     /// The face's Emacs name.
@@ -2290,6 +2296,8 @@ impl FaceId {
             FaceId::KitTextInputMultiTop => "drgnx-kit-text-input-multi-top",
             FaceId::KitTextInputMultiMid => "drgnx-kit-text-input-multi-mid",
             FaceId::KitTextInputMultiBottom => "drgnx-kit-text-input-multi-bottom",
+            FaceId::KitToast => "drgnx-kit-toast",
+            FaceId::KitTooltip => "drgnx-kit-tooltip",
         }
     }
 
@@ -2864,6 +2872,8 @@ impl FaceId {
             "drgnx-kit-text-input-multi-top" => FaceId::KitTextInputMultiTop,
             "drgnx-kit-text-input-multi-mid" => FaceId::KitTextInputMultiMid,
             "drgnx-kit-text-input-multi-bottom" => FaceId::KitTextInputMultiBottom,
+            "drgnx-kit-toast" => FaceId::KitToast,
+            "drgnx-kit-tooltip" => FaceId::KitTooltip,
             _ => return None,
         })
     }

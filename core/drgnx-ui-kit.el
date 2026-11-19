@@ -852,6 +852,30 @@ head leaves.  The rows of the hunks are `drgnx-ui-kit-diff-block''s."
       (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
       (drgnx-ui-kit--b-finish nil 0 0 nil height))))
 
+(defun drgnx-ui-kit--status-dot-into (status)
+  "The `status-dot' of STATUS (a symbol, no word) on the builder, as the hub's nested `expand'."
+  (drgnx-ui-kit--b-splice (drgnx-ui-kit--status-dot (list :status (symbol-name status)) drgnx-ui-kit--bscale
+                                                    drgnx-ui-kit--btty)))
+
+(defun drgnx-ui-kit--toast (props scale tty)
+  "The `toast' component of PROPS (:tone :text :buttons ([LABEL ACTION]...)) at SCALE, see `drgnx-ui-kit--expand'."
+  (drgnx-ui-kit--building scale tty
+    (let* ((entry (drgnx-ui-kit-component 'toast)) (tone (drgnx-ui-kit--name props :tone 'info))
+           (face (drgnx-ui-kit--face 'toast (drgnx-ui-kit--chosen entry (list tone))))
+           (g (plist-get entry :geometry)) (pad (plist-get g :pad))
+           (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0)) (height nil))
+      (drgnx-ui-kit--b-pad (car pad) tty-pad face)
+      (drgnx-ui-kit--status-dot-into (pcase tone ('warn 'needs-you) ('error 'error) (_ 'running)))
+      (drgnx-ui-kit--b-pad (plist-get g :gap) 1 face)
+      (drgnx-ui-kit--b-push (or (plist-get props :text) "") face)
+      (seq-doseq (b (plist-get props :buttons))
+        (drgnx-ui-kit--b-pad (plist-get g :gap) 1 face)
+        (setq height (drgnx-ui-kit--b-splice
+                      (drgnx-ui-kit--button (list :label (elt b 0) :style "quiet" :size "sm" :action (elt b 1))
+                                            scale tty))))
+      (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+      (drgnx-ui-kit--b-finish nil 0 0 nil height))))
+
 (defun drgnx-ui-kit--round (x)
   "X rounded half up, as the hub rounds (`drgnx-px')."
   (floor (+ x 0.5 1e-9)))
@@ -1423,6 +1447,7 @@ px, HEIGHT the row's line height in device px or nil (one text line)."
     ('diff-block (drgnx-ui-kit--diff-block props scale tty))
     ('diff-line (drgnx-ui-kit--diff-line props scale tty))
     ('empty-state (drgnx-ui-kit--empty-state props scale tty))
+    ('toast (drgnx-ui-kit--toast props scale tty))
     ('agent-mark (drgnx-ui-kit--agent-mark props scale tty))
     ('progress (drgnx-ui-kit--progress props scale tty))
     ('meter (drgnx-ui-kit--meter props scale tty))
@@ -1721,7 +1746,7 @@ command, a function of no arguments) as the kind `ui-button' holding it.  Nil is
          (list :kind (car action) :args (cdr action)))
         (t (list :kind 'ui-button :args (list action)))))
 
-(defun drgnx-ui-kit-button (label action style size state key where)
+(defun drgnx-ui-kit-button (label action style size state key where &optional frame)
   "LABEL as a kit button on WHERE (`text', `header-line', `mode-line' or `tab-line') that runs ACTION: a registry id, a
 command, a function of no arguments, or (KIND . ARGS) of a kit action (`drgnx-ui-kit-define-action'); nil is a button
 with no action.  STYLE is `primary', `secondary', `quiet' or `danger', SIZE `md' or `sm', STATE one of the state
@@ -1732,7 +1757,7 @@ hint or nil.  Its `help-echo' and accessible text are LABEL."
             (list :c "button" :label label :style (symbol-name (or style 'secondary)) :size (symbol-name (or size 'md))
                   :state (symbol-name (if (and (eq state 'focus-visible) (not (drgnx-ui-kit-focus-visible-p))) 'rest (or state 'rest)))
                   :key key :action (drgnx-ui-kit--action-spec action))
-            where nil)))
+            where frame)))
     (put-text-property 0 (length s) 'help-echo label s)
     s))
 
@@ -1775,7 +1800,7 @@ arguments, or (KIND . ARGS) of a kit action.  Each item's `help-echo' is its LAB
                              :items (mapcar (lambda (i) (list (car i) (drgnx-ui-kit--action-spec (cdr i)))) items))
                        where frame))
 
-(defun drgnx-ui-kit-diff-block (file added removed hunks width &optional buttons)
+(defun drgnx-ui-kit-diff-block (file added removed hunks width &optional buttons frame)
   "FILE's diff as a kit diff block WIDTH columns wide, one string: the head row (FILE, +ADDED \u2212REMOVED, then
 BUTTONS, ((LABEL HELP FN)...), as kit text buttons), then each of HUNKS, ((HEADER (KIND NUMBER TEXT)...)...), KIND
 `ctx', `add' or `del': its `@@' row and lines (number, sign, text) in the code font.  The rows are the card's, one
@@ -1787,7 +1812,7 @@ removed\"."
                         (propertize (format "+%d" added) 'face (funcall face 'add)) (propertize " " 'face (funcall face 'head))
                         (propertize (format "\u2212%d" removed) 'face (funcall face 'del))
                         (mapconcat (lambda (b) (concat (propertize " " 'face (funcall face 'head))
-                                                       (drgnx-ui-kit-text-button (nth 0 b) (nth 2 b) (nth 1 b) 'quiet 'sm)))
+                                                       (drgnx-ui-kit-text-button (nth 0 b) (nth 2 b) (nth 1 b) 'quiet 'sm frame)))
                                    buttons ""))
                 'head)
           rows)
@@ -1865,6 +1890,24 @@ show while it is empty, and as its `help-echo' (the field's spoken label)."
         (push (cons head tail) out)
         (setq i (1+ i))))
     (nreverse out)))
+
+(defun drgnx-ui-kit-toast (tone text buttons where &optional frame)
+  "TEXT as a kit toast of TONE (`info', `warn' or `error') on WHERE of FRAME, with BUTTONS, ((LABEL HELP FN)...), as quiet
+small kit text buttons after it.  Its `help-echo' and accessible text are \"warning: TEXT\" (the tone's word)."
+  (let ((s (drgnx-ui-kit-string 'toast (list :c "toast" :tone (symbol-name (or tone 'info)) :text text) where frame)))
+    (dolist (b buttons)
+      (setq s (concat s (propertize " " 'face (get-text-property 0 'face s))
+                      (drgnx-ui-kit-text-button (nth 0 b) (nth 2 b) (nth 1 b) 'quiet 'sm))))
+    (put-text-property 0 (length s) 'help-echo
+                       (format "%s: %s" (pcase tone ('warn "warning") ('error "error") (_ "information")) text) s)
+    s))
+
+(defun drgnx-ui-kit-tooltip-parameters (frame)
+  "The tooltip frame's parameters for FRAME from the kit's tooltip binding: 8 px of inner pad (`drgnx-px', device px on
+Nidhogg's native shells) and no border of its own; its colours and font come from the `tooltip' face, which inherits the
+kit's `drgnx-kit-tooltip'."
+  (let ((pad (car (plist-get (plist-get (drgnx-ui-kit-component 'tooltip) :geometry) :pad))))
+    `((internal-border-width . ,(drgnx-px pad frame)) (border-width . 0) (no-special-glyphs . t))))
 
 (defun drgnx-ui-kit-card-lines (lines kind width)
   "LINES (strings) as the rows of one card of KIND (`plain', `needs-you' or `selected') WIDTH columns wide, one string.
@@ -1963,10 +2006,10 @@ accessible text is \"needs you: TITLE\"."
     (nreverse out)))
 
 ;;; A kit button in buffer text that is also a `button.el' button (`push-button', `forward-button' reach it).
-(defun drgnx-ui-kit-text-button (label fn help style size)
+(defun drgnx-ui-kit-text-button (label fn help style size &optional frame)
   "LABEL as a kit button (STYLE, SIZE: see `drgnx-ui-kit-button') in buffer text that calls FN, a function of no
 arguments; HELP (a string or nil) is its `help-echo'.  It is a `button.el' button too: `push-button' on it calls FN."
-  (let ((s (drgnx-ui-kit-button label fn style size 'rest nil 'text)))
+  (let ((s (drgnx-ui-kit-button label fn style size 'rest nil 'text frame)))
     (add-text-properties 0 (length s) (list 'category 'default-button 'button t 'follow-link t
                                             'action (lambda (_) (funcall fn)))
                          s)

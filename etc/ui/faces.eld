@@ -568,4 +568,6 @@
  drgnx-kit-text-input
  drgnx-kit-text-input-multi-top
  drgnx-kit-text-input-multi-mid
- drgnx-kit-text-input-multi-bottom)
+ drgnx-kit-text-input-multi-bottom
+ drgnx-kit-toast
+ drgnx-kit-tooltip)

@@ -279,7 +279,7 @@ faces a landed kit component replaces (`drgnx-ui-kit-replaced-faces'): they inhe
           (internal-border :background ,(c 'gap))
           (child-frame-border :background ,(c 'border-strong))
           ,@(and (not hc) `((child-frame-shadow :foreground ,(c 'gap) :background ,(c 'gap))))
-          (tooltip :foreground ,(c 'fg) :background ,(c 'raised))
+          (tooltip :inherit drgnx-kit-tooltip)
           (minibuffer-prompt :foreground ,(c 'accent))
           (nidhogg-title-bar :foreground ,(c 'fg) :background ,(c 'gap))
           (nidhogg-title-bar-inactive :foreground ,(c 'muted) :background ,(c 'gap)))

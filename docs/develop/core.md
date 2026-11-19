@@ -3933,6 +3933,12 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   card's ring. Lisp: the head row is `drgnx-ui-kit-expand`'s (conformance, buttons included); `(drgnx-ui-kit-diff-block
   FILE ADDED REMOVED HUNKS WIDTH &optional BUTTONS)` is the chrome's whole block, each row its own box run. The old
   `drgnx-agent-panel-added`, `-removed` and `-context` faces are aliases of the add, del and ctx faces.
+- `toast` (tone info, warn, error): `Comp::Toast { tone, text, buttons }`: the tone's status dot (running, needs you, error), the
+  text on the overlay surface and quiet small kit buttons; `(drgnx-ui-kit-toast TONE TEXT BUTTONS WHERE &optional FRAME)`.
+  The notice toasts' buttons (`drgnx-notice-toast--render`) are kit text buttons. `tooltip` (Lisp only, no sheet): the
+  overlay surface, 8 px of pad, the UI font; the drgnx theme's `tooltip` face inherits `drgnx-kit-tooltip`, and
+  `(drgnx-ui-kit-tooltip-parameters FRAME)` gives the tooltip frame's parameters. `empty-state`: `Comp::EmptyState`
+  (text, an optional quiet button), `(drgnx-ui-kit-empty-state TEXT BUTTON WHERE)`, inert (`drgnx-row-inert`).
 - Bindings gained `:attrs` (raw face attributes, in the defface and the theme's spec) and `:ring (WIDTH RADIUS OPEN...)`
   (the edge's width, and where Glitnir draws, its radius and open sides; `drgnx-ui-kit-theme-specs` takes a GLITNIR
   flag).
