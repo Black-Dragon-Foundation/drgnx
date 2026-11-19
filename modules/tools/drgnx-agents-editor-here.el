@@ -26,6 +26,9 @@
 
 (declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
 (declare-function drgnx-look-pixel-width "drgnx-pixels")
+(declare-function drgnx-view-env-classes "drgnx-view-env")
+(declare-function drgnx-view-env-update "drgnx-view-env")
+(defvar drgnx-explorer-hub-view-name)
 (declare-function drgnx-work-space-workspace "drgnx-work-space")
 (declare-function drgnx-work-code--session "drgnx-work-code")
 (declare-function drgnx-agent-session-name "drgnx-agents")
@@ -136,6 +139,13 @@ folder, six marks; a file: three, each with its agent's initial)."
   (drgnx-agents-editor-here--badge ordinals (if dirp (cdr drgnx-agents-editor-here--explorer-limits)
                                               (car drgnx-agents-editor-here--explorer-limits))
                                    (not dirp)))
+
+(defun drgnx-agents-editor-here--explorer-env ()
+  "Send the Explorer's env to the hub again when it was sent (the badge's widths came or went with this module), so
+the room the hub keeps after a name for the badge follows at once, not at the next window change."
+  (when (and (boundp 'drgnx-explorer-hub-view-name) (fboundp 'drgnx-view-env-classes)
+             (drgnx-view-env-classes drgnx-explorer-hub-view-name))
+    (drgnx-view-env-update drgnx-explorer-hub-view-name)))
 
 (defun drgnx-agents-editor-here--explorer-badge-widths (window)
   "`drgnx-explorer-badge-width-functions': how wide the Explorer's badges are drawn in WINDOW, as the env's `badge'
@@ -423,6 +433,7 @@ agent's row is among them, the agents and the status segment; a reset makes ever
                           :map 'drgnx-agents-here-mode-map :when (lambda () (derived-mode-p 'drgnx-agents-here-mode))))
   (add-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
   (add-hook 'drgnx-explorer-badge-width-functions #'drgnx-agents-editor-here--explorer-badge-widths)
+  (drgnx-agents-editor-here--explorer-env)
   (eval-after-load 'drgnx-statusbar
     (drgnx-modules-with-owner
       (drgnx-statusbar-define-segment 'agents-here :fn #'drgnx-agents-editor-here--segment :click 'drgnx-agents-editor-here
@@ -435,6 +446,7 @@ agent's row is among them, the agents and the status segment; a reset makes ever
   "Take the badges out of the Explorer and forget the cached presence."
   (remove-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
   (remove-hook 'drgnx-explorer-badge-width-functions #'drgnx-agents-editor-here--explorer-badge-widths)
+  (drgnx-agents-editor-here--explorer-env)
   (clrhash drgnx-agents-editor-here--badges)
   (clrhash drgnx-agents-editor-here--initials)
   (when-let* ((b (get-buffer drgnx-agents-here-buffer-name))) (kill-buffer b))
