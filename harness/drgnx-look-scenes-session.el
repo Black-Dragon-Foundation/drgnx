@@ -2639,9 +2639,10 @@ name cut short of its mark (`test/unit/gateway-test.el' in tiling-resize at s2) 
 
 (defun drgnx-look-scene--free-after (window bol pos eol)
   "The px free after POS on its row BOL..EOL in WINDOW: the blanks and stops' spaces from POS on, and, when they reach
-EOL, the body's px past the row's end less what the row keeps clear there (`drgnx-look-scene--kept-at-end').  A blank in a block's face (`drgnx-look-scene--filled-p': a card's fill or
-edge) ends the count: when the row ends in that block, its end pad less the row's start pad in the same face (the
-block's own padding, kept on both sides) counts, and the px past the block are not the text's."
+EOL, the body's px past the row's end less what the row keeps clear there (`drgnx-look-scene--kept-at-end').  A blank
+in a block's face (`drgnx-look-scene--filled-p': a card's fill or edge) ends the count: when the row ends in that
+block, its end pad less the row's start pad in the same face (the block's own padding, kept on both sides) counts, and
+the px past the block are not the text's."
   (let ((q pos) (frame (window-frame window)) (block nil))
     (while (and (< q eol) (drgnx-look-scene--blank-p q) (not block))
       (if (drgnx-look-scene--filled-p q frame) (setq block q) (setq q (1+ q))))
