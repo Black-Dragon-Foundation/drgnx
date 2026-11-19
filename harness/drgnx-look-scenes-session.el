@@ -1077,6 +1077,28 @@ what changed: the buffers whose text did, each window's body width before and af
                       before (funcall widths) drgnx-look-scene--asks-open))
             drgnx-look-scene--errors))))
 
+(defun drgnx-look-scene--perm-card-edge (buffer)
+  "An error when the permission card in the agent panel BUFFER does not close its ring at one right edge on its
+three rows (the head, the buttons, the room under them), or when that edge is not near the panel's: the card takes the
+panel's width (the other cards do), it is not as wide as its content."
+  (when-let* ((win (get-buffer-window buffer)))
+    (with-current-buffer buffer
+      (save-excursion
+        (goto-char (point-max))
+        (if (not (re-search-backward "Allow" nil t))
+            (push "agent-panel: no permission card (no Allow button)" drgnx-look-scene--errors)
+          (redisplay t)
+          (let ((widths (mapcar (lambda (n)
+                                  (save-excursion
+                                    (forward-line n)
+                                    (car (window-text-pixel-size win (line-beginning-position) (line-end-position)))))
+                                '(-1 0 1)))
+                (body (window-body-width win t)))
+            (unless (and (<= (- (apply #'max widths) (apply #'min widths)) 1) (>= (apply #'min widths) (* 0.85 body)))
+              (push (format "agent-panel: the permission card's rows end at %S px, the panel's text area is %d px wide: its ring does not close at one right edge near the panel's"
+                            widths body)
+                    drgnx-look-scene--errors))))))))
+
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "panel"
@@ -1090,6 +1112,7 @@ what changed: the buffers whose text did, each window's body width before and af
     (drgnx-look-scene--panel-top drgnx-look-scene--panel))
   (drgnx-look-scene--try "three windows" (drgnx-look-scene--panel-three-windows drgnx-look-scene--panel))
   (drgnx-look-scene--try "settled" (drgnx-look-scene--panel-unsettled drgnx-look-scene--panel))
+  (drgnx-look-scene--try "permission card" (drgnx-look-scene--perm-card-edge drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--panel-top (buffer)

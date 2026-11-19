@@ -337,9 +337,18 @@ fn perm_card(i: &In, _images: &mut Vec<(ImageId, String)>, p: &Permission) -> Ve
             r.props
                 .push((from, to, "drgnx-agent-panel-action".to_owned(), json!(act)));
         }
-        let end = u32::try_from(r.text.chars().count()).unwrap_or(u32::MAX);
+        // the card takes the panel's width: a last character stretches to the right edge (as the other cards') and the
+        // ring and the head's tint run to it, so every row closes the ring at the same place
+        let len = u32::try_from(r.text.chars().count()).unwrap_or(u32::MAX);
+        r.text.push(' ');
+        r.stops.push((len, i.env.width_px.saturating_sub(px(i.env, 12.0))));
+        for run in &mut r.runs {
+            if run.0 == 0 && run.1 == len {
+                run.1 = len + 1;
+            }
+        }
         r.props
-            .push((0, end, "drgnx-agent-panel-card".to_owned(), at.clone()));
+            .push((0, len + 1, "drgnx-agent-panel-card".to_owned(), at.clone()));
     }
     rows
 }

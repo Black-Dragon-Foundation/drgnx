@@ -171,6 +171,46 @@ fn a_request_is_a_kit_question_card_over_allow_always_and_deny() {
 
 // pattern: D
 #[test]
+fn the_permission_card_takes_the_panels_width_so_its_ring_closes_on_every_row() {
+    let e = env(400);
+    let fonts = fonts();
+    let p = [Permission {
+        id: Some(RpcId::Int(7)),
+        title: Some("Read the gateway's log".into()),
+        tool: None,
+        options: vec![],
+    }];
+    let (rows, _) = rows(&In {
+        env: &e,
+        fonts: &fonts,
+        diffs: &[],
+        permissions: &p,
+        queue: &[],
+    });
+    let rows: Vec<Row> = rows.into_iter().filter(|r| r.key != "c:gap").collect();
+    assert_eq!(rows.len(), 3);
+    for r in &rows {
+        let n = u32::try_from(r.text.chars().count()).unwrap();
+        // the last character stretches to the same right edge on every row
+        assert_eq!(r.stops.last(), Some(&(n - 1, 400 - 12)), "{}", r.key);
+        // and the card's ring (and the head's tint) run to it
+        let card = r
+            .runs
+            .iter()
+            .find(|(_, _, f)| f.starts_with("drgnx-kit-card-"))
+            .unwrap();
+        assert_eq!((card.0, card.1), (0, n), "{}", r.key);
+    }
+    let head = rows[0]
+        .runs
+        .iter()
+        .find(|(_, _, f)| f == FaceId::KitQuestionCardHead.name())
+        .unwrap();
+    assert_eq!(head.1, u32::try_from(rows[0].text.chars().count()).unwrap());
+}
+
+// pattern: D
+#[test]
 fn a_narrow_panel_drops_the_label_before_the_buttons() {
     let e = env(180);
     let fonts = fonts();
