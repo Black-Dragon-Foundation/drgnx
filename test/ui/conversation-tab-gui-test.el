@@ -215,5 +215,52 @@ it (the companion's pre- and post-command hooks)."
       (with-current-buffer comp
         (should-not (overlay-get drgnx-agent-companion--head 'before-string))))))
 
+
+;;; Flow Task 23a: the at-limit block and the paused line.  The hub's `budget' event for the session is the panel's
+;;; `drgnx-agent-panel--budget' (a plist: :card :scope :unit :limit :spent :p90 and :scope-name for a scope above the
+;;; agent); `drgnx-agent-panel-budget-raise' answers it.  Can't be run until the budget events (hub H4) and the kit's
+;;; meter (15a) are on the line this branch builds on: they are written against the interfaces the plan names.
+
+(defvar drgnx-agent-panel--budget)
+(declare-function drgnx-agent-panel-budget-raise "drgnx-agent-panel-cards" ())
+(declare-function drgnx-agent-panel-budget-block "drgnx-agent-panel-cards" ())
+
+(ert-deftest drgnx-ui-conversation-tab/at-limit-raise-resumes ()
+  "At the limit the block offers \"Raise to $N and resume\": N is the spend plus the forecast's p90, rounded up; the
+button asks `budget/raise' for that limit with `resume'."
+  (drgnx-ui-conversation-tab--with (panel session)
+    (drgnx-agent-panel-open-tab session)
+    (let (calls)
+      (with-current-buffer panel
+        (setq drgnx-agent-panel--budget '(:card 4 :scope "session" :unit "usd-est" :limit 5.0 :spent 5.0 :p90 2.3)))
+      (should (string-match-p "Raise to \\$8 and resume" (with-current-buffer panel (drgnx-agent-panel-budget-block))))
+      (cl-letf (((symbol-function 'drgnx-agent-panel--ask) (lambda (method params &rest _) (push (cons method params) calls))))
+        (with-current-buffer panel (drgnx-agent-panel-budget-raise)))
+      (should (equal "budget/raise" (car (car calls))))
+      (should (equal 4 (plist-get (cdr (car calls)) :card)))
+      (should (eq t (plist-get (cdr (car calls)) :resume)))
+      (should (equal 8.0 (plist-get (aref (plist-get (cdr (car calls)) :limits) 0) :amount))))))
+
+(ert-deftest drgnx-ui-conversation-tab/at-limit-names-a-scope-above ()
+  "When the limit that held the agent belongs to a scope above it, the block names it: \"the plan reached its $40\"."
+  (drgnx-ui-conversation-tab--with (panel session)
+    (drgnx-agent-panel-open-tab session)
+    (with-current-buffer panel
+      (setq drgnx-agent-panel--budget
+            '(:card 5 :scope "plan" :scope-name "the plan" :unit "usd-est" :limit 40.0 :spent 40.0 :p90 3.0)))
+    (should (string-match-p "the plan reached its \\$40" (with-current-buffer panel (drgnx-agent-panel-budget-block))))))
+
+(ert-deftest drgnx-ui-conversation-tab/paused-line-in-the-composer ()
+  "A paused agent's composer says so above the field; sending never cancels."
+  (drgnx-ui-conversation-tab--with (panel session)
+    (drgnx-agent-panel-open-tab session)
+    (let ((comp (drgnx-agent-panel--composer-of panel)))
+      (with-current-buffer panel
+        (setq drgnx-agent-panel--budget '(:card 4 :scope "session" :unit "usd-est" :limit 5.0 :spent 5.0 :p90 2.3)))
+      (drgnx-agent-panel-composer-redraw)
+      (with-current-buffer comp
+        (should (string-match-p "Paused: budget\\. Raise, or send a message to go on without raising\\."
+                                (overlay-get drgnx-agent-companion--head 'before-string)))))))
+
 (provide 'conversation-tab-gui-test)
 ;;; conversation-tab-gui-test.el ends here

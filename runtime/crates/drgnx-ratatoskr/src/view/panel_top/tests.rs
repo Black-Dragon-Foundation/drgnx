@@ -521,3 +521,29 @@ fn the_plan_strip_is_a_status_dot_and_its_word_per_plan_item() {
     let (none, _) = rows_of_empty(&e, &f, &l, &open);
     assert!(none.iter().all(|r| r.key != PLAN));
 }
+
+/// Flow Task 23a: the header's cost chip reads the spend and the limit of the scope that holds the agent.
+#[test]
+fn header_cost_chip_has_spend_and_limit() {
+    let (e, f, l, open) = (env(600), fonts(), lens(), BTreeSet::new());
+    let s = snap(json!({"usage": {"used": 50.0, "size": 100.0, "cost": 1.2}}));
+    let mut cx = cx_of(&e, &f, &l, &open, &[], &[]);
+    cx.budget = Some((1.2, 5.0));
+    let (rows, _) = rows(&s, &cx);
+    let chips: String = rows
+        .iter()
+        .filter(|r| r.key.starts_with(CHIPS))
+        .map(|r| r.text.as_str())
+        .collect();
+    assert!(chips.contains("$1.20 / $5"), "{chips:?}");
+    // the chip still explains itself on a click (its kind is `cost`)
+    let kinds: Vec<_> = rows
+        .iter()
+        .flat_map(|r| props(r, FaceId::AgentPanelChip.name()))
+        .map(|(v, _)| v.as_str().unwrap_or("").to_owned())
+        .collect();
+    assert!(kinds.iter().any(|k| k == "cost"), "{kinds:?}");
+    // without a limit, the plain spend
+    let (plain, _) = rows_of_empty(&e, &f, &l, &open);
+    assert!(plain.iter().all(|r| !r.text.contains(" / $")));
+}

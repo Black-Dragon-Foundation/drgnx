@@ -322,3 +322,20 @@ fn plan_strip_follows_the_latest_plan_entry() {
     );
     assert!(plan_strip(&es[..2]).is_empty());
 }
+
+/// Flow Task 23a: the limit a paused agent's block suggests is its spend plus the forecast's p90 of what remains,
+/// rounded up to the unit's next step: the next dollar, the next whole percent of a window, the next 100k tokens;
+/// a count has none.
+#[test]
+fn at_limit_block_suggests_p90_rounded_up() {
+    use runstav::methods::matrix::Unit;
+    let near = |got: Option<f64>, want: f64| {
+        let g = got.expect("a suggestion");
+        assert!((g - want).abs() < 1e-9, "{g} != {want}");
+    };
+    near(at_limit_suggestion(Unit::UsdEst, 5.0, 2.3), 8.0); // 7.30 -> 8
+    near(at_limit_suggestion(Unit::Usd, 5.0, 3.0), 8.0); // 8.00 stays 8
+    near(at_limit_suggestion(Unit::LimitShare, 0.31, 0.052), 0.37); // 36.2 % -> 37 %
+    near(at_limit_suggestion(Unit::Tokens, 450_000.0, 120_500.0), 600_000.0); // 570,500 -> 600k
+    assert_eq!(at_limit_suggestion(Unit::Count, 3.0, 1.0), None);
+}
