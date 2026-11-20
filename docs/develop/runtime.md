@@ -233,16 +233,28 @@ tail). There is no SDK role framework.
     its base64 decoded per chunk), `Subagent` (the raw `subagent_update`). The kinds that have a v1 twin arrive as
     `Update`: `tool_call_update` (the first sight of an id is a v1 `tool_call`; `paused` is `in_progress` and
     `cancelled` is `failed` in the v1 status, the real status and `capabilities.cancel` ride in
-    `_meta["_hermod/status"]` and `_meta["_hermod/can_cancel"]`; a v2 diff, which has no `oldText`/`newText`, is left
-    out), `tool_call_content_chunk`, `plan_update` (as the v1 plan), `usage_update`, `available_commands_update`,
+    `_meta["_hermod/status"]` and `_meta["_hermod/can_cancel"]`; a v2 `diff` item, which is structured `changes` plus
+    git patch text, becomes the v1 diff items the hub reads: one `{path, oldText, newText}` per hunk of the patch for each
+    file of `changes` (the hunk's context kept in both texts, as Codex's one diff per hunk; an added file has no
+    `oldText`, a deleted one an empty `newText`), and a file with no usable patch text — none, a format other than
+    `git_patch`, a move or a copy — is named with empty texts), `tool_call_content_chunk`, `plan_update` (as the v1 plan), `usage_update`, `available_commands_update`,
     `notice`, `config_option_update` (`configId` is `id`).
   - **Requests.** `cancel_tool_call`, `cancel_terminal` (`tool_call/cancel`, `terminal/cancel`) and `cancel_child`
     (`session/cancel` with the child's id); on v1 each returns `Error::Rpc { code: -32601 }` without writing. On v2
     `load_session` sends `session/resume` with `replayFrom: {type: "start"}`, `resume_session` the same without it,
     `set_mode` and `set_model` are `session/set_config_option` (the mode option the agent reported; none: -32601),
     `authenticate` is `auth/login`, and an MCP server config carries its `type`.
-  Not translated: session messages, compaction, `replay_complete`, and the v2 shapes of a permission request that the
-  v1 types refuse.
+  A v2 `session/request_permission` (`title`, `description`, `subject`, no `toolCall`) reaches the hub as the v1 request
+  it decodes: the `toolCall` is the subject's tool call (`type: tool_call`, applied first as a `tool_call_update`, so the
+  call exists before the prompt), or for `type: command` an `execute` call with `rawInput {command, cwd}` (its
+  `toolCallId` when it has one), else a call of the request's own id with the request's `title`; the answer is the same
+  `outcome` object in both versions.
+  **Falling back.** An agent that answers the v2 `initialize` with `protocolVersion: 1` is spoken to in v1. One that
+  answers it with an error is still there: `initialize` asks again as v1 on the same connection, once (a second error is
+  the answer), and `AgentInfo::v2_fallback` carries the first error's message. One that exits at the ask ends the
+  connection (`Error::Closed`): the owner starts the agent again as v1 (the hub: once, `launch`), and no further. The hub
+  tells which in `Snapshot.proto` (`v1`/`v2`) and `Snapshot.v2_fallback` (`rejected: …`, `exited: …`).
+  Not translated: session messages, compaction, `replay_complete`.
 - **Tests.** `runtime/crates/hermod/tests/v2.rs` runs scripted v2 children (negotiation, the turn, upserts, background
   lists, the cancel requests); `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children, and for a fork the mock agent
   `ratatoskr-mock acp --state DIR` (`RATATOSKR_MOCK`, else beside the test binary, built there when missing): two

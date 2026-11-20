@@ -287,7 +287,18 @@ impl Conn {
             "info": {"name": "hermod", "version": env!("CARGO_PKG_VERSION")},
             "capabilities": capabilities,
         });
-        let v: Value = self.typed("initialize", params).await?;
+        let v: Value = match self.typed("initialize", params).await {
+            Ok(v) => v,
+            // an agent that refuses the v2 ask with an error is still there: asked again as v1, once, on this connection
+            Err(Error::Rpc { message, .. }) => {
+                let mut info = self
+                    .initialize_v1(caps, json!(crate::schema::ProtocolVersion::V1))
+                    .await?;
+                info.v2_fallback = Some(message);
+                return Ok(info);
+            }
+            Err(e) => return Err(e),
+        };
         if v.get("protocolVersion").and_then(Value::as_u64) != Some(2) {
             // a v1 agent read a v2 request without the v1 fields: what it answered is a v1 answer
             return self.settle_v1(decode(v)?);
@@ -307,6 +318,7 @@ impl Conn {
             meta: caps.get("_meta").filter(|m| !m.is_null()).cloned(),
             auth: v2::v1_auth(v.get("authMethods").unwrap_or(&Value::Null)),
             proto: Proto::V2,
+            v2_fallback: None,
         })
     }
 
@@ -333,6 +345,7 @@ impl Conn {
             meta: r.meta.map(Value::Object),
             auth: r.auth_methods,
             proto: Proto::V1,
+            v2_fallback: None,
         })
     }
 
@@ -941,7 +954,23 @@ async fn handle(
                 .await;
         }
         Message::Request { id, method, params } => {
-            let params = params.unwrap_or(Value::Null);
+            let mut params = params.unwrap_or(Value::Null);
+            // v2's permission request (`title`, `subject`) is the v1 one the hub decodes (`toolCall`), after the
+            // subject's tool call has been applied like an update
+            if method == "session/request_permission" && shared.proto.load(Ordering::SeqCst) == 2 {
+                let sid = SessionId::new(
+                    params
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                );
+                let (v1, events) = shared.lock_v2().permission(at, &sid, &id, &params);
+                for ev in events {
+                    let _ = etx.send(ev).await;
+                }
+                params = v1;
+            }
             let incoming = match method.as_str() {
                 "session/request_permission" => decode_req(params).map(|r| {
                     Incoming::Permission(r, Responder::new(id.clone(), wtx.clone(), shared))

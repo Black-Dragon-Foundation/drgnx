@@ -601,6 +601,13 @@
                   "null"
                 ]
               },
+              "proto": {
+                "description": "The ACP version its agent speaks (`v1` or `v2`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "provider": {
                 "type": [
                   "string",
@@ -671,6 +678,13 @@
                   {
                     "type": "null"
                   }
+                ]
+              },
+              "v2_fallback": {
+                "description": "Why a profile that asked for ACP v2 got v1: `rejected: MESSAGE` (the agent answered the v2 `initialize` with an\nerror and was asked again as v1 on the same connection) or `exited: WHY` (it exited at the v2 `initialize` and\nwas started again as v1).  Absent: no fallback (the agent answered 1, or v2 was not asked).",
+                "type": [
+                  "string",
+                  "null"
                 ]
               },
               "via": {
@@ -7066,6 +7080,13 @@
                   "null"
                 ]
               },
+              "proto": {
+                "description": "The ACP version its agent speaks (`v1` or `v2`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "provider": {
                 "type": [
                   "string",
@@ -7136,6 +7157,13 @@
                   {
                     "type": "null"
                   }
+                ]
+              },
+              "v2_fallback": {
+                "description": "Why a profile that asked for ACP v2 got v1: `rejected: MESSAGE` (the agent answered the v2 `initialize` with an\nerror and was asked again as v1 on the same connection) or `exited: WHY` (it exited at the v2 `initialize` and\nwas started again as v1).  Absent: no fallback (the agent answered 1, or v2 was not asked).",
+                "type": [
+                  "string",
+                  "null"
                 ]
               },
               "via": {
@@ -8879,6 +8907,13 @@
                   "null"
                 ]
               },
+              "proto": {
+                "description": "The ACP version its agent speaks (`v1` or `v2`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "provider": {
                 "type": [
                   "string",
@@ -8949,6 +8984,13 @@
                   {
                     "type": "null"
                   }
+                ]
+              },
+              "v2_fallback": {
+                "description": "Why a profile that asked for ACP v2 got v1: `rejected: MESSAGE` (the agent answered the v2 `initialize` with an\nerror and was asked again as v1 on the same connection) or `exited: WHY` (it exited at the v2 `initialize` and\nwas started again as v1).  Absent: no fallback (the agent answered 1, or v2 was not asked).",
+                "type": [
+                  "string",
+                  "null"
                 ]
               },
               "via": {
