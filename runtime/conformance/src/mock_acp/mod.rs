@@ -517,6 +517,36 @@ impl Agent {
         };
         let reply = |result: Value| send(&json!({"jsonrpc": "2.0", "id": id, "result": result}));
         match method.as_str() {
+            // `--exit-on-init FILE`: exits at every initialize, one `{"attempt":N}` line in FILE per start
+            "initialize" if self.argv.iter().any(|a| a == "--exit-on-init") => {
+                if let Some(path) = flag(&self.argv, "--exit-on-init") {
+                    let n = std::fs::read_to_string(&path).map_or(0, |t| t.lines().count()) + 1;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                    {
+                        let _ = writeln!(f, "{{\"attempt\":{n}}}");
+                    }
+                }
+                eprintln!("mock: exiting at initialize");
+                std::process::exit(3)
+            }
+            // `--v2-init-error`: the ask for v2 is refused with an error, a v1 ask is answered
+            "initialize"
+                if params["protocolVersion"] == json!(2)
+                    && self.argv.iter().any(|a| a == "--v2-init-error") =>
+            {
+                rpc_error(&id, -32602, "unsupported protocol version 2")
+            }
+            // `--v2-init-exit`: the agent exits at the ask for v2 (a v1 ask is answered)
+            "initialize"
+                if params["protocolVersion"] == json!(2)
+                    && self.argv.iter().any(|a| a == "--v2-init-exit") =>
+            {
+                eprintln!("mock: exiting at the v2 initialize");
+                std::process::exit(3)
+            }
             "initialize"
                 if params["protocolVersion"] == json!(2)
                     && matches!(self.kind, Kind::Claude | Kind::Codex) =>

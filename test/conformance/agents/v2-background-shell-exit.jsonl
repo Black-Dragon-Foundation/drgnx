@@ -17,4 +17,4 @@
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "background": [], "background_ended": [{"id": "t1", "end": {"status": "failed", "exit_code": 3}}]}}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$sid"}}}
-{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"session": {"background": [], "background_ended": [{"kind": "terminal", "id": "t1", "description": "sleep 5", "end": {"status": "failed", "exit_code": 3}}]}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"session": {"proto": "v2", "v2_fallback": "$absent", "background": [], "background_ended": [{"kind": "terminal", "id": "t1", "description": "sleep 5", "end": {"status": "failed", "exit_code": 3}}]}}}}

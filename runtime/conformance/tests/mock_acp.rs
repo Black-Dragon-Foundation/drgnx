@@ -1264,3 +1264,52 @@ fn v2_resume_sends_the_snapshot_first() {
     assert_eq!(list.last().unwrap()["state"], "idle");
     assert_eq!(bg_ids(list.last().unwrap()), ["t1"]);
 }
+
+// ---- the mock's ways of not speaking v2 (the hub falls back to v1) ----
+
+/// Whether the mock's stdout closed (it exited) before it said anything.
+fn exits_silently(a: &mut Acp) -> bool {
+    matches!(
+        a.rx.recv_timeout(Duration::from_secs(10)),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+    )
+}
+
+#[test]
+fn v2_init_error_refuses_only_the_v2_ask() {
+    let mut a = Acp::start(&["--as", "claude", "--v2-init-error"]);
+    let r = a.init_v2();
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+    // the same connection is then asked as v1, and answers
+    assert_eq!(a.init()["result"]["protocolVersion"], 1);
+}
+
+#[test]
+fn v2_init_exit_ends_the_agent_at_the_v2_ask_only() {
+    let mut a = Acp::start(&["--as", "claude", "--v2-init-exit"]);
+    a.write(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": 2, "info": {"name": "t", "version": "1"}, "capabilities": {}}}));
+    assert!(exits_silently(&mut a), "it exits without answering");
+    let mut b = Acp::start(&["--as", "claude", "--v2-init-exit"]);
+    assert_eq!(
+        b.init()["result"]["protocolVersion"],
+        1,
+        "a v1 ask is answered"
+    );
+}
+
+#[test]
+fn exit_on_init_counts_its_attempts() {
+    let d = dir();
+    let log = d.path().join("attempts.log");
+    for _ in 0..3 {
+        let mut a = Acp::start(&["--as", "claude", "--exit-on-init", log.to_str().unwrap()]);
+        a.write(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1}}));
+        assert!(exits_silently(&mut a));
+    }
+    let lines = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        lines.lines().collect::<Vec<_>>(),
+        [r#"{"attempt":1}"#, r#"{"attempt":2}"#, r#"{"attempt":3}"#]
+    );
+}
