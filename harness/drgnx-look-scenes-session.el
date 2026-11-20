@@ -398,6 +398,7 @@ window starting at line START."
   ;; scene shows them where the file opened
   (run-hooks 'post-command-hook))
 
+(defvar drgnx-look-scene--undos)
 (defvar drgnx-look-scene--start nil
   "((:part PART) . STATE): the frame's arrangement (`drgnx-layouts--frame-part') and the state that is checked
 \(`drgnx-look-scene--start-state') as the setup left them, which every scene starts from (`drgnx-look-scene-begin').")
@@ -584,6 +585,10 @@ editor area as it is, and under the grid `delete-other-windows' keeps the editor
 drew inside them (scratch splits, a narrow sidebar that cut the Run and Debug rows, the notebook views' panes too small
 to split).  Left held, the sticky-lines scene drew the minimap the hover scenes opened, and later scenes kept the card."
   (when drgnx-look-scene--start
+    ;; what the scene before left to take back (`drgnx-look-scene--undo')
+    (let ((undos drgnx-look-scene--undos))
+      (setq drgnx-look-scene--undos nil)
+      (dolist (fn undos) (drgnx-look-scene--try "begin: take back" (funcall fn))))
     (advice-remove 'drgnx-minimap--spec #'drgnx-look-scene--minimap-held)
     (dolist (w (window-list-1 nil 'never t))
       (when (window-parameter w 'drgnx-look-scene-minimap-open)
@@ -3565,6 +3570,254 @@ labelled, the minimap held open, dark."
           (push "minimap-diff: no hunk labels in the spec" drgnx-look-scene--errors))
         (drgnx-look-scene--minimap-hold w))))
   (drgnx-look-scene--answer))
+
+;;;; The minimap's other states (minimap plan Task 20, design §9; Task 21's `hstrip'): folds with their summaries,
+;;;; the minimap's search and selection, two windows on one file, the problems card, and the horizontal strip
+
+(declare-function drgnx-minimap-focus "drgnx-minimap-search")
+(declare-function drgnx-minimap-focus-search "drgnx-minimap-search" (query))
+(declare-function drgnx-minimap-focus-leave "drgnx-minimap-search")
+(declare-function drgnx-minimap-focus-window "drgnx-minimap-search")
+(declare-function drgnx-minimap--select-event "drgnx-minimap-search" (kind window pos))
+(declare-function drgnx-minimap-problems-show "drgnx-minimap-peek" (window pos))
+(declare-function drgnx-minimap-card-hide "drgnx-minimap-peek")
+(declare-function drgnx-marks--count "drgnx-marks" (kinds beg end))
+(declare-function drgnx-fold-create "drgnx-fold" (beg end &optional name))
+(declare-function drgnx-timer-cancel "drgnx-timer" (key))
+(declare-function drgnx-fold-unfold-all "drgnx-fold")
+(declare-function drgnx-pin-region "drgnx-sticky" (beg end &optional name))
+(defvar drgnx-fold-mode)
+(declare-function drgnx-fold-mode "drgnx-fold" (&optional arg))
+(declare-function drgnx-editing--wrap-set "drgnx-editing" (mode))
+(declare-function drgnx-editing--wrap-clear "drgnx-editing")
+(defvar drgnx-fold--manual)
+(defvar drgnx-sticky--pins)
+(declare-function drgnx-sticky--pins-changed "drgnx-sticky")
+(defvar-local drgnx-look-scene--diags nil "The minimap scenes' problems: ((BEG . END) KIND TEXT) in this buffer.")
+
+(defvar drgnx-look-scene--undos nil
+  "What the scene drawn last left to take back before the next (`drgnx-look-scene--start-again' runs them): its
+folds, pins, bookmark, Flymake stand-in, the minimap's focus and card, a buffer's wrap.")
+
+(defun drgnx-look-scene--undo (fn)
+  "Take back with FN, before the next scene, what this scene changes."
+  (push fn drgnx-look-scene--undos))
+
+(defun drgnx-look-scene--parser-open (line start)
+  "minimap-folding.html's parser.rs (`drgnx-look-scene--parser-rs') in the editor at LINE, the window from line START."
+  (let ((f (expand-file-name "runtime/src/parser.rs" drgnx-look-scene--project)))
+    (unless (file-exists-p f)
+      (make-directory (file-name-directory f) t)
+      (write-region (drgnx-look-scene--parser-rs) nil f nil 'silent)))
+  (drgnx-look-scene--goto "runtime/src/parser.rs" line 4 start))
+
+(defun drgnx-look-scene--line-of (re &optional from)
+  "The line (from 1) of the first match of RE at or after line FROM (default 1) in the current buffer."
+  (save-excursion
+    (goto-char (point-min)) (forward-line (1- (or from 1)))
+    (re-search-forward re)
+    (line-number-at-pos (match-beginning 0) t)))
+
+(defun drgnx-look-scene--line-pos (line &optional end)
+  "The start of LINE in the current buffer, or with END its end."
+  (save-excursion (goto-char (point-min)) (forward-line (1- line)) (if end (line-end-position) (point))))
+
+(defun drgnx-look-scene--diag-backend (report &rest _)
+  "A stand-in Flymake backend, as `drgnx-look-scene--problems': `drgnx-look-scene--diags' told through REPORT."
+  (funcall report (mapcar (lambda (d) (flymake-make-diagnostic (current-buffer) (car (nth 0 d)) (cdr (nth 0 d))
+                                                               (nth 1 d) (nth 2 d)))
+                          drgnx-look-scene--diags)))
+
+(defun drgnx-look-scene--diagnose (diags)
+  "Give the current buffer DIAGS (LINE KIND TEXT) as Flymake's, each on its line's text, and wait until the scroll
+bar's marks count them (a fold's summary and the problems card read those)."
+  (require 'flymake)
+  (setq-local drgnx-look-scene--diags
+              (mapcar (lambda (d)
+                        (let ((b (save-excursion (goto-char (drgnx-look-scene--line-pos (car d)))
+                                                 (skip-chars-forward " ") (point))))
+                          (list (cons b (drgnx-look-scene--line-pos (car d) t)) (nth 1 d) (nth 2 d))))
+                      diags))
+  (setq-local flymake-diagnostic-functions (list #'drgnx-look-scene--diag-backend))
+  (flymake-mode 1)
+  (flymake-start)
+  (let ((b (current-buffer)))
+    (drgnx-look-scene--undo (lambda () (when (buffer-live-p b)
+                                         (with-current-buffer b
+                                           (flymake-mode -1)
+                                           (kill-local-variable 'flymake-diagnostic-functions)
+                                           (kill-local-variable 'drgnx-look-scene--diags))))))
+  (let ((errors (seq-count (lambda (d) (eq (nth 1 d) :error)) diags)))
+    (drgnx-look-scene--until 10 "the problems as marks"
+                             (lambda () (and (fboundp 'drgnx-marks--count)
+                                             (>= (drgnx-marks--count '(error) (point-min) (point-max)) errors))))))
+
+(defun drgnx-look-scene-fold-summary ()
+  "minimap-folding.html's folding frame: inside `impl Parser', `fn read_parser''s six loops folded, the first holding
+two errors and the fourth a warning (their summaries count them), `fn decode_parser' a named fold, point in `fn
+split_parser'; the folded lines draw their arrows and the minimap is held open, dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "fold-summary"
+    (drgnx-look-scene--parser-open 1 1)
+    (require 'drgnx-fold)
+    (unless drgnx-fold-mode (drgnx-fold-mode 1))
+    (let* ((fn (drgnx-look-scene--line-of "^    fn read_parser"))
+           (loops (let ((l fn) acc)
+                    (dotimes (_ 6)
+                      (setq l (drgnx-look-scene--line-of "^        for r in" (1+ l)))
+                      (push l acc))
+                    (nreverse acc)))
+           (named (drgnx-look-scene--line-of "^    fn decode_parser"))
+           (here (drgnx-look-scene--line-of "^    fn split_parser")))
+      (drgnx-look-scene--diagnose (list (list (+ (nth 0 loops) 3) :error "mismatched types")
+                                        (list (+ (nth 0 loops) 5) :error "cannot find value `v' in this scope")
+                                        (list (+ (nth 3 loops) 4) :warning "unused variable: `r'")))
+      (let ((b (current-buffer)))
+        (drgnx-look-scene--undo (lambda () (when (buffer-live-p b)
+                                             (with-current-buffer b
+                                               (drgnx-fold-unfold-all)
+                                               (setq drgnx-fold--manual nil))))))
+      ;; a loop is 10 lines, `for' to its closing brace; a function 63, `fn' to its own
+      (dolist (l loops)
+        (drgnx-fold-create (drgnx-look-scene--line-pos l) (drgnx-look-scene--line-pos (+ l 9) t)))
+      (drgnx-fold-create (drgnx-look-scene--line-pos named) (drgnx-look-scene--line-pos (+ named 62) t)
+                         "legacy v1 decoder")
+      (drgnx-look-scene--goto "runtime/src/parser.rs" (1+ here) 8 (- fn 3))
+      (let ((w (selected-window)))
+        (drgnx-ruler--place w)
+        (drgnx-look-scene--minimap-hold w))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-minimap-search ()
+  "minimap-layers.html's search: the minimap given the focus and `decode' searched in it (its hits as bars, the
+current one ringed, point where it was), dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-search"
+    (drgnx-look-scene--parser-open 1180 1170)
+    (let ((w (selected-window)))
+      (drgnx-ruler--place w)
+      (drgnx-minimap-focus)
+      (drgnx-look-scene--undo (lambda () (when (drgnx-minimap-focus-window) (drgnx-minimap-focus-leave))))
+      (drgnx-minimap-focus-search "decode")
+      (drgnx-look-scene--minimap-hold w)))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-minimap-selection ()
+  "minimap-layers.html's selection: a Shift-drag on the minimap from line 410 to 612 (Nidhogg's select events), the
+whole lines selected and the chip beside the minimap, dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-selection"
+    (drgnx-look-scene--parser-open 400 380)
+    (let ((w (selected-window)))
+      (drgnx-ruler--place w)
+      (drgnx-look-scene--undo (lambda () (drgnx-minimap-card-hide) (deactivate-mark)))
+      (drgnx-minimap--select-event 'select-start w (drgnx-look-scene--line-pos 410))
+      (drgnx-minimap--select-event 'select-extend w (drgnx-look-scene--line-pos 520))
+      (drgnx-minimap--select-event 'select-end w (drgnx-look-scene--line-pos 612))
+      ;; held: its poll hides the card once the pointer is off the minimap (the GUI rows judge that)
+      (drgnx-timer-cancel 'minimap-card-away)
+      (drgnx-look-scene--minimap-hold w)))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-minimap-splits ()
+  "minimap-layers.html's splits: the editor split in two, both on parser.rs (this one at line 830, the other at
+1840); this window's minimap held open shows its view filled and the other's numbered, dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-splits"
+    (drgnx-look-scene--parser-open 1850 1840)
+    (let* ((other (selected-window))
+           (w (drgnx-grid-split-tile other 'left)))
+      (setq drgnx-look-scene--windows-rearranged t)
+      (drgnx-grid--make-editor w)
+      (select-window w)
+      (drgnx-look-scene--parser-open 840 830)
+      (drgnx-ruler--place other)
+      (drgnx-ruler--place w)
+      (drgnx-look-scene--minimap-hold w)))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-minimap-problems ()
+  "minimap-layers.html's problems: `fn decode_rows' with two errors and a warning, its problems card open beside the
+held minimap, a pinned region (`wire format') and a bookmark (`retry policy') further down, dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-problems"
+    (drgnx-look-scene--parser-open 1 1)
+    (let* ((fn (drgnx-look-scene--line-of "^    fn decode_rows"))
+           (pin (drgnx-look-scene--line-of "^    fn split_rows"))
+           (mark (drgnx-look-scene--line-of "^    fn flush_rows")))
+      (drgnx-look-scene--diagnose (list (list (+ fn 4) :error "mismatched types")
+                                        (list (+ fn 15) :error "cannot find value `v' in this scope")
+                                        (list (+ fn 27) :warning "unused variable: `r'")))
+      (require 'drgnx-sticky)
+      (drgnx-pin-region (drgnx-look-scene--line-pos pin) (drgnx-look-scene--line-pos (+ pin 20) t) "wire format")
+      (require 'bookmark)
+      (save-excursion (goto-char (drgnx-look-scene--line-pos mark)) (bookmark-set "retry policy"))
+      (let ((b (current-buffer)))
+        (drgnx-look-scene--undo (lambda ()
+                                  (drgnx-minimap-card-hide)
+                                  (bookmark-delete "retry policy")
+                                  (when (buffer-live-p b)
+                                    (with-current-buffer b
+                                      (setq drgnx-sticky--pins nil)
+                                      (drgnx-sticky--pins-changed))))))
+      (drgnx-look-scene--goto "runtime/src/parser.rs" (+ fn 2) 8 (- fn 4))
+      (let ((w (selected-window)))
+        (drgnx-ruler--place w)
+        (drgnx-look-scene--minimap-hold w)
+        (drgnx-minimap-problems-show w (drgnx-look-scene--line-pos (+ fn 4)))
+        (drgnx-timer-cancel 'minimap-card-away)
+        (drgnx-look-scene--settle-frame))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene--csv ()
+  "minimap-folding.html D's requests.csv: a header and 60 rows, each wider than the window."
+  (with-temp-buffer
+    (insert "id,time,method,path,status,bytes,duration_ms,peer,user_agent,referrer,trace_id,span_id,region,cache,notes\n")
+    (dotimes (i 60)
+      (insert (format "%d,2026-11-%02dT09:14:0%d.%dZ,GET,/api/v2/tables/%d/rows?limit=500&offset=%d,200,%d,%d,peer-%d,drgnx-sync/0.6 (linux; x86_64),https://example.invalid/dash/%d,7f3a%dc9e2b1d,%de41,eu-west,%s,batch %d committed\n"
+                      (+ 4101 i) (+ 11 (% i 18)) (% i 10) (+ 137 (* 37 i)) (+ 31 i) (* 500 (1+ i)) (+ 18911 (* 911 i))
+                      (+ 10 i) (1+ (% (1+ i) 3)) (1+ i) (1+ i) (1+ i) (if (= 1 (% i 2)) "miss" "hit") (+ 89 i))))
+    (buffer-string)))
+
+(defun drgnx-look-scene--hstrip (theme)
+  "minimap-folding.html D in THEME: a CSV whose rows are wider than the window, wrap off, no line numbers, scrolled
+38 columns to the right: the horizontal strip along the text's bottom."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "hstrip"
+    (let* ((rel "data/requests.csv") (f (expand-file-name rel drgnx-look-scene--project)))
+      (unless (file-exists-p f)
+        (make-directory (file-name-directory f) t)
+        (write-region (drgnx-look-scene--csv) nil f nil 'silent))
+      ;; point well inside the columns shown, or Emacs scrolls back to show it
+      (drgnx-look-scene--goto rel 1 80 1)
+      (drgnx-editing--wrap-set 'off)
+      (display-line-numbers-mode -1)
+      (let ((b (current-buffer)) (w (selected-window)))
+        (drgnx-look-scene--undo (lambda ()
+                                  (when (window-live-p w) (set-window-hscroll w 0))
+                                  (when (buffer-live-p b)
+                                    (with-current-buffer b (drgnx-editing--wrap-clear) (display-line-numbers-mode 1))))))
+      (let ((w (selected-window)))
+        (set-window-hscroll w 38)
+        (drgnx-ruler--place w)
+        (unless (window-parameter w 'glitnir-hstrip)
+          (push "hstrip: the editor has no horizontal strip spec" drgnx-look-scene--errors))
+        (drgnx-look-scene--settle-frame))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-hstrip ()
+  "The horizontal strip over a wide CSV scrolled sideways, dark."
+  (drgnx-look-scene--hstrip 'drgnx-dark))
+
+(defun drgnx-look-scene-hstrip-light ()
+  "The horizontal strip over a wide CSV scrolled sideways, light."
+  (drgnx-look-scene--hstrip 'drgnx-light))
 
 (defun drgnx-look-scene-cards-fit ()
   "No tile switcher card cuts its text: in each visible card's window nothing is scrolled off (`window-hscroll' 0)
