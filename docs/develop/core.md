@@ -1686,6 +1686,17 @@ lists at each publish.
   `drgnx-marks-hunks` counts a diff buffer's @@ hunks once per text change and reads a file's from `drgnx-hunks--data`;
   the lines are not moved by C, the next placement (the ruler's debounced refresh after an edit, or the change marks'
   redraw) sends them again. `drgnx-marks-next-change` goes by those hunks there (`drgnx-marks-step-hunk`).
+- **Peek, problems card, trail, describe** (`modules/editor/drgnx-minimap-peek.el`, design M2, X8, M4, A2). Nidhogg
+  sends one `glitnir-minimap` event per rest of the pointer (`glitnir-minimap-functions`: `dwell` on a row,
+  `dwell-marks` on the marks lane, `dwell-label` on a label); `drgnx-minimap--event` is the one hover-time Lisp call.
+  The peek and the problems card share one child frame (`drgnx-minimap--card`, marked `drgnx-minimap-exclude`): the
+  peek shows the editor's own buffer from the row's lines, the card a buffer of Flymake's diagnostics in the section
+  (`drgnx-minimap--section`: the innermost fold range holding the row, else its MARK section, else the buffer). Its
+  keys are a transient map (RET, a click, Esc; any other key closes it and runs); a 150 ms poll of the pointer runs
+  only while it shows. The trail: the line model keeps the visits (`nidhogg-lines-trail-note`), noted by an idle timer
+  (`drgnx-minimap-trail-dwell`) and on jumps (`xref-after-jump-hook`, `drgnx-marks-jump-functions` that
+  `drgnx-marks-step` runs, the cards' jumps), which also flash the row (`glitnir-minimap-flash`); the spec's `:trail`
+  and `:trail-length` draw it. `minimap-describe` speaks `drgnx-minimap-description`.
 - **Sticky lines.** `editor/sticky` with `drgnx-sticky-style` `lines` draws the scope start lines in a pooled child
   frame per window over its top rows (`drgnx-sticky--cards`), its window and frame marked `drgnx-minimap-exclude`. The
   header's memo `sticky-segment` (once per window start, text change above it, or hub answer) works out the scopes

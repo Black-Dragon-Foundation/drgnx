@@ -833,6 +833,8 @@
               (agent-edit-next :none "the palette")
               (agent-edit-previous :none "the palette")
               (minimap-layer :none "the palette")
+              (minimap-describe :none "the palette")
+              (trail-clear :none "the palette")
               ;; hideshow's keys, on drgnx's folds (docs/guide/editing.md, "Folding")
               (fold-toggle "C-c @ C-c" :map drgnx-fold-mode-map)
               (fold-recursive :none "the palette")

@@ -170,6 +170,7 @@ at the buffer's end, and say which.  Nil when the buffer has none."
         (push-mark nil t)
         (goto-char (save-restriction (widen) (goto-char (point-min)) (forward-line (1- (car h))) (point)))
         (message "%s of %d" (drgnx-marks-hunk-label (1+ i) (nth 1 h) (nth 2 h)) n)
+        (run-hook-with-args 'drgnx-marks-jump-functions (point))
         (point)))))
 
 ;;;; Problems (Flymake)
@@ -489,6 +490,9 @@ when the line moved, as bookmark.el's own."
             (1+ (drgnx-marks--count kinds 1 pos)) (drgnx-marks--count kinds 1 (1+ (buffer-size)))
             (if msg (concat ": " msg) "") (line-number-at-pos pos t))))
 
+(defvar drgnx-marks-jump-functions nil
+  "Functions called with the position a next-mark key went to (the minimap notes it on its trail and flashes it).")
+
 (defun drgnx-marks-step (kinds dir)
   "Go to the next mark of KINDS after the current line (DIR > 0) or the previous one before it, wrapping at the
 buffer's end, and say where it is.  Nil when the buffer has none."
@@ -501,6 +505,7 @@ buffer's end, and say where it is.  Nil when the buffer has none."
       (push-mark nil t)
       (goto-char pos)
       (message "%s" (drgnx-marks-announcement pos kinds))
+      (run-hook-with-args 'drgnx-marks-jump-functions pos)
       pos)))
 
 (defun drgnx-marks-next ()

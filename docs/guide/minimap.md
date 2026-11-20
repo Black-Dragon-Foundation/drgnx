@@ -52,6 +52,26 @@ its name as a label, labels on or off.
 Definitions are named for files up to 8 MiB (they come from the same outline as the Outline view); MARK sections
 are found in files of any size.
 
+### Peek, problems and describe
+
+Rest the pointer on a row of the minimap for 300 ms and a **peek** opens beside it: the real lines there at full size,
+6 of them by default, with the line number and the definition they are in at the top. Press `RET` or click it to go
+there. `Esc`, any other key or moving the pointer away closes it. Rest on the marks along the minimap's outer edge
+instead and, when the section there has problems, the **problems card** opens in its place. It lists each error and
+warning of the innermost foldable block around that row, with their counts; `RET` or a click goes to the one you
+choose.
+
+Rest on a definition's name and the echo area says where you are. **Describe Position** (palette; Vim `SPC u d`) says
+the same for the cursor: the block around it, its lines, its marks by kind ("2 errors, 1 warning") and the heat
+layer's value there. Screen readers such as Emacspeak and speechd-el read the echo area.
+
+### Visited trail
+
+The places you stayed at least 2 seconds, or jumped to (Go to Definition, the next-mark keys, a peek), show as faint
+bars at the minimap's left edge, the newest brightest. The last 20 show. The trail is per file and is not saved.
+**Clear Visited Trail** (palette) forgets it. After a jump the minimap flashes the row you landed on for 400 ms;
+with reduced motion it lights without fading.
+
 ### Heat layers
 
 **Minimap Heat Layer…** (palette; Vim `SPC u h`) recolours the bars by one of four things, on a scale from your
@@ -101,6 +121,11 @@ says where it is in the echo area, for example `error 2 of 7: unused variable, l
 | `drgnx-minimap-layer` | none | The heat layer: blame age, coverage, profile, lines agents read, or none. |
 | `drgnx-minimap-coverage-files` | `lcov.info`, `coverage/*.info`, `coverage.xml`, `coverage.json`, … | Where coverage reports are, relative to the project (`*` and `?` match in the last part). |
 | `drgnx-minimap-mark-regexp` | MARK comments, regions, `;;;;`, `# %%` | Which comment lines are MARK sections: a regular expression in Rust's syntax, matched against each line; the name is its group `name`, else its first group. |
+| `drgnx-minimap-peek` | on | Resting on a minimap row opens the peek. |
+| `drgnx-minimap-peek-lines` | 6 | How many lines the peek shows. |
+| `drgnx-minimap-trail` | on | The visited trail on the minimap. |
+| `drgnx-minimap-trail-dwell` | 2 | Seconds the cursor rests on a line before the line joins the trail. |
+| `drgnx-minimap-trail-length` | 20 | How many visits the trail shows, 1 to 64. |
 | `drgnx-marks-symbol-uses` | off | Mark every use of the symbol under the cursor, 400 ms after you stop moving. |
 
 The module is `editor/minimap`; turning it off takes every strip away.
