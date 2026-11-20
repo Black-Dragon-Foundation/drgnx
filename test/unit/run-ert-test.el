@@ -1026,7 +1026,8 @@ suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
 ;;;; The GUI tier's per-file sessions (harness/drgnx-ui.el), through a stand-in launcher
 
 (defconst drgnx-run-ert-test--ui-selector "^drgnx-ui-look-fonts/\\\\|^drgnx-ui-look-tabs/"
-  "Picks two files of test/ui (their names are in the files' index).")
+  "Picks two files of test/ui (their names are in the files' index).
+Only those two: a file the index cannot read counts as open and would be started too (a \"\\N{…}\" did that).")
 
 (defun drgnx-run-ert-test--ui-tier (jobs &rest env)
   "Run the GUI tier's runner (test-ui-session) with the stub launcher, JOBS at once, ENV more.  Return (EXIT OUTPUT STUB-LOG)."
@@ -1050,8 +1051,8 @@ suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
 
 (ert-deftest drgnx-run-ert/the-gui-tier-starts-one-session-per-file-and-merges ()
   (pcase-let ((`(,exit ,out ,log) (drgnx-run-ert-test--ui-tier 1)))
-    (should (equal (list exit (and (string-match-p "^ui ERT: 6/6 passed" out) t)) '(0 t)))
-    (should (= 3 (length (split-string log "\n" t))))              ; three files, three sessions
+    (should (equal (list exit (and (string-match-p "^ui ERT: 4/4 passed" out) t)) '(0 t)))
+    (should (= 2 (length (split-string log "\n" t))))              ; two files, two sessions
     (should (string-match-p "ui file look-fonts-gui-test.el: 2/2 passed" out))))
 
 (ert-deftest drgnx-run-ert/the-gui-tier-runs-its-sessions-at-once-with-jobs ()
@@ -1059,13 +1060,13 @@ suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
     (let* ((rows (mapcar (lambda (l) (mapcar #'string-to-number (cdr (split-string l)))) (split-string log "\n" t)))
            (by-start (sort rows (lambda (x y) (< (car x) (car y)))))
            (a (car by-start)) (b (cadr by-start)))
-      (should (= 3 (length rows)))
+      (should (= 2 (length rows)))
       (should (< (car b) (cadr a))))))     ; the second started before the first ended
 
 (ert-deftest drgnx-run-ert/a-failing-file-fails-the-tier-and-is-named ()
   (pcase-let ((`(,exit ,out ,_log) (drgnx-run-ert-test--ui-tier 2 "STUB_FAIL=look-tabs")))
     (should (eql 1 exit))
-    (should (string-match-p "^ui ERT: 5/6 passed" out))
+    (should (string-match-p "^ui ERT: 3/4 passed" out))
     (should (string-match-p "^  FAIL stub/row: stub failure" out))))
 
 (ert-deftest drgnx-run-ert/the-gui-tier-asks-every-session-for-the-leak-check ()
