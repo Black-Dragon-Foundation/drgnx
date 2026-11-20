@@ -19,7 +19,8 @@ Settings, Keyboard Shortcuts, Extensions and the Work views. It is a map as well
 - **Lists the hub sends in parts** (a big folder tree in the Explorer, a long result list) take their thumb from the
   whole list, not from the rows loaded so far, so the thumb sits where you are in the whole list.
 - **Mouse:** press on the strip to go to that place; drag to scroll with the pointer.
-- In a terminal frame there is no strip yet (it arrives with the terminal column).
+- **In a terminal** the scroll bar is one column at the window's right edge: `┃` over the part shown, `│` elsewhere,
+  and `▐` in a mark's colour where a mark falls. Scrolling moves it without running any Lisp.
 
 ### Horizontal scroll bar
 
@@ -51,6 +52,66 @@ its name as a label, labels on or off.
 
 Definitions are named for files up to 8 MiB (they come from the same outline as the Outline view); MARK sections
 are found in files of any size.
+
+### Peek, problems and describe
+
+Rest the pointer on a row of the minimap for 300 ms and a **peek** opens beside it: the real lines there at full size,
+6 of them by default, with the line number and the definition they are in at the top. Press `RET` or click it to go
+there. `Esc`, any other key or moving the pointer away closes it. Rest on the marks along the minimap's outer edge
+instead and, when the section there has problems, the **problems card** opens in its place. It lists each error and
+warning of the innermost foldable block around that row, with their counts; `RET` or a click goes to the one you
+choose.
+
+Rest on a definition's name and the echo area says where you are. **Describe Position** (palette; Vim `SPC u d`) says
+the same for the cursor: the block around it, its lines, its marks by kind ("2 errors, 1 warning") and the heat
+layer's value there. Screen readers such as Emacspeak and speechd-el read the echo area.
+
+### Visited trail
+
+The places you stayed at least 2 seconds, or jumped to (Go to Definition, the next-mark keys, a peek), show as faint
+bars at the minimap's left edge, the newest brightest. The last 20 show. The trail is per file and is not saved.
+**Clear Visited Trail** (palette) forgets it. After a jump the minimap flashes the row you landed on for 400 ms;
+with reduced motion it lights without fading.
+
+### Search, focus and selecting lines
+
+While you search with `C-s` (or `/` in Vim), every match in the file shows on the minimap as a short accent bar at
+its column, the one you are on ringed. Big files are scanned a few milliseconds at a time, so typing never waits; a
+pattern the fast scanner cannot read (a back-reference, say) is searched the usual way, with the same matches.
+
+**Focus Minimap** (palette; Vim `SPC u M`) keeps the minimap open and gives it the keys:
+
+| Key | Does |
+|---|---|
+| `j` / `k`, `↓` / `↑` | move one line; the editor follows and the row flashes |
+| `/` | search without leaving the minimap |
+| `n` / `N` | the next or previous match, with "12 of 87" in the echo area |
+| `SPC` | peek at the line |
+| `z` | fold or unfold the block there |
+| `RET` | go there and leave the minimap |
+| `Esc` | leave, the cursor back where it was |
+
+These keys, the peek's (`RET`, `Esc`) and the selection card's below are commands of their own (`minimap-focus-*`,
+`minimap-card-*`, `minimap-bucket-*`, `minimap-chip-*`), the same in every key profile; rebind them as any other
+(docs/guide/keys.md).
+
+Hold Shift and drag on the minimap to select whole lines. When you let go a small card offers **Copy** (`c`),
+**Fold** (`f`), **Pin** (`p`) and **Ask Agent** (`a`, the agent panel's composer with the lines attached).
+
+Rest the pointer on a definition's name on the minimap and its row lights in the Outline. A definition you folded
+shows `⋯` after its name in the Outline.
+
+### Huge files
+
+A file of more than 250,000 lines, or one that opened as a large file, has no line map: its minimap is a **density
+strip**. Each pixel row is a part of the file, brighter where it holds more text, with a red mark at the edge where
+that part has errors and a yellow one where it has warnings. The hub reads the file from disk in the background, so
+the strip fills in as it goes (parts not read yet are outlined) and a log that grows is read again. Rest the pointer
+on the strip to peek at that part's first lines; `RET` or a click goes there. A file open in chunks places the band at
+the chunk's place in the whole file, and a part in another chunk is shown but not jumped to.
+
+What counts as an error or a warning is `drgnx-minimap-density-regexps` (by default lines with `ERROR` or `FATAL`,
+and lines with `WARN`), in [Rust regex](https://docs.rs/regex/latest/regex/#syntax) syntax.
 
 ### Heat layers
 
@@ -97,10 +158,22 @@ says where it is in the echo area, for example `error 2 of 7: unused variable, l
 | `drgnx-minimap-hstrip` | on | The horizontal scroll bar of an editor that cuts its lines. |
 | `drgnx-minimap` | on | The scroll bar of an editor widens into the minimap when the pointer rests on it. |
 | `drgnx-minimap-width` | 120 | The minimap's width in pixels, 80 to 200. |
+| `drgnx-minimap-scale` | 2 | How tall a line is on the minimap, 1 to 3 pixels. |
+| `drgnx-minimap-side` | right | The edge of the text the minimap and the scroll bar are at (on a terminal, the scroll bar is the left margin's first column). |
+| `drgnx-minimap-sticky` | off | Keep the minimap open. On the right, the text narrows so the minimap covers no code. |
 | `drgnx-minimap-labels` | on | Names over the minimap: definitions and MARK sections, MARK sections only, or none. |
 | `drgnx-minimap-layer` | none | The heat layer: blame age, coverage, profile, lines agents read, or none. |
 | `drgnx-minimap-coverage-files` | `lcov.info`, `coverage/*.info`, `coverage.xml`, `coverage.json`, … | Where coverage reports are, relative to the project (`*` and `?` match in the last part). |
 | `drgnx-minimap-mark-regexp` | MARK comments, regions, `;;;;`, `# %%` | Which comment lines are MARK sections: a regular expression in Rust's syntax, matched against each line; the name is its group `name`, else its first group. |
+| `drgnx-minimap-peek` | on | Resting on a minimap row opens the peek. |
+| `drgnx-minimap-peek-lines` | 6 | How many lines the peek shows. |
+| `drgnx-minimap-trail` | on | The visited trail on the minimap. |
+| `drgnx-minimap-trail-dwell` | 2 | Seconds the cursor rests on a line before the line joins the trail. |
+| `drgnx-minimap-trail-length` | 20 | How many visits the trail shows, 1 to 64. |
+| `drgnx-minimap-density-above` | 250000 | Past how many lines the minimap is a density strip. |
+| `drgnx-minimap-density-regexps` | `(:error "ERROR\|FATAL" :warning "WARN")` | What the density strip marks as errors and warnings. |
 | `drgnx-marks-symbol-uses` | off | Mark every use of the symbol under the cursor, 400 ms after you stop moving. |
+
+Every setting applies at once, to every open window.
 
 The module is `editor/minimap`; turning it off takes every strip away.

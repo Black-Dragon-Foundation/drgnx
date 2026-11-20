@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'seq)
 (require 'drgnx-ruler)
 (require 'drgnx-timer)
 (require 'drgnx-faces)
@@ -47,6 +48,11 @@
 (declare-function nidhogg-lines-next-mark "nidhogg-lines" (buffer pos &optional kinds dir))
 (declare-function nidhogg-lines-counts "nidhogg-lines" (buffer beg end))
 (declare-function nidhogg-lines-describe "nidhogg-lines" (&optional buffer))
+(declare-function nidhogg-lines-search "nidhogg-lines" (buffer query &optional literal case-fold))
+(declare-function nidhogg-lines-search-step "nidhogg-lines" (buffer))
+(declare-function nidhogg-lines-search-hits "nidhogg-lines" (buffer &optional beg end))
+(declare-function nidhogg-lines-search-current "nidhogg-lines" (buffer pos))
+(defvar isearch-other-end)
 (declare-function bookmark-get-filename "bookmark" (bookmark-name-or-record))
 (declare-function bookmark-get-position "bookmark" (bookmark-name-or-record))
 (declare-function bookmark-maybe-load-default-file "bookmark" ())
@@ -170,6 +176,7 @@ at the buffer's end, and say which.  Nil when the buffer has none."
         (push-mark nil t)
         (goto-char (save-restriction (widen) (goto-char (point-min)) (forward-line (1- (car h))) (point)))
         (message "%s of %d" (drgnx-marks-hunk-label (1+ i) (nth 1 h) (nth 2 h)) n)
+        (run-hook-with-args 'drgnx-marks-jump-functions (point))
         (point)))))
 
 ;;;; Problems (Flymake)
@@ -200,36 +207,75 @@ at the buffer's end, and say which.  Nil when the buffer has none."
 (defvar-local drgnx-marks--search-hits nil "The hits of the running isearch: (POS LANE FACE PRIORITY) each.")
 (defvar-local drgnx-marks--search-for nil "The (STRING REGEXP CASE-FOLD) `drgnx-marks--search-hits' were found for.")
 
+(defun drgnx-marks--search-model-p ()
+  "Whether the line model scans this buffer's searches (Nidhogg, the buffer with a model; design X1)."
+  (and (fboundp 'nidhogg-lines-search) (drgnx-marks--model-p)))
+
+(defun drgnx-marks--search-step (buffer)
+  "One 4 ms slice of BUFFER's model search; non-nil while there is more (`drgnx-timer-idle-steps')."
+  (and (buffer-live-p buffer) (eq 'running (nidhogg-lines-search-step buffer))))
+
+(defun drgnx-marks--search-done (buffer)
+  "BUFFER's model search ended: its hits as marks, or Lisp's scan when the text held what the model cannot read."
+  (when (and (buffer-live-p buffer) (buffer-local-value 'isearch-mode buffer))
+    (with-current-buffer buffer
+      (let ((ans (nidhogg-lines-search-step nil)))
+        (if (numberp ans)
+            (progn
+              (setq drgnx-marks--search-hits
+                    (mapcar (lambda (h) (list (car h) 'middle 'drgnx-marks-hit 2))
+                            (seq-take (nidhogg-lines-search-hits nil) drgnx-marks-search-max)))
+              (drgnx-ruler-source 'search (and drgnx-marks--search-hits (lambda () drgnx-marks--search-hits))))
+          (nidhogg-lines-search nil nil)
+          (drgnx-marks--search-lisp))))))
+
 (defun drgnx-marks--search-scan (buffer)
-  "BUFFER's isearch hits, the whole accessible text, once per search string (the debounce's end)."
+  "BUFFER's isearch hits, the whole accessible text, once per search string (the debounce's end): the line model
+scans in 4 ms idle slices when it can read the query, else Lisp does."
   (when (and (buffer-live-p buffer) (buffer-local-value 'isearch-mode buffer))
     (with-current-buffer buffer
       (let ((key (list isearch-string isearch-regexp isearch-case-fold-search)))
         (unless (equal key drgnx-marks--search-for)
           (setq drgnx-marks--search-for key drgnx-marks--search-hits nil)
-          (unless (string-empty-p isearch-string)
-            (let ((case-fold-search isearch-case-fold-search) (n 0) hits)
-              (save-excursion
-                (goto-char (point-min))
-                (while (and (< n drgnx-marks-search-max)
-                            (condition-case nil
-                                (if isearch-regexp (re-search-forward isearch-string nil t)
-                                  (search-forward isearch-string nil t))
-                              (invalid-regexp nil)))
-                  (push (list (match-beginning 0) 'middle 'drgnx-marks-hit 2) hits)
-                  (setq n (1+ n))
-                  (when (= (match-beginning 0) (match-end 0)) (forward-char 1))))
-              (setq drgnx-marks--search-hits (nreverse hits))))
-          (drgnx-ruler-source 'search (and drgnx-marks--search-hits (lambda () drgnx-marks--search-hits))))))))
+          (if (and (not (string-empty-p isearch-string)) (drgnx-marks--search-model-p)
+                   (nidhogg-lines-search nil isearch-string (not isearch-regexp) (and isearch-case-fold-search t)))
+              (drgnx-timer-idle-steps (cons 'marks-search-scan buffer) 0 #'drgnx-marks--search-step
+                                      :args (list buffer) :on-done #'drgnx-marks--search-done :owner buffer)
+            (when (drgnx-marks--search-model-p) (nidhogg-lines-search nil nil))
+            (drgnx-marks--search-lisp)))))))
+
+(defun drgnx-marks--search-lisp ()
+  "The current buffer's isearch hits as Lisp finds them, the whole accessible text, as marks."
+  (setq drgnx-marks--search-hits nil)
+  (unless (string-empty-p isearch-string)
+    (let ((case-fold-search isearch-case-fold-search) (n 0) hits)
+      (save-excursion
+        (goto-char (point-min))
+        (while (and (< n drgnx-marks-search-max)
+                    (condition-case nil
+                        (if isearch-regexp (re-search-forward isearch-string nil t)
+                          (search-forward isearch-string nil t))
+                      (invalid-regexp nil)))
+          ;; an empty match is no hit (`how-many' counts the same; so does the line model)
+          (if (= (match-beginning 0) (match-end 0))
+              (unless (eobp) (forward-char 1))
+            (push (list (match-beginning 0) 'middle 'drgnx-marks-hit 2) hits)
+            (setq n (1+ n)))))
+      (setq drgnx-marks--search-hits (nreverse hits))))
+  (drgnx-ruler-source 'search (and drgnx-marks--search-hits (lambda () drgnx-marks--search-hits))))
 
 (defun drgnx-marks--search-changed ()
-  "`isearch-update-post-hook': the hits again once the search string rests."
+  "`isearch-update-post-hook': the hits again once the search string rests; the current one ringed on the minimap."
+  (when (and (drgnx-marks--search-model-p) isearch-other-end)
+    (nidhogg-lines-search-current nil (min (point) isearch-other-end)))
   (drgnx-timer-debounce (cons 'marks-search (current-buffer)) 0.15 #'drgnx-marks--search-scan
                         :args (list (current-buffer)) :owner (current-buffer)))
 
 (defun drgnx-marks--search-ended ()
   "`isearch-mode-end-hook': the hits go."
   (drgnx-timer-cancel (cons 'marks-search (current-buffer)))
+  (drgnx-timer-cancel (cons 'marks-search-scan (current-buffer)))
+  (when (drgnx-marks--search-model-p) (nidhogg-lines-search nil nil))
   (setq drgnx-marks--search-hits nil drgnx-marks--search-for nil)
   (drgnx-ruler-source 'search nil))
 
@@ -489,6 +535,9 @@ when the line moved, as bookmark.el's own."
             (1+ (drgnx-marks--count kinds 1 pos)) (drgnx-marks--count kinds 1 (1+ (buffer-size)))
             (if msg (concat ": " msg) "") (line-number-at-pos pos t))))
 
+(defvar drgnx-marks-jump-functions nil
+  "Functions called with the position a next-mark key went to (the minimap notes it on its trail and flashes it).")
+
 (defun drgnx-marks-step (kinds dir)
   "Go to the next mark of KINDS after the current line (DIR > 0) or the previous one before it, wrapping at the
 buffer's end, and say where it is.  Nil when the buffer has none."
@@ -501,6 +550,7 @@ buffer's end, and say where it is.  Nil when the buffer has none."
       (push-mark nil t)
       (goto-char pos)
       (message "%s" (drgnx-marks-announcement pos kinds))
+      (run-hook-with-args 'drgnx-marks-jump-functions pos)
       pos)))
 
 (defun drgnx-marks-next ()

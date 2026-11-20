@@ -1589,7 +1589,8 @@ Nothing sets a window's margins directly. Owners make **claims** on a buffer:
 the sum of its buffer's claims there. It is set again on every claim or centring, when a window shows another
 buffer, and when a window's size changes. The window hooks are on only while some claim or centring exists. Claims
 sit side by side, lowest order outermost. On the left in terminals that is the debug column (0), the agents' strip
-(1), then the change marks (2).
+(1), then the change marks (2). On the right, a terminal window with the scroll bar adds one column of its own after
+the claims (`drgnx-margins-ruler WINDOW ON`, a window parameter: the scroll bar is per window, not per buffer).
 
 An owner starts each margin string with `(drgnx-margins-pad OWNER)`: blanks up to its claim, computed for the
 buffer's first window. `drgnx-margins-changed-functions` runs with the buffer when places may have moved. Tests:
@@ -1667,7 +1668,8 @@ lists at each publish.
 - **The minimap.** `editor/minimap` hooks `drgnx-ruler-place-functions` (run with each window and whether it shows
   the strip, when its strip is placed: no Lisp per scroll). An editor window (`drgnx-minimap-window-p`: the strip
   shown, `drgnx-minimap` on, a file or a `prog-mode`/`text-mode`/`diff-mode` buffer that is neither a Sjá view nor a special mode)
-  gets the window parameter `glitnir-minimap`: `:width` (`drgnx-minimap-width`, 80–200), the colours, `:nesting`,
+  gets the window parameter `glitnir-minimap`: `:width` (`drgnx-minimap-width`, 80–200), `:scale` (`drgnx-minimap-scale`,
+  1–3), `:left` (`drgnx-minimap-side`), `:open` while sticky (`drgnx-minimap-sticky`), the colours, `:nesting`,
   and with `drgnx-minimap-labels` the labels' `:labels` (`t` or `marks-only`), their colours (`:label`, `:sub` for a
   nested definition, `:accent` for the one under the pointer, `:mark` for a MARK section), `:label-face` (the font)
   and `:file`, the file's true name, which keys the hub's `labels` layer in Sjá. The buffer's line model gets the MARK
@@ -1686,6 +1688,36 @@ lists at each publish.
   `drgnx-marks-hunks` counts a diff buffer's @@ hunks once per text change and reads a file's from `drgnx-hunks--data`;
   the lines are not moved by C, the next placement (the ruler's debounced refresh after an edit, or the change marks'
   redraw) sends them again. `drgnx-marks-next-change` goes by those hunks there (`drgnx-marks-step-hunk`).
+- **Peek, problems card, trail, describe** (`modules/editor/drgnx-minimap-peek.el`, design M2, X8, M4, A2). Nidhogg
+  sends one `glitnir-minimap` event per rest of the pointer (`glitnir-minimap-functions`: `dwell` on a row,
+  `dwell-marks` on the marks lane, `dwell-label` on a label); `drgnx-minimap--event` is the one hover-time Lisp call.
+  The peek and the problems card share one child frame (`drgnx-minimap--card`, marked `drgnx-minimap-exclude`): the
+  peek shows the editor's own buffer from the row's lines, the card a buffer of Flymake's diagnostics in the section
+  (`drgnx-minimap--section`: the innermost fold range holding the row, else its MARK section, else the buffer). Its
+  keys are a transient map (RET, a click, Esc; any other key closes it and runs); a 150 ms poll of the pointer runs
+  only while it shows. The trail: the line model keeps the visits (`nidhogg-lines-trail-note`), noted by an idle timer
+  (`drgnx-minimap-trail-dwell`) and on jumps (`xref-after-jump-hook`, `drgnx-marks-jump-functions` that
+  `drgnx-marks-step` runs, the cards' jumps), which also flash the row (`glitnir-minimap-flash`); the spec's `:trail`
+  and `:trail-length` draw it. `minimap-describe` speaks `drgnx-minimap-description`. A card can carry its own keys
+  (`drgnx-minimap--show-card`'s MAP; its commands join `drgnx-minimap--card-commands`).
+- **Density strip** (`modules/editor/drgnx-minimap-density.el`, design M7, §7.6). `drgnx-minimap-density-p` (a
+  large file, or more lines than `drgnx-minimap-density-above`, counted only when the buffer has more characters than
+  that, memoized on the modification tick) makes `drgnx-minimap--place` skip the line model and set a `:density` spec
+  (with `:chunk` (START . FILE-BYTES) for a vlf chunk, followed on `vlf-after-batch-functions`); the watch carries
+  `:density` with `drgnx-minimap-density-regexps`. The hub scans the file on disk (`view/minimap/density.rs`) and
+  sends Sjá the `density` layer in parts. `dwell-bucket` asks `minimap/bucket` for the bucket's first lines and shows
+  them in the card (KIND `bucket`, its own keys); its jump maps the byte through the chunk's start.
+- **Search, focus, line selection, Outline sync** (`modules/editor/drgnx-minimap-search.el`, design X1, X2, X7).
+  isearch's hits come from the line model's scan (`nidhogg-lines-search`, then `nidhogg-lines-search-step` in 4 ms
+  idle slices through `drgnx-timer-idle-steps`, key `marks-search-scan`; `core/drgnx-marks.el`): the model's hits
+  become the `search` marks, `nidhogg-lines-search-current` follows isearch, and the spec's `:hit` draws them. A
+  query the model cannot read (`nidhogg-lines-search` nil, or a `fallback` step) is scanned by Lisp, which skips
+  empty matches as `how-many` does, so both count the same. `minimap-focus` puts `:open t` in the window's spec and
+  a transient map on the keys; leaving puts point and the window start back. A Shift-drag sends `select-start`,
+  `select-extend` and `select-end`; the lines between are selected whole and the end shows the chip (a card of
+  KIND `chip`). `label-hover` (once per change) lights the Outline's row locally: Sjá's `at-line` names it,
+  `drgnx-view-row-start` places an overlay; the hub is not asked. The Outline sends the folded ranges' first lines
+  (`drgnx-fold-folded-lines`) with `outline/set` and again on `drgnx-fold-changed-hook`.
 - **Sticky lines.** `editor/sticky` with `drgnx-sticky-style` `lines` draws the scope start lines in a pooled child
   frame per window over its top rows (`drgnx-sticky--cards`), its window and frame marked `drgnx-minimap-exclude`. The
   header's memo `sticky-segment` (once per window start, text change above it, or hub answer) works out the scopes
@@ -1708,15 +1740,28 @@ lists at each publish.
   `nidhogg-lines-set-folds`). Kinds: 0 block, 1 function, 2 class, 3 comment, 4 import, 5 test, 6 region, 7 cell,
   8 heading (`drgnx-fold-kinds`). A fold is an overlay (`drgnx-fold` t, `invisible`, `display` the summary,
   `isearch-open-invisible`) from the first line's end to END; after each command the overlays' ranges go to the model
-  (`nidhogg-lines-set-hidden`), which leaves their lines out of the scroll bar and the minimap. Org folds with
-  `org-fold`; `evil-fold-list` gets a provider for `drgnx-fold-mode`.
+  (`nidhogg-lines-set-hidden`, each `(BEG END NAME)`: a named fold's name is the minimap's pill), which leaves their
+  lines out of the scroll bar and the minimap. Org folds with `org-fold`; `evil-fold-list` gets a provider for
+  `drgnx-fold-mode`. The fold arrows are Nidhogg's (`glitnir-fold-arrows`, drawn from the fold table at publish): the
+  module sets the window parameter on editor windows of graphical frames from `drgnx-ruler-place-functions`
+  (`drgnx-fold--place-arrows`, `drgnx-fold-arrows`), and a click arrives as `[left-fringe mouse-1]` in
+  `drgnx-fold-mode-map` (`drgnx-fold-fringe-click`: only on a line that starts a range). While arrows show, the left
+  fringe's own part is the gutter `drgnx-fold--gutter` (5 + 18 logical px, minimap-folding.html's `.g` and `.fa`;
+  `drgnx-fold--set-gutter`, its width before kept in `drgnx-fold-fringe`); with a scroll bar on the left that own
+  part is the ruler's `drgnx-ruler-fringe`, so the ruler keeps it. The chevron is 12 px, centred in the 18 px column;
+  Nidhogg counts its `:inset` from the fringe's inner edge, so a left strip adds its width.
 - **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
   8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
   at 26 %; all through `drgnx-px`. The themes give that face the text colour (`fg`, the look's `--fg`), never a fill
   token: 26 % of a fill such as `hover` sits a step from every surface and the thumb vanishes.
   - The fringe is widened by the strip with `set-window-fringes` only when the strip comes or goes, or the scale
     changes (`drgnx-scrollbar-refresh-all` on the density hook). Its own width is kept in the window parameter
-    `drgnx-ruler-fringe`, which is also the strip's `:right`.
+    `drgnx-ruler-fringe`, which is also the strip's `:right`; `drgnx-ruler-side` says which fringe that is. With
+    `drgnx-ruler-left-function` (the minimap's side, `drgnx-minimap--ruler-left-p` for editors when
+    `drgnx-minimap-side` is `left`) the strip is in the left fringe beside the text (`:left`), the fringe's own part
+    outermost, where the fold arrows keep to (their `:inset` skips the strip). On a terminal the strip's column is
+    `drgnx-margins-ruler`'s: the right margin's last column, or with `left` the left margin's first, before every left
+    claim (`drgnx-margins-offset` counts it).
   - The fringe's own pixels stay outermost, so `drgnx-look-edge-drag` keeps its hit area: a press there goes to it
     (`drgnx-ruler-press`).
   - A window that shows another buffer gets that buffer's strip (`window-buffer-change-functions`). The ruler mode
@@ -1728,8 +1773,19 @@ lists at each publish.
 - **Mouse.** A press on the strip (`<right-fringe> <down-mouse-1>`, `drgnx-ruler-press`) goes to the place under the
   pointer, centred, and a drag follows the pointer until the button comes up: one `recenter` per motion, the one
   place Lisp runs per pointer move. `drgnx-ruler-click` serves buffers whose marks show without the scroll bar.
-- **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler`, or in a terminal
-  (`drgnx-ruler-available-p`).
+- **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler` (`drgnx-ruler-available-p`).
+- **Sticky.** While `drgnx-minimap-sticky` is on and the side is `right`, `drgnx-minimap--reserve` calls
+  `drgnx-ruler-reserve WINDOW PX`: the right fringe grows by the minimap's width inside the strip (the strip stays
+  outermost, its `:right` unchanged), so the text narrows and Glitnir's minimap, which opens leftwards from the strip,
+  covers fringe, not code (design §3, "Sticky-open"). The settings' `:apply` places every window again. Glitnir draws
+  the ruler on the right only, so `left` moves the minimap, not the strip, and a sticky left minimap covers text.
+- **Announcements (design A2).** Fold says `folded 38 lines, 2 errors` (`drgnx-fold--announce`: the lines hidden,
+  then errors and warnings when there are any, counted by `drgnx-marks--count`); the next-mark keys say
+  `error 2 of 7: …, line 1,606` (`drgnx-marks-announcement`); `minimap-describe` the section at point.
+- **Terminals (design §7.8, stage T).** A terminal window gets no fringe: `drgnx-ruler--show` gives it a one-column
+  right margin instead (`drgnx-margins-ruler`, outermost, so it is the margin's last column) and the same spec.
+  Nidhogg's C fills that column in the frame's desired matrix (`┃` thumb, `│` rail, `▐` marks), so `update_frame`
+  owns the cells and a scroll runs no Lisp. Checked by `test/tty/minimap-tty-test.el` (a counter on the placing).
 - **Checks.** `ruler-test.el` and `marks-test.el` (batch); the look scenes check every scrollable window of every
   scene (`drgnx-look-scene-scrollbars`: the strip is set, and on the root frame drawn exactly when the content runs
   past the window, from two snapshots of the root frame with and without the strips (the checker marks each window

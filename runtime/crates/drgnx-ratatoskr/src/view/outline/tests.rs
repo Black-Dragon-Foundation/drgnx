@@ -48,23 +48,48 @@ fn a_moved_definition_keeps_its_key() {
 
 #[test]
 fn the_model_holds_each_definitions_line() {
-    let d = doc(&shown_of("src/a.rs", RS));
+    let d = doc(&shown_of("src/a.rs", RS), &BTreeSet::new());
     assert_eq!(
         d.lists["order"],
         ["0:0:W", "0:1:W", "1:0:size", "0:0:later"]
     );
     assert_eq!(
         d.nodes["1:0:size"]["fields"],
-        json!([["label", "size"], ["line", 3]])
+        json!([["label", "size"], ["line", 3], ["folded", false]])
     );
     assert_eq!(d.nodes["0:0:later"]["fields"][1], json!(["line", 5]));
-    assert!(doc(&Shown::Notice(NONE)).lists["order"].is_empty());
+    assert!(doc(&Shown::Notice(NONE), &BTreeSet::new()).lists["order"].is_empty());
+}
+
+/// A definition starting on a folded line (`outline/set`'s `folded`) is `folded` in the model and has the fold glyph
+/// after its name, labelled; the others have neither.
+#[test]
+fn a_folded_definition_is_marked() {
+    let folded: BTreeSet<u32> = [3].into_iter().collect();
+    let shown = shown_of("src/a.rs", RS);
+    let d = doc(&shown, &folded);
+    assert_eq!(d.nodes["1:0:size"]["fields"][2], json!(["folded", true]));
+    assert_eq!(d.nodes["0:0:later"]["fields"][2], json!(["folded", false]));
+    let look = RowLook::of(&env(Display::Tty, 1.0), INDENT, 1);
+    let (built, _) = rows(&shown, &folded, &look);
+    let text: Vec<&str> = built.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(
+        text,
+        ["  W", "  W", &format!("    size {FOLDED_GLYPH}"), "  later"]
+    );
+    assert!(
+        built[2]
+            .props
+            .iter()
+            .any(|p| p.2 == "help-echo" && p.3 == json!("folded"))
+    );
+    assert!(!built[3].props.iter().any(|p| p.2 == "help-echo"));
 }
 
 #[test]
 fn rows_indent_by_the_definitions_around() {
     let look = RowLook::of(&env(Display::Tty, 1.0), INDENT, 1);
-    let (built, images) = rows(&shown_of("src/a.rs", RS), &look);
+    let (built, images) = rows(&shown_of("src/a.rs", RS), &BTreeSet::new(), &look);
     let text: Vec<&str> = built.iter().map(|r| r.text.as_str()).collect();
     assert_eq!(text, ["  W", "  W", "    size", "  later"]);
     assert!(images.is_empty());
@@ -129,12 +154,12 @@ fn nothing_to_outline_is_one_notice() {
     let big = "x".repeat(OUTLINE_MAX + 1);
     assert_eq!(shown_of("src/a.rs", &big), Shown::Notice(LARGE));
     let tty = RowLook::of(&env(Display::Tty, 1.0), INDENT, 1);
-    let (built, images) = rows(&Shown::Notice(NONE), &tty);
+    let (built, images) = rows(&Shown::Notice(NONE), &BTreeSet::new(), &tty);
     assert_eq!(built[0].text, format!("  {NONE}"));
     assert!(images.is_empty());
     assert!(built[0].props.iter().any(|p| p.2 == "drgnx-row-inert"));
     let gui = RowLook::of(&env(Display::Gui, 2.0), INDENT, 1);
-    let (built, images) = rows(&Shown::Notice(NONE), &gui);
+    let (built, images) = rows(&Shown::Notice(NONE), &BTreeSet::new(), &gui);
     assert_eq!(
         built[0].text,
         format!("    {NONE}"),

@@ -934,6 +934,25 @@ Packages and archives ("melpa") whose updates you review before they install.
 | `:agents` | `never` |
 | `:schema` | `(list-of (or symbol string))` |
 
+## drgnx-fold-arrows
+
+Where an editor's left fringe shows a chevron on each line that starts a fold: `hover' (while the pointer is over
+the fringe; a folded line's always), `always', or nil (none: folding stays on the keys).  A click on one folds or
+unfolds its block.
+
+| Key | Value |
+| --- | --- |
+| Default | `hover` |
+| Type | `(choice (const hover) (const always) (const :tag "None" nil))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-fold--arrows-respec` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
 ## drgnx-fold-max
 
 The most fold ranges a buffer keeps (the smallest go first past it), as VS Code's editor.foldingMaximumRegions.
@@ -1555,6 +1574,42 @@ again when a test run writes it.
 | `:agents` | `grantable` |
 | `:schema` | - |
 
+## drgnx-minimap-density-above
+
+Past how many lines a buffer's minimap is a density strip (no line model; design M7).  A large file (above the
+large-files size) is always one.
+
+| Key | Value |
+| --- | --- |
+| Default | `250000` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap-peek--respec` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-density-regexps
+
+What the density strip marks: the lines matching `:error' and those matching `:warning', in Rust regex syntax
+(the hub scans the file).
+
+| Key | Value |
+| --- | --- |
+| Default | `(:error "ERROR\|FATAL" :warning "WARN")` |
+| Type | `(plist :key-type (choice (const :error) (const :warning)) :value-type string)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap-peek--respec` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
 ## drgnx-minimap-hide-short
 
 Non-nil: the scroll bar hides while the window shows all of its content (it comes back once the content runs
@@ -1648,6 +1703,40 @@ the whole match.  Nil: no MARK sections.
 | `:agents` | `grantable` |
 | `:schema` | - |
 
+## drgnx-minimap-peek
+
+Non-nil: resting 300 ms on a minimap row opens a peek beside the minimap, the real lines there at full size.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-peek-lines
+
+How many lines the minimap's peek shows.
+
+| Key | Value |
+| --- | --- |
+| Default | `6` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
 ## drgnx-minimap-ruler
 
 Non-nil: every scrollable window has the scroll bar, a strip at its right edge with the thumb and the file's
@@ -1662,6 +1751,110 @@ marks.  Nil: only windows whose buffer has marks (a debugger's breakpoints) show
 | `:merge` | `replace` |
 | `:on-error` | `last-good` |
 | `:apply` | `drgnx-ruler--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-scale
+
+How tall a line is on the minimap, in logical pixels: 1 to 3 (3 shows fewer lines, each easier to tell apart).
+
+| Key | Value |
+| --- | --- |
+| Default | `2` |
+| Type | `(choice (const 1) (const 2) (const 3))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-side
+
+Which edge of the text the minimap and the scroll bar are at: `right' or `left' (the scroll bar in the left
+fringe, beside the text; on a terminal the left margin's first column).
+
+| Key | Value |
+| --- | --- |
+| Default | `right` |
+| Type | `(choice (const right) (const left))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-sticky
+
+Non-nil: the minimap stays open, and the text narrows by its width so it covers no code (on the right; on the left
+it opens over the text).
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap--setting-changed` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-trail
+
+Non-nil: the places you stayed or jumped to show as fading bars at the minimap's left edge (the visited trail).
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap-peek--respec` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-trail-dwell
+
+Seconds point rests on a line, Emacs idle, before the line joins the visited trail.
+
+| Key | Value |
+| --- | --- |
+| Default | `2` |
+| Type | `number` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap-peek--restart` |
+| `:runtime` | - |
+| `:agents` | `grantable` |
+| `:schema` | - |
+
+## drgnx-minimap-trail-length
+
+How many visits the minimap's trail shows, 1 to 64.
+
+| Key | Value |
+| --- | --- |
+| Default | `20` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-minimap-peek--respec` |
 | `:runtime` | - |
 | `:agents` | `grantable` |
 | `:schema` | - |

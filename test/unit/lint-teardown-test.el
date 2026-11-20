@@ -31,6 +31,8 @@ BATCH).  One that is gone fails the lint too, so the entry goes with it.")
 (defconst drgnx-teardown--library-files
   '(("modules/lang/drgnx-pack-ts-mode.el" . lang/packs) ("modules/lang/drgnx-problems.el" . lang/eglot)
     ("modules/ui/drgnx-tty-clipboard.el" . ui/terminal)
+    ("modules/editor/drgnx-minimap-peek.el" . editor/minimap) ("modules/editor/drgnx-minimap-search.el" . editor/minimap)
+    ("modules/editor/drgnx-minimap-density.el" . editor/minimap)
     ("modules/ui/drgnx-tty-fallback-layer.el" . ui/terminal)
     ("modules/ui/drgnx-decor.el" . ui/look) ("modules/ui/drgnx-agent-cursors.el" . ui/look)
     ("modules/tools/drgnx-agents-editor-draw.el" . tools/agents-in-editor)

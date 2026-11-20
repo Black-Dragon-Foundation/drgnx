@@ -21,6 +21,7 @@
           (ruler-test--marks nil) (fringes (list 8 8)) (sets 0) (fringe-sets 0)
           (swp (symbol-function 'set-window-parameter)))
      (cl-letf (((symbol-function 'drgnx-ruler-available-p) (lambda () t))
+               ((symbol-function 'drgnx-ruler--column-p) #'ignore)    ; batch's frame stands for a graphical one
                ((symbol-function 'window-fringes) (lambda (&optional _) (list (car fringes) (cadr fringes) nil nil)))
                ((symbol-function 'set-window-fringes)
                 (lambda (_w l r &rest _) (setq fringes (list l r) fringe-sets (1+ fringe-sets))))
@@ -76,6 +77,68 @@ fringe is widened once, and the parameter set only when the marks change."
 
 (declare-function drgnx-theme--faces "drgnx-theme-gen" (variant tok))
 (declare-function drgnx-look-token "drgnx-theme-gen" (name &optional variant))
+
+(ert-deftest drgnx-ruler/a-terminal-window-gets-a-margin-column ()
+  "On a terminal the strip is one right-margin column (after the buffer's own claims there), the fringe untouched; it
+goes with the strip, and the margin is the claims' again."
+  (ruler-test--with
+    (cl-letf (((symbol-function 'drgnx-ruler--column-p) (lambda (_) t)))
+      (drgnx-margins-claim 'ruler-test 2 :side 'right)
+      (setq ruler-test--marks (list (list (ruler-test--pos 50) 'right 'error 1)))
+      (drgnx-ruler-source 'test #'ruler-test--source)
+      (unwind-protect
+          (progn
+            (should (window-parameter (selected-window) 'glitnir-ruler))
+            (should (equal (cdr (window-margins)) 3))
+            (should (equal fringe-sets 0))
+            (drgnx-ruler-source 'test nil)
+            (should-not (window-parameter (selected-window) 'glitnir-ruler))
+            (should (equal (cdr (window-margins)) 2)))
+        (drgnx-margins-claim 'ruler-test nil :side 'right)
+        (set-window-parameter (selected-window) 'drgnx-margins-ruler nil)))))
+
+(ert-deftest drgnx-ruler/a-left-strip-widens-the-left-fringe-and-moves-back ()
+  "With `drgnx-ruler-left-function' saying left, the strip widens the left fringe (its own width kept as `:right')
+and says `:left'; moved back to the right, the left fringe has its own width again and the right one takes the strip;
+taken away, both are their own."
+  (ruler-test--with
+    (let ((drgnx-ruler-left-function (lambda (_w) t)))
+      (setq ruler-test--marks (list (list (ruler-test--pos 50) 'right 'error 1)))
+      (drgnx-ruler-source 'test #'ruler-test--source)
+      (unwind-protect
+          (let ((spec (window-parameter (selected-window) 'glitnir-ruler)))
+            (should (plist-get spec :left))
+            (should (equal (plist-get spec :right) 8))
+            (should (equal fringes (list (+ 8 (drgnx-px 12)) 8)))
+            (setq drgnx-ruler-left-function nil)
+            (drgnx-ruler-update)
+            (should-not (plist-get (window-parameter (selected-window) 'glitnir-ruler) :left))
+            (should (equal fringes (list 8 (+ 8 (drgnx-px 12)))))
+            (drgnx-ruler-source 'test nil)
+            (should (equal fringes '(8 8))))
+        (drgnx-ruler-source 'test nil)
+        (set-window-parameter (selected-window) 'drgnx-ruler-side nil)))))
+
+(ert-deftest drgnx-ruler/a-terminal-strip-on-the-left ()
+  "On a terminal a left strip is the left margin's first column, before the buffer's left claims; moved to the right,
+it is the right margin's column and the left claims start at the edge again."
+  (ruler-test--with
+    (cl-letf (((symbol-function 'drgnx-ruler--column-p) (lambda (_) t)))
+      (let ((drgnx-ruler-left-function (lambda (_w) t)))
+        (drgnx-margins-claim 'ruler-test 2 :side 'left)
+        (setq ruler-test--marks (list (list (ruler-test--pos 50) 'right 'error 1)))
+        (drgnx-ruler-source 'test #'ruler-test--source)
+        (unwind-protect
+            (progn
+              (should (equal (window-margins) '(3)))
+              (should (= 1 (drgnx-margins-offset 'ruler-test)))
+              (setq drgnx-ruler-left-function nil)
+              (drgnx-ruler-update)
+              (should (equal (window-margins) '(2 . 1)))
+              (should (= 0 (drgnx-margins-offset 'ruler-test))))
+          (drgnx-ruler-source 'test nil)
+          (drgnx-margins-claim 'ruler-test nil :side 'left)
+          (set-window-parameter (selected-window) 'drgnx-margins-ruler nil))))))
 
 (ert-deftest drgnx-ruler/the-thumb-is-the-text-colour-in-every-theme ()
   "The thumb is `drgnx-ruler-view's foreground at 26 %, and that foreground is the text colour (the look's `.sbar
@@ -286,6 +349,45 @@ finds the MARK sections with the default expression."
       (drgnx-ruler--place (selected-window))
       (should (= (length calls) 1)))))
 
+(defvar drgnx-minimap-width)
+(defvar drgnx-minimap-scale)
+(defvar drgnx-minimap-side)
+(defvar drgnx-minimap-sticky)
+
+(defun ruler-test--set (&rest pairs)
+  "Set the settings PAIRS as the user does, then run their `:apply' as the settings layer's next idle tick does."
+  (while pairs
+    (customize-set-variable (pop pairs) (pop pairs)))
+  (drgnx-settings-apply-pass))
+
+(ert-deftest drgnx-minimap/its-settings-apply-at-once ()
+  "Width, scale, side and sticky (design A3) change the open windows' spec when set, with nothing else done; sticky
+keeps the minimap open and narrows the text by the minimap's width (the right fringe grows by it, the strip stays
+outermost), and gives it back."
+  (skip-unless (fboundp 'nidhogg-lines-set-section-regexp))
+  (ruler-test--with-minimap
+    (let ((w (selected-window)) (strip (drgnx-px 12)))
+      (unwind-protect
+          (progn
+            (ruler-test--set 'drgnx-minimap-width 160)
+            (should (equal (plist-get (window-parameter w 'glitnir-minimap) :width) 160))
+            (ruler-test--set 'drgnx-minimap-scale 3)
+            (should (equal (plist-get (window-parameter w 'glitnir-minimap) :scale) 3))
+            (ruler-test--set 'drgnx-minimap-side 'left)
+            (should (plist-get (window-parameter w 'glitnir-minimap) :left))
+            (ruler-test--set 'drgnx-minimap-side 'right)
+            (should-not (plist-get (window-parameter w 'glitnir-minimap) :left))
+            (should (equal fringes (list 8 (+ 8 strip))))
+            (ruler-test--set 'drgnx-minimap-sticky t)
+            (should (plist-get (window-parameter w 'glitnir-minimap) :open))
+            (should (equal fringes (list 8 (+ 8 strip (drgnx-px 160)))))
+            (should (equal (plist-get (window-parameter w 'glitnir-ruler) :right) 8))
+            (ruler-test--set 'drgnx-minimap-sticky nil)
+            (should-not (plist-get (window-parameter w 'glitnir-minimap) :open))
+            (should (equal fringes (list 8 (+ 8 strip)))))
+        (ruler-test--set 'drgnx-minimap-width 120 'drgnx-minimap-scale 2 'drgnx-minimap-side 'right
+                         'drgnx-minimap-sticky nil)))))
+
 (ert-deftest drgnx-minimap/marks-only-and-off ()
   "`marks-only': the labels stay on but name no file, and the hub is told the file is shown no more; nil: no labels
 at all, and no MARK expression in the model."
@@ -458,6 +560,15 @@ scroll would cut its lines); over a window that cuts them, it scrolls sideways."
             (drgnx-hscroll-wheel (list 'wheel-left (list w (point) '(0 . 0) 0)))
             (should (> (window-hscroll w) 0)))
         (set-window-hscroll w 0)))))
+
+(ert-deftest drgnx-minimap/a-folded-range-gets-a-pill ()
+  "The minimap draws a dashed pill after each folded range's first line (design F3): the spec names its colour and
+the count's format; the range's name, when it has one, comes from the line model (`drgnx-fold--report')."
+  (skip-unless (fboundp 'nidhogg-lines-set-section-regexp))
+  (ruler-test--with-minimap
+    (let ((spec (drgnx-minimap--spec (selected-window))))
+      (should (eq 'drgnx-text-muted (plist-get spec :pill)))
+      (should (equal "⋯ %d folded" (plist-get spec :pill-format))))))
 
 (ert-deftest drgnx-minimap/a-files-change-hunks-are-labelled ()
   "A file with its change marks on gets a label at each of the hub's hunks (`drgnx-hunks--data'): a deletion at the

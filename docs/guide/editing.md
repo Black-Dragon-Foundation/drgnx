@@ -107,7 +107,15 @@ scroll by lines as always. **Toggle Smooth Scrolling**. Module `ui/smooth`.
 
 Fold a block to see the code around it: **Fold** (`C-{` in the VS Code keys, `C-c @ C-h` in the Emacs keys, `z c` in
 the Vim keys) hides the block at the cursor after its first line, which then ends with `⋯ N lines`; **Unfold** shows it
-again, **Toggle Fold** does whichever applies. Fold on a line already folded folds the block around it.
+again, **Toggle Fold** does whichever applies. Fold on a line already folded folds the block around it. Fold says
+what it hid in the echo area, for example `folded 38 lines, 2 errors`, which screen readers read.
+
+A chevron in the left fringe marks each line that starts a block: it shows while the pointer is over the fringe (a
+folded block's, pointing right, always shows), and a click on it folds or unfolds that block. `drgnx-fold-arrows` sets
+when they show (`hover`, `always`, or none). While they are on, the left fringe is a 23 px gutter: the change marks'
+lane outermost, then the arrows' column beside the line numbers; with `drgnx-fold-arrows` nil it is narrow again. Nidhogg draws them from the line model as the window is drawn, so they cost
+nothing as you scroll. The minimap shows a folded block as a dashed pill after its first line: the fold's name when
+you named it, else `⋯ N folded`.
 
 - **Fold All** / **Unfold All**; **Fold Recursively** / **Unfold Recursively** (the block and every block in it);
   **Fold Level…** (every block at one nesting level, 1 the outermost, but the one you are in; VS Code's `C-k C-1` …

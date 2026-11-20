@@ -1506,6 +1506,7 @@ dependencies = [
  "jsonc-parser",
  "lexopt",
  "libc",
+ "memchr",
  "mimir",
  "minni",
  "norn",

@@ -30,6 +30,13 @@
 (require 'drgnx-registry)
 (require 'drgnx-setting)
 
+;; The module's other files sit beside this one (modules are not on the load path): the peek and cards first, which
+;; the search and the density strip use.  At compile time too, so their definitions are known here.
+(eval-and-compile
+  (let ((dir (file-name-directory (or load-file-name (bound-and-true-p byte-compile-current-file) buffer-file-name))))
+    (dolist (f '(drgnx-minimap-peek drgnx-minimap-search drgnx-minimap-density))
+      (unless (featurep f) (load (expand-file-name (symbol-name f) dir) nil t)))))
+
 (declare-function drgnx-sticky-pin-names "drgnx-sticky" (&optional buffer))
 
 (defvar drgnx-look-density-changed-hook)
@@ -67,6 +74,22 @@ wider than the window (12 px over the text, from the first text column; it takes
 (drgnx-defsetting drgnx-minimap-width 120
   "The minimap's width in logical pixels, 80 to 200."
   :type 'natnum :group 'drgnx-minimap :scope 'global :apply #'drgnx-minimap--setting-changed)
+
+(drgnx-defsetting drgnx-minimap-scale 2
+  "How tall a line is on the minimap, in logical pixels: 1 to 3 (3 shows fewer lines, each easier to tell apart)."
+  :type '(choice (const 1) (const 2) (const 3)) :group 'drgnx-minimap :scope 'global
+  :apply #'drgnx-minimap--setting-changed)
+
+(drgnx-defsetting drgnx-minimap-side 'right
+  "Which edge of the text the minimap and the scroll bar are at: `right' or `left' (the scroll bar in the left
+fringe, beside the text; on a terminal the left margin's first column)."
+  :type '(choice (const right) (const left)) :group 'drgnx-minimap :scope 'global
+  :apply #'drgnx-minimap--setting-changed)
+
+(drgnx-defsetting drgnx-minimap-sticky nil
+  "Non-nil: the minimap stays open, and the text narrows by its width so it covers no code (on the right; on the left
+it opens over the text)."
+  :type 'boolean :group 'drgnx-minimap :scope 'global :apply #'drgnx-minimap--setting-changed)
 
 (drgnx-defsetting drgnx-minimap-labels t
   "The names drawn over the minimap: t, each definition (from the hub's outline, for files up to 8 MiB) and each
@@ -188,16 +211,33 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
                               (vector (car h) (drgnx-marks-hunk-label n (nth 1 h) (nth 2 h))))
                             (drgnx-marks-hunks)))))))
 
+(defun drgnx-minimap--width ()
+  "The minimap's width, logical pixels: `drgnx-minimap-width' held to 80..200."
+  (max 80 (min 200 drgnx-minimap-width)))
+
+(defun drgnx-minimap--reserve (window on)
+  "Narrow WINDOW's text by the minimap's width while it is sticky on the right and WINDOW has one (ON), else give the
+width back: `drgnx-ruler-reserve' widens the right fringe inside the strip, where the minimap opens."
+  (let ((px (and on drgnx-minimap-sticky (not (eq drgnx-minimap-side 'left))
+                 (not (drgnx-ruler--column-p window))
+                 (drgnx-px (drgnx-minimap--width) (window-frame window)))))
+    (unless (eql px (window-parameter window 'drgnx-ruler-reserve))
+      (drgnx-ruler-reserve window px))))
+
 (defun drgnx-minimap--spec (window)
   "WINDOW's `glitnir-minimap': the width, the colours, the labels and the heat layer."
   (let ((file (and (or drgnx-minimap-layer (and drgnx-minimap-labels (not (eq drgnx-minimap-labels 'marks-only))))
                    (drgnx-minimap--file (window-buffer window))))
         (hunks (and drgnx-minimap-labels (drgnx-minimap--hunk-labels (window-buffer window)))))
     (append
-     (list :width (max 80 (min 200 drgnx-minimap-width)) :scale 2 :nesting t
+     (list :width (drgnx-minimap--width) :scale (max 1 (min 3 drgnx-minimap-scale)) :nesting t
+           ;; the search's hits (X1): accent bars at their columns, the current one ringed
+           :hit (cons 'drgnx-accent 1.0)
            :fill (cons (face-background 'drgnx-surface-panel nil 'default) 1.0)
            :text (cons 'default 0.35)
            :band (cons 'default 0.09)
+           ;; a folded range's dashed pill (F3): its name (`nidhogg-lines-set-hidden'), else its count
+           :pill 'drgnx-text-muted :pill-format "⋯ %d folded"
            :classes (seq-keep (lambda (c) (and (facep (cadr c)) (cons (car c) (cadr c))))
                               drgnx-minimap--class-faces))
      (and drgnx-minimap-labels
@@ -205,6 +245,12 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
                 :label 'default :sub 'drgnx-text-muted :accent 'drgnx-accent :mark 'warning
                 :label-face 'drgnx-minimap-label))
      (and file (list :file file))
+     (and (eq drgnx-minimap-side 'left) (list :left t))
+     ;; a focused minimap stays open (`minimap-focus'), and a sticky one
+     (and (or drgnx-minimap-sticky (eq window (drgnx-minimap-focus-window))) (list :open t))
+     ;; the visited trail (M4): the line model's last visits as fading bars at the left edge
+     (and drgnx-minimap-trail
+          (list :trail (cons 'warning 0.7) :trail-length (max 1 (min 64 drgnx-minimap-trail-length))))
      ;; the heat layer (X3): Sjá's `heat:S' of the file recolours the bars on the ramp
      (and file drgnx-minimap-layer
           (list :heat (symbol-name drgnx-minimap-layer) :heat-low 'drgnx-border-strong :heat-high 'drgnx-agent-2))
@@ -233,7 +279,7 @@ it reads."
 (defun drgnx-minimap--watch (buffer file)
   "Tell the hub BUFFER now shows FILE in a minimap (nil: none) with the heat layer asked for, when either changed."
   (with-current-buffer buffer
-    (let ((ask (and file (drgnx-minimap--ask))))
+    (let ((ask (and file (if (drgnx-minimap-density-p) (drgnx-minimap-density-ask) (drgnx-minimap--ask)))))
       (unless (and (equal file drgnx-minimap--watched) (equal ask drgnx-minimap--asked))
         (when (drgnx-minimap--hub-p)
           (when (and drgnx-minimap--watched (not (equal file drgnx-minimap--watched)))
@@ -306,36 +352,52 @@ them), else `mwheel-scroll'."
     (unless (and (window-live-p w) (drgnx-minimap--wraps-p w))
       (mwheel-scroll event))))
 
+(defun drgnx-minimap--ruler-left-p (window)
+  "`drgnx-ruler-left-function': an editor's scroll bar is on the left with the minimap (`drgnx-minimap-side')."
+  (and (eq drgnx-minimap-side 'left) (drgnx-minimap-window-p window)))
+
 (defun drgnx-minimap--place (window on)
   "`drgnx-ruler-place-functions': WINDOW's minimap and horizontal strip as they should be now, given that it shows
 the strip (ON)."
   (let ((hs (and on (drgnx-minimap-hstrip-window-p window) (drgnx-minimap--hstrip-spec (window-frame window)))))
     (unless (equal hs (window-parameter window 'glitnir-hstrip))
       (set-window-parameter window 'glitnir-hstrip hs)))
-  (if (and on (drgnx-minimap-window-p window))
-      (let ((buffer (window-buffer window)))
-        (with-current-buffer buffer
-          (nidhogg-lines-enable)
-          (drgnx-minimap--highlight)
-          (let ((re (and drgnx-minimap-labels drgnx-minimap-mark-regexp)))
-            (unless (equal re drgnx-minimap--regexp)
-              (setq drgnx-minimap--regexp re)
-              (condition-case err
-                  (nidhogg-lines-set-section-regexp nil re)
-                (error (drgnx-notify 'minimap 'warn (format "Minimap MARK regexp: %s" (error-message-string err))
-                                     :id 'mark-regexp))))))
-        (let ((spec (drgnx-minimap--spec window)))
-          (unless (equal spec (window-parameter window 'glitnir-minimap))
-            (set-window-parameter window 'glitnir-minimap spec))
-          (drgnx-minimap--watch buffer (plist-get spec :file))))
-    (when (window-parameter window 'glitnir-minimap)
-      (set-window-parameter window 'glitnir-minimap nil))))
+  (cond
+   ;; past the density limit (M7): no line model, the hub's density strip of the file on disk
+   ((and on (drgnx-minimap-window-p window) (drgnx-minimap-density-p (window-buffer window)))
+    (let* ((buffer (window-buffer window)) (file (drgnx-minimap--file buffer))
+           (spec (and file (drgnx-minimap-density-spec window file))))
+      (unless (equal spec (window-parameter window 'glitnir-minimap))
+        (set-window-parameter window 'glitnir-minimap spec))
+      (drgnx-minimap--reserve window nil)
+      (drgnx-minimap--watch buffer file)))
+   ((and on (drgnx-minimap-window-p window))
+    (let ((buffer (window-buffer window)))
+      (with-current-buffer buffer
+        (nidhogg-lines-enable)
+        (drgnx-minimap--highlight)
+        (let ((re (and drgnx-minimap-labels drgnx-minimap-mark-regexp)))
+          (unless (equal re drgnx-minimap--regexp)
+            (setq drgnx-minimap--regexp re)
+            (condition-case err
+                (nidhogg-lines-set-section-regexp nil re)
+              (error (drgnx-notify 'minimap 'warn (format "Minimap MARK regexp: %s" (error-message-string err))
+                                   :id 'mark-regexp))))))
+      (let ((spec (drgnx-minimap--spec window)))
+        (unless (equal spec (window-parameter window 'glitnir-minimap))
+          (set-window-parameter window 'glitnir-minimap spec))
+        (drgnx-minimap--watch buffer (plist-get spec :file)))
+      (drgnx-minimap--reserve window t)))
+   ((window-parameter window 'glitnir-minimap)
+    (set-window-parameter window 'glitnir-minimap nil)
+    (drgnx-minimap--reserve window nil))))
 
 (defun drgnx-minimap--off ()
   "Every window's minimap gone, and the hub told no file is shown in one."
   (dolist (f (frame-list))
     (dolist (w (window-list f 'nomini))
       (when (window-parameter w 'glitnir-minimap) (set-window-parameter w 'glitnir-minimap nil))
+      (when (window-parameter w 'drgnx-ruler-reserve) (drgnx-ruler-reserve w nil))
       (when (window-parameter w 'glitnir-hstrip) (set-window-parameter w 'glitnir-hstrip nil))))
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-minimap--watched b) (drgnx-minimap--watch b nil))
@@ -358,12 +420,58 @@ the strip (ON)."
     (agent-edit-previous "Previous Agent Edit" drgnx-marks-previous-agent-edit
                          "Go to the previous place an agent edited in this file")
     (minimap-layer "Minimap Heat Layer…" drgnx-minimap-layer
-                   "Recolour the minimap by blame age, coverage, a profile or the lines agents read, or turn that off"))
+                   "Recolour the minimap by blame age, coverage, a profile or the lines agents read, or turn that off")
+    (minimap-describe "Describe Position" drgnx-minimap-describe
+                      "Say the section at point, its marks and the minimap's heat value there")
+    (trail-clear "Clear Visited Trail" drgnx-minimap-trail-clear "Clear this file's visited trail on the minimap")
+    (minimap-focus "Focus Minimap" drgnx-minimap-focus
+                   "Keep the minimap open and move, search, peek and fold in it with keys"))
   "The module's commands: (ID TITLE FUNCTION DOC) each.")
+
+(defconst drgnx-minimap--map-commands
+  '((minimap-focus-down "Minimap: Down" drgnx-minimap-focus-down drgnx-minimap-focus-map
+                        "Move the focused minimap's row down")
+    (minimap-focus-up "Minimap: Up" drgnx-minimap-focus-up drgnx-minimap-focus-map "Move the focused minimap's row up")
+    (minimap-focus-search "Minimap: Search" drgnx-minimap-focus-search drgnx-minimap-focus-map
+                          "Search the file and mark the hits on the focused minimap")
+    (minimap-focus-next "Minimap: Next Hit" drgnx-minimap-focus-next drgnx-minimap-focus-map
+                        "Move the focused minimap's row to the next search hit")
+    (minimap-focus-previous "Minimap: Previous Hit" drgnx-minimap-focus-previous drgnx-minimap-focus-map
+                            "Move the focused minimap's row to the previous search hit")
+    (minimap-focus-peek "Minimap: Peek" drgnx-minimap-focus-peek drgnx-minimap-focus-map
+                        "Peek at the focused minimap's row")
+    (minimap-focus-fold "Minimap: Fold" drgnx-minimap-focus-fold drgnx-minimap-focus-map
+                        "Fold or unfold the range at the focused minimap's row")
+    (minimap-focus-go "Minimap: Go" drgnx-minimap-focus-go drgnx-minimap-focus-map
+                      "Go to the focused minimap's row and leave the minimap")
+    (minimap-focus-leave "Minimap: Leave" drgnx-minimap-focus-leave drgnx-minimap-focus-map
+                         "Leave the minimap: point back where it was")
+    (minimap-card-jump "Minimap Peek: Go" drgnx-minimap-card-jump drgnx-minimap-card-map "Go to the peeked line")
+    (minimap-card-close "Minimap Peek: Close" drgnx-minimap-card-hide drgnx-minimap-card-map "Close the minimap's peek")
+    (minimap-bucket-jump "Minimap Part: Go" drgnx-minimap-bucket-jump drgnx-minimap-bucket-map
+                         "Go to the peeked part of a huge file, when the buffer holds it")
+    (minimap-bucket-close "Minimap Part: Close" drgnx-minimap-card-hide drgnx-minimap-bucket-map
+                          "Close the peek of a huge file's part")
+    (minimap-chip-copy "Minimap Selection: Copy" drgnx-minimap-chip-copy drgnx-minimap-chip-map
+                       "Copy the minimap's selected lines")
+    (minimap-chip-fold "Minimap Selection: Fold" drgnx-minimap-chip-fold drgnx-minimap-chip-map
+                       "Fold the minimap's selected lines")
+    (minimap-chip-pin "Minimap Selection: Pin" drgnx-minimap-chip-pin drgnx-minimap-chip-map
+                      "Pin the minimap's selected lines")
+    (minimap-chip-ask "Minimap Selection: Ask Agent" drgnx-minimap-chip-ask drgnx-minimap-chip-map
+                      "Ask an agent about the minimap's selected lines")
+    (minimap-chip-close "Minimap Selection: Close" drgnx-minimap-card-hide drgnx-minimap-chip-map
+                        "Close the selection's chip"))
+  "The keys of the minimap's focus, peek, part peek and selection chip: (ID TITLE FUNCTION MAP DOC) each.  Their keys
+come from the profiles (`:map' rows); the maps bind only the mouse in code.")
 
 (defun drgnx-minimap--teardown ()
   "The scroll bar and the marks' producers off; every window's strip gone."
+  (setq drgnx-ruler-left-function nil)
   (drgnx-marks-off)
+  (drgnx-minimap-peek-off)
+  (drgnx-minimap-search-off)
+  (drgnx-minimap-density-off)
   (remove-hook 'drgnx-ruler-place-functions #'drgnx-minimap--place)
   (when (eq (lookup-key special-event-map [glitnir-hstrip]) #'drgnx-minimap-hstrip-scroll)
     (define-key special-event-map [glitnir-hstrip] nil t))
@@ -379,6 +487,10 @@ the strip (ON)."
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-minimap--commands)
                                 (drgnx-command-define id :category "Go" :title title :command fn :scope 'editing
                                                       :doc doc))
+                              (pcase-dolist (`(,id ,title ,fn ,map ,doc) drgnx-minimap--map-commands)
+                                (drgnx-command-define id :category "Go" :title title :command fn :map map
+                                                      :scope 'editing :doc doc))
+                              (setq drgnx-ruler-left-function #'drgnx-minimap--ruler-left-p)
                               (add-hook 'drgnx-ruler-place-functions #'drgnx-minimap--place)
                               ;; the horizontal strip: Nidhogg's press and drag events, the sideways wheel and tilt
                               (define-key special-event-map [glitnir-hstrip] #'drgnx-minimap-hstrip-scroll)
@@ -387,7 +499,10 @@ the strip (ON)."
                               (drgnx-module-set 'mouse-wheel-tilt-scroll t)
                               (drgnx-scrollbar-mode 1)
                               (add-hook 'drgnx-look-density-changed-hook #'drgnx-scrollbar-refresh-all)
-                              (drgnx-marks-on)))
+                              (drgnx-marks-on)
+                              (drgnx-minimap-peek-on)
+                              (drgnx-minimap-search-on)
+                              (drgnx-minimap-density-on)))
 
 (provide 'drgnx-minimap)
 ;;; drgnx-minimap.el ends here

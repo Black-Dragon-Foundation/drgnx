@@ -3,6 +3,9 @@
 (require 'ert)
 (require 'drgnx-perf-run)
 
+(defconst perf-run-test--dir (file-name-directory (or load-file-name buffer-file-name))
+  "This file's directory (test/unit/).")
+
 (ert-deftest drgnx-perf-run/measure-workloads-repeat-and-take-medians ()
   ;; I6: frames, redisplay, memory: three runs, medians — never one sample.
   (let ((n 0))
@@ -522,8 +525,18 @@ its advice off `timer-event-handler' and the hub batch."
     (should (funcall fails '((lines-gc :gc_pause (:p95 9.2)) (lines-gc-baseline :gc_pause (:p95 8.0))) "lines-gc"))
     (should-not (drgnx-perf-run--relative-fails '((minimap-type :input (:p95 9.0)))))
     (dolist (w '(minimap-type-baseline minimap-type minimap-type-250k-baseline minimap-type-250k lines-gc-baseline
-                                       lines-gc lines-build-1mb lines-memory fold-all-10k classes-1mb fold-reparse))
+                                       lines-gc lines-build-1mb lines-memory fold-all-10k classes-1mb fold-reparse
+                                       minimap-peek))
       (should (assq w (drgnx-perf-run--workloads))))))
+
+(ert-deftest drgnx-perf-run/the-density-strip-has-its-row-and-budgets ()
+  ;; design §8: a 2 GB file's first density part within 250 ms, each part's main-thread cost within 1 ms
+  (should (assq 'density-2gb (drgnx-perf-run--workloads)))
+  (let ((budgets (with-temp-buffer
+                   (insert-file-contents (expand-file-name "../perf/budgets.eld" perf-run-test--dir))
+                   (read (current-buffer)))))
+    (should (member '(density-2gb (:first_ms) 250) budgets))
+    (should (member '(density-2gb (:part_ms :max) 1) budgets))))
 
 (ert-deftest drgnx-perf-run/the-ruler-is-judged-against-the-same-scroll-without-it ()
   ;; the ruler's row narrows the file and has the column on; its baseline differs from it only by the ruler, so neither

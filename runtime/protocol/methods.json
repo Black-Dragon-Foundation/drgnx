@@ -32935,12 +32935,93 @@
       "classes": [
         "user"
       ],
-      "doc": "the editor shows a file in a minimap, or no longer: while it does, the hub sends the file's labels (its definitions, up to 8 MiB of text) and the heat layer asked for (blame, coverage, profile or agent-read) on the model's raw path, again after edits pause",
-      "name": "minimap/watch",
+      "doc": "the first lines of a density bucket of a huge file, read from disk: the density strip's peek",
+      "name": "minimap/bucket",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`minimap/watch`: the editor shows FILE (absolute) in a minimap (ON), or no longer (not ON).  While a connection\nwatches it, the hub sends the file's minimap labels (its definitions as the Outline reads them, up to\n`MINIMAP_LABELS_MAX` bytes of text) on the model's raw path (`view-model` with `minimap`, docs/develop/hub.md,\n\"The minimap's layers\"), at once and again after the editor's edits to it pause; never per keystroke.  With HEAT\nit also sends that heat layer (`heat:HEAT`), and removes the one an earlier watch asked for.",
+        "description": "`minimap/bucket`: the first LINES (1 to 40) lines of a density bucket of FILE (its index, from 0, of the scan's\nbuckets): the bucket peek.  Read from disk; no buffer is touched.",
+        "properties": {
+          "bucket": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "file": {
+            "type": "string"
+          },
+          "lines": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "file",
+          "bucket",
+          "lines"
+        ],
+        "title": "MinimapBucketParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The bucket's first lines (invalid UTF-8 replaced, each cut at 400 bytes), the byte offset of the first and the\nbuckets the file has.",
+        "properties": {
+          "buckets": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "start",
+          "buckets"
+        ],
+        "title": "MinimapBucket",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor shows a file in a minimap, or no longer: while it does, the hub sends the file's labels (its definitions, up to 8 MiB of text) and the heat layer asked for (blame, coverage, profile or agent-read) on the model's raw path, again after edits pause",
+      "name": "minimap/watch",
+      "params": {
+        "$defs": {
+          "MinimapDensity": {
+            "additionalProperties": false,
+            "description": "What a density scan counts: the lines matching ERROR and those matching WARNING, Rust `regex` syntax each (at most\n1024 bytes).",
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "warning": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "warning"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`minimap/watch`: the editor shows FILE (absolute) in a minimap (ON), or no longer (not ON).  While a connection\nwatches it, the hub sends the file's minimap labels (its definitions as the Outline reads them, up to\n`MINIMAP_LABELS_MAX` bytes of text) on the model's raw path (`view-model` with `minimap`, docs/develop/hub.md,\n\"The minimap's layers\"), at once and again after the editor's edits to it pause; never per keystroke.  With HEAT\nit also sends that heat layer (`heat:HEAT`), and removes the one an earlier watch asked for.  With DENSITY (a file\npast the density limit, design M7) it scans the file on disk instead and sends its `density` layer in parts.",
         "properties": {
           "coverage": {
             "description": "Where coverage reports are, relative to the file's worktree (`*` and `?` match in the last part): the newest\nthat names the file is read, and read again when it changes.",
@@ -32948,6 +33029,17 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "density": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MinimapDensity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The file is past the density limit: scan it on disk for the density strip (no labels, folds or heat)."
           },
           "file": {
             "type": "string"
@@ -34401,6 +34493,15 @@
               "string",
               "null"
             ]
+          },
+          "folded": {
+            "description": "The lines (from 1) where the editor has a folded range start: the definitions starting there are marked folded.",
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
           },
           "view": {
             "type": "string"

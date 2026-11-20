@@ -1619,7 +1619,13 @@ The commands of modules that need no installed package are in it, the later stag
                               work-start-plan work-start-go work-start-none work-start-cancel
                               ;; Changes filtered to a Work node (flow Task 27e), the Budgets page (Task 24b) and the
                               ;; Agents side's cards (Task 23)
-                              work-changes budgets-open budgets-edit-limit budgets-select agents-side-act))
+                              work-changes budgets-open budgets-edit-limit budgets-select agents-side-act
+                              ;; the minimap's focus, peek, part peek and selection chip (minimap Tasks 15, 16, 18)
+                              minimap-focus-down minimap-focus-up minimap-focus-search minimap-focus-next
+                              minimap-focus-previous minimap-focus-peek minimap-focus-fold minimap-focus-go
+                              minimap-focus-leave minimap-card-jump minimap-card-close minimap-bucket-jump
+                              minimap-bucket-close minimap-chip-copy minimap-chip-fold minimap-chip-pin minimap-chip-ask
+                              minimap-chip-close))
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

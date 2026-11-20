@@ -320,6 +320,7 @@ params! {
     OutlineSet(view::OutlineSet),
     OutlineScopes(view::OutlineScopesParams),
     MinimapWatch(view::MinimapWatch),
+    MinimapBucket(view::MinimapBucketParams),
     FoldsSave(folds::FoldsSave),
     FoldsLoad(folds::FoldsLoad),
     TermOpen(term::TermOpen),

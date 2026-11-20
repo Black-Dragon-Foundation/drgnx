@@ -312,6 +312,8 @@ pub enum FaceId {
     FoldSummary,
     /// `drgnx-fold-name`
     FoldName,
+    /// `drgnx-minimap-peek-header`
+    MinimapPeekHeader,
     /// `drgnx-minimap-label`
     MinimapLabel,
     /// `drgnx-sticky`
@@ -1315,6 +1317,7 @@ impl FaceId {
         FaceId::WbIslandControl,
         FaceId::FoldSummary,
         FaceId::FoldName,
+        FaceId::MinimapPeekHeader,
         FaceId::MinimapLabel,
         FaceId::Sticky,
         FaceId::StickyLine,
@@ -1895,6 +1898,7 @@ impl FaceId {
             FaceId::WbIslandControl => "drgnx-wb-island-control",
             FaceId::FoldSummary => "drgnx-fold-summary",
             FaceId::FoldName => "drgnx-fold-name",
+            FaceId::MinimapPeekHeader => "drgnx-minimap-peek-header",
             FaceId::MinimapLabel => "drgnx-minimap-label",
             FaceId::Sticky => "drgnx-sticky",
             FaceId::StickyLine => "drgnx-sticky-line",
@@ -2476,6 +2480,7 @@ impl FaceId {
             "drgnx-wb-island-control" => FaceId::WbIslandControl,
             "drgnx-fold-summary" => FaceId::FoldSummary,
             "drgnx-fold-name" => FaceId::FoldName,
+            "drgnx-minimap-peek-header" => FaceId::MinimapPeekHeader,
             "drgnx-minimap-label" => FaceId::MinimapLabel,
             "drgnx-sticky" => FaceId::Sticky,
             "drgnx-sticky-line" => FaceId::StickyLine,
