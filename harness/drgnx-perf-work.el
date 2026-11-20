@@ -357,6 +357,9 @@ takes a 10,000-step turn in for minutes, and answers a question meanwhile only n
           (set-window-buffer (selected-window) buf)
           (unless (buffer-local-value 'drgnx-view-patch buf)
             (error "Premise: the trail is not on the hub's rows (Sjá: %s)" (if (fboundp 'nidhogg-view--call) "yes" "no")))
+          ;; the env of the window's class goes now: a window change sends it on an idle debounce, and this wait is not
+          ;; idle (the hub holds the view `unshown' until then and draws no rows)
+          (drgnx-view-env-update (format "trail/%s" (drgnx-agent-session-remote drgnx-perf--trail-session)))
           (unless (drgnx-perf--wait 30 (lambda () (and (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch buf))
                                                        (> (buffer-size buf) 0))))
             (error "The trail's first rows did not come"))
