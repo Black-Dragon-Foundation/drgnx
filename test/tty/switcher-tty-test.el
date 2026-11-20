@@ -22,7 +22,7 @@
                                                       (plist-get drgnx-switcher--state :overlays)))
                    (drgnx-tty-session-eval s '(reverse (mapcar (lambda (it) (string (plist-get it :letter)))
                                                                (plist-get drgnx-switcher--state :items))))))
-    (drgnx-tty-session-wait-screen s "^a" 10)
+    (drgnx-tty-session-wait-screen s (concat "^" drgnx-tty-session-rail "a") 10)
     (drgnx-tty-session-eval s '(progn (drgnx-switcher-close) t))
     (should-not (drgnx-tty-session-eval s 'drgnx-switcher--state))))
 

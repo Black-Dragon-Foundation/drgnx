@@ -524,11 +524,16 @@ the session's own runtime folder, ended with the session's Emacs.  No hub binary
 
 ;;;; The screen
 
-(defconst drgnx-tty-session-explorer-heading "^ \\(?:.\\{3\\} \\)?[⌄›v>] Files"
+(defconst drgnx-tty-session-rail "\\(?:.\\{4\\}\\)?"
+  "What may stand at a screen line's start before the sidebar's text: the rail, three columns of glyphs and the divider
+(docs/guide/look.md, \"The rail\"), which a window that shows the sidebar and the editor has and a focused one has not.
+For a pattern that starts at the sidebar's text: (concat \"^\" drgnx-tty-session-rail \"\\\\(TEXT\\\\)\"), whose group
+is where a click lands.")
+
+(defconst drgnx-tty-session-explorer-heading (concat "^" drgnx-tty-session-rail " [⌄›v>] Files")
   "The Explorer's section heading on a terminal screen (a line of its own: the chevron, open or closed, then `Files';
 v and > in the ASCII a C locale gets): the sidebar is drawn.  The line's start keeps it off the title bar's `C-p
-files' (`string-match' folds case).  The rail, three columns of glyphs on a terminal (docs/guide/look.md, \"The
-rail\"), may stand before the chevron: a window that shows the sidebar and the editor has one.")
+files' (`string-match' folds case).")
 
 (defun drgnx-tty-session-screen (sess &optional escapes)
   "The text of SESS's pane (`capture-pane -p'; with ESCAPES, its attributes as escape sequences).  A kitty session's
@@ -539,11 +544,13 @@ is kitty's screen (`drgnx-tty-session-kitty-screen'; ESCAPES is not for it)."
                                       (append (and escapes '("-e")) (list "-t" (plist-get sess :target)))))))
 
 (defun drgnx-tty-session--find-in (screen regexp)
-  "(COL . ROW), 1-based cells, of REGEXP's first match in SCREEN's lines, or nil."
+  "(COL . ROW), 1-based cells, of REGEXP's first match in SCREEN's lines, or nil.  COL is where the match's group 1
+starts when it has one (a click lands on the row's text, not on the rail before it: `drgnx-tty-session-rail'), else
+where the match starts."
   (cl-loop for line in (split-string screen "\n")
            for row from 1
            when (string-match regexp line)
-           return (cons (1+ (string-width (substring line 0 (match-beginning 0)))) row)))
+           return (cons (1+ (string-width (substring line 0 (or (match-beginning 1) (match-beginning 0))))) row)))
 
 (defun drgnx-tty-session-find (sess regexp)
   "(COL . ROW) of REGEXP's first match on SESS's screen, or nil."

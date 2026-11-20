@@ -96,7 +96,7 @@ with :below HEADING, the first match in a line below HEADING's."
 (ert-deftest drgnx-tty-mouse/explorer-click-opens-a-file ()
   (drgnx-tty-session-with (s :size "120x40")
     (drgnx-tty-mouse-test--project s)
-    (drgnx-tty-mouse-test--click-on s "^  b\\.txt")
+    (drgnx-tty-mouse-test--click-on s (concat "^" drgnx-tty-session-rail "\\(  b\\.txt\\)"))
     (should (equal (drgnx-tty-session-wait s `(and (equal ,drgnx-tty-mouse-test--editor-buffer "b.txt") t)) t))))
 
 (ert-deftest drgnx-tty-mouse/explorer-ctrl-click-toggles-selection ()
@@ -108,15 +108,15 @@ with :below HEADING, the first match in a line below HEADING's."
     (drgnx-tty-session-wait s '(let ((w (drgnx-wb-section-window 'explorer)))
                                  (equal (with-current-buffer (window-buffer w) (drgnx-explorer-node-at (window-point w)))
                                         (buffer-file-name (get-buffer "a.txt")))))
-    (drgnx-tty-mouse-test--click-on s "^  a\\.txt" :mods '(control) :below drgnx-tty-session-explorer-heading)
-    (drgnx-tty-mouse-test--click-on s "^  b\\.txt" :mods '(control) :below drgnx-tty-session-explorer-heading)
+    (drgnx-tty-mouse-test--click-on s (concat "^" drgnx-tty-session-rail "\\(  a\\.txt\\)") :mods '(control) :below drgnx-tty-session-explorer-heading)
+    (drgnx-tty-mouse-test--click-on s (concat "^" drgnx-tty-session-rail "\\(  b\\.txt\\)") :mods '(control) :below drgnx-tty-session-explorer-heading)
     (should (equal (drgnx-tty-session-wait
                     s '(with-current-buffer (window-buffer (drgnx-wb-section-window 'explorer))
                          (and (= (length drgnx-explorer--selection) 2)
                               (mapcar #'file-name-nondirectory drgnx-explorer--selection))))
                    '("a.txt" "b.txt")))
     ;; a Ctrl-click on a selected row takes it out
-    (drgnx-tty-mouse-test--click-on s "^  a\\.txt" :mods '(control) :below drgnx-tty-session-explorer-heading)
+    (drgnx-tty-mouse-test--click-on s (concat "^" drgnx-tty-session-rail "\\(  a\\.txt\\)") :mods '(control) :below drgnx-tty-session-explorer-heading)
     (should (equal (drgnx-tty-session-wait
                     s '(with-current-buffer (window-buffer (drgnx-wb-section-window 'explorer))
                          (and (= (length drgnx-explorer--selection) 1)

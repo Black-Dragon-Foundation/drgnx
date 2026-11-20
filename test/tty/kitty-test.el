@@ -206,7 +206,7 @@ screen.  Returns its directory."
   (drgnx-tty-kitty-test--with (s)
     (drgnx-tty-kitty-test--project s)
     ;; a click on the Explorer's b.txt row opens it
-    (let ((row (drgnx-tty-session-wait-screen s "^  b\\.txt")))
+    (let ((row (drgnx-tty-session-wait-screen s (concat "^" drgnx-tty-session-rail "\\(  b\\.txt\\)"))))
       (drgnx-tty-session-kitty-text s (drgnx-tty-session--click-bytes (car row) (cdr row))))
     (drgnx-tty-session-wait s `(equal ,drgnx-tty-kitty-test--editor-buffer "b.txt"))
     (drgnx-tty-session-wait-screen s "line 3\\b")
