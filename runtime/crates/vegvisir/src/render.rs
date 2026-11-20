@@ -1432,16 +1432,11 @@ pub fn strip(
             Some(FaceId::WorkNeedsYou.name()),
         );
     }
-    // 20 px short of the edge: the window's fringe and its truncation glyph are not drawn on; a terminal has no
-    // pixel stops: the chips follow after two spaces
-    if kit.tty {
-        b.push("  ", None);
-    } else {
-        b.stop(
-            env.width_px
-                .saturating_sub(w.ceil() as u32 + (20.0 * env.scale) as u32),
-        );
-    }
+    // 20 px short of the edge: the window's fringe and its truncation glyph are not drawn on
+    b.stop(
+        env.width_px
+            .saturating_sub(w.ceil() as u32 + (20.0 * env.scale) as u32),
+    );
     let mut images = BTreeMap::new();
     for (i, (c, icon)) in chips.iter().enumerate() {
         if i > 0 {
@@ -1467,7 +1462,7 @@ pub fn strip(
             );
             continue;
         }
-        let drawn = icon.filter(|_| !kit.tty).and_then(|n| {
+        let drawn = icon.and_then(|n| {
             let svg = crate::icons::svg(n, env.palette.colour("chip-fg"), icon_px)?;
             Some((ImageId::of(svg.as_bytes(), env.epoch), svg))
         });
@@ -1488,9 +1483,7 @@ pub fn strip(
     }
     let end = b.pos();
     b.face(0, end, FaceId::WorkCard.name());
-    if !kit.tty {
-        b.height(1, (30.0 * env.scale).round() as u32);
-    }
+    b.height(1, (30.0 * env.scale).round() as u32);
     (b.finish(), images.into_iter().collect())
 }
 

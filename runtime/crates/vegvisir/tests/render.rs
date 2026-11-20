@@ -426,36 +426,6 @@ fn tiles_are_image_ids_reused_across_draws() {
     assert_eq!(uniq.len(), a.images.len() - 1);
 }
 
-/// [D] The needs-you strip on a terminal has no pixel stop, no image and no height: the machines' chips follow after two
-/// spaces (the tty Work rows read a stop as a graphical form).
-#[test]
-fn strip_on_a_terminal_has_no_stop_image_or_height() {
-    let f: Frame = serde_json::from_str(include_str!(
-        "../../../../test/fixtures/work-space/frame.json"
-    ))
-    .unwrap();
-    let (items, edges, layout) = frame();
-    let new = BTreeSet::new();
-    let pal = palette();
-    let s = scene(&items, &edges, &layout, &new);
-    let machines: Vec<Item> = items
-        .values()
-        .filter(|i| i.id.0.starts_with("machine:"))
-        .cloned()
-        .collect();
-    let env = Env {
-        tty: true,
-        cell: (1, 1),
-        width_px: 120,
-        ..gui(&pal)
-    };
-    let kit = drgnx_rows::kit::KitEnv { tty: true, ..kit() };
-    let row = render::strip(&s, &f.needs_you, &machines, &[], &env, &Cols, &kit).0;
-    assert!(row.text.contains("desk 3/16"), "{row:?}");
-    assert!(row.stops.is_empty(), "{row:?}");
-    assert!(row.images.is_empty(), "{row:?}");
-}
-
 /// [D] The needs-you strip: a chip with its jump key per entry (nine at most, then +N), the machines' load at the
 /// right edge.
 #[test]
