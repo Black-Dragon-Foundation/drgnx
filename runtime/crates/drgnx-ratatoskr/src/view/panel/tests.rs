@@ -332,7 +332,8 @@ fn two_classes_get_two_versions() {
     w.act(Act::Say);
     w.act(Act::Tool);
     w.act(Act::Env("tty", 1, 640));
-    w.act(Act::Change(1));
+    // the agent's message grows (a read's completion inside a closed Explored run draws nothing new: S3)
+    w.act(Act::Change(0));
     let of = |class: &str| -> Vec<(u64, u64)> {
         w.out
             .iter()
