@@ -1188,6 +1188,9 @@ pub struct Session {
     /// The plugins that run for it differ from the ones it started with ([`crate::sessions::Sessions::plugins_flag`]).
     plugins_changed: Arc<AtomicBool>,
     capabilities: Option<Value>,
+    /// As [`Launched::proto`] and [`Launched::v2_fallback`].
+    proto: Option<String>,
+    v2_fallback: Option<String>,
     conn: Conn,
     acp: SessionId,
     editors: Arc<crate::settings::agents::Editors>,
@@ -1335,6 +1338,9 @@ struct Launched {
     level: Option<RestoreLevel>,
     level_why: Option<String>,
     caps: Option<Value>,
+    /// The ACP version the agent speaks (`v1`, `v2`), and why it is v1 when v2 was asked (`rejected: …`, `exited: …`).
+    proto: Option<String>,
+    v2_fallback: Option<String>,
     enforced: bool,
     /// Whether the provider's lock holds (`lock::plan`'s verdict, whatever the sandbox).
     lock_held: bool,
@@ -2333,8 +2339,54 @@ async fn launch(
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     // the session's MCP session is opened first (below); a launch that fails after that, at any step, closes the one
     // it opened: its socket and dir go with it, not only when `prepare` fails
+    let ask = profile.acp_v2() == crate::settings::profiles::AcpV2::Auto;
+    let first = launch_once(front, profile, role, sid, cwd, attach, plan, ask, None).await;
+    match first {
+        // the agent exited when asked for ACP v2: started once more, asking for v1 (a second exit is the answer)
+        Err(e) if ask && e.path.as_deref() == Some(V2_EXITED) => {
+            tracing::warn!(
+                sid,
+                "the agent exited at the ACP v2 initialize: started again as v1"
+            );
+            let why = format!("exited: {}", e.message);
+            launch_once(
+                front,
+                profile,
+                role,
+                sid,
+                cwd,
+                attach,
+                plan,
+                false,
+                Some(why),
+            )
+            .await
+        }
+        other => other,
+    }
+}
+
+/// The marker of the error of a launch whose agent exited at the ACP v2 `initialize` (an `Error::path`).
+const V2_EXITED: &str = "acp-v2-exited";
+
+/// One start of the agent (V2: ask it for ACP v2; FALLBACK: why it is asked for v1 this time).
+#[allow(clippy::too_many_arguments)]
+async fn launch_once(
+    front: &Front,
+    profile: &AgentProfile,
+    role: Role,
+    sid: &str,
+    cwd: &Path,
+    attach: &Attach,
+    plan: (Option<&str>, Option<&str>, &[(String, String)]),
+    v2: bool,
+    fallback: Option<String>,
+) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     let opened = front.mcp.socket_of(sid).is_none();
-    let out = launch_steps(front, profile, role, sid, cwd, attach, plan, opened).await;
+    let out = launch_steps(
+        front, profile, role, sid, cwd, attach, plan, opened, v2, fallback,
+    )
+    .await;
     if out.is_err() && opened {
         let _ = front.mcp.close(sid).await;
     }
@@ -2352,6 +2404,8 @@ async fn launch_steps(
     attach: &Attach,
     (task, job, module_env): (Option<&str>, Option<&str>, &[(String, String)]),
     opened: bool,
+    v2: bool,
+    fallback: Option<String>,
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
     // needs it
@@ -2406,7 +2460,7 @@ async fn launch_steps(
     let opts = ConnOpts {
         tap: crate::recording::acp_tap(sid, job, &profile.name, &prep.spec, cwd),
         // ACP v2 is a draft: only a profile that asks for it (`:acp-v2 auto`, the default of claude and codex) does
-        v2: profile.acp_v2() == crate::settings::profiles::AcpV2::Auto,
+        v2,
         ..ConnOpts::default()
     };
     let (conn, rx) = Conn::spawn(prep.spec, opts)
@@ -2441,12 +2495,22 @@ async fn launch_steps(
         }
     }
     let meta = prep.plan.session_meta.clone();
+    // what `initialize` settled (its version, why it is v1 when v2 was asked), and whether the agent exited there
+    let settled = Mutex::new((None::<hermod::Proto>, None::<String>));
+    let exited_at_init = AtomicBool::new(false);
     let init = async {
         let caps =
             serde_json::from_value(json!({"fs": {"readTextFile": true, "writeTextFile": true},
                                                  "_meta": panel::client_meta()}))
             .map_err(|e| hermod::Error::Decode(e.to_string()))?;
-        let info = conn.initialize(caps).await?;
+        let info = match conn.initialize(caps).await {
+            Err(hermod::Error::Closed) => {
+                exited_at_init.store(true, Ordering::SeqCst);
+                return Err(hermod::Error::Closed);
+            }
+            r => r?,
+        };
+        *lock(&settled) = (Some(info.proto), info.v2_fallback.clone());
         stages.at("the agent initialized");
         let caps = serde_json::to_value(&info.caps).ok();
         let mut landed = (None, None);
@@ -2516,9 +2580,16 @@ async fn launch_steps(
                 .rfind(|l| !l.is_empty())
                 .map(|l| format!(" ({})", super::transcript::redact(l)))
                 .unwrap_or_default();
-            return Err(internal(format!("{}: {e}{why}", profile.name)));
+            let mut err = internal(format!("{}: {e}{why}", profile.name));
+            if v2 && exited_at_init.load(Ordering::SeqCst) {
+                err.path = Some(V2_EXITED.into());
+            }
+            return Err(err);
         }
     };
+    let (proto, v2_fallback) = settled
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Err(e) = plock::verify(&conn, &acp, profile, &prep.plan, capabilities.as_ref()).await {
         kill().await;
         return Err(refuse(&format!("{}: {e}", profile.name)));
@@ -2530,6 +2601,8 @@ async fn launch_steps(
             level,
             level_why,
             caps: capabilities,
+            proto: proto.map(|p| if p == hermod::Proto::V2 { "v2" } else { "v1" }.to_string()),
+            v2_fallback: v2_fallback.map(|m| format!("rejected: {m}")).or(fallback),
             enforced: prep.enforced,
             lock_held: prep.plan.enforced == plock::Enforced::Yes,
             enforced_why: prep.enforced_why,
@@ -2676,6 +2749,8 @@ fn assemble(
         browser_why: l.browser_why,
         plugins_changed,
         capabilities: l.caps,
+        proto: l.proto,
+        v2_fallback: l.v2_fallback,
         conn: l.conn,
         acp: l.acp,
         editors: front.editors.clone(),
@@ -4580,6 +4655,8 @@ impl Session {
             background: st.background_view(self.own_jobs()),
             background_ended: st.bg.ended.iter().cloned().collect(),
             caused: st.causes.list.clone(),
+            proto: self.proto.clone(),
+            v2_fallback: self.v2_fallback.clone(),
         }
     }
 

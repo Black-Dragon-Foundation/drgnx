@@ -82,6 +82,9 @@ pub struct AgentInfo {
     pub auth: Vec<AuthMethod>,
     /// The version the connection speaks from here on.
     pub proto: Proto,
+    /// Why a connection that asked for v2 speaks v1: the agent rejected the v2 `initialize` with an error and was
+    /// asked again as v1 (its message).  None: no fallback (v1 asked, or the agent answered 1 or 2).
+    pub v2_fallback: Option<String>,
 }
 
 /// How a turn ended.  `turn_id` is `_meta.turnId` of the answer, when the agent sends one.
