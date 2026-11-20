@@ -502,7 +502,11 @@ panel's window at either scale.")
         (defalias 'drgnx-panel-replay-program #'drgnx-look-scene--background-program))
       ;; the replay's hub is the scenes' hub from here on: it seeds the plan run as `drgnx-look-scene--hub' does
       ;; and the agent works in the scenes' project, so the status bar and the Explorer show it there
-      (setq drgnx-look-scene--panel (let ((process-environment (cons "RATATOSKR_SEED_SCENE=1" process-environment))
+      (setq drgnx-look-scene--panel (let ((process-environment
+                                           ;; the background scene's items began as long ago as the mockup's elapsed times say
+                                           (append (and (drgnx-look-scene--bg-only-p)
+                                                        (list "RATATOSKR_BG_STARTED_AGO=t1=252,w1=760,k1=125,t2=240"))
+                                                   (cons "RATATOSKR_SEED_SCENE=1" process-environment)))
                                           (drgnx-panel-replay-project drgnx-look-scene--project))
                                       (drgnx-panel-replay-up bin)))
       ;; the turn runs on past the prefix to its ask: the scene shows every step's time and the open card
@@ -745,8 +749,9 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
   "The mock agent's script for the `agent-background' scene: an edit, then three items running (a shell, a watcher, a
 subagent) and one that ended, failed (exit 3); the turn ends with the agent's line."
   (concat "tool:edit hermod/src/v2.rs\\nsay Added the v2 turn.\\n"
-          "bg:shell t1 cargo test -p hermod\\nbg:output t1 test v2::turn_ends_at_idle ... ok\\n"
-          "bg:monitor w1 Watching CI on staging PR #412\\nbg:subagent k1 Subagent: review the v2 diff\\n"
+          "bg:shell t1 cargo test -p hermod\\nbg:progress t1 test v2::turn_ends_at_idle ... ok\\n"
+          "bg:monitor w1 Watching CI on staging PR #412\\nbg:progress w1 3 of 7 jobs done · macOS queued\\n"
+          "bg:subagent k1 Subagent: review the v2 diff\\nbg:progress k1 read conn.rs · 8 tool uses\\n"
           "bg:shell t2 bin/drgnx test gateway\\nbg:exit t2 3\\n"
           "say The tests are running in the background; I'll check the review when it lands. Turn ended.\n"
           "say done"))
