@@ -518,6 +518,15 @@ scroll would cut its lines); over a window that cuts them, it scrolls sideways."
             (should (> (window-hscroll w) 0)))
         (set-window-hscroll w 0)))))
 
+(ert-deftest drgnx-minimap/a-folded-range-gets-a-pill ()
+  "The minimap draws a dashed pill after each folded range's first line (design F3): the spec names its colour and
+the count's format; the range's name, when it has one, comes from the line model (`drgnx-fold--report')."
+  (skip-unless (fboundp 'nidhogg-lines-set-section-regexp))
+  (ruler-test--with-minimap
+    (let ((spec (drgnx-minimap--spec (selected-window))))
+      (should (eq 'drgnx-text-muted (plist-get spec :pill)))
+      (should (equal "⋯ %d folded" (plist-get spec :pill-format))))))
+
 (ert-deftest drgnx-minimap/a-files-change-hunks-are-labelled ()
   "A file with its change marks on gets a label at each of the hub's hunks (`drgnx-hunks--data'): a deletion at the
 line before it; none without the marks."

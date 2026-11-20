@@ -235,6 +235,8 @@ width back: `drgnx-ruler-reserve' widens the right fringe inside the strip, wher
            :fill (cons (face-background 'drgnx-surface-panel nil 'default) 1.0)
            :text (cons 'default 0.35)
            :band (cons 'default 0.09)
+           ;; a folded range's dashed pill (F3): its name (`nidhogg-lines-set-hidden'), else its count
+           :pill 'drgnx-text-muted :pill-format "⋯ %d folded"
            :classes (seq-keep (lambda (c) (and (facep (cadr c)) (cons (car c) (cadr c))))
                               drgnx-minimap--class-faces))
      (and drgnx-minimap-labels

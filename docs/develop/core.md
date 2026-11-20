@@ -1740,8 +1740,12 @@ lists at each publish.
   `nidhogg-lines-set-folds`). Kinds: 0 block, 1 function, 2 class, 3 comment, 4 import, 5 test, 6 region, 7 cell,
   8 heading (`drgnx-fold-kinds`). A fold is an overlay (`drgnx-fold` t, `invisible`, `display` the summary,
   `isearch-open-invisible`) from the first line's end to END; after each command the overlays' ranges go to the model
-  (`nidhogg-lines-set-hidden`), which leaves their lines out of the scroll bar and the minimap. Org folds with
-  `org-fold`; `evil-fold-list` gets a provider for `drgnx-fold-mode`.
+  (`nidhogg-lines-set-hidden`, each `(BEG END NAME)`: a named fold's name is the minimap's pill), which leaves their
+  lines out of the scroll bar and the minimap. Org folds with `org-fold`; `evil-fold-list` gets a provider for
+  `drgnx-fold-mode`. The fold arrows are Nidhogg's (`glitnir-fold-arrows`, drawn from the fold table at publish): the
+  module sets the window parameter on editor windows of graphical frames from `drgnx-ruler-place-functions`
+  (`drgnx-fold--place-arrows`, `drgnx-fold-arrows`), and a click arrives as `[left-fringe mouse-1]` in
+  `drgnx-fold-mode-map` (`drgnx-fold-fringe-click`: only on a line that starts a range).
 - **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
   8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
   at 26 %; all through `drgnx-px`. The themes give that face the text colour (`fg`, the look's `--fg`), never a fill

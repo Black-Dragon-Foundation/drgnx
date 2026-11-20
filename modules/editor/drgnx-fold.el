@@ -53,6 +53,7 @@
 (declare-function org-cycle "org-cycle" (&optional arg))
 (declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
 (defvar drgnx-hub-connected-functions)
+(defvar drgnx-ruler-place-functions)
 (declare-function drgnx-notebook--rescan "drgnx-notebook")
 (defvar drgnx-notebook--cells)
 (defvar evil-fold-list)
@@ -371,7 +372,7 @@ counted once by the line model (`nidhogg-lines-counts', else the scroll bar's ma
   "Tell the line model which ranges are hidden (the scroll bar and the minimap leave their lines out), and
 `drgnx-fold-changed-hook' that they changed."
   (when (and (fboundp 'nidhogg-lines-set-hidden) (not (drgnx-fold--org-p)) drgnx-fold--sources)
-    (nidhogg-lines-set-hidden nil (mapcar (lambda (o) (cons (overlay-start o) (overlay-end o)))
+    (nidhogg-lines-set-hidden nil (mapcar (lambda (o) (list (overlay-start o) (overlay-end o) (overlay-get o 'drgnx-fold-name)))
                                           (drgnx-fold--overlays))))
   (run-hooks 'drgnx-fold-changed-hook))
 
@@ -830,10 +831,63 @@ is dropped.  Non-nil when done, as the poll of `drgnx-fold--loaded' wants."
                         (lambda (result error) (unless error (drgnx-fold--loaded buffer (plist-get result :anchors)))))
       (error nil))))
 
+;;;; Fold arrows (design F1)
+
+(defun drgnx-fold--arrows-respec (&rest _)
+  "`drgnx-fold-arrows' changed: every window's arrows again."
+  (dolist (f (frame-list))
+    (dolist (w (window-list f 'nomini))
+      (when (or (window-parameter w 'glitnir-fold-arrows) (window-parameter w 'glitnir-ruler))
+        (drgnx-fold--place-arrows w (and (window-parameter w 'glitnir-ruler) t))))))
+
+(drgnx-defsetting drgnx-fold-arrows 'hover
+  "Where an editor's left fringe shows a chevron on each line that starts a fold: `hover' (while the pointer is over
+the fringe; a folded line's always), `always', or nil (none: folding stays on the keys).  A click on one folds or
+unfolds its block."
+  :type '(choice (const hover) (const always) (const :tag "None" nil))
+  :group 'drgnx-fold :scope 'global :apply #'drgnx-fold--arrows-respec)
+
+(defun drgnx-fold--arrows-spec (mode fringe)
+  "Nidhogg's `glitnir-fold-arrows' spec for MODE (`drgnx-fold-arrows') in a left fringe FRINGE device px wide: the
+chevron's box 2 px in from each side, an open fold's muted, a folded one's in the accent; nil for none or a fringe
+under 8 px."
+  (and mode (>= fringe 8)
+       (list :mode mode :size (- fringe 4) :inset 2
+             :colour (cons 'drgnx-text-muted 0.9) :folded (cons 'drgnx-accent 1.0))))
+
+(defun drgnx-fold--place-arrows (window on)
+  "`drgnx-ruler-place-functions': WINDOW's fold arrows as they should be now: on an editor window (ON, it shows the
+strip) of a graphical frame, from `drgnx-fold-arrows'; else none."
+  (when (window-live-p window)
+    (let ((spec (and on (display-graphic-p (window-frame window))
+                     (not (with-current-buffer (window-buffer window) (drgnx-fold--org-p)))
+                     (drgnx-fold--arrows-spec drgnx-fold-arrows (or (car (window-fringes window)) 0)))))
+      (unless (equal spec (window-parameter window 'glitnir-fold-arrows))
+        (set-window-parameter window 'glitnir-fold-arrows spec)))))
+
+(defun drgnx-fold-fringe-click (event)
+  "A click in the left fringe (EVENT): fold or unfold the block that starts on the clicked line, where its chevron is;
+on any other line nothing.  Point stays where it was."
+  (interactive "e")
+  (let* ((posn (event-start event)) (w (posn-window posn)) (pos (posn-point posn)))
+    (when (and (window-live-p w) pos)
+      (with-selected-window w
+        (save-excursion
+          (goto-char pos)
+          (let ((r (drgnx-fold--range-at pos)))
+            (when (or (drgnx-fold--line-overlays)
+                      (and r (<= (line-beginning-position) (nth 0 r) (line-end-position))))
+              (drgnx-fold-toggle))))))))
+
 ;;;; Mode, evil, hideshow
 
-(defvar drgnx-fold-mode-map (make-sparse-keymap)
-  "Keys of folding (the Emacs profile binds hideshow's `C-c @' keys here, keys/emacs.eld).")
+(defvar drgnx-fold-mode-map
+  (let ((m (make-sparse-keymap)))
+    ;; the fold arrows' clicks (the keyboard keys come from the profiles)
+    (define-key m [left-fringe down-mouse-1] #'ignore)
+    (define-key m [left-fringe mouse-1] #'drgnx-fold-fringe-click)
+    m)
+  "Keys of folding (the Emacs profile binds hideshow's `C-c @' keys here, keys/emacs.eld); a click on a fold arrow.")
 
 (define-minor-mode drgnx-fold-mode
   "Folding on the line model (module editor/fold): its keys, and evil's fold keys act on drgnx's folds."
@@ -893,6 +947,10 @@ is dropped.  Non-nil when done, as the poll of `drgnx-fold--loaded' wants."
   (remove-hook 'after-save-hook #'drgnx-fold--save)
   (remove-hook 'kill-buffer-hook #'drgnx-fold--killed)
   (remove-hook 'drgnx-hub-connected-functions #'drgnx-fold--resend)
+  (remove-hook 'drgnx-ruler-place-functions #'drgnx-fold--place-arrows)
+  (dolist (f (frame-list))
+    (dolist (w (window-list f 'nomini))
+      (when (window-parameter w 'glitnir-fold-arrows) (set-window-parameter w 'glitnir-fold-arrows nil))))
   (dolist (b (buffer-list))
     (with-current-buffer b
       (mapc #'delete-overlay (drgnx-fold--overlays))
@@ -918,6 +976,8 @@ is dropped.  Non-nil when done, as the poll of `drgnx-fold--loaded' wants."
                               (add-hook 'after-save-hook #'drgnx-fold--save)
                               (add-hook 'kill-buffer-hook #'drgnx-fold--killed)
                               (add-hook 'drgnx-hub-connected-functions #'drgnx-fold--resend)
+                              (add-hook 'drgnx-ruler-place-functions #'drgnx-fold--place-arrows)
+                              (drgnx-fold--arrows-respec)
                               (with-eval-after-load 'evil (drgnx-fold--evil-provider))))
 
 (provide 'drgnx-fold)
