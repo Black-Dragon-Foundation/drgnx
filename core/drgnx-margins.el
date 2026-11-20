@@ -35,13 +35,19 @@
   "The columns zen centres WINDOW's text by, on each side (0 when none)."
   (or (window-parameter window 'drgnx-margins-centre) 0))
 
+(defun drgnx-margins--ruler-columns (window side)
+  "The columns WINDOW's scroll bar takes in its margin on SIDE (a terminal's: `drgnx-margins-ruler'): one on its
+side, outermost, else none."
+  (let ((ruler (window-parameter window 'drgnx-margins-ruler)))
+    (if (and ruler (eq side (if (eq ruler 'left) 'left 'right))) 1 0)))
+
 (defun drgnx-margins-apply (window)
-  "Set WINDOW's margins: its centring plus its buffer's claims, on each side, and on the right the scroll bar's
-column when WINDOW has one (a terminal's: `drgnx-margins-ruler', outermost, so it is the margin's last column)."
+  "Set WINDOW's margins: its centring plus its buffer's claims, on each side, and the scroll bar's column when WINDOW
+has one (a terminal's: `drgnx-margins-ruler', outermost: the right margin's last column, or the left's first)."
   (when (window-live-p window)
     (let* ((b (window-buffer window)) (c (drgnx-margins-centring window))
-           (l (+ c (drgnx-margins--sum b 'left)))
-           (r (+ c (drgnx-margins--sum b 'right) (if (window-parameter window 'drgnx-margins-ruler) 1 0))))
+           (l (+ c (drgnx-margins--sum b 'left) (drgnx-margins--ruler-columns window 'left)))
+           (r (+ c (drgnx-margins--sum b 'right) (drgnx-margins--ruler-columns window 'right))))
       (unless (equal (window-margins window) (cons (and (> l 0) l) (and (> r 0) r)))
         (set-window-margins window l r)))))
 
@@ -76,10 +82,12 @@ column when WINDOW has one (a terminal's: `drgnx-margins-ruler', outermost, so i
       (run-hook-with-args 'drgnx-margins-changed-functions (window-buffer window)))))
 
 (defun drgnx-margins-ruler (window on)
-  "Give WINDOW the scroll bar's one-column right margin on a terminal (ON), or take it away.  Its owner, the ruler,
-calls this again when WINDOW shows another buffer (which sets the margins anew)."
-  (unless (eq (and on t) (window-parameter window 'drgnx-margins-ruler))
-    (set-window-parameter window 'drgnx-margins-ruler (and on t)))
+  "Give WINDOW the scroll bar's margin column on a terminal (ON: `left' for the left margin's first column, else the
+right margin's last), or take it away.  Its owner, the ruler, calls this again when WINDOW shows another buffer (which
+sets the margins anew)."
+  (let ((v (and on (if (eq on 'left) 'left t))))
+    (unless (eq v (window-parameter window 'drgnx-margins-ruler))
+      (set-window-parameter window 'drgnx-margins-ruler v)))
   (drgnx-margins-apply window))
 
 (defun drgnx-margins-offset (owner &optional buffer)
@@ -92,7 +100,10 @@ claims before it; nil when OWNER has no claim."
       (let ((w (get-buffer-window buffer t)) (n 0))
         (cl-loop for c in claims until (eq (car c) owner)
                  when (eq (nth 1 c) (nth 1 mine)) do (setq n (+ n (nth 2 c))))
-        (+ n (if w (drgnx-margins-centring w) 0))))))
+        ;; a scroll bar's column outermost on the left comes before every left claim
+        (+ n (if w (+ (drgnx-margins-centring w)
+                      (if (eq (nth 1 mine) 'left) (drgnx-margins--ruler-columns w 'left) 0))
+               0))))))
 
 (defun drgnx-margins-pad (owner &optional buffer)
   "Blanks up to OWNER's claim in BUFFER's margin: what its margin strings start with."

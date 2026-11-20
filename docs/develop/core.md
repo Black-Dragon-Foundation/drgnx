@@ -1752,7 +1752,12 @@ lists at each publish.
   token: 26 % of a fill such as `hover` sits a step from every surface and the thumb vanishes.
   - The fringe is widened by the strip with `set-window-fringes` only when the strip comes or goes, or the scale
     changes (`drgnx-scrollbar-refresh-all` on the density hook). Its own width is kept in the window parameter
-    `drgnx-ruler-fringe`, which is also the strip's `:right`.
+    `drgnx-ruler-fringe`, which is also the strip's `:right`; `drgnx-ruler-side` says which fringe that is. With
+    `drgnx-ruler-left-function` (the minimap's side, `drgnx-minimap--ruler-left-p` for editors when
+    `drgnx-minimap-side` is `left`) the strip is in the left fringe beside the text (`:left`), the fringe's own part
+    outermost, where the fold arrows keep to (their `:inset` skips the strip). On a terminal the strip's column is
+    `drgnx-margins-ruler`'s: the right margin's last column, or with `left` the left margin's first, before every left
+    claim (`drgnx-margins-offset` counts it).
   - The fringe's own pixels stay outermost, so `drgnx-look-edge-drag` keeps its hit area: a press there goes to it
     (`drgnx-ruler-press`).
   - A window that shows another buffer gets that buffer's strip (`window-buffer-change-functions`). The ruler mode

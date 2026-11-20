@@ -81,7 +81,8 @@ wider than the window (12 px over the text, from the first text column; it takes
   :apply #'drgnx-minimap--setting-changed)
 
 (drgnx-defsetting drgnx-minimap-side 'right
-  "Which edge of the text the minimap opens over: `right' or `left'.  The scroll bar stays at the right edge."
+  "Which edge of the text the minimap and the scroll bar are at: `right' or `left' (the scroll bar in the left
+fringe, beside the text; on a terminal the left margin's first column)."
   :type '(choice (const right) (const left)) :group 'drgnx-minimap :scope 'global
   :apply #'drgnx-minimap--setting-changed)
 
@@ -351,6 +352,10 @@ them), else `mwheel-scroll'."
     (unless (and (window-live-p w) (drgnx-minimap--wraps-p w))
       (mwheel-scroll event))))
 
+(defun drgnx-minimap--ruler-left-p (window)
+  "`drgnx-ruler-left-function': an editor's scroll bar is on the left with the minimap (`drgnx-minimap-side')."
+  (and (eq drgnx-minimap-side 'left) (drgnx-minimap-window-p window)))
+
 (defun drgnx-minimap--place (window on)
   "`drgnx-ruler-place-functions': WINDOW's minimap and horizontal strip as they should be now, given that it shows
 the strip (ON)."
@@ -462,6 +467,7 @@ come from the profiles (`:map' rows); the maps bind only the mouse in code.")
 
 (defun drgnx-minimap--teardown ()
   "The scroll bar and the marks' producers off; every window's strip gone."
+  (setq drgnx-ruler-left-function nil)
   (drgnx-marks-off)
   (drgnx-minimap-peek-off)
   (drgnx-minimap-search-off)
@@ -484,6 +490,7 @@ come from the profiles (`:map' rows); the maps bind only the mouse in code.")
                               (pcase-dolist (`(,id ,title ,fn ,map ,doc) drgnx-minimap--map-commands)
                                 (drgnx-command-define id :category "Go" :title title :command fn :map map
                                                       :scope 'editing :doc doc))
+                              (setq drgnx-ruler-left-function #'drgnx-minimap--ruler-left-p)
                               (add-hook 'drgnx-ruler-place-functions #'drgnx-minimap--place)
                               ;; the horizontal strip: Nidhogg's press and drag events, the sideways wheel and tilt
                               (define-key special-event-map [glitnir-hstrip] #'drgnx-minimap-hstrip-scroll)

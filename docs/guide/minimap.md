@@ -159,7 +159,7 @@ says where it is in the echo area, for example `error 2 of 7: unused variable, l
 | `drgnx-minimap` | on | The scroll bar of an editor widens into the minimap when the pointer rests on it. |
 | `drgnx-minimap-width` | 120 | The minimap's width in pixels, 80 to 200. |
 | `drgnx-minimap-scale` | 2 | How tall a line is on the minimap, 1 to 3 pixels. |
-| `drgnx-minimap-side` | right | The edge of the text the minimap opens over. The scroll bar stays on the right. |
+| `drgnx-minimap-side` | right | The edge of the text the minimap and the scroll bar are at (on a terminal, the scroll bar is the left margin's first column). |
 | `drgnx-minimap-sticky` | off | Keep the minimap open. On the right, the text narrows so the minimap covers no code. |
 | `drgnx-minimap-labels` | on | Names over the minimap: definitions and MARK sections, MARK sections only, or none. |
 | `drgnx-minimap-layer` | none | The heat layer: blame age, coverage, profile, lines agents read, or none. |

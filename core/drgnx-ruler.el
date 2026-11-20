@@ -130,6 +130,14 @@ the whole, outside the rows the buffer holds; it brings those rows and puts WIND
 fringe) or a terminal's (a margin column; not batch Emacs's initial frame, which is no terminal anyone sees)."
   (and (featurep 'glitnir-ruler) (or (display-graphic-p) (not (frame-initial-p))) t))
 
+(defvar drgnx-ruler-left-function nil
+  "Nil, or a function of a window: non-nil puts that window's strip at its left edge (the minimap's side, set by
+`editor/minimap'): in the left fringe beside the text, on a terminal the left margin's first column.")
+
+(defun drgnx-ruler--left-p (window)
+  "Whether WINDOW's strip is at its left edge (`drgnx-ruler-left-function')."
+  (and drgnx-ruler-left-function (funcall drgnx-ruler-left-function window) t))
+
 (defun drgnx-ruler--column-p (window)
   "Whether WINDOW's strip is a terminal's margin column, not a strip in its fringe."
   (not (display-graphic-p (window-frame window))))
@@ -219,6 +227,7 @@ RADIUS [END])."
     (append
      (list :width (drgnx-px drgnx-ruler--width frame)
            :right (or (window-parameter window 'drgnx-ruler-fringe) 0)
+           :left (drgnx-ruler--left-p window)
            :height (drgnx-px drgnx-ruler--mark-height frame)
            :band (cons 'drgnx-ruler-view drgnx-ruler--thumb-opacity)
            :thumb-inset (drgnx-px drgnx-ruler--thumb-inset frame)
@@ -227,20 +236,35 @@ RADIUS [END])."
      (and span (list :span span))
      (list :marks (mapcar (lambda (m) (drgnx-ruler--mark m frame)) (and drgnx-ruler-mode drgnx-ruler--marks))))))
 
+(defun drgnx-ruler--set-fringe (window side px)
+  "Set WINDOW's fringe on SIDE (`left' or `right') to PX, the other side kept."
+  (let ((fr (window-fringes window)))
+    (if (eq side 'left)
+        (set-window-fringes window px (cadr fr) (nth 2 fr))
+      (set-window-fringes window (car fr) px (nth 2 fr)))))
+
 (defun drgnx-ruler--show (window)
-  "Give WINDOW the strip: its right fringe widened by the strip (once), or on a terminal a one-column right margin
-\(`drgnx-margins-ruler'), and the spec, set only when it changed."
-  (if (drgnx-ruler--column-p window)
-      (drgnx-margins-ruler window t)
-    (let* ((fr (window-fringes window))
-           ;; the strip, and what an owner reserves inside it (a sticky minimap: `drgnx-ruler-reserve')
-           (width (+ (drgnx-px drgnx-ruler--width (window-frame window))
-                     (or (window-parameter window 'drgnx-ruler-reserve) 0)))
-           (own (or (window-parameter window 'drgnx-ruler-fringe) (cadr fr))))
-      (unless (and (window-parameter window 'drgnx-ruler-fringe) (= (cadr fr) (+ own width)))
-        (setq own (if (window-parameter window 'drgnx-ruler-fringe) own (cadr fr)))
-        (set-window-parameter window 'drgnx-ruler-fringe own)
-        (set-window-fringes window (car fr) (+ own width) (nth 2 fr)))))
+  "Give WINDOW the strip: the fringe on its side (`drgnx-ruler--left-p') widened by the strip (once), or on a
+terminal a margin column (`drgnx-margins-ruler'), and the spec, set only when it changed."
+  (let ((side (if (drgnx-ruler--left-p window) 'left 'right)))
+    (if (drgnx-ruler--column-p window)
+        (drgnx-margins-ruler window side)
+      ;; the strip moved to the other side: that side's fringe back first
+      (when-let* ((was (window-parameter window 'drgnx-ruler-side))
+                  ((not (eq was side)))
+                  (own (window-parameter window 'drgnx-ruler-fringe)))
+        (drgnx-ruler--set-fringe window was own)
+        (set-window-parameter window 'drgnx-ruler-fringe nil))
+      (let* ((fr (window-fringes window))
+             (now (if (eq side 'left) (car fr) (cadr fr)))
+             ;; the strip, and what an owner reserves inside it (a sticky minimap: `drgnx-ruler-reserve')
+             (width (+ (drgnx-px drgnx-ruler--width (window-frame window))
+                       (or (window-parameter window 'drgnx-ruler-reserve) 0)))
+             (own (or (window-parameter window 'drgnx-ruler-fringe) now)))
+        (unless (and (window-parameter window 'drgnx-ruler-fringe) (= now (+ own width)))
+          (set-window-parameter window 'drgnx-ruler-fringe own)
+          (set-window-parameter window 'drgnx-ruler-side side)
+          (drgnx-ruler--set-fringe window side (+ own width))))))
   (let ((spec (with-current-buffer (window-buffer window) (drgnx-ruler--spec window))))
     (unless (equal spec (window-parameter window 'glitnir-ruler))
       (set-window-parameter window 'glitnir-ruler spec))))
@@ -257,9 +281,9 @@ opens there instead of over the text.  The strip stays outermost."
     (when (window-parameter window 'drgnx-margins-ruler) (drgnx-margins-ruler window nil))
     (set-window-parameter window 'drgnx-ruler-reserve nil)
     (when-let* ((own (window-parameter window 'drgnx-ruler-fringe)))
-      (let ((fr (window-fringes window)))
-        (set-window-fringes window (car fr) own (nth 2 fr)))
-      (set-window-parameter window 'drgnx-ruler-fringe nil))
+      (drgnx-ruler--set-fringe window (or (window-parameter window 'drgnx-ruler-side) 'right) own)
+      (set-window-parameter window 'drgnx-ruler-fringe nil)
+      (set-window-parameter window 'drgnx-ruler-side nil))
     (when (window-parameter window 'glitnir-ruler)
       (set-window-parameter window 'glitnir-ruler nil))))
 

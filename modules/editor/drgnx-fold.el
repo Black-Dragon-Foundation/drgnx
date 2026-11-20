@@ -847,12 +847,13 @@ unfolds its block."
   :type '(choice (const hover) (const always) (const :tag "None" nil))
   :group 'drgnx-fold :scope 'global :apply #'drgnx-fold--arrows-respec)
 
-(defun drgnx-fold--arrows-spec (mode fringe)
-  "Nidhogg's `glitnir-fold-arrows' spec for MODE (`drgnx-fold-arrows') in a left fringe FRINGE device px wide: the
-chevron's box 2 px in from each side, an open fold's muted, a folded one's in the accent; nil for none or a fringe
+(defun drgnx-fold--arrows-spec (mode fringe &optional strip)
+  "Nidhogg's `glitnir-fold-arrows' spec for MODE (`drgnx-fold-arrows') in a left fringe FRINGE device px wide of its
+own, beside a scroll bar STRIP px wide at its inner edge (on the left: `drgnx-minimap-side'): the chevron's box 2 px in
+from each side of the fringe's own part, an open fold's muted, a folded one's in the accent; nil for none or a fringe
 under 8 px."
   (and mode (>= fringe 8)
-       (list :mode mode :size (- fringe 4) :inset 2
+       (list :mode mode :size (- fringe 4) :inset (+ 2 (or strip 0))
              :colour (cons 'drgnx-text-muted 0.9) :folded (cons 'drgnx-accent 1.0))))
 
 (defun drgnx-fold--place-arrows (window on)
@@ -861,7 +862,12 @@ strip) of a graphical frame, from `drgnx-fold-arrows'; else none."
   (when (window-live-p window)
     (let ((spec (and on (display-graphic-p (window-frame window))
                      (not (with-current-buffer (window-buffer window) (drgnx-fold--org-p)))
-                     (drgnx-fold--arrows-spec drgnx-fold-arrows (or (car (window-fringes window)) 0)))))
+                     (let* ((lf (or (car (window-fringes window)) 0))
+                            ;; a scroll bar on the left widened the fringe: the arrows keep to its own part
+                            (own (if (eq (window-parameter window 'drgnx-ruler-side) 'left)
+                                     (or (window-parameter window 'drgnx-ruler-fringe) lf)
+                                   lf)))
+                       (drgnx-fold--arrows-spec drgnx-fold-arrows own (- lf own))))))
       (unless (equal spec (window-parameter window 'glitnir-fold-arrows))
         (set-window-parameter window 'glitnir-fold-arrows spec)))))
 

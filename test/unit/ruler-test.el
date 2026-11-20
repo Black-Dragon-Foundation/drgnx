@@ -97,6 +97,49 @@ goes with the strip, and the margin is the claims' again."
         (drgnx-margins-claim 'ruler-test nil :side 'right)
         (set-window-parameter (selected-window) 'drgnx-margins-ruler nil)))))
 
+(ert-deftest drgnx-ruler/a-left-strip-widens-the-left-fringe-and-moves-back ()
+  "With `drgnx-ruler-left-function' saying left, the strip widens the left fringe (its own width kept as `:right')
+and says `:left'; moved back to the right, the left fringe has its own width again and the right one takes the strip;
+taken away, both are their own."
+  (ruler-test--with
+    (let ((drgnx-ruler-left-function (lambda (_w) t)))
+      (setq ruler-test--marks (list (list (ruler-test--pos 50) 'right 'error 1)))
+      (drgnx-ruler-source 'test #'ruler-test--source)
+      (unwind-protect
+          (let ((spec (window-parameter (selected-window) 'glitnir-ruler)))
+            (should (plist-get spec :left))
+            (should (equal (plist-get spec :right) 8))
+            (should (equal fringes (list (+ 8 (drgnx-px 12)) 8)))
+            (setq drgnx-ruler-left-function nil)
+            (drgnx-ruler-update)
+            (should-not (plist-get (window-parameter (selected-window) 'glitnir-ruler) :left))
+            (should (equal fringes (list 8 (+ 8 (drgnx-px 12)))))
+            (drgnx-ruler-source 'test nil)
+            (should (equal fringes '(8 8))))
+        (drgnx-ruler-source 'test nil)
+        (set-window-parameter (selected-window) 'drgnx-ruler-side nil)))))
+
+(ert-deftest drgnx-ruler/a-terminal-strip-on-the-left ()
+  "On a terminal a left strip is the left margin's first column, before the buffer's left claims; moved to the right,
+it is the right margin's column and the left claims start at the edge again."
+  (ruler-test--with
+    (cl-letf (((symbol-function 'drgnx-ruler--column-p) (lambda (_) t)))
+      (let ((drgnx-ruler-left-function (lambda (_w) t)))
+        (drgnx-margins-claim 'ruler-test 2 :side 'left)
+        (setq ruler-test--marks (list (list (ruler-test--pos 50) 'right 'error 1)))
+        (drgnx-ruler-source 'test #'ruler-test--source)
+        (unwind-protect
+            (progn
+              (should (equal (window-margins) '(3)))
+              (should (= 1 (drgnx-margins-offset 'ruler-test)))
+              (setq drgnx-ruler-left-function nil)
+              (drgnx-ruler-update)
+              (should (equal (window-margins) '(2 . 1)))
+              (should (= 0 (drgnx-margins-offset 'ruler-test))))
+          (drgnx-ruler-source 'test nil)
+          (drgnx-margins-claim 'ruler-test nil :side 'left)
+          (set-window-parameter (selected-window) 'drgnx-margins-ruler nil))))))
+
 (ert-deftest drgnx-ruler/the-thumb-is-the-text-colour-in-every-theme ()
   "The thumb is `drgnx-ruler-view's foreground at 26 %, and that foreground is the text colour (the look's `.sbar
 .thumb', --fg at 26 %), in every variant: a fill token (`hover', next to the surfaces' own colours) at 26 % left the
