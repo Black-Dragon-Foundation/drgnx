@@ -790,9 +790,10 @@ impl Panels {
         for g in (src.groups)(from, only) {
             let thoughts: Vec<&runstav::methods::agents::Entry> = g.thoughts.iter().collect();
             let run_open = |h: usize| {
-                look.rows.get(&(h as u64)).copied().unwrap_or_else(|| {
-                    look.open.contains("read") || look.open.contains("search")
-                })
+                look.rows
+                    .get(&(h as u64))
+                    .copied()
+                    .unwrap_or_else(|| look.open.contains("read") || look.open.contains("search"))
             };
             let mut built = match roles.get(&g.head) {
                 Some(rows::Role::Head(b)) => {

@@ -1172,7 +1172,16 @@ pub fn panel_block_rows(
     env: &drgnx_rows::kit::KitEnv,
 ) -> Vec<Row> {
     let mut out = Vec::new();
-    conv_rows(block, &format!("e:{head}"), head, 0, open, env, false, &mut out);
+    conv_rows(
+        block,
+        &format!("e:{head}"),
+        head,
+        0,
+        open,
+        env,
+        false,
+        &mut out,
+    );
     if matches!(block, super::blocks::Block::Explored { .. }) {
         out.truncate(1);
     }
