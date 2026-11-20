@@ -250,6 +250,54 @@ fn band_row(
     b.finish()
 }
 
+/// How many task cards of one plan a row shows before the rest collapse into one "+N" chip (flow-day-v2).
+pub const TASKS_SHOWN: usize = 6;
+
+/// CARDS of a row with a plan's tasks past [`TASKS_SHOWN`] collapsed: the first six, left to right, stay; the next card shows
+/// "+N" (N the tasks left out) in its place and the others are not drawn. A task an agent works on never collapses.
+fn collapse_tasks<'a>(
+    s: &Scene,
+    cards: Vec<(&'a ItemId, Vec<Line>)>,
+) -> Vec<(&'a ItemId, Vec<Line>)> {
+    let worked = |id: &ItemId| {
+        s.edges.iter().any(|e| {
+            e.kind == EdgeKind::CameFrom
+                && &e.from == id
+                && s.items.get(&e.to).is_some_and(|a| a.kind == Kind::Agent)
+        })
+    };
+    // a plan's task chips may wrap over several rows: they count across them, in reading order (row, then column)
+    // (row, column) of each task chip, by the plan it belongs to
+    type Reading<'a> = Vec<((u32, u32), &'a ItemId)>;
+    let mut by_plan: BTreeMap<Option<&ItemId>, Reading> = BTreeMap::new();
+    for (id, it) in s.items.iter().filter(|(_, it)| it.kind == Kind::Task) {
+        if let Some(r) = s.layout.at.get(id).filter(|_| !worked(id)) {
+            by_plan
+                .entry(it.block.as_ref())
+                .or_default()
+                .push(((r.y, r.x), id));
+        }
+    }
+    let mut hidden: BTreeSet<&ItemId> = BTreeSet::new();
+    let mut more: BTreeMap<&ItemId, usize> = BTreeMap::new();
+    for (_, mut tasks) in by_plan {
+        tasks.sort();
+        if tasks.len() > TASKS_SHOWN {
+            let rest = &tasks[TASKS_SHOWN..];
+            more.insert(rest[0].1, rest.len());
+            hidden.extend(rest.iter().map(|t| t.1));
+        }
+    }
+    cards
+        .into_iter()
+        .filter_map(|(id, lines)| match more.get(id) {
+            Some(n) => Some((id, vec![Line::plain(format!("+{n}"))])),
+            None if hidden.contains(id) => None,
+            None => Some((id, lines)),
+        })
+        .collect()
+}
+
 /// How many text lines layout row R holds: five for a rich agent row, two for a compact one, else one.
 fn row_lines(r: &crate::layout::Row) -> u32 {
     match (r.layer, r.height_units) {
@@ -278,6 +326,7 @@ fn card_rows(
         .iter()
         .filter_map(|id| s.items.get(id).map(|it| (id, card_lines(s, it))))
         .collect();
+    let cards = collapse_tasks(s, cards);
     let lanes: Vec<(u32, ImageId, String)> = e
         .lanes(i, g)
         .into_iter()
@@ -463,7 +512,22 @@ fn segment(
     } else if let Some((_, alt)) = l.1 {
         b.push(alt, None);
     }
+    let body_at = b.pos();
     body.push_fitted(b, &fitted);
+    // a machine's job chips link to the agents that started them (`drgnx-work-link`), when the line is not cut
+    if fitted == body.text()
+        && let Some(it) = s.items.get(id)
+    {
+        let text = body.text();
+        for j in &it.chips {
+            let (Some(agent), Some(off)) = (&j.links_to, text.find(&job_chip_text(j))) else {
+                continue;
+            };
+            let from = body_at + text[..off].chars().count() as u32;
+            let to = from + job_chip_text(j).chars().count() as u32;
+            b.prop(from, to, "drgnx-work-link", Value::String(agent.0.clone()));
+        }
+    }
     if let Some((t, f)) = &tail {
         b.push(t, *f);
     }
@@ -813,6 +877,11 @@ fn icon(name: &str) -> &'static str {
     }
 }
 
+/// A job's chip text: its name and state, in the chip's own room.
+fn job_chip_text(j: &crate::model::JobChip) -> String {
+    format!(" {} · {} ", j.name, j.state)
+}
+
 /// The one line of a chip item: ask, spec, plan, branch, file or machine.
 fn chip_line(it: &Item) -> Line {
     let f = &it.fields;
@@ -902,6 +971,13 @@ fn chip_line(it: &Item) -> Line {
                 Some(FaceId::WorkChip.name()),
             );
         }
+        // a task card: the kit's status dot (its glyph in the state's face) and its word, never colour alone
+        (Kind::Task, _) if f.task_state.is_some() => {
+            let s = f.task_state.unwrap_or(crate::TaskState::NotStarted);
+            l.push(" · ", None)
+                .push(s.glyph(), Some(task_dot(s)))
+                .push(format!(" {}", s.word()), None);
+        }
         (Kind::Machine, _) if !extra.is_empty() => {
             l.push(format!(" {}", extra.join(" · ")), None);
         }
@@ -910,10 +986,28 @@ fn chip_line(it: &Item) -> Line {
         }
         _ => {}
     }
+    // a machine's jobs, one chip each (the chip links to the agent that started it: `segment` puts the link on it)
+    if it.kind == Kind::Machine {
+        for j in &it.chips {
+            l.push(" ", None)
+                .push(job_chip_text(j), Some(FaceId::WorkChip.name()));
+        }
+    }
     if it.warn {
         l.push(" ⚠", Some(FaceId::WorkOverlap.name()));
     }
     l
+}
+
+/// The kit's status-dot face of a task's state.
+fn task_dot(s: crate::TaskState) -> &'static str {
+    match s {
+        crate::TaskState::Done => FaceId::KitStatusDotDone,
+        crate::TaskState::Running => FaceId::KitStatusDotRunning,
+        crate::TaskState::NeedsYou => FaceId::KitStatusDotNeedsYou,
+        crate::TaskState::NotStarted => FaceId::KitStatusDotIdle,
+    }
+    .name()
 }
 
 // ---- the edges: band tiles and lanes -----------------------------------------------------------------------------
@@ -1219,11 +1313,19 @@ const ICON_PX: u32 = 16;
 
 /// What a needs-you chip takes besides its text, logical px: its own padding and its key hint.
 const CHIP_OVERHEAD: f32 = 64.0;
+/// The room a kit chip's own pads take beyond its text, logical px (both sides).
+const EXTRA_CHIP_PAD: f32 = 16.0;
 
-/// A gap of about PX logical px in B: spaces (one on a terminal).
+/// A gap of PX logical px in B: the kit's pad (exactly its device px), one space on a terminal.
 fn gap(b: &mut RowBuilder, kit: &kit::KitEnv, px: u32) {
-    let n = if kit.tty { 1 } else { (px / 4).max(1) as usize };
-    b.push(&" ".repeat(n), None);
+    if kit.tty {
+        b.push(" ", None);
+    } else {
+        b.pad(
+            (f64::from(px) * f64::from(kit.scale) + 0.5).floor() as u32,
+            None,
+        );
+    }
 }
 
 /// The needs-you strip (the header line), one row `strip`: a chip with its jump key for each of the first nine
@@ -1277,7 +1379,9 @@ pub fn strip(
             fit::width_in(m, Some(CARD_FONT), c) + if i.is_some() { icon_px as f32 } else { 0.0 }
         })
         .sum::<f32>()
-        + fit::width_in(m, Some(CARD_FONT), " ") * chips.len().saturating_sub(1) as f32;
+        + fit::width_in(m, Some(CARD_FONT), " ") * chips.len().saturating_sub(1) as f32
+        // the pace and budget chips are the kit's, with their own pads
+        + EXTRA_CHIP_PAD * env.scale * extra.len() as f32;
     // the needs-you chips share what the right-hand chips leave, each cut to its share (no chip runs under them): the
     // chip's own padding and its key hint come off the share
     let shown = entries.len().clamp(1, 9);
@@ -1336,6 +1440,25 @@ pub fn strip(
             b.push(" ", None);
         }
         let start = b.pos();
+        if i < extra.len() {
+            // a pace or plan-budget chip: the kit's, warn-toned when the week runs out or the budget is nearing
+            let warn = ["runs out", "nearing", "reached"]
+                .iter()
+                .any(|w| c.contains(w));
+            kit::expand(
+                &mut b,
+                kit,
+                &Comp::Chip {
+                    label: c.trim().to_owned(),
+                    tone: if warn { Tone::Warn } else { Tone::Neutral },
+                    fill: ChipFill::Soft,
+                    icon: None,
+                    state: kit::State::Rest,
+                    action: None,
+                },
+            );
+            continue;
+        }
         let drawn = icon.and_then(|n| {
             let svg = crate::icons::svg(n, env.palette.colour("chip-fg"), icon_px)?;
             Some((ImageId::of(svg.as_bytes(), env.epoch), svg))
@@ -1574,6 +1697,43 @@ mod tests {
                 ..Fields::default()
             },
             chips: Vec::new(),
+        }
+    }
+
+    /// [D] `work-graph/tasks-layer…` (Task 21): a task's card in the graph carries the kit's status dot (its glyph in the state's
+    /// kit face) and its word, "not started" for the idle state: colour is never the only sign.
+    #[test]
+    fn a_task_card_has_the_kits_status_dot_and_its_word() {
+        use crate::TaskState;
+        for (state, face, word) in [
+            (
+                TaskState::NotStarted,
+                FaceId::KitStatusDotIdle,
+                "not started",
+            ),
+            (TaskState::Running, FaceId::KitStatusDotRunning, "running"),
+            (
+                TaskState::NeedsYou,
+                FaceId::KitStatusDotNeedsYou,
+                "needs you",
+            ),
+            (TaskState::Done, FaceId::KitStatusDotDone, "done"),
+        ] {
+            let mut it = machine("ready", false);
+            it.kind = Kind::Task;
+            it.label = "Footer cut off".into();
+            it.fields = Fields {
+                task_state: Some(state),
+                ..Fields::default()
+            };
+            let l = chip_line(&it);
+            assert!(l.text().contains(word), "{word}: {:?}", l.text());
+            assert!(
+                l.0.iter()
+                    .any(|(t, f)| t == state.glyph() && *f == Some(face.name())),
+                "{word}: {:?}",
+                l.0
+            );
         }
     }
 

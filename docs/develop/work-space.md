@@ -764,6 +764,8 @@ the map's model holds no tracker tasks, so the Board is not an instance in the m
 
 ### The Timeline and the trail
 
+The Timeline has two forms, each its own buffer on its own hub view: **Schedule** (`work/schedule/subscribe`, the List with a bar per row) and **Activity** (`work/trail/subscribe`, a lane per agent). `drgnx-work-timeline-open MAP [FORM]` makes either (Schedule by default). The window (`drgnx-work-timeline-spans`: 10 minutes, hour, 4 hours, day, week), its end (nil follows now), Activity's filter and Schedule's grouping are buffer-local state; every change goes to the hub as `work/schedule/set` or `work/trail/set` (a window given without `follow` stops following), never as a new subscription, except when the lanes change. `RET` on a Schedule task row opens the Activity of the agents working on it (found by the `task` field of the map's agent nodes) and pushes a crumb; `RET` on an Activity segment opens that agent's trail; `<backspace>` pops a crumb. The 21a perf rows are in `test/perf/budgets.eld`.
+
 `modules/tools/drgnx-work-trail.el` holds both, and the steering commands. The hub builds both (`work::trail`): their
 rows, and a model of their own in Sjá. A step's kind (`drgnx-work-trail-kind`) comes from its class and `detail.kind`,
 never its prose.
@@ -886,6 +888,14 @@ roots' first root commits (the path where git does not answer).
 ## Changes by task
 
 `work/changes.rs` groups what the agents changed by the task each worked on: task, then file, then hunk, with a last group, "Your edits and others", for what no task owns (`group`; `by_task` reads each live session's edited files and their diffs from the edit history; `hunks_of` reads a diff's hunks). A hunk's agent is its session's, and its `reason` stays empty ("no reason recorded") until the history records the cause of an agent write. `view/changes.rs` builds the `changes` view's rows in that order as plain text; each hunk row carries the `drgnx-action` it offers (open the file at the hunk) and a `drgnx-hunk` property naming the path, op, index and agent for comment and revert. The Changes place that shows the view comes with the layout A shell.
+
+## Comments on a paragraph
+
+`view/doc_comments.rs` is the view `doc-comments/RECORD` (`doc-comments/subscribe`, `set`, `close`): a kit card for each thread of `work/comments::threads` (the paragraph quoted, "paragraph removed" with the quote kept when its anchor is gone, the comment and its replies, "No agent is writing it" in the needs-you card when it was steered to nobody, Reply and Resolve buttons carrying `drgnx-action`). `modules/tools/drgnx-doc-agents.el` is the editor side: `drgnx-doc-agents-mode` (on for plans and specs) marks the paragraph under the writing agent's newest edit range with its mark and a quiet fill (one overlay that moves), shows "N comments" in the margin of an anchored paragraph, and `doc-comment-add` sends `comments/add` with the paragraph as the quote (never a cancel; the hub steers the writer).
+
+## Budgets on List rows and the start step
+
+A List row's meter is the kit's `row` meter (`work/map/list.rs`), its state word after it, and over it the property `drgnx-work-meter` (item, unit, limit) which `work-budget-set` (`$`, `modules/tools/drgnx-work-budget.el`) reads: a one-line `text-input` with a unit chip (% wk, usd, tokens, count), RET sends `budget/set` on the row's scope keeping its other units, an empty field removes that unit's limit, Esc cancels. The strip's pace and plan-budget chips are kit chips, warn-toned when the week runs out or the budget is nearing. Detail has a Budget section from the model's binding budget, and `work/map/budget_detail.rs` holds the pure sentences (a line for each unit never summed, "Counts toward" with the binding scope, "Set to p90" only when p90 is over the limit) and the start step (`forecast/start`: the budget fields prefilled with the p90 rounded up in the plan's unit, the week warning, the prior chip); `modules/tools/drgnx-work-start.el` proposes, shows it and approves with the limits.
 
 ## The review screen
 

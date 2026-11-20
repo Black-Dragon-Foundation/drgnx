@@ -148,6 +148,8 @@ From the Board back to the map, a card selects its agent; a task with no agent s
 
 ### The Timeline and the research trail
 
+The Timeline has two forms. **Schedule** (the default) is the List with a bar for each row on one time axis, by plan or by machine (`G`); **Activity** is a lane for each agent, its steps as bars, with the filter All, Edits and Waits (`f`). `t` switches between them and keeps the window. `+` and `-` zoom (10 minutes, hour, 4 hours, day, and for Schedule the week), `[` and `]` pan by half a window, `T` goes to now and follows it, and `B` opens the Budgets page for the selection. `RET` on a task's bar opens the Activity of its agents, `RET` on a bar of Activity opens that agent's trail at the step, and `<backspace>` goes back one level.
+
 `t` shows a lane for each agent over time. Each step is a segment, coloured by what it was (reading and searching,
 editing, other tools, thinking, waiting on a job, waiting for you). Left and right move to the earlier or later step of
 a lane, up and down to the lane above or below, and `Enter` opens the step. A file selected on the map lights the lanes
@@ -194,6 +196,10 @@ starts an agent, so it goes through `job/propose` like every dispatch from the W
 A branch in the merge queue shows "queue 2/3" on its card, and "conflicts with rp-x" when a trial merge failed; selected,
 its side panel says the same in words. These come from the hub's own record; a branch the hub sent no queue for shows
 nothing. Merging and pushing stay on their cards.
+
+### Comments, budgets and starting a plan
+
+`C-c w c` (Emacs; `SPC a C` in Vim) comments on the paragraph at point of a plan or spec; the agent writing it is steered, never cancelled, and the paragraph shows "N comments" in the margin. A List row that has spent or has a limit shows a meter; `$` on it opens a one-line field for the limit with a unit chip (% wk, usd, tokens, count): RET sets it, an empty field removes it, Esc cancels. Starting a plan (Detail's Start) shows its budget prefilled with the forecast's p90 rounded up, warns when the week would run out (the start is never blocked), and RET starts it; M-RET starts it with no budget.
 
 ### The review screen
 

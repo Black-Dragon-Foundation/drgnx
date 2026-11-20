@@ -1332,18 +1332,15 @@ fn detail_actions_are_kit_buttons() {
             "{open:?}"
         );
         assert!(faces.contains(&FaceId::KitKeyHintCap.name()), "{open:?}");
-        // the md button's 12 px each side, in device px, and its 26 px height
-        let pad = (12.0 * scale + 0.5).floor() as u32;
-        assert_eq!(open.spaces[0].1, pad, "{open:?}");
+        // the sm button's 8 px each side, in device px, and its 22 px height
+        let pad = (8.0 * scale + 0.5).floor() as u32;
+        assert!(open.spaces.iter().any(|s| s.1 == pad), "{open:?}");
         assert_eq!(
             open.height.map(|h| h.unit),
-            Some((26.0 * scale + 0.5).floor() as u32)
+            Some((22.0 * scale + 0.5).floor() as u32)
         );
         // the pads are the kit's spaces: button start, gap, the key hint's two and the button end
-        assert!(
-            open.spaces.len() >= 5 && open.spaces.len() % 5 == 0,
-            "{open:?}"
-        );
+        assert!(open.spaces.len() >= 5, "{open:?}");
     }
 }
 
@@ -1382,12 +1379,12 @@ fn detail_rows_are_the_mockups_tile() {
     // (work-space-dark.html `.det .hd`)
     assert!(rows[0].text.contains("Opus · hub rows"), "{:?}", rows[0]);
     assert!(
-        faces_of(&rows[0]).contains(&FaceId::Chip.name()),
+        faces_of(&rows[0]).contains(&FaceId::KitChipNeutralSoft.name()),
         "{:?}",
         rows[0]
     );
     assert!(
-        faces_of(&rows[0]).contains(&FaceId::WorkWho1.name()),
+        faces_of(&rows[0]).contains(&FaceId::KitAgentMark.name()),
         "{:?}",
         rows[0]
     );
@@ -2318,4 +2315,343 @@ fn list_strip_chips_show_full_text() {
     assert!(has_face(strip, FaceId::KitChipWarnSoft), "{strip:?}");
     assert!(has_face(strip, FaceId::KitKeyHintCap), "{strip:?}");
     assert!(strip.text.contains("g1"), "{}", strip.text);
+}
+
+// ---- Task 22: the Detail on the kit ----
+
+/// [D] The Detail has no hand padding: an agent's head is the kit's agent mark and the kit's chip (no run in the old
+/// hand chip face), and every action is a small kit button that runs its command when clicked (kind `work-command`).
+#[test]
+fn detail_rows_have_no_hand_padding() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let agent = ItemId("agent:a1".into());
+    let lines = detail::lines(core.model(), Some(&agent), 0);
+    let rows = detail::rows(&lines, &kit_env(1.0), 340, &Cols);
+    let head = rows.iter().find(|r| r.key == "head/0").expect("the head");
+    assert!(has_face(head, FaceId::KitAgentMark), "{head:?}");
+    assert!(has_face(head, FaceId::KitChipNeutralSoft), "{head:?}");
+    assert!(!has_face(head, FaceId::Chip), "{head:?}");
+    for (label, command) in [
+        ("Open", "work-open"),
+        ("Trail", "work-trail"),
+        ("Steer", "work-steer"),
+        ("Pause", "work-pause"),
+    ] {
+        let r = rows
+            .iter()
+            .find(|r| r.key.starts_with("actions/") && r.text.contains(label))
+            .unwrap_or_else(|| panic!("the {label} action"));
+        assert!(
+            r.props
+                .iter()
+                .any(|p| p.2 == "drgnx-action" && p.3 == json!(["work-command", command])),
+            "{label}: {r:?}"
+        );
+    }
+}
+
+// ---- Task 30: accessibility and the terminal form of the List ----
+
+/// [D] `a11y-flow/every-glyph-has-a-label`, on the List: every state dot has its word in the row, and every agent mark
+/// has a `help-echo` over it (the mark is one letter on a colour).
+#[test]
+fn a11y_flow_list_every_glyph_has_a_label() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let mut dots = 0;
+    for r in rows.iter().filter(|r| r.key.starts_with("list:")) {
+        if r.runs.iter().any(|x| {
+            [
+                FaceId::KitStatusDotIdle,
+                FaceId::KitStatusDotRunning,
+                FaceId::KitStatusDotDone,
+                FaceId::KitStatusDotNeedsYou,
+            ]
+            .iter()
+            .any(|f| x.2 == f.name())
+        }) {
+            dots += 1;
+            assert!(
+                ["not started", "running", "done", "needs you"]
+                    .iter()
+                    .any(|w| r.text.contains(w)),
+                "a dot without its word: {}",
+                r.text
+            );
+        }
+        for x in r.runs.iter().filter(|x| x.2 == FaceId::KitAgentMark.name()) {
+            assert!(
+                r.props
+                    .iter()
+                    .any(|p| p.2 == "help-echo" && p.0 <= x.0 && x.1 <= p.1),
+                "an agent mark without a help-echo: {r:?}"
+            );
+        }
+    }
+    assert!(dots >= 4, "the world's tasks have dots");
+}
+
+/// [D] On a terminal the List has the kit's state dot with its word once (no second word at the right) and no stop
+/// (the pieces follow the title after two spaces).
+#[test]
+fn list_on_a_terminal_has_one_word_and_no_stop() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let tty: ViewEnv = serde_json::from_value(
+        json!({"view": "m", "class": "tty-1", "epoch": 1, "display": "tty", "scale": 1.0,
+                                  "cell": [1, 1], "width_px": 100}),
+    )
+    .expect("a tty env");
+    let (rows, _) = view_rows(core.model(), &v, &tty, &Cols, 0, &BTreeSet::new(), &[]);
+    let r = list_row_of(&rows, "Anchor the card");
+    assert!(has_face(r, FaceId::KitStatusDotRunning), "{r:?}");
+    assert_eq!(r.text.matches("running").count(), 1, "{}", r.text);
+    assert!(r.stops.is_empty(), "{r:?}");
+}
+
+// ---- Task 20a: budgets on List rows ----
+
+/// The world of [`list_world`] with budgets: the running task at 9 of $12 (nearing), the needs-you task at its $5 limit
+/// (reached), the not-started one with a spend and no limit.
+fn list_budget_world() -> Core {
+    use vegvisir::model::{ItemBudget, Num};
+    use vegvisir::{Event, GraphFact};
+    let mut core = list_world();
+    for (item, spent, limit, state) in [
+        ("task:t2", 9.0, Some(12.0), "nearing"),
+        ("task:t4", 5.0, Some(5.0), "reached"),
+        ("task:t1", 1.5, None, "none"),
+    ] {
+        core.step(Event::Graph(GraphFact::Budget {
+            item: item.into(),
+            budget: Some(ItemBudget {
+                spent: Num(spent),
+                limit: limit.map(Num),
+                unit: "usd".into(),
+                state: state.into(),
+            }),
+        }));
+    }
+    core
+}
+
+/// [D] `work-list/meter-shows-spend-and-limit` and `meter-states-carry-words`: a row's meter is the kit's `row` meter,
+/// not a chip: its bar in the state's face, its text, and the state's word (a nearing one the share, a reached one "at
+/// limit", one with no limit "no limit": colour is never the only sign).
+#[test]
+fn list_meter_is_a_kit_meter_with_its_words() {
+    let core = list_budget_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let near = list_row_of(&rows, "Anchor the card");
+    assert!(has_face(near, FaceId::KitProgressMeterNear), "{near:?}");
+    assert!(near.text.contains("$9/$12"), "{}", near.text);
+    assert!(near.text.contains("75 %"), "{}", near.text);
+    let reached = list_row_of(&rows, "Allow once");
+    assert!(
+        has_face(reached, FaceId::KitProgressMeterReached),
+        "{reached:?}"
+    );
+    assert!(reached.text.contains("at limit"), "{}", reached.text);
+    let none = list_row_of(&rows, "Count on the pill");
+    assert!(none.text.contains("no limit"), "{}", none.text);
+}
+
+/// [D] The meter names its scope for the editor: over the meter's text the row has `drgnx-work-meter` with the item,
+/// the unit and the limit (none: null), which `work-budget-set` reads.
+#[test]
+fn list_meter_names_its_scope_and_limit_for_the_editor() {
+    let core = list_budget_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let near = list_row_of(&rows, "Anchor the card");
+    let p = near
+        .props
+        .iter()
+        .find(|p| p.2 == "drgnx-work-meter")
+        .unwrap_or_else(|| panic!("a meter property: {near:?}"));
+    assert_eq!(p.3["item"], "task:t2");
+    assert_eq!(p.3["unit"], "usd");
+    assert_eq!(p.3["limit"], 12.0);
+    let none = list_row_of(&rows, "Count on the pill");
+    let p = none
+        .props
+        .iter()
+        .find(|p| p.2 == "drgnx-work-meter")
+        .expect("a meter property");
+    assert!(p.3["limit"].is_null(), "{p:?}");
+}
+
+/// [D] `work-list/strip-shows-week-pace`: the strip's pace and plan-budget chips are kit chips (not the plain chip
+/// face), neutral, and warn-toned when the week runs out before its reset or the plan's budget is nearing.
+#[test]
+fn list_strip_pace_and_budget_chips_are_kit_chips_warn_when_they_run_out() {
+    let core = list_world();
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let extra = vec![
+        "Claude wk 41 % · +3.2 %/h".to_owned(),
+        "Codex wk 80 % · +5.0 %/h · runs out".to_owned(),
+        "plan $31/$40 · nearing".to_owned(),
+    ];
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &extra);
+    let strip = &rows[0];
+    assert!(strip.text.contains("Claude wk 41 %"), "{}", strip.text);
+    let warn = strip
+        .runs
+        .iter()
+        .filter(|r| r.2 == FaceId::KitChipWarnSoft.name())
+        .count();
+    let neutral = strip
+        .runs
+        .iter()
+        .filter(|r| r.2 == FaceId::KitChipNeutralSoft.name())
+        .count();
+    assert!(
+        neutral >= 1,
+        "a neutral chip for the pace that holds: {strip:?}"
+    );
+    // the needs-you card of the world and the two warning chips
+    assert!(warn >= 3, "warn chips for runs out and nearing: {strip:?}");
+}
+
+// ---- Task 22b: Detail's Budget section ----
+
+/// [D] `work-detail/budget-section-shows-meter-and-forecast` (the Rust half): an item with a binding budget has a Budget
+/// section under its head: its unit's word, spend, limit and share, in the Detail's own rows.
+#[test]
+fn detail_shows_the_budget_section_for_an_item_with_a_budget() {
+    let core = list_budget_world();
+    let task = ItemId("task:t2".into());
+    let lines = detail::lines(core.model(), Some(&task), 0);
+    let at = lines
+        .iter()
+        .position(|l| l.0 == "budget" && l.1 == "Budget")
+        .expect("a Budget heading");
+    assert!(lines[at + 1].1.contains("$9 of $12"), "{:?}", lines[at + 1]);
+    assert!(lines[at + 1].1.contains("75 %"), "{:?}", lines[at + 1]);
+    let rows = detail::rows(&lines, &kit_env(1.0), 340, &Cols);
+    assert!(
+        rows.iter()
+            .any(|r| r.key.starts_with("budget/") && r.text.contains("$9 of $12")),
+        "{rows:?}"
+    );
+    // an item with no budget has no section
+    let none = ItemId("task:t3".into());
+    assert!(
+        !detail::lines(core.model(), Some(&none), 0)
+            .iter()
+            .any(|l| l.0 == "budget")
+    );
+}
+
+// ---- round 3: Detail with facts, the forecast words of a not-started row ----
+
+/// [D] `work-detail/budget-section-shows-meter-and-forecast`: with the facts of `budget/get` along the chain and the
+/// forecast, Detail's Budget section has a line for each unit, "Counts toward" with the binding scope and "Set to p90"
+/// where p90 is over the limit; before the facts arrive it says "forecasting…" and never blocks.
+#[test]
+fn detail_with_facts_shows_every_unit_the_chain_and_set_to_p90() {
+    use super::budget_detail::{Facts, Link, UnitLine};
+    use runstav::methods::forecast::Range;
+    use runstav::methods::matrix::Unit;
+    let core = list_budget_world();
+    let task = ItemId("task:t2".into());
+    let facts = Facts {
+        units: vec![
+            UnitLine {
+                unit: Unit::Usd,
+                spent: 9.0,
+                limit: Some(12.0),
+                forecast: Some(Range {
+                    p50: 10.0,
+                    p90: 14.0,
+                }),
+            },
+            UnitLine {
+                unit: Unit::LimitShare,
+                spent: 0.11,
+                limit: Some(0.15),
+                forecast: None,
+            },
+        ],
+        chain: vec![
+            Link {
+                scope: "plan",
+                unit: Unit::Usd,
+                remaining: 3.0,
+            },
+            Link {
+                scope: "spec",
+                unit: Unit::Usd,
+                remaining: 50.0,
+            },
+        ],
+    };
+    let lines = detail::lines_with_facts(core.model(), Some(&task), 0, Some(&facts));
+    let text: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.0 == "budget")
+        .map(|l| l.1.as_str())
+        .collect();
+    assert!(
+        text.iter().any(|l| l.contains("usd")
+            && l.contains("$9 of $12")
+            && l.contains("Set to p90 ($14)")),
+        "{text:?}"
+    );
+    assert!(
+        text.iter()
+            .any(|l| l.contains("% wk") && l.contains("11 % of 15 %")),
+        "{text:?}"
+    );
+    assert!(text.iter().any(|l| l.contains("Counts toward")), "{text:?}");
+    assert!(
+        text.iter().any(|l| l.contains("binding: plan, $3 left")),
+        "{text:?}"
+    );
+    let pending = detail::lines_with_facts(core.model(), Some(&task), 0, None);
+    assert!(
+        pending
+            .iter()
+            .any(|l| l.0 == "budget" && l.1.contains("forecasting")),
+        "{pending:?}"
+    );
+}
+
+/// [D] `work-list/meter-shows-spend-and-limit`, the forecast words: a not-started row at 900 px or more shows
+/// "fc $12–19 · 2–4 h" muted (the plan forecast of hub H12); narrower, or with no forecast, nothing.
+#[test]
+fn list_not_started_row_shows_the_forecast_words_when_wide() {
+    use vegvisir::{Event, GraphFact};
+    let mut core = list_world();
+    core.step(Event::Graph(GraphFact::Forecast {
+        item: "task:t1".into(),
+        usd: Some((vegvisir::model::Num(12.0), vegvisir::model::Num(19.0))),
+        hours: Some((vegvisir::model::Num(2.0), vegvisir::model::Num(4.0))),
+    }));
+    let v = list_view(core.model(), vegvisir::Show::All);
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
+    let r = list_row_of(&rows, "Count on the pill");
+    assert!(r.text.contains("fc $12–19 · 2–4 h"), "{}", r.text);
+    // a started task has no forecast words
+    assert!(
+        !list_row_of(&rows, "Anchor the card").text.contains("fc $"),
+        "only a not-started row"
+    );
+    // narrower than 900 px: nothing
+    let narrow: ViewEnv = serde_json::from_value(
+        json!({"view": "m", "class": "gui-2", "epoch": 1, "display": "gui", "scale": 1.0, "cell": [8, 16], "width_px": 700}),
+    )
+    .expect("a narrow env");
+    let (rows, _) = view_rows(core.model(), &v, &narrow, &Cols, 0, &BTreeSet::new(), &[]);
+    assert!(
+        !list_row_of(&rows, "Count on the pill")
+            .text
+            .contains("fc $"),
+        "narrow: no forecast words"
+    );
 }

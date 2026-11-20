@@ -17,6 +17,8 @@ pub enum ListChip {
     Progress(u32, u32),
     /// A task's state: a glyph and its word.
     State(TaskState),
+    /// A task not started: what it is forecast to cost and take, `fc $12–19 · 2–4 h` (shown on a wide row, muted).
+    Forecast(String),
     /// What the item has spent against its binding limit (spec, plan and task rows that have spend): the last chip,
     /// right before the agent.
     Meter(crate::model::ItemBudget),
@@ -52,6 +54,18 @@ pub struct ListEntry {
 pub const NO_SPEC: &str = "spec:none";
 /// The id of the closing row.
 pub const COMPLETED_MORE: &str = "completed:more";
+
+/// A forecast in words: `fc $12–19 · 2–4 h` (the p50 to the p90 of each; a part with no figure is left out).
+pub fn forecast_words(f: &crate::model::ItemForecast) -> String {
+    let mut parts = Vec::new();
+    if let Some((a, b)) = f.usd {
+        parts.push(format!("${:.0}–{:.0}", a.0, b.0));
+    }
+    if let Some((a, b)) = f.hours {
+        parts.push(format!("{:.0}–{:.0} h", a.0, b.0));
+    }
+    format!("fc {}", parts.join(" · "))
+}
 
 /// The row's budget: the item's own, unless it has neither spend nor a limit to show.
 fn budget_of(it: &Item) -> Option<crate::model::ItemBudget> {
@@ -278,6 +292,12 @@ pub fn entries(m: &Model, v: &ViewState, now: u64) -> Vec<ListEntry> {
                     }
                 }
                 chips.extend(budget_of(tit).map(ListChip::Meter));
+                // a task not started shows what it is forecast to cost and take
+                if tit.fields.task_state == Some(TaskState::NotStarted)
+                    && let Some(f) = &tit.fields.forecast
+                {
+                    chips.push(ListChip::Forecast(forecast_words(f)));
+                }
                 out.push(ListEntry {
                     item: t.clone(),
                     label: tit.label.clone(),

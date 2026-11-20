@@ -58,6 +58,31 @@
 (declare-function drgnx-work-review-reject "drgnx-work-review")
 (unless (featurep (quote drgnx-review-screen))
   (load (expand-file-name "drgnx-review-screen" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep (quote drgnx-doc-agents))
+  (load (expand-file-name "drgnx-doc-agents" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-doc-agents-comment-add "drgnx-doc-agents")
+(declare-function drgnx-doc-agents-threads-open "drgnx-doc-agents")
+(declare-function drgnx-doc-agents-maybe-enable "drgnx-doc-agents")
+(declare-function drgnx-doc-agents-mode "drgnx-doc-agents")
+(declare-function drgnx-doc-agents-reply "drgnx-doc-agents")
+(defvar drgnx-doc-agents-threads-mode-map)
+(unless (featurep (quote drgnx-work-budget))
+  (load (expand-file-name "drgnx-work-budget" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-budget-set "drgnx-work-budget")
+(declare-function drgnx-work-budget-send "drgnx-work-budget")
+(declare-function drgnx-work-budget-cancel "drgnx-work-budget")
+(declare-function drgnx-work-budget-unit "drgnx-work-budget")
+(defvar drgnx-work-budget-input-mode-map)
+(unless (featurep (quote drgnx-work-start))
+  (load (expand-file-name "drgnx-work-start" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-start-plan "drgnx-work-start")
+(declare-function drgnx-work-start-go "drgnx-work-start")
+(declare-function drgnx-work-start-none "drgnx-work-start")
+(declare-function drgnx-work-start-cancel "drgnx-work-start")
+(defvar drgnx-work-start-mode-map)
+(unless (featurep (quote drgnx-work-target))
+  (load (expand-file-name "drgnx-work-target" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-target-set "drgnx-work-target")
 (declare-function drgnx-review-screen-show "drgnx-review-screen")
 (declare-function drgnx-review-screen-teardown "drgnx-review-screen")
 (declare-function drgnx-review-screen-accept "drgnx-review-screen")
@@ -66,6 +91,16 @@
 (declare-function drgnx-review-request-cancel "drgnx-review-screen")
 (declare-function drgnx-work-trail-buffers "drgnx-work-trail")
 (declare-function drgnx-work-timeline-buffers "drgnx-work-trail")
+(declare-function drgnx-work-timeline-toggle "drgnx-work-trail")
+(declare-function drgnx-work-timeline-zoom-in "drgnx-work-trail")
+(declare-function drgnx-work-timeline-zoom-out "drgnx-work-trail")
+(declare-function drgnx-work-timeline-pan-earlier "drgnx-work-trail")
+(declare-function drgnx-work-timeline-pan-later "drgnx-work-trail")
+(declare-function drgnx-work-timeline-go-now "drgnx-work-trail")
+(declare-function drgnx-work-timeline-zoom-back "drgnx-work-trail")
+(declare-function drgnx-work-timeline-filter "drgnx-work-trail")
+(declare-function drgnx-work-timeline-group "drgnx-work-trail")
+(declare-function drgnx-work-timeline-budget-page "drgnx-work-trail")
 (declare-function drgnx-work-trail-show "drgnx-work-trail")
 (declare-function drgnx-work-trail-steer "drgnx-work-trail")
 (declare-function drgnx-work-trail-pause "drgnx-work-trail")
@@ -210,6 +245,12 @@ it (a notes repository with the code repositories inside it)."
               work-steer work-pause work-resume work-stop work-keys-sheet work-conclusion-steps work-step-conclusions
               work-review work-second-reviewer work-review-accept work-review-reject
               work-review-screen review-screen-accept review-screen-request-changes
+              doc-comment-add doc-comments-open doc-comment-reply
+              work-target-set
+              work-budget-set work-budget-send work-budget-cancel work-budget-unit
+              work-start-plan work-start-go work-start-none work-start-cancel
+              work-timeline-toggle work-zoom-in work-zoom-out work-pan-earlier work-pan-later work-go-now work-zoom-back
+              work-timeline-filter work-timeline-group work-budget-page
               review-screen-request-send review-screen-request-cancel
               work-focus work-overlaps
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
@@ -657,6 +698,7 @@ windows; the commands."
   ;; each project's Active · Completed · All choice is in the saved workbench
   (require 'drgnx-persist)
   (add-hook 'drgnx-persist-state-functions #'drgnx-work-map--persist-state)
+  (add-hook 'find-file-hook #'drgnx-doc-agents-maybe-enable)
   (add-hook 'drgnx-persist-after-restore-functions #'drgnx-work-map--adopt-show)
   (drgnx-module-hook 'drgnx-frame-replaced-functions frame-replaced (old new)
     (drgnx-work-map--frame-replaced old new)
@@ -765,9 +807,48 @@ windows; the commands."
   (drgnx-command-define 'work-review-reject :category "Work" :title "Reject the Hunk Here"
                         :command #'drgnx-work-review-reject :map 'drgnx-work-review-mode-map
                         :doc "The file goes back to pending and the agent is told, queued; the agent is not cancelled")
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((work-timeline-toggle "Timeline: Schedule or Activity" drgnx-work-timeline-toggle "Switch the Timeline between Schedule (a bar per row) and Activity (a lane per agent), keeping its window")
+                   (work-zoom-in "Timeline: Zoom In" drgnx-work-timeline-zoom-in "A narrower window: week, day, 4 hours, hour, 10 minutes")
+                   (work-zoom-out "Timeline: Zoom Out" drgnx-work-timeline-zoom-out "A wider window")
+                   (work-pan-earlier "Timeline: Pan Earlier" drgnx-work-timeline-pan-earlier "Half a window back in time")
+                   (work-pan-later "Timeline: Pan Later" drgnx-work-timeline-pan-later "Half a window forward; at now it follows again")
+                   (work-go-now "Timeline: Go to Now" drgnx-work-timeline-go-now "Follow now again")
+                   (work-zoom-back "Timeline: Zoom Back" drgnx-work-timeline-zoom-back "Pop one crumb: back to where the zoom came from")
+                   (work-timeline-filter "Timeline: Filter Activity" drgnx-work-timeline-filter "Activity: All, Edits, Waits")
+                   (work-timeline-group "Timeline: Group Schedule" drgnx-work-timeline-group "Schedule: by plan or by machine")
+                   (work-budget-page "Open the Budgets Page" drgnx-work-timeline-budget-page "The Budgets page scoped to the selection")))
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-timeline-mode-map :doc doc))
   (drgnx-command-define 'work-review-screen :category "Work" :title "Open the Review Screen"
                         :command #'drgnx-review-screen-show :map 'drgnx-work-lens-map
                         :doc "The selected agent's change: what changed, the effect on tasks, the reasons, then Accept and Request changes")
+  (drgnx-command-define 'work-budget-set :category "Work" :title "Set Budget"
+                        :command #'drgnx-work-budget-set :map 'drgnx-work-lens-map
+                        :doc "A one-line input for the limit of the row's budget, with a unit chip; RET sends, an empty field removes the limit")
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((work-budget-send "Send the Budget Limit" drgnx-work-budget-send "Send budget/set for this scope, its other units kept")
+                   (work-budget-cancel "Cancel the Budget Limit" drgnx-work-budget-cancel "Close the input; nothing is sent")
+                   (work-budget-unit "Cycle the Budget Unit" drgnx-work-budget-unit "% wk, usd, tokens, count")))
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-budget-input-mode-map :doc doc))
+  (drgnx-command-define 'work-start-plan :category "Work" :title "Start the Plan with a Budget"
+                        :command #'drgnx-work-start-plan :map 'drgnx-work-lens-map
+                        :doc "Propose the plan's job, show its start step (budget fields prefilled from the forecast) and start it")
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((work-start-go "Start with These Limits" drgnx-work-start-go "Start the plan with the limits the fields say")
+                   (work-start-none "Start with No Budget" drgnx-work-start-none "Start the plan with no budget")
+                   (work-start-cancel "Cancel the Start" drgnx-work-start-cancel "Leave the start step; the job stays proposed")))
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-start-mode-map :doc doc))
+  (drgnx-command-define 'work-target-set :category "Work" :title "Set the Target Date"
+                        :command #'drgnx-work-target-set
+                        :doc "The target date of the selected spec or plan; an empty answer clears it")
+  (drgnx-command-define 'doc-comment-add :category "Work" :title "Comment on This Paragraph"
+                        :command #'drgnx-doc-agents-comment-add
+                        :doc "A comment thread on the paragraph at point, steered to the agent writing the document, never cancelling it")
+  (drgnx-command-define 'doc-comment-reply :category "Work" :title "Reply to This Comment"
+                        :command #'drgnx-doc-agents-reply :map 'drgnx-doc-agents-threads-mode-map
+                        :doc "A reply in the thread of the comment on this line, steered to the agent it was sent to")
+  (drgnx-command-define 'doc-comments-open :category "Work" :title "Show the Comment Threads"
+                        :command #'drgnx-doc-agents-threads-open :doc "The threads of this document as cards, with their replies")
   (drgnx-command-define 'review-screen-accept :category "Work" :title "Accept Every Hunk"
                         :command #'drgnx-review-screen-accept :map 'drgnx-review-screen-mode-map
                         :doc "A review mark per hunk of every file; nothing is merged or pushed")
@@ -832,6 +913,8 @@ windows; the commands."
 windows lose the layout motion's parameters and the map buffers go."
   (drgnx-history-mode -1)
   (remove-hook 'drgnx-persist-state-functions #'drgnx-work-map--persist-state)
+  (remove-hook 'find-file-hook #'drgnx-doc-agents-maybe-enable)
+  (dolist (b (buffer-list)) (when (buffer-local-value 'drgnx-doc-agents-mode b) (with-current-buffer b (drgnx-doc-agents-mode -1))))
   (remove-hook 'drgnx-persist-after-restore-functions #'drgnx-work-map--adopt-show)
   (drgnx-work-client-close-all)
   (dolist (b (drgnx-work-map-buffers))

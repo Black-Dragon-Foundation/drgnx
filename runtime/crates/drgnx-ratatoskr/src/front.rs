@@ -777,6 +777,18 @@ impl Front {
             Params::ChangesClose(p) => {
                 crate::view::changes::close(self, &caller, p).map(|b| json!(b))
             }
+            // the comment threads of a record (view::doc_comments)
+            Params::DocCommentsSubscribe(p) => {
+                crate::view::doc_comments::subscribe(self, &caller, p)
+                    .await
+                    .map(|b| json!(b))
+            }
+            Params::DocCommentsSet(p) => crate::view::doc_comments::set(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::DocCommentsClose(p) => {
+                crate::view::doc_comments::close(self, &caller, p).map(|b| json!(b))
+            }
             // the review screen: one change, its effects and reasons (view::review_screen)
             Params::ReviewScreenSubscribe(p) => {
                 crate::view::review_screen::subscribe(self, &caller, p)
@@ -935,6 +947,7 @@ impl Front {
             | Params::PaceGet(_)
             | Params::ForecastGet(_)
             | Params::ForecastPlan(_)
+            | Params::ForecastStart(_)
             | Params::ForecastSession(_)
             | Params::ForecastAccuracy(_)
             | Params::SayStart(_)

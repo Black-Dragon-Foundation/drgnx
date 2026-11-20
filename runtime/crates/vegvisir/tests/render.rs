@@ -997,3 +997,146 @@ fn strip_chip_text_is_not_truncated() {
         .map(|p| p.3.clone());
     assert_eq!(echo, Some(serde_json::Value::String(long)));
 }
+
+// ---- Task 21: the graph's tasks and machines on the kit ----
+
+/// The rows of the graph of CORE's model at a width of 1000 px, as text.
+fn graph_text(core: &vegvisir::Core) -> (Vec<Row>, String) {
+    use vegvisir::ViewState;
+    let m = core.model();
+    let state = ViewState {
+        width_units: 226,
+        ..ViewState::default()
+    };
+    let layout = vegvisir::layout::layout(m, &state, None);
+    let items = m.items();
+    let edges = m.edges();
+    let new = BTreeSet::new();
+    let palette = Palette::default();
+    let s = scene(&items, &edges, &layout, &new);
+    let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
+    let text = drawn
+        .rows
+        .iter()
+        .map(|r| r.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (drawn.rows, text)
+}
+
+fn plan_with_tasks(n: usize) -> vegvisir::Core {
+    use vegvisir::{Core, Event, GraphFact};
+    let mut core = Core::new();
+    core.step(Event::Graph(GraphFact::Plan {
+        id: "p1".into(),
+        title: "Inbox drop-down".into(),
+        rank: 1,
+        progress: Some((0, u32::try_from(n).unwrap())),
+        updated: 0,
+    }));
+    for i in 1..=n {
+        core.step(Event::Graph(GraphFact::Task {
+            id: format!("t{i}"),
+            plan: "p1".into(),
+            title: format!("task {i}"),
+            done: false,
+            updated: 0,
+        }));
+    }
+    core
+}
+
+/// [D] `work-graph/tasks-layer…` (the "+N" of flow-day-v2): a plan's tasks past the sixth collapse into one "+N" chip, so
+/// eight tasks show six cards and "+2", and six tasks show six cards and no chip.
+#[test]
+fn a_plans_tasks_past_six_collapse_to_a_plus_n_chip() {
+    let (_, text) = graph_text(&plan_with_tasks(8));
+    for i in 1..=6 {
+        assert!(text.contains(&format!("task {i}")), "task {i} in {text}");
+    }
+    assert!(
+        !text.contains("task 7") && !text.contains("task 8"),
+        "{text}"
+    );
+    assert!(text.contains("+2"), "{text}");
+    let (_, six) = graph_text(&plan_with_tasks(6));
+    assert!(six.contains("task 6") && !six.contains('+'), "{six}");
+}
+
+/// [D] `work-graph/runs-on-shows-job-chips-linked-to-agents`: a machine's card in the layer "Runs on" shows its slots and
+/// a chip for each job it runs (the job's name and state), and that chip is a link to the agent that started it
+/// (`drgnx-work-link` with the agent's id), so a click or RET goes to the agent.
+#[test]
+fn a_machine_card_shows_its_jobs_as_chips_linked_to_their_agents() {
+    use vegvisir::{Core, Event, GraphFact, JobFact, MachineFact, SessionFact, State};
+    let mut core = Core::new();
+    core.step(Event::Graph(GraphFact::Plan {
+        id: "p1".into(),
+        title: "Plan".into(),
+        rank: 1,
+        progress: None,
+        updated: 0,
+    }));
+    core.step(Event::Graph(GraphFact::Task {
+        id: "t1".into(),
+        plan: "p1".into(),
+        title: "task 1".into(),
+        done: false,
+        updated: 0,
+    }));
+    core.step(Event::Machines(vec![MachineFact {
+        name: "desktop".into(),
+        slots: 4,
+        used: 1,
+        reported: false,
+        runner: None,
+    }]));
+    core.step(Event::Session(SessionFact {
+        id: "a1".into(),
+        name: "a1".into(),
+        model: "Opus".into(),
+        state: State::Running,
+        since: 0,
+        age: None,
+        seq: 1,
+        task: Some("t1".into()),
+        manager: None,
+        branch: Some("drgnx/a1".into()),
+        worktree: None,
+        base: None,
+        machine: Some("desktop".into()),
+        slot: None,
+        spend: None,
+        context: None,
+        progress: None,
+        job: Some(JobFact {
+            id: "j1".into(),
+            name: "cargo test".into(),
+            runner: Some("desktop".into()),
+            state: "running".into(),
+            started: 0,
+            limit_min: None,
+            keys: Vec::new(),
+            why: None,
+        }),
+    }));
+    let (rows, text) = graph_text(&core);
+    let machine = rows
+        .iter()
+        .find(|r| r.text.contains("desktop"))
+        .unwrap_or_else(|| panic!("the machine row in {text}"));
+    assert!(machine.text.contains("1/4"), "{}", machine.text);
+    assert!(
+        machine.text.contains("cargo test"),
+        "the job's chip in {}",
+        machine.text
+    );
+    assert!(
+        machine
+            .props
+            .iter()
+            .any(|p| p.2 == "drgnx-work-link" && p.3 == serde_json::json!("agent:a1")),
+        "the chip links to its agent: {:?}",
+        machine.props
+    );
+}

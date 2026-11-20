@@ -340,6 +340,11 @@
  (work-relayout (:relayout :p95) 50) (work-relayout (:stalls) 0)
  (work-list-nav (:input :p95) 8) (work-list-nav (:stalls) 0)
  (work-list-filter (:relayout :p95) 50) (work-list-filter (:stalls) 0)
+ ;; allocation, CPU and rows of the List's two input workloads (flow Task 20, measured on the desktop island, check f20a-g4: nav
+ ;; alloc p50 700, cpu p90 1.7 ms, rows 0; filter alloc p50 35299, cpu p90 11.61 ms, rows 0): about 15 % over what was
+ ;; measured, 30 % on the 1.7 ms
+ (work-list-nav (:alloc :p50) 810) (work-list-nav (:cpu_ms :p90) 2.2) (work-list-nav (:rows) 0)
+ (work-list-filter (:alloc :p50) 40600) (work-list-filter (:cpu_ms :p90) 13.4) (work-list-filter (:rows) 0)
  (work-live (:draw_ms_s) 40) (work-live (:slice_ms :max) 4) (work-live (:stalls) 0)
  ;; The map on the hub's rows (render offload; read in the combined pass).  work-live's draw is at most 40 kB p50 (it was
  ;; 831 kB, Lisp drawing the frames; that path and its paired row, work-live-old, went with Task 34).  The work-nav and
@@ -356,6 +361,12 @@
  ;; a 10,000-step trail opened on the hub's rows until its first rows are drawn; a new step is the hub's patch (its
  ;; Lisp append and its row, :append_ms, went with Task 34: view-patch and work-live measure a patch's insert)
  (work-trail (:draw_ms) 100)
+ ;; the Timeline on the 30-agent map (flow plan Task 21a, spec section 15a): the Schedule and the Activity open until their first rows
+ ;; are drawn within 100 ms; a zoom of the Schedule draws its new window within 50 ms (p95 of 110); an Activity draw while 30
+ ;; agents stream within 4 ms (p95 of 100); typing beside it makes no Timeline hub call (at most 1); the following Schedule
+ ;; takes at most one row patch in 5 s.
+ (schedule-open (:first_rows) 100) (schedule-zoom (:relayout :p95) 50) (activity-open (:first_rows) 100)
+ (activity-step (:patch :p95) 4) (activity-typing (:delta) 1) (now-line (:rows_per_5s) 1)
  ;; the agents in the editor, the panel and pair mode (agent system part 3, "Budget rows"): typing p95 within a frame and no
  ;; freeze over 100 ms; the +1 ms against `agents-typing-none' and the pair writes applied >= 0.80 are `drgnx-perf-run--relative-fails'
  (agents-typing (:input :p95) 16) (agents-typing (:stalls) 0)

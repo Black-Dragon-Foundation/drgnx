@@ -355,6 +355,18 @@ fn agent_head(it: &Item) -> Vec<(&'static str, String)> {
 }
 
 /// The lines of IT every kind has: head, why, touches, conclusions, actions.
+/// The hub's unit of a budget's unit name (kebab-case; an unknown one reads as dollars).
+fn unit_of(unit: &str) -> runstav::methods::matrix::Unit {
+    use runstav::methods::matrix::Unit;
+    match unit {
+        "usd-est" => Unit::UsdEst,
+        "tokens" => Unit::Tokens,
+        "count" => Unit::Count,
+        "limit-share" | "share" => Unit::LimitShare,
+        _ => Unit::Usd,
+    }
+}
+
 fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
     let f = &it.fields;
     let mut out = if word(&it.kind) == "agent" {
@@ -395,6 +407,19 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
             },
         ));
     }
+    // the Budget section: a line for each unit with a limit or a spend (the model holds the binding one), never summed
+    if let Some(b) = &f.budget {
+        out.push(("budget", "Budget".into()));
+        let u = super::budget_detail::UnitLine {
+            unit: unit_of(&b.unit),
+            spent: b.spent.0,
+            limit: b.limit.map(|l| l.0),
+            forecast: None,
+        };
+        for l in super::budget_detail::budget_lines(&[u]) {
+            out.push(("budget", format!("  {l}")));
+        }
+    }
     out.push(("why", "Why ↑".into()));
     let w = why(m, it);
     if w.is_empty() {
@@ -425,6 +450,9 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
             ("Pause", "p"),
             ("Review", "v"),
         ]
+    } else if word(&it.kind) == "plan" {
+        // Start has no key of its own: it is a button and a palette command
+        &[("Open", "⏎"), ("Start", "")]
     } else {
         &[("Open", "⏎")]
     };
@@ -474,6 +502,21 @@ fn wrap(text: &str, room: f32, m: &dyn Measure) -> Vec<String> {
     lines
 }
 
+/// The registered command a button of the Detail's actions runs, by its label.
+fn command_of(label: &str) -> Option<&'static str> {
+    match label {
+        "Open" => Some("work-open"),
+        "Files" => Some("work-files"),
+        "Diffs" => Some("work-diffs"),
+        "Trail" => Some("work-trail"),
+        "Steer" => Some("work-steer"),
+        "Pause" => Some("work-pause"),
+        "Start" => Some("work-start-plan"),
+        "Review" => Some("work-review"),
+        _ => None,
+    }
+}
+
 /// The width of the key column, logical px.
 const KEY_PX: f32 = 66.0;
 
@@ -521,26 +564,31 @@ pub(crate) fn rows(lines: &[Line], kit: &KitEnv, width_px: u32, m: &dyn Measure)
                     let badge = parts[0];
                     let letter = badge.chars().next().unwrap_or('?');
                     let number = badge.chars().last().unwrap_or('1');
-                    let from = b.pos();
-                    b.push(&format!(" {letter} "), None);
-                    let to = b.pos();
-                    b.face(
-                        from,
-                        to,
-                        FaceId::WORK_WHO[number.to_digit(10).unwrap_or(1).clamp(1, 6) as usize - 1]
-                            .name(),
+                    kit::expand(
+                        &mut b,
+                        kit,
+                        &Comp::AgentMark {
+                            slot: number.to_digit(10).unwrap_or(1).clamp(1, 12) as u8,
+                            handle: letter.to_string(),
+                        },
                     );
                     b.push(" ", None)
                         .push(parts.get(1).unwrap_or(&""), Some(FaceId::UiHeading.name()));
                     if let Some(chip) = parts.get(2).filter(|c| !c.is_empty()) {
-                        let width =
-                            fit::width_in(m, Some(FaceId::Chip.name()), &format!(" {chip} "))
-                                .ceil();
-                        b.stop(width_px.saturating_sub(width as u32 + pad));
-                        let from = b.pos();
-                        b.push(&format!(" {chip} "), None);
-                        let to = b.pos();
-                        b.face(from, to, FaceId::Chip.name());
+                        // the kit's chip at the right edge: measured as the kit expands it
+                        let comp = Comp::Chip {
+                            label: (*chip).to_owned(),
+                            tone: kit::Tone::Neutral,
+                            fill: kit::ChipFill::Soft,
+                            icon: None,
+                            state: State::Rest,
+                            action: None,
+                        };
+                        let mut scratch = RowBuilder::new("measure");
+                        kit::expand(&mut scratch, kit, &comp);
+                        let width = crate::work::trail::flow::row_px(m, &scratch.finish());
+                        b.stop(width_px.saturating_sub(width + pad));
+                        kit::expand(&mut b, kit, &comp);
                     }
                 }
                 ("actions", Some(_)) => {
@@ -556,10 +604,17 @@ pub(crate) fn rows(lines: &[Line], kit: &KitEnv, width_px: u32, m: &dyn Measure)
                             &Comp::Button {
                                 label: pair[0].to_owned(),
                                 style: ButtonStyle::Secondary,
-                                size: Size::Md,
+                                size: Size::Sm,
                                 state: State::Rest,
-                                key: pair.get(1).map(|k| (*k).to_owned()),
-                                action: None,
+                                key: pair
+                                    .get(1)
+                                    .filter(|k| !k.is_empty())
+                                    .map(|k| (*k).to_owned()),
+                                // a click runs the action's command in this window (`work-command`, as the Flow's)
+                                action: command_of(pair[0]).map(|id| kit::Action {
+                                    kind: "work-command".to_owned(),
+                                    args: vec![Value::String(id.to_owned())],
+                                }),
                             },
                         );
                     }
@@ -618,4 +673,58 @@ pub(crate) fn rows(lines: &[Line], kit: &KitEnv, width_px: u32, m: &dyn Measure)
             vec![b.finish()]
         })
         .collect()
+}
+
+/// [`lines`] with the Budget section read from FACTS (`budget/get` along the chain: a line for each unit, "Counts toward"
+/// with the binding scope, "Set to p90" where it applies) and a Schedule section; while there are no facts and the item has
+/// a budget, "forecasting…". The model's own binding-budget lines give way to them.
+pub(crate) fn lines_with_facts(
+    m: &Model,
+    sel: Option<&ItemId>,
+    now: u64,
+    facts: Option<&super::budget_detail::Facts>,
+) -> Vec<Line> {
+    use super::budget_detail as bd;
+    let mut out = lines(m, sel, now);
+    let Some(it) = sel.and_then(|s| m.item(s)) else {
+        return out;
+    };
+    let had = out.iter().any(|l| l.0 == "budget");
+    out.retain(|l| l.0 != "budget");
+    let mut section: Vec<Line> = Vec::new();
+    match facts {
+        Some(f) if !f.units.is_empty() => {
+            section.push(("budget", "Budget".into(), None));
+            for l in bd::budget_lines(&f.units) {
+                section.push(("budget", format!("  {l}"), None));
+            }
+            if !f.chain.is_empty() {
+                section.push(("budget", "  Counts toward".into(), None));
+                for l in bd::counts_toward(&f.chain) {
+                    section.push(("budget", format!("    {l}"), None));
+                }
+            }
+        }
+        Some(_) => {}
+        None if had => {
+            section.push(("budget", "Budget".into(), None));
+            section.push(("budget", "  forecasting…".into(), None));
+        }
+        None => {}
+    }
+    // the Schedule section: a spec's or plan's target, a task's nothing yet known
+    let kind = word(&it.kind);
+    if matches!(kind.as_str(), "spec" | "plan") {
+        let s = bd::ScheduleFacts {
+            target: it.fields.target_at.map(|t| (t.0, String::new())),
+            ..bd::ScheduleFacts::default()
+        };
+        section.push(("schedule", "Schedule".into(), None));
+        for l in bd::schedule_lines(&s, &kind, 0) {
+            section.push(("schedule", format!("  {l}"), None));
+        }
+    }
+    let at = out.iter().position(|l| l.0 == "why").unwrap_or(out.len());
+    out.splice(at..at, section);
+    out
 }

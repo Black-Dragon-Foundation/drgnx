@@ -21,6 +21,7 @@ pub mod agents_side;
 pub mod buffers;
 pub mod changes;
 pub mod debug;
+pub mod doc_comments;
 pub mod explorer;
 pub mod extensions;
 pub mod files;
@@ -639,6 +640,8 @@ pub struct Views {
     scms: scm::Scms,
     /// The Changes views (`changes/subscribe`): what the agents changed, by task.
     changes: changes::Changes,
+    /// The comment-threads views (`doc-comments/subscribe`): the threads of a record.
+    doc_comments: doc_comments::DocComments,
     /// The review screens (`review-screen/subscribe`): one change under review.
     review_screens: review_screen::ReviewScreens,
     /// The Agents side views (`agents/side/subscribe`).
@@ -670,6 +673,7 @@ impl Default for Views {
             minimaps: minimap::Watches::default(),
             scms: scm::Scms::default(),
             changes: changes::Changes::default(),
+            doc_comments: doc_comments::DocComments::default(),
             review_screens: review_screen::ReviewScreens::default(),
             agents_sides: agents_side::AgentsSides::default(),
             debugs: debug::DebugViews::default(),
@@ -712,6 +716,7 @@ impl Views {
             || self.outline_build(f, key)
             || self.scm_build(f, key)
             || self.changes_build(f, key)
+            || self.doc_comments_build(f, key)
             || self.review_screen_build(f, key)
             || self.agents_side_build(f, key)
             || self.debugs.env_build(f, key)
@@ -1053,6 +1058,7 @@ impl Views {
         self.minimaps.gone(conn);
         self.scms.gone(conn);
         self.changes.gone(conn);
+        self.doc_comments.gone(conn);
         self.review_screens.gone(conn);
         self.agents_sides.gone(conn);
         self.debugs.gone(conn);

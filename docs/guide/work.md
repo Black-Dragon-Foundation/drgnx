@@ -66,6 +66,11 @@ Your choice is kept for each project. In the List a task's row shows its state a
 its plan progress, its agent and its machine; a title too long for the window is cut with an ellipsis (hover for all of
 it). The chips above the list are the things that need you, each with its jump key (`g1` to `g9`).
 
+### Reading the List without colour
+
+A task's state is always a word as well as a dot, an agent's mark has its name as a tooltip, and on a terminal the dot
+and its word come first, with the rest of the row after two spaces.
+
 ## The first open of the map
 
 Opening the Work map adopts each of its folders' specs, plans, ledgers and other records into the graph

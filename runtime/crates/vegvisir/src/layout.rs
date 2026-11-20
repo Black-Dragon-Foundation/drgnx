@@ -624,6 +624,7 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
         names,
         &prev_want,
         &mut want_out,
+        &BTreeMap::new(),
     );
 
     // layers 2 and 1, then 6: targets from what they link to
@@ -635,10 +636,17 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
                 .copied()
                 .filter(|&y| kinds.contains(&kind(y)) && placed(y))
                 .collect();
+            // a machine's job chips ride on its card: each widens it by its text
+            let extra: BTreeMap<Sym, u32> = items
+                .iter()
+                .filter(|&&y| kind(y) == Kind::Machine)
+                .map(|&y| (y, d.items[&y].job_units))
+                .filter(|(_, w)| *w > 0)
+                .collect();
             let targets: Vec<(Sym, Option<u32>)> = items
                 .iter()
                 .map(|&y| {
-                    let w = mx.chip_w(kind(y));
+                    let w = mx.chip_w(kind(y)) + extra.get(&y).copied().unwrap_or(0);
                     (y, bary(y, &drawn, xs).map(|c| c.saturating_sub(w / 2)))
                 })
                 .collect();
@@ -653,6 +661,7 @@ pub fn layout(m: &Model, v: &ViewState, prev: Option<&Layout>) -> Layout {
                 names,
                 &prev_want,
                 &mut want_out,
+                &extra,
             );
             for (k, line) in lines.into_iter().enumerate() {
                 for &(y, x, w) in &line {
@@ -928,11 +937,13 @@ fn place_chips(
     names: &crate::model::Names,
     prev_want: &BTreeMap<&ItemId, u32>,
     want_out: &mut BTreeMap<Sym, u32>,
+    extra: &BTreeMap<Sym, u32>,
 ) -> Vec<Vec<(Sym, u32, u32)>> {
     let mut items: Vec<(Sym, Option<u32>, u32, String)> = targets
         .iter()
         .map(|&(y, t)| {
-            let w = mx.chip_w(Kind::of(names.name(y)).unwrap_or(k));
+            let w = mx.chip_w(Kind::of(names.name(y)).unwrap_or(k))
+                + extra.get(&y).copied().unwrap_or(0);
             let id = names.id(y);
             // the previous target holds while the new one stays near it; an item linked to nothing goes last
             let t = match (t, prev_want.get(&id)) {

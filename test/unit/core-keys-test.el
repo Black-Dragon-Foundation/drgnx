@@ -1472,6 +1472,28 @@ The commands of modules that need no installed package are in it, the later stag
                                                               (plist-get b :id)))))
                                     (plist-get r :conflicts))))))))))
 
+(ert-deftest core-keys/timeline-keys-in-every-profile ()
+  "Every profile gives the Timeline's commands a key (flow Task 21a): toggle, zoom, pan, now, back, filter, grouping, budgets."
+  (dolist (profile '("emacs" "vim" "vscode"))
+    (let ((ids (flatten-tree (with-temp-buffer
+                               (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+                               (goto-char (point-min))
+                               (let (forms) (condition-case nil (while t (push (read (current-buffer)) forms)) (end-of-file nil)) forms)))))
+      (dolist (id '(work-timeline-toggle work-zoom-in work-zoom-out work-pan-earlier work-pan-later work-go-now work-zoom-back
+                                         work-timeline-filter work-timeline-group work-budget-page))
+        (should (memq id ids))))))
+
+(ert-deftest core-keys/work-budget-set-in-every-profile ()
+  "Every profile gives `work-budget-set' its key (`$' in the Work lens map) and the editor's three commands theirs (flow Task 20a)."
+  (dolist (profile '("emacs" "vim" "vscode"))
+    (let ((ids (flatten-tree (with-temp-buffer
+                               (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+                               (goto-char (point-min))
+                               (let (forms) (condition-case nil (while t (push (read (current-buffer)) forms)) (end-of-file nil)) forms)))))
+      (dolist (id '(work-budget-set work-budget-send work-budget-cancel work-budget-unit
+                                    work-start-plan work-start-go work-start-none work-start-cancel))
+        (should (memq id ids))))))
+
 (ert-deftest drgnx-keys/linux-is-unchanged ()
   ;; The macOS work changes nothing on Linux but the keys of the commands it added — and the views
   ;; that took C-S-e, C-S-f, C-S-h and F2 (see `drgnx-keys/views-took-their-keys').
@@ -1586,7 +1608,15 @@ The commands of modules that need no installed package are in it, the later stag
                               tile-placeholder-open tile-placeholder-close
                               ;; the review screen (flow Task 28)
                               work-review-screen review-screen-accept review-screen-request-changes
-                              review-screen-request-send review-screen-request-cancel)) ; a tile placeholder's RET and x
+                              review-screen-request-send review-screen-request-cancel
+                              doc-comment-add doc-comments-open doc-comment-reply
+                              work-target-set
+                              ;; the Timeline's forms (flow Task 21a)
+                              work-timeline-toggle work-zoom-in work-zoom-out work-pan-earlier work-pan-later work-go-now
+                              work-zoom-back work-timeline-filter work-timeline-group work-budget-page
+                              ;; budgets on List rows, set in place (flow Task 20a)
+                              work-budget-set work-budget-send work-budget-cancel work-budget-unit
+                              work-start-plan work-start-go work-start-none work-start-cancel))
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

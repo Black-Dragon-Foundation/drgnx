@@ -55,9 +55,12 @@
   (make-directory (file-name-directory file) t)
   (unless (file-exists-p file) (with-temp-file file (insert "one line\n"))))
 
+(defvar drgnx-work-thirty--jobs 0 "How many agents of the list were given a job.")
+
 (defun drgnx-work-thirty--agent-list (desc)
   "The description's agents as plists :id :parent :repo :branch :files :reads :decide, subagents given their parent's repository."
   (let ((all (alist-get 'agents desc)) (by-id (make-hash-table :test #'equal)) out)
+    (setq drgnx-work-thirty--jobs 0)
     (dolist (a all) (puthash (alist-get 'id a) a by-id))
     (dolist (a all)
       (let* ((id (alist-get 'id a)) (parent (and (string-search "/" id) (car (split-string id "/"))))
@@ -73,7 +76,9 @@
                     :branch (if branch (drgnx-work-thirty--rest branch)
                               (format "%s-%s" (drgnx-work-thirty--slug (or parent id)) (drgnx-work-thirty--slug id)))
                     :files files :reads (alist-get 'reads a) :decide (alist-get 'conclusion a)
-                    :name (alist-get 'name a))
+                    :name (alist-get 'name a)
+                    ;; the first three top-level agents start a job (a long `sleep`), so the machine they run on has job chips
+                    :job (and (not parent) (<= (cl-incf drgnx-work-thirty--jobs) 3)))
               out)))
     (nreverse out)))
 
@@ -91,6 +96,7 @@ an agent with a conclusion, then a chunk a second."
                                                                    (expand-file-name r dir))))
                                 (plist-get agent :reads))
                         (mapcar (lambda (e) (concat "tool:edit " e)) edits)
+                        (and (plist-get agent :job) (list "call:job_start {\"argv\":[\"sleep\",\"900\"]}"))
                         (and (plist-get agent :parent) (list "provider:task look around"))
                         (and (plist-get agent :decide) (list (concat "decide " (plist-get agent :decide))))
                         ;; a chunk, a read (a step, so the map's fields change) and a second of quiet, over and over
@@ -114,7 +120,14 @@ Sets `drgnx-work-thirty--roots'."
     (dolist (p (alist-get 'plans desc))
       (let ((file (expand-file-name (format "org/docs/plans/%s.md" (alist-get 'id p)) dir)))
         (drgnx-work-thirty--touch file)
-        (with-temp-file file (insert (format "# %s\n\n- [ ] first task\n" (alist-get 'title p))))))
+        (with-temp-file file
+          ;; the plan's tasks as headings, so the hub imports a task for each (the Graph's Tasks layer, the List's task rows)
+          (insert (format "# %s\n" (alist-get 'title p)))
+          (let ((n 0))
+            (dolist (tk (alist-get 'tasks desc))
+              (when (equal (alist-get 'plan tk) (alist-get 'id p))
+                (insert (format "\n### Task %d: %s\n\n**Role:** implement\n\n%s.\n" (cl-incf n) (alist-get 'title tk) (alist-get 'title tk)))))
+            (when (zerop n) (insert "\n- [ ] first task\n"))))))
     (dolist (s (alist-get 'specs desc))
       (let ((file (expand-file-name (format "org/docs/specs/%s.md" (alist-get 'id s)) dir)))
         (drgnx-work-thirty--touch file)

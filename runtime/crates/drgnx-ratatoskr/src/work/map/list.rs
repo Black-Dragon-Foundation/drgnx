@@ -8,10 +8,13 @@ use std::collections::BTreeSet;
 
 use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::Measure;
-use drgnx_rows::kit::{self, ChipFill, Comp, KitEnv, ProgressKind, RowKind, Status, Tone};
+use drgnx_rows::kit::{
+    self, ChipFill, Comp, KitEnv, MeterSize, MeterState, MeterUnit, ProgressKind, RowKind, Status,
+    Tone,
+};
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::view::ViewEnv;
-use serde_json::Value;
+use serde_json::{Value, json};
 use vegvisir::list::{COMPLETED_MORE, ListChip, ListEntry};
 use vegvisir::{Group, ItemId, Kind, Model, TaskState, Visibility};
 
@@ -22,6 +25,8 @@ use crate::work::trail::flow::row_px;
 const BAR_PX: u16 = 46;
 /// Room kept at the right edge, logical px: the window's fringe and its truncation glyph are not drawn on.
 const EDGE_PX: f32 = 28.0;
+/// The row width, device px, from which a not-started row shows its forecast words.
+const WIDE_PX: u32 = 900;
 /// The gutter edge's width, logical px.
 const GUTTER_PX: f32 = 3.0;
 
@@ -30,14 +35,34 @@ fn px(v: f32, scale: f32) -> u32 {
     (f64::from(v) * f64::from(scale) + 0.5 + 1e-9).floor() as u32
 }
 
-/// A gap of about V logical px in B: spaces (a 4 px space is the least the fonts draw), one on a terminal.
+/// A gap of V logical px in B: the kit's pad (exactly its device px), one space on a terminal.
 fn gap(b: &mut RowBuilder, kit: &KitEnv, v: f32) {
-    let n = if kit.tty {
-        1
+    if kit.tty {
+        b.push(" ", None);
     } else {
-        (v / 4.0).round().max(1.0) as usize
-    };
-    b.push(&" ".repeat(n), None);
+        b.pad(px(v, kit.scale), None);
+    }
+}
+
+/// The kit's unit of a budget's unit name (the hub's `Unit`, kebab-case).
+fn meter_unit(unit: &str) -> MeterUnit {
+    match unit {
+        "usd-est" => MeterUnit::UsdEst,
+        "tokens" => MeterUnit::Tokens,
+        "count" => MeterUnit::Count,
+        "limit-share" | "share" => MeterUnit::Share,
+        _ => MeterUnit::Usd,
+    }
+}
+
+/// The kit's state of a budget's state (`ok`, `nearing`, `reached` or `none`).
+fn meter_state(state: &str) -> MeterState {
+    match state {
+        "nearing" => MeterState::Nearing,
+        "reached" => MeterState::Reached,
+        "none" => MeterState::None,
+        _ => MeterState::Ok,
+    }
 }
 
 fn status_of(s: TaskState) -> Status {
@@ -123,7 +148,8 @@ pub(crate) fn rows(
             out.push(r);
             continue;
         }
-        let draw_right = |b: &mut RowBuilder| right(b, m, e, &kit, &slot);
+        let wide = env.width_px >= WIDE_PX;
+        let draw_right = |b: &mut RowBuilder| right(b, m, e, &kit, &slot, wide);
         let rw = {
             let mut scratch = RowBuilder::new("measure");
             draw_right(&mut scratch);
@@ -238,7 +264,14 @@ fn left(b: &mut RowBuilder, e: &ListEntry, kit: &KitEnv) -> u32 {
 }
 
 /// The right part of E's row in B, each piece after a gap.
-fn right(b: &mut RowBuilder, m: &Model, e: &ListEntry, kit: &KitEnv, slot: &dyn Fn(&ItemId) -> u8) {
+fn right(
+    b: &mut RowBuilder,
+    m: &Model,
+    e: &ListEntry,
+    kit: &KitEnv,
+    slot: &dyn Fn(&ItemId) -> u8,
+    wide: bool,
+) {
     let chip = |b: &mut RowBuilder, label: String| {
         kit::expand(
             b,
@@ -288,9 +321,39 @@ fn right(b: &mut RowBuilder, m: &Model, e: &ListEntry, kit: &KitEnv, slot: &dyn 
                 sep(b);
                 chip(b, x.clone());
             }
+            // the forecast words of a not-started row, on a wide row only (900 px: the title keeps its room), muted
+            ListChip::Forecast(words) => {
+                if wide {
+                    sep(b);
+                    b.push(words, Some(FaceId::TextMuted.name()));
+                }
+            }
             ListChip::Meter(bm) => {
                 sep(b);
-                chip(b, vegvisir::render::meter_text(bm));
+                let from = b.pos();
+                let text = vegvisir::render::meter_text(bm);
+                kit::expand(
+                    b,
+                    kit,
+                    &Comp::Meter {
+                        spent: bm.spent.0,
+                        limit: bm.limit.map(|l| l.0),
+                        unit: meter_unit(&bm.unit),
+                        forecast: None,
+                        state: meter_state(&bm.state),
+                        size: MeterSize::Row,
+                        width: 0,
+                        // the kit says "no limit" itself
+                        text: text.strip_suffix(" · no limit").unwrap_or(&text).to_owned(),
+                    },
+                );
+                let to = b.pos();
+                b.prop(
+                    from,
+                    to,
+                    "drgnx-work-meter",
+                    json!({"item": e.item.0, "unit": bm.unit, "limit": bm.limit.map(|l| l.0)}),
+                );
             }
             ListChip::State(s) => {
                 // a terminal's state dot has its word already

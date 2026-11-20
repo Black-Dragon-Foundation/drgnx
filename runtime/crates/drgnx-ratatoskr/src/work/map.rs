@@ -533,6 +533,11 @@ pub struct Map {
     /// The front, for a session a step or presence names before its first snapshot reached the map.
     front: OnceLock<Weak<Front>>,
     origin: OnceLock<tokio::time::Instant>,
+    /// What Detail reads of the plans' forecasts: the forecast of each plan's newest job, filled in the background (a read of the
+    /// job store and the history), so the editor never waits for it.
+    forecasts: Mutex<budget_detail::ForecastCache>,
+    /// The plans whose forecast was asked for.
+    forecast_asked: Mutex<BTreeSet<String>>,
     /// What went out, in order (`model`, `rows`): tests read it.
     #[cfg(test)]
     log: Mutex<Vec<&'static str>>,
@@ -772,6 +777,16 @@ fn rows_width(envs: &[ViewEnv]) -> Option<u32> {
 }
 
 impl Map {
+    /// Detail of every shown map view, drawn again (a forecast arrived).
+    fn redraw_details(&self, f: &Front) {
+        let g = lock(&self.inner);
+        for (key, v) in g.views.iter().filter(|(_, v)| v.shown) {
+            if let Some(sp) = g.spaces.get(&v.space) {
+                Self::publish_detail(f, sp.core.model(), v, key, None);
+            }
+        }
+    }
+
     /// Whether any map view is open.
     pub fn open(&self) -> bool {
         self.open.load(Ordering::Relaxed)
@@ -1486,8 +1501,13 @@ impl Map {
         class: Option<&str>,
     ) {
         let view = detail::view_of(&key.view);
-        let lines =
-            detail::lines_or_default(m, v.selected.as_ref(), crate::clock::wall_secs() as u64);
+        let now = crate::clock::wall_secs() as u64;
+        // every budget the selected item's scope names, and what it counts toward (`budget/get` along the chain)
+        let facts = detail_facts(f, v.selected.as_ref());
+        let lines = match v.selected.as_ref().filter(|s| m.item(s).is_some()) {
+            Some(sel) => detail::lines_with_facts(m, Some(sel), now, facts.as_ref()),
+            None => detail::lines_or_default(m, v.selected.as_ref(), now),
+        };
         for c in f.core.views.classes(key.conn, &view) {
             if class.is_some_and(|only| only != c) {
                 continue;
@@ -2144,6 +2164,73 @@ fn strip_text(job: &str, title: &str) -> String {
     }
 }
 
+/// The budget facts of the spec, plan or task SEL names: each unit it names and what its ancestors have left, read from the
+/// budget store (a spec, plan or task is its own scope; an agent's is its session's).
+fn detail_facts(f: &Front, sel: Option<&ItemId>) -> Option<budget_detail::Facts> {
+    let (kind, id) = sel?.0.split_once(':')?;
+    if !matches!(kind, "spec" | "plan" | "task") {
+        return None;
+    }
+    let scope: runstav::methods::timeline::BudgetScope =
+        serde_json::from_value(json!({ kind: format!("{kind}:{id}") })).ok()?;
+    let item = format!("{kind}:{id}");
+    // a plan's forecast is read in the background the first time Detail shows it, then Detail draws again
+    if kind == "plan"
+        && f.core
+            .map
+            .forecast_asked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(item.clone())
+        && let Some(fr) = f.core.map.front.get().and_then(std::sync::Weak::upgrade)
+    {
+        let (plan, key) = (id.to_owned(), item.clone());
+        crate::clock::spawn("map:detail-forecast", async move {
+            if let Some(fc) = plan_forecast(&fr, &plan).await {
+                fr.core
+                    .map
+                    .forecasts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(key, fc);
+                fr.core.map.redraw_details(&fr);
+            }
+        });
+    }
+    let cache = f
+        .core
+        .map
+        .forecasts
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    Some(budget_detail::facts_for(
+        &f.core.budgets.views_along(&scope),
+        &item,
+        &cache,
+    ))
+}
+
+/// The forecast of PLAN's newest job (a run it proposed or started); none when it has no job or the forecast fails.
+async fn plan_forecast(f: &Front, plan: &str) -> Option<runstav::methods::forecast::Forecast> {
+    let (a, b) = (format!("plan:{plan}"), plan.to_owned());
+    let job: Option<String> = f
+        .writer
+        .db
+        .read(move |c| {
+            Ok(c.query_row(
+                "select id from job where plan in (?1, ?2) order by created desc limit 1",
+                (a, b),
+                |r| r.get::<_, String>(0),
+            )
+            .ok())
+        })
+        .await
+        .ok()
+        .flatten();
+    crate::forecast::job_forecast(f, &job?).await.ok()
+}
+
 /// The stripped ids (`kind:` removed) of the entities the old scanner made, `plan:/abs/path` and `spec:/abs/path`, whose
 /// file an importer entity (`...:rec-HASH`, `data.records.file`) holds: the same file twice on the map.  ROWS are
 /// (id, records file).
@@ -2439,6 +2526,7 @@ pub async fn run(front: Arc<Front>) {
     }
 }
 
+pub(crate) mod budget_detail;
 mod detail;
 mod list;
 mod model;
