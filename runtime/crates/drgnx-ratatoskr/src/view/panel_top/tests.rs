@@ -66,6 +66,7 @@ fn build(s: &Snapshot, width: u32, busy: Option<f64>) -> (Vec<Row>, Vec<(ImageId
             checkpoints: None,
             chain: &[],
             plan: &[],
+            budget: None,
         },
     )
 }
@@ -217,6 +218,7 @@ fn a_terminal_header_has_no_images() {
             checkpoints: None,
             chain: &[],
             plan: &[],
+            budget: None,
         },
     );
     assert!(images.len() == 3 || images.is_empty());
@@ -305,6 +307,7 @@ fn the_chips_say_the_sandbox_the_files_and_the_checkpoints_when_the_hub_knows() 
             checkpoints: Some(1),
             chain: &[],
             plan: &[],
+            budget: None,
         },
     );
     let chip_rows: Vec<_> = rows.iter().filter(|r| r.key.starts_with(CHIPS)).collect();
@@ -340,6 +343,7 @@ fn the_chips_say_the_model_and_the_mcp_servers_and_both_explain_themselves() {
             checkpoints: None,
             chain: &[],
             plan: &[],
+            budget: None,
         },
     );
     let chips = rows.iter().find(|r| r.key == CHIPS).expect("chips");
@@ -373,6 +377,7 @@ fn chips_that_do_not_fit_one_row_wrap_to_the_next_never_cut_audit_a3() {
             checkpoints: Some(12),
             chain: &[],
             plan: &[],
+            budget: None,
         },
     );
     let chip_rows: Vec<_> = rows.iter().filter(|r| r.key.starts_with(CHIPS)).collect();
