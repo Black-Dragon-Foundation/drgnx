@@ -272,13 +272,18 @@ fn tty(s: &Snapshot, cx: &Cx, items: &[&BackgroundItem]) -> Vec<Row> {
     let cols = (if cx.env.width_px == 0 {
         TTY_COLS
     } else {
-        (cx.env.width_px / cell).max(8)
+        // the last column is the terminal's own (the `$` of a cut line)
+        (cx.env.width_px / cell).saturating_sub(1).max(8)
     }) as usize;
     let mut out = Vec::new();
     if let Some((text, warn)) = bg::chip(s) {
         let mut b = RowBuilder::new("bg:chip");
+        let line: String = format!("⟳ {text} (b list, k stop, RET output)")
+            .chars()
+            .take(cols)
+            .collect();
         b.push(
-            &format!("⟳ {text} (b list, k stop, RET output)"),
+            &line,
             Some(if warn {
                 FaceId::AgentPanelWarn.name()
             } else {

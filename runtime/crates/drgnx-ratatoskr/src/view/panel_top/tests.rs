@@ -957,7 +957,7 @@ fn background_tty_rows_are_the_mockups_characters() {
         "kind": "terminal", "id": "t9", "description": "bin/drgnx test gateway", "started_ms": 1_000_000 - 240_000,
         "status": "running", "can_cancel": false, "end": {"status": "failed", "exit_code": 3}
     }]);
-    let mut e = env(320);
+    let mut e = env(8 * 48);
     e.display = Display::Tty;
     let (f, l) = (fonts(), lens());
     let open = BTreeSet::new();
@@ -982,13 +982,19 @@ fn background_tty_rows_are_the_mockups_characters() {
     );
     assert_eq!(
         text("bg:t1"),
-        format!("R $ cargo test -p hermod{}4:12", " ".repeat(40 - 24 - 4))
+        format!("R $ cargo test -p hermod{}4:12", " ".repeat(47 - 24 - 4))
     );
     assert_eq!(text("bg:t1:1"), "    test v2::turn_ends_at_idle ... ok");
     assert!(text("bg:w1").starts_with("R ◉ Watching CI on staging PR #412"));
     assert!(text("bg:w1").ends_with("12:40"));
     assert!(text("bg:c1").starts_with("R @ Subagent: review the v2 diff"));
-    assert_eq!(text("bg:t9"), "F $ bin/drgnx test gateway exit 3  4 min");
+    assert_eq!(
+        text("bg:t9"),
+        format!(
+            "F $ bin/drgnx test gateway{}exit 3  4 min",
+            " ".repeat(47 - 26 - 13)
+        )
+    );
     // no head row, no buttons: the keys do it
     assert!(
         rows.iter()

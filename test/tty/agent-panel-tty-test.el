@@ -455,7 +455,7 @@ of the mock agent (its rows carry the session's id), and the card's line is on t
 as the mockup's terminal frame has them: `R $ COMMAND  ELAPSED' (status letter, kind mark), its last line under it."
   (let ((drgnx-tty-agent-panel-test--background '("bg:shell t1 sleep 600" "bg:shell t2 sleep 601")))
     (drgnx-tty-agent-panel-test--with (s)
-      (drgnx-tty-session-wait-screen s (regexp-quote "⟳ 2 in background (b list, k stop, RET output)") 30)
+      (drgnx-tty-session-wait-screen s (regexp-quote "⟳ 2 in background") 30)
       (drgnx-tty-session-wait-screen s "R \\$ sleep 600 +[0-9]+:[0-9][0-9]" 10)
       (drgnx-tty-session-wait-screen s "R \\$ sleep 601 +[0-9]+:[0-9][0-9]" 10))))
 
