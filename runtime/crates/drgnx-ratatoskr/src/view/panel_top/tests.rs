@@ -68,6 +68,8 @@ fn build(s: &Snapshot, width: u32, busy: Option<f64>) -> (Vec<Row>, Vec<(ImageId
             chain: &[],
             plan: &[],
             budget: None,
+            ended_at: &NO_ENDED,
+            bg_selected: None,
         },
     )
 }
@@ -220,6 +222,8 @@ fn a_terminal_header_has_no_images() {
             chain: &[],
             plan: &[],
             budget: None,
+            ended_at: &NO_ENDED,
+            bg_selected: None,
         },
     );
     assert!(images.len() == 3 || images.is_empty());
@@ -309,6 +313,8 @@ fn the_chips_say_the_sandbox_the_files_and_the_checkpoints_when_the_hub_knows() 
             chain: &[],
             plan: &[],
             budget: None,
+            ended_at: &NO_ENDED,
+            bg_selected: None,
         },
     );
     let chip_rows: Vec<_> = rows.iter().filter(|r| r.key.starts_with(CHIPS)).collect();
@@ -345,6 +351,8 @@ fn the_chips_say_the_model_and_the_mcp_servers_and_both_explain_themselves() {
             chain: &[],
             plan: &[],
             budget: None,
+            ended_at: &NO_ENDED,
+            bg_selected: None,
         },
     );
     let chips = rows.iter().find(|r| r.key == CHIPS).expect("chips");
@@ -379,6 +387,8 @@ fn chips_that_do_not_fit_one_row_wrap_to_the_next_never_cut_audit_a3() {
             chain: &[],
             plan: &[],
             budget: None,
+            ended_at: &NO_ENDED,
+            bg_selected: None,
         },
     );
     let chip_rows: Vec<_> = rows.iter().filter(|r| r.key.starts_with(CHIPS)).collect();
@@ -418,6 +428,8 @@ fn cx_of<'a>(
         chain,
         plan,
         budget: None,
+        ended_at: &NO_ENDED,
+        bg_selected: None,
     }
 }
 
@@ -553,4 +565,480 @@ fn header_cost_chip_has_spend_and_limit() {
     // without a limit, the plain spend
     let (plain, _) = rows_of_empty(&e, &f, &l, &open);
     assert!(plain.iter().all(|r| !r.text.contains(" / $")));
+}
+
+// ---- background work (the panel's chip and its pinned list) ----
+
+fn item(
+    kind: &str,
+    id: &str,
+    what: &str,
+    started_ms: u64,
+    last: Option<&str>,
+    status: &str,
+    cancel: bool,
+) -> Value {
+    let mut v = json!({
+        "kind": kind, "id": id, "description": what, "started_ms": started_ms,
+        "status": status, "can_cancel": cancel,
+    });
+    if let (Some(l), Some(o)) = (last, v.as_object_mut()) {
+        o.insert("progress".into(), json!(l));
+    }
+    v
+}
+
+fn three() -> Value {
+    json!([
+        item(
+            "terminal",
+            "t1",
+            "cargo test -p hermod",
+            1_000_000 - 252_000,
+            Some("test v2::turn_ends_at_idle ... ok"),
+            "running",
+            true
+        ),
+        item(
+            "tool_call",
+            "w1",
+            "Watching CI on staging PR #412",
+            1_000_000 - 760_000,
+            Some("3 of 7 jobs done"),
+            "running",
+            false
+        ),
+        item(
+            "subagent",
+            "c1",
+            "Subagent: review the v2 diff",
+            1_000_000 - 125_000,
+            Some("read conn.rs"),
+            "running",
+            true
+        ),
+    ])
+}
+
+fn rows_with(background: Value, open: &[&str], width: u32, display: Display) -> Vec<Row> {
+    let mut e = env(width);
+    e.display = display;
+    let (f, l) = (fonts(), lens());
+    let open: BTreeSet<String> = open.iter().map(|s| (*s).to_owned()).collect();
+    rows(
+        &snap(json!({ "background": background })),
+        &cx_of(&e, &f, &l, &open, &[], &[]),
+    )
+    .0
+}
+
+fn gui(background: Value) -> Vec<Row> {
+    gui_sel(background, None)
+}
+
+fn gui_sel(background: Value, selected: Option<&str>) -> Vec<Row> {
+    let mut e = env(600);
+    e.display = Display::Gui;
+    let (f, l) = (fonts(), lens());
+    let open = BTreeSet::new();
+    let mut cx = cx_of(&e, &f, &l, &open, &[], &[]);
+    cx.now = 1000.0;
+    cx.bg_selected = selected;
+    rows(&snap(json!({ "background": background })), &cx).0
+}
+
+fn head_text(rows: &[Row]) -> String {
+    rows.iter()
+        .find(|r| r.key == HEAD)
+        .map(|r| r.text.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn chip_hidden_without_background() {
+    // None: the agent does not report it; Some([]): nothing runs.  Neither shows a chip or a list.
+    let none = rows(
+        &snap(json!({})),
+        &cx_of(&env(600), &fonts(), &lens(), &BTreeSet::new(), &[], &[]),
+    )
+    .0;
+    assert!(!head_text(&none).contains("in background"));
+    assert!(none.iter().all(|r| !r.key.starts_with("bg:")));
+    let empty = gui(json!([]));
+    assert!(!head_text(&empty).contains("in background"));
+    assert!(empty.iter().all(|r| !r.key.starts_with("bg:")));
+}
+
+#[test]
+fn chip_counts_running_items() {
+    let rows = gui(three());
+    let head = rows.iter().find(|r| r.key == HEAD).expect("the header");
+    assert!(head.text.contains("3 in background"), "{}", head.text);
+    let acts = props(head, "drgnx-agent-panel-action");
+    assert!(
+        acts.iter()
+            .any(|(v, t)| **v == json!("background-list") && t.contains("3 in background")),
+        "{acts:?}"
+    );
+    // an ended item is not counted
+    let mut two = three();
+    two.as_array_mut().expect("list").pop();
+    assert!(head_text(&gui(two)).contains("2 in background"));
+}
+
+#[test]
+fn chip_unknown_uses_warning_text() {
+    let rows = gui(json!([
+        item("terminal", "t1", "cargo test", 0, None, "unknown", false),
+        item("tool_call", "w1", "watch", 0, None, "unknown", false),
+    ]));
+    let head = rows.iter().find(|r| r.key == HEAD).expect("the header");
+    assert!(head.text.contains("2 · state unknown"), "{}", head.text);
+    assert!(!head.text.contains("in background"));
+    let byte = head.text.find("2 · state unknown").expect("chip text");
+    let at = head.text[..byte].chars().count() as u32 + 3;
+    assert!(
+        head.runs
+            .iter()
+            .any(|(a, b, f)| f == FaceId::AgentPanelWarn.name() && *a <= at && at < *b),
+        "warn face over the chip: {:?}",
+        head.runs
+    );
+}
+
+#[test]
+fn background_list_rows_per_item() {
+    let rows = gui_sel(three(), Some("t1"));
+    let keys: Vec<&str> = rows
+        .iter()
+        .map(|r| r.key.as_str())
+        .filter(|k| k.starts_with("bg:"))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "bg:head", "bg:t1", "bg:t1:1", "bg:w1", "bg:w1:1", "bg:c1", "bg:c1:1"
+        ]
+    );
+    let by = |k: &str| rows.iter().find(|r| r.key == k).expect(k);
+    assert!(
+        by("bg:head").text.contains("In background · 3"),
+        "{}",
+        by("bg:head").text
+    );
+    assert!(by("bg:t1").text.contains("cargo test -p hermod"));
+    assert!(by("bg:t1").text.ends_with("4:12"), "{}", by("bg:t1").text);
+    assert!(by("bg:w1").text.ends_with("12:40"), "{}", by("bg:w1").text);
+    assert!(by("bg:c1").text.ends_with("2:05"), "{}", by("bg:c1").text);
+    assert!(
+        by("bg:t1:1")
+            .text
+            .contains("test v2::turn_ends_at_idle ... ok")
+    );
+    // each row names its item, its kind and whether it can be stopped
+    let first = props(by("bg:t1"), "drgnx-bg-item");
+    assert_eq!(first[0].0, &json!("t1"));
+    assert_eq!(props(by("bg:t1"), "drgnx-bg-kind")[0].0, &json!("terminal"));
+    assert_eq!(
+        props(by("bg:w1"), "drgnx-bg-kind")[0].0,
+        &json!("tool_call")
+    );
+    assert_eq!(props(by("bg:c1"), "drgnx-bg-kind")[0].0, &json!("subagent"));
+    assert_eq!(props(by("bg:t1"), "drgnx-bg-can-cancel")[0].0, &json!(true));
+    assert_eq!(
+        props(by("bg:w1"), "drgnx-bg-can-cancel")[0].0,
+        &json!(false)
+    );
+    // the elapsed cell carries when the item began, for the ticking timer
+    let el = props(by("bg:t1"), "drgnx-bg-elapsed");
+    assert_eq!(el[0].0, &json!(1_000_000u64 - 252_000));
+    assert_eq!(el[0].1, "4:12");
+    // the selected row shows its actions (Output), the others only their last line
+    assert!(by("bg:t1:1").text.contains("Output"));
+    assert!(
+        !by("bg:c1:1").text.contains("Open"),
+        "{}",
+        by("bg:c1:1").text
+    );
+    assert!(
+        !by("bg:w1:1").text.contains("Output"),
+        "{}",
+        by("bg:w1:1").text
+    );
+    // "Stop all" in the head while something can be stopped
+    let acts = props(by("bg:head"), "drgnx-agent-panel-action");
+    assert!(
+        acts.iter()
+            .any(|(v, _)| **v == json!("background-stop-all")),
+        "{acts:?}"
+    );
+}
+
+#[test]
+fn background_list_collapsed() {
+    let mut e = env(600);
+    e.display = Display::Gui;
+    let (f, l) = (fonts(), lens());
+    let open = BTreeSet::from(["bg-folded".to_owned()]);
+    let mut cx = cx_of(&e, &f, &l, &open, &[], &[]);
+    cx.now = 1000.0;
+    let rows = rows(&snap(json!({ "background": three() })), &cx).0;
+    let keys: Vec<&str> = rows
+        .iter()
+        .map(|r| r.key.as_str())
+        .filter(|k| k.starts_with("bg:"))
+        .collect();
+    assert_eq!(keys, ["bg:head"]);
+    // the chip still counts them
+    assert!(head_text(&rows).contains("3 in background"));
+}
+
+#[test]
+fn background_list_caps_visible_rows() {
+    let many: Vec<Value> = (0..40)
+        .map(|i| {
+            item(
+                "terminal",
+                &format!("t{i}"),
+                &format!("job {i}"),
+                1_000_000 - 5_000,
+                None,
+                "running",
+                true,
+            )
+        })
+        .collect();
+    let rows = gui(json!(many));
+    let first_lines = rows
+        .iter()
+        .filter(|r| r.key.starts_with("bg:t") && !r.key.ends_with(":1"))
+        .count();
+    assert_eq!(first_lines, 6);
+    let more = rows
+        .iter()
+        .find(|r| r.key == "bg:more")
+        .expect("the more row");
+    assert!(more.text.contains("and 34 more"), "{}", more.text);
+    assert!(
+        props(more, "drgnx-agent-panel-action")
+            .iter()
+            .any(|(v, _)| **v == json!("background-more"))
+    );
+    assert!(head_text(&rows).contains("40 in background"));
+}
+
+#[test]
+fn background_row_long_text_one_line() {
+    let long = "x".repeat(300);
+    let multi = "first line\nsecond line\nthird";
+    let rows = gui(json!([item(
+        "terminal",
+        "t1",
+        &long,
+        1_000_000 - 1000,
+        Some(multi),
+        "running",
+        true
+    )]));
+    for k in ["bg:t1", "bg:t1:1"] {
+        let r = rows.iter().find(|r| r.key == k).expect(k);
+        assert!(!r.text.contains('\n'), "{k}: {:?}", r.text);
+        assert!(
+            r.text.chars().count() < 140,
+            "{k} is {} chars",
+            r.text.chars().count()
+        );
+    }
+    let r = rows.iter().find(|r| r.key == "bg:t1").expect("row");
+    assert!(r.text.contains('…'), "{}", r.text);
+    assert!(
+        rows.iter()
+            .find(|r| r.key == "bg:t1:1")
+            .expect("row")
+            .text
+            .contains("first line")
+    );
+    assert!(
+        !rows
+            .iter()
+            .find(|r| r.key == "bg:t1:1")
+            .expect("row")
+            .text
+            .contains("second line")
+    );
+}
+
+#[test]
+fn ended_item_faded_until_transcript_line() {
+    let mut e = env(600);
+    e.display = Display::Gui;
+    let (f, l) = (fonts(), lens());
+    let open = BTreeSet::new();
+    let ended = json!([{
+        "kind": "terminal", "id": "t9", "description": "cargo test -p hermod", "started_ms": 1_000_000 - 240_000,
+        "status": "running", "can_cancel": false,
+        "end": {"status": "failed", "exit_code": 101}
+    }]);
+    let snapshot = snap(json!({ "background": three(), "background_ended": ended }));
+    let seen = BTreeMap::from([("t9".to_owned(), 998.0)]);
+    let mut cx = cx_of(&e, &f, &l, &open, &[], &[]);
+    cx.now = 1000.0;
+    cx.ended_at = &seen;
+    let rows = rows(&snapshot, &cx).0;
+    let r = rows
+        .iter()
+        .find(|r| r.key == "bg:t9")
+        .expect("the ended item stays in the list");
+    assert!(r.text.contains("failed · exit 101"), "{}", r.text);
+    assert!(
+        r.runs
+            .iter()
+            .any(|(_, _, f)| f == FaceId::AgentPanelSubtle.name())
+    );
+    assert!(
+        props(r, "drgnx-bg-elapsed").is_empty(),
+        "an ended item does not tick"
+    );
+    // not counted as running
+    assert!(head_text(&rows).contains("3 in background"));
+    // once its line has been in the transcript for a while it leaves
+    let mut late = cx_of(&e, &f, &l, &open, &[], &[]);
+    late.now = 1010.0;
+    late.ended_at = &seen;
+    assert!(rows_keys(&snapshot, &late).iter().all(|k| k != "bg:t9"));
+}
+
+fn rows_keys(s: &Snapshot, cx: &Cx) -> Vec<String> {
+    rows(s, cx).0.into_iter().map(|r| r.key).collect()
+}
+
+#[test]
+fn no_stop_without_can_cancel() {
+    let rows = gui_sel(three(), Some("w1"));
+    let w = rows
+        .iter()
+        .find(|r| r.key == "bg:w1:1")
+        .expect("watcher line");
+    assert!(!w.text.contains("Stop"), "{}", w.text);
+    assert!(
+        props(w, "drgnx-agent-panel-action")
+            .iter()
+            .all(|(v, _)| v.as_str().is_none_or(|a| !a.starts_with("background-stop")))
+    );
+    assert!(w.text.contains("Output"));
+    let rows = gui_sel(three(), Some("t1"));
+    let t = rows
+        .iter()
+        .find(|r| r.key == "bg:t1:1")
+        .expect("terminal line");
+    assert!(t.text.contains("Stop"));
+    assert!(
+        props(t, "drgnx-agent-panel-action")
+            .iter()
+            .any(|(v, _)| **v == json!("background-stop:t1"))
+    );
+    // nothing stoppable: no "Stop all" either
+    let none = gui(json!([item(
+        "tool_call",
+        "w1",
+        "watch",
+        1_000_000 - 1000,
+        None,
+        "running",
+        false
+    )]));
+    let head = none.iter().find(|r| r.key == "bg:head").expect("head");
+    assert!(!head.text.contains("Stop all"));
+}
+
+#[test]
+fn background_tty_rows_are_the_mockups_characters() {
+    let ended = json!([{
+        "kind": "terminal", "id": "t9", "description": "bin/drgnx test gateway", "started_ms": 1_000_000 - 240_000,
+        "status": "running", "can_cancel": false, "end": {"status": "failed", "exit_code": 3}
+    }]);
+    let mut e = env(320);
+    e.display = Display::Tty;
+    let (f, l) = (fonts(), lens());
+    let open = BTreeSet::new();
+    let seen = BTreeMap::from([("t9".to_owned(), 998.0)]);
+    let mut cx = cx_of(&e, &f, &l, &open, &[], &[]);
+    cx.now = 1000.0;
+    cx.ended_at = &seen;
+    let rows = rows(
+        &snap(json!({ "background": three(), "background_ended": ended })),
+        &cx,
+    )
+    .0;
+    let text = |k: &str| {
+        rows.iter()
+            .find(|r| r.key == k)
+            .map(|r| r.text.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        text("bg:chip"),
+        "⟳ 3 in background (b list, k stop, RET output)"
+    );
+    assert_eq!(
+        text("bg:t1"),
+        format!("R $ cargo test -p hermod{}4:12", " ".repeat(40 - 24 - 4))
+    );
+    assert_eq!(text("bg:t1:1"), "    test v2::turn_ends_at_idle ... ok");
+    assert!(text("bg:w1").starts_with("R ◉ Watching CI on staging PR #412"));
+    assert!(text("bg:w1").ends_with("12:40"));
+    assert!(text("bg:c1").starts_with("R @ Subagent: review the v2 diff"));
+    assert_eq!(text("bg:t9"), "F $ bin/drgnx test gateway exit 3  4 min");
+    // no head row, no buttons: the keys do it
+    assert!(
+        rows.iter()
+            .all(|r| r.key != "bg:head" && r.key != "bg:more")
+    );
+    assert!(head_text(&rows).find("in background").is_none());
+}
+
+#[test]
+fn a_session_without_background_reports_draws_no_rows_even_tty() {
+    let rows = rows_with(json!(null), &[], 320, Display::Tty);
+    assert!(rows.iter().all(|r| !r.key.starts_with("bg:")));
+}
+
+#[test]
+fn actions_show_on_the_selected_row_only() {
+    let none = gui(three());
+    assert!(
+        none.iter()
+            .all(|r| !r.text.contains("Output") && !r.text.contains("Open")),
+        "nothing selected"
+    );
+    let sub = gui_sel(three(), Some("c1"));
+    let c = sub
+        .iter()
+        .find(|r| r.key == "bg:c1:1")
+        .expect("subagent line");
+    assert!(
+        c.text.contains("Open") && c.text.contains("Stop"),
+        "{}",
+        c.text
+    );
+    // the other rows stay plain
+    assert!(
+        !sub.iter()
+            .find(|r| r.key == "bg:t1:1")
+            .expect("terminal line")
+            .text
+            .contains("Stop")
+    );
+    // an item with no last line has a second row only while selected
+    let bare = json!([item(
+        "terminal",
+        "t1",
+        "make",
+        1_000_000 - 1000,
+        None,
+        "running",
+        true
+    )]);
+    assert!(gui(bare.clone()).iter().all(|r| r.key != "bg:t1:1"));
+    assert!(gui_sel(bare, Some("t1")).iter().any(|r| r.key == "bg:t1:1"));
 }

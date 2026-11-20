@@ -56,6 +56,8 @@ pub struct Look {
     pub rows: BTreeMap<u64, bool>,
     pub slow_secs: f64,
     pub dear_cost: f64,
+    /// The background item selected in the pinned list (its actions show on its row).
+    pub bg_selected: Option<String>,
 }
 
 impl Default for Look {
@@ -65,12 +67,16 @@ impl Default for Look {
             rows: BTreeMap::new(),
             slow_secs: 10.0,
             dear_cost: 0.5,
+            bg_selected: None,
         }
     }
 }
 
 /// A text's parts as (text, face), each measured in the font its face draws in (`drgnx_rows::fit::width_in`).
 pub type Parts<'p> = [(&'p str, &'p str)];
+
+/// No background item runs.
+pub static NO_BG: BTreeMap<String, (u64, u64)> = BTreeMap::new();
 
 /// What a group's rows read besides its entries.
 pub struct Cx<'a> {
@@ -82,6 +88,9 @@ pub struct Cx<'a> {
     pub prov: &'a dyn Fn(&Entry) -> Option<String>,
     /// The px a right-aligned text of these [`Parts`] starts at.
     pub right: &'a dyn Fn(&Parts<'_>) -> u32,
+    /// The background items still running, by the id of the tool call that started them: (when each began, now), in
+    /// milliseconds since the epoch.  Such a tool call draws live until its item ends.
+    pub bg: &'a BTreeMap<String, (u64, u64)>,
 }
 
 /// One group as the session hands it to the panel: its head's index and entry, the thoughts that fold under it, and
@@ -706,7 +715,10 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     // the step on one line
     let mut l = Line::new(key.clone(), idx);
     l.push(if parent.is_some() { "      " } else { "  " }, None);
+    // a call whose background item still runs is live, whatever its own status says
+    let live = str_of(e, "id").and_then(|id| cx.bg.get(id)).copied();
     let (dot, face) = match status {
+        _ if live.is_some() => ("○", FaceId::AgentPanelRun.name()),
         "completed" | "done" => ("●", FaceId::AgentPanelOk.name()),
         "failed" => ("●", FaceId::AgentPanelFail.name()),
         _ => ("○", FaceId::AgentPanelRun.name()),
@@ -725,6 +737,17 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
             &format!("  · {result}"),
             Some(FaceId::AgentPanelSubtle.name()),
         );
+    }
+    if let Some((started, now)) = live {
+        l.push("  in background", Some(FaceId::AgentPanelTag.name()))
+            .push(" ", None);
+        let from = l.b.pos();
+        l.push(
+            &crate::view::bgwork::elapsed_ms(started, now),
+            Some(FaceId::AgentPanelCode.name()),
+        );
+        let to = l.b.pos();
+        l.b.prop(from, to, "drgnx-bg-elapsed", json!(started));
     }
     if facts.is_some_and(|(_, f)| f.undone) {
         l.push("  ↶ undone", Some(FaceId::AgentPanelSubtle.name()));

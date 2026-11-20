@@ -13,7 +13,7 @@ use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::agents::{SessionStatus, Snapshot};
 use runstav::methods::view::{Display, ViewEnv};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The keys of the rows (the editor places the rows whose key starts with `p:` above the panel's own).
 pub const HEAD: &str = "p:head";
@@ -60,7 +60,14 @@ pub struct Cx<'a> {
     /// The spend and the limit of the scope that holds the agent, in dollars (none: no limit; the cost chip is the plain
     /// spend).
     pub budget: Option<(f64, f64)>,
+    /// Background items that ended, by id: the second (since the epoch) the panel first saw each end.
+    pub ended_at: &'a BTreeMap<String, f64>,
+    /// The background item selected in the list (its actions show on its row).
+    pub bg_selected: Option<&'a str>,
 }
+
+/// No item ended.
+pub static NO_ENDED: BTreeMap<String, f64> = BTreeMap::new();
 
 /// What the agent is doing, for the header: "Claude · running 6 min", "held by you", "Pair · editing your checkout".
 pub fn status_line(s: &Snapshot, busy_since: Option<f64>, now: f64) -> String {
@@ -103,6 +110,7 @@ pub fn rows(s: &Snapshot, cx: &Cx) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut rows = vec![head];
     rows.extend(chain(cx));
     rows.extend(chips(s, cx));
+    rows.extend(background::rows(s, cx, &mut images));
     rows.extend(plan_strip(cx));
     rows.extend(strip(cx));
     (rows, images)
@@ -179,7 +187,11 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
     let button_w = if gui { p4 * 2 + icon_px } else { 3 * cell };
     let gap_w = if gui { p6 } else { cell };
     let buttons_w = 2 * (gap_w + button_w);
-    let right_w = lens_w + buttons_w;
+    let chip = background::head_chip(s, cx);
+    let chip_w = chip.as_ref().map_or(0, |(t, _)| {
+        icon_px + text_width(cx, Some(FaceId::AgentPanelChip.name()), &format!(" {t} ")) + gap_w
+    });
+    let right_w = lens_w + buttons_w + chip_w;
 
     // the head: " " icon " " name
     b.push(" ", None);
@@ -217,6 +229,30 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
     // the right part starts at its stop
     let stop = env.width_px.saturating_sub(right_w + p8);
     b.stop(stop);
+    if let Some((t, warn)) = &chip {
+        let face = if *warn {
+            FaceId::AgentPanelWarn.name()
+        } else {
+            FaceId::Accent.name()
+        };
+        let start = b.pos();
+        icon(&mut b, images, "refresh-cw", "⟳", icon_px, face);
+        b.push(&format!(" {t} "), Some(face));
+        let end = b.pos();
+        b.prop(
+            start,
+            end,
+            "drgnx-agent-panel-action",
+            json!("background-list"),
+        );
+        b.prop(
+            start,
+            end,
+            "help-echo",
+            json!("Background work: fold or unfold the list (b)"),
+        );
+        b.space(gap_w, 1, "default");
+    }
     for (n, p) in cx.lens.names.iter().enumerate() {
         if n > 0 {
             if gui {
@@ -561,6 +597,9 @@ fn chips(s: &Snapshot, cx: &Cx) -> Vec<Row> {
     }
     out
 }
+
+#[path = "panel_top/background.rs"]
+mod background;
 
 #[cfg(test)]
 #[path = "panel_top/tests.rs"]

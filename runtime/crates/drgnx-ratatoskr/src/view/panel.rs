@@ -9,6 +9,7 @@
 //! its kind and whether it has a diff, so the editor's keys find the next of a kind without asking; an appended entry
 //! sends its new steps alone. Every row names its step (`drgnx-work-id`).
 
+use super::bgwork;
 use super::model::Doc;
 use super::panel_cards::{self, FileEdit};
 use super::panel_review;
@@ -21,7 +22,7 @@ use crate::front::Front;
 use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::{self, FontSet};
 use drgnx_rows::{Row, RowBuilder};
-use runstav::methods::agents::{Entry, EntryType, PanelLook};
+use runstav::methods::agents::{Entry, EntryType, PanelLook, Snapshot};
 use runstav::methods::timeline::Step;
 use runstav::methods::view::{Display, ViewEnv};
 use runstav::wire::Error;
@@ -144,6 +145,10 @@ struct Source<'a> {
     prov: &'a dyn Fn(&runstav::methods::agents::Entry) -> Option<String>,
     /// The blocks' roles of the entries from an index on ([`rows::panel_roles`]).
     roles: &'a dyn Fn(usize) -> BTreeMap<usize, rows::Role>,
+    /// The background items still running, by the id that names their tool call ([`rows::Cx::bg`]).
+    bg: &'a BTreeMap<String, (u64, u64)>,
+    /// Rows the panel adds between the groups: (the entry index they come before, the rows), by index.
+    extra: &'a [(usize, Vec<Row>)],
 }
 
 /// What one (connection, view, class) was built from, and each group's rows.
@@ -189,6 +194,9 @@ struct Edited {
     diffs: Vec<(String, String)>,
 }
 
+/// Background item id → (the second the panel first saw it end, the transcript's entry count then).
+type Seen = BTreeMap<String, (f64, usize)>;
+
 /// The panels' state: the looks, the caches and the steps' facts.
 #[derive(Default)]
 pub struct Panels {
@@ -200,6 +208,9 @@ pub struct Panels {
     busy: Mutex<BTreeMap<String, f64>>,
     /// Session → its edits for the ledger.
     edited: Mutex<BTreeMap<String, Edited>>,
+    /// Session → background item id → (the second the panel first saw it end, how many entries the transcript had
+    /// then).  What was already ended when the panel first looked has second 0 (history: no line, no fading).
+    bg_seen: Mutex<BTreeMap<String, Seen>>,
     /// Held while the panels are built.
     building: Mutex<()>,
     front: OnceLock<Weak<Front>>,
@@ -366,6 +377,22 @@ impl Panels {
         }
     }
 
+    /// Session SID's ended background items as the panel has seen them end (see `bg_seen`), those of SNAP noted now.
+    fn note_ended(&self, sid: &str, snap: &Snapshot, now: f64, entries: usize) -> Seen {
+        let mut all = lock(&self.bg_seen);
+        let first = !all.contains_key(sid);
+        let seen = all.entry(sid.to_owned()).or_default();
+        seen.retain(|id, _| snap.background_ended.iter().any(|i| &i.id == id));
+        for i in &snap.background_ended {
+            seen.entry(i.id.clone()).or_insert(if first {
+                (0.0, entries)
+            } else {
+                (now, entries)
+            });
+        }
+        seen.clone()
+    }
+
     /// `agents/panel/look`: CONN's choices for VIEW (a top view's are its transcript view's), and its panel's rows
     /// built again.
     pub fn look(&self, f: &Front, conn: u64, p: PanelLook) -> bool {
@@ -399,6 +426,10 @@ impl Panels {
             }
             if let Some(on) = p.lens_on {
                 c.lens.on = on;
+            }
+            if let Some(sel) = p.bg_selected {
+                let sel = sel.into_inner();
+                c.look.bg_selected = (!sel.is_empty()).then_some(sel);
             }
             if p.older == Some(true) {
                 c.from = c.from.map(|from| from.saturating_sub(WINDOW));
@@ -580,6 +611,36 @@ impl Panels {
         fonts: &FontSet,
         dirty: Option<&BTreeSet<usize>>,
     ) -> (Vec<Row>, Vec<(drgnx_rows::ImageId, String)>) {
+        // the header and the chips: built from the snapshot each time (two rows; the store sends what changed)
+        let snapshot = s.snapshot();
+        let now = crate::clock::wall_secs();
+        // the background work: the items still running name the tool calls that draw live; those that ended, the
+        // lines the transcript gets (and the list fades them for a while)
+        let seen = self.note_ended(&s.id, &snapshot, now, s.entry_count());
+        let ended_at: BTreeMap<String, f64> = seen.iter().map(|(k, v)| (k.clone(), v.0)).collect();
+        let now_ms = (now * 1000.0) as u64;
+        let bg_live: BTreeMap<String, (u64, u64)> = bgwork::list(&snapshot)
+            .iter()
+            .filter(|i| bgwork::is_running(i))
+            .map(|i| (i.id.clone(), (i.started_ms, now_ms)))
+            .collect();
+        let mut extra: Vec<(usize, Vec<Row>)> = Vec::new();
+        for i in &snapshot.background_ended {
+            if let Some((at, pos)) = seen.get(&i.id).filter(|(at, _)| *at > 0.0) {
+                let secs = (*at - i.started_ms as f64 / 1000.0).max(0.0);
+                extra.push((
+                    *pos,
+                    bgwork::end_rows(&bgwork::Ended {
+                        item: i,
+                        secs: Some(secs),
+                    }),
+                ));
+            }
+        }
+        for c in &snapshot.caused {
+            extra.push((c.entry as usize, bgwork::after_rows(c)));
+        }
+        extra.sort_by_key(|e| e.0);
         let src = Source {
             sid: &s.id,
             n: s.entry_count(),
@@ -587,10 +648,9 @@ impl Panels {
             always: &|e: &runstav::methods::agents::Entry| s.always_covers(e),
             prov: &|e: &runstav::methods::agents::Entry| s.allowed_how(e),
             roles: &|from: usize| s.panel_roles(from),
+            bg: &bg_live,
+            extra: &extra,
         };
-        // the header and the chips: built from the snapshot each time (two rows; the store sends what changed)
-        let snapshot = s.snapshot();
-        let now = crate::clock::wall_secs();
         let busy_since = {
             let mut busy = lock(&self.busy);
             if snapshot.status == Some(runstav::methods::agents::SessionStatus::Busy) {
@@ -602,9 +662,15 @@ impl Panels {
         };
         // a top view reads the look its transcript view was sent
         let look_key = (key.0, look_view(&key.1));
-        let (lens, open) = lock(&self.chosen)
+        let (lens, open, bg_selected) = lock(&self.chosen)
             .get(&look_key)
-            .map(|c| (c.lens.clone(), c.look.open.clone()))
+            .map(|c| {
+                (
+                    c.lens.clone(),
+                    c.look.open.clone(),
+                    c.look.bg_selected.clone(),
+                )
+            })
             .unwrap_or_default();
         // the chips the snapshot does not carry: the files edited (the ledger's) and the steps holding a checkpoint
         let files_edited = lock(&self.edited).get(&s.id).map(|e| {
@@ -675,6 +741,8 @@ impl Panels {
                     chain: &chain,
                     plan: &plan,
                     budget,
+                    ended_at: &ended_at,
+                    bg_selected: bg_selected.as_deref(),
                 },
             );
             hover(&mut rows);
@@ -741,7 +809,17 @@ impl Panels {
         let all = lock(&self.facts);
         let empty = BTreeMap::new();
         let (facts_v, facts) = all.get(sid).map_or((0, &empty), |(v, m)| (*v, m));
-        let sig = Some((env.epoch, env.width_px, look_v, facts_v));
+        // the running background items change which tool calls draw live
+        let bg_v = src.bg.keys().fold(src.bg.len() as u64, |h, k| {
+            k.bytes()
+                .fold(h, |h, b| h.wrapping_mul(31).wrapping_add(u64::from(b)))
+        });
+        let sig = Some((
+            env.epoch,
+            env.width_px,
+            look_v ^ bg_v.rotate_left(17),
+            facts_v,
+        ));
         let mut caches = lock(&self.caches);
         let cache = caches.entry(key.clone()).or_default();
         let whole = cache.sig != sig
@@ -786,6 +864,7 @@ impl Panels {
             always: src.always,
             prov: src.prov,
             right: &right,
+            bg: src.bg,
         };
         for g in (src.groups)(from, only) {
             let thoughts: Vec<&runstav::methods::agents::Entry> = g.thoughts.iter().collect();
@@ -823,8 +902,15 @@ impl Panels {
             );
             out.push(b.finish());
         }
-        for rows in cache.groups.values() {
+        let mut extra = src.extra.iter().peekable();
+        for (head, rows) in &cache.groups {
+            while let Some((_, r)) = extra.next_if(|(pos, _)| pos <= head) {
+                out.extend(r.iter().cloned());
+            }
             out.extend(rows.iter().cloned());
+        }
+        for (_, r) in extra {
+            out.extend(r.iter().cloned());
         }
         out
     }
