@@ -47,6 +47,8 @@
 
 ;;;; Search: the line model's scan, else Lisp's
 
+(defvar drgnx-minimap-focus-map)          ; defined below, after its commands
+
 (defun drgnx-minimap-search-run (query regexp case-fold)
   "Search the current buffer's whole text for QUERY (a regexp when REGEXP, folding case with CASE-FOLD) to its end:
 the hits as (POS . END), in order, empty matches left out.  The line model scans when it can read QUERY (its hits are

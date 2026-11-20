@@ -2,8 +2,9 @@
 //! the hub scans the file on disk.  It reads [`BLOCK`] blocks, splits the file into at most [`BUCKETS`] equal byte
 //! ranges, and counts per bucket its ink (the bytes that are not whitespace: the strip's brightness, so blank and
 //! sparse stretches read dim) and the lines that match the error and warning expressions (counted where each line
-//! starts, each expression on its own, as `grep -c` counts).  The table goes out in parts: the first once
-//! [`FIRST_PART`] has passed, then at each further tenth of the file, then whole.  The scan stops when its watch goes
+//! starts, each expression on its own, as `grep -c` counts).  The table goes out in parts: the first before
+//! [`FIRST_PART`] passes (once the next block, as slow as the slowest so far, could end past it), then at each
+//! further tenth of the file, then whole.  The scan stops when its watch goes
 //! or asks again, and starts over when the file changes on disk under it; after it, the file is looked at every
 //! [`POLL`] and scanned again when it changed.
 
@@ -75,6 +76,9 @@ pub fn scan(
     let mut buckets: Vec<Bucket> = vec![(0, 0, 0); count as usize];
     let mut file = File::open(path)?;
     let start = now();
+    // the first part goes out before the deadline: once the next block, as slow as the slowest so far, could end
+    // past it
+    let (mut last, mut slowest) = (start, Duration::ZERO);
     let mut first_sent = false;
     let mut next_tenth = 1u64;
     // the block, with the unfinished last line of the one before at its head
@@ -116,12 +120,16 @@ pub fn scan(
         if eof {
             break;
         }
-        // a part: the first once FIRST_PART passed, then at each tenth
+        // a part: the first before FIRST_PART passes, then at each tenth
         let done = (read / size) as u32;
         let tenth = read * 10 / stamp.len.max(1);
-        if (!first_sent && now().duration_since(start) >= FIRST_PART)
-            || (first_sent && tenth >= next_tenth)
-        {
+        let first_due = !first_sent && {
+            let t = now();
+            slowest = slowest.max(t.duration_since(last));
+            last = t;
+            t.duration_since(start) + slowest >= FIRST_PART
+        };
+        if first_due || (first_sent && tenth >= next_tenth) {
             first_sent = true;
             next_tenth = tenth + 1;
             if !part(Some((&buckets[..done.min(count) as usize], count))) {
@@ -308,6 +316,88 @@ mod tests {
         assert!(parts.len() <= 11, "{parts:?}");
         assert!(parts.windows(2).all(|w| w[0].0 < w[1].0), "{parts:?}");
         assert!(parts.iter().all(|(b, n)| *b as u32 <= *n));
+    }
+
+    /// The first part goes out within [`FIRST_PART`], not after it: at the block after which the next one, as slow as
+    /// the slowest so far, could end past the deadline (blocks of 100 ms on the clock: at 200 ms, not 300).
+    #[test]
+    fn the_first_part_goes_out_before_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = log(dir.path(), 900_000);
+        let st = stamp(&p).unwrap();
+        let t0 = Instant::now();
+        let at = std::cell::Cell::new(t0);
+        let clock = || {
+            at.set(at.get() + Duration::from_millis(100));
+            at.get()
+        };
+        let mut first = None;
+        scan(&p, st, &re("ERROR"), &re("WARN"), clock, |part| {
+            if part.is_some() && first.is_none() {
+                first = Some(at.get().duration_since(t0));
+            }
+            true
+        })
+        .unwrap();
+        let first = first.expect("a part went out");
+        assert!(first <= FIRST_PART, "the first part at {first:?}");
+    }
+
+    /// The perf lane's 200 MB generated log (design §9, state C): the buckets tile the file, the error and warning
+    /// counts are `grep -c`'s, the first part goes out within [`FIRST_PART`] on the real clock, and a close (the part
+    /// callback answering no) stops the scan within a block.  Ignored in normal runs: release, pinned
+    /// (`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --lib -- --ignored
+    /// --nocapture density_200mb`; docs/develop/perf.md).
+    #[test]
+    #[ignore = "perf lane"]
+    fn density_200mb_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = log(dir.path(), 5_600_000);
+        let st = stamp(&p).unwrap();
+        assert!(st.len >= 200 << 20, "the log is 200 MB: {}", st.len);
+        let (error, warning) = (re("ERROR|FATAL"), re("WARN"));
+        let t0 = Instant::now();
+        let (mut first, mut parts) = (None, 0u32);
+        let r = scan(&p, st, &error, &warning, Instant::now, |part| {
+            if part.is_some() {
+                parts += 1;
+                first.get_or_insert(t0.elapsed());
+            }
+            true
+        })
+        .unwrap();
+        let whole = t0.elapsed();
+        let Scanned::Done(b, _) = r else {
+            panic!("not done: {r:?}")
+        };
+        let (size, count) = geometry(st.len);
+        assert_eq!((b.len() as u32, count), (1024, 1024));
+        let spans: u64 = (0..u64::from(count))
+            .map(|i| ((i + 1) * size).min(st.len) - i * size)
+            .sum();
+        assert_eq!(spans, st.len, "the buckets tile the file");
+        assert_eq!(b.iter().map(|x| x.1).sum::<u32>(), grep_c(&p, &error));
+        assert_eq!(b.iter().map(|x| x.2).sum::<u32>(), grep_c(&p, &warning));
+        eprintln!("density-200mb: first part {first:?}, {parts} parts, whole scan {whole:?}");
+        if let Some(first) = first {
+            assert!(first <= FIRST_PART, "the first part at {first:?}");
+        }
+        let t1 = Instant::now();
+        let mut blocks = 0;
+        let r = scan(&p, st, &error, &warning, Instant::now, |part| {
+            blocks += 1;
+            part.is_none() && blocks < 3
+        })
+        .unwrap();
+        assert_eq!(
+            (r, blocks),
+            (Scanned::Cancelled, 3),
+            "a close stops it within a block"
+        );
+        assert!(
+            t1.elapsed() < whole,
+            "the cancelled scan read only its blocks"
+        );
     }
 
     /// A cancel stops the scan within a block; a file that changes under the scan says so.

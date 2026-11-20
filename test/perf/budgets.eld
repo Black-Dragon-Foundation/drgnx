@@ -33,6 +33,9 @@
  (lines-build-1mb (:build_ms) 25) (lines-memory (:bytes_per_line) 40)
  ;; Fold All over 10,000 lines of the fixture (design §8): ≤ 50 ms, at most one overlay a range
  (fold-all-10k (:fold_ms) 50) (fold-all-10k (:overlays_per_range) 1)
+ ;; the density strip of a 2 GiB log (design §8, M7): its first part within 250 ms of the watch, each part's handler
+ ;; on the main thread within 1 ms (the scan is the hub's, off it)
+ (density-2gb (:first_ms) 250) (density-2gb (:part_ms :max) 1)
  ;; tree-sitter (design §8, Task 11): the first whole-text class pass of 1 MB keeps the main thread ≤ 40 ms p95 at once
  ;; (the rest in idle slices, each within a frame), every line coloured; the whole pass and its CPU time (measured
  ;; 2026-11-19: 174 ms p95, 168 ms) and its Lisp objects held under a ceiling; an edit's folds ≤ 2 ms over its parse

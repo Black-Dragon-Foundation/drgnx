@@ -49,6 +49,8 @@ large-files size) is always one."
 (defvar-local drgnx-minimap--density-memo nil
   "Whether the buffer is past the density limit, for (TICK SIZE LIMIT): (KEY . ANSWER).")
 
+(defvar drgnx-minimap-bucket-map)          ; defined below, after its commands
+
 (defun drgnx-minimap-density-p (&optional buffer)
   "Whether BUFFER's minimap is a density strip: a large file, or more lines than `drgnx-minimap-density-above'.
 The lines are counted only when the buffer holds more characters than the limit, once per change."

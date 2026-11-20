@@ -3504,6 +3504,47 @@ second half, the minimap held open, dark."
         (drgnx-look-scene--minimap-hold w))))
   (drgnx-look-scene--answer))
 
+(declare-function drgnx-minimap-density-p "drgnx-minimap-density" (&optional buffer))
+
+(defun drgnx-look-scene--events-log ()
+  "minimap-folding.html C's events-2026-11.log: 260,000 lines (past the density limit), each a time, a level and a
+request, errors in two bursts and warnings scattered, so the strip has dim and bright parts and marks."
+  (with-temp-buffer
+    (dotimes (i 260000)
+      (insert (format "2026-11-%02d %02d:%02d:%02d %s request %d %s\n" (1+ (/ i 10000)) (% (/ i 3600) 24) (% (/ i 60) 60) (% i 60)
+                      (cond ((or (< 61000 i 61400) (< 190000 i 190900)) (if (= 0 (% i 3)) "ERROR" "INFO "))
+                            ((= 0 (% i 997)) "WARN ")
+                            (t "INFO "))
+                      i (if (= 0 (% i 7)) "served from cache" "served by worker 3 in 12 ms"))))
+    (buffer-string)))
+
+(defun drgnx-look-scene-minimap-density ()
+  "minimap-folding.html's C: a 260,000-line log past the density limit, its density strip held open over the hub's
+bucket table (the scan of the file on disk), dark."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "minimap-density"
+    (drgnx-look-scene--hub)
+    (let* ((rel "logs/events-2026-11.log") (f (expand-file-name rel drgnx-look-scene--project)))
+      (unless (file-exists-p f)
+        (make-directory (file-name-directory f) t)
+        (write-region (drgnx-look-scene--events-log) nil f nil 'silent))
+      (drgnx-look-scene--goto rel 61200 1 61180)
+      (let* ((w (selected-window)) (file (drgnx-minimap--file (window-buffer w))))
+        (unless (drgnx-minimap-density-p (window-buffer w))
+          (push "minimap-density: the log is not past the density limit" drgnx-look-scene--errors))
+        (drgnx-ruler--place w)
+        ;; `get' answers (VERSION COUNT): the whole table is the file's 1,024 buckets
+        (unless (drgnx-look-scene--until 20 "density buckets"
+                                         (lambda () (equal (cadr (and file (nidhogg-view-minimap 'get file "density"))) 1024)))
+          (push (format "minimap-density: density for %s: %S" file (and file (nidhogg-view-minimap 'get file "density")))
+                drgnx-look-scene--errors))
+        (unless (plist-get (window-parameter w 'glitnir-minimap) :density)
+          (push "minimap-density: the window's spec is not a density strip" drgnx-look-scene--errors))
+        (set-window-parameter w 'glitnir-minimap (append (window-parameter w 'glitnir-minimap) '(:open t)))
+        (drgnx-look-scene--settle-frame))))
+  (drgnx-look-scene--answer))
+
 (defun drgnx-look-scene-minimap-diff ()
   "minimap-layers.html's diff minimap: the project's uncommitted changes as a diff buffer (no file), each hunk
 labelled, the minimap held open, dark."

@@ -1264,6 +1264,72 @@ collection, against before it opened, plus its buffer's text)."
       (drgnx-perf--term-open)
       t)))
 
+(defconst drgnx-perf-run--density-form
+  (prin1-to-string
+   '(progn
+      (defvar drgnx-perf--dn-dir nil "The workload's folder: the 2 GiB log.")
+      (defvar drgnx-perf--dn-file nil "The log.")
+      (defvar drgnx-perf--dn-seen nil "Sjá's (VERSION COUNT) of the log's density layer, as last seen.")
+      (defvar drgnx-perf--dn-first nil "When the first part came, ms after the watch was asked.")
+      (defvar drgnx-perf--dn-asked nil "When the watch was asked (`float-time').")
+      (defvar drgnx-perf--dn-parts nil "Each part's main-thread time, ms: the pushed line's handler.")
+      (defun drgnx-perf--dn-up ()
+        "Write the log: a 4 MiB block of lines (every 50th an ERROR, every 70th a WARN) 512 times over."
+        (setq drgnx-perf--dn-dir (make-temp-file "drgnx-perf-density" t)
+              drgnx-perf--dn-file (expand-file-name "big.log" drgnx-perf--dn-dir))
+        (let ((block (expand-file-name "block" drgnx-perf--dn-dir)))
+          (with-temp-file block
+            (let ((i 0))
+              (while (< (buffer-size) 4194304)
+                (insert (format "2026-11-20 12:00:%02d %s request %d\n" (% i 60)
+                                (cond ((= 0 (% i 50)) "ERROR") ((= 0 (% i 70)) "WARN") (t "INFO")) i))
+                (setq i (1+ i)))))
+          (unless (zerop (call-process "sh" nil nil nil "-c"
+                                       (format "for i in $(seq 512); do cat %s; done > %s; rm -f %s"
+                                               (shell-quote-argument block) (shell-quote-argument drgnx-perf--dn-file)
+                                               (shell-quote-argument block))))
+            (error "density-2gb: the log was not written")))
+        (unless drgnx-hub--events (error "density-2gb: no events connection"))
+        t)
+      (defun drgnx-perf--dn-pushed (f &rest args)
+        "Around `drgnx-hub--model-pushed': a new version of the log's density layer is a part; its handler's time."
+        (let ((t0 (float-time)))
+          (prog1 (apply f args)
+            (let ((g (and drgnx-perf--dn-asked (ignore-errors (nidhogg-view-minimap 'get drgnx-perf--dn-file "density")))))
+              (when (and g (not (equal g drgnx-perf--dn-seen)))
+                (push (* 1000 (- (float-time) t0)) drgnx-perf--dn-parts)
+                (unless drgnx-perf--dn-first (setq drgnx-perf--dn-first (* 1000 (- t0 drgnx-perf--dn-asked))))
+                (setq drgnx-perf--dn-seen g))))))
+      (defun drgnx-perf--dn-measure ()
+        "Watch the log with its density strip: the first part's time, each part's main-thread cost, the parts until
+the whole table (1,024 buckets); then the watch goes (the scan stops)."
+        (setq drgnx-perf--dn-seen nil drgnx-perf--dn-first nil drgnx-perf--dn-parts nil)
+        (advice-add 'drgnx-hub--model-pushed :around #'drgnx-perf--dn-pushed)
+        (unwind-protect
+            (progn
+              (setq drgnx-perf--dn-asked (float-time))
+              (drgnx-hub--call-on drgnx-hub--events "minimap/watch"
+                                  (list :file drgnx-perf--dn-file :on t :density (list :error "ERROR|FATAL" :warning "WARN"))
+                                  #'ignore)
+              (drgnx-perf--wait 100 (lambda () (equal (cadr drgnx-perf--dn-seen) 1024)))
+              (let ((parts (drgnx-perf-stats drgnx-perf--dn-parts)))
+                (list :first_ms (and drgnx-perf--dn-first (drgnx-perf--round drgnx-perf--dn-first))
+                      :part_ms parts :parts (length drgnx-perf--dn-parts)
+                      :buckets (cadr drgnx-perf--dn-seen)
+                      :whole_s (drgnx-perf--round (- (float-time) drgnx-perf--dn-asked)))))
+          (advice-remove 'drgnx-hub--model-pushed #'drgnx-perf--dn-pushed)
+          (setq drgnx-perf--dn-asked nil)
+          (drgnx-hub--call-on drgnx-hub--events "minimap/watch" (list :file drgnx-perf--dn-file :on :false) #'ignore)))
+      (defun drgnx-perf--dn-check ()
+        "The whole table came, in more than one part."
+        (and (equal (cadr drgnx-perf--dn-seen) 1024) (> (length drgnx-perf--dn-parts) 1)))
+      (defun drgnx-perf--dn-down ()
+        (ignore-errors (nidhogg-view-minimap 'forget drgnx-perf--dn-file))
+        (when drgnx-perf--dn-dir (ignore-errors (delete-directory drgnx-perf--dn-dir t)))
+        (setq drgnx-perf--dn-dir nil)
+        t)))
+  "The density-2gb workload's session functions (`drgnx-perf-run-workloads').")
+
 (defconst drgnx-perf-run--search-window-form
   (prin1-to-string
    '(progn
@@ -2951,6 +3017,16 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :check "(and (drgnx-perf--replace-check) (buffer-local-value 'drgnx-view-patch (drgnx-perf--replace-view)) t)"
        :teardown ,(concat "(progn (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; Next Match across the model's 20,000-entry window of a 30k-match search, on the rows path (plan sja-complete W1)
+      ;; the minimap's density strip of a 2 GiB log (design §8, M7): the hub scans it on disk and sends its bucket
+      ;; table to Sjá in parts; the first part within 250 ms of the watch, each part's handler on the main thread
+      ;; within 1 ms (the scan itself is off it)
+      (density-2gb
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " drgnx-perf-run--density-form
+                       " (drgnx-perf--dn-up))")
+       :measure "(drgnx-perf--dn-measure)"
+       :check "(drgnx-perf--dn-check)"
+       :timeout 180
+       :teardown "(progn (drgnx-perf--dn-down) (drgnx-perf--hub-stop))")
       (search-window
        :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form)
                        " " drgnx-perf-run--search-window-form " (drgnx-perf--sw-up))")
