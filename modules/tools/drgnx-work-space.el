@@ -29,6 +29,7 @@
 (unless (featurep 'drgnx-work-code)
   (load (expand-file-name "drgnx-work-code" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-work-code-files-command "drgnx-work-code")
+(declare-function drgnx-work-changes-command "drgnx-work-code")
 (declare-function drgnx-work-who-is-here "drgnx-work-code")
 (declare-function drgnx-work-code-diffs-command "drgnx-work-code")
 (declare-function drgnx-work-diff-quit "drgnx-work-code")
@@ -215,7 +216,7 @@ it (a notes repository with the code repositories inside it)."
               work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
               work-collapse-layer-5 work-collapse-layer-6 work-collapse-layer-7 work-collapse-layer-8
               work-expand-layers work-cycle-filter work-show-active work-show-completed work-show-all work-mode-list work-mode-graph work-mode-toggle work-search
-              work-escape work-take-wheel work-files work-who-is-here work-move-machine
+              work-escape work-take-wheel work-files work-changes work-who-is-here work-move-machine
               work-diffs work-diff-quit work-diff-accept-hunk work-diff-reject-hunk)
   "The commands of this module, each with a row in every key profile (keys/*.eld).")
 
@@ -680,6 +681,9 @@ windows; the commands."
   (drgnx-command-define 'work-files :category "Work" :title "List the Agent's Files"
                         :command #'drgnx-work-code-files-command :map 'drgnx-work-map-mode-map
                         :doc "The files the selected agent edited, one key each; the key opens the file at the agent's line")
+  (drgnx-command-define 'work-changes :category "Work" :title "Show the Changes of This Task"
+                        :command #'drgnx-work-changes-command :map 'drgnx-work-map-mode-map
+                        :doc "The Changes place by task, filtered to the selected task or agent")
   (drgnx-command-define 'work-diffs :category "Work" :title "Show the Agent's Diffs Side by Side"
                         :command #'drgnx-work-code-diffs-command :map 'drgnx-work-map-mode-map
                         :doc "The files the selected agent edited, one window each (three at most), against their base; q puts the windows back")

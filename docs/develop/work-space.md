@@ -849,7 +849,7 @@ counts only when it is one of the paths asked about, and a file opens only by th
 remote or quoted name, a link out or into a loop, a device, a FIFO, a folder or a name a handler would read. An entry
 naming anything else is passed over. `test/unit/work-names-test.el` holds these cases.
 
-`work-files` (`e`) calls `work/files {session}` for the agent the selection stands for (an agent, a subagent's parent,
+`work-files` (`c`) calls `work/files {session}` for the agent the selection stands for (an agent, a subagent's parent,
 or the first agent a branch came from) and fills a `drgnx-work-files-mode` buffer, placed in the popup lane. Its hint keys
 come from `drgnx-work-code-hint-keys`. The list is the edited files only: `work/files` has no read list yet (its
 `read_at` is filled when the edit history lands). `work-who-is-here` asks for the visited file in the user's checkout and
@@ -886,6 +886,8 @@ roots' first root commits (the path where git does not answer).
 ## Changes by task
 
 `work/changes.rs` groups what the agents changed by the task each worked on: task, then file, then hunk, with a last group, "Your edits and others", for what no task owns (`group`; `by_task` reads each live session's edited files and their diffs from the edit history; `hunks_of` reads a diff's hunks). A hunk's agent is its session's, and its `reason` stays empty ("no reason recorded") until the history records the cause of an agent write. `view/changes.rs` builds the `changes` view's rows in that order as plain text; each hunk row carries the `drgnx-action` it offers (open the file at the hunk) and a `drgnx-hunk` property naming the path, op, index and agent for comment and revert. The Changes place that shows the view comes with the layout A shell.
+
+`changes/set` takes a `filter` (`{task}` or `{agent}`): the view keeps only that task's groups, or that agent's, until another filter; an empty id shows every group again. An agent may be named by its session id (Work's selection) or its name. In Work, `work-changes` (`e`) opens the Changes place filtered to the selected task or agent (`drgnx-changes-for-item`); `changes-all` clears it. The files picker moved to `c`.
 
 ## The review screen
 

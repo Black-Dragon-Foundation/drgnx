@@ -9,7 +9,7 @@ use crate::view::{Key, Views};
 use crate::work::changes::TaskGroup;
 use drgnx_rows::kit::{self, Action, Comp, DiffLine, Hunk, KitEnv, RowKind, State, Status};
 use drgnx_rows::{Row, RowBuilder};
-use runstav::methods::changes::{Set, Subscribe, ViewId};
+use runstav::methods::changes::{Filter, Set, Subscribe, ViewId};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::json;
 use std::collections::HashMap;
@@ -23,12 +23,26 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Default)]
 pub struct Changes {
     views: Mutex<HashMap<(u64, String), Vec<TaskGroup>>>,
+    filters: Mutex<HashMap<(u64, String), Filter>>,
 }
 
 impl Changes {
     pub(super) fn gone(&self, conn: u64) {
         lock(&self.views).retain(|(c, _), _| *c != conn);
+        lock(&self.filters).retain(|(c, _), _| *c != conn);
     }
+}
+
+/// GROUPS kept by FILTER: the task's groups, or the agent's; no filter (or an empty one) keeps them all.
+pub fn filter_groups(groups: Vec<TaskGroup>, filter: Option<&Filter>) -> Vec<TaskGroup> {
+    let Some(f) = filter else { return groups };
+    groups
+        .into_iter()
+        .filter(|g| {
+            f.task.as_ref().is_none_or(|t| g.task.as_ref() == Some(t))
+                && f.agent.as_ref().is_none_or(|a| g.agent.as_ref() == Some(a))
+        })
+        .collect()
 }
 
 impl Views {
@@ -48,7 +62,9 @@ impl Views {
 
     /// CONN's VIEW shows GROUPS now: every class gets the rows that changed.
     fn changes_show(&self, f: &Front, conn: u64, view: &str, groups: Vec<TaskGroup>) {
-        lock(&self.changes.views).insert((conn, view.to_owned()), groups.clone());
+        let key = (conn, view.to_owned());
+        let groups = filter_groups(groups, lock(&self.changes.filters).get(&key));
+        lock(&self.changes.views).insert(key, groups);
         for class in self.classes(conn, view) {
             self.changes_build(f, &(conn, view.to_owned(), class));
         }
@@ -72,7 +88,27 @@ pub async fn set(f: &Front, c: &Caller, p: Set) -> Result<bool, Error> {
             path: Some("view".into()),
         });
     }
-    if p.refresh {
+    if let Some(mut filter) = p.filter {
+        // Work names an agent by its session id; the groups carry the agent's name
+        if let Some(a) = filter.agent.as_mut() {
+            if let Some(name) = f.core.agents.live_sessions().iter().find_map(|s| {
+                let snap = s.snapshot();
+                (snap.id == *a).then(|| snap.name.clone().unwrap_or(snap.id))
+            }) {
+                *a = name;
+            }
+        }
+        filter.task = filter.task.filter(|t| !t.is_empty());
+        filter.agent = filter.agent.filter(|a| !a.is_empty());
+        let key = (c.conn_id, p.view.clone());
+        if filter == Filter::default() {
+            lock(&f.core.views.changes.filters).remove(&key);
+        } else {
+            lock(&f.core.views.changes.filters).insert(key, filter);
+        }
+        let groups = crate::work::changes::by_task(f).await?;
+        f.core.views.changes_show(f, c.conn_id, &p.view, groups);
+    } else if p.refresh {
         let groups = crate::work::changes::by_task(f).await?;
         f.core.views.changes_show(f, c.conn_id, &p.view, groups);
     }
@@ -81,6 +117,7 @@ pub async fn set(f: &Front, c: &Caller, p: Set) -> Result<bool, Error> {
 
 /// `changes/close`.
 pub fn close(f: &Front, c: &Caller, p: ViewId) -> Result<bool, Error> {
+    lock(&f.core.views.changes.filters).remove(&(c.conn_id, p.view.clone()));
     Ok(lock(&f.core.views.changes.views)
         .remove(&(c.conn_id, p.view))
         .is_some())
