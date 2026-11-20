@@ -5,15 +5,16 @@ use crate::schema::v1 as acp;
 use crate::stamp;
 use crate::types::{
     AgentInfo, ClientCaps, ConnOpts, ContentBlock, Dir, Error, Event, ForkInto, LineTap, McpServer,
-    PromptOutcome, SessionId,
+    PromptOutcome, Proto, SessionId,
 };
+use crate::v2;
 use bytes::BytesMut;
 use runstav::jsonrpc::{self, Id, Message};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -37,9 +38,19 @@ pub(crate) struct Shared {
     /// The model each session uses: the one the answer that opened it reported (`models.currentModelId`), then each
     /// `session/set_model` the agent accepted.
     models: Mutex<HashMap<String, String>>,
+    /// 1 or 2: what `initialize` settled.
+    proto: AtomicU8,
+    /// The id of the config option that holds each session's mode (v2 has no `modes`).
+    mode_opts: Mutex<HashMap<String, String>>,
+    /// The v2 translation's state (unused on v1).
+    v2: Mutex<v2::V2>,
 }
 
 impl Shared {
+    fn lock_v2(&self) -> std::sync::MutexGuard<'_, v2::V2> {
+        self.v2.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn lock_pending(&self) -> std::sync::MutexGuard<'_, HashMap<Id, oneshot::Sender<Answer>>> {
         self.pending.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -90,6 +101,9 @@ impl Conn {
             cwds: Mutex::new(HashMap::new()),
             modes: Mutex::new(HashMap::new()),
             models: Mutex::new(HashMap::new()),
+            proto: AtomicU8::new(1),
+            mode_opts: Mutex::new(HashMap::new()),
+            v2: Mutex::new(v2::V2::default()),
         });
         let (tx, mut wrx) = mpsc::unbounded_channel::<String>();
         let (etx, erx) = mpsc::channel(EVENT_QUEUE);
@@ -124,6 +138,8 @@ impl Conn {
                 reader.abort();
             }
             sh.closed.send_replace(true);
+            // a turn waiting for an `idle` that will not come ends with the child
+            sh.lock_v2().close_all();
             let waiting: Vec<_> = sh.lock_pending().drain().collect();
             for (_, w) in waiting {
                 let _ = w.send(Err(Error::Closed));
@@ -179,6 +195,17 @@ impl Conn {
     /// The request's line, on its way to the agent when this returns (ahead of any line sent after), and its answer
     /// to wait for.
     fn send_call(&self, method: &str, params: Value) -> Result<Sent<'_>, Error> {
+        self.send_call_as(method, params, None)
+    }
+
+    /// As [`Conn::send_call`]; TURN names the session of a v2 prompt, whose wait for the turn's end is registered
+    /// before the line goes (the agent's `idle` may come before its answer).
+    fn send_call_as(
+        &self,
+        method: &str,
+        params: Value,
+        turn: Option<&str>,
+    ) -> Result<Sent<'_>, Error> {
         if *self.shared.closed.borrow() {
             return Err(Error::Closed);
         }
@@ -190,19 +217,34 @@ impl Conn {
         if *self.shared.closed.borrow() {
             return Err(Error::Closed);
         }
+        let turn = turn.map(|sid| {
+            let (token, rx) = self.shared.lock_v2().register(sid, id.clone());
+            (sid.to_string(), token, rx)
+        });
         let line = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-        self.tx.send(line.to_string()).map_err(|_| Error::Closed)?;
+        if self.tx.send(line.to_string()).is_err() {
+            if let Some((sid, token, _)) = &turn {
+                self.shared.lock_v2().forget(sid, *token);
+            }
+            return Err(Error::Closed);
+        }
         Ok(Sent {
             answer: orx,
             _forget: forget,
+            turn,
         })
     }
 }
+
+/// A v2 prompt's wait for its turn's end: the session, the token and the receiver of the outcome.
+type Turn = (String, u64, oneshot::Receiver<Result<PromptOutcome, Error>>);
 
 /// A request whose line has gone to the agent; its answer is still to come.
 struct Sent<'a> {
     answer: oneshot::Receiver<Answer>,
     _forget: Forget<'a>,
+    /// A v2 prompt's session, its token and the receiver of its turn's end.
+    turn: Option<Turn>,
 }
 
 impl Sent<'_> {
@@ -223,14 +265,63 @@ impl Conn {
         decode(v)
     }
 
+    /// `initialize`.  With `ConnOpts::v2` the request asks for ACP v2 (`info`, `capabilities`, the panel's `_meta`); an
+    /// agent that answers 1 gets the v1 path on this connection, silently.
     pub async fn initialize(&self, mut caps: ClientCaps) -> Result<AgentInfo, Error> {
         caps.terminal = false;
+        if !self.opts.v2 {
+            return self
+                .initialize_v1(caps, json!(crate::schema::ProtocolVersion::V1))
+                .await;
+        }
+        let mut capabilities = json!({});
+        if let Some(m) = serde_json::to_value(&caps)
+            .ok()
+            .and_then(|c| c.get("_meta").cloned())
+            .filter(|m| !m.is_null())
+        {
+            capabilities["_meta"] = m;
+        }
         let params = json!({
-            "protocolVersion": crate::schema::ProtocolVersion::V1,
+            "protocolVersion": 2,
+            "info": {"name": "hermod", "version": env!("CARGO_PKG_VERSION")},
+            "capabilities": capabilities,
+        });
+        let v: Value = self.typed("initialize", params).await?;
+        if v.get("protocolVersion").and_then(Value::as_u64) != Some(2) {
+            // a v1 agent read a v2 request without the v1 fields: what it answered is a v1 answer
+            return self.settle_v1(decode(v)?);
+        }
+        self.shared.proto.store(2, Ordering::SeqCst);
+        let caps = v.get("capabilities").cloned().unwrap_or(Value::Null);
+        let info = v.get("info");
+        let text = |k: &str| {
+            info.and_then(|i| i.get(k))
+                .and_then(Value::as_str)
+                .map(String::from)
+        };
+        Ok(AgentInfo {
+            name: text("name"),
+            version: text("version"),
+            caps: decode(v2::v1_caps(&caps))?,
+            meta: caps.get("_meta").filter(|m| !m.is_null()).cloned(),
+            auth: v2::v1_auth(v.get("authMethods").unwrap_or(&Value::Null)),
+            proto: Proto::V2,
+        })
+    }
+
+    async fn initialize_v1(&self, caps: ClientCaps, version: Value) -> Result<AgentInfo, Error> {
+        let params = json!({
+            "protocolVersion": version,
             "clientCapabilities": caps,
             "clientInfo": {"name": "hermod", "version": env!("CARGO_PKG_VERSION")},
         });
         let r: acp::InitializeResponse = self.typed("initialize", params).await?;
+        self.settle_v1(r)
+    }
+
+    fn settle_v1(&self, r: acp::InitializeResponse) -> Result<AgentInfo, Error> {
+        self.shared.proto.store(1, Ordering::SeqCst);
         let (name, version) = match r.agent_info {
             Some(i) => (Some(i.name), Some(i.version)),
             None => (None, None),
@@ -241,7 +332,71 @@ impl Conn {
             caps: r.agent_capabilities,
             meta: r.meta.map(Value::Object),
             auth: r.auth_methods,
+            proto: Proto::V1,
         })
+    }
+
+    /// The version this connection speaks (V1 until `initialize` settles it).
+    pub fn proto(&self) -> Proto {
+        if self.shared.proto.load(Ordering::SeqCst) == 2 {
+            Proto::V2
+        } else {
+            Proto::V1
+        }
+    }
+
+    /// The refusal of a v2-only request on a v1 connection (nothing is written).
+    fn v2_only(&self, what: &str) -> Result<(), Error> {
+        if self.proto() == Proto::V2 {
+            return Ok(());
+        }
+        Err(Error::Rpc {
+            code: -32601,
+            message: format!("{what}: ACP v1 has no such request"),
+            data: None,
+        })
+    }
+
+    /// ACP v2: stop one tool call that advertises `capabilities.cancel` (`tool_call/cancel`).  The answer says the
+    /// agent accepted it; the tool call's final status says it stopped.
+    pub async fn cancel_tool_call(&self, sid: &SessionId, id: &str) -> Result<(), Error> {
+        self.v2_only("tool_call/cancel")?;
+        self.typed::<Value>(
+            "tool_call/cancel",
+            json!({"sessionId": sid, "toolCallId": id}),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// ACP v2: stop the process of one terminal that advertises `capabilities.cancel` (`terminal/cancel`).
+    pub async fn cancel_terminal(&self, sid: &SessionId, id: &str) -> Result<(), Error> {
+        self.v2_only("terminal/cancel")?;
+        self.typed::<Value>(
+            "terminal/cancel",
+            json!({"sessionId": sid, "terminalId": id}),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// ACP v2: cancel a child session's foreground work (`session/cancel` with the child's id, a notification).  Only
+    /// for a child whose announcement advertised `cancel`: the caller checks.
+    pub fn cancel_child(&self, child: &SessionId) -> Result<(), Error> {
+        self.v2_only("session/cancel of a child")?;
+        self.cancel(child)
+    }
+
+    /// `authenticate` (v1) or `auth/login` (v2) with the method METHOD_ID.
+    pub async fn authenticate(&self, method_id: &str) -> Result<(), Error> {
+        let method = if self.proto() == Proto::V2 {
+            "auth/login"
+        } else {
+            "authenticate"
+        };
+        self.typed::<Value>(method, json!({"methodId": method_id}))
+            .await
+            .map(drop)
     }
 
     pub async fn new_session(
@@ -250,9 +405,20 @@ impl Conn {
         mcp: Vec<McpServer>,
         meta: Option<Value>,
     ) -> Result<SessionId, Error> {
-        let mut params = json!({"cwd": cwd, "mcpServers": mcp});
+        let v2 = self.proto() == Proto::V2;
+        let mut params =
+            json!({"cwd": cwd, "mcpServers": if v2 { v2_mcp(&mcp) } else { json!(mcp) }});
         set_meta(&mut params, meta);
         let v: Value = self.typed("session/new", params).await?;
+        if v2 {
+            let sid = v
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .map(|s| SessionId::new(s.to_string()))
+                .ok_or_else(|| Error::Decode("session/new: no sessionId".into()))?;
+            self.note_opened(&sid, cwd, &v);
+            return Ok(sid);
+        }
         let r: acp::NewSessionResponse = decode(v.clone())?;
         self.note_model(&r.session_id, reported_model(&v));
         self.remember(&r.session_id, cwd);
@@ -271,6 +437,10 @@ impl Conn {
         mcp: Vec<McpServer>,
         meta: Option<Value>,
     ) -> Result<(), Error> {
+        if self.proto() == Proto::V2 {
+            // v2 has no session/load: resume with a replay from the start does both
+            return self.resume_v2(sid, cwd, mcp, meta, true).await;
+        }
         let mut params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": mcp});
         set_meta(&mut params, meta);
         let r = self.typed::<Value>("session/load", params).await?;
@@ -288,6 +458,9 @@ impl Conn {
         mcp: Vec<McpServer>,
         meta: Option<Value>,
     ) -> Result<(), Error> {
+        if self.proto() == Proto::V2 {
+            return self.resume_v2(sid, cwd, mcp, meta, false).await;
+        }
         let mut params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": mcp});
         set_meta(&mut params, meta);
         let r = self.typed::<Value>("session/resume", params).await?;
@@ -295,6 +468,42 @@ impl Conn {
         self.note_mode(sid, reported_mode(&r));
         self.note_model(sid, reported_model(&r));
         Ok(())
+    }
+
+    /// `session/resume` on v2, REPLAY from the start or not; the agent's current-state snapshot comes before the answer.
+    async fn resume_v2(
+        &self,
+        sid: &SessionId,
+        cwd: &Path,
+        mcp: Vec<McpServer>,
+        meta: Option<Value>,
+        replay: bool,
+    ) -> Result<(), Error> {
+        let mut params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": v2_mcp(&mcp)});
+        if replay {
+            params["replayFrom"] = json!({"type": "start"});
+        }
+        set_meta(&mut params, meta);
+        let v = self.typed::<Value>("session/resume", params).await?;
+        self.note_opened(sid, cwd, &v);
+        Ok(())
+    }
+
+    /// What a v2 answer that opened session SID reports: its directory, its mode (and the option that holds it), its model.
+    fn note_opened(&self, sid: &SessionId, cwd: &Path, answer: &Value) {
+        let (mode, model, opt) = v2::reported(answer);
+        self.remember(sid, cwd);
+        self.note_mode(sid, mode);
+        self.note_model(sid, model);
+        let mut opts = self
+            .shared
+            .mode_opts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match opt {
+            Some(o) => opts.insert(sid.0.to_string(), o),
+            None => opts.remove(&*sid.0),
+        };
     }
 
     /// The model session SID uses: the one the answer that opened it on this connection reported, then each
@@ -332,6 +541,24 @@ impl Conn {
     }
 
     pub async fn set_mode(&self, sid: &SessionId, mode: &str) -> Result<(), Error> {
+        if self.proto() == Proto::V2 {
+            // v2 has no modes: the mode is a config option, the one the agent reported
+            let opt = self
+                .shared
+                .mode_opts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&*sid.0)
+                .cloned();
+            return match opt {
+                Some(o) => self.set_config_option(sid, &o, mode).await,
+                None => Err(Error::Rpc {
+                    code: -32601,
+                    message: "the agent reports no mode option".into(),
+                    data: None,
+                }),
+            };
+        }
         self.typed::<Value>(
             "session/set_mode",
             json!({"sessionId": sid, "modeId": mode}),
@@ -350,7 +577,11 @@ impl Conn {
     ) -> Result<(), Error> {
         self.typed::<Value>(
             "session/set_config_option",
-            json!({"sessionId": sid, "configId": config_id, "value": value}),
+            if self.proto() == Proto::V2 {
+                json!({"sessionId": sid, "configId": config_id, "type": "id", "value": value})
+            } else {
+                json!({"sessionId": sid, "configId": config_id, "value": value})
+            },
         )
         .await
         .map(|_| {
@@ -362,6 +593,9 @@ impl Conn {
 
     /// Switch the session's model (`session/set_model`).
     pub async fn set_model(&self, sid: &SessionId, model: &str) -> Result<(), Error> {
+        if self.proto() == Proto::V2 {
+            return self.set_config_option(sid, "model", model).await;
+        }
         self.typed::<Value>(
             "session/set_model",
             json!({"sessionId": sid, "modelId": model}),
@@ -390,8 +624,45 @@ impl Conn {
     ) -> Result<impl Future<Output = Result<PromptOutcome, Error>> + '_, Error> {
         let mut params = json!({"sessionId": sid, "prompt": blocks});
         set_meta(&mut params, meta);
-        let sent = self.send_call("session/prompt", params)?;
-        Ok(async move { prompt_outcome(sent.answer("session/prompt", None).await?) })
+        // v2: the answer only says the message was inserted; the turn ends at the agent's `idle`, which may come
+        // first, so its wait is registered before the line goes and the reader marks the answer as it arrives
+        let sent = self.send_call_as(
+            "session/prompt",
+            params,
+            (self.proto() == Proto::V2).then_some(&*sid.0),
+        )?;
+        let shared = self.shared.clone();
+        Ok(async move {
+            let mut sent = sent;
+            let turn = sent.turn.take();
+            let answer = sent.answer("session/prompt", None).await;
+            let Some((key, token, rx)) = turn else {
+                return prompt_outcome(answer?);
+            };
+            let _forget = ForgetTurn(&shared, &key, token);
+            match answer {
+                // dropped before it was inserted (`session/cancel`, `session/close`): the work never began
+                Err(Error::Rpc { code: -32800, .. }) => {
+                    return Ok(PromptOutcome {
+                        stop: crate::types::StopReason::Cancelled,
+                        usage: None,
+                        turn_id: None,
+                    });
+                }
+                Err(e) => return Err(e),
+                Ok(_) => {}
+            }
+            rx.await.unwrap_or(Err(Error::Closed))
+        })
+    }
+}
+
+/// Removes a v2 prompt's wait when its future ends or is dropped.
+struct ForgetTurn<'a>(&'a Shared, &'a str, u64);
+
+impl Drop for ForgetTurn<'_> {
+    fn drop(&mut self) {
+        self.0.lock_v2().forget(self.1, self.2);
     }
 }
 
@@ -510,6 +781,24 @@ fn merge(into: &mut Value, from: Value) {
     }
 }
 
+/// The MCP servers as v2 wants them: every config carries its `type` (a v1 stdio server has none).
+fn v2_mcp(mcp: &[McpServer]) -> Value {
+    Value::Array(
+        mcp.iter()
+            .filter_map(|m| serde_json::to_value(m).ok())
+            .map(|mut v| {
+                if let Some(o) = v.as_object_mut()
+                    && !o.contains_key("type")
+                    && o.contains_key("command")
+                {
+                    o.insert("type".into(), json!("stdio"));
+                }
+                v
+            })
+            .collect(),
+    )
+}
+
 fn set_meta(params: &mut Value, meta: Option<Value>) {
     if let (Some(m), Some(o)) = (meta, params.as_object_mut()) {
         o.insert("_meta".into(), m);
@@ -579,6 +868,7 @@ async fn handle(
     };
     match msg {
         Message::Result { id, result } => {
+            shared.lock_v2().answered(&id, true);
             if let Some(w) = shared.lock_pending().remove(&id) {
                 let _ = w.send(Ok(result));
             }
@@ -587,6 +877,7 @@ async fn handle(
             id: Some(id),
             error,
         } => {
+            shared.lock_v2().answered(&id, false);
             if let Some(w) = shared.lock_pending().remove(&id) {
                 let _ = w.send(Err(Error::Rpc {
                     code: error.code,
@@ -601,6 +892,28 @@ async fn handle(
                 if method.starts_with('_') {
                     let params = params.unwrap_or(Value::Null);
                     let _ = etx.send(Event::Ext { method, params }).await;
+                }
+                return;
+            }
+            if shared.proto.load(Ordering::SeqCst) == 2 {
+                let Some((sid, update)) = params.as_ref().and_then(|p| {
+                    Some((
+                        p.get("sessionId")?.as_str()?.to_string(),
+                        p.get("update")?.clone(),
+                    ))
+                }) else {
+                    tracing::warn!("hermod: a session/update without a session or an update");
+                    return;
+                };
+                let out = shared
+                    .lock_v2()
+                    .translate(at, &SessionId::new(sid.clone()), update);
+                for ev in out.events {
+                    let _ = etx.send(ev).await;
+                }
+                // the turn ends after every update it has had: the owner reads those first
+                if let Some(result) = out.ended {
+                    shared.lock_v2().finish(&sid, &result);
                 }
                 return;
             }

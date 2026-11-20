@@ -30,6 +30,11 @@ dropped for a typo. The settings pages and onboarding do not write to a file wit
 `settings.el` apply at once, with no restart. No agent, no workspace file and no `.dir-locals.el` can change these
 settings, and a buffer-local value is never read: a profile is a program, and a route chooses where your code goes.
 
+`:acp-v2` is `auto` or `off`: whether drgnx asks the agent to speak ACP v2, the draft revision of the protocol that
+lets an agent report the work it keeps running in the background (commands, watchers, subagents) and lets drgnx stop one
+item without stopping the agent. It is `auto` for the profiles named `claude` and `codex` and `off` for every other
+profile; an agent that does not speak v2 is spoken to in v1 either way, and `off` never asks.
+
 `:command` is the agent program; `:mode` is what a message to a busy agent does: `queue` (default), `steer` (when
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
 `interrupt` (stop the turn, then send; in a durable session, which the hub runs, a message never cancels a turn, so

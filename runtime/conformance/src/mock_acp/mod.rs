@@ -1,6 +1,8 @@
 //! `ratatoskr-mock acp --as claude|codex|gemini|kimi|dsh [--script FILE] [--log FILE] [--llm URL]`: a scripted ACP agent
 //! (JSON-RPC 2.0, one object per line on stdin/stdout) that stands in for the outside agents' CLIs.  Std only.
-//! The wire is `agent-client-protocol-schema =1.12.0`'s (camelCase fields, `session/*` methods).
+//! The wire is `agent-client-protocol-schema =1.19.0`'s (camelCase fields, `session/*` methods).  A client that asks for
+//! `protocolVersion: 2` gets it from the Claude and Codex personalities (`v2.rs`: the turn ends at `state_update idle`,
+//! background work is listed, `bg:*` words); every other personality answers 1.
 //!
 //! A prompt's text is a program, one word-line per step (a port of `test/fixtures/mock-acp.el`'s words):
 //!
@@ -73,6 +75,7 @@ mod gemini;
 mod kimi;
 mod panel;
 mod replay;
+mod v2;
 
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -134,6 +137,8 @@ struct Session {
     turns: u64,
     /// `(turn, message id)` of every user and agent message.
     history: Vec<(u64, String)>,
+    /// ACP v2: what runs in the background (the personality that speaks it).
+    bg: Vec<v2::Item>,
 }
 
 struct Agent {
@@ -153,6 +158,8 @@ struct Agent {
     fail: Option<(i64, String)>,
     /// `--state DIR`: where each session's history is kept.
     state: Option<PathBuf>,
+    /// The client asked for ACP v2 and this personality speaks it (Claude, Codex): see `v2.rs`.
+    v2: bool,
 }
 
 fn flag(args: &[String], name: &str) -> Option<String> {
@@ -227,6 +234,7 @@ pub fn run(args: &[String]) -> ! {
         prompts: 0,
         fail: None,
         state: flag(args, "--state").map(PathBuf::from),
+        v2: false,
     };
     a.serve();
     std::process::exit(0)
@@ -365,7 +373,11 @@ impl Agent {
         id
     }
 
-    fn update(&self, sid: &str, update: Value) {
+    fn update(&self, sid: &str, mut update: Value) {
+        // v2 has one upsert for a tool call: the first update of an id creates it
+        if self.v2 && update["sessionUpdate"] == "tool_call" {
+            update["sessionUpdate"] = json!("tool_call_update");
+        }
         send(&json!({"jsonrpc": "2.0", "method": "session/update",
             "params": {"sessionId": sid, "update": update}}));
     }
@@ -390,7 +402,11 @@ impl Agent {
         let (Some(path), Some(s)) = (self.state_file(sid), self.sessions.get(sid)) else {
             return;
         };
-        let body = json!({"cwd": s.cwd, "turns": s.turns, "history": s.history});
+        let bg: Vec<Value> =
+            s.bg.iter()
+                .map(|i| json!({"kind": i.kind, "id": i.id, "announce": i.announce}))
+                .collect();
+        let body = json!({"cwd": s.cwd, "turns": s.turns, "history": s.history, "bg": bg});
         // the state folder is made with the first session kept in it
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -415,6 +431,22 @@ impl Agent {
             mcp: params["mcpServers"].as_array().cloned().unwrap_or_default(),
             turns: v["turns"].as_u64().unwrap_or(0),
             history,
+            bg: v["bg"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|i| {
+                    Some(v2::Item {
+                        kind: match i["kind"].as_str()? {
+                            "terminal" => "terminal",
+                            "tool_call" => "tool_call",
+                            _ => "subagent",
+                        },
+                        id: i["id"].as_str()?.to_string(),
+                        announce: i["announce"].clone(),
+                    })
+                })
+                .collect(),
         })
     }
 
@@ -435,6 +467,7 @@ impl Agent {
             mcp: params["mcpServers"].as_array().cloned().unwrap_or_default(),
             turns: 0,
             history: Vec::new(),
+            bg: Vec::new(),
         };
         self.sessions.insert(sid.clone(), session);
         self.personality_log(params);
@@ -471,12 +504,27 @@ impl Agent {
         let params = m["params"].clone();
         let Some(id) = id else {
             if method == "session/cancel" {
+                // v2: a child session of a session this process holds is cancelled as such
+                if self.v2
+                    && let Some(child) = params["sessionId"].as_str()
+                    && self.cancel_child(child)
+                {
+                    return;
+                }
                 self.stash(m);
             }
             return;
         };
         let reply = |result: Value| send(&json!({"jsonrpc": "2.0", "id": id, "result": result}));
         match method.as_str() {
+            "initialize"
+                if params["protocolVersion"] == json!(2)
+                    && matches!(self.kind, Kind::Claude | Kind::Codex) =>
+            {
+                self.v2 = true;
+                self.log("initialize", params.clone());
+                reply(v2::answer_init(self));
+            }
             "initialize" => {
                 let mut answer = json!({"protocolVersion": 1, "authMethods": [],
                     "agentInfo": {"name": format!("ratatoskr-mock-{}", self.kind_name()), "version": "0.1.0"},
@@ -511,6 +559,9 @@ impl Agent {
                 let sid = self.open(&params);
                 self.save(&sid);
                 self.log("session/new", json!({"sessionId": sid, "mcpServers": params["mcpServers"], "cwd": params["cwd"]}));
+                if self.v2 {
+                    return reply(json!({"sessionId": sid, "configOptions": v2::config_options()}));
+                }
                 reply(self.with_modes(json!({"sessionId": sid})));
             }
             "session/load" if matches!(self.kind, Kind::Gemini | Kind::Kimi) => {
@@ -561,8 +612,13 @@ impl Agent {
                     self.sessions.insert(sid.clone(), v);
                     self.save(&sid);
                 }
+                if self.v2 {
+                    return self.resume_v2(&id, &sid);
+                }
                 reply(self.with_modes(json!({})));
             }
+            "tool_call/cancel" if self.v2 => self.cancel_item(&id, &params, "tool_call"),
+            "terminal/cancel" if self.v2 => self.cancel_item(&id, &params, "terminal"),
             "session/close" if self.kind != Kind::Gemini => {
                 self.log("session/close", json!({"sessionId": params["sessionId"]}));
                 let gone = params["sessionId"]
@@ -578,7 +634,9 @@ impl Agent {
                 self.fork(&id, &params)
             }
             "session/prompt" => self.prompt(&id, &params),
-            "session/set_config_option" if self.argv.iter().any(|a| a == "--config-options") => {
+            "session/set_config_option"
+                if self.v2 || self.argv.iter().any(|a| a == "--config-options") =>
+            {
                 self.log(
                     "config_option",
                     json!({"configId": params["configId"], "value": params["value"]}),
@@ -711,6 +769,9 @@ impl Agent {
     }
 
     fn prompt(&mut self, id: &Value, params: &Value) {
+        if self.v2 {
+            return self.prompt_v2(id, params);
+        }
         let Some(sid) = params["sessionId"]
             .as_str()
             .map(String::from)

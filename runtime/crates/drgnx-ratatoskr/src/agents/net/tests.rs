@@ -20,6 +20,7 @@ fn profile(command: &str, ai: Option<&str>) -> AgentProfile {
         doc: None,
         provider: None,
         job_safe: false,
+        acp_v2: None,
     }
 }
 

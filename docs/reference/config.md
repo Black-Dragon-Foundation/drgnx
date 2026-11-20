@@ -17,6 +17,7 @@ The old agents.eld, read only to move it into settings.el (docs/guide/settings.m
 | `:profiles * :ai` | symbol | no | The provider environment it gets |
 | `:profiles * :model` | string | no | The model it asks for |
 | `:profiles * :tracker-tools` | one of on, off | no | The five tracker tools; on by default |
+| `:profiles * :acp-v2` | one of auto, off | no | Ask the agent for ACP v2 (a draft): auto asks, off never does; auto by default for claude and codex |
 | `:profiles * :doc` | string | no | One line |
 | `:default` | string | no | The profile New Agent Session… offers |
 | `:mcp` | list of one of coordination, search | no | The MCP servers agents get |

@@ -215,7 +215,36 @@ tail). There is no SDK role framework.
   `Event::Ext { method, params }` or `Incoming::Ext { method, params, resp }`, its params unchecked: the owner checks
   and answers them (the hub: `docs/develop/hub.md`, "The _drgnx/panel extension"). Other unknown notifications are
   ignored; other unknown requests get -32601.
-- **Tests.** `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children, and for a fork the mock agent
+- **ACP v2** (a draft; `agent-client-protocol-schema` 1.19.0 with `unstable_protocol_v2`). `ConnOpts::v2` makes
+  `initialize` ask for `protocolVersion: 2` (`info`, `capabilities`, the panel's `_meta`); an agent that answers 1 gets
+  the v1 path on the same connection, silently. `AgentInfo::proto` and `Conn::proto()` say which (`Proto::V1|V2`); the
+  v2 `capabilities` are given to the hub in the v1 shape it keys on (a v2 agent resumes and loads through
+  `session/resume`). hermod translates v2 into the events the hub already consumes (`src/v2.rs`; updates are read as
+  JSON, so a draft revision adds no schema dependency):
+  - **The turn.** `session/prompt` resolves at insertion; the turn's end (`prompt()`'s answer) is the first
+    `state_update idle` after a prompt the agent has acknowledged, with its `stopReason`, `usage` and `_meta.turnId`
+    (`error` with its `error` object: `Error::Rpc`). A repeated `idle` (the background list changed) ends nothing; an
+    `idle` that came before the answer is kept for it; the answer `-32800` (dropped before insertion) is a cancelled
+    outcome, not an error; the agent's exit ends every waiting turn with `Error::Closed`. Every acknowledged prompt
+    ends with the one `idle` (the first carries the usage, so it is counted once).
+  - **Events.** `Replace` (a whole-message upsert: `user_message`, `agent_message`, `agent_thought`), `State` (the
+    foreground state, `Unknown` kept as unknown, and `background`: `None` when the agent omits it, `Some(vec![])` for
+    `[]`, an unknown type as `BackgroundRef::Other`), `Terminal` (`terminal_update`, and `terminal_output_chunk` with
+    its base64 decoded per chunk), `Subagent` (the raw `subagent_update`). The kinds that have a v1 twin arrive as
+    `Update`: `tool_call_update` (the first sight of an id is a v1 `tool_call`; `paused` is `in_progress` and
+    `cancelled` is `failed` in the v1 status, the real status and `capabilities.cancel` ride in
+    `_meta["_hermod/status"]` and `_meta["_hermod/can_cancel"]`; a v2 diff, which has no `oldText`/`newText`, is left
+    out), `tool_call_content_chunk`, `plan_update` (as the v1 plan), `usage_update`, `available_commands_update`,
+    `notice`, `config_option_update` (`configId` is `id`).
+  - **Requests.** `cancel_tool_call`, `cancel_terminal` (`tool_call/cancel`, `terminal/cancel`) and `cancel_child`
+    (`session/cancel` with the child's id); on v1 each returns `Error::Rpc { code: -32601 }` without writing. On v2
+    `load_session` sends `session/resume` with `replayFrom: {type: "start"}`, `resume_session` the same without it,
+    `set_mode` and `set_model` are `session/set_config_option` (the mode option the agent reported; none: -32601),
+    `authenticate` is `auth/login`, and an MCP server config carries its `type`.
+  Not translated: session messages, compaction, `replay_complete`, and the v2 shapes of a permission request that the
+  v1 types refuse.
+- **Tests.** `runtime/crates/hermod/tests/v2.rs` runs scripted v2 children (negotiation, the turn, upserts, background
+  lists, the cancel requests); `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children, and for a fork the mock agent
   `ratatoskr-mock acp --state DIR` (`RATATOSKR_MOCK`, else beside the test binary, built there when missing): two
   processes on one state folder show a fork on a connection that never saw the session.
 

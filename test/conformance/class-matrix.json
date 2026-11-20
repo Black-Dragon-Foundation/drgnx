@@ -1,4 +1,5 @@
 {
+  "agents/background-cancel": ["user"],
   "agents/buffer/unwatch": ["user"],
   "agents/buffer/watch": ["user"],
   "agents/compact-preview": ["user"],

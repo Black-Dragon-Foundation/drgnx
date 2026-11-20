@@ -578,3 +578,39 @@ async fn refresh_reads_again_only_when_the_stamp_changed() {
         .unwrap();
     assert!(kept.contains("m.example"), "{kept}");
 }
+
+// ACP v2 is a draft: only the `claude` and `codex` profiles ask for it unless a profile says so, and `off` never does.
+#[test]
+fn acp_v2_defaults_per_profile() {
+    use profiles::AcpV2;
+    let d = defaults();
+    for p in &d.profiles {
+        let want = if p.name == "claude" || p.name == "codex" {
+            AcpV2::Auto
+        } else {
+            AcpV2::Off
+        };
+        assert_eq!(p.acp_v2(), want, "{}", p.name);
+    }
+    let dir = config(
+        r#" (drgnx-agents-profiles (("claude" :command ("a") :acp-v2 off) ("codex" :command ("b")) ("other" :command ("c") :acp-v2 auto) ("plain" :command ("d"))))
+"#,
+    );
+    let l = Settings::load(dir.path(), &Kv::default());
+    assert_eq!(l.problems, []);
+    let got: Vec<(&str, AcpV2)> = l
+        .values
+        .agents_profiles
+        .iter()
+        .map(|p| (p.name.as_str(), p.acp_v2()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("claude", AcpV2::Off),
+            ("codex", AcpV2::Auto),
+            ("other", AcpV2::Auto),
+            ("plain", AcpV2::Off)
+        ]
+    );
+}

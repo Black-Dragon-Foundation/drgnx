@@ -1320,6 +1320,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
+| `agents/background-cancel` | user | `{id: Id, item: string}` | `boolean` | no |
 | `agents/buffer/unwatch` | user | `{view: string}` | `boolean` | no |
 | `agents/buffer/watch` | user | `{doc_version?: natnum, file: string, view: string, worktree?: string}` | `BufferFrame` | no |
 | `agents/compact-preview` | user | `{id: Id}` | `{frees?: natnum, kept?: [ContextItem], note?: string, summarised?: [ContextItem]}` | no |
@@ -1973,6 +1974,33 @@ snapshot's `queue` lists the waiting texts and `paused` is true while they are h
 the pause: the running tool call completes, then the turn is cancelled and the queue held.
 
 A turn ending as cancelled holds the queue, an error does too; an end-of-turn stop delivers the next prompt at once.
+
+### Background work (ACP v2)
+
+An agent that speaks ACP v2 ([hermod](runtime.md#hermod-the-acp-client)) reports what runs independently of its turn:
+terminals, tool calls that outlive their turn (a watcher, a workflow) and child sessions. The hub keeps it per session
+(`agents/session/background.rs`) and shows it as `Snapshot.background`:
+
+- `background` is the agent's list, **replaced whole** by each snapshot (v2's rule; a resumed session's first snapshot
+  replaces the stale one). **None is "the agent does not report it"** (a v1 agent never does; the panel says
+  unknown), `[]` is "nothing runs"; the state `unknown` marks every item `unknown`, never running or done. An item is
+  `{kind: terminal|tool_call|subagent, id, description, started_ms, progress?, status: running|pending|paused|unknown,
+  end?, can_cancel}`; its description and progress come from its tool call (title, last content line), terminal
+  (command, last output line) or child (title). The hub's own jobs (`exec/start` of the session) are items too
+  (`terminal`, cancel = Stop Job).
+- `background_ended` keeps the last 20 items that left the list, with how they ended (`end: {status:
+  completed|failed|stopped, summary?, exit_code?}`: a terminal's exit code and signal, a tool call's final status, a
+  child's last stop reason). An item that left with no final status ended without saying how: no `end`.
+- A display terminal's output is kept as bytes in order (a chunk may end inside a UTF-8 sequence), the newest 4 MiB
+  (a `terminal_update` snapshot replaces what was kept). Output of a child session is not the parent's transcript.
+- `agents/background-cancel {id, item}` stops one item: a terminal by `terminal/cancel`, a tool call by
+  `tool_call/cancel`, a child by `session/cancel` of its session, one of the hub's jobs by its stop. An item that does
+  not (or no longer does) advertise `capabilities.cancel` is refused (`not-allowed`) and nothing is sent; an id that
+  is not listed (or names two items) is `invalid-params`. The turn's Stop is unchanged and leaves background work
+  running.
+- Whole-message upserts (`Event::Replace`) replace the entry's text; the user message v2 reports back is the turn's
+  own entry. The profile setting `:acp-v2 auto|off` (`AgentProfile::acp_v2`; `auto` for the profiles named `claude`
+  and `codex`, `off` otherwise) decides whether the hub asks for v2.
 
 ### A session's turn
 

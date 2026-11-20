@@ -3,6 +3,126 @@
     {
       "data": {
         "$defs": {
+          "BackgroundEnd": {
+            "additionalProperties": false,
+            "description": "How a background item ended.",
+            "properties": {
+              "exit_code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "$ref": "#/$defs/BackgroundEndStatus"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          "BackgroundEndStatus": {
+            "enum": [
+              "completed",
+              "failed",
+              "stopped"
+            ],
+            "type": "string"
+          },
+          "BackgroundItem": {
+            "additionalProperties": false,
+            "description": "One item of a session's background work.",
+            "properties": {
+              "can_cancel": {
+                "description": "The agent lets a client stop this item on its own (`capabilities.cancel`), or the hub can (its own job).",
+                "type": "boolean"
+              },
+              "description": {
+                "description": "What it is: the command, the tool call's title, the child's title.",
+                "type": "string"
+              },
+              "end": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BackgroundEnd"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "description": "The agent's id of it (terminal id, tool call id, child session id), or the hub's job id.",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/BackgroundKind"
+              },
+              "progress": {
+                "description": "Its last output line or progress.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "started_ms": {
+                "description": "When the hub first saw it (milliseconds since the epoch).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "$ref": "#/$defs/BackgroundStatus"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "description",
+              "started_ms",
+              "status",
+              "can_cancel"
+            ],
+            "type": "object"
+          },
+          "BackgroundKind": {
+            "description": "What kind of background work an item is.",
+            "oneOf": [
+              {
+                "const": "terminal",
+                "description": "A process: a display terminal of the agent, or one of the hub's own jobs.",
+                "type": "string"
+              },
+              {
+                "const": "tool_call",
+                "description": "Work without a process of its own that keeps reporting status on its tool call (a watcher, a workflow).",
+                "type": "string"
+              },
+              {
+                "const": "subagent",
+                "description": "A child session.",
+                "type": "string"
+              }
+            ]
+          },
+          "BackgroundStatus": {
+            "description": "Whether a listed item runs.  `unknown`: the agent cannot tell (never shown as running or done).",
+            "enum": [
+              "running",
+              "pending",
+              "paused",
+              "unknown"
+            ],
+            "type": "string"
+          },
           "Context": {
             "additionalProperties": false,
             "description": "The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by\npart, and what a compaction would free.",
@@ -279,6 +399,23 @@
                   "string",
                   "null"
                 ]
+              },
+              "background": {
+                "description": "What runs in the background of the session now (ACP v2's list: terminals, tool calls that outlive their turn,\nchild sessions; and the hub's own jobs).  None: the agent does not report it (a v1 agent never does): not \"nothing\".",
+                "items": {
+                  "$ref": "#/$defs/BackgroundItem"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "background_ended": {
+                "description": "The last background items that ended (at most 20), the newest last: each with how it ended.",
+                "items": {
+                  "$ref": "#/$defs/BackgroundItem"
+                },
+                "type": "array"
               },
               "browser_why": {
                 "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
@@ -5226,6 +5363,47 @@
       "classes": [
         "user"
       ],
+      "doc": "stop one item of the session's background list by its own request (`terminal/cancel`, `tool_call/cancel`, `session/cancel` of the child session; a job of the hub's own: its stop); an item that does not advertise cancel is refused with nothing sent (not-allowed), an item that is not listed: invalid-params",
+      "name": "agents/background-cancel",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`agents/background-cancel`: stop one item of the session's background list.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "item": {
+            "description": "The item's `id` in the session's `background` list.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "item"
+        ],
+        "title": "BackgroundCancelParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "end one buffer view of this connection (false: none was open; a connection's views end with it)",
       "name": "agents/buffer/unwatch",
       "params": {
@@ -6260,6 +6438,126 @@
       },
       "result": {
         "$defs": {
+          "BackgroundEnd": {
+            "additionalProperties": false,
+            "description": "How a background item ended.",
+            "properties": {
+              "exit_code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "$ref": "#/$defs/BackgroundEndStatus"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          "BackgroundEndStatus": {
+            "enum": [
+              "completed",
+              "failed",
+              "stopped"
+            ],
+            "type": "string"
+          },
+          "BackgroundItem": {
+            "additionalProperties": false,
+            "description": "One item of a session's background work.",
+            "properties": {
+              "can_cancel": {
+                "description": "The agent lets a client stop this item on its own (`capabilities.cancel`), or the hub can (its own job).",
+                "type": "boolean"
+              },
+              "description": {
+                "description": "What it is: the command, the tool call's title, the child's title.",
+                "type": "string"
+              },
+              "end": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BackgroundEnd"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "description": "The agent's id of it (terminal id, tool call id, child session id), or the hub's job id.",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/BackgroundKind"
+              },
+              "progress": {
+                "description": "Its last output line or progress.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "started_ms": {
+                "description": "When the hub first saw it (milliseconds since the epoch).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "$ref": "#/$defs/BackgroundStatus"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "description",
+              "started_ms",
+              "status",
+              "can_cancel"
+            ],
+            "type": "object"
+          },
+          "BackgroundKind": {
+            "description": "What kind of background work an item is.",
+            "oneOf": [
+              {
+                "const": "terminal",
+                "description": "A process: a display terminal of the agent, or one of the hub's own jobs.",
+                "type": "string"
+              },
+              {
+                "const": "tool_call",
+                "description": "Work without a process of its own that keeps reporting status on its tool call (a watcher, a workflow).",
+                "type": "string"
+              },
+              {
+                "const": "subagent",
+                "description": "A child session.",
+                "type": "string"
+              }
+            ]
+          },
+          "BackgroundStatus": {
+            "description": "Whether a listed item runs.  `unknown`: the agent cannot tell (never shown as running or done).",
+            "enum": [
+              "running",
+              "pending",
+              "paused",
+              "unknown"
+            ],
+            "type": "string"
+          },
           "Context": {
             "additionalProperties": false,
             "description": "The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by\npart, and what a compaction would free.",
@@ -6566,6 +6864,23 @@
                   "string",
                   "null"
                 ]
+              },
+              "background": {
+                "description": "What runs in the background of the session now (ACP v2's list: terminals, tool calls that outlive their turn,\nchild sessions; and the hub's own jobs).  None: the agent does not report it (a v1 agent never does): not \"nothing\".",
+                "items": {
+                  "$ref": "#/$defs/BackgroundItem"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "background_ended": {
+                "description": "The last background items that ended (at most 20), the newest last: each with how it ended.",
+                "items": {
+                  "$ref": "#/$defs/BackgroundItem"
+                },
+                "type": "array"
               },
               "browser_why": {
                 "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",
@@ -7966,6 +8281,126 @@
       },
       "result": {
         "$defs": {
+          "BackgroundEnd": {
+            "additionalProperties": false,
+            "description": "How a background item ended.",
+            "properties": {
+              "exit_code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "$ref": "#/$defs/BackgroundEndStatus"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          "BackgroundEndStatus": {
+            "enum": [
+              "completed",
+              "failed",
+              "stopped"
+            ],
+            "type": "string"
+          },
+          "BackgroundItem": {
+            "additionalProperties": false,
+            "description": "One item of a session's background work.",
+            "properties": {
+              "can_cancel": {
+                "description": "The agent lets a client stop this item on its own (`capabilities.cancel`), or the hub can (its own job).",
+                "type": "boolean"
+              },
+              "description": {
+                "description": "What it is: the command, the tool call's title, the child's title.",
+                "type": "string"
+              },
+              "end": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BackgroundEnd"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "description": "The agent's id of it (terminal id, tool call id, child session id), or the hub's job id.",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/BackgroundKind"
+              },
+              "progress": {
+                "description": "Its last output line or progress.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "started_ms": {
+                "description": "When the hub first saw it (milliseconds since the epoch).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "$ref": "#/$defs/BackgroundStatus"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "description",
+              "started_ms",
+              "status",
+              "can_cancel"
+            ],
+            "type": "object"
+          },
+          "BackgroundKind": {
+            "description": "What kind of background work an item is.",
+            "oneOf": [
+              {
+                "const": "terminal",
+                "description": "A process: a display terminal of the agent, or one of the hub's own jobs.",
+                "type": "string"
+              },
+              {
+                "const": "tool_call",
+                "description": "Work without a process of its own that keeps reporting status on its tool call (a watcher, a workflow).",
+                "type": "string"
+              },
+              {
+                "const": "subagent",
+                "description": "A child session.",
+                "type": "string"
+              }
+            ]
+          },
+          "BackgroundStatus": {
+            "description": "Whether a listed item runs.  `unknown`: the agent cannot tell (never shown as running or done).",
+            "enum": [
+              "running",
+              "pending",
+              "paused",
+              "unknown"
+            ],
+            "type": "string"
+          },
           "Context": {
             "additionalProperties": false,
             "description": "The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by\npart, and what a compaction would free.",
@@ -8242,6 +8677,23 @@
                   "string",
                   "null"
                 ]
+              },
+              "background": {
+                "description": "What runs in the background of the session now (ACP v2's list: terminals, tool calls that outlive their turn,\nchild sessions; and the hub's own jobs).  None: the agent does not report it (a v1 agent never does): not \"nothing\".",
+                "items": {
+                  "$ref": "#/$defs/BackgroundItem"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "background_ended": {
+                "description": "The last background items that ended (at most 20), the newest last: each with how it ended.",
+                "items": {
+                  "$ref": "#/$defs/BackgroundItem"
+                },
+                "type": "array"
               },
               "browser_why": {
                 "description": "Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that\ncannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).",

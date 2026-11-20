@@ -20,6 +20,8 @@ pub struct ConnOpts {
     pub deadline: Duration,
     pub stderr_tail: usize,
     pub tap: Option<Arc<dyn LineTap>>,
+    /// Ask the agent for ACP v2 (a draft): an agent that answers 1 gets v1 on the same connection, silently.
+    pub v2: bool,
 }
 
 impl Default for ConnOpts {
@@ -28,8 +30,16 @@ impl Default for ConnOpts {
             deadline: Duration::from_secs(30),
             stderr_tail: 4000,
             tap: None,
+            v2: false,
         }
     }
+}
+
+/// The ACP version a connection speaks, as `initialize` settled it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Proto {
+    V1,
+    V2,
 }
 
 impl fmt::Debug for ConnOpts {
@@ -38,6 +48,7 @@ impl fmt::Debug for ConnOpts {
             .field("deadline", &self.deadline)
             .field("stderr_tail", &self.stderr_tail)
             .field("tap", &self.tap.is_some())
+            .field("v2", &self.v2)
             .finish()
     }
 }
@@ -69,6 +80,8 @@ pub struct AgentInfo {
     pub caps: AgentCapabilities,
     pub meta: Option<Value>,
     pub auth: Vec<AuthMethod>,
+    /// The version the connection speaks from here on.
+    pub proto: Proto,
 }
 
 /// How a turn ended.  `turn_id` is `_meta.turnId` of the answer, when the agent sends one.
@@ -108,6 +121,37 @@ pub enum Event {
         message_id: Option<String>,
     },
     Request(Incoming),
+    /// ACP v2: a whole-message upsert (`user_message`, `agent_message`, `agent_thought`): the message MESSAGE_ID has
+    /// exactly this content now (`null`: none), whatever chunks it had.
+    Replace {
+        at: f64,
+        sid: SessionId,
+        message_id: String,
+        kind: MessageKind,
+        content: Value,
+    },
+    /// ACP v2: a session's foreground state, with its background list when the agent reports one (`None`: it does
+    /// not; `Some(vec![])`: nothing runs).  The turn's end is the prompt's answer, not this.
+    State {
+        at: f64,
+        sid: SessionId,
+        state: RunState,
+        background: Option<Vec<BackgroundRef>>,
+    },
+    /// ACP v2: a display terminal's update or output bytes.
+    Terminal {
+        at: f64,
+        sid: SessionId,
+        id: String,
+        update: TerminalEv,
+    },
+    /// ACP v2: a child session announced or updated (the raw `subagent_update`).
+    Subagent {
+        at: f64,
+        sid: SessionId,
+        child: SessionId,
+        update: Value,
+    },
     /// A notification outside the schema whose method starts with `_` (an agent's own extension, e.g.
     /// `_claude/rateLimit`, `_codex/rateLimits`); anything else the schema does not know is dropped.
     Ext {
@@ -119,6 +163,48 @@ pub enum Event {
         signal: Option<i32>,
         stderr: String,
     },
+}
+
+/// Which kind of message a whole-message upsert is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageKind {
+    User,
+    Agent,
+    Thought,
+}
+
+/// ACP v2's foreground state.  `Unknown`: the agent cannot tell (never taken for idle or done).
+#[derive(Clone, Debug, PartialEq)]
+pub enum RunState {
+    Running,
+    RequiresAction,
+    Idle(Option<StopReason>),
+    Unknown,
+}
+
+/// One item of a v2 background list.  `Other` is a type this code does not know: it still counts as running work.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BackgroundRef {
+    Terminal(String),
+    ToolCall(String),
+    Subagent(SessionId),
+    Other(Value),
+}
+
+/// A display terminal's news: fields the agent sent (a `None` is "not sent", not "cleared"), or bytes appended.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TerminalEv {
+    Update {
+        command: Option<String>,
+        cwd: Option<String>,
+        /// The whole output so far, replacing what was kept.
+        snapshot: Option<Vec<u8>>,
+        /// Exit code and signal.
+        exit: Option<(Option<i32>, Option<String>)>,
+        can_cancel: Option<bool>,
+    },
+    /// Bytes appended, decoded per chunk.
+    Chunk(Vec<u8>),
 }
 
 #[derive(Debug)]

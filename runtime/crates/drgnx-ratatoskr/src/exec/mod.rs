@@ -173,15 +173,41 @@ pub enum JobEvent {
 
 /// The jobs running now, by the session that started each (a session waits for its own, in the hub's memory).
 #[derive(Default)]
-pub struct Live(Mutex<std::collections::HashMap<String, Option<String>>>);
+pub struct Live(
+    Mutex<std::collections::HashMap<String, Option<String>>>,
+    /// What each running job is called and when it started (the session's background list shows it).
+    Mutex<std::collections::HashMap<String, (String, f64)>>,
+);
 
 impl Live {
     fn add(&self, id: &str, session: Option<String>) {
         self.0.lock().unwrap().insert(id.to_string(), session);
     }
 
+    /// Job ID's name (its given name, else its argv) and start time, for the session's background list.
+    fn describe(&self, id: &str, name: Option<&str>, argv: &[String], started: f64) {
+        let label = name.map_or_else(|| argv.join(" "), str::to_string);
+        self.1
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), (label, started));
+    }
+
     fn remove(&self, id: &str) {
         self.0.lock().unwrap().remove(id);
+        self.1.lock().unwrap().remove(id);
+    }
+
+    /// The running jobs SESSION started, as (id, name, start time in seconds), by id.
+    pub fn jobs(&self, session: &str) -> Vec<(String, String, f64)> {
+        let labels = self.1.lock().unwrap();
+        self.ids(session)
+            .into_iter()
+            .map(|id| {
+                let (label, started) = labels.get(&id).cloned().unwrap_or_default();
+                (id, label, started)
+            })
+            .collect()
     }
 
     fn has(&self, id: &str) -> bool {
@@ -1423,6 +1449,8 @@ impl Inner {
             keyed: false,
         })?;
         self.live.add(id, session);
+        self.live
+            .describe(id, spec.user.name.as_deref(), &spec.argv, started);
         // the tick wakes after start's own: a job admitted at once is start's to launch
         self.queue.enter(self.submit_of(id, spec), started as u64);
         Ok(())
@@ -2255,6 +2283,8 @@ impl Inner {
         let id = id.to_string();
         // counted as running before the starter hears of its id
         self.live.add(&id, meta.session.clone());
+        self.live
+            .describe(&id, meta.name.as_deref(), &meta.argv, meta.started);
         self.watch_progress(&id, &spec.argv);
         // a networked job's relay answers for as long as the job runs; a graceful hub stop ends it through `nets`
         let relay = relay.map(|net| {
@@ -2740,6 +2770,8 @@ impl Inner {
                 && self.end(&id).is_none()
             {
                 self.live.add(&id, m.session.clone());
+                self.live
+                    .describe(&id, m.name.as_deref(), &m.argv, m.started);
                 if m.queued {
                     waiting.push((m.started, id));
                     continue;

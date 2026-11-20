@@ -6,13 +6,15 @@
 //! recording).
 //!
 //! Modules: `conn` (spawn, the tasks, calls with deadlines), `types` (`ConnOpts`, `LineTap`, `Dir`, `AgentInfo`,
-//! `PromptOutcome`, `ForkPoint`, `ForkInto`, `Event`, `Error`), `incoming` (the agent's requests and their
-//! responders), `stamp` (receipt stamps).
+//! `PromptOutcome`, `ForkPoint`, `ForkInto`, `Event`, `Error`, and v2's `Proto`, `RunState`, `BackgroundRef`, `TerminalEv`),
+//! `incoming` (the agent's requests and their responders), `stamp` (receipt stamps), `v2` (ACP v2 turned into the
+//! events above: a turn ends at the agent's `idle`, upserts replace, background work and terminals arrive as events).
 
 pub mod conn;
 pub mod incoming;
 pub mod stamp;
 pub mod types;
+pub(crate) mod v2;
 
 pub use agent_client_protocol_schema as schema;
 pub use conn::Conn;

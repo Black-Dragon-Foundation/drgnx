@@ -11,6 +11,9 @@
 
 #[cfg(test)]
 pub(crate) mod attach_tests;
+mod background;
+#[cfg(test)]
+mod background_tests;
 #[cfg_attr(
     not(test),
     allow(
@@ -74,6 +77,11 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 fn now() -> f64 {
     crate::clock::wall_secs()
+}
+
+/// The hub's clock in milliseconds (a background item's start).
+fn now_ms() -> u64 {
+    (now() * 1000.0) as u64
 }
 
 pub(crate) fn refuse(message: &str) -> Error {
@@ -232,6 +240,9 @@ struct State {
     plan_now: Option<String>,
     /// The conclusions this turn recorded, with their steps: an agent write's reason ([`Session::write_cause`]).
     concluded: crate::work::conclusions::TurnConclusions,
+    /// ACP v2's background work, as the agent reports it (none for a v1 agent) and what the hub knows of its items.
+    bg: background::Background,
+    known: background::Known,
 }
 
 /// What a tool call's update tells the presence model's live feed ([`crate::work::presence`]): taken under the state's
@@ -392,6 +403,8 @@ impl State {
             follow_tool: None,
             plan_now: None,
             concluded: Default::default(),
+            bg: Default::default(),
+            known: Default::default(),
             closed: Vec::new(),
             before: None,
             edits: Vec::new(),
@@ -797,6 +810,111 @@ impl State {
         }
     }
 
+    /// A v2 state update: the agent's background list (none: not reported) and what it is doing.  `requires_action`
+    /// and `running` need nothing here: the permission request is the wait, and the prompt's answer ends the turn.
+    fn on_state(
+        &mut self,
+        state: hermod::RunState,
+        background: Option<Vec<hermod::BackgroundRef>>,
+    ) {
+        self.seq += 1;
+        let State { bg, known, .. } = self;
+        bg.apply_snapshot(background, |r| known.item(r));
+        if state == hermod::RunState::Unknown {
+            bg.mark_unknown();
+        }
+    }
+
+    /// A child session's own state (the item that names it follows it).
+    fn on_child_state(&mut self, child: &str, state: &hermod::RunState) {
+        self.seq += 1;
+        self.known.child_state(child, state);
+        self.refresh_background();
+    }
+
+    /// A `subagent_update`.
+    fn on_subagent(&mut self, update: &Value, now_ms: u64) {
+        self.seq += 1;
+        self.known.subagent(update, now_ms);
+        self.refresh_background();
+    }
+
+    /// A display terminal's news.
+    fn on_terminal(&mut self, id: &str, update: hermod::TerminalEv, now_ms: u64) {
+        self.seq += 1;
+        self.known.terminals.update(id, update, now_ms);
+        self.refresh_background();
+    }
+
+    /// The listed items, read again from what the hub knows now.
+    fn refresh_background(&mut self) {
+        let State { bg, known, .. } = self;
+        bg.refresh(|r| known.item(r));
+    }
+
+    /// A whole-message upsert: the entry of MESSAGE_ID has CONTENT now (`null`: none).  A message the hub has not seen
+    /// is added; the echo of the turn's own prompt (v2 reports the user message back) is that turn's entry.
+    fn replace_message(&mut self, kind: hermod::MessageKind, message_id: &str, content: &Value) {
+        self.seq += 1;
+        let et = match kind {
+            hermod::MessageKind::User => EntryType::User,
+            hermod::MessageKind::Agent => EntryType::Agent,
+            hermod::MessageKind::Thought => EntryType::Thought,
+        };
+        let text: String = content
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect();
+        let known = self.entries.iter().rposition(|e| {
+            e.kind == et && e.rest.get("messageId").and_then(Value::as_str) == Some(message_id)
+        });
+        let Some(i) = known else {
+            // the prompt this hub sent is the last user entry, with nothing of the agent's after it, and has no id yet
+            let own = (et == EntryType::User)
+                .then(|| self.entries.iter().rposition(|e| e.kind == EntryType::User))
+                .flatten()
+                .filter(|&i| {
+                    !self.entries[i].rest.contains_key("messageId")
+                        && self.entries[i + 1..]
+                            .iter()
+                            .all(|e| !matches!(e.kind, EntryType::Agent | EntryType::Tool))
+                });
+            if let Some(i) = own {
+                self.entries[i]
+                    .rest
+                    .insert("messageId".into(), json!(message_id));
+                self.dirty.insert(i);
+            } else {
+                self.open = None;
+                self.text(et, &text, Some(message_id));
+            }
+            return;
+        };
+        let e = &mut self.entries[i];
+        e.rest.insert("length".into(), json!(text.chars().count()));
+        e.rest.insert("text".into(), json!(text));
+        self.dirty.insert(i);
+        self.open = Some((et, i));
+        // the Markdown of the replaced text is parsed anew
+        self.md = None;
+        self.md_follow(et, i);
+    }
+
+    /// The items to show: what the agent reports and the hub's own jobs OWN (none: neither has any).
+    fn background_view(
+        &self,
+        own: Vec<runstav::methods::agents::BackgroundItem>,
+    ) -> Option<Vec<runstav::methods::agents::BackgroundItem>> {
+        if self.bg.items.is_none() && own.is_empty() {
+            return None;
+        }
+        let mut items = self.bg.items.clone().unwrap_or_default();
+        items.extend(own);
+        Some(items)
+    }
+
     /// One `session/update` of the agent (its JSON), as entries, commands and usage.
     fn apply(&mut self, u: &Value) {
         self.seq += 1;
@@ -821,6 +939,13 @@ impl State {
             .or(own.as_deref());
         if mid.is_some() {
             self.last_mid = mid.map(str::to_string);
+        }
+        // a v2 tool call (hermod marks it): what the background list needs of it, kept beside the entries
+        if matches!(kind, "tool_call" | "tool_call_update")
+            && u.pointer("/_meta/_hermod~1status").is_some()
+        {
+            self.known.tool(u, now_ms());
+            self.refresh_background();
         }
         match kind {
             "user_message_chunk" => self.text(EntryType::User, &text_of(u), mid),
@@ -2262,6 +2387,8 @@ async fn launch_steps(
     // while recording, the connection's lines, MCP calls and worktree changes go into the run (in spawn order)
     let opts = ConnOpts {
         tap: crate::recording::acp_tap(sid, job, &profile.name, &prep.spec, cwd),
+        // ACP v2 is a draft: only a profile that asks for it (`:acp-v2 auto`, the default of claude and codex) does
+        v2: profile.acp_v2() == crate::settings::profiles::AcpV2::Auto,
         ..ConnOpts::default()
     };
     let (conn, rx) = Conn::spawn(prep.spec, opts)
@@ -4314,6 +4441,52 @@ impl Session {
         lock(&self.state).cur.as_ref().and_then(|c| c.tool.clone())
     }
 
+    /// The jobs the session itself started (`exec/start`), as items of its background list.
+    fn own_jobs(&self) -> Vec<runstav::methods::agents::BackgroundItem> {
+        self.live
+            .jobs(&self.id)
+            .into_iter()
+            .map(|(id, label, started)| {
+                background::job_item(&id, &label, (started * 1000.0) as u64)
+            })
+            .collect()
+    }
+
+    /// `agents/background-cancel`: stop one background item, by the request its kind has (a terminal, a tool call, a
+    /// child session) or by stopping the job (the hub's own).  An item that does not advertise cancel is refused and
+    /// nothing is sent.
+    pub(crate) async fn background_cancel(&self, front: &Front, item: &str) -> Result<(), Error> {
+        use background::Route;
+        let own = self.live.ids(&self.id).iter().any(|j| j == item);
+        let found = if own {
+            self.own_jobs().into_iter().find(|i| i.id == item)
+        } else {
+            lock(&self.state).bg.find(item).cloned().ok()
+        };
+        let Some(found) = found else {
+            return Err(invalid(
+                "item",
+                format!("`{item}` is not a running background item of {}", self.id),
+            ));
+        };
+        let route = background::route_cancel(&found, own)
+            .map_err(|_| refuse(&format!("`{item}` does not advertise cancel")))?;
+        let sent = match route {
+            Route::Terminal(id) => self.conn.cancel_terminal(&self.acp, &id).await,
+            Route::ToolCall(id) => self.conn.cancel_tool_call(&self.acp, &id).await,
+            Route::Subagent(id) => self.conn.cancel_child(&SessionId::new(id)),
+            Route::Job(id) => {
+                return front.core.exec.stop(&id).await.map(drop);
+            }
+        };
+        sent.map_err(|e| match e {
+            hermod::Error::Rpc { message, .. } => {
+                refuse(&format!("the agent refused: «{message}»"))
+            }
+            e => internal(format!("background-cancel: {e}")),
+        })
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         let identity = self.identities.get(&self.id);
         let st = lock(&self.state);
@@ -4364,6 +4537,8 @@ impl Session {
             held_by: (st.wheel != Wheel::Free).then(|| "user".to_string()),
             model: self.conn.reported_model(&self.acp),
             mcp: self.mcp_servers.clone(),
+            background: st.background_view(self.own_jobs()),
+            background_ended: st.bg.ended.iter().cloned().collect(),
         }
     }
 
@@ -4444,7 +4619,11 @@ impl Session {
                         self.budgets.notify(hits);
                     }
                 }
-                Event::Update { update, .. } => {
+                Event::Update { sid, update, .. } => {
+                    // a child session's transcript is not this session's (its own view is a later plan)
+                    if sid != self.acp && lock(&self.state).known.is_child(&sid.0) {
+                        return;
+                    }
                     if let Ok(v) = serde_json::to_value(&update) {
                         // the turn's stages at debug (a flaky row's log names where it stopped): the kind only
                         let kind = v.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
@@ -4525,6 +4704,47 @@ impl Session {
                         self.schedule();
                         tracing::debug!(sid = %self.id, kind, tool_ended, "turn: the update applied");
                     }
+                }
+                // ACP v2.  A child session's news is not this session's: only its state and its announcement are kept
+                Event::Replace {
+                    sid,
+                    message_id,
+                    kind,
+                    content,
+                    ..
+                } => {
+                    if sid == self.acp {
+                        lock(&self.state).replace_message(kind, &message_id, &content);
+                        self.schedule();
+                    }
+                }
+                Event::State {
+                    sid,
+                    state,
+                    background,
+                    ..
+                } => {
+                    {
+                        let mut st = lock(&self.state);
+                        if sid == self.acp {
+                            st.on_state(state, background);
+                        } else if st.known.is_child(&sid.0) {
+                            st.on_child_state(&sid.0, &state);
+                        }
+                    }
+                    self.schedule();
+                }
+                Event::Terminal {
+                    sid, id, update, ..
+                } => {
+                    if sid == self.acp {
+                        lock(&self.state).on_terminal(&id, update, now_ms());
+                        self.schedule();
+                    }
+                }
+                Event::Subagent { update, .. } => {
+                    lock(&self.state).on_subagent(&update, now_ms());
+                    self.schedule();
                 }
                 Event::Request(Incoming::Permission(req, resp)) => {
                     let turn = lock(&self.state).core.turn();
@@ -7330,6 +7550,7 @@ mod tests {
             doc: None,
             provider,
             job_safe: false,
+            acp_v2: None,
         };
         let gemini = p(None, Some(Provider::Gemini), "/bin/mock");
         assert_eq!(step_provider(&gemini).as_deref(), Some("gemini"));

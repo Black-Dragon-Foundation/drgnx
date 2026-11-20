@@ -20,8 +20,8 @@ use crate::front::Front;
 use hermod::Responder;
 use runstav::jsonrpc;
 use runstav::methods::agents::{
-    ById, CompactPreview, ConfigParams, Context, ContextDropParams, ContextPinParams,
-    ExplainParams, Explained, Panel as Shown,
+    BackgroundCancelParams, ById, CompactPreview, ConfigParams, Context, ContextDropParams,
+    ContextPinParams, ExplainParams, Explained, Panel as Shown,
 };
 use runstav::wire::Error;
 use serde::Deserialize;
@@ -364,6 +364,17 @@ async fn forward(
         }
         Err(e) => Err(internal(format!("{method}: {e}"))),
     }
+}
+
+/// `agents/background-cancel`.
+pub async fn background_cancel(
+    f: &Front,
+    _: &Caller,
+    p: BackgroundCancelParams,
+) -> Result<bool, Error> {
+    let s = f.core.agents.find(p.id.as_str())?;
+    s.background_cancel(f, &p.item.0).await?;
+    Ok(true)
 }
 
 /// `agents/context-drop`.
