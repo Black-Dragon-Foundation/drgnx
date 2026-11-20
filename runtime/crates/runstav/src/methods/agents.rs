@@ -218,6 +218,21 @@ pub struct Snapshot {
     /// The last background items that ended (at most 20), the newest last: each with how it ended.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub background_ended: Vec<BackgroundItem>,
+    /// The turns the agent started by itself after an item ended (the last 20): the turn's first entry and the item that
+    /// woke it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caused: Vec<BackgroundCause>,
+}
+
+/// What woke the agent: the background item whose end came before a turn nobody asked for.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundCause {
+    /// The first entry of the turn.
+    pub entry: u64,
+    /// The item's id and its description (the item may have left the ended list by the time the turn is shown).
+    pub item: String,
+    pub description: String,
 }
 
 /// What kind of background work an item is.
@@ -496,6 +511,14 @@ pub struct Context {
 pub struct ContextDropParams {
     pub id: Id,
     /// The item's `id` in the session's context breakdown.
+    pub item: Bounded<String, 256>,
+}
+
+/// `agents/background-output`: the output of one item of the session's background list.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BackgroundOutputParams {
+    pub id: Id,
+    /// The item's `id` in the session's `background` list.
     pub item: Bounded<String, 256>,
 }
 
@@ -778,6 +801,9 @@ pub struct PanelLook {
     /// The preset in force, from 1 (0: none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lens_on: Option<u32>,
+    /// The background item selected in the pinned list (its actions show on its row); the empty string: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg_selected: Option<Bounded<String, 256>>,
     /// The pinned cards' texts, oldest first: each is a card under the strip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pins: Option<Vec<Bounded<String, 512>>>,
@@ -1032,6 +1058,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "agents/background-cancel", AgentsBackgroundCancel(BackgroundCancelParams) -> bool,
             classes: [User], writes: false,
             doc: "stop one item of the session's background list by its own request (`terminal/cancel`, `tool_call/cancel`, `session/cancel` of the child session; a job of the hub's own: its stop); an item that does not advertise cancel is refused with nothing sent (not-allowed), an item that is not listed: invalid-params",
+        ),
+        method!(
+            "agents/background-output", AgentsBackgroundOutput(BackgroundOutputParams) -> ToolOutput,
+            classes: [User], writes: false,
+            doc: "the output of one item of the session's background list: a terminal's newest bytes as the hub kept them (at most 256 KiB, `truncated` when older ones were left out), a tool call's output; an item that is not listed or has no output: invalid-params",
         ),
         method!(
             "agents/context-drop", AgentsContextDrop(ContextDropParams) -> bool,

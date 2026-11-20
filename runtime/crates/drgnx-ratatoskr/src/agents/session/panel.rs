@@ -377,6 +377,17 @@ pub async fn background_cancel(
     Ok(true)
 }
 
+/// `agents/background-output`.
+pub fn background_output(
+    f: &Front,
+    _: &Caller,
+    p: runstav::methods::agents::BackgroundOutputParams,
+) -> Result<runstav::methods::agents::ToolOutput, Error> {
+    let s = f.core.agents.find(p.id.as_str())?;
+    s.background_output(&p.item.0)
+        .ok_or_else(|| invalid("item", "a background item of this session that has output"))
+}
+
 /// `agents/context-drop`.
 pub async fn context_drop(f: &Front, _: &Caller, p: ContextDropParams) -> Result<bool, Error> {
     let s = f.core.agents.find(p.id.as_str())?;

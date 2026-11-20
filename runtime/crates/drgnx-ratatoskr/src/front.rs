@@ -908,6 +908,7 @@ impl Front {
             | Params::AgentsToolOutput(_)
             | Params::AgentsPause(_)
             | Params::AgentsBackgroundCancel(_)
+            | Params::AgentsBackgroundOutput(_)
             | Params::AgentsContextDrop(_)
             | Params::AgentsContextPin(_)
             | Params::AgentsCompactPreview(_)
