@@ -1,4 +1,4 @@
-;;; drgnx-minimap-peek.el --- The minimap's hover peek, problems card, visited trail and describe -*- lexical-binding: t -*-
+;;; drgnx-minimap-peek.el --- The minimap's peek, problems card, trail and describe -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -224,30 +224,37 @@ window)."
     (set-frame-size frame w h t)
     (set-frame-position frame (max (nth 0 edges) (- (nth 2 edges) mm w (drgnx-px 8 parent))) y)))
 
-(defun drgnx-minimap--header (text)
-  "A card's header line: TEXT, then `↵ jump' at the right."
-  (concat (propertize (concat " " text) 'face 'drgnx-minimap-peek-header)
-          (propertize " " 'display '(space :align-to (- right 8)) 'face 'drgnx-minimap-peek-header)
-          (propertize "↵ jump " 'face 'drgnx-minimap-peek-header)))
+(defun drgnx-minimap--header (text &optional hint)
+  "A card's header line: TEXT, then HINT (default `↵ jump') at the right."
+  (let ((hint (or hint "↵ jump")))
+    (concat (propertize (concat " " text) 'face 'drgnx-minimap-peek-header)
+            (propertize " " 'display `(space :align-to (- right ,(1+ (string-width hint))))
+                        'face 'drgnx-minimap-peek-header)
+            (propertize (concat hint " ") 'face 'drgnx-minimap-peek-header))))
 
-(defun drgnx-minimap--show-card (kind window pos lines header buffer start)
-  "Show the card of KIND for POS of editor WINDOW: BUFFER from START, LINES tall, HEADER on top."
+(defvar drgnx-minimap--card-commands '(drgnx-minimap-card-jump drgnx-minimap-card-click)
+  "The commands that keep a card's keys (`drgnx-minimap--card-keep-p'); a card with keys of its own adds its own.")
+
+(defun drgnx-minimap--show-card (kind window pos lines header buffer start &optional map)
+  "Show the card of KIND for POS of editor WINDOW: BUFFER from START, LINES tall, HEADER on top (a string, or
+\(TEXT . HINT)), its keys MAP (default `drgnx-minimap-card-map')."
   (let* ((frame (drgnx-minimap--card-frame (window-frame window)))
          (cw (frame-root-window frame)))
     (set-window-buffer cw buffer)
     (set-window-start cw start t)
-    (set-window-parameter cw 'header-line-format (drgnx-minimap--header header))
+    (set-window-parameter cw 'header-line-format (if (consp header) (drgnx-minimap--header (car header) (cdr header))
+                                                   (drgnx-minimap--header header)))
     (set-window-parameter cw 'mode-line-format 'none)
     (drgnx-minimap--card-place frame window lines)
     (unless (frame-visible-p frame) (make-frame-visible frame))
     (setq drgnx-minimap--card (vector frame kind window pos))
-    (set-transient-map drgnx-minimap-card-map #'drgnx-minimap--card-keep-p #'drgnx-minimap-card-hide)
+    (set-transient-map (or map drgnx-minimap-card-map) #'drgnx-minimap--card-keep-p #'drgnx-minimap-card-hide)
     (drgnx-timer-start 'minimap-card-away 0.15 #'drgnx-minimap--card-away :repeat 0.15 :owner 'editor/minimap)
     frame))
 
 (defun drgnx-minimap--card-keep-p ()
   "Keep the card's keys while the card shows and the key was one of its own."
-  (and drgnx-minimap--card (memq this-command '(drgnx-minimap-card-jump drgnx-minimap-card-click))))
+  (and drgnx-minimap--card (memq this-command drgnx-minimap--card-commands)))
 
 (defun drgnx-minimap-card-hide ()
   "Hide the minimap's card."
@@ -354,7 +361,8 @@ place; the header's counts as the second value: (TEXT . COUNTS)."
       (let* ((kind (drgnx-minimap--diag-kind d)) (p (flymake-diagnostic-beg d))
              (icon (or (drgnx-face-glyph (pcase kind ('error 'fail) ('warning 'warn) (_ 'info)) frame) "•")))
         (cl-incf (alist-get kind counts))
-        (push (propertize (concat " " (propertize icon 'face (pcase kind ('error 'error) ('warning 'warning) (_ 'success)))
+        (push (propertize (concat " "
+                                  (propertize icon 'face (pcase kind ('error 'error) ('warning 'warning) (_ 'success)))
                                   " " (car (split-string (flymake-diagnostic-text d) "\n"))
                                   (propertize (format "  line %d" (line-number-at-pos p t)) 'face 'drgnx-text-muted)
                                   "\n")

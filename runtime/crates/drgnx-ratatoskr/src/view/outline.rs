@@ -5,6 +5,8 @@
 //! track is sent again by the editor. The model is a list `order` of a node per definition, its `line` (from 1) and
 //! `label` fields: the editor asks Sjá which one a line is in (`at-line`) and where a row goes. A row is the name,
 //! indented two columns per definition around it, its key over it; a file with nothing to outline is one notice row.
+//! A definition starting on a line the editor has folded (`outline/set`'s `folded`) has the field `folded` and a fold
+//! glyph after its name (the minimap and folding design, X7).
 
 use super::explorer::{INDENT, RowLook};
 use super::model::Doc;
@@ -21,7 +23,7 @@ use runstav::methods::view::{
 };
 use runstav::wire::Error;
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -55,6 +57,8 @@ struct One {
     file: Option<String>,
     generation: u64,
     shown: Option<Arc<Shown>>,
+    /// The lines the editor has folded (`outline/set`'s `folded`).
+    folded: Arc<BTreeSet<u32>>,
 }
 
 /// The Outline views of every (connection, view).
@@ -73,10 +77,10 @@ type Parsed = (String, u64, Arc<Vec<OutlineEntry>>);
 pub const PARSED_FILES: usize = 8;
 
 impl Outlines {
-    fn shown(&self, conn: u64, view: &str) -> Option<Arc<Shown>> {
+    fn shown(&self, conn: u64, view: &str) -> Option<(Arc<Shown>, Arc<BTreeSet<u32>>)> {
         lock(&self.views)
             .get(&(conn, view.to_owned()))
-            .and_then(|o| o.shown.clone())
+            .and_then(|o| o.shown.clone().map(|s| (s, o.folded.clone())))
     }
 
     pub(super) fn stop(&self, conn: u64, view: &str) {
@@ -144,8 +148,9 @@ pub fn keys(entries: &[OutlineEntry]) -> Vec<String> {
 /// The key of a notice's row.
 pub const NOTICE_KEY: &str = "notice";
 
-/// SHOWN's model: a node per definition with its `line` and `label`, the list `order` in file order (a notice: empty).
-pub fn doc(shown: &Shown) -> Doc {
+/// SHOWN's model: a node per definition with its `line`, `label` and `folded` (it starts on a line of FOLDED), the list
+/// `order` in file order (a notice: empty).
+pub fn doc(shown: &Shown, folded: &BTreeSet<u32>) -> Doc {
     let mut d = Doc {
         descriptor: json!({
             "scheme": "links",
@@ -165,7 +170,8 @@ pub fn doc(shown: &Shown) -> Doc {
             d.nodes.insert(
                 key.clone(),
                 json!({"id": key, "kind": e.kind, "flags": 0,
-                       "fields": [["label", e.name], ["line", e.line_start]]}),
+                       "fields": [["label", e.name], ["line", e.line_start],
+                                  ["folded", folded.contains(&e.line_start)]]}),
             );
             order.push(key);
         }
@@ -174,10 +180,17 @@ pub fn doc(shown: &Shown) -> Doc {
     d
 }
 
+/// The glyph after a folded definition's name.
+pub const FOLDED_GLYPH: &str = "⋯";
+
 /// SHOWN's rows in LOOK, and the icon a notice names.  A definition: two columns, two more per definition around it,
-/// the name as one row shows it, the key over the row.  A notice: the info icon (a graphical display) and the text,
-/// muted, inert.
-pub fn rows(shown: &Shown, look: &RowLook) -> (Vec<Row>, Vec<(ImageId, String)>) {
+/// the name as one row shows it, the key over the row; one starting on a line of FOLDED has [`FOLDED_GLYPH`] after its
+/// name, muted, labelled "folded".  A notice: the info icon (a graphical display) and the text, muted, inert.
+pub fn rows(
+    shown: &Shown,
+    folded: &BTreeSet<u32>,
+    look: &RowLook,
+) -> (Vec<Row>, Vec<(ImageId, String)>) {
     match shown {
         Shown::Entries(entries) => {
             let rows = entries
@@ -187,6 +200,13 @@ pub fn rows(shown: &Shown, look: &RowLook) -> (Vec<Row>, Vec<(ImageId, String)>)
                     let mut r = RowBuilder::new(key.clone());
                     r.push(&" ".repeat(2 + 2 * e.depth as usize), None);
                     r.push(&super::explorer::display(&e.name), None);
+                    if folded.contains(&e.line_start) {
+                        r.push(" ", None);
+                        let at = r.pos();
+                        r.push(FOLDED_GLYPH, Some(FaceId::TextMuted.name()));
+                        let to = r.pos();
+                        r.prop(at, to, "help-echo", json!("folded"));
+                    }
                     let end = r.pos();
                     r.prop(0, end, "drgnx-work-id", json!(key));
                     r.finish()
@@ -229,15 +249,16 @@ fn notice_row(key: &str, text: &str, look: &RowLook, icon: bool) -> (Row, Vec<(I
 /// publishes to the window, `drgnx_rows::fit_row`): a notice is read whole.
 pub fn rows_in(
     shown: &Shown,
+    folded: &BTreeSet<u32>,
     look: &RowLook,
     env: &ViewEnv,
     fonts: &FontSet,
 ) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let Shown::Notice(text) = shown else {
-        return rows(shown, look);
+        return rows(shown, folded, look);
     };
     if env.width_px == 0 || env.headless {
-        return rows(shown, look);
+        return rows(shown, folded, look);
     }
     let (_, icon_images) = notice_row(NOTICE_KEY, "", look, true);
     let image_px = |id: &ImageId| {
@@ -283,18 +304,25 @@ pub fn rows_in(
 impl Views {
     /// The rows of KEY's view's outline for its class; false when the view has none (no `outline/set` yet).
     pub(super) fn outline_build(&self, f: &Front, key: &Key) -> bool {
-        let Some(shown) = self.outlines.shown(key.0, &key.1) else {
+        let Some((shown, folded)) = self.outlines.shown(key.0, &key.1) else {
             return false;
         };
         self.publish_built(f, key, |env, fonts| {
-            rows_in(&shown, &RowLook::of(env, INDENT, 1), env, fonts)
+            rows_in(&shown, &folded, &RowLook::of(env, INDENT, 1), env, fonts)
         });
         true
     }
 
     /// CONN's VIEW shows SHOWN now: the model first, then the rows that changed to every class of it.
-    fn outline_publish(&self, f: &Front, conn: u64, view: &str, shown: &Shown) {
-        self.publish_model(f, conn, view, doc(shown));
+    fn outline_publish(
+        &self,
+        f: &Front,
+        conn: u64,
+        view: &str,
+        shown: &Shown,
+        folded: &BTreeSet<u32>,
+    ) {
+        self.publish_model(f, conn, view, doc(shown, folded));
         let classes = lock(&self.store).classes(conn, view);
         for class in classes {
             self.outline_build(f, &(conn, view.to_owned(), class));
@@ -304,10 +332,10 @@ impl Views {
 
 /// Outline CONN's VIEW's file again for its ask GENERATION; nothing when a later ask came meanwhile.
 async fn refresh(f: &Front, conn: u64, view: &str, generation: u64) {
-    let file = {
+    let (file, folded) = {
         let views = lock(&f.core.views.outlines.views);
         match views.get(&(conn, view.to_owned())) {
-            Some(o) if o.generation == generation => o.file.clone(),
+            Some(o) if o.generation == generation => (o.file.clone(), o.folded.clone()),
             _ => return,
         }
     };
@@ -328,7 +356,7 @@ async fn refresh(f: &Front, conn: u64, view: &str, generation: u64) {
             _ => return,
         }
     }
-    f.core.views.outline_publish(f, conn, view, &shown);
+    f.core.views.outline_publish(f, conn, view, &shown, &folded);
 }
 
 /// `outline/set`: the caller's VIEW shows P's file now; it is outlined before the answer.
@@ -338,6 +366,7 @@ pub async fn set(f: &Front, c: &Caller, p: OutlineSet) -> Result<bool, Error> {
         let mut views = lock(&f.core.views.outlines.views);
         let o = views.entry((c.conn_id, p.view.clone())).or_default();
         o.file = file;
+        o.folded = Arc::new(p.folded.iter().copied().collect());
         o.generation += 1;
         o.generation
     };

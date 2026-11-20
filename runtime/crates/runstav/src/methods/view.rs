@@ -340,10 +340,19 @@ pub struct OutlineSet {
     pub view: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    /// The lines (from 1) where the editor has a folded range start: the definitions starting there are marked folded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folded: Vec<u32>,
 }
+
+/// The most folded lines `outline/set` takes.
+pub const OUTLINE_FOLDED_MAX: usize = 65536;
 
 fn check_outline(p: &OutlineSet) -> Result<(), Error> {
     check_ids(&p.view, None)?;
+    if p.folded.len() > OUTLINE_FOLDED_MAX {
+        return Err(invalid("folded", "at most 65536 lines"));
+    }
     p.file.as_deref().map_or(Ok(()), check_outline_file)
 }
 

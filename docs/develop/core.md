@@ -1696,7 +1696,19 @@ lists at each publish.
   only while it shows. The trail: the line model keeps the visits (`nidhogg-lines-trail-note`), noted by an idle timer
   (`drgnx-minimap-trail-dwell`) and on jumps (`xref-after-jump-hook`, `drgnx-marks-jump-functions` that
   `drgnx-marks-step` runs, the cards' jumps), which also flash the row (`glitnir-minimap-flash`); the spec's `:trail`
-  and `:trail-length` draw it. `minimap-describe` speaks `drgnx-minimap-description`.
+  and `:trail-length` draw it. `minimap-describe` speaks `drgnx-minimap-description`. A card can carry its own keys
+  (`drgnx-minimap--show-card`'s MAP; its commands join `drgnx-minimap--card-commands`).
+- **Search, focus, line selection, Outline sync** (`modules/editor/drgnx-minimap-search.el`, design X1, X2, X7).
+  isearch's hits come from the line model's scan (`nidhogg-lines-search`, then `nidhogg-lines-search-step` in 4 ms
+  idle slices through `drgnx-timer-idle-steps`, key `marks-search-scan`; `core/drgnx-marks.el`): the model's hits
+  become the `search` marks, `nidhogg-lines-search-current` follows isearch, and the spec's `:hit` draws them. A
+  query the model cannot read (`nidhogg-lines-search` nil, or a `fallback` step) is scanned by Lisp, which skips
+  empty matches as `how-many` does, so both count the same. `minimap-focus` puts `:open t` in the window's spec and
+  a transient map on the keys; leaving puts point and the window start back. A Shift-drag sends `select-start`,
+  `select-extend` and `select-end`; the lines between are selected whole and the end shows the chip (a card of
+  KIND `chip`). `label-hover` (once per change) lights the Outline's row locally: Sjá's `at-line` names it,
+  `drgnx-view-row-start` places an overlay; the hub is not asked. The Outline sends the folded ranges' first lines
+  (`drgnx-fold-folded-lines`) with `outline/set` and again on `drgnx-fold-changed-hook`.
 - **Sticky lines.** `editor/sticky` with `drgnx-sticky-style` `lines` draws the scope start lines in a pooled child
   frame per window over its top rows (`drgnx-sticky--cards`), its window and frame marked `drgnx-minimap-exclude`. The
   header's memo `sticky-segment` (once per window start, text change above it, or hub answer) works out the scopes

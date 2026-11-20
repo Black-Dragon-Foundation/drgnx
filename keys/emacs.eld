@@ -835,6 +835,7 @@
               (minimap-layer :none "the palette")
               (minimap-describe :none "the palette")
               (trail-clear :none "the palette")
+              (minimap-focus :none "the palette")
               ;; hideshow's keys, on drgnx's folds (docs/guide/editing.md, "Folding")
               (fold-toggle "C-c @ C-c" :map drgnx-fold-mode-map)
               (fold-recursive :none "the palette")

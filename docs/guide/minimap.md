@@ -72,6 +72,30 @@ bars at the minimap's left edge, the newest brightest. The last 20 show. The tra
 **Clear Visited Trail** (palette) forgets it. After a jump the minimap flashes the row you landed on for 400 ms;
 with reduced motion it lights without fading.
 
+### Search, focus and selecting lines
+
+While you search with `C-s` (or `/` in Vim), every match in the file shows on the minimap as a short accent bar at
+its column, the one you are on ringed. Big files are scanned a few milliseconds at a time, so typing never waits; a
+pattern the fast scanner cannot read (a back-reference, say) is searched the usual way, with the same matches.
+
+**Focus Minimap** (palette; Vim `SPC u M`) keeps the minimap open and gives it the keys:
+
+| Key | Does |
+|---|---|
+| `j` / `k`, `↓` / `↑` | move one line; the editor follows and the row flashes |
+| `/` | search without leaving the minimap |
+| `n` / `N` | the next or previous match, with "12 of 87" in the echo area |
+| `SPC` | peek at the line |
+| `z` | fold or unfold the block there |
+| `RET` | go there and leave the minimap |
+| `Esc` | leave, the cursor back where it was |
+
+Hold Shift and drag on the minimap to select whole lines. When you let go a small card offers **Copy** (`c`),
+**Fold** (`f`), **Pin** (`p`) and **Ask Agent** (`a`, the agent panel's composer with the lines attached).
+
+Rest the pointer on a definition's name on the minimap and its row lights in the Outline. A definition you folded
+shows `⋯` after its name in the Outline.
+
 ### Heat layers
 
 **Minimap Heat Layer…** (palette; Vim `SPC u h`) recolours the bars by one of four things, on a scale from your

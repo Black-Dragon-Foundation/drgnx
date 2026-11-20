@@ -30,6 +30,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-setting)
 (require 'drgnx-minimap-peek)
+(require 'drgnx-minimap-search)
 
 (declare-function drgnx-sticky-pin-names "drgnx-sticky" (&optional buffer))
 
@@ -196,6 +197,8 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
         (hunks (and drgnx-minimap-labels (drgnx-minimap--hunk-labels (window-buffer window)))))
     (append
      (list :width (max 80 (min 200 drgnx-minimap-width)) :scale 2 :nesting t
+           ;; the search's hits (X1): accent bars at their columns, the current one ringed
+           :hit (cons 'drgnx-accent 1.0)
            :fill (cons (face-background 'drgnx-surface-panel nil 'default) 1.0)
            :text (cons 'default 0.35)
            :band (cons 'default 0.09)
@@ -206,6 +209,8 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
                 :label 'default :sub 'drgnx-text-muted :accent 'drgnx-accent :mark 'warning
                 :label-face 'drgnx-minimap-label))
      (and file (list :file file))
+     ;; a focused minimap stays open (`minimap-focus')
+     (and (eq window (drgnx-minimap-focus-window)) (list :open t))
      ;; the visited trail (M4): the line model's last visits as fading bars at the left edge
      (and drgnx-minimap-trail
           (list :trail (cons 'warning 0.7) :trail-length (max 1 (min 64 drgnx-minimap-trail-length))))
@@ -365,13 +370,16 @@ the strip (ON)."
                    "Recolour the minimap by blame age, coverage, a profile or the lines agents read, or turn that off")
     (minimap-describe "Describe Position" drgnx-minimap-describe
                       "Say the section at point, its marks and the minimap's heat value there")
-    (trail-clear "Clear Visited Trail" drgnx-minimap-trail-clear "Clear this file's visited trail on the minimap"))
+    (trail-clear "Clear Visited Trail" drgnx-minimap-trail-clear "Clear this file's visited trail on the minimap")
+    (minimap-focus "Focus Minimap" drgnx-minimap-focus
+                   "Keep the minimap open and move, search, peek and fold in it with keys"))
   "The module's commands: (ID TITLE FUNCTION DOC) each.")
 
 (defun drgnx-minimap--teardown ()
   "The scroll bar and the marks' producers off; every window's strip gone."
   (drgnx-marks-off)
   (drgnx-minimap-peek-off)
+  (drgnx-minimap-search-off)
   (remove-hook 'drgnx-ruler-place-functions #'drgnx-minimap--place)
   (when (eq (lookup-key special-event-map [glitnir-hstrip]) #'drgnx-minimap-hstrip-scroll)
     (define-key special-event-map [glitnir-hstrip] nil t))
@@ -396,7 +404,8 @@ the strip (ON)."
                               (drgnx-scrollbar-mode 1)
                               (add-hook 'drgnx-look-density-changed-hook #'drgnx-scrollbar-refresh-all)
                               (drgnx-marks-on)
-                              (drgnx-minimap-peek-on)))
+                              (drgnx-minimap-peek-on)
+                              (drgnx-minimap-search-on)))
 
 (provide 'drgnx-minimap)
 ;;; drgnx-minimap.el ends here

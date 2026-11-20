@@ -1569,7 +1569,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `notebook/view` | user | `{cell?: string, id: string, kind: "outline" \| "output" \| "log"}` | `{view: string}` | no |
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `outline/scopes` | user | `{file?: string, line: natnum, path?: string, worktree_root?: string}` | `{scopes: [OutlineScope]}` | no |
-| `outline/set` | user | `{file?: string, view: string}` | `boolean` | no |
+| `outline/set` | user | `{file?: string, folded?: [natnum], view: string}` | `boolean` | no |
 | `pace/get` | user | `{history?: boolean, provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
@@ -3258,9 +3258,11 @@ The Outline section's rows: the definitions of the file in the editor, built by 
 (`hrafn::symbols::outline_text`; `runtime/crates/drgnx-ratatoskr/src/view/outline.rs`; the editor's side is
 `wb/drgnx-outline.el`).
 
-- `outline/set {view, file?}` says the (connection, view) shows FILE now (absolute, at most 4096 bytes; none: no file
-  the hub can read, such as a buffer without one or a remote file), outlines it and answers `true` once its model and
-  rows have gone. The editor sends it when the file it shows changes and after a save, never per keystroke.
+- `outline/set {view, file?, folded?}` says the (connection, view) shows FILE now (absolute, at most 4096 bytes; none:
+  no file the hub can read, such as a buffer without one or a remote file), outlines it and answers `true` once its
+  model and rows have gone. FOLDED (at most 65536 lines, from 1) names the lines where the editor's folded ranges
+  start: a definition starting on one has `folded` true in the model and `⋯` (`FOLDED_GLYPH`, muted, help-echo
+  "folded") after its name. The editor sends it when the file it shows changes and after a save, never per keystroke.
 - **The text.** The editor's own text of the file where the edit history tracks the buffer (unsaved typing included,
   from the mirror Search already reads), else the file on disk. A buffer that has sent nothing since it registered
   reads the disk too: it is unmodified then (a modified one is resynced at once), while the history's document still
@@ -3269,7 +3271,7 @@ The Outline section's rows: the definitions of the file in the editor, built by 
   dropped.
 - **The size guard.** One check, `too_large` (`OUTLINE_MAX`, 1 MiB, the Lisp Outline's limit), on both paths: a text or
   a file past it is not parsed, and the view shows the notice "This file is too large for an outline".
-- **The model** is a node per definition with its `label` and its `line` (from 1) in the list `order`, in file order:
+- **The model** is a node per definition with its `label`, its `line` (from 1) and `folded` in the list `order`, in file order:
   the editor asks Sjá which definition a line is in (`at-line`) to mark the current one, and a row's line to jump.
 - **A row** is the name, indented two columns plus two per definition around it, with control characters as `^X`;
   its key (`DEPTH:N:NAME`, N counting the earlier definitions of that name and depth) is over it as `drgnx-work-id`, so a

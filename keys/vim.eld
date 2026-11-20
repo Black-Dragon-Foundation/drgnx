@@ -857,6 +857,7 @@
               (minimap-layer "SPC u h")
               (minimap-describe "SPC u d")
               (trail-clear :none "the palette")
+              (minimap-focus "SPC u M")
               ;; Vim's z folds; evil's own fold keys act on drgnx's folds too (`evil-fold-list')
               (fold-toggle "z a")
               (fold-recursive "z C")

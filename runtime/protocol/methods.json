@@ -34402,6 +34402,15 @@
               "null"
             ]
           },
+          "folded": {
+            "description": "The lines (from 1) where the editor has a folded range start: the definitions starting there are marked folded.",
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
           "view": {
             "type": "string"
           }

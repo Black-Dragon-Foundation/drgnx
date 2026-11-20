@@ -839,6 +839,7 @@
               (minimap-layer :none "the palette")
               (minimap-describe :none "the palette")
               (trail-clear :none "the palette")
+              (minimap-focus :none "the palette")
               (fold-toggle "C-k C-l")
               (fold-recursive "C-k [")   ; VS Code's Ctrl+K Ctrl+[: C-[ is ESC, and C-k ESC would take the ESC every terminal key starts with (F6, arrows, Alt+x)
               (unfold-recursive "C-k C-]")

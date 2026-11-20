@@ -24,6 +24,7 @@
 (declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe headless))
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+(declare-function drgnx-fold-folded-lines "drgnx-fold" (&optional buffer))
 (defvar drgnx-hub--events)
 
 (defface drgnx-outline-current '((t :inherit drgnx-accent))
@@ -35,6 +36,7 @@ sidebar's one selection stays the only one." :group 'drgnx)
 (defconst drgnx-outline-hub-view "outline" "The Outline's hub-fed view (`outline/set').")
 (defvar drgnx-outline--source nil "The buffer the Outline shows.")
 (defvar drgnx-outline--sent :none "The file last sent to the hub (nil: none), or :none before the first.")
+(defvar drgnx-outline--sent-folded nil "The folded lines last sent with the file.")
 (defvar drgnx-outline--reveal nil "Non-nil: a new file's first rows show the current definition.")
 (defvar drgnx-outline--mark nil "The overlay that marks the current definition, or nil.")
 (defvar drgnx-outline--waiting nil "The overlay saying the Outline waits for the hub, or nil.")
@@ -79,15 +81,25 @@ sidebar's one selection stays the only one." :group 'drgnx)
       (overlay-put drgnx-outline--waiting 'before-string
                    (propertize "  Waiting for the hub to outline this file…\n" 'face 'shadow)))))
 
-(defun drgnx-outline--send (file)
-  "Tell the hub the Outline shows FILE (nil: no file)."
-  (setq drgnx-outline--sent file)
+(defun drgnx-outline--folded (src)
+  "The lines (from 1) of SRC's folded ranges' first lines (the Outline marks those definitions folded), or nil."
+  (and (buffer-live-p src) (fboundp 'drgnx-fold-folded-lines) (drgnx-fold-folded-lines src)))
+
+(defun drgnx-outline--send (file &optional folded)
+  "Tell the hub the Outline shows FILE (nil: no file), the definitions starting on FOLDED's lines folded."
+  (setq drgnx-outline--sent file drgnx-outline--sent-folded folded)
   (if (not (drgnx-outline--hub-p))
       (drgnx-outline--wait-for-hub)
     (drgnx-hub--call-on drgnx-hub--events "outline/set"
-                        (if file (list :view drgnx-outline-hub-view :file file) (list :view drgnx-outline-hub-view))
+                        (append (list :view drgnx-outline-hub-view)
+                                (and file (list :file file))
+                                (and file folded (list :folded (vconcat folded))))
                         #'ignore)
     (setq drgnx-view-patch-hurry t)))
+
+(defun drgnx-outline--folds-changed ()
+  "`drgnx-fold-changed-hook': the source's folds changed; the Outline's marks follow."
+  (when (eq (current-buffer) drgnx-outline--source) (drgnx-outline-refresh)))
 
 (defun drgnx-outline-scopes (buffer line callback)
   "Ask the hub for the definitions around LINE (from 1) of BUFFER's file (`outline/scopes': the Outline's parse of it,
@@ -102,12 +114,12 @@ asked: no local file, or no hub."
 
 (defun drgnx-outline--resend (_view)
   "The hub is up again (`drgnx-view-env-register'): it gets the file again."
-  (unless (eq drgnx-outline--sent :none) (drgnx-outline--send drgnx-outline--sent)))
+  (unless (eq drgnx-outline--sent :none) (drgnx-outline--send drgnx-outline--sent drgnx-outline--sent-folded)))
 
 (defun drgnx-outline--saved ()
   "`after-save-hook' of the source: the hub reads the file again (the name too: a `write-file')."
   (when (eq (current-buffer) drgnx-outline--source)
-    (drgnx-outline--send (drgnx-outline--file (current-buffer)))))
+    (drgnx-outline--send (drgnx-outline--file (current-buffer)) (drgnx-outline--folded (current-buffer)))))
 
 (defun drgnx-outline--watch (src)
   "Follow SRC's saves (and stop following the previous source)."
@@ -129,12 +141,13 @@ stops following the editor's saves."
   "Tell the hub the editor's file when it is not the one it has.  A new file starts the Outline at its top, and its
 first rows show the current definition."
   (let* ((editor (drgnx-wb-editor-window)) (src (and editor (window-buffer editor)))
-         (new (not (eq src drgnx-outline--source))) (file (drgnx-outline--file src)))
+         (new (not (eq src drgnx-outline--source))) (file (drgnx-outline--file src))
+         (folded (drgnx-outline--folded src)))
     (drgnx-outline--buffer)
     (drgnx-outline--watch src)
     (when new (setq drgnx-outline--reveal t))
-    (when (or new (not (equal file drgnx-outline--sent)))
-      (drgnx-outline--send file))))
+    (when (or new (not (equal file drgnx-outline--sent)) (not (equal folded drgnx-outline--sent-folded)))
+      (drgnx-outline--send file folded))))
 
 (defun drgnx-outline--handle ()
   "The Sjá instance of the Outline's model, or nil."
@@ -233,6 +246,7 @@ of a list longer than it (a list does not scroll past its end)."
                           :buffer #'drgnx-outline--buffer :on-show (lambda (_w) (drgnx-outline-refresh)))
   (drgnx-signal-subscribe 'editor-changed #'drgnx-outline-refresh)
   (drgnx-signal-subscribe 'editor-point-changed #'drgnx-outline--mark-current)
+  (add-hook 'drgnx-fold-changed-hook #'drgnx-outline--folds-changed)
   (drgnx-wb-rows-follow))
 
 (provide 'drgnx-outline)

@@ -364,11 +364,25 @@ counted once by the line model (`nidhogg-lines-counts', else the scroll bar's ma
   (drgnx-fold--report)
   (drgnx-fold--changed))
 
+(defvar drgnx-fold-changed-hook nil
+  "Run in a buffer whose folded ranges changed (the Outline marks the folded definitions: `drgnx-fold-folded-lines').")
+
 (defun drgnx-fold--report ()
-  "Tell the line model which ranges are hidden (the scroll bar and the minimap leave their lines out)."
+  "Tell the line model which ranges are hidden (the scroll bar and the minimap leave their lines out), and
+`drgnx-fold-changed-hook' that they changed."
   (when (and (fboundp 'nidhogg-lines-set-hidden) (not (drgnx-fold--org-p)) drgnx-fold--sources)
     (nidhogg-lines-set-hidden nil (mapcar (lambda (o) (cons (overlay-start o) (overlay-end o)))
-                                          (drgnx-fold--overlays)))))
+                                          (drgnx-fold--overlays))))
+  (run-hooks 'drgnx-fold-changed-hook))
+
+(defun drgnx-fold-folded-lines (&optional buffer)
+  "The lines (from 1) of BUFFER's folded ranges' first lines, in order, without repeats."
+  (with-current-buffer (or buffer (current-buffer))
+    (save-restriction
+      (widen)
+      (seq-uniq (sort (mapcar (lambda (o) (line-number-at-pos (overlay-start o) t))
+                              (drgnx-fold--overlays))
+                      #'<)))))
 
 (defun drgnx-fold--hide (range)
   "Hide RANGE (BEG END …) after its first line, unless it is hidden already or holds one line; the overlay or nil."
