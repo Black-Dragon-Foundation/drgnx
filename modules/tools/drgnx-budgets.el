@@ -21,6 +21,7 @@
 (declare-function drgnx-wb-rows-setup "drgnx-wb")
 (declare-function drgnx-work-select "drgnx-work-map" (kind id))
 (defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
 
 (defconst drgnx-budgets-view-id "budgets" "The hub-fed view of the Budgets page.")
 (defconst drgnx-budgets-buffer-name "*Budgets*" "The page's buffer.")
@@ -35,10 +36,16 @@
                     (if error (message "Budgets: %s" (if (stringp error) error (plist-get error :message)))
                       (when then (funcall then result))))))
 
+(defun drgnx-budgets--view-call (method params)
+  "Ask the hub the view METHOD with PARAMS on the events connection, where the view's rows come back."
+  (when (drgnx-budgets--hub-p)
+    (drgnx-hub--call-on drgnx-hub--events method params
+                        (lambda (_result error)
+                          (when error (message "Budgets: %s" (if (stringp error) error (plist-get error :message))))))))
+
 (defun drgnx-budgets--subscribe (&optional _view)
   "Tell the hub the page shows (at attach, and again on a reconnect)."
-  (when (drgnx-budgets--hub-p)
-    (drgnx-budgets--call "budgets/page/subscribe" (list :view drgnx-budgets-view-id))))
+  (drgnx-budgets--view-call "budgets/page/subscribe" (list :view drgnx-budgets-view-id)))
 
 (defvar drgnx-budgets-mode-map (make-sparse-keymap) "Keys of the Budgets page (the key profiles bind them).")
 
@@ -71,7 +78,7 @@
   "Read the scopes and the meters again."
   (interactive)
   (when (get-buffer drgnx-budgets-buffer-name)
-    (drgnx-budgets--call "budgets/page/set" (list :view drgnx-budgets-view-id :refresh t))))
+    (drgnx-budgets--view-call "budgets/page/set" (list :view drgnx-budgets-view-id :refresh t))))
 
 (defun drgnx-budgets-set-limit (scope unit amount)
   "Set SCOPE's (KIND ID) limit in UNIT to AMOUNT with `budget/set': that one limit, nothing else."
@@ -119,7 +126,7 @@
   "Turning tools/agent-panel off: the page's buffer goes (the hub forgets the view with it)."
   (when (get-buffer drgnx-budgets-buffer-name)
     (when (drgnx-budgets--hub-p)
-      (drgnx-budgets--call "budgets/page/close" (list :view drgnx-budgets-view-id)))
+      (drgnx-budgets--view-call "budgets/page/close" (list :view drgnx-budgets-view-id)))
     (when (fboundp 'drgnx-view-env-unregister) (drgnx-view-env-unregister drgnx-budgets-view-id))
     (kill-buffer drgnx-budgets-buffer-name)))
 

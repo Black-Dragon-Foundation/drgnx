@@ -622,6 +622,17 @@ fn conv_rows(
                 );
             }
         }
+        B::Step { step, kind, title } => {
+            let mut b = row(0);
+            b.push(
+                &format!("  {} · {}", kind, one_line(title, 100)),
+                Some(FaceId::AgentPanelSubtle.name()),
+            );
+            let end = b.pos();
+            b.prop(0, end, "drgnx-work-id", json!(format!("e:{}", step.entry)));
+            b.prop(0, end, "drgnx-action", json!(["block-open", idx]));
+            out.push(b.finish());
+        }
         B::Notice { text, error } => {
             let mut b = row(0);
             b.push(

@@ -177,6 +177,7 @@ rows.")
 (declare-function drgnx-wb-rows-setup "drgnx-wb")
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
 
 (defconst drgnx-agents-side-view-id "agents-side" "The hub-fed view of the Agents side's cards.")
 (defconst drgnx-agents-side-buffer-name "*drgnx Agents side*")
@@ -198,7 +199,7 @@ rows.")
 
 (defun drgnx-agents-side--subscribe (&optional _view)
   (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
-    (drgnx-hub-call "agents/side/subscribe" (list :view drgnx-agents-side-view-id) #'ignore)))
+    (drgnx-hub--call-on drgnx-hub--events "agents/side/subscribe" (list :view drgnx-agents-side-view-id) #'ignore)))
 
 (defun drgnx-agents-side--cards-buffer ()
   "The cards' buffer, attached as the hub-fed view the first time."
@@ -283,7 +284,7 @@ presence model has in it.  Nil without one.  Showing it never switches the side.
   "Turning tools/agent-panel off: the cards' buffer goes (the hub forgets the view with it)."
   (when-let* ((b (get-buffer drgnx-agents-side-buffer-name)))
     (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
-      (drgnx-hub-call "agents/side/close" (list :view drgnx-agents-side-view-id) #'ignore))
+      (drgnx-hub--call-on drgnx-hub--events "agents/side/close" (list :view drgnx-agents-side-view-id) #'ignore))
     (when (fboundp 'drgnx-view-env-unregister) (drgnx-view-env-unregister drgnx-agents-side-view-id))
     (kill-buffer b))
   (setq drgnx-agents-side--state (list :view 'cards)))

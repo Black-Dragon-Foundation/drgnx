@@ -1398,7 +1398,7 @@ The profile's own entries are what resolves, not the first one an `assq' finds."
     (ai-tab "TAB" drgnx-ai-ghost-mode-map) (ai-edit "C-k C-e" nil)
     (ai-edit-apply-hunk "C-c C-a" drgnx-ai-edit-review-mode-map)
     (ai-edit-done "C-c C-c" drgnx-ai-edit-review-mode-map) (ai-edit-reject "C-c C-k" drgnx-ai-edit-review-mode-map)
-    (work-take-wheel "W" drgnx-work-live-file-mode-map) (work-files "e" drgnx-work-map-mode-map)
+    (work-take-wheel "W" drgnx-work-live-file-mode-map) (work-files "c" drgnx-work-map-mode-map)
     (work-diffs "d" drgnx-work-map-mode-map) (work-diff-quit "q" drgnx-work-diff-mode-map)
     (work-diff-accept-hunk "a" drgnx-work-diff-mode-map) (work-diff-reject-hunk "D" drgnx-work-diff-mode-map)
     (work-move-machine "M" drgnx-work-item-map) (work-job-log "l" drgnx-work-detail-mode-map) (work-who-is-here "C-k h" nil) (work-left "<left>" drgnx-work-lens-map) (work-right "<right>" drgnx-work-lens-map)
@@ -1616,7 +1616,10 @@ The commands of modules that need no installed package are in it, the later stag
                               work-zoom-back work-timeline-filter work-timeline-group work-budget-page
                               ;; budgets on List rows, set in place (flow Task 20a)
                               work-budget-set work-budget-send work-budget-cancel work-budget-unit
-                              work-start-plan work-start-go work-start-none work-start-cancel))
+                              work-start-plan work-start-go work-start-none work-start-cancel
+                              ;; Changes filtered to a Work node (flow Task 27e), the Budgets page (Task 24b) and the
+                              ;; Agents side's cards (Task 23)
+                              work-changes budgets-open budgets-edit-limit budgets-select agents-side-act))
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

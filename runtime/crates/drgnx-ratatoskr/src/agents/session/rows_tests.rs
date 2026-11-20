@@ -607,4 +607,27 @@ mod block_rows {
             assert!(t.contains(label), "{t}");
         }
     }
+
+    /// Any other tool call is one subtle line, "kind · title", that opens its step.
+    #[test]
+    fn a_step_block_is_one_line_that_opens_its_step() {
+        use crate::agents::session::blocks::StepRef;
+        let rows = block_list_rows(
+            &[Block::Step {
+                step: StepRef {
+                    entry: 4,
+                    step: Some(2),
+                },
+                kind: "shell".into(),
+                title: "cargo build".into(),
+            }],
+            &BTreeSet::new(),
+            &kit(),
+            false,
+        );
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].text.contains("shell · cargo build"), "{}", rows[0].text);
+        assert_eq!(prop(&rows[0], "drgnx-work-id"), Some(&json!("e:4")));
+        assert_eq!(prop(&rows[0], "drgnx-action"), Some(&json!(["block-open", 0])));
+    }
 }

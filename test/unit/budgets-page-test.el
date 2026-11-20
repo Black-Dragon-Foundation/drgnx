@@ -29,6 +29,17 @@
     (should (equal '(:plan "p1") (plist-get (cdr (car calls)) :scope)))
     (should (equal 50.0 (plist-get (aref (plist-get (cdr (car calls)) :limits) 0) :amount)))))
 
+(ert-deftest drgnx-budgets-page/the-view-subscribes-on-the-events-connection ()
+  "The page's `budgets/page/*' calls go on the events connection, where the hub sends the view's rows; on the call
+connection a real hub never sends them."
+  (require 'drgnx-budgets)
+  (let ((drgnx-hub--events 'events) on)
+    (cl-letf (((symbol-function 'process-live-p) (lambda (p) (eq p 'events)))
+              ((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "Not on the call connection")))
+              ((symbol-function 'drgnx-hub--call-on) (lambda (conn method &rest _) (push (cons conn method) on))))
+      (drgnx-budgets--subscribe))
+    (should (equal '((events . "budgets/page/subscribe")) on))))
+
 (ert-deftest drgnx-budgets-page/selecting-selects-in-work ()
   "Selecting a scope's row selects its node in Work: a plan, a task or a run's job."
   (require 'drgnx-budgets)

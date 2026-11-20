@@ -111,5 +111,15 @@ session's card and `job/card stop' for a job's."
         (drgnx-agents-side-stop-card '(:job "j1"))
         (should (equal "job/card" (car (car calls))))))))
 
+(ert-deftest drgnx-agents-side/subscribes-on-the-events-connection ()
+  "The cards' view subscribes on the events connection, where the hub sends its rows."
+  (require 'drgnx-agent-panel-list)
+  (let ((drgnx-hub--events 'events) on)
+    (cl-letf (((symbol-function 'process-live-p) (lambda (p) (eq p 'events)))
+              ((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "Not on the call connection")))
+              ((symbol-function 'drgnx-hub--call-on) (lambda (conn method &rest _) (push (cons conn method) on))))
+      (drgnx-agents-side--subscribe))
+    (should (equal '((events . "agents/side/subscribe")) on))))
+
 (provide 'agents-side-test)
 ;;; agents-side-test.el ends here
