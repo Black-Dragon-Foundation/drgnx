@@ -104,7 +104,7 @@ const FOLLOW_AHEAD: f64 = 0.1;
 fn followed(w: Window, now: f64, reduced: bool) -> Option<Window> {
     let span = w.to - w.from;
     if reduced {
-        return (now >= w.to).then(|| Window {
+        return (now >= w.to).then_some(Window {
             from: now - 0.5 * span,
             to: now + 0.5 * span,
         });

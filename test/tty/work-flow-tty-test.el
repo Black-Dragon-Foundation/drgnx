@@ -59,10 +59,10 @@
   "PLACE in `emacs -nw', three agents streaming: on the hub's rows in a terminal class, not stale, no pixel form, and
 its first line on the screen."
   (let ((bin (getenv "DRGNX_RATATOSKR_BIN")))
-    (skip-unless (and bin (file-executable-p bin)))
+    (unless (and bin (file-executable-p bin)) (ert-skip "no DRGNX_RATATOSKR_BIN"))
     (drgnx-tty-session-with (s :size "160x48" :env (list (concat "DRGNX_RATATOSKR_BIN=" bin)))
       (drgnx-tty-session-wait-tab s nil 20)
-      (skip-unless (drgnx-tty-session-eval s '(fboundp 'nidhogg-view--call)))
+      (unless (drgnx-tty-session-eval s '(fboundp 'nidhogg-view--call)) (ert-skip "no nidhogg-view--call"))
       ;; the fixture waits for its agents inside this one call
       (drgnx-tty-session-eval s (drgnx-tty-work-flow-test--open place) 180)
       (unwind-protect
