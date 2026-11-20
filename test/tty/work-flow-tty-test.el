@@ -19,14 +19,14 @@
                     (goto-char (point-min))
                     (skip-chars-forward " \t\n")
                     (string-trim (buffer-substring-no-properties (point) (min (point-max) (line-end-position)))))))
-           ;; a pixel width or stop (`(space :width (N))', `:align-to (N)') is a graphical form
+           ;; a pixel width (`(space :width (N))') is a graphical form; a stop (`(space :align-to (N))') is a column stop on
+           ;; a terminal, where the cell is one pixel wide
            (and (buffer-live-p b)
                 (with-current-buffer b
                   (let ((pos (point-min)) found)
                     (while (and (not found) (< pos (point-max)))
                       (let ((d (get-text-property pos 'display)))
-                        (when (and (consp d) (eq (car d) 'space)
-                                   (or (consp (plist-get (cdr d) :width)) (consp (plist-get (cdr d) :align-to))))
+                        (when (and (consp d) (eq (car d) 'space) (consp (plist-get (cdr d) :width)))
                           (setq found pos)))
                       (setq pos (next-single-property-change pos 'display nil (point-max))))
                     found)))))
