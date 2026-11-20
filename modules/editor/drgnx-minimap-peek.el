@@ -44,6 +44,7 @@
 (declare-function nidhogg-lines-trail-clear "nidhogg-lines.c" (buffer))
 (declare-function nidhogg-view-minimap "nidhogg-views" (what file &optional layer line))
 (defvar drgnx-minimap-layer)
+(defvar drgnx-minimap-card-map)                 ; below, beside its commands
 (defvar flymake-mode)
 (defvar glitnir-minimap-functions)
 

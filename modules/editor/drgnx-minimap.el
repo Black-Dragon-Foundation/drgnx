@@ -29,9 +29,13 @@
 (require 'drgnx-marks)
 (require 'drgnx-registry)
 (require 'drgnx-setting)
-(require 'drgnx-minimap-peek)
-(require 'drgnx-minimap-search)
-(require 'drgnx-minimap-density)
+
+;; The module's other files sit beside this one (modules are not on the load path): the peek and cards first, which
+;; the search and the density strip use.  At compile time too, so their definitions are known here.
+(eval-and-compile
+  (let ((dir (file-name-directory (or load-file-name (bound-and-true-p byte-compile-current-file) buffer-file-name))))
+    (dolist (f '(drgnx-minimap-peek drgnx-minimap-search drgnx-minimap-density))
+      (unless (featurep f) (load (expand-file-name (symbol-name f) dir) nil t)))))
 
 (declare-function drgnx-sticky-pin-names "drgnx-sticky" (&optional buffer))
 

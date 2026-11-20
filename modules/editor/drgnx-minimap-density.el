@@ -14,7 +14,14 @@
 ;;; Code:
 (require 'subr-x)
 (require 'drgnx-setting)
-(require 'drgnx-minimap-peek)
+
+;; drgnx-minimap.el loads this file after drgnx-minimap-peek.el (modules are not on the load path)
+(declare-function drgnx-minimap--show-card "drgnx-minimap-peek" (kind window pos lines header buffer start &optional map))
+(declare-function drgnx-minimap-card-hide "drgnx-minimap-peek" ())
+(declare-function drgnx-minimap--jump "drgnx-minimap-peek" (window pos))
+(defvar drgnx-minimap-peek)
+(defvar drgnx-minimap-peek-lines)
+(defvar drgnx-minimap--card)
 
 (declare-function drgnx-hub--call-on "drgnx-hub-client" (conn method params callback &rest keys))
 (declare-function drgnx-minimap--hub-p "drgnx-minimap" ())

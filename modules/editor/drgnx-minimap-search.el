@@ -20,7 +20,15 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
-(require 'drgnx-minimap-peek)
+
+;; drgnx-minimap.el loads this file after drgnx-minimap-peek.el (modules are not on the load path)
+(declare-function drgnx-minimap--model-p "drgnx-minimap-peek" (&optional buffer))
+(declare-function drgnx-minimap--show-card "drgnx-minimap-peek" (kind window pos lines header buffer start &optional map))
+(declare-function drgnx-minimap-card-hide "drgnx-minimap-peek" ())
+(declare-function drgnx-minimap--jump "drgnx-minimap-peek" (window pos))
+(declare-function drgnx-minimap-peek-show "drgnx-minimap-peek" (window pos))
+(defvar drgnx-minimap-peek)
+(defvar drgnx-minimap--card)
 
 (declare-function drgnx-fold-toggle "drgnx-fold" ())
 (declare-function drgnx-fold-create "drgnx-fold" (beg end &optional name))
