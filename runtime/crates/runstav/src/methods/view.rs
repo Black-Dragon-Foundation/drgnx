@@ -392,7 +392,8 @@ pub struct OutlineScopes {
 /// watches it, the hub sends the file's minimap labels (its definitions as the Outline reads them, up to
 /// `MINIMAP_LABELS_MAX` bytes of text) on the model's raw path (`view-model` with `minimap`, docs/develop/hub.md,
 /// "The minimap's layers"), at once and again after the editor's edits to it pause; never per keystroke.  With HEAT
-/// it also sends that heat layer (`heat:HEAT`), and removes the one an earlier watch asked for.
+/// it also sends that heat layer (`heat:HEAT`), and removes the one an earlier watch asked for.  With DENSITY (a file
+/// past the density limit, design M7) it scans the file on disk instead and sends its `density` layer in parts.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MinimapWatch {
@@ -408,6 +409,49 @@ pub struct MinimapWatch {
     /// The profile the heat layer `profile` reads (absolute): pprof, `perf script` text or speedscope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// The file is past the density limit: scan it on disk for the density strip (no labels, folds or heat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density: Option<MinimapDensity>,
+}
+
+/// What a density scan counts: the lines matching ERROR and those matching WARNING, Rust `regex` syntax each (at most
+/// 1024 bytes).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MinimapDensity {
+    pub error: String,
+    pub warning: String,
+}
+
+/// `minimap/bucket`: the first LINES (1 to 40) lines of a density bucket of FILE (its index, from 0, of the scan's
+/// buckets): the bucket peek.  Read from disk; no buffer is touched.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MinimapBucketParams {
+    pub file: String,
+    pub bucket: u32,
+    pub lines: u32,
+}
+
+/// The bucket's first lines (invalid UTF-8 replaced, each cut at 400 bytes), the byte offset of the first and the
+/// buckets the file has.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MinimapBucket {
+    pub text: String,
+    pub start: u64,
+    pub buckets: u32,
+}
+
+fn check_minimap_bucket(p: &MinimapBucketParams) -> Result<(), Error> {
+    check_outline_file(&p.file)?;
+    if p.bucket >= 1024 {
+        return Err(invalid("bucket", "a bucket index below 1024"));
+    }
+    if !(1..=40).contains(&p.lines) {
+        return Err(invalid("lines", "1 to 40 lines"));
+    }
+    Ok(())
 }
 
 /// The heat layers `minimap/watch` knows.
@@ -415,6 +459,12 @@ pub const MINIMAP_HEAT: [&str; 4] = ["blame", "coverage", "profile", "agent-read
 
 fn check_minimap_watch(p: &MinimapWatch) -> Result<(), Error> {
     check_outline_file(&p.file)?;
+    if p.density
+        .as_ref()
+        .is_some_and(|d| d.error.len() > 1024 || d.warning.len() > 1024)
+    {
+        return Err(invalid("density", "two expressions of at most 1024 bytes"));
+    }
     if p.heat
         .as_deref()
         .is_some_and(|h| !MINIMAP_HEAT.contains(&h))
@@ -523,6 +573,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "the editor shows a file in a minimap, or no longer: while it does, the hub sends the file's labels (its definitions, up to 8 MiB of text) and the heat layer asked for (blame, coverage, profile or agent-read) on the model's raw path, again after edits pause",
             check: check_minimap_watch,
+        ),
+        method!(
+            "minimap/bucket", MinimapBucket(MinimapBucketParams) -> MinimapBucket,
+            classes: [User], writes: false,
+            doc: "the first lines of a density bucket of a huge file, read from disk: the density strip's peek",
+            check: check_minimap_bucket,
         ),
         method!(
             "outline/scopes", OutlineScopes(OutlineScopesParams) -> OutlineScopes,

@@ -96,6 +96,18 @@ Hold Shift and drag on the minimap to select whole lines. When you let go a smal
 Rest the pointer on a definition's name on the minimap and its row lights in the Outline. A definition you folded
 shows `⋯` after its name in the Outline.
 
+### Huge files
+
+A file of more than 250,000 lines, or one that opened as a large file, has no line map: its minimap is a **density
+strip**. Each pixel row is a part of the file, brighter where it holds more text, with a red mark at the edge where
+that part has errors and a yellow one where it has warnings. The hub reads the file from disk in the background, so
+the strip fills in as it goes (parts not read yet are outlined) and a log that grows is read again. Rest the pointer
+on the strip to peek at that part's first lines; `RET` or a click goes there. A file open in chunks places the band at
+the chunk's place in the whole file, and a part in another chunk is shown but not jumped to.
+
+What counts as an error or a warning is `drgnx-minimap-density-regexps` (by default lines with `ERROR` or `FATAL`,
+and lines with `WARN`), in [Rust regex](https://docs.rs/regex/latest/regex/#syntax) syntax.
+
 ### Heat layers
 
 **Minimap Heat Layer…** (palette; Vim `SPC u h`) recolours the bars by one of four things, on a scale from your
@@ -150,6 +162,8 @@ says where it is in the echo area, for example `error 2 of 7: unused variable, l
 | `drgnx-minimap-trail` | on | The visited trail on the minimap. |
 | `drgnx-minimap-trail-dwell` | 2 | Seconds the cursor rests on a line before the line joins the trail. |
 | `drgnx-minimap-trail-length` | 20 | How many visits the trail shows, 1 to 64. |
+| `drgnx-minimap-density-above` | 250000 | Past how many lines the minimap is a density strip. |
+| `drgnx-minimap-density-regexps` | `(:error "ERROR\|FATAL" :warning "WARN")` | What the density strip marks as errors and warnings. |
 | `drgnx-marks-symbol-uses` | off | Mark every use of the symbol under the cursor, 400 ms after you stop moving. |
 
 The module is `editor/minimap`; turning it off takes every strip away.

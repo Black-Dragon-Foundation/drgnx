@@ -31,6 +31,7 @@
 (require 'drgnx-setting)
 (require 'drgnx-minimap-peek)
 (require 'drgnx-minimap-search)
+(require 'drgnx-minimap-density)
 
 (declare-function drgnx-sticky-pin-names "drgnx-sticky" (&optional buffer))
 
@@ -242,7 +243,7 @@ it reads."
 (defun drgnx-minimap--watch (buffer file)
   "Tell the hub BUFFER now shows FILE in a minimap (nil: none) with the heat layer asked for, when either changed."
   (with-current-buffer buffer
-    (let ((ask (and file (drgnx-minimap--ask))))
+    (let ((ask (and file (if (drgnx-minimap-density-p) (drgnx-minimap-density-ask) (drgnx-minimap--ask)))))
       (unless (and (equal file drgnx-minimap--watched) (equal ask drgnx-minimap--asked))
         (when (drgnx-minimap--hub-p)
           (when (and drgnx-minimap--watched (not (equal file drgnx-minimap--watched)))
@@ -321,24 +322,32 @@ the strip (ON)."
   (let ((hs (and on (drgnx-minimap-hstrip-window-p window) (drgnx-minimap--hstrip-spec (window-frame window)))))
     (unless (equal hs (window-parameter window 'glitnir-hstrip))
       (set-window-parameter window 'glitnir-hstrip hs)))
-  (if (and on (drgnx-minimap-window-p window))
-      (let ((buffer (window-buffer window)))
-        (with-current-buffer buffer
-          (nidhogg-lines-enable)
-          (drgnx-minimap--highlight)
-          (let ((re (and drgnx-minimap-labels drgnx-minimap-mark-regexp)))
-            (unless (equal re drgnx-minimap--regexp)
-              (setq drgnx-minimap--regexp re)
-              (condition-case err
-                  (nidhogg-lines-set-section-regexp nil re)
-                (error (drgnx-notify 'minimap 'warn (format "Minimap MARK regexp: %s" (error-message-string err))
-                                     :id 'mark-regexp))))))
-        (let ((spec (drgnx-minimap--spec window)))
-          (unless (equal spec (window-parameter window 'glitnir-minimap))
-            (set-window-parameter window 'glitnir-minimap spec))
-          (drgnx-minimap--watch buffer (plist-get spec :file))))
-    (when (window-parameter window 'glitnir-minimap)
-      (set-window-parameter window 'glitnir-minimap nil))))
+  (cond
+   ;; past the density limit (M7): no line model, the hub's density strip of the file on disk
+   ((and on (drgnx-minimap-window-p window) (drgnx-minimap-density-p (window-buffer window)))
+    (let* ((buffer (window-buffer window)) (file (drgnx-minimap--file buffer))
+           (spec (and file (drgnx-minimap-density-spec window file))))
+      (unless (equal spec (window-parameter window 'glitnir-minimap))
+        (set-window-parameter window 'glitnir-minimap spec))
+      (drgnx-minimap--watch buffer file)))
+   ((and on (drgnx-minimap-window-p window))
+    (let ((buffer (window-buffer window)))
+      (with-current-buffer buffer
+        (nidhogg-lines-enable)
+        (drgnx-minimap--highlight)
+        (let ((re (and drgnx-minimap-labels drgnx-minimap-mark-regexp)))
+          (unless (equal re drgnx-minimap--regexp)
+            (setq drgnx-minimap--regexp re)
+            (condition-case err
+                (nidhogg-lines-set-section-regexp nil re)
+              (error (drgnx-notify 'minimap 'warn (format "Minimap MARK regexp: %s" (error-message-string err))
+                                   :id 'mark-regexp))))))
+      (let ((spec (drgnx-minimap--spec window)))
+        (unless (equal spec (window-parameter window 'glitnir-minimap))
+          (set-window-parameter window 'glitnir-minimap spec))
+        (drgnx-minimap--watch buffer (plist-get spec :file)))))
+   ((window-parameter window 'glitnir-minimap)
+    (set-window-parameter window 'glitnir-minimap nil))))
 
 (defun drgnx-minimap--off ()
   "Every window's minimap gone, and the hub told no file is shown in one."
@@ -380,6 +389,7 @@ the strip (ON)."
   (drgnx-marks-off)
   (drgnx-minimap-peek-off)
   (drgnx-minimap-search-off)
+  (drgnx-minimap-density-off)
   (remove-hook 'drgnx-ruler-place-functions #'drgnx-minimap--place)
   (when (eq (lookup-key special-event-map [glitnir-hstrip]) #'drgnx-minimap-hstrip-scroll)
     (define-key special-event-map [glitnir-hstrip] nil t))
@@ -405,7 +415,8 @@ the strip (ON)."
                               (add-hook 'drgnx-look-density-changed-hook #'drgnx-scrollbar-refresh-all)
                               (drgnx-marks-on)
                               (drgnx-minimap-peek-on)
-                              (drgnx-minimap-search-on)))
+                              (drgnx-minimap-search-on)
+                              (drgnx-minimap-density-on)))
 
 (provide 'drgnx-minimap)
 ;;; drgnx-minimap.el ends here

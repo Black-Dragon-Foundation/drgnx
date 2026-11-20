@@ -1549,7 +1549,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
-| `minimap/watch` | user | `{coverage?: [string], file: string, heat?: string, on: boolean, profile?: string}` | `boolean` | no |
+| `minimap/bucket` | user | `{bucket: natnum, file: string, lines: natnum}` | `{buckets: natnum, start: natnum, text: string}` | no |
+| `minimap/watch` | user | `{coverage?: [string], density?: {error: string, warning: string}, file: string, heat?: string, on: boolean, profile?: string}` | `boolean` | no |
 | `notebook/clear` | user | `{cell?: string, id: string}` | `boolean` | no |
 | `notebook/close` | user | `{id: string}` | `boolean` | no |
 | `notebook/execute` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
@@ -3303,7 +3304,7 @@ layer. Nidhogg takes it as the line model's `hub` fold source for a buffer that 
 one with a parser folds by the same query in the editor.
 
 With `heat` (`blame`, `coverage`, `profile` or `agent-read`) the watch also sends that heat layer, `heat:S` with
-`items: [[first line, last line, value]]`, value 0 to 1000, lines from 1 (`view/heat.rs`, design X3), with the labels
+`items: [[first line, last line, value, fact]]`, value 0 to 1000, lines from 1 (`view/heat.rs`, design X3), with the labels
 and again when they go again:
 
 - `blame`: git's blame of the file (`git/blame`'s, the editor's text where the history tracks it): each line's commit
@@ -3321,8 +3322,23 @@ and again when they go again:
 A report names a file by its absolute path or a path relative to where it ran: a relative name matches the file when
 it is a suffix of it at a `/`. Reports and profiles over 256 MiB are not read. Each span also has a fact for the peek
 ("2 days ago · 9f3c21e read tables lazily · r.okafor", "covered · 3 hits", "12.5 % of this file's samples",
-"read 2× · claude"); it is kept in the hub until Sjá takes a 4th item element. A watch with another layer, or none,
+"read 2× · claude"), sent as the item's 4th element; the peek and Describe Position read it from Sjá. A watch with another layer, or none,
 or `on: false`, first removes the layer the last one asked for (`items: null`).
+
+With `density` (`{error, warning}`, two Rust regexes of at most 1024 bytes; design M7, §7.6) the file is past the
+editor's density limit: the watch sends no labels, folds or heat but scans the file on disk (`view/minimap/density.rs`)
+in 4 MiB blocks. The file is cut into at most 1024 equal byte ranges (`geometry`); each bucket counts its ink (the
+bytes that are not whitespace: equal ranges would all be equally bright) and the lines matching each expression
+where the line starts, as `grep -c` counts. The `density` layer (`items: {buckets: [[ink, errors, warnings]], total}`,
+the finished buckets of `total`) goes out once 250 ms have passed, then at each further tenth of the file, then
+whole. A watch that goes, or asks again, stops the scan within a block; a file that changes under it is scanned
+from the start, and after the scan it is looked at every 2 s and scanned again when it changed. A watch that no
+longer asks for density removes the layer. A regex that does not compile is refused (`invalid-params`,
+`density.error` or `density.warning`).
+
+`minimap/bucket {file, bucket, lines}` (bucket below 1024, 1 to 40 lines) answers `{text, start, buckets}`: the first
+LINES lines that start in the bucket, each cut at 400 bytes, invalid UTF-8 replaced; START is the first one's byte
+offset. It reads the file from disk; an unreadable file is `invalid-params` at `file`.
 
 ### Folds remembered (`folds/save`, `folds/load`)
 

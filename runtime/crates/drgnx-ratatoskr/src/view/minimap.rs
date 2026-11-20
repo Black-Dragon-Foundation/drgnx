@@ -7,7 +7,7 @@
 //! {"event": "view-model", "data": {"minimap": {"file": F, "layer": L, "version": N, "items": I}}}
 //! L = "labels"   I = [[line, depth, kind, text]]    a definition's name, line from 1, depth 0 outermost
 //!   | "folds"    I = [[first, last, kind]]          a fold range, lines from 1
-//!   | "heat:" S  I = [[first, last, value]]         source S (blame, coverage, …), value 0..=1000
+//!   | "heat:" S  I = [[first, last, value, fact]]   source S (blame, coverage, …), value 0..=1000, the peek's text
 //!   | "density"  I = {"buckets": [[bytes, errors, warnings]], "total": n}   the first buckets of n
 //! I = null removes the layer.
 //! ```
@@ -21,15 +21,21 @@
 //!
 //! **Heat** (`minimap/watch`'s `heat`): the one heat layer the minimap shows, from [`super::heat`]'s sources, sent
 //! with the labels and again when they are; a coverage report's folder is watched, so a test run's new report is read
-//! again.  Asking for another layer (or none) removes the last one.  The spans' facts stay here until Sjá reads a 4th
-//! item element (Task 15).
+//! again.  Asking for another layer (or none) removes the last one.  Each span carries its fact, which the peek and
+//! `minimap-describe` read from Sjá.
+//!
+//! **Density** (`minimap/watch`'s `density`): a file past the editor's density limit gets no labels, folds or heat but
+//! a scan of the file on disk ([`density`]) whose bucket table goes out in parts as the `density` layer;
+//! `minimap/bucket` reads a bucket's first lines for its peek.
+
+pub mod density;
 
 use super::heat::{self, Span};
 use super::lock;
 use crate::dispatch::Caller;
 use crate::front::{Front, event_line};
-use runstav::methods::view::MinimapWatch;
-use runstav::wire::Error;
+use runstav::methods::view::{MinimapBucket, MinimapBucketParams, MinimapWatch};
+use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -70,10 +76,9 @@ impl Layer {
         match self {
             Layer::Labels(v) => json!(v),
             Layer::Folds(v) => json!(v),
-            // [first, last, value]: the fact goes out once Sjá reads a 4th element (Task 15)
             Layer::Heat(_, v) => json!(
                 v.iter()
-                    .map(|s| (s.first, s.last, s.value))
+                    .map(|s| (s.first, s.last, s.value, &s.fact))
                     .collect::<Vec<_>>()
             ),
             Layer::Density { buckets, total } => json!({"buckets": buckets, "total": total}),
@@ -143,6 +148,8 @@ pub struct Ask {
     pub heat: Option<String>,
     pub coverage: Vec<String>,
     pub profile: Option<String>,
+    /// The density scan's error and warning expressions, and the run that scans for this ask (none: no density).
+    pub density: Option<(String, String, u64)>,
 }
 
 /// The coverage reports' folders watched, and the reports' name patterns.
@@ -405,21 +412,41 @@ async fn push(f: &Front, conn: u64, file: &str, generation: u64) {
 pub async fn watch(f: &Front, c: &Caller, p: MinimapWatch) -> Result<bool, Error> {
     let file = crate::work::presence::true_name(&p.file);
     let key = (c.conn_id, file.clone());
+    let compiled = match &p.density {
+        Some(d) => Some((
+            compile(&d.error, "density.error")?,
+            compile(&d.warning, "density.warning")?,
+        )),
+        None => None,
+    };
+    let run = DENSITY_RUN.fetch_add(1, Ordering::Relaxed);
     let ask = Ask {
         heat: p.heat,
         coverage: p.coverage,
         profile: p.profile,
+        density: p.density.map(|d| (d.error, d.warning, run)),
     };
-    let (generation, old) = {
+    let (generation, old, old_density) = {
         let mut files = lock(&f.core.views.minimaps.files);
         if p.on {
             let e = files.entry(key).or_default();
             e.0 += 1;
-            (Some(e.0), std::mem::replace(&mut e.1, ask.clone()).heat)
+            let old = std::mem::replace(&mut e.1, ask.clone());
+            (Some(e.0), old.heat, old.density.is_some())
         } else {
-            (None, files.remove(&key).and_then(|(_, a)| a.heat))
+            let old = files.remove(&key).map(|(_, a)| a).unwrap_or_default();
+            (None, old.heat, old.density.is_some())
         }
     };
+    // a file no longer past the limit: its strip's layer goes
+    if old_density && generation.is_some() && ask.density.is_none() {
+        let version = VERSION.fetch_add(1, Ordering::Relaxed);
+        f.send_to(
+            c.conn_id,
+            "view-model",
+            data(&file, version, "density", Value::Null),
+        );
+    }
     if let Some(old) = old.filter(|o| generation.is_none() || ask.heat.as_ref() != Some(o)) {
         let version = VERSION.fetch_add(1, Ordering::Relaxed);
         f.send_to(
@@ -429,10 +456,152 @@ pub async fn watch(f: &Front, c: &Caller, p: MinimapWatch) -> Result<bool, Error
         );
     }
     f.core.views.minimaps.coverage_unused();
-    if let Some(g) = generation {
-        push(f, c.conn_id, &file, g).await;
+    match (generation, compiled) {
+        (Some(_), Some((error, warning))) => start_density(f, c.conn_id, file, run, error, warning),
+        (Some(g), None) => push(f, c.conn_id, &file, g).await,
+        _ => {}
     }
     Ok(true)
+}
+
+/// Each density ask's run: a scan goes on while its watch still holds the same run.
+static DENSITY_RUN: AtomicU64 = AtomicU64::new(1);
+
+/// The largest compiled density expression, in bytes.
+const DENSITY_REGEX_MAX: usize = 1 << 20;
+
+fn compile(re: &str, path: &str) -> Result<regex::bytes::Regex, Error> {
+    regex::bytes::RegexBuilder::new(re)
+        .size_limit(DENSITY_REGEX_MAX)
+        .build()
+        .map_err(|e| Error {
+            code: ErrorCode::InvalidParams,
+            message: format!("not an expression the density scan reads: {e}"),
+            path: Some(path.to_owned()),
+        })
+}
+
+/// Whether CONN's watch of FILE still asks for density run RUN.
+fn density_alive(f: &Front, conn: u64, file: &str, run: u64) -> bool {
+    lock(&f.core.views.minimaps.files)
+        .get(&(conn, file.to_owned()))
+        .is_some_and(|(_, a)| a.density.as_ref().is_some_and(|d| d.2 == run))
+}
+
+/// FILE's density table (BUCKETS of TOTAL) to CONN as the `density` layer.
+fn send_density(f: &Front, conn: u64, file: &str, buckets: &[density::Bucket], total: u32) {
+    let version = VERSION.fetch_add(1, Ordering::Relaxed);
+    let layer = Layer::Density {
+        buckets: buckets.to_vec(),
+        total,
+    };
+    f.send_to(
+        conn,
+        "view-model",
+        data(file, version, "density", layer.items()),
+    );
+}
+
+/// Scan FILE for CONN's density strip while run RUN is its watch's (design §7.6): the parts as they come, the whole
+/// table at the end; again from the start when the file changes under the scan, or after it ([`density::POLL`]).
+fn start_density(
+    f: &Front,
+    conn: u64,
+    file: String,
+    run: u64,
+    error: regex::bytes::Regex,
+    warning: regex::bytes::Regex,
+) {
+    let Some(front) = f.core.views.front_weak() else {
+        return;
+    };
+    crate::clock::spawn("minimap:density", async move {
+        let path = PathBuf::from(&file);
+        loop {
+            let Some(stamp) = density::stamp(&path) else {
+                return;
+            };
+            let (front2, file2, path2) = (front.clone(), file.clone(), path.clone());
+            let (error2, warning2) = (error.clone(), warning.clone());
+            let scanned = crate::clock::blocking(move || {
+                density::scan(
+                    &path2,
+                    stamp,
+                    &error2,
+                    &warning2,
+                    crate::clock::real_now,
+                    |part| {
+                        let Some(f) = front2.upgrade() else {
+                            return false;
+                        };
+                        if !density_alive(&f, conn, &file2, run) {
+                            return false;
+                        }
+                        if let Some((buckets, total)) = part {
+                            send_density(&f, conn, &file2, buckets, total);
+                        }
+                        true
+                    },
+                )
+            })
+            .await;
+            match scanned {
+                Ok(Ok(density::Scanned::Done(buckets, done))) => {
+                    {
+                        let Some(f) = front.upgrade() else {
+                            return;
+                        };
+                        if !density_alive(&f, conn, &file, run) {
+                            return;
+                        }
+                        send_density(&f, conn, &file, &buckets, buckets.len() as u32);
+                    }
+                    // the file is looked at now and then: a change scans it again
+                    loop {
+                        crate::clock::sleep(density::POLL).await;
+                        let Some(f) = front.upgrade() else {
+                            return;
+                        };
+                        if !density_alive(&f, conn, &file, run) {
+                            return;
+                        }
+                        if density::stamp(&path) != Some(done) {
+                            break;
+                        }
+                    }
+                }
+                Ok(Ok(density::Scanned::Changed)) => {}
+                _ => return,
+            }
+        }
+    });
+}
+
+/// `minimap/bucket`: the first lines of bucket P.bucket of P.file, for the density strip's peek.
+pub async fn bucket(
+    _f: &Front,
+    _c: &Caller,
+    p: MinimapBucketParams,
+) -> Result<MinimapBucket, Error> {
+    let path = PathBuf::from(crate::work::presence::true_name(&p.file));
+    let (bucket, lines) = (p.bucket, p.lines);
+    match crate::clock::blocking(move || density::peek(&path, bucket, lines)).await {
+        Ok(Ok((text, start, buckets))) => Ok(MinimapBucket {
+            text,
+            start,
+            buckets,
+        }),
+        Ok(Err(e)) => Err(Error {
+            code: ErrorCode::InvalidParams,
+            message: format!("the file cannot be read: {e}"),
+            path: Some("file".into()),
+        }),
+        Err(_) => Err(Error {
+            code: ErrorCode::Internal,
+            message: "the bucket's read failed".into(),
+            path: None,
+        }),
+    }
 }
 
 /// Every watch DUE picks (by file and ask) gets its layers again once things settle ([`super::outline::QUIET`]).

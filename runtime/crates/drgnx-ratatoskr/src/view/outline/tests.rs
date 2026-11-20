@@ -153,12 +153,12 @@ fn nothing_to_outline_is_one_notice() {
     let big = "x".repeat(OUTLINE_MAX + 1);
     assert_eq!(shown_of("src/a.rs", &big), Shown::Notice(LARGE));
     let tty = RowLook::of(&env(Display::Tty, 1.0), INDENT, 1);
-    let (built, images) = rows(&Shown::Notice(NONE), &tty);
+    let (built, images) = rows(&Shown::Notice(NONE), &BTreeSet::new(), &tty);
     assert_eq!(built[0].text, format!("  {NONE}"));
     assert!(images.is_empty());
     assert!(built[0].props.iter().any(|p| p.2 == "drgnx-row-inert"));
     let gui = RowLook::of(&env(Display::Gui, 2.0), INDENT, 1);
-    let (built, images) = rows(&Shown::Notice(NONE), &gui);
+    let (built, images) = rows(&Shown::Notice(NONE), &BTreeSet::new(), &gui);
     assert_eq!(
         built[0].text,
         format!("    {NONE}"),

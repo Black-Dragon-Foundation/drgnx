@@ -232,7 +232,9 @@ window)."
                         'face 'drgnx-minimap-peek-header)
             (propertize (concat hint " ") 'face 'drgnx-minimap-peek-header))))
 
-(defvar drgnx-minimap--card-commands '(drgnx-minimap-card-jump drgnx-minimap-card-click)
+(defvar drgnx-minimap--card-commands
+  ;; `ignore': a click's down event, so the card's map is still there for its up event
+  '(ignore drgnx-minimap-card-jump drgnx-minimap-card-click drgnx-minimap-bucket-jump)
   "The commands that keep a card's keys (`drgnx-minimap--card-keep-p'); a card with keys of its own adds its own.")
 
 (defun drgnx-minimap--show-card (kind window pos lines header buffer start &optional map)
@@ -406,6 +408,9 @@ place; the header's counts as the second value: (TEXT . COUNTS)."
       ('dwell-marks (or (drgnx-minimap-problems-show window pos)
                         (when drgnx-minimap-peek (drgnx-minimap-peek-show window pos))))
       ('dwell-label (with-current-buffer (window-buffer window) (drgnx-minimap-describe pos)))
+      ;; a density strip's bucket (design M7): its first lines, read by the hub from disk
+      ('dwell-bucket (when (and drgnx-minimap-peek (fboundp 'drgnx-minimap-bucket-peek))
+                       (drgnx-minimap-bucket-peek window pos)))
       ((or 'click 'drag) (drgnx-minimap-card-hide)))))
 
 ;;;; Setup

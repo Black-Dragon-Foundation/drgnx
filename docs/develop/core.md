@@ -1698,6 +1698,13 @@ lists at each publish.
   `drgnx-marks-step` runs, the cards' jumps), which also flash the row (`glitnir-minimap-flash`); the spec's `:trail`
   and `:trail-length` draw it. `minimap-describe` speaks `drgnx-minimap-description`. A card can carry its own keys
   (`drgnx-minimap--show-card`'s MAP; its commands join `drgnx-minimap--card-commands`).
+- **Density strip** (`modules/editor/drgnx-minimap-density.el`, design M7, §7.6). `drgnx-minimap-density-p` (a
+  large file, or more lines than `drgnx-minimap-density-above`, counted only when the buffer has more characters than
+  that, memoized on the modification tick) makes `drgnx-minimap--place` skip the line model and set a `:density` spec
+  (with `:chunk` (START . FILE-BYTES) for a vlf chunk, followed on `vlf-after-batch-functions`); the watch carries
+  `:density` with `drgnx-minimap-density-regexps`. The hub scans the file on disk (`view/minimap/density.rs`) and
+  sends Sjá the `density` layer in parts. `dwell-bucket` asks `minimap/bucket` for the bucket's first lines and shows
+  them in the card (KIND `bucket`, its own keys); its jump maps the byte through the chunk's start.
 - **Search, focus, line selection, Outline sync** (`modules/editor/drgnx-minimap-search.el`, design X1, X2, X7).
   isearch's hits come from the line model's scan (`nidhogg-lines-search`, then `nidhogg-lines-search-step` in 4 ms
   idle slices through `drgnx-timer-idle-steps`, key `marks-search-scan`; `core/drgnx-marks.el`): the model's hits
