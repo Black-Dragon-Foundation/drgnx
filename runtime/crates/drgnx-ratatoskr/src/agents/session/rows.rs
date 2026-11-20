@@ -363,7 +363,16 @@ pub fn block_list_rows(
     let mut out = Vec::new();
     for (i, b) in blocks.iter().enumerate() {
         let mut rows = Vec::new();
-        conv_rows(b, &format!("k:{i}"), i, 0, open.contains(&i), env, reduced_motion, &mut rows);
+        conv_rows(
+            b,
+            &format!("k:{i}"),
+            i,
+            0,
+            open.contains(&i),
+            env,
+            reduced_motion,
+            &mut rows,
+        );
         for r in &mut rows {
             let end = r.text.chars().count() as u32;
             r.props.push((0, end, "drgnx-block".into(), json!(i)));
@@ -539,8 +548,14 @@ fn conv_rows(
                             "Open".into(),
                             act("block-open", vec![json!(idx), json!(path), json!(first)]),
                         ),
-                        ("Revert".into(), act("block-revert", vec![json!(idx), json!(path)])),
-                        ("Comment".into(), act("block-comment", vec![json!(idx), json!(path)])),
+                        (
+                            "Revert".into(),
+                            act("block-revert", vec![json!(idx), json!(path)]),
+                        ),
+                        (
+                            "Comment".into(),
+                            act("block-comment", vec![json!(idx), json!(path)]),
+                        ),
                     ],
                     icon: None,
                     width: None,

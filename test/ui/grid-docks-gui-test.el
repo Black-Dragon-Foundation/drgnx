@@ -80,5 +80,33 @@ gap between the editor and the side bar (the editor has no tile to its right), a
               (set-window-parameter w p nil))))
         (should-not (frame-live-p drgnx-grid--resize-line))))))
 
+(ert-deftest drgnx-ui-grid-docks/a-kind-comes-back-on-its-text-after-text-came-above-it ()
+  "A kind switched away and back in its tile comes back on the line it was on, though text was inserted above that
+line meanwhile: the remembered start and point follow the text (a hub view's patches arrive while it is hidden; a
+start kept as a number came back rows earlier, the agent panel's tab switch at scale 2, 2026-11-20)."
+  (skip-unless (display-graphic-p))
+  (drgnx-grid-test--with
+    (let ((term (get-buffer-create "*g-term-text*")))
+      (with-current-buffer term
+        (dotimes (i 200) (insert (format "line %d\n" i))))
+      (let ((w (drgnx-pane-show 'g-term :buffer term)))
+        (with-selected-window w
+          (goto-char (point-min)) (forward-line 100)
+          (set-window-start w (point)) (set-window-point w (point)))
+        (redisplay t)
+        (drgnx-pane-show 'g-problems)
+        (redisplay t)
+        (with-current-buffer term
+          (goto-char (point-min))
+          (dotimes (i 50) (insert (format "new %d\n" i))))
+        (let ((w2 (drgnx-pane-show 'g-term)))
+          (redisplay t)
+          (should (eq term (window-buffer w2)))
+          (with-current-buffer term
+            (should (equal "line 100" (save-excursion (goto-char (window-start w2))
+                                                      (buffer-substring (line-beginning-position) (line-end-position)))))
+            (should (equal "line 100" (save-excursion (goto-char (window-point w2))
+                                                      (buffer-substring (line-beginning-position) (line-end-position)))))))))))
+
 (provide 'grid-docks-gui-test)
 ;;; grid-docks-gui-test.el ends here

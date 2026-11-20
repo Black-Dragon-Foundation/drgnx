@@ -68,7 +68,12 @@ impl Views {
         };
         self.publish_built(f, key, |env, _| {
             (
-                rows_with(&shown.tree, &shown.paces, &shown.forecasts, &super::kit_env(env)),
+                rows_with(
+                    &shown.tree,
+                    &shown.paces,
+                    &shown.forecasts,
+                    &super::kit_env(env),
+                ),
                 Vec::new(),
             )
         });
@@ -124,7 +129,10 @@ async fn load(f: &Front, c: &Caller, view: &str) -> Result<(), Error> {
         }
         f.core.views.budgets_show(f, c.conn_id, view, shown.clone());
         match page.next {
-            Some(n) if lock(&f.core.views.budget_pages.views).contains_key(&(c.conn_id, view.to_owned())) => {
+            Some(n)
+                if lock(&f.core.views.budget_pages.views)
+                    .contains_key(&(c.conn_id, view.to_owned())) =>
+            {
                 after = Some(n)
             }
             _ => return Ok(()),
@@ -146,7 +154,14 @@ async fn self_forecasts(f: &Front, shown: &mut Shown) {
         .collect();
     for p in plans {
         let id = scope_id(&BudgetScope::Plan(p.clone()));
-        let Ok(fc) = crate::forecast::plan(f, ForecastPlanParams { plans: Bounded(vec![p]) }).await else {
+        let Ok(fc) = crate::forecast::plan(
+            f,
+            ForecastPlanParams {
+                plans: Bounded(vec![p]),
+            },
+        )
+        .await
+        else {
             continue;
         };
         let cost = fc
@@ -154,7 +169,10 @@ async fn self_forecasts(f: &Front, shown: &mut Shown) {
             .first()
             .map(|r| r.remaining.cost.clone())
             .unwrap_or(fc.forecast.cost);
-        if let Some(c) = cost.into_iter().find(|c| matches!(c.unit, Unit::Usd | Unit::UsdEst)) {
+        if let Some(c) = cost
+            .into_iter()
+            .find(|c| matches!(c.unit, Unit::Usd | Unit::UsdEst))
+        {
             shown.forecasts.insert(id, c);
         }
     }
@@ -195,7 +213,14 @@ fn scope_parts(s: &BudgetScope) -> (String, String) {
         Ok(Value::Object(m)) => m
             .into_iter()
             .next()
-            .map(|(k, v)| (k, v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())))
+            .map(|(k, v)| {
+                (
+                    k,
+                    v.as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| v.to_string()),
+                )
+            })
             .unwrap_or_default(),
         _ => Default::default(),
     }
@@ -298,7 +323,10 @@ fn pace_rows(p: &Pace, env: &KitEnv, out: &mut Vec<Row>) {
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
         let at = (p.used_share + r7 * ((reset - now).max(0.0) / 3600.0)).min(9.99);
-        line.push_str(&format!(" · at the 7-day pace {:.0} % at reset", at * 100.0));
+        line.push_str(&format!(
+            " · at the 7-day pace {:.0} % at reset",
+            at * 100.0
+        ));
     }
     if p.estimate {
         line.push_str(" · estimate");
@@ -402,7 +430,12 @@ fn scope_row(n: &BudgetNode, depth: usize, forecast: Option<&CostRange>, env: &K
         },
     );
     let to = b.pos();
-    b.prop(from, to, "drgnx-action", json!(["budget-limit", kind, id, unit_wire(unit)]));
+    b.prop(
+        from,
+        to,
+        "drgnx-action",
+        json!(["budget-limit", kind, id, unit_wire(unit)]),
+    );
     if let Some(c) = forecast {
         b.push(&format!("  forecast ${:.0}–${:.0}", c.p50, c.p90), None);
     }

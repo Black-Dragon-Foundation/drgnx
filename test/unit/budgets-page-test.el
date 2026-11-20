@@ -6,7 +6,10 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
+(require 'drgnx-modules)
 (require 'drgnx-hub-client)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(drgnx-test-modules-preload '(tools/agent-panel))   ; drgnx-agent-panel.el loads drgnx-budgets.el beside it
 
 (declare-function drgnx-budgets-set-limit "drgnx-budgets" (scope unit amount))
 (declare-function drgnx-budgets-select "drgnx-budgets" (scope))

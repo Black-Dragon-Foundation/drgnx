@@ -7,7 +7,9 @@
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::view::{Key, Views};
-use drgnx_rows::kit::{self, ButtonStyle, Comp, KitEnv, MeterSize, MeterState, MeterUnit, ProgressKind, Size};
+use drgnx_rows::kit::{
+    self, ButtonStyle, Comp, KitEnv, MeterSize, MeterState, MeterUnit, ProgressKind, Size,
+};
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::agents_side::{Set, Subscribe, ViewId};
 use runstav::methods::past::PastProvider;

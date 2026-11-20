@@ -11,6 +11,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-frame-shell)
 
 (defconst drgnx-ui-shell-rail--repo
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))

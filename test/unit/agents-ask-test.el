@@ -62,7 +62,8 @@
     (cl-letf (((symbol-function 'drgnx-hub-call)
                (lambda (_method _params callback &rest _)
                  (funcall callback (list :entries (vector (list :session "s7" :line 4))) nil)))
-              ((symbol-function 'drgnx-agent-panel-open)
+              ;; the agent's conversation opens in the Agents side (flow Task 23)
+              ((symbol-function 'drgnx-agents-side-open-conversation)
                (lambda (session) (push session opened) (current-buffer)))
               ((symbol-function 'drgnx-agent-panel--composer-of) (lambda (b) b))
               ((symbol-function 'drgnx-agent-panel-new-chat) (lambda () (setq new-chat t) (current-buffer))))
@@ -76,7 +77,7 @@
     ;; no agent there: the new chat
     (cl-letf (((symbol-function 'drgnx-hub-call)
                (lambda (_method _params callback &rest _) (funcall callback (list :entries []) nil)))
-              ((symbol-function 'drgnx-agent-panel-open) (lambda (_) (error "no agent is here")))
+              ((symbol-function 'drgnx-agents-side-open-conversation) (lambda (_) (error "no agent is here")))
               ((symbol-function 'drgnx-agent-panel-new-chat) (lambda () (setq new-chat t) (current-buffer))))
       (with-temp-buffer
         (setq buffer-file-name "/p/b.el")

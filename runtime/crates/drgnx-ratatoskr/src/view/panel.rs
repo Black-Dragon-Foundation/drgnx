@@ -649,9 +649,12 @@ impl Panels {
                 let b = &f.core.budgets;
                 let scope = b.holder_of_session(&s.id)?;
                 match b.binding(&scope)? {
-                    (runstav::methods::matrix::Unit::Usd | runstav::methods::matrix::Unit::UsdEst, spent, limit) => {
-                        Some((spent, limit))
-                    }
+                    (
+                        runstav::methods::matrix::Unit::Usd
+                        | runstav::methods::matrix::Unit::UsdEst,
+                        spent,
+                        limit,
+                    ) => Some((spent, limit)),
                     _ => None,
                 }
             });

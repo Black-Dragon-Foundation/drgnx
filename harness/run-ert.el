@@ -1254,6 +1254,10 @@ failed test is a failure named after the file."
 form whose head symbol's name ends in `deftest' (`ert-deftest', a file's own `…--deftest' macro), as strings.  OPEN: t
 when such a form's first argument is not a plain symbol (a computed name), or the file does not read: the file may
 hold any test."
+  ;; a "\N{NAME}" makes the reader load the Unicode name table, which cannot load under an obarray of our own: it
+  ;; loads first, in the real one (once a session)
+  (when (with-temp-buffer (ignore-errors (insert-file-contents file)) (search-forward "\\N{" nil t))
+    (ucs-names))
   (let ((names nil) (open nil) (obarray (obarray-make)))
     (condition-case nil
         (with-temp-buffer

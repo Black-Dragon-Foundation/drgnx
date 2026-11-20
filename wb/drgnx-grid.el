@@ -156,10 +156,13 @@ Kept out of frame parameters: a buffer object in one would make the saved frame 
   (alist-get kind (gethash frame drgnx-grid--kinds) nil nil #'equal))
 
 (defun drgnx-grid--remember (window)
-  "Remember the buffer, start and point tile WINDOW shows for its shown kind."
+  "Remember the buffer, start and point tile WINDOW shows for its shown kind.  Start and point are markers: a buffer
+that changes while its kind is hidden (a hub view's patches) comes back on the text it was on, not rows away."
   (when-let* (((drgnx-grid-tool-tile-p window)) (kind (car (window-parameter window 'drgnx-pane-stack))))
-    (setf (alist-get kind (gethash (window-frame window) drgnx-grid--kinds) nil nil #'equal)
-          (list (window-buffer window) (window-start window) (window-point window)))))
+    (let ((old (drgnx-grid--saved kind (window-frame window))) (b (window-buffer window)))
+      (dolist (m (cdr old)) (when (markerp m) (set-marker m nil)))
+      (setf (alist-get kind (gethash (window-frame window) drgnx-grid--kinds) nil nil #'equal)
+            (list b (copy-marker (window-start window)) (copy-marker (window-point window)))))))
 
 (defun drgnx-grid--placeholder (entry)
   "ENTRY's kind's placeholder: its :placeholder function's buffer, else the tile placeholder

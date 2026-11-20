@@ -508,7 +508,11 @@ pub fn plan_strip(entries: &[Entry]) -> Vec<(String, PlanState)> {
 /// The limit the at-limit block suggests (Flow Task 23a): SPENT plus P90 (the session forecast's p90 of what remains),
 /// rounded up to the unit's next step: the next dollar, the next whole percent of a window, the next 100k tokens. A
 /// count has none.
-pub fn at_limit_suggestion(unit: runstav::methods::matrix::Unit, spent: f64, p90: f64) -> Option<f64> {
+pub fn at_limit_suggestion(
+    unit: runstav::methods::matrix::Unit,
+    spent: f64,
+    p90: f64,
+) -> Option<f64> {
     use runstav::methods::matrix::Unit;
     let step = match unit {
         Unit::Usd | Unit::UsdEst => 1.0,

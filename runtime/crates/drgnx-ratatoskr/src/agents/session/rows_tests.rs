@@ -626,8 +626,15 @@ mod block_rows {
             false,
         );
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].text.contains("shell · cargo build"), "{}", rows[0].text);
+        assert!(
+            rows[0].text.contains("shell · cargo build"),
+            "{}",
+            rows[0].text
+        );
         assert_eq!(prop(&rows[0], "drgnx-work-id"), Some(&json!("e:4")));
-        assert_eq!(prop(&rows[0], "drgnx-action"), Some(&json!(["block-open", 0])));
+        assert_eq!(
+            prop(&rows[0], "drgnx-action"),
+            Some(&json!(["block-open", 0]))
+        );
     }
 }

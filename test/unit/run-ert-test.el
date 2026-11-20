@@ -826,6 +826,20 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
                          '("computed-test.el"))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-named-character-escape-keeps-the-file-indexed ()
+  ;; A "\N{NAME}" in a test file makes the reader load the Unicode name table; under the index's own obarray that
+  ;; load failed, the file counted as open, and every name-selected run started it too.  Checked in a fresh Emacs: a
+  ;; warm one has the table already.
+  (let ((f (make-temp-file "named-char-test" nil ".el"
+                           "(ert-deftest nc/one () (should (equal \"\\N{WARNING SIGN}\" \"\u26A0\")))\n")))
+    (unwind-protect
+        (with-temp-buffer
+          (should (eql 0 (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                                       "--batch" "-Q" "-l" (locate-library "run-ert.el")
+                                       "--eval" (format "(prin1 (drgnx-run-ert--index %S))" f))))
+          (should (string-match-p "((\"nc/one\") \\. nil)\\|((\"nc/one\"))" (buffer-string))))
+      (delete-file f))))
+
 (ert-deftest drgnx-run-ert/an-unindexed-test-fails-a-full-run ()
   ;; a test made inside a form the prefilter does not read fails the full run, and names the test and file
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
