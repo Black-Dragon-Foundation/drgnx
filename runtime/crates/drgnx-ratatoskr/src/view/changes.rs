@@ -90,13 +90,13 @@ pub async fn set(f: &Front, c: &Caller, p: Set) -> Result<bool, Error> {
     }
     if let Some(mut filter) = p.filter {
         // Work names an agent by its session id; the groups carry the agent's name
-        if let Some(a) = filter.agent.as_mut() {
-            if let Some(name) = f.core.agents.live_sessions().iter().find_map(|s| {
+        if let Some(a) = filter.agent.as_mut()
+            && let Some(name) = f.core.agents.live_sessions().iter().find_map(|s| {
                 let snap = s.snapshot();
                 (snap.id == *a).then(|| snap.name.clone().unwrap_or(snap.id))
-            }) {
-                *a = name;
-            }
+            })
+        {
+            *a = name;
         }
         filter.task = filter.task.filter(|t| !t.is_empty());
         filter.agent = filter.agent.filter(|a| !a.is_empty());

@@ -353,7 +353,9 @@ fn block_row(idx: usize, n: usize, block: &Block) -> Row {
 /// an ask (a `QuestionCard` with its keys), a subagent (its blocks nested under its head, indented), a notice, the
 /// live line (a pulse, still under REDUCED_MOTION) and a queued message.  Block N's rows are keyed `k:N/...` and each
 /// carries `drgnx-block` N; OPEN holds the Explored blocks the user opened.  An agent message's Markdown is the
-/// panel's own (`b:I:N` rows, drawn with its entry): it adds no row here.
+/// panel's own (`b:I:N` rows, drawn with its entry): it adds no row here.  Only the tests draw blocks this way until
+/// the panel does (flow Task 23, S3).
+#[cfg(test)]
 pub fn block_list_rows(
     blocks: &[super::blocks::Block],
     open: &BTreeSet<usize>,
@@ -383,6 +385,7 @@ pub fn block_list_rows(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn conv_rows(
     block: &super::blocks::Block,
     key: &str,
@@ -457,7 +460,7 @@ fn conv_rows(
                 for (n, s) in steps.iter().enumerate() {
                     let mut b = row(n + 1);
                     b.push(
-                        &format!("    step {}", s.step.map_or(s.entry as u64, |x| x)),
+                        &format!("    step {}", s.step.unwrap_or(s.entry as u64)),
                         Some(FaceId::AgentPanelSubtle.name()),
                     );
                     let end = b.pos();
