@@ -220,3 +220,51 @@ fn a_bar_draws_its_parts_and_words() {
             .any(|(_, _, n, v)| n == "drgnx-work-part" && v == "late")
     );
 }
+
+/// Every state a bar can be in says its word in the row's text (flow Task 30, `a11y-flow/every-state-has-a-word`):
+/// colour is never the only signal, and a finished bar says done whatever else it says (how long it took, the target).
+#[test]
+fn every_state_has_a_word() {
+    let p = Palette::default();
+    let e = env(&p);
+    let win = Window {
+        from: 0.0,
+        to: 400.0,
+    };
+    let bar = |state: ScheduleState| schedule::ScheduleBar {
+        started: Some(0.0),
+        done_to: Some(120.0),
+        p50: Some(100.0),
+        p90: Some(200.0),
+        baseline: Some(60.0),
+        target: None,
+        state,
+        machine: None,
+    };
+    let cases = [
+        (ScheduleState::Behind, "behind"),
+        (ScheduleState::Late, "late"),
+        (ScheduleState::Waiting, "waiting"),
+        (ScheduleState::Slipped, "slipped"),
+        (ScheduleState::Done, "done"),
+        (ScheduleState::Forecast, "forecast"),
+    ];
+    for (state, word) in cases {
+        for target in [None, Some(150.0)] {
+            let r = SchedRow {
+                bar: Some(schedule::ScheduleBar {
+                    target,
+                    ..bar(state)
+                }),
+                ..row("task:a", 2, None)
+            };
+            let rows =
+                schedule::schedule_rows(&[r], &e, &Cols, Zone(0), &win, 400, Some(120.0), 120.0);
+            assert!(
+                rows[1].text.contains(word),
+                "{state:?} (target {target:?}) has no word {word:?}: {}",
+                rows[1].text
+            );
+        }
+    }
+}

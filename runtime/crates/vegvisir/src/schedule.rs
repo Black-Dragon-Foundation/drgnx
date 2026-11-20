@@ -247,14 +247,15 @@ fn right_text(b: &ScheduleBar, zone: Zone, now: f64) -> String {
     let mut parts: Vec<String> = Vec::new();
     match b.state {
         ScheduleState::Done => {
+            parts.push("done".into());
             if let (Some(s), Some(e)) = (b.started, b.done_to) {
                 parts.push(format!("took {}", hm(e - s)));
             }
-            if let Some(t) = b.target {
-                parts.push(match b.done_to {
-                    Some(e) if e <= t => "met target".into(),
-                    Some(e) => format!("missed by {}", hm(e - t)),
-                    None => "done".into(),
+            if let (Some(t), Some(e)) = (b.target, b.done_to) {
+                parts.push(if e <= t {
+                    "met target".into()
+                } else {
+                    format!("missed by {}", hm(e - t))
                 });
             }
         }
