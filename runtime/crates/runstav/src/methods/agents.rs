@@ -211,6 +211,75 @@ pub struct Snapshot {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub mcp: Vec<String>,
+    /// What runs in the background of the session now (ACP v2's list: terminals, tool calls that outlive their turn,
+    /// child sessions; and the hub's own jobs).  None: the agent does not report it (a v1 agent never does): not "nothing".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<Vec<BackgroundItem>>,
+    /// The last background items that ended (at most 20), the newest last: each with how it ended.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_ended: Vec<BackgroundItem>,
+}
+
+/// What kind of background work an item is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundKind {
+    /// A process: a display terminal of the agent, or one of the hub's own jobs.
+    Terminal,
+    /// Work without a process of its own that keeps reporting status on its tool call (a watcher, a workflow).
+    ToolCall,
+    /// A child session.
+    Subagent,
+}
+
+/// Whether a listed item runs.  `unknown`: the agent cannot tell (never shown as running or done).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundStatus {
+    Running,
+    Pending,
+    Paused,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundEndStatus {
+    Completed,
+    Failed,
+    Stopped,
+}
+
+/// How a background item ended.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundEnd {
+    pub status: BackgroundEndStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+
+/// One item of a session's background work.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundItem {
+    pub kind: BackgroundKind,
+    /// The agent's id of it (terminal id, tool call id, child session id), or the hub's job id.
+    pub id: String,
+    /// What it is: the command, the tool call's title, the child's title.
+    pub description: String,
+    /// When the hub first saw it (milliseconds since the epoch).
+    pub started_ms: u64,
+    /// Its last output line or progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
+    pub status: BackgroundStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<BackgroundEnd>,
+    /// The agent lets a client stop this item on its own (`capabilities.cancel`), or the hub can (its own job).
+    pub can_cancel: bool,
 }
 
 /// The file (and the user's lines in it) a paired chat waits on.
@@ -427,6 +496,14 @@ pub struct Context {
 pub struct ContextDropParams {
     pub id: Id,
     /// The item's `id` in the session's context breakdown.
+    pub item: Bounded<String, 256>,
+}
+
+/// `agents/background-cancel`: stop one item of the session's background list.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BackgroundCancelParams {
+    pub id: Id,
+    /// The item's `id` in the session's `background` list.
     pub item: Bounded<String, 256>,
 }
 
@@ -950,6 +1027,11 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "whether a profile's agent starts and answers initialize (it is started in its sandbox, asked, and ended; no session is made)",
             check: check_probe,
+        ),
+        method!(
+            "agents/background-cancel", AgentsBackgroundCancel(BackgroundCancelParams) -> bool,
+            classes: [User], writes: false,
+            doc: "stop one item of the session's background list by its own request (`terminal/cancel`, `tool_call/cancel`, `session/cancel` of the child session; a job of the hub's own: its stop); an item that does not advertise cancel is refused with nothing sent (not-allowed), an item that is not listed: invalid-params",
         ),
         method!(
             "agents/context-drop", AgentsContextDrop(ContextDropParams) -> bool,

@@ -242,6 +242,7 @@ params! {
     AgentsWheelGive(agents::ById),
     AgentsWheelSaved(agents::WheelSaved),
     AgentsProbe(agents::ProbeParams),
+    AgentsBackgroundCancel(agents::BackgroundCancelParams),
     AgentsContextDrop(agents::ContextDropParams),
     AgentsContextPin(agents::ContextPinParams),
     AgentsCompactPreview(agents::ById),

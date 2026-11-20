@@ -145,6 +145,7 @@ the index does; \"real\" lists them, leaving out only what .gitignore files and 
          (cons :ai (drgnx-settings-runtime--str (plist-get p :ai)))
          (cons :model (plist-get p :model))
          (cons :tracker_tools (drgnx-settings-runtime--str (plist-get p :tracker-tools)))
+         (cons :acp_v2 (drgnx-settings-runtime--str (plist-get p :acp-v2)))
          (cons :doc (plist-get p :doc))
          (cons :job_safe (and (plist-get p :job-safe) t)))))
 

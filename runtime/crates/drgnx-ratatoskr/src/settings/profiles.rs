@@ -64,9 +64,31 @@ pub struct AgentProfile {
     /// A job may run it (the built-in Claude profiles).
     #[serde(default)]
     pub job_safe: bool,
+    /// `:acp-v2 auto|off`: whether the hub asks the agent for ACP v2 (a draft); none: `auto` for the profiles named
+    /// `claude` and `codex`, `off` for every other ([`AgentProfile::acp_v2`]).
+    #[serde(default)]
+    pub acp_v2: Option<AcpV2>,
+}
+
+/// Whether the hub asks an agent for ACP v2 (`:acp-v2`).  `auto` asks, and an agent that answers 1 gets v1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AcpV2 {
+    Auto,
+    Off,
 }
 
 impl AgentProfile {
+    /// The ACP v2 setting in effect.
+    pub fn acp_v2(&self) -> AcpV2 {
+        self.acp_v2
+            .unwrap_or(if matches!(self.name.as_str(), "claude" | "codex") {
+                AcpV2::Auto
+            } else {
+                AcpV2::Off
+            })
+    }
+
     /// The provider: `:provider` when set, else the first of claude, codex, gemini, kimi and dsh that a file name in
     /// the command contains (the Lisp's `drgnx-agents--command-agent`); none for anything else (no lock, "not
     /// enforced").

@@ -65,6 +65,7 @@ restriction."
                                           (:ai symbol "The provider environment it gets")
                                           (:model string "The model it asks for")
                                           (:tracker-tools (enum on off) "The five tracker tools; on by default")
+                                          (:acp-v2 (enum auto off) "Ask the agent for ACP v2 (a draft): auto asks, off never does; auto by default for claude and codex")
                                           (:doc string "One line")))
                      "Your agent profiles; the built-in ones need none")
           (:default string "The profile New Agent Session… offers")

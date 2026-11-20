@@ -17,6 +17,7 @@ fn profile(name: &str, command: &str) -> AgentProfile {
         doc: None,
         provider: None,
         job_safe: false,
+        acp_v2: None,
     }
 }
 
