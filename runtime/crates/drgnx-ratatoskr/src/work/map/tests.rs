@@ -2293,6 +2293,12 @@ fn list_an_empty_workspace_says_so() {
         .expect("the empty row");
     assert!(r.text.contains("Nothing here yet"), "{}", r.text);
     assert!(!r.props.iter().any(|p| p.2 == "drgnx-work-id"));
+    // the kit's empty state face
+    assert!(
+        r.runs
+            .iter()
+            .any(|run| run.2 == drgnx_rows::faces::FaceId::KitEmptyState.name())
+    );
 }
 
 /// [D] A needs-you chip is the kit's warn chip with its jump key as a kit key hint, and shows a 40-letter fact whole (two chips share the width)
@@ -2654,4 +2660,24 @@ fn list_not_started_row_shows_the_forecast_words_when_wide() {
             .contains("fc $"),
         "narrow: no forecast words"
     );
+}
+
+/// [D] The chain a session works under, as the conversation's header shows it (Flow Task 23): spec, plan, task, each
+/// with its kind, id and title, read from the Work model; empty for an item the model does not hold.
+#[test]
+fn a_tasks_breadcrumb_is_its_spec_then_its_plan_then_itself() {
+    let core = list_world();
+    let id = |s: &str| vegvisir::ItemId(s.to_owned());
+    let crumbs = core.model().breadcrumb(&id("task:t1"));
+    let want = |k: &str, i: &str, t: &str| (k.to_owned(), i.to_owned(), t.to_owned());
+    assert_eq!(
+        crumbs,
+        vec![
+            want("spec", "s1", "Title bar"),
+            want("plan", "p1", "Inbox drop-down"),
+            want("task", "t1", "Count on the pill"),
+        ]
+    );
+    // an item the model does not hold has no breadcrumb
+    assert!(core.model().breadcrumb(&id("task:nope")).is_empty());
 }

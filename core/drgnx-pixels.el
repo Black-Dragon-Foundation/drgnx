@@ -78,7 +78,8 @@ on every bar build and row.  Weak on the frame: an entry goes with its frame.")
   "Give the root FRAME the UI scale SCALE (a number; nil or 1: none), which `drgnx-pixels-ui-scale' reads."
   (if (and (numberp scale) (/= scale 1))
       (puthash frame (float scale) drgnx-pixels--ui-scales)
-    (remhash frame drgnx-pixels--ui-scales)))
+    (remhash frame drgnx-pixels--ui-scales))
+  (drgnx-pixels-cache-reset))
 
 (defun drgnx-pixels-ui-scale (&optional frame)
   "The UI scale on FRAME (default the selected frame): its root frame's, which the look's UI scale sets
@@ -91,6 +92,23 @@ on every bar build and row.  Weak on the frame: an entry goes with its frame.")
   "FRAME's frame pixels per logical pixel: its display scale on a native shell (1.0 elsewhere) times the UI scale."
   (* (if (and (drgnx-pixels-device-p) (fboundp 'frame-scale-factor)) (float (frame-scale-factor frame)) 1.0)
      (drgnx-pixels-ui-scale frame)))
+
+;;;; Sizes cached per scale
+
+(defvar drgnx-pixels--cached (make-hash-table :test #'equal)
+  "(KEY . SCALE) → a size the chrome worked out at SCALE (`drgnx-pixels-cached').  Bounded: one entry for each of the
+chrome's few keys at each scale seen, and emptied on every scale change (`drgnx-pixels-cache-reset').")
+
+(defun drgnx-pixels-cached (key frame fn)
+  "The size KEY names on FRAME: FN called with FRAME once for each scale seen, then the cached value.  Frames of the
+same scale share it; a frame of another scale sizes itself at its own."
+  (let ((k (cons key (drgnx-pixels-scale frame))))
+    (or (gethash k drgnx-pixels--cached)
+        (puthash k (funcall fn frame) drgnx-pixels--cached))))
+
+(defun drgnx-pixels-cache-reset ()
+  "A scale changed: every cached size is worked out again on its next use."
+  (clrhash drgnx-pixels--cached))
 
 (defconst drgnx-pixels--epsilon 1e-9
   "What `drgnx-px' and `drgnx-px-line' forgive a product: 1.5 × 4/3 is 1.9999999999999998 in floats.")

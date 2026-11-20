@@ -389,4 +389,10 @@
  (tile-move (:input :p95) 50)
  (layout-restore (:tiles) 150)
  (pane-drag (:motion :p95) 16) (pane-drag (:drop :p95) 50)
+ ;; The Flow plan (harness/drgnx-perf-flow.el): the editor's side of the conversation (a 10k-block conversation's last
+ ;; window drawn; a block appended), the Agents side (30 streaming agents: a card replaced; a composer key's extra cost
+ ;; while they stream), a look reset of three frames' views, and the Budgets page's first rows (500 scopes, 3 meters).
+ (conversation-open (:first-rows) 100) (conversation-append (:append :p95) 4)
+ (agents-side-stream (:patch :p95) 4) (agents-side-typing (:delta) 1)
+ (look-reset-3-frames (:reset) 250) (budget-page-open (:first-rows) 100)
 )

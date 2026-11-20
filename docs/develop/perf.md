@@ -1195,6 +1195,21 @@ and measures and prints; run it optimized and alone on a pinned host:
 
 Tests: `test/unit/perf-extensions-test.el` (every row has a budget and a fixture, the comparison measures both sides).
 
+## Flow
+
+`harness/drgnx-perf-flow.el` holds the Flow plan's rows, measure-only like Extensions: the library is evaluated in the
+session, makes each view's buffer and feeds it the rows the hub would send, at the plan's sizes, through
+`drgnx-view-apply-patch`, then times the patch applied and drawn. The hub's half of each view is in its Rust tests.
+
+| Workload | Measures | Budget |
+|---|---|---|
+| `conversation-open` | a 10k-block conversation's last window (200 rows) attached and drawn, median of 5 | 100 ms |
+| `conversation-append` | one block inserted after the last, drawn; 120 samples | p95 4 ms |
+| `agents-side-stream` | one of 30 agents' cards replaced (its rows only), drawn; 200 samples | p95 4 ms |
+| `agents-side-typing` | a composer key's median while the side streams, less its median without | 1 ms |
+| `look-reset-3-frames` | Work, the Agents side and a conversation in 3 frames each reset and drawn, median of 5 | 250 ms |
+| `budget-page-open` | the 3 meters, their history and the first 100 scopes drawn, median of 5 | 100 ms |
+
 ## What typing rebuilds
 
 The status bar is built again when the position or the text changes (every keystroke), but the segments that show

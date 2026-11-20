@@ -320,6 +320,17 @@ at once."
   (let ((sel (or (bound-and-true-p drgnx-work-map--selection) (user-error "Nothing is selected"))))
     (select-window (display-buffer (drgnx-work-code-files sel (drgnx-work-map-chain-agents) t)))))
 
+(declare-function drgnx-changes-for-item "drgnx-changes" (kind id))
+
+(defun drgnx-work-changes-command ()
+  "The Changes place by task, filtered to the selected task or agent (flow day, moment 3)."
+  (interactive)
+  (pcase-let* ((`(,_ . ,id) (or (bound-and-true-p drgnx-work-map--selection) (user-error "Nothing is selected"))))
+    (require 'drgnx-changes)
+    (cond ((string-prefix-p "task:" id) (drgnx-changes-for-item "task" (substring id (length "task:"))))
+          ((drgnx-work-code--sid id) (drgnx-changes-for-item "agent" (drgnx-work-code--sid id)))
+          (t (user-error "Select a task or an agent")))))
+
 ;;;; Who is here
 
 (defun drgnx-work-who-is-here ()

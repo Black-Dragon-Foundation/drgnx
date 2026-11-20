@@ -21,10 +21,10 @@
 
 (defvar drgnx-agent-panel--context)
 (defvar drgnx-work-map--selection)
-(declare-function drgnx-agent-panel-open "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-new-chat "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-context-add "drgnx-agent-panel-composer")
-(declare-function drgnx-agent-panel--composer-of "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer")
+(declare-function drgnx-agents-side-open-conversation "drgnx-agent-panel-list" (session))
 (declare-function drgnx-explorer-node-at "drgnx-explorer")
 
 (defun drgnx-agents-ask-context ()
@@ -55,11 +55,13 @@ buffer, (:item (KIND . ID)) on a Work row, the path of an Explorer row as (:file
     (error (funcall callback nil))))
 
 (defun drgnx-agents-ask--show (context sessions)
-  "Open the Agents side and put CONTEXT in its composer: SESSIONS' first conversation, else a new chat."
-  (let* ((buf (if sessions (drgnx-agent-panel-open (car sessions)) (drgnx-agent-panel-new-chat)))
-         (composer (or (and sessions (drgnx-agent-panel--composer-of buf)) buf)))
-    (when context
-      (with-current-buffer composer (drgnx-agent-panel-context-add context)))
+  "Open the Agents side and put CONTEXT in its composer: SESSIONS' first conversation (compact, in the side), else a new
+chat.  The item goes on the panel, whose composer draws it as a removable chip."
+  (let ((buf (if sessions (drgnx-agents-side-open-conversation (car sessions)) (drgnx-agent-panel-new-chat))))
+    (when (and context (buffer-live-p buf))
+      (with-current-buffer buf
+        (drgnx-agent-panel-context-add context)
+        (when (fboundp 'drgnx-agent-panel-composer-redraw) (drgnx-agent-panel-composer-redraw))))
     buf))
 
 ;;;###autoload

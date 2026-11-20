@@ -1762,6 +1762,18 @@ impl Map {
     }
 
     /// Connection CONN is gone: its views with it.
+    /// The chain (spec, plan, task) the task TASK works under, outermost first, as `(kind, id, title)`, from the first
+    /// workspace whose model holds it; empty when none does (the conversation header's chain row).
+    pub fn breadcrumb(&self, task: &str) -> Vec<(String, String, String)> {
+        let id = ItemId(format!("task:{task}"));
+        lock(&self.inner)
+            .spaces
+            .values()
+            .map(|sp| sp.core.model().breadcrumb(&id))
+            .find(|c| !c.is_empty())
+            .unwrap_or_default()
+    }
+
     pub fn gone(&self, conn: u64) {
         let mut g = lock(&self.inner);
         let keys: Vec<ViewKey> = g.views.keys().filter(|k| k.conn == conn).cloned().collect();

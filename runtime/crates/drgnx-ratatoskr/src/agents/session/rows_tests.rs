@@ -85,8 +85,8 @@ fn hunks_split_at_30_lines() {
         );
     }
     assert!(hunks[0].text.starts_with("    a.el  @@"));
-    assert!(faces(hunks[0]).contains(&FaceId::AgentPanelRemoved.name()));
-    assert!(faces(hunks[5]).contains(&FaceId::AgentPanelAdded.name()));
+    assert!(faces(hunks[0]).contains(&FaceId::KitDiffBlockDel.name()));
+    assert!(faces(hunks[5]).contains(&FaceId::KitDiffBlockAdd.name()));
 }
 
 /// agent-panel.html: the panel's prose is in the UI font, its output and diffs in the code font, so every line of a
@@ -121,7 +121,7 @@ fn output_and_hunk_lines_are_code() {
         .find(|r| r.key == "e:3/h:0")
         .expect("a hunk row");
     assert!(
-        faces(h).contains(&FaceId::AgentPanelContext.name()),
+        faces(h).contains(&FaceId::KitDiffBlockCtx.name()),
         "{:?}",
         faces(h)
     );
@@ -430,4 +430,181 @@ fn an_allowed_step_says_how_it_was_allowed() {
     );
     let rows = rows_with(&stepped("completed"), &look, &facts, false, None);
     assert!(under(&rows).is_empty());
+}
+
+// Flow Task 23, S3: the transcript from the conversation blocks (`blocks.rs`), one block type each.  The interface:
+// `block_list_rows(blocks, open, kit, reduced_motion)`, rows keyed `k:N/...` for block N, each row carrying
+// `drgnx-block` N; `open` holds the indexes of the Explored blocks the user opened.
+mod block_rows {
+    use super::*;
+    use crate::agents::session::blocks::Block;
+    use drgnx_rows::kit::KitEnv;
+    use std::collections::BTreeSet;
+
+    fn kit() -> KitEnv<'static> {
+        KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            ascii: false,
+            density: Default::default(),
+            icons: None,
+        }
+    }
+
+    fn text(rows: &[Row]) -> String {
+        rows.iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The user's message is a plain card, a bubble, with its words.
+    #[test]
+    fn a_you_block_is_a_bubble() {
+        let rows = block_list_rows(
+            &[Block::You {
+                text: "fix the tests".into(),
+            }],
+            &BTreeSet::new(),
+            &kit(),
+            false,
+        );
+        assert!(rows[0].key.starts_with("k:0"), "{:?}", rows[0].key);
+        assert!(text(&rows).contains("fix the tests"));
+        assert!(rows.iter().all(|r| {
+            r.props
+                .iter()
+                .any(|p| p.2 == "drgnx-block" && p.3 == json!(0))
+        }));
+    }
+
+    /// Reads and searches fold into one collapsible section header, "Explored · N files · t"; it opens by a click.
+    #[test]
+    fn an_explored_block_is_a_collapsible_header_that_opens_its_steps() {
+        let b = [Block::Explored {
+            reads: 3,
+            searches: 2,
+            secs: 12,
+            steps: vec![],
+        }];
+        let closed = block_list_rows(&b, &BTreeSet::new(), &kit(), false);
+        assert_eq!(closed.len(), 1);
+        assert!(
+            closed[0].text.contains("Explored")
+                && closed[0].text.contains('5')
+                && closed[0].text.contains("12"),
+            "{}",
+            closed[0].text
+        );
+        let toggles: Vec<&Value> = closed[0]
+            .props
+            .iter()
+            .filter(|p| p.2 == "drgnx-action")
+            .map(|p| &p.3)
+            .collect();
+        assert_eq!(toggles, [&json!(["block-toggle", 0])]);
+        // opened: the header says so (its twisty), and a click closes it
+        let open = block_list_rows(&b, &BTreeSet::from([0]), &kit(), false);
+        assert_ne!(closed[0].text, open[0].text);
+    }
+
+    /// A subagent's blocks nest under its head, indented.
+    #[test]
+    fn a_subagent_nests_and_indents() {
+        let b = [Block::Subagent {
+            call_id: "c1".into(),
+            title: "Survey the tests".into(),
+            blocks: vec![Block::You {
+                text: "inner".into(),
+            }],
+        }];
+        let rows = block_list_rows(&b, &BTreeSet::new(), &kit(), false);
+        let head = rows
+            .iter()
+            .find(|r| r.text.contains("Survey the tests"))
+            .expect("the head");
+        let inner = rows
+            .iter()
+            .find(|r| r.text.contains("inner"))
+            .expect("the nested block");
+        let lead = |r: &Row| r.text.chars().take_while(|c| *c == ' ').count();
+        assert!(
+            lead(inner) > lead(head),
+            "{:?} vs {:?}",
+            inner.text,
+            head.text
+        );
+    }
+
+    /// The live line pulses, and stands still under reduced motion.
+    #[test]
+    fn the_live_line_pulses_unless_reduced_motion() {
+        let b = [Block::Live {
+            text: "reading the log".into(),
+        }];
+        let pulses = |rm: bool| {
+            block_list_rows(&b, &BTreeSet::new(), &kit(), rm)
+                .iter()
+                .any(|r| r.props.iter().any(|p| p.2 == "drgnx-pulse"))
+        };
+        assert!(pulses(false));
+        assert!(!pulses(true));
+    }
+
+    /// An edit is a kit diff block head: the path, `+N −M`, and Open, Revert and Comment as kit buttons.
+    #[test]
+    fn an_edit_block_has_open_revert_and_comment() {
+        let b = [Block::Edit {
+            path: "core/a.rs".into(),
+            plus: 4,
+            minus: 1,
+            hunks: vec![crate::agents::session::blocks::HunkRef {
+                start_line: 2,
+                end_line: 6,
+            }],
+        }];
+        let rows = block_list_rows(&b, &BTreeSet::new(), &kit(), false);
+        let t = text(&rows);
+        assert!(
+            t.contains("core/a.rs") && t.contains("+4") && t.contains("\u{2212}1"),
+            "{t}"
+        );
+        let kinds: Vec<String> = rows
+            .iter()
+            .flat_map(|r| r.props.iter())
+            .filter(|p| p.2 == "drgnx-action")
+            .filter_map(|p| p.3.get(0).and_then(Value::as_str).map(str::to_owned))
+            .collect();
+        assert_eq!(kinds, ["block-open", "block-revert", "block-comment"]);
+    }
+
+    /// A question the agent asks is the kit's question card with its choices; a permission's keys are y, a, n.
+    #[test]
+    fn an_ask_block_is_a_question_card() {
+        let b = [Block::Ask {
+            kind: crate::agents::session::blocks::AskKind::Permission,
+            text: "Read the gateway's log?".into(),
+            options: vec![
+                ("Allow".into(), 'y'),
+                ("Always".into(), 'a'),
+                ("Deny".into(), 'n'),
+            ],
+        }];
+        let rows = block_list_rows(&b, &BTreeSet::new(), &kit(), false);
+        assert!(
+            rows[0].text.contains("Read the gateway's log?"),
+            "{}",
+            rows[0].text
+        );
+        assert!(
+            rows.iter()
+                .flat_map(|r| r.runs.iter())
+                .any(|x| x.2 == FaceId::KitQuestionCardHead.name())
+        );
+        let t = text(&rows);
+        for label in ["Allow", "Always", "Deny"] {
+            assert!(t.contains(label), "{t}");
+        }
+    }
 }

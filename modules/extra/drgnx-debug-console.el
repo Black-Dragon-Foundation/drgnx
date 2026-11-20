@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'seq)
 
+(declare-function drgnx-ui-kit-empty-state "drgnx-ui-kit" (text button where))
 (declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
 (declare-function drgnx-hub-call-sync "drgnx-hub-client" (method params &optional timeout))
 (declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab buffer))
@@ -150,7 +151,7 @@ chip of the session the input evaluates in (a click picks another; none without 
   (when on
     (setq drgnx-debug-console--hint-overlay (make-overlay (point-min) (point-min) nil t))
     (overlay-put drgnx-debug-console--hint-overlay 'before-string
-                 (propertize (concat drgnx-debug-console-empty "\n") 'face 'shadow))))
+                 (concat (drgnx-ui-kit-empty-state drgnx-debug-console-empty nil 'text) "\n"))))
 
 (defun drgnx-debug-console--prompt ()
   "The input's prompt after the output: read-only, not to be typed before."

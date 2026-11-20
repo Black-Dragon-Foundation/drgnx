@@ -15,13 +15,26 @@ pub struct Subscribe {
     pub view: String,
 }
 
-/// `changes/set`: a change to VIEW: REFRESH reads the sessions' edits again.
+/// `changes/set`: a change to VIEW: REFRESH reads the sessions' edits again; FILTER (when given) keeps only one task's
+/// or one agent's groups from then on (`e` on a task or an agent in Work), and an empty filter shows every group again.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Set {
     pub view: String,
     #[serde(default)]
     pub refresh: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<Filter>,
+}
+
+/// Which groups a Changes view keeps: the task's (TASK) or the agent's (AGENT); neither keeps every group.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Filter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 /// A view id: `changes/close`.
@@ -46,7 +59,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "changes/set", ChangesSet(Set) -> bool,
             classes: [User], writes: false,
-            doc: "a change to a Changes view: refresh reads the sessions' edits again",
+            doc: "a change to a Changes view: refresh reads the sessions' edits again; a filter keeps one task's or one agent's groups",
             check: |p: &Set| check_view(&p.view),
         ),
         method!(

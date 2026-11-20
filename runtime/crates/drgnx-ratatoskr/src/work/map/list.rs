@@ -97,7 +97,7 @@ pub(crate) fn rows(
             None,
         );
         let end = b.pos();
-        b.face(0, end, FaceId::WorkDim.name());
+        b.face(0, end, FaceId::KitEmptyState.name());
         return vec![b.finish()];
     }
     let kit = kit_env(env);

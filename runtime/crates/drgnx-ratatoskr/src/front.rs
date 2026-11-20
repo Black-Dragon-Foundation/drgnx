@@ -757,6 +757,16 @@ impl Front {
                 crate::view::panel::look(self, &caller, p).map(|b| json!(b))
             }
             Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
+            // the Budgets page: the meters and the scope tree (view::budgets)
+            Params::BudgetsPageSubscribe(p) => crate::view::budgets::subscribe(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::BudgetsPageSet(p) => crate::view::budgets::set(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::BudgetsPageClose(p) => {
+                crate::view::budgets::close(self, &caller, p).map(|b| json!(b))
+            }
             // the Agents side: a card per session (view::agents_side)
             Params::AgentsSideSubscribe(p) => {
                 crate::view::agents_side::subscribe(self, &caller, p).map(|b| json!(b))

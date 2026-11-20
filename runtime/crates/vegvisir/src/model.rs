@@ -825,6 +825,60 @@ impl Model {
         }
     }
 
+    /// The chain ID works under, outermost first, as `(kind, bare id, title)`: a task's spec, plan and itself; a plan's
+    /// spec and itself; a spec alone; an agent's (or a subagent's parent's) task's chain. Empty for an item the model
+    /// does not hold. A plan derived from several specs names the first.
+    pub fn breadcrumb(&self, id: &ItemId) -> Vec<(String, String, String)> {
+        let f = &self.facts;
+        let Some(y) = self.names.get(id.as_str()) else {
+            return Vec::new();
+        };
+        let crumb = |kind: &str, s: Sym, title: &str| {
+            let full = self.names.id(s);
+            let bare = full
+                .as_str()
+                .strip_prefix(&format!("{kind}:"))
+                .unwrap_or(full.as_str())
+                .to_owned();
+            (kind.to_owned(), bare, title.to_owned())
+        };
+        let spec_of = |p: Sym| {
+            f.derives
+                .iter()
+                .find(|(pp, _)| *pp == p)
+                .and_then(|&(_, s)| f.specs.get(&s).map(|t| crumb("spec", s, t)))
+        };
+        let plan_chain = |p: Sym| {
+            let mut out: Vec<_> = spec_of(p).into_iter().collect();
+            if let Some((title, ..)) = f.plans.get(&p) {
+                out.push(crumb("plan", p, title));
+            }
+            out
+        };
+        let task_chain = |t: Sym| {
+            let Some((p, title, _)) = f.tasks.get(&t) else {
+                return Vec::new();
+            };
+            let mut out = plan_chain(*p);
+            out.push(crumb("task", t, title));
+            out
+        };
+        if f.tasks.contains_key(&y) {
+            task_chain(y)
+        } else if f.plans.contains_key(&y) {
+            plan_chain(y)
+        } else if let Some(t) = f.specs.get(&y) {
+            vec![crumb("spec", y, t)]
+        } else if let Some(s) = f.sessions.get(&y) {
+            s.task
+                .or_else(|| s.parent.and_then(|p| f.sessions.get(&p)?.task))
+                .map(task_chain)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// The clock's minute.
     pub fn minute(&self) -> u64 {
         self.facts.minute

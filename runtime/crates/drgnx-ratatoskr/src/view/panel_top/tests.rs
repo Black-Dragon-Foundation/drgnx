@@ -64,6 +64,8 @@ fn build(s: &Snapshot, width: u32, busy: Option<f64>) -> (Vec<Row>, Vec<(ImageId
             now: 1000.0,
             files_edited: None,
             checkpoints: None,
+            chain: &[],
+            plan: &[],
         },
     )
 }
@@ -213,6 +215,8 @@ fn a_terminal_header_has_no_images() {
             now: 0.0,
             files_edited: None,
             checkpoints: None,
+            chain: &[],
+            plan: &[],
         },
     );
     assert!(images.len() == 3 || images.is_empty());
@@ -299,6 +303,8 @@ fn the_chips_say_the_sandbox_the_files_and_the_checkpoints_when_the_hub_knows() 
             now: 0.0,
             files_edited: Some(3),
             checkpoints: Some(1),
+            chain: &[],
+            plan: &[],
         },
     );
     let chip_rows: Vec<_> = rows.iter().filter(|r| r.key.starts_with(CHIPS)).collect();
@@ -332,6 +338,8 @@ fn the_chips_say_the_model_and_the_mcp_servers_and_both_explain_themselves() {
             now: 0.0,
             files_edited: None,
             checkpoints: None,
+            chain: &[],
+            plan: &[],
         },
     );
     let chips = rows.iter().find(|r| r.key == CHIPS).expect("chips");
@@ -363,6 +371,8 @@ fn chips_that_do_not_fit_one_row_wrap_to_the_next_never_cut_audit_a3() {
             now: 0.0,
             files_edited: Some(3),
             checkpoints: Some(12),
+            chain: &[],
+            plan: &[],
         },
     );
     let chip_rows: Vec<_> = rows.iter().filter(|r| r.key.starts_with(CHIPS)).collect();
@@ -380,4 +390,161 @@ fn chips_that_do_not_fit_one_row_wrap_to_the_next_never_cut_audit_a3() {
     ] {
         assert!(all.contains(w), "{w} in {all}");
     }
+}
+
+fn cx_of<'a>(
+    e: &'a ViewEnv,
+    f: &'a FontSet,
+    l: &'a Lens,
+    open: &'a BTreeSet<String>,
+    chain: &'a [ChainLink],
+    plan: &'a [(String, String)],
+) -> Cx<'a> {
+    Cx {
+        env: e,
+        fonts: f,
+        lens: l,
+        open,
+        busy_since: None,
+        now: 0.0,
+        files_edited: None,
+        checkpoints: None,
+        chain,
+        plan,
+        budget: None,
+    }
+}
+
+fn link(kind: &str, id: &str, label: &str) -> ChainLink {
+    ChainLink {
+        kind: kind.into(),
+        id: id.into(),
+        label: label.into(),
+    }
+}
+
+// pattern: D
+#[test]
+fn the_chain_chips_select_their_node_in_work() {
+    let (e, f, l, open) = (env(600), fonts(), lens(), BTreeSet::new());
+    let chain = [
+        link("spec", "s1", "Search view"),
+        link("plan", "p2", "A: search"),
+        link("task", "t7", "Fix the ask"),
+    ];
+    let (rows, _) = rows(&snap(json!({})), &cx_of(&e, &f, &l, &open, &chain, &[]));
+    let chain_row = rows.iter().find(|r| r.key == CHAIN).expect("a chain row");
+    assert_eq!(rows[1].key, CHAIN, "right under the header");
+    for label in ["Search view", "A: search", "Fix the ask"] {
+        assert!(chain_row.text.contains(label), "{:?}", chain_row.text);
+    }
+    assert!(chain_row.text.contains('›'), "{:?}", chain_row.text);
+    let kinds: Vec<_> = props(chain_row, FaceId::AgentPanelChip.name())
+        .into_iter()
+        .map(|(v, text)| (v.as_str().unwrap_or("").to_owned(), text))
+        .collect();
+    assert_eq!(
+        kinds.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+        ["select:spec:s1", "select:plan:p2", "select:task:t7"]
+    );
+    // no chain, no row
+    let (none, _) = rows_of_empty(&e, &f, &l, &open);
+    assert!(none.iter().all(|r| r.key != CHAIN));
+}
+
+fn rows_of_empty(
+    e: &ViewEnv,
+    f: &FontSet,
+    l: &Lens,
+    open: &BTreeSet<String>,
+) -> (Vec<Row>, Vec<(ImageId, String)>) {
+    rows(&snap(json!({})), &cx_of(e, f, l, open, &[], &[]))
+}
+
+// pattern: D
+#[test]
+fn the_chips_name_the_worktree_the_agent_works_in() {
+    let (e, f, l, open) = (env(600), fonts(), lens(), BTreeSet::new());
+    let s = snap(json!({"cwd": "/work/proj/.claude/worktrees/r6-flow-23"}));
+    let (first, _) = rows(&s, &cx_of(&e, &f, &l, &open, &[], &[]));
+    let chips: String = first
+        .iter()
+        .filter(|r| r.key.starts_with(CHIPS))
+        .map(|r| r.text.as_str())
+        .collect();
+    assert!(chips.contains(" r6-flow-23 "), "{chips:?}");
+    // a folder that is no worktree is named by its own last part
+    let s = snap(json!({"cwd": "/work/proj/"}));
+    let (rows, _) = rows(&s, &cx_of(&e, &f, &l, &open, &[], &[]));
+    let chips: String = rows
+        .iter()
+        .filter(|r| r.key.starts_with(CHIPS))
+        .map(|r| r.text.as_str())
+        .collect();
+    assert!(chips.contains(" proj "), "{chips:?}");
+}
+
+// pattern: D
+#[test]
+fn the_plan_strip_is_a_status_dot_and_its_word_per_plan_item() {
+    let (e, f, l, open) = (env(600), fonts(), lens(), BTreeSet::new());
+    let plan = [
+        ("completed".to_owned(), "Read the gateway".to_owned()),
+        ("in_progress".to_owned(), "Queue replies".to_owned()),
+        ("pending".to_owned(), "Test it".to_owned()),
+    ];
+    let (rows, _) = rows(&snap(json!({})), &cx_of(&e, &f, &l, &open, &[], &plan));
+    let at = rows.iter().position(|r| r.key == PLAN).expect("a plan row");
+    let strip_at = rows.iter().position(|r| r.key.starts_with(STRIP)).unwrap();
+    assert!(
+        at < strip_at,
+        "the plan strip comes before the step-type strip"
+    );
+    let r = &rows[at];
+    for word in ["Read the gateway", "Queue replies", "Test it"] {
+        assert!(r.text.contains(word), "{:?}", r.text);
+    }
+    let dots: Vec<&str> = r
+        .runs
+        .iter()
+        .map(|(_, _, face)| face.as_str())
+        .filter(|f| f.starts_with("drgnx-kit-status-dot"))
+        .collect();
+    assert_eq!(
+        dots,
+        [
+            FaceId::KitStatusDotDone.name(),
+            FaceId::KitStatusDotRunning.name(),
+            FaceId::KitStatusDotIdle.name()
+        ]
+    );
+    // no plan, no row
+    let (none, _) = rows_of_empty(&e, &f, &l, &open);
+    assert!(none.iter().all(|r| r.key != PLAN));
+}
+
+/// Flow Task 23a: the header's cost chip reads the spend and the limit of the scope that holds the agent.
+#[test]
+fn header_cost_chip_has_spend_and_limit() {
+    let (e, f, l, open) = (env(600), fonts(), lens(), BTreeSet::new());
+    let s = snap(json!({"usage": {"used": 50.0, "size": 100.0, "cost": 1.2}}));
+    let mut cx = cx_of(&e, &f, &l, &open, &[], &[]);
+    cx.budget = Some((1.2, 5.0));
+    let (rows, _) = rows(&s, &cx);
+    let chips: String = rows
+        .iter()
+        .filter(|r| r.key.starts_with(CHIPS))
+        .map(|r| r.text.as_str())
+        .collect();
+    assert!(chips.contains("$1.20 / $5"), "{chips:?}");
+    // the chip still explains itself on a click (its kind is `cost`)
+    let kinds: Vec<_> = rows
+        .iter()
+        .flat_map(|r| props(r, FaceId::AgentPanelChip.name()))
+        .map(|(v, _)| v.as_str().unwrap_or("").to_owned())
+        .collect();
+    assert!(kinds.iter().any(|k| k == "cost"), "{kinds:?}");
+    // without a limit, the plain spend
+    let (plain, _) = rows_of_empty(&e, &f, &l, &open);
+    assert!(plain.iter().all(|r| !r.text.contains(" / $")));
 }

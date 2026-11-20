@@ -13,6 +13,7 @@
 
 use crate::builder::RowBuilder;
 use crate::faces::FaceId;
+use crate::fit;
 use crate::kit_gen::{self, Geom, STATES};
 use crate::row::{ImageId, Row};
 use serde::{Deserialize, Serialize};
@@ -753,6 +754,33 @@ pub const TAB_CLOSE_PAD_PX: u16 = 2;
 /// A rail item's icon size in logical px (sidebars.html `.rb`: a 32 px square round a 16 px icon).
 pub const RAIL_ICON_PX: u16 = 16;
 
+/// What a line of a diff hunk is: context, added or removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiffLine {
+    Ctx,
+    Add,
+    Del,
+}
+
+impl DiffLine {
+    fn part(self) -> &'static str {
+        match self {
+            DiffLine::Ctx => "ctx",
+            DiffLine::Add => "add",
+            DiffLine::Del => "del",
+        }
+    }
+
+    fn sign(self) -> &'static str {
+        match self {
+            DiffLine::Ctx => " ",
+            DiffLine::Add => "+",
+            DiffLine::Del => "-",
+        }
+    }
+}
+
 /// What a question card asks: a permission (`y` Allow once, `a` Always, `n` Deny), a question (its answers `1`…`9`) or a
 /// sign-off (`y` Approve, `n` Request changes).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -785,6 +813,13 @@ impl QuestionKind {
     }
 }
 
+/// One hunk of a diff block: its `@@` HEADER and its LINES (kind, the line's number, text).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct Hunk {
+    pub header: String,
+    pub lines: Vec<(DiffLine, u32, String)>,
+}
+
 /// One answer of a question card: its LABEL, the KEY of its hint (empty: the kind's own) and what it does.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Choice {
@@ -792,6 +827,34 @@ pub struct Choice {
     #[serde(default)]
     pub key: String,
     pub action: Action,
+}
+
+/// A toast's tone: its status dot (`info` running, `warn` needs you, `error` error).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToastTone {
+    #[default]
+    Info,
+    Warn,
+    Error,
+}
+
+impl ToastTone {
+    fn name(self) -> &'static str {
+        match self {
+            ToastTone::Info => "info",
+            ToastTone::Warn => "warn",
+            ToastTone::Error => "error",
+        }
+    }
+
+    fn status(self) -> Status {
+        match self {
+            ToastTone::Info => Status::Running,
+            ToastTone::Warn => Status::NeedsYou,
+            ToastTone::Error => Status::Error,
+        }
+    }
 }
 
 /// A component with its props, as JSON `{"c": "row", …}`.
@@ -856,6 +919,39 @@ pub enum Comp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<Action>,
     },
+    /// A diff block: FILE's head row (its path, +ADDED -REMOVED, BUTTONS after them) over each hunk's `@@` row and lines.
+    /// As one component it expands to its head row; the rows of the whole block come from `expand_rows`.
+    DiffBlock {
+        file: String,
+        added: u32,
+        removed: u32,
+        #[serde(default)]
+        hunks: Vec<Hunk>,
+        #[serde(default)]
+        buttons: Vec<(String, Action)>,
+        /// An icon (a name) before the file, as the section header's twisty is drawn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
+        /// The head's room in logical px: [`diff_block_rows`] fits the file's name to what the rest of the head leaves.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
+    },
+    /// A toast of TONE: its status dot, TEXT and quiet small buttons after it.
+    Toast {
+        #[serde(default)]
+        tone: ToastTone,
+        text: String,
+        #[serde(default)]
+        buttons: Vec<(String, Action)>,
+    },
+    /// An empty state: TEXT, and after it, when there is an ACTION, a quiet small button labelled so.
+    EmptyState {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<(String, Action)>,
+    },
+    /// One row of a diff block's body: TEXT in PART (`hunk`, `ctx`, `add` or `del`) with the block's room each side.
+    DiffLine { part: String, text: String },
     /// One line of a card of KIND in SHAPE: TEXT with the card's room each side.
     Card {
         #[serde(default)]
@@ -1596,6 +1692,125 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
                 put_action(b, from, to, a);
             }
         }
+        Comp::DiffBlock {
+            file,
+            added,
+            removed,
+            buttons,
+            icon,
+            ..
+        } => {
+            let part = |p: &'static str| {
+                let variant = [p, env.density.name()];
+                comp_face(kit_gen::face(CompId::DiffBlock, &variant))
+            };
+            let g: Geom = kit_gen::geom(CompId::DiffBlock, &["head", env.density.name()]);
+            let head = part("head");
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), head);
+            if let Some(name) = icon {
+                let alt = if env.ascii { "#" } else { "\u{25a4}" };
+                let mark = Some(glyph(env, name))
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or(alt);
+                match env
+                    .icons
+                    .filter(|_| !env.tty)
+                    .and_then(|i| (i.0)(name, px(ICON_PX, env.scale)))
+                {
+                    Some(id) => b.image(id, alt),
+                    None => b.push(mark, head),
+                };
+                b.push(" ", head);
+            }
+            b.push(file, head);
+            pad(b, env, px(g.gap, env.scale), 1, head);
+            b.push(&format!("+{added}"), part("add"));
+            b.push(" ", head);
+            b.push(&format!("\u{2212}{removed}"), part("del"));
+            for (label, action) in buttons {
+                pad(b, env, px(g.gap, env.scale), 1, head);
+                expand(
+                    b,
+                    env,
+                    &Comp::Button {
+                        label: label.clone(),
+                        style: ButtonStyle::Quiet,
+                        size: Size::Sm,
+                        state: State::Rest,
+                        key: None,
+                        action: Some(action.clone()),
+                    },
+                );
+            }
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), head);
+        }
+        Comp::Toast {
+            tone,
+            text,
+            buttons,
+        } => {
+            let variant = [tone.name(), env.density.name()];
+            let g: Geom = kit_gen::geom(CompId::Toast, &variant);
+            let face = comp_face(kit_gen::face(CompId::Toast, &variant));
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+            expand(
+                b,
+                env,
+                &Comp::StatusDot {
+                    status: tone.status(),
+                    word: false,
+                },
+            );
+            pad(b, env, px(g.gap, env.scale), 1, face);
+            b.push(text, face);
+            for (label, a) in buttons {
+                pad(b, env, px(g.gap, env.scale), 1, face);
+                expand(
+                    b,
+                    env,
+                    &Comp::Button {
+                        label: label.clone(),
+                        style: ButtonStyle::Quiet,
+                        size: Size::Sm,
+                        state: State::Rest,
+                        key: None,
+                        action: Some(a.clone()),
+                    },
+                );
+            }
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+        }
+        Comp::EmptyState { text, action } => {
+            let variant = [env.density.name()];
+            let g: Geom = kit_gen::geom(CompId::EmptyState, &variant);
+            let face = comp_face(kit_gen::face(CompId::EmptyState, &variant));
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+            b.push(text, face);
+            if let Some((label, a)) = action {
+                pad(b, env, px(g.gap, env.scale), 1, face);
+                expand(
+                    b,
+                    env,
+                    &Comp::Button {
+                        label: label.clone(),
+                        style: ButtonStyle::Quiet,
+                        size: Size::Sm,
+                        state: State::Rest,
+                        key: None,
+                        action: Some(a.clone()),
+                    },
+                );
+            }
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+        }
+        Comp::DiffLine { part, text } => {
+            let variant = [part.as_str(), env.density.name()];
+            let g: Geom = kit_gen::geom(CompId::DiffBlock, &variant);
+            let face = comp_face(kit_gen::face(CompId::DiffBlock, &variant));
+            pad(b, env, px(g.pad.0, env.scale), usize::from(g.tty_pad), face);
+            b.push(text, face);
+            pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+        }
         Comp::Card { kind, shape, text } => {
             let variant = [kind.name(), shape.name(), env.density.name()];
             let g: Geom = kit_gen::geom(CompId::Card, &variant);
@@ -2323,7 +2538,89 @@ pub fn expand_rows(env: &KitEnv, key: &str, c: &Comp) -> Vec<Row> {
     }
     let mut b = RowBuilder::new(format!("{key}/0"));
     expand(&mut b, env, c);
-    vec![b.finish()]
+    let head = b.finish();
+    let Comp::DiffBlock { hunks, .. } = c else {
+        return vec![head];
+    };
+    // the whole block: the head, then each hunk's `@@` row and its lines (gutter number, sign, text), in the card's ring
+    let mut rows = vec![head];
+    let mut line = |id: String, part: &str, text: String| {
+        let mut b = RowBuilder::new(id);
+        let c = Comp::DiffLine {
+            part: part.to_owned(),
+            text,
+        };
+        expand(&mut b, env, &c);
+        rows.push(b.finish());
+    };
+    for (hi, h) in hunks.iter().enumerate() {
+        line(format!("{key}/h{hi}"), "hunk", h.header.clone());
+        for (li, (kind, n, text)) in h.lines.iter().enumerate() {
+            let text = format!("{n:>4} {} {text}", kind.sign());
+            line(format!("{key}/h{hi}/{li}"), kind.part(), text);
+        }
+    }
+    card_rows(env, CardKind::Plain, rows)
+}
+
+/// What of a diff block's head the file's name leaves room for, in device px: the head's WIDTH (logical px) less its pads,
+/// the icon, the counts and each button, measured by M.
+fn diff_head_room(env: &KitEnv, m: &dyn fit::Measure, c: &Comp, width: u32) -> f32 {
+    let Comp::DiffBlock {
+        added,
+        removed,
+        buttons,
+        icon,
+        ..
+    } = c
+    else {
+        return 0.0;
+    };
+    let d = env.density.name();
+    let g: Geom = kit_gen::geom(CompId::DiffBlock, &["head", d]);
+    let face = |p: &str| comp_face(kit_gen::face(CompId::DiffBlock, &[p, d]));
+    let w = |f: Option<&str>, t: &str| fit::width_in(m, f, t);
+    let mut used = (px(g.pad.0, env.scale) + px(g.pad.1, env.scale) + px(g.gap, env.scale)) as f32
+        + w(face("add"), &format!("+{added}"))
+        + w(face("head"), " ")
+        + w(face("del"), &format!("\u{2212}{removed}"));
+    if icon.is_some() {
+        used += px(ICON_PX, env.scale) as f32 + w(face("head"), " ");
+    }
+    let bg: Geom = kit_gen::geom(CompId::Button, &["quiet", "sm", d]);
+    let bf = comp_face(kit_gen::face(CompId::Button, &["quiet", "sm", d]));
+    for (label, _) in buttons {
+        used += (px(g.gap, env.scale) + px(bg.pad.0, env.scale) + px(bg.pad.1, env.scale)) as f32
+            + w(bf, label);
+    }
+    px(u16::try_from(width).unwrap_or(u16::MAX), env.scale) as f32 - used
+}
+
+/// [`expand_rows`] of a diff block with a `width`: the file's name fitted (an ellipsis, or nothing when the room is
+/// gone) to the room the head's other parts leave, measured by M, so the buttons stay inside the edge.
+pub fn diff_block_rows(env: &KitEnv, key: &str, c: &Comp, m: &dyn fit::Measure) -> Vec<Row> {
+    let mut c = c.clone();
+    if let Comp::DiffBlock {
+        file,
+        width: Some(width),
+        ..
+    } = &c
+    {
+        let room = diff_head_room(env, m, &c, *width);
+        let head = comp_face(kit_gen::face(
+            CompId::DiffBlock,
+            &["head", env.density.name()],
+        ));
+        let fitted = if room > 0.0 {
+            fit::fit_in(m, head, file, room)
+        } else {
+            String::new()
+        };
+        if let Comp::DiffBlock { file, .. } = &mut c {
+            *file = fitted;
+        }
+    }
+    expand_rows(env, key, &c)
 }
 
 /// ROWS as the rows of one card of KIND: each row's text under the card's ring face of its shape (single, top, mid,
@@ -2907,6 +3204,185 @@ mod tests {
         assert_eq!(r.stops, vec![(0, 100)]);
         assert_eq!(r.spaces, vec![(1, 2, 0)]);
         assert_eq!(r.runs, vec![(1, 2, FaceId::Focus.name().to_owned())]);
+    }
+
+    #[test]
+    fn diff_block_rows_are_parts_in_the_cards_ring() {
+        // head, then each hunk's `@@` row and lines: every row in its part's face, the card's ring over it, open between rows
+        let env = KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            density: Density::Comfortable,
+            icons: None,
+            ascii: false,
+        };
+        let block = Comp::DiffBlock {
+            file: "a.rs".into(),
+            added: 1,
+            removed: 1,
+            hunks: vec![Hunk {
+                header: "@@ -1 +1 @@".into(),
+                lines: vec![
+                    (DiffLine::Del, 1, "old".into()),
+                    (DiffLine::Add, 1, "new".into()),
+                    (DiffLine::Ctx, 2, "same".into()),
+                ],
+            }],
+            buttons: vec![(
+                "Accept".into(),
+                Action {
+                    kind: "kit-test".into(),
+                    args: vec![],
+                },
+            )],
+            icon: None,
+            width: None,
+        };
+        let rows = expand_rows(&env, "d", &block);
+        assert_eq!(rows.len(), 5);
+        let part_face = |i: usize| {
+            rows[i]
+                .runs
+                .iter()
+                .map(|r| r.2.as_str())
+                .find(|f| f.contains("diff-block"))
+        };
+        assert_eq!(part_face(0), Some(FaceId::KitDiffBlockHead.name()));
+        assert_eq!(part_face(1), Some(FaceId::KitDiffBlockHunk.name()));
+        assert_eq!(part_face(2), Some(FaceId::KitDiffBlockDel.name()));
+        assert_eq!(part_face(3), Some(FaceId::KitDiffBlockAdd.name()));
+        assert_eq!(part_face(4), Some(FaceId::KitDiffBlockCtx.name()));
+        assert_eq!(rows[2].text.trim(), "1 - old");
+        assert!(rows[0].text.contains("Accept"));
+        assert!(rows[0].props.iter().any(|p| p.2 == "drgnx-action"));
+        let ring = |i: usize| rows[i].runs.last().unwrap().2.clone();
+        assert_eq!(ring(0), FaceId::KitCardPlainTop.name());
+        assert_eq!(ring(2), FaceId::KitCardPlainMid.name());
+        assert_eq!(ring(4), FaceId::KitCardPlainBottom.name());
+    }
+
+    #[test]
+    fn toast_is_a_status_dot_the_text_and_kit_buttons() {
+        let env = KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            density: Density::Comfortable,
+            icons: None,
+            ascii: false,
+        };
+        let act = |k: &str| Action {
+            kind: k.into(),
+            args: vec![],
+        };
+        let row = |tone, buttons| {
+            let mut b = RowBuilder::new("t");
+            expand(
+                &mut b,
+                &env,
+                &Comp::Toast {
+                    tone,
+                    text: "Disk is nearly full".into(),
+                    buttons,
+                },
+            );
+            b.finish()
+        };
+        let r = row(
+            ToastTone::Warn,
+            vec![
+                ("Show".into(), act("show")),
+                ("Dismiss".into(), act("dismiss")),
+            ],
+        );
+        assert!(
+            r.text.contains("Disk is nearly full")
+                && r.text.contains("Show")
+                && r.text.contains("Dismiss")
+        );
+        // the toast's frame face under the text, a kit button's action on each button
+        assert!(r.runs.iter().any(|(_, _, f)| f == FaceId::KitToast.name()));
+        assert_eq!(r.props.iter().filter(|p| p.2 == "drgnx-action").count(), 2);
+        // each tone's dot is the status dot's: info running, warn needs you, error error
+        let dot = |tone| {
+            let r = row(tone, vec![]);
+            r.runs.iter().map(|(_, _, f)| f.clone()).collect::<Vec<_>>()
+        };
+        assert!(dot(ToastTone::Info).contains(&FaceId::KitStatusDotRunning.name().to_owned()));
+        assert!(dot(ToastTone::Warn).contains(&FaceId::KitStatusDotNeedsYou.name().to_owned()));
+        assert!(dot(ToastTone::Error).contains(&FaceId::KitStatusDotError.name().to_owned()));
+    }
+
+    struct Mono;
+    impl fit::Measure for Mono {
+        fn advance(&self, _role: &str, _ch: char) -> Option<f32> {
+            Some(8.0)
+        }
+        fn fallback(&self, _role: &str) -> f32 {
+            8.0
+        }
+    }
+
+    fn head_block(file: &str, width: Option<u32>) -> Comp {
+        Comp::DiffBlock {
+            file: file.into(),
+            added: 2,
+            removed: 1,
+            hunks: vec![],
+            buttons: ["Reject", "Accept"]
+                .iter()
+                .map(|l| {
+                    (
+                        (*l).to_owned(),
+                        Action {
+                            kind: "kit-test".into(),
+                            args: vec![],
+                        },
+                    )
+                })
+                .collect(),
+            icon: Some("file-code".into()),
+            width,
+        }
+    }
+
+    #[test]
+    fn diff_block_head_has_an_icon_and_fits_its_name_to_the_room() {
+        let image = |_: &str, _: u32| Some(ImageId { hash: 7, epoch: 1 });
+        let mut env = KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            density: Density::Comfortable,
+            icons: None,
+            ascii: false,
+        };
+        let name = "core/a-long-directory/drgnx-gateway.el";
+        // no icon image: the glyph; room enough: the whole name
+        let wide = diff_block_rows(&env, "d", &head_block(name, Some(600)), &Mono);
+        assert!(wide[0].text.contains(name) && wide[0].text.contains('\u{25a4}'));
+        // an icon image: the row names it
+        env.icons = Some(Icons(&image));
+        let wide = diff_block_rows(&env, "d", &head_block(name, Some(600)), &Mono);
+        assert_eq!(wide[0].images.len(), 1);
+        // a narrow window: the name gives way (an ellipsis), the counts and both buttons stay
+        let narrow = diff_block_rows(&env, "d", &head_block(name, Some(300)), &Mono);
+        let t = &narrow[0].text;
+        assert!(!t.contains(name) && t.contains('\u{2026}'), "{t}");
+        assert!(
+            t.contains("+2") && t.contains("Reject") && t.contains("Accept"),
+            "{t}"
+        );
+        // no room at all: no name, the buttons stay
+        let none = diff_block_rows(&env, "d", &head_block(name, Some(100)), &Mono);
+        assert!(!none[0].text.contains("core") && none[0].text.contains("Accept"));
+        // no width: the whole name, as `expand` draws it
+        assert!(
+            diff_block_rows(&env, "d", &head_block(name, None), &Mono)[0]
+                .text
+                .contains(name)
+        );
     }
 
     #[test]

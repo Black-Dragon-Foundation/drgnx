@@ -134,6 +134,13 @@
     {"name": "tab-icon", "comp": {"c": "tab", "title": "main.rs", "state": "selected", "icon": "file-code", "close": true}},
     {"name": "tab-panel-icon", "comp": {"c": "tab", "title": "Debug Console", "size": "panel", "state": "selected", "icon": "terminal"}},
     {"name": "segmented", "comp": {"c": "segmented", "current": 1, "items": [["Map", {"kind": "ui-button", "args": ["map"]}], ["Board", {"kind": "ui-button", "args": ["board"]}], ["Flow", {"kind": "ui-button", "args": ["flow"]}]]}},
+    {"name": "diff-block-head", "comp": {"c": "diff-block", "file": "src/main.rs", "added": 3, "removed": 1}},
+    {"name": "diff-block-buttons", "comp": {"c": "diff-block", "file": "src/main.rs", "added": 3, "removed": 1, "buttons": [["Reject", {"kind": "card", "args": ["reject", "src/main.rs", 0]}], ["Accept", {"kind": "card", "args": ["accept", "src/main.rs", 0]}]]}},
+    {"name": "diff-block-icon", "comp": {"c": "diff-block", "file": "src/main.rs", "added": 3, "removed": 1, "icon": "file-unknown"}},
+    {"name": "diff-line-add", "comp": {"c": "diff-line", "part": "add", "text": "  12 + let x = 1;"}},
+    {"name": "diff-line-hunk", "comp": {"c": "diff-line", "part": "hunk", "text": "@@ -10,3 +10,4 @@"}},
+    {"name": "empty-state", "comp": {"c": "empty-state", "text": "Nothing here yet"}},
+    {"name": "empty-state-action", "comp": {"c": "empty-state", "text": "No agents", "action": ["Start one", {"kind": "kit-test", "args": ["start"]}]}},
     {"name": "input-single-empty", "comp": {"c": "text-input", "placeholder": "Ask an agent"}},
     {"name": "input-single-text", "comp": {"c": "text-input", "text": "rename the helper", "placeholder": "Ask an agent"}},
     {"name": "input-single-1chip", "comp": {"c": "text-input", "text": "why does this fail", "placeholder": "Ask an agent", "chips": [{"label": "kit.rs", "tone": "neutral", "remove": {"kind": "composer-chip-remove", "args": ["kit.rs"]}}]}},
@@ -149,6 +156,9 @@
     {"name": "rail-current", "comp": {"c": "rail-item", "place": "Search", "icon": "search", "state": "selected", "action": {"kind": "ui-button", "args": ["place-search"]}}},
     {"name": "rail-current-inactive", "comp": {"c": "rail-item", "place": "Search", "icon": "search", "state": "selected-inactive"}},
     {"name": "rail-dot", "comp": {"c": "rail-item", "place": "Changes", "icon": "git-branch", "dot": true}},
-    {"name": "rail-no-icon", "comp": {"c": "rail-item", "place": "Run"}}
+    {"name": "rail-no-icon", "comp": {"c": "rail-item", "place": "Run"}},
+    {"name": "toast-info", "comp": {"c": "toast", "tone": "info", "text": "Saved"}},
+    {"name": "toast-warn-buttons", "comp": {"c": "toast", "tone": "warn", "text": "Disk is nearly full", "buttons": [["Show", {"kind": "kit-test", "args": ["show"]}], ["Dismiss", {"kind": "kit-test", "args": ["dismiss"]}]]}},
+    {"name": "toast-error", "comp": {"c": "toast", "tone": "error", "text": "Build failed"}}
   ]
 }

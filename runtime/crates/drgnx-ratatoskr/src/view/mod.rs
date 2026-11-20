@@ -18,6 +18,7 @@
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
 pub mod agents_side;
+pub mod budgets;
 pub mod buffers;
 pub mod changes;
 pub mod debug;
@@ -646,6 +647,7 @@ pub struct Views {
     review_screens: review_screen::ReviewScreens,
     /// The Agents side views (`agents/side/subscribe`).
     agents_sides: agents_side::AgentsSides,
+    budget_pages: budgets::Pages,
     /// The Run and Debug views (`debug/view`).
     pub debugs: debug::DebugViews,
     /// The agent panels' rows (`agent-panel/SESSION`).
@@ -676,6 +678,7 @@ impl Default for Views {
             doc_comments: doc_comments::DocComments::default(),
             review_screens: review_screen::ReviewScreens::default(),
             agents_sides: agents_side::AgentsSides::default(),
+            budget_pages: budgets::Pages::default(),
             debugs: debug::DebugViews::default(),
             panels: Arc::default(),
             front: OnceLock::new(),
@@ -719,6 +722,7 @@ impl Views {
             || self.doc_comments_build(f, key)
             || self.review_screen_build(f, key)
             || self.agents_side_build(f, key)
+            || self.budgets_build(f, key)
             || self.debugs.env_build(f, key)
             || f.core.presence.here_build(f, key.0, &key.1)
             || f.notebooks.views.env_build(key.0, &key.1)
@@ -1061,6 +1065,7 @@ impl Views {
         self.doc_comments.gone(conn);
         self.review_screens.gone(conn);
         self.agents_sides.gone(conn);
+        self.budget_pages.gone(conn);
         self.debugs.gone(conn);
         self.panels.gone(conn, None);
         lock(&self.sja).retain(|(c, _, _)| *c != conn);

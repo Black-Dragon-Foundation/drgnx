@@ -726,6 +726,89 @@ type face in its `:inherit'; nil for a face that only colours."
     (should (equal (substring-no-properties s) "ab    \n"))
     (should (equal (get-text-property 5 'display s) '(space :align-to 6)))))
 
+(ert-deftest drgnx-ui-kit/diff-block-rows-carry-their-part-and-the-ring ()
+  "A diff block: the head row, the hunk's @@ row and its lines, each in its part's kit face, the ring open between
+rows; the head carries the counts and the buttons; its help-echo says the file and the counts."
+  (let* ((fired nil)
+         (s (drgnx-ui-kit-diff-block "a.rs" 1 1 '(("@@ -1 +1 @@" (del 1 "old") (add 1 "new") (ctx 2 "same"))) 40
+                                     (list (list "Accept" "keep it" (lambda () (setq fired t))))))
+         (rows (split-string s "\n" t)) (face-of (lambda (row regex) (car (ensure-list (get-text-property (string-match regex row) 'face row))))))
+    (should (= 5 (length rows)))
+    (should (eq 'drgnx-kit-diff-block-head (funcall face-of (nth 0 rows) "a.rs")))
+    (should (eq 'drgnx-kit-diff-block-add (funcall face-of (nth 0 rows) "\\+1")))
+    (should (eq 'drgnx-kit-diff-block-hunk (funcall face-of (nth 1 rows) "@@")))
+    (should (eq 'drgnx-kit-diff-block-del (funcall face-of (nth 2 rows) "old")))
+    (should (eq 'drgnx-kit-diff-block-add (funcall face-of (nth 3 rows) "new")))
+    (should (eq 'drgnx-kit-diff-block-ctx (funcall face-of (nth 4 rows) "same")))
+    (should (equal '(drgnx-kit-diff-block-del drgnx-kit-card-plain-mid)
+                   (get-text-property (1- (length (nth 2 rows))) 'face (nth 2 rows))))
+    (should (equal '(drgnx-kit-diff-block-ctx drgnx-kit-card-plain-bottom)
+                   (get-text-property 0 'face (nth 4 rows))))
+    (should (equal "a.rs, 1 added, 1 removed" (get-text-property 0 'help-echo s)))
+    (let ((pos (string-match "Accept" s)))
+      (should (get-text-property pos 'button s))
+      (funcall (get-text-property pos 'action s) nil)
+      (should fired))))
+
+(ert-deftest drgnx-ui-kit/diff-block-head-fits-its-name-to-the-room ()
+  "With a :width the head's file name gives way (an ellipsis, or nothing) to the counts and the buttons; without one it
+is whole.  Every character is 8 px wide here."
+  (cl-letf (((symbol-function 'drgnx-ui-kit--text-width) (lambda (text _face) (* 8 (length text)))))
+    (let* ((name "core/a-long-directory/drgnx-gateway.el")
+           (head (lambda (width)
+                   (plist-get (drgnx-ui-kit-expand
+                               'diff-block (list :c "diff-block" :file name :added 2 :removed 1 :icon "file-unknown"
+                                                 :width width
+                                                 :buttons (vector (vector "Reject" '(:kind "kit-test" :args nil)) (vector "Accept" '(:kind "kit-test" :args nil))))
+                               1 nil) :text))))
+      (should (string-match-p (regexp-quote name) (funcall head 600)))
+      (should (string-match-p "\u25a4" (funcall head 600)))
+      (let ((narrow (funcall head 300)))
+        (should-not (string-match-p (regexp-quote name) narrow))
+        (should (string-match-p "\u2026" narrow))
+        (should (string-match-p "Reject" narrow)) (should (string-match-p "Accept" narrow)))
+      (let ((none (funcall head 100)))
+        (should-not (string-match-p "core" none)) (should (string-match-p "Accept" none)))
+      (should (string-match-p (regexp-quote name) (plist-get (drgnx-ui-kit-expand 'diff-block (list :c "diff-block" :file name :added 2 :removed 1) 1 nil) :text))))))
+
+(ert-deftest drgnx-ui-kit/empty-state-is-inert-and-labelled ()
+  "An empty state is its text in the kit's face, inert (no row selects it), its help text the text itself; with a button
+the button is after the text and a `button.el' button."
+  (let* ((fired nil) (s (drgnx-ui-kit-empty-state "No agents yet" (list "Start one" "start an agent" (lambda () (setq fired t))) 'text)))
+    (should (string-prefix-p "No agents yet" s))
+    (should (get-text-property 0 'drgnx-row-inert s))
+    (should (equal "No agents yet" (get-text-property 0 'help-echo s)))
+    (should (eq 'drgnx-kit-empty-state (car (ensure-list (get-text-property 0 'face s)))))
+    (let ((pos (string-match "Start one" s)))
+      (should (get-text-property pos 'button s))
+      (funcall (get-text-property pos 'action s) nil)
+      (should fired))))
+
+(ert-deftest drgnx-ui-kit/toast-buttons-are-kit-buttons ()
+  "A toast is its tone's status dot, the text in the toast's face and kit buttons that run their action."
+  (let* ((fired nil)
+         (s (drgnx-ui-kit-toast 'warn "Disk is nearly full" (list (list "Show" "show it" (lambda () (setq fired t)))) 'text)))
+    (should (string-match-p "Disk is nearly full" s))
+    (should (eq 'drgnx-kit-toast (car (ensure-list (get-text-property (string-match "Disk" s) 'face s)))))
+    (let ((pos (string-match "Show" s)))
+      (should (get-text-property pos 'button s))
+      (should (cl-some (lambda (f) (string-match-p "drgnx-kit-button" (symbol-name f)))
+                       (ensure-list (get-text-property pos 'face s))))
+      (funcall (get-text-property pos 'action s) nil)
+      (should fired))
+    (should (equal "warning: Disk is nearly full" (get-text-property 0 'help-echo s)))))
+
+(ert-deftest drgnx-ui-kit/tooltip-parameters-follow-the-kit ()
+  "The tooltip's frame parameters come from the kit's tooltip binding (pad 8 px, UI font) and the standard `tooltip'
+face inherits the kit's, so a theme that knows nothing of drgnx styles it too."
+  (let ((params (drgnx-ui-kit-tooltip-parameters (selected-frame))))
+    (should (= (drgnx-px 8 (selected-frame)) (alist-get 'internal-border-width params)))
+    (should (facep 'drgnx-kit-tooltip))
+    (unwind-protect
+        (progn (load-theme 'drgnx-dark t)
+               (should (memq 'drgnx-kit-tooltip (ensure-list (face-attribute 'tooltip :inherit nil t)))))
+      (mapc #'disable-theme custom-enabled-themes))))
+
 (ert-deftest drgnx-ui-kit/card-line-forms ()
   (let ((e (drgnx-ui-kit-expand 'card '(:c "card" :kind "selected" :shape "mid" :text "Go") 1.0 nil)))
     (should (equal (plist-get e :text) " Go "))

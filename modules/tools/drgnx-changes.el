@@ -103,6 +103,19 @@
   (setq drgnx-changes-by by)
   (switch-to-buffer (if (eq by 'repo) (drgnx-scm--buffer) (drgnx-changes--buffer))))
 
+(defun drgnx-changes-for-item (kind id)
+  "Show the Changes place by task, filtered to the item KIND (\"task\" or \"agent\") ID: only that task's groups, or
+only that agent's.  The hub keeps the filter for the view until another one (an empty id shows every group)."
+  (setq drgnx-changes-by 'task)
+  (switch-to-buffer (drgnx-changes--buffer))
+  (drgnx-changes--call "changes/set" (list :view drgnx-changes-view-id :refresh t
+                                           :filter (if (equal kind "task") (list :task id) (list :agent id)))))
+
+(defun drgnx-changes-all ()
+  "Show every task's changes again (the filter `e' in Work set goes)."
+  (interactive)
+  (drgnx-changes--call "changes/set" (list :view drgnx-changes-view-id :refresh t :filter (list :task ""))))
+
 (defun drgnx-changes-by-task () "Show the changes by task." (interactive) (drgnx-changes-group-by 'task))
 (defun drgnx-changes-by-repo () "Show the changes by repository (Source Control)." (interactive) (drgnx-changes-group-by 'repo))
 
@@ -111,6 +124,7 @@
   (dolist (c '((changes-by-task "Changes: By Task" drgnx-changes-by-task "What the agents changed, task by task" nil)
                (changes-by-repo "Changes: By Repo" drgnx-changes-by-repo "The changes by repository (Source Control)" nil)
                (changes-refresh "Changes: Refresh" drgnx-changes-refresh "Read the sessions' edits again" nil)
+               (changes-all "Changes: Show Every Task" drgnx-changes-all "Every task's changes again (no filter)" nil)
                (changes-open-hunk "Changes: Open Hunk" drgnx-changes-open-hunk "The file at the hunk on this row"
                                   drgnx-changes-mode-map)
                (changes-revert-hunk "Changes: Revert Hunk" drgnx-changes-revert-hunk

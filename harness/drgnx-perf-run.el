@@ -18,6 +18,7 @@
 (require 'drgnx-perf)
 (require 'drgnx-perf-settings)
 (require 'drgnx-perf-extensions)
+(require 'drgnx-perf-flow)
 (require 'drgnx-perf-workloads)
 (require 'drgnx-perf-work)
 (require 'drgnx-perf-agents)
@@ -3055,6 +3056,7 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :teardown ,drgnx-perf-run--agent-settings-teardown-form)
       ,@(drgnx-perf-settings-workloads)
       ,@(drgnx-perf-extensions-workloads)
+      ,@(drgnx-perf-flow-workloads)
       ;; typing in a local file while a remote root is listed in the Explorer and its connection is dead
       (remote-typing
        :setup ,(drgnx-perf-run--remote-setup-form)

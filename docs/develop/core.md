@@ -1548,6 +1548,9 @@ function and one rounding rule:
 - `(drgnx-px-line WIDTH &optional FRAME SCALE)` is for lines: a thin line (1 logical pixel or less) is max(1,
   floor(scale)) pixels (1 at 1.25 and 4/3, 2 at 2, as the mockups' 1 CSS px at scale 2); a line under 2 is
   max(1, floor(WIDTH × scale)); a wider one is `drgnx-px`.
+- `(drgnx-pixels-cached KEY FRAME FN)` is how the chrome (the rail, the title row, the tab lines, the composer) keeps
+  a size it works out: FN is called with FRAME once for each scale seen under KEY, so frames of one scale share it and a
+  frame on another monitor sizes itself at its own. `(drgnx-pixels-cache-reset)` empties it; a UI scale change does.
 - `(drgnx-pixels-scale &optional FRAME)` is the factor both use: the display scale on a native shell (1.0 elsewhere)
   times the UI scale, `(drgnx-pixels-ui-scale FRAME)`: the root frame's, which ui/look's `drgnx-look-scale` sets on
   every graphical root frame with `(drgnx-pixels-set-ui-scale FRAME SCALE)` (1.0 without one). It is kept in a
@@ -3933,6 +3936,18 @@ kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` ch
   under the runs of each row of a card the hub built; `(drgnx-ui-kit-card-lines LINES KIND WIDTH)` is the Lisp
   chrome's: each row its own box run (text filled to WIDTH, a boxed `(space :align-to)` stretch, an unboxed newline).
   The old `drgnx-card-*` faces are aliases of the plain and selected faces.
+- `diff-block` (parts head, hunk, ctx, add, del; code font; add and del on the diff tints): `Comp::DiffBlock { file,
+  added, removed, hunks, buttons }` expands to its head row (`expand`: the file, `+N −M`, the buttons as Quiet small kit
+  buttons) and, through `expand_rows`, to the whole block (head, each hunk's `@@` row and its numbered lines) in the plain
+  card's ring. Lisp: the head row is `drgnx-ui-kit-expand`'s (conformance, buttons included); `(drgnx-ui-kit-diff-block
+  FILE ADDED REMOVED HUNKS WIDTH &optional BUTTONS)` is the chrome's whole block, each row its own box run. The old
+  `drgnx-agent-panel-added`, `-removed` and `-context` faces are aliases of the add, del and ctx faces.
+- `toast` (tone info, warn, error): `Comp::Toast { tone, text, buttons }`: the tone's status dot (running, needs you, error), the
+  text on the overlay surface and quiet small kit buttons; `(drgnx-ui-kit-toast TONE TEXT BUTTONS WHERE &optional FRAME)`.
+  The notice toasts' buttons (`drgnx-notice-toast--render`) are kit text buttons. `tooltip` (Lisp only, no sheet): the
+  overlay surface, 8 px of pad, the UI font; the drgnx theme's `tooltip` face inherits `drgnx-kit-tooltip`, and
+  `(drgnx-ui-kit-tooltip-parameters FRAME)` gives the tooltip frame's parameters. `empty-state`: `Comp::EmptyState`
+  (text, an optional quiet button), `(drgnx-ui-kit-empty-state TEXT BUTTON WHERE)`, inert (`drgnx-row-inert`).
 - Bindings gained `:attrs` (raw face attributes, in the defface and the theme's spec) and `:ring (WIDTH RADIUS OPEN...)`
   (the edge's width, and where Glitnir draws, its radius and open sides; `drgnx-ui-kit-theme-specs` takes a GLITNIR
   flag).

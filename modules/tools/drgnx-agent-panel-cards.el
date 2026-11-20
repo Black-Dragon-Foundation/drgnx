@@ -17,6 +17,7 @@
 (require 'subr-x)
 (require 'drgnx-view)
 (require 'drgnx-registry)
+(require 'drgnx-ui-kit)                 ; the question card's action kind
 
 (declare-function drgnx-agent-panel--send-look "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
@@ -216,13 +217,121 @@ take before their next command, and tell the hub."
 (declare-function drgnx-agent-panel-act "drgnx-agent-panel-steps" (event))
 (declare-function drgnx-ui-kit-define-action "drgnx-ui-kit" (kind function keys))
 
-(defun drgnx-agent-panel--kit-card (_args)
-  "The action kind `agent-panel-card' of the kit buttons on a permission card: a click runs the panel's own dispatcher
-\(`drgnx-agent-panel-act', which reads the button's `drgnx-agent-panel-action'); RET on the card allows it once."
-  (if (mouse-event-p last-input-event) (drgnx-agent-panel-act last-input-event) (drgnx-agent-panel-allow)))
+(defun drgnx-agent-panel--kit-card (args)
+  "The action kind `agent-panel-card' of the kit buttons on a permission card.  A click runs the panel's own dispatcher
+\(`drgnx-agent-panel-act', which reads the button's `drgnx-agent-panel-action'); a key runs the verb of ARGS, which
+is (\"card:VERB:ID\"): `allow', `always' or `deny', on the card at point (RET on a button is that button's verb;
+`y', `a' and `n' rewrite it first, `drgnx-agent-panel--kit-card-keys').  Without a verb, RET allows it once."
+  (if (mouse-event-p last-input-event)
+      (drgnx-agent-panel-act last-input-event)
+    (pcase (nth 1 (split-string (format "%s" (car args)) ":"))
+      ("always" (drgnx-agent-panel-always))
+      ("deny" (drgnx-agent-panel-reject))
+      (_ (drgnx-agent-panel-allow)))))
+
+(defun drgnx-agent-panel--kit-card-verb (verb)
+  "A transform of the action's ARGS that puts VERB in place of the button's own: (\"card:VERB:ID\")."
+  (lambda (args)
+    (list (replace-regexp-in-string "\\`card:[^:]*:" (format "card:%s:" verb) (format "%s" (car args))))))
+
+(defconst drgnx-agent-panel--kit-card-keys '(("y" . "allow") ("a" . "always") ("n" . "deny"))
+  "The keys on a permission card's buttons and what each answers: y allows once, a allows always, n denies.")
+
+;;;; The at-limit block (Flow Task 23a)
+
+(defvar drgnx-agent-panel--budget)
+
+(defun drgnx-agent-panel-budget--suggest (unit spent p90)
+  "The limit the block suggests: SPENT plus P90, rounded up to UNIT's next step (the next dollar, the next whole percent
+of a window, the next 100k tokens); nil for a count.  The hub's `at_limit_suggestion' does the same."
+  (let ((step (pcase unit ("usd" 1.0) ("usd-est" 1.0) ("limit-share" 0.01) ("tokens" 100000.0))))
+    (when step
+      (let ((n (fceiling (- (/ (+ spent (max 0.0 (or p90 0.0))) step) 1e-9))))
+        (/ (fround (* n step 1e6)) 1e6)))))
+
+(defun drgnx-agent-panel-budget--amount (unit x &optional whole)
+  "X in UNIT as the block says it: \"$5.00\" (\"$5\" when WHOLE and X is), \"37 %\", \"570k tokens\", or a count."
+  (pcase unit
+    ((or "usd" "usd-est") (if (and whole (< (abs (- x (fround x))) 0.005)) (format "$%d" (round x)) (format "$%.2f" x)))
+    ("limit-share" (format "%d %%" (round (* 100 x))))
+    ("tokens" (format "%dk tokens" (round (/ x 1000))))
+    (_ (format "%d" (round x)))))
+
+(defun drgnx-agent-panel-budget--button (label command &optional style)
+  "LABEL as a kit button (STYLE, `secondary' by default) that runs COMMAND."
+  (drgnx-ui-kit-button label command (or style 'secondary) 'sm 'rest nil 'text))
+
+(defun drgnx-agent-panel-budget-block ()
+  "The at-limit block of the current panel (`drgnx-agent-panel--budget'), a string, or nil when the agent is not held:
+what held it (its own limit, or the scope above it by name), the forecast to finish, and Raise to $N and resume, Raise…
+and Stop."
+  (when-let* ((b drgnx-agent-panel--budget))
+    (let* ((unit (plist-get b :unit)) (limit (plist-get b :limit)) (spent (plist-get b :spent))
+           (est (if (equal unit "usd-est") " est." ""))
+           (above (plist-get b :scope-name))
+           (suggest (drgnx-agent-panel-budget--suggest unit spent (plist-get b :p90)))
+           (head (if above
+                     (format "Paused: %s reached its %s · %s of %s%s" above
+                             (drgnx-agent-panel-budget--amount unit limit t)
+                             (drgnx-agent-panel-budget--amount unit spent) (drgnx-agent-panel-budget--amount unit limit) est)
+                   (format "Paused at its limit · %s of %s%s (%s)" (drgnx-agent-panel-budget--amount unit spent)
+                           (drgnx-agent-panel-budget--amount unit limit) est (or (plist-get b :scope) "worker")))))
+      (concat (propertize head 'face 'drgnx-ui-text) "\n"
+              (when-let* ((p90 (plist-get b :p90)))
+                (propertize (format "forecast to finish ≈ %s–%s more\n"
+                                    (drgnx-agent-panel-budget--amount unit (or (plist-get b :p50) p90) t)
+                                    (drgnx-agent-panel-budget--amount unit p90 t))
+                            'face 'drgnx-text-subtle))
+              (when suggest
+                (concat (drgnx-agent-panel-budget--button
+                         (format "Raise to %s and resume ↵" (drgnx-agent-panel-budget--amount unit suggest t))
+                         #'drgnx-agent-panel-budget-raise 'primary)
+                        " "))
+              (drgnx-agent-panel-budget--button "Raise…" #'drgnx-agent-panel-budget-raise-to) " "
+              (drgnx-agent-panel-budget--button "Stop x" #'drgnx-agent-panel-budget-stop 'quiet)
+              "\n"))))
+
+(declare-function drgnx-agent-panel--budget-clear "drgnx-agent-panel")
+
+(defun drgnx-agent-panel-budget--raise (amount)
+  (let ((b (or drgnx-agent-panel--budget (user-error "This agent is not held by a limit")))
+        (panel (current-buffer)))
+    (drgnx-agent-panel--ask "budget/raise"
+                            (list :card (plist-get b :card)
+                                  :limits (vector (list :unit (plist-get b :unit) :amount amount))
+                                  :resume t)
+                            (lambda (_r err)
+                              (if err (message "Budget: %s" (if (stringp err) err (plist-get err :message)))
+                                (when (buffer-live-p panel)
+                                  (with-current-buffer panel (drgnx-agent-panel--budget-clear)))
+                                (message "Budget: raised, resumed"))))))
+
+(defun drgnx-agent-panel-budget-raise ()
+  "Raise the limit that holds this agent to the block's suggestion (spend plus the forecast's p90) and resume it."
+  (interactive)
+  (let* ((b (or drgnx-agent-panel--budget (user-error "This agent is not held by a limit")))
+         (n (or (drgnx-agent-panel-budget--suggest (plist-get b :unit) (plist-get b :spent) (plist-get b :p90))
+                (user-error "No suggestion for a count; use Raise…"))))
+    (drgnx-agent-panel-budget--raise n)))
+
+(defun drgnx-agent-panel-budget-raise-to (amount)
+  "Raise the limit that holds this agent to AMOUNT, asked for here, and resume it."
+  (interactive (list (read-number "Raise the limit to: "
+                                  (and drgnx-agent-panel--budget
+                                       (drgnx-agent-panel-budget--suggest (plist-get drgnx-agent-panel--budget :unit)
+                                                                          (plist-get drgnx-agent-panel--budget :spent)
+                                                                          (plist-get drgnx-agent-panel--budget :p90))))))
+  (drgnx-agent-panel-budget--raise (float amount)))
+
+(defun drgnx-agent-panel-budget-stop ()
+  "Stop the agent a limit holds (the only way a budget block cancels work: you asked)."
+  (interactive)
+  (drgnx-agent-panel--ask "agents/stop" (list :id drgnx-agent-panel--session)))
 
 (defun drgnx-agent-panel-cards-setup ()
-  (drgnx-ui-kit-define-action 'agent-panel-card #'drgnx-agent-panel--kit-card nil)
+  (drgnx-ui-kit-define-action 'agent-panel-card #'drgnx-agent-panel--kit-card
+                              (mapcar (lambda (k) (cons (car k) (drgnx-agent-panel--kit-card-verb (cdr k))))
+                                      drgnx-agent-panel--kit-card-keys))
   (dolist (c '((agents-panel-pin "Pin the Card" drgnx-agent-panel-pin "Pin the card or step at point under the chips; again to unpin")
                (agents-panel-ledger "List the Edits" drgnx-agent-panel-ledger
                                     "The files the agent edited, and how many edits came since you last looked")
@@ -233,7 +342,13 @@ take before their next command, and tell the hub."
                (agents-panel-allow "Allow or Open" drgnx-agent-panel-allow
                                    "A permission card: allow once. A step: open or fold it")
                (agents-panel-always "Always Allow" drgnx-agent-panel-always
-                                    "A permission card: allow this and requests like it from now on")))
+                                    "A permission card: allow this and requests like it from now on")
+               (agents-budget-raise "Raise the Limit and Resume" drgnx-agent-panel-budget-raise
+                                    "Raise the limit that holds the agent to its spend plus the forecast's p90, and resume it")
+               (agents-budget-raise-to "Raise the Limit To…" drgnx-agent-panel-budget-raise-to
+                                       "Raise the limit that holds the agent to an amount you give, and resume it")
+               (agents-budget-stop "Stop the Held Agent" drgnx-agent-panel-budget-stop
+                                   "Stop the agent a limit holds")))
     (drgnx-command-define (nth 0 c) :category "Agents" :title (nth 1 c) :command (nth 2 c)
                           :map 'drgnx-agent-panel-mode-map :doc (nth 3 c))))
 

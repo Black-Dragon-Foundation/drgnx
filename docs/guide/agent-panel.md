@@ -113,6 +113,11 @@ when the hub sends the first rows. The panel draws no steps of its own.
 
 ## What opens
 
+Under the header's first row, when the agent works on a task, a row of chips names what it works under (the task; the
+plan and the spec above it join when the hub reads them): a click selects that node in Work. The chips carry the
+worktree the agent works in (the name under `.claude/worktrees/`, else the folder's own name). When the agent made a
+plan, a row of status dots, one for each plan item with its words (done, running, to do), comes under the chips.
+
 The strip under the chips reads **Expand steps:** and has a pill for each step type (thinking, read, search, edit, execute,
 fetch, other), a ring, filled when it is on; **make default** is at its right end. In a narrow panel the pills go on as
 many lines as they need, and they follow the panel's width when you resize it. A type that is on shows the detail of its
@@ -170,11 +175,21 @@ What the agent changed and what it asks sit under the transcript as cards.
   agent is told, in a queued message, to take it back. The panel never writes to an agent's worktree and keeps no queue
   of its own; both keys are the review view's own functions (module `tools/work-space`).
 - **Permission cards:** a request the agent waits on: what it asks, on the attention tint and ringed in the attention
-  colour, and under it the buttons **Allow**, **Always** and **Deny** (their keys are in the buttons' hover text). `RET` allows it once, `A` always, `D`
-  denies it. The card goes when the hub's next snapshot no longer holds the request. A chat (an agent that is not a
+  colour, and under it the buttons **Allow**, **Always** and **Deny**: the kit's question card, with the keys
+  `y`, `a` and `n` on its buttons. In the panel `RET` allows it once, `A` always, `D` denies it. The card goes when the hub's next snapshot no longer holds the request. A chat (an agent that is not a
   worker or a manager) never edits or runs commands in its project outside Pair: the permission matrix answers such a
   request itself (`code.edit` is Never for chat in every preset), so no card shows and the agent hears "rejected".
 - The cards and the Edits line reach the panel's right edge, 12 px in.
+
+## When a limit holds the agent
+
+When the agent works under a dollar limit (its own, or its task's, plan's or spec's), the cost chip in the header reads
+the spend against that limit, "$1.20 / $5". When the limit is reached the agent pauses and a block under the transcript
+says so: "Paused at its limit · $5.00 of $5.00 est. (worker)", or, when the limit belongs to a scope above it, "Paused:
+the plan reached its $40". It shows the forecast to finish ("≈ $2–3 more") and three buttons: **Raise to $N and
+resume** (N is the spend plus the forecast's high end, rounded up to the next dollar, whole percent of a window or 100k
+tokens), **Raise…** (an amount you type) and **Stop**. The composer says "Paused: budget. Raise, or send a message to
+go on without raising." Sending a message never cancels anything.
 
 ## Large outputs
 
@@ -202,6 +217,20 @@ O open in a buffer". When the hub kept only the ends of a huge output the count 
 and what waits for you. `RET` opens that session's panel. Enter on an agent's card on the Work map opens the panel
 too. This list and the panel replaced the old Agents view; chat with a model (gptel) is gone with it, and the
 agent panel is where you talk to a model now.
+
+## The Agents side
+
+In the layout A shell the right side of every place but Work shows the **Agents side**: a card per agent, the ones that
+need you first, then the running ones, then the rest. A card has the agent's mark, its name and provider, its task, a
+state line ("running · $1.20/$5 · 3/6") with one bar, and one button: **Answer** when it needs you, **Review** when its
+edits are ready, **Open** otherwise. The bar is the plan's progress; when the agent's spend nears its dollar limit
+(80 %) the budget meter takes its place (there are never two bars), and at the limit the card says "Paused at its
+limit · $5.00 of $5.00" and sorts first. **Earlier** lists the five newest past sessions, and **All ›** the rest.
+
+A card's button shows its conversation in the side itself, in the compact form (header, transcript and composer), with
+**← Agents** above it to go back to the cards. With a file in the editor, the composer offers it as a removable chip
+("@ file", or "@ lines a–b" with a region), and when an agent is working on that file a chip "Sonnet is editing this
+file ›" offers its conversation; the side never switches by itself.
 
 ## Ask an agent about this
 

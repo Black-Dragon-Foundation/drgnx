@@ -22,6 +22,10 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Button (kit)](button.md) | a label in a rounded box, four styles and two sizes, with its key hint |
 | [Key hint (kit)](key-hint.md) | the keys of an action in the code font, in a small box |
 | [Section header (kit)](section-header.md) | a section's title, with a twisty when it folds and an optional count |
+| [Diff block (kit)](diff-block.md) | a file's head row (path, +N −M, buttons) over each hunk's rows in the code font, in the card's ring |
+| [Empty state (kit)](empty-state.md) | what a list or console says while it holds nothing, with an optional quiet button |
+| [Toast (kit)](toast.md) | a notice floating over the editor: a status dot, the text, up to two quiet buttons |
+| [Tooltip (kit)](tooltip.md) | the overlay surface, 8 px of pad, the UI font; feeds the `tooltip` face |
 | [Card (kit)](card.md) | the rows of one card: a ring inside the line, open where the card goes on |
 | [Agent mark (kit)](agent-mark.md) | the agent mark's numbers (generated from `etc/ui/components.eld`) |
 | [Progress (kit)](progress.md) | progress's numbers (generated from `etc/ui/components.eld`) |

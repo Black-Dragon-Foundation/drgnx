@@ -212,6 +212,12 @@ impl Live {
 /// A job's slice folder by job id ([`Hooks::guard_slice`]).
 pub type GuardSlice = Arc<dyn Fn(&str) -> Option<PathBuf> + Send + Sync>;
 
+/// What a test does after each of the guard's readings of job ID, before the guard waits for the next one
+/// ([`Hooks::guard_read`]).
+pub type GuardRead = Arc<
+    dyn Fn(&str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
+>;
+
 /// What the runner reaches beyond its own folder: the store (a job is an entity), the subscribers (`exec-done`), the
 /// memory cap and whether a user systemd carries the units.
 #[derive(Clone)]
@@ -247,6 +253,9 @@ pub struct Hooks {
     /// The cgroup folder of a local job's slice, by job id, for the progress guard; none: the job's
     /// `drgnx-job-<id>.slice` under this process's user manager (tests pass a fixture).
     pub guard_slice: Option<GuardSlice>,
+    /// Awaited after each reading of the progress guard (tests): the order of a job's output against the guard's
+    /// readings is the test's, not a race against the clock.  None: the guard goes straight on.
+    pub guard_read: Option<GuardRead>,
     /// The projects' edit histories and the state folder they live in: a runner's applied changes are one version
     /// there. None: they are applied unrecorded (tests).
     pub history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
@@ -281,6 +290,7 @@ impl Default for Hooks {
             cards: None,
             key_envs: Arc::new(Vec::new),
             guard_slice: None,
+            guard_read: None,
             history: None,
             #[cfg(test)]
             plain_sessions: false,
@@ -1805,6 +1815,9 @@ impl Inner {
             last = pguard::read(at, slice.as_deref(), &logs, &last);
             if let Some(s) = t.see(last, &l) {
                 return s;
+            }
+            if let Some(h) = &self.hooks.guard_read {
+                h(id).await;
             }
         }
     }
