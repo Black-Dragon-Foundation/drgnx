@@ -524,10 +524,11 @@ the session's own runtime folder, ended with the session's Emacs.  No hub binary
 
 ;;;; The screen
 
-(defconst drgnx-tty-session-explorer-heading "^ [⌄›v>] Files"
+(defconst drgnx-tty-session-explorer-heading "^ \\(?:.\\{3\\} \\)?[⌄›v>] Files"
   "The Explorer's section heading on a terminal screen (a line of its own: the chevron, open or closed, then `Files';
 v and > in the ASCII a C locale gets): the sidebar is drawn.  The line's start keeps it off the title bar's `C-p
-files' (`string-match' folds case).")
+files' (`string-match' folds case).  The rail, three columns of glyphs on a terminal (docs/guide/look.md, \"The
+rail\"), may stand before the chevron: a window that shows the sidebar and the editor has one.")
 
 (defun drgnx-tty-session-screen (sess &optional escapes)
   "The text of SESS's pane (`capture-pane -p'; with ESCAPES, its attributes as escape sequences).  A kitty session's
