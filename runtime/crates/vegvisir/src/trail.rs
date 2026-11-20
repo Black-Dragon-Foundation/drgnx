@@ -759,6 +759,10 @@ pub fn timeline_rows(
                     std::iter::repeat_n(bin.kind.letter(), (bin.c1 - bin.c0) as usize).collect();
                 b.push(&s, None);
             } else {
+                // a high-contrast theme: the kind's letter at the segment's start, so the kind is never colour alone
+                if env.hc {
+                    b.push(&bin.kind.letter().to_string(), None);
+                }
                 // the segment: one char, displayed as the space up to its end
                 b.stop(TRACK_X + bin.c1 * cw);
             }

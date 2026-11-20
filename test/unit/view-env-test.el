@@ -91,6 +91,17 @@ the selected window (a GUI class) and torn down after."
     (run-hook-with-args 'disable-theme-functions 'some-theme)
     (should (= 1 (length (drgnx-view-env-test--envs))))))
 
+(ert-deftest drgnx-view-env/a-high-contrast-theme-sets-hc ()
+  ;; flow Task 30: the env says whether the theme is a high-contrast one; a switch to it sends the env again
+  (let ((variant 'dark))
+    (cl-letf (((symbol-function 'drgnx-look-variant) (lambda (&optional _frame) variant)))
+      (drgnx-view-env-test--with
+        (drgnx-view-env-register "v" buf)
+        (should (eq :false (plist-get (car (last (drgnx-view-env-test--envs))) :hc)))
+        (setq variant 'hc)
+        (run-hook-with-args 'enable-theme-functions 'drgnx-high-contrast)
+        (should (eq t (plist-get (car (last (drgnx-view-env-test--envs))) :hc)))))))
+
 (ert-deftest drgnx-view-env/two-frames-two-classes ()
   (drgnx-view-env-test--with
     (let ((other (split-window)))

@@ -66,6 +66,9 @@ pub struct Env<'a> {
     pub tty_widths: &'a [(u32, u32, u8)],
     /// A card line's text height in px and the share of it above the baseline, percent (a lane image matches it).
     pub line: (u32, u32),
+    /// The editor's theme is a high-contrast one (`view/env`'s `hc`): a Timeline segment writes its kind's letter, a
+    /// bar's tail is an outline.
+    pub hc: bool,
 }
 
 /// What the map shows.

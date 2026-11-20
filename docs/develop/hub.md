@@ -1681,7 +1681,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
-| `view/env` | user | `{ascii?: boolean, attach?: boolean, badge?: [[natnum, natnum], [natnum, natnum], natnum], cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tail?: [natnum, natnum], tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/env` | user | `{ascii?: boolean, attach?: boolean, badge?: [[natnum, natnum], [natnum, natnum], natnum], cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], hc?: boolean, headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tail?: [natnum, natnum], tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, faces?: [{avg?: number, face: string, file?: string, index?: natnum, pad?: number, px?: number, role: string, wght?: number}], glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
@@ -2591,8 +2591,10 @@ All of it is in memory only.
 
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
-  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, glyphs: [[name, glyph]],
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, hc?, glyphs: [[name, glyph]],
   ascii?, density?, tail?, badge?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again.
+  `hc` is true while the frame's theme is a high-contrast one (`drgnx-look-variant` `hc`): the Timeline then writes each
+  Activity segment's kind letter and draws a Schedule bar's tail to p90 as an outline (`drgnx-work-tail-outline`).
   `width_px` is the window's body. `tail: [mark, control]` is where the view's buffer draws a row's tail after it (the
   Explorer's and the Buffers panel's: `drgnx-view-env-tail`, `drgnx-wb-tail-px`), px from the right edge: the start
   of its git mark and of its control. A row ends its text short of what its tail always draws: the mark's place on a

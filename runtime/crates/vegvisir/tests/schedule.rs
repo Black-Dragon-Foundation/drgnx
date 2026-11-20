@@ -1,6 +1,7 @@
 //! The Schedule's bars and rows (`vegvisir::schedule`): the states of the timeline spec's §4, the target states on
 //! specs and plans only, By machine, and the rows' parts.
 
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::Measure;
 use drgnx_rows::svg::Palette;
 use vegvisir::render::Env;
@@ -28,6 +29,7 @@ fn env(p: &Palette) -> Env<'_> {
         palette: p,
         tty_widths: &[],
         line: (16, 80),
+        hc: false,
     }
 }
 
@@ -219,6 +221,55 @@ fn a_bar_draws_its_parts_and_words() {
             .iter()
             .any(|(_, _, n, v)| n == "drgnx-work-part" && v == "late")
     );
+}
+
+/// In a high-contrast theme a bar's tail to p90 is an outline, not a faint fill (flow Task 30,
+/// `a11y-flow/hc-tails-are-outlines`): the outlined face on a GUI, `═` cells on a terminal; out of hc the edge face.
+#[test]
+fn hc_tails_are_outlines() {
+    let p = Palette::default();
+    let win = Window {
+        from: 0.0,
+        to: 400.0,
+    };
+    let tail = |hc: bool, tty: bool| -> (String, String) {
+        let e = Env { hc, tty, ..env(&p) };
+        let rows = schedule::schedule_rows(
+            &[row("task:a", 2, None)],
+            &e,
+            &Cols,
+            Zone(0),
+            &win,
+            400,
+            Some(50.0),
+            50.0,
+        );
+        let r = &rows[1];
+        let (s, z, _, _) = r
+            .props
+            .iter()
+            .find(|(_, _, n, v)| n == "drgnx-work-part" && v == "p90")
+            .expect("a p90 part");
+        let face = r
+            .runs
+            .iter()
+            .find(|(a, _, _)| a == s)
+            .map(|(_, _, f)| f.clone())
+            .unwrap_or_default();
+        let text: String = r
+            .text
+            .chars()
+            .skip(*s as usize)
+            .take((z - s) as usize)
+            .collect();
+        (face, text)
+    };
+    assert_eq!(tail(true, false).0, FaceId::WorkTailOutline.name());
+    assert_eq!(tail(false, false).0, FaceId::WorkEdge.name());
+    let tty = tail(true, true).1;
+    assert!(!tty.is_empty() && tty.chars().all(|c| c == '═'), "{tty:?}");
+    let tty = tail(false, true).1;
+    assert!(!tty.is_empty() && tty.chars().all(|c| c == '░'), "{tty:?}");
 }
 
 /// Every state a bar can be in says its word in the row's text (flow Task 30, `a11y-flow/every-state-has-a-word`):

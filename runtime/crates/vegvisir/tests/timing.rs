@@ -145,6 +145,7 @@ mod timeline_schedule {
             palette: p,
             tty_widths: &[],
             line: (16, 80),
+            hc: false,
         }
     }
 

@@ -65,6 +65,7 @@ fn gui(palette: &Palette) -> Env<'_> {
         palette,
         tty_widths: &[],
         line: (16, 80),
+        hc: false,
     }
 }
 

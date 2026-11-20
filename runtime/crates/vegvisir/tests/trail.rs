@@ -29,6 +29,7 @@ fn env(p: &Palette) -> Env<'_> {
         palette: p,
         tty_widths: &[],
         line: (16, 80),
+        hc: false,
     }
 }
 
@@ -315,6 +316,44 @@ fn the_edits_filter_keeps_only_edits() {
             ("Y".to_owned(), FaceId::KitRangeBarSegWait.name().to_owned()),
         ]
     );
+}
+
+/// In a high-contrast theme a GUI lane writes each segment's kind letter at its start (flow Task 30,
+/// `a11y-flow/segment-kind-letters-in-hc`): the kind never rests on colour alone; out of hc the segment is a bare run.
+#[test]
+fn segment_kind_letters_in_hc() {
+    let p = Palette::default();
+    let steps = vec![
+        seg(1, "tool", Some("read"), 0.0, 40.0),
+        seg(2, "tool", Some("edit"), 40.0, 70.0),
+    ];
+    let win = Window {
+        from: 0.0,
+        to: 100.0,
+    };
+    let lane_text = |hc: bool| -> String {
+        let e = Env { hc, ..env(&p) };
+        let rows = trail::timeline_rows(
+            &[Lane {
+                id: "a".into(),
+                label: "a".into(),
+                steps: steps.clone(),
+            }],
+            &e,
+            &Cols,
+            Zone(0),
+            &win,
+            100,
+            TrailFilter::All,
+            None,
+            0.0,
+        );
+        rows[1].text.clone()
+    };
+    let hc = lane_text(true);
+    assert!(hc.contains('R') && hc.contains('E'), "{hc:?}");
+    let plain = lane_text(false);
+    assert!(!plain.contains('R') && !plain.contains('E'), "{plain:?}");
 }
 
 /// The now-line is drawn again at most once every five seconds, and only when it moved a column.

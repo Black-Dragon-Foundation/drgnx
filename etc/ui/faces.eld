@@ -428,6 +428,7 @@
  drgnx-work-needs-you
  drgnx-work-edge
  drgnx-work-edge-strong
+ drgnx-work-tail-outline
  drgnx-work-label
  drgnx-work-lens-title
  drgnx-work-lens-rail

@@ -761,6 +761,7 @@ pub(crate) fn render_env<'a>(env: &'a ViewEnv, palette: &'a Palette) -> render::
         palette,
         tty_widths: &env.tty_widths,
         line,
+        hc: env.hc,
     }
 }
 

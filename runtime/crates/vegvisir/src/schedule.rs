@@ -293,8 +293,8 @@ fn right_text(b: &ScheduleBar, zone: Zone, now: f64) -> String {
 }
 
 /// ROW's columns on a track of COLS over WIN, at NOW: the done part, the forecast to p50, the tail to p90, then over
-/// them the late cap, the baseline's tick and the target's rule.
-fn paint(b: &ScheduleBar, win: &Window, cols: u32, now: f64) -> Vec<Option<Paint>> {
+/// them the late cap, the baseline's tick and the target's rule.  HC (a high-contrast theme): the tail is an outline.
+fn paint(b: &ScheduleBar, win: &Window, cols: u32, now: f64, hc: bool) -> Vec<Option<Paint>> {
     let mut out: Vec<Option<Paint>> = vec![None; cols as usize];
     let col = |t: f64| win.at(t, cols);
     let mut fill = |a: f64, z: f64, p: Paint| {
@@ -345,10 +345,18 @@ fn paint(b: &ScheduleBar, win: &Window, cols: u32, now: f64) -> Vec<Option<Paint
             fill(
                 p50.max(from),
                 p90,
-                Paint {
-                    face: FaceId::WorkEdge.name(),
-                    ch: '░',
-                    part: "p90",
+                if hc {
+                    Paint {
+                        face: FaceId::WorkTailOutline.name(),
+                        ch: '═',
+                        part: "p90",
+                    }
+                } else {
+                    Paint {
+                        face: FaceId::WorkEdge.name(),
+                        ch: '░',
+                        part: "p90",
+                    }
                 },
             );
         }
@@ -440,7 +448,7 @@ pub fn schedule_rows(
             out.push(b.finish());
             continue;
         };
-        let mut cols_of = paint(bar, win, cols, now);
+        let mut cols_of = paint(bar, win, cols, now, env.hc);
         if let Some(c) = now_c {
             cols_of[(c as usize).min(cols as usize - 1)] = None;
         }
