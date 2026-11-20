@@ -426,8 +426,7 @@ mod tests {
 
     #[test]
     fn the_end_line_keeps_its_link_at_the_docks_width() {
-        let cmd =
-            "cargo test -p hermod --features long-feature-list --release --no-fail-fast";
+        let cmd = "cargo test -p hermod --features long-feature-list --release --no-fail-fast";
         let failed = ended(
             "terminal",
             cmd,
