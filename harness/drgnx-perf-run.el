@@ -2387,7 +2387,13 @@ at the wait's return held that."
                    (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
                                  :buffer (generate-new-buffer " *ratatoskr*")
                                  :command (list bin "serve" "--foreground" "--parent-pid" (number-to-string (emacs-pid))))))
-           (unless (drgnx-perf--wait 30 #'drgnx-hub-running-p) (error "Ratatoskr did not answer a ping"))
+           ;; a hub that went away says so, with what it wrote: the wait does not run out its 30 s on a process that is gone
+           (unless (drgnx-perf--wait 30 (lambda () (or (drgnx-hub-running-p) (not (process-live-p drgnx-perf--hub)))))
+             (error "Ratatoskr did not answer a ping"))
+           (unless (process-live-p drgnx-perf--hub)
+             (error "Ratatoskr went away at its start (%s): %s" (process-status drgnx-perf--hub)
+                    (with-current-buffer (process-buffer drgnx-perf--hub)
+                      (string-trim (buffer-substring (max (point-min) (- (point-max) 600)) (point-max))))))
            (drgnx-hub-connect)
            (drgnx-hub-ensure)
            t))

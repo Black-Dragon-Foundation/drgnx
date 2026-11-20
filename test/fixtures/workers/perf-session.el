@@ -687,7 +687,8 @@ workload's collections are the GC policy's, not the open's work) taken out and k
 
 (defun drgnx-perf-w-explorer-first-open-teardown ()
   (drgnx-perf-w--disarm)
-  (dolist (f drgnx-perf-w--fo-files) (when-let* ((b (find-buffer-visiting f))) (kill-buffer b)))
+  (dolist (f drgnx-perf-w--fo-files)
+    (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
   (setq drgnx-perf-w--fo-files nil)
   (drgnx-perf-w--explorer-close)
   (drgnx-perf-w--clean)

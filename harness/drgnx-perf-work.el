@@ -327,6 +327,12 @@ model far more often)."
 takes a 10,000-step turn in for minutes, and answers a question meanwhile only now and then: ask every 2 s, 15 s a call."
         (let ((end (+ (float-time) secs)) (n nil))
           (while (and (not (and (numberp n) (>= n drgnx-perf--trail-n))) (< (float-time) end))
+            ;; a hub that is gone answers nothing, and the wait would run out the harness's own (60 s of no progress)
+            (unless (process-live-p drgnx-perf--hub)
+              (error "Premise: the trail's hub is gone (%s): %s" (and drgnx-perf--hub (process-status drgnx-perf--hub))
+                     (and drgnx-perf--hub (buffer-live-p (process-buffer drgnx-perf--hub))
+                          (with-current-buffer (process-buffer drgnx-perf--hub)
+                            (string-trim (buffer-substring (max (point-min) (- (point-max) 600)) (point-max)))))))
             (setq n (condition-case e (drgnx-perf--trail-newest) (error (setq drgnx-perf--trail-err e) nil)))
             (push (list (round (- (float-time) (or drgnx-perf--trail-t0 (float-time)))) n
                         (drgnx-perf--trail-cpu (and (process-live-p drgnx-perf--hub) (process-id drgnx-perf--hub)))
