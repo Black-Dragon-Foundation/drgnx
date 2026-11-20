@@ -137,6 +137,7 @@ fn row(item: &str, depth: u8, machine: Option<&str>) -> SchedRow {
             },
             50.0,
         )),
+        budget: None,
     }
 }
 
@@ -270,6 +271,53 @@ fn hc_tails_are_outlines() {
     assert!(!tty.is_empty() && tty.chars().all(|c| c == '═'), "{tty:?}");
     let tty = tail(false, true).1;
     assert!(!tty.is_empty() && tty.chars().all(|c| c == '░'), "{tty:?}");
+}
+
+/// A row's accessible label reads its title, then its schedule, then its budget (flow Task 30,
+/// `a11y-flow/row-label-reads-title-schedule-budget`; the timeline spec's §11): the `help-echo` on the row's title.
+#[test]
+fn row_label_reads_title_schedule_budget() {
+    let p = Palette::default();
+    let win = Window {
+        from: 0.0,
+        to: 400.0,
+    };
+    let label = |budget: Option<vegvisir::model::ItemBudget>| -> String {
+        let r = SchedRow {
+            label: "Minimap plan".into(),
+            budget,
+            ..row("plan:m", 0, None)
+        };
+        let rows =
+            schedule::schedule_rows(&[r], &env(&p), &Cols, Zone(0), &win, 400, Some(50.0), 50.0);
+        let row = &rows[1];
+        let (s, _, _, v) = row
+            .props
+            .iter()
+            .find(|(_, _, n, _)| n == "help-echo")
+            .expect("the row's label");
+        assert_eq!(*s, 0, "the label is on the row's title");
+        v.as_str().unwrap_or_default().to_owned()
+    };
+    let est = vegvisir::model::ItemBudget {
+        spent: vegvisir::model::Num(36.0),
+        limit: Some(vegvisir::model::Num(55.0)),
+        unit: "usd-est".into(),
+        state: "ok".into(),
+    };
+    assert_eq!(
+        label(Some(est.clone())),
+        "Minimap plan, on track, finish 00:01 to 00:03, 36 of 55 dollars, estimate"
+    );
+    assert_eq!(
+        label(Some(vegvisir::model::ItemBudget {
+            limit: None,
+            unit: "tokens".into(),
+            ..est
+        })),
+        "Minimap plan, on track, finish 00:01 to 00:03, 36 tokens, no limit"
+    );
+    assert_eq!(label(None), "Minimap plan, on track, finish 00:01 to 00:03");
 }
 
 /// Every state a bar can be in says its word in the row's text (flow Task 30, `a11y-flow/every-state-has-a-word`):

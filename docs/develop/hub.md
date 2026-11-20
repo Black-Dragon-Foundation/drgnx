@@ -2595,6 +2595,8 @@ All of it is in memory only.
   ascii?, density?, tail?, badge?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again.
   `hc` is true while the frame's theme is a high-contrast one (`drgnx-look-variant` `hc`): the Timeline then writes each
   Activity segment's kind letter and draws a Schedule bar's tail to p90 as an outline (`drgnx-work-tail-outline`).
+  `reduced_motion` in any class's env makes a followed Timeline scroll in steps (it stays until now reaches its end,
+  then moves half its span; `work::trail::followed`).
   `width_px` is the window's body. `tail: [mark, control]` is where the view's buffer draws a row's tail after it (the
   Explorer's and the Buffers panel's: `drgnx-view-env-tail`, `drgnx-wb-tail-px`), px from the right edge: the start
   of its git mark and of its control. A row ends its text short of what its tail always draws: the mark's place on a
