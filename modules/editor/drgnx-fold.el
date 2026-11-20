@@ -401,6 +401,20 @@ counted once by the line model (`nidhogg-lines-counts', else the scroll bar's ma
             (overlay-put ov 'display (drgnx-fold--summary ov))
             ov)))))
 
+(defun drgnx-fold--announce (ov)
+  "Say in the echo area what fold overlay OV hid, for a screen reader (design A2): \"folded 38 lines, 2 errors\",
+each problem count only when there is one.  OV nil: nothing."
+  (when ov
+    (let* ((s (overlay-start ov)) (e (overlay-end ov))
+           (n (let ((c (count-lines s e))) (if (save-excursion (goto-char e) (bolp)) c (1- c))))
+           (count (lambda (kind word)
+                    (let ((k (if (fboundp 'drgnx-marks--count) (drgnx-marks--count (list kind) s e) 0)))
+                      (and (> k 0) (format "%d %s%s" k word (if (= k 1) "" "s")))))))
+      (message "%s" (mapconcat #'identity
+                               (delq nil (list (format "folded %d line%s" n (if (= n 1) "" "s"))
+                                               (funcall count 'error "error") (funcall count 'warning "warning")))
+                               ", ")))))
+
 (defun drgnx-fold--show (ov)
   (delete-overlay ov))
 
@@ -450,7 +464,7 @@ already folded, the range around it."
         (setq r (car (last (seq-filter (lambda (o) (and (< (nth 3 o) (nth 3 r)) (drgnx-fold--holds o (nth 0 r) (nth 1 r))))
                                        (drgnx-fold-ranges (nth 0 r) (1+ (nth 0 r))))))))
       (unless r (user-error "Nothing to fold here"))
-      (drgnx-fold--hide r))))
+      (drgnx-fold--announce (drgnx-fold--hide r)))))
 
 (defun drgnx-fold-unfold ()
   "Unfold the folds of point's line."

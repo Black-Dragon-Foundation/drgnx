@@ -19,7 +19,8 @@ Settings, Keyboard Shortcuts, Extensions and the Work views. It is a map as well
 - **Lists the hub sends in parts** (a big folder tree in the Explorer, a long result list) take their thumb from the
   whole list, not from the rows loaded so far, so the thumb sits where you are in the whole list.
 - **Mouse:** press on the strip to go to that place; drag to scroll with the pointer.
-- In a terminal frame there is no strip yet (it arrives with the terminal column).
+- **In a terminal** the scroll bar is one column at the window's right edge: `┃` over the part shown, `│` elsewhere,
+  and `▐` in a mark's colour where a mark falls. Scrolling moves it without running any Lisp.
 
 ### Horizontal scroll bar
 
@@ -153,6 +154,9 @@ says where it is in the echo area, for example `error 2 of 7: unused variable, l
 | `drgnx-minimap-hstrip` | on | The horizontal scroll bar of an editor that cuts its lines. |
 | `drgnx-minimap` | on | The scroll bar of an editor widens into the minimap when the pointer rests on it. |
 | `drgnx-minimap-width` | 120 | The minimap's width in pixels, 80 to 200. |
+| `drgnx-minimap-scale` | 2 | How tall a line is on the minimap, 1 to 3 pixels. |
+| `drgnx-minimap-side` | right | The edge of the text the minimap opens over. The scroll bar stays on the right. |
+| `drgnx-minimap-sticky` | off | Keep the minimap open. On the right, the text narrows so the minimap covers no code. |
 | `drgnx-minimap-labels` | on | Names over the minimap: definitions and MARK sections, MARK sections only, or none. |
 | `drgnx-minimap-layer` | none | The heat layer: blame age, coverage, profile, lines agents read, or none. |
 | `drgnx-minimap-coverage-files` | `lcov.info`, `coverage/*.info`, `coverage.xml`, `coverage.json`, … | Where coverage reports are, relative to the project (`*` and `?` match in the last part). |
@@ -165,5 +169,7 @@ says where it is in the echo area, for example `error 2 of 7: unused variable, l
 | `drgnx-minimap-density-above` | 250000 | Past how many lines the minimap is a density strip. |
 | `drgnx-minimap-density-regexps` | `(:error "ERROR\|FATAL" :warning "WARN")` | What the density strip marks as errors and warnings. |
 | `drgnx-marks-symbol-uses` | off | Mark every use of the symbol under the cursor, 400 ms after you stop moving. |
+
+Every setting applies at once, to every open window.
 
 The module is `editor/minimap`; turning it off takes every strip away.

@@ -107,7 +107,8 @@ scroll by lines as always. **Toggle Smooth Scrolling**. Module `ui/smooth`.
 
 Fold a block to see the code around it: **Fold** (`C-{` in the VS Code keys, `C-c @ C-h` in the Emacs keys, `z c` in
 the Vim keys) hides the block at the cursor after its first line, which then ends with `⋯ N lines`; **Unfold** shows it
-again, **Toggle Fold** does whichever applies. Fold on a line already folded folds the block around it.
+again, **Toggle Fold** does whichever applies. Fold on a line already folded folds the block around it. Fold says
+what it hid in the echo area, for example `folded 38 lines, 2 errors`, which screen readers read.
 
 - **Fold All** / **Unfold All**; **Fold Recursively** / **Unfold Recursively** (the block and every block in it);
   **Fold Level…** (every block at one nesting level, 1 the outermost, but the one you are in; VS Code's `C-k C-1` …

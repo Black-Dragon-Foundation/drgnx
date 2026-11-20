@@ -75,6 +75,21 @@ wider than the window (12 px over the text, from the first text column; it takes
   "The minimap's width in logical pixels, 80 to 200."
   :type 'natnum :group 'drgnx-minimap :scope 'global :apply #'drgnx-minimap--setting-changed)
 
+(drgnx-defsetting drgnx-minimap-scale 2
+  "How tall a line is on the minimap, in logical pixels: 1 to 3 (3 shows fewer lines, each easier to tell apart)."
+  :type '(choice (const 1) (const 2) (const 3)) :group 'drgnx-minimap :scope 'global
+  :apply #'drgnx-minimap--setting-changed)
+
+(drgnx-defsetting drgnx-minimap-side 'right
+  "Which edge of the text the minimap opens over: `right' or `left'.  The scroll bar stays at the right edge."
+  :type '(choice (const right) (const left)) :group 'drgnx-minimap :scope 'global
+  :apply #'drgnx-minimap--setting-changed)
+
+(drgnx-defsetting drgnx-minimap-sticky nil
+  "Non-nil: the minimap stays open, and the text narrows by its width so it covers no code (on the right; on the left
+it opens over the text)."
+  :type 'boolean :group 'drgnx-minimap :scope 'global :apply #'drgnx-minimap--setting-changed)
+
 (drgnx-defsetting drgnx-minimap-labels t
   "The names drawn over the minimap: t, each definition (from the hub's outline, for files up to 8 MiB) and each
 MARK section; `marks-only', the MARK sections alone; nil, none."
@@ -195,13 +210,26 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
                               (vector (car h) (drgnx-marks-hunk-label n (nth 1 h) (nth 2 h))))
                             (drgnx-marks-hunks)))))))
 
+(defun drgnx-minimap--width ()
+  "The minimap's width, logical pixels: `drgnx-minimap-width' held to 80..200."
+  (max 80 (min 200 drgnx-minimap-width)))
+
+(defun drgnx-minimap--reserve (window on)
+  "Narrow WINDOW's text by the minimap's width while it is sticky on the right and WINDOW has one (ON), else give the
+width back: `drgnx-ruler-reserve' widens the right fringe inside the strip, where the minimap opens."
+  (let ((px (and on drgnx-minimap-sticky (not (eq drgnx-minimap-side 'left))
+                 (not (drgnx-ruler--column-p window))
+                 (drgnx-px (drgnx-minimap--width) (window-frame window)))))
+    (unless (eql px (window-parameter window 'drgnx-ruler-reserve))
+      (drgnx-ruler-reserve window px))))
+
 (defun drgnx-minimap--spec (window)
   "WINDOW's `glitnir-minimap': the width, the colours, the labels and the heat layer."
   (let ((file (and (or drgnx-minimap-layer (and drgnx-minimap-labels (not (eq drgnx-minimap-labels 'marks-only))))
                    (drgnx-minimap--file (window-buffer window))))
         (hunks (and drgnx-minimap-labels (drgnx-minimap--hunk-labels (window-buffer window)))))
     (append
-     (list :width (max 80 (min 200 drgnx-minimap-width)) :scale 2 :nesting t
+     (list :width (drgnx-minimap--width) :scale (max 1 (min 3 drgnx-minimap-scale)) :nesting t
            ;; the search's hits (X1): accent bars at their columns, the current one ringed
            :hit (cons 'drgnx-accent 1.0)
            :fill (cons (face-background 'drgnx-surface-panel nil 'default) 1.0)
@@ -214,8 +242,9 @@ is not a view: no `drgnx-ruler-span-function', not a special mode)."
                 :label 'default :sub 'drgnx-text-muted :accent 'drgnx-accent :mark 'warning
                 :label-face 'drgnx-minimap-label))
      (and file (list :file file))
-     ;; a focused minimap stays open (`minimap-focus')
-     (and (eq window (drgnx-minimap-focus-window)) (list :open t))
+     (and (eq drgnx-minimap-side 'left) (list :left t))
+     ;; a focused minimap stays open (`minimap-focus'), and a sticky one
+     (and (or drgnx-minimap-sticky (eq window (drgnx-minimap-focus-window))) (list :open t))
      ;; the visited trail (M4): the line model's last visits as fading bars at the left edge
      (and drgnx-minimap-trail
           (list :trail (cons 'warning 0.7) :trail-length (max 1 (min 64 drgnx-minimap-trail-length))))
@@ -333,6 +362,7 @@ the strip (ON)."
            (spec (and file (drgnx-minimap-density-spec window file))))
       (unless (equal spec (window-parameter window 'glitnir-minimap))
         (set-window-parameter window 'glitnir-minimap spec))
+      (drgnx-minimap--reserve window nil)
       (drgnx-minimap--watch buffer file)))
    ((and on (drgnx-minimap-window-p window))
     (let ((buffer (window-buffer window)))
@@ -349,15 +379,18 @@ the strip (ON)."
       (let ((spec (drgnx-minimap--spec window)))
         (unless (equal spec (window-parameter window 'glitnir-minimap))
           (set-window-parameter window 'glitnir-minimap spec))
-        (drgnx-minimap--watch buffer (plist-get spec :file)))))
+        (drgnx-minimap--watch buffer (plist-get spec :file)))
+      (drgnx-minimap--reserve window t)))
    ((window-parameter window 'glitnir-minimap)
-    (set-window-parameter window 'glitnir-minimap nil))))
+    (set-window-parameter window 'glitnir-minimap nil)
+    (drgnx-minimap--reserve window nil))))
 
 (defun drgnx-minimap--off ()
   "Every window's minimap gone, and the hub told no file is shown in one."
   (dolist (f (frame-list))
     (dolist (w (window-list f 'nomini))
       (when (window-parameter w 'glitnir-minimap) (set-window-parameter w 'glitnir-minimap nil))
+      (when (window-parameter w 'drgnx-ruler-reserve) (drgnx-ruler-reserve w nil))
       (when (window-parameter w 'glitnir-hstrip) (set-window-parameter w 'glitnir-hstrip nil))))
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-minimap--watched b) (drgnx-minimap--watch b nil))

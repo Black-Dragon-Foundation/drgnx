@@ -26,14 +26,17 @@
 ;; nothing here runs on a scroll.  A view the hub sends a window of (the Explorer of a big tree) names its rows
 ;; through `drgnx-ruler-span-function', so the thumb stands for the whole view.  The parameter is set only when the
 ;; marks, the span or the window's fringe change.  A press on the strip goes there and a drag scrolls (the one place
-;; Lisp runs per pointer motion, while the button is held).  Without Nidhogg's feature `glitnir-ruler', or in a
-;; terminal, there is no strip.  docs/develop/core.md, "The scroll bar and its marks".
+;; Lisp runs per pointer motion, while the button is held).  On a terminal the strip is one column: the window gets a
+;; one-column right margin (`drgnx-margins-ruler') whose cells Nidhogg fills in the frame's desired matrix (`┃' over
+;; the rows shown, `│' elsewhere, `▐' a mark), so a scroll there runs no Lisp either.  Without Nidhogg's feature
+;; `glitnir-ruler' there is no strip.  docs/develop/core.md, "The scroll bar and its marks".
 
 ;;; Code:
 (require 'cl-lib)
 (require 'drgnx-pixels)
 (require 'drgnx-setting)
 (require 'drgnx-timer)
+(require 'drgnx-margins)
 
 (declare-function glitnir-ruler-position "glitnir" (posn))
 (declare-function glitnir-ruler-fraction "glitnir" (posn))
@@ -123,8 +126,13 @@ the whole, outside the rows the buffer holds; it brings those rows and puts WIND
 (defvar drgnx-ruler-mode)
 
 (defun drgnx-ruler-available-p ()
-  "Whether this Emacs draws the ruler: Nidhogg's Glitnir on a graphical frame."
-  (and (featurep 'glitnir-ruler) (display-graphic-p)))
+  "Whether this Emacs draws the ruler on the selected frame: Nidhogg's Glitnir, on a graphical frame (a strip in the
+fringe) or a terminal's (a margin column; not batch Emacs's initial frame, which is no terminal anyone sees)."
+  (and (featurep 'glitnir-ruler) (or (display-graphic-p) (not (frame-initial-p))) t))
+
+(defun drgnx-ruler--column-p (window)
+  "Whether WINDOW's strip is a terminal's margin column, not a strip in its fringe."
+  (not (display-graphic-p (window-frame window))))
 
 (defun drgnx-scrollbar-window-p (window)
   "Whether WINDOW is a scrollable surface that gets the scroll bar: an editor group, a docked pane (the Explorer, the
@@ -220,21 +228,34 @@ RADIUS [END])."
      (list :marks (mapcar (lambda (m) (drgnx-ruler--mark m frame)) (and drgnx-ruler-mode drgnx-ruler--marks))))))
 
 (defun drgnx-ruler--show (window)
-  "Give WINDOW the strip: its right fringe widened by the strip (once), and the spec, set only when it changed."
-  (let* ((fr (window-fringes window))
-         (width (drgnx-px drgnx-ruler--width (window-frame window)))
-         (own (or (window-parameter window 'drgnx-ruler-fringe) (cadr fr))))
-    (unless (and (window-parameter window 'drgnx-ruler-fringe) (= (cadr fr) (+ own width)))
-      (setq own (if (window-parameter window 'drgnx-ruler-fringe) own (cadr fr)))
-      (set-window-parameter window 'drgnx-ruler-fringe own)
-      (set-window-fringes window (car fr) (+ own width) (nth 2 fr)))
-    (let ((spec (with-current-buffer (window-buffer window) (drgnx-ruler--spec window))))
-      (unless (equal spec (window-parameter window 'glitnir-ruler))
-        (set-window-parameter window 'glitnir-ruler spec)))))
+  "Give WINDOW the strip: its right fringe widened by the strip (once), or on a terminal a one-column right margin
+\(`drgnx-margins-ruler'), and the spec, set only when it changed."
+  (if (drgnx-ruler--column-p window)
+      (drgnx-margins-ruler window t)
+    (let* ((fr (window-fringes window))
+           ;; the strip, and what an owner reserves inside it (a sticky minimap: `drgnx-ruler-reserve')
+           (width (+ (drgnx-px drgnx-ruler--width (window-frame window))
+                     (or (window-parameter window 'drgnx-ruler-reserve) 0)))
+           (own (or (window-parameter window 'drgnx-ruler-fringe) (cadr fr))))
+      (unless (and (window-parameter window 'drgnx-ruler-fringe) (= (cadr fr) (+ own width)))
+        (setq own (if (window-parameter window 'drgnx-ruler-fringe) own (cadr fr)))
+        (set-window-parameter window 'drgnx-ruler-fringe own)
+        (set-window-fringes window (car fr) (+ own width) (nth 2 fr)))))
+  (let ((spec (with-current-buffer (window-buffer window) (drgnx-ruler--spec window))))
+    (unless (equal spec (window-parameter window 'glitnir-ruler))
+      (set-window-parameter window 'glitnir-ruler spec))))
+
+(defun drgnx-ruler-reserve (window px)
+  "Widen WINDOW's right fringe by PX device pixels inside its strip (nil: none), narrowing the text: a sticky minimap
+opens there instead of over the text.  The strip stays outermost."
+  (set-window-parameter window 'drgnx-ruler-reserve px)
+  (when (window-parameter window 'drgnx-ruler-fringe) (drgnx-ruler--show window)))
 
 (defun drgnx-ruler--hide (window)
-  "Take the strip from WINDOW: the marks, and its fringe back to its own width."
+  "Take the strip from WINDOW: the marks, and its fringe back to its own width (a terminal's margin column)."
   (when (window-live-p window)
+    (when (window-parameter window 'drgnx-margins-ruler) (drgnx-margins-ruler window nil))
+    (set-window-parameter window 'drgnx-ruler-reserve nil)
     (when-let* ((own (window-parameter window 'drgnx-ruler-fringe)))
       (let ((fr (window-fringes window)))
         (set-window-fringes window (car fr) own (nth 2 fr)))
@@ -273,7 +294,8 @@ loses the strip."
     (let ((on (drgnx-ruler--wants-p w)))
       (if on
           (drgnx-ruler--show w)
-        (when (or (window-parameter w 'glitnir-ruler) (window-parameter w 'drgnx-ruler-fringe))
+        (when (or (window-parameter w 'glitnir-ruler) (window-parameter w 'drgnx-ruler-fringe)
+                  (window-parameter w 'drgnx-margins-ruler))
           (drgnx-ruler--hide w)))
       (run-hook-with-args 'drgnx-ruler-place-functions w on))))
 

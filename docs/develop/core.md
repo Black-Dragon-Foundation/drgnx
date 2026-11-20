@@ -1589,7 +1589,8 @@ Nothing sets a window's margins directly. Owners make **claims** on a buffer:
 the sum of its buffer's claims there. It is set again on every claim or centring, when a window shows another
 buffer, and when a window's size changes. The window hooks are on only while some claim or centring exists. Claims
 sit side by side, lowest order outermost. On the left in terminals that is the debug column (0), the agents' strip
-(1), then the change marks (2).
+(1), then the change marks (2). On the right, a terminal window with the scroll bar adds one column of its own after
+the claims (`drgnx-margins-ruler WINDOW ON`, a window parameter: the scroll bar is per window, not per buffer).
 
 An owner starts each margin string with `(drgnx-margins-pad OWNER)`: blanks up to its claim, computed for the
 buffer's first window. `drgnx-margins-changed-functions` runs with the buffer when places may have moved. Tests:
@@ -1667,7 +1668,8 @@ lists at each publish.
 - **The minimap.** `editor/minimap` hooks `drgnx-ruler-place-functions` (run with each window and whether it shows
   the strip, when its strip is placed: no Lisp per scroll). An editor window (`drgnx-minimap-window-p`: the strip
   shown, `drgnx-minimap` on, a file or a `prog-mode`/`text-mode`/`diff-mode` buffer that is neither a Sjá view nor a special mode)
-  gets the window parameter `glitnir-minimap`: `:width` (`drgnx-minimap-width`, 80–200), the colours, `:nesting`,
+  gets the window parameter `glitnir-minimap`: `:width` (`drgnx-minimap-width`, 80–200), `:scale` (`drgnx-minimap-scale`,
+  1–3), `:left` (`drgnx-minimap-side`), `:open` while sticky (`drgnx-minimap-sticky`), the colours, `:nesting`,
   and with `drgnx-minimap-labels` the labels' `:labels` (`t` or `marks-only`), their colours (`:label`, `:sub` for a
   nested definition, `:accent` for the one under the pointer, `:mark` for a MARK section), `:label-face` (the font)
   and `:file`, the file's true name, which keys the hub's `labels` layer in Sjá. The buffer's line model gets the MARK
@@ -1758,8 +1760,19 @@ lists at each publish.
 - **Mouse.** A press on the strip (`<right-fringe> <down-mouse-1>`, `drgnx-ruler-press`) goes to the place under the
   pointer, centred, and a drag follows the pointer until the button comes up: one `recenter` per motion, the one
   place Lisp runs per pointer move. `drgnx-ruler-click` serves buffers whose marks show without the scroll bar.
-- **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler`, or in a terminal
-  (`drgnx-ruler-available-p`).
+- **Where there is none.** No strip without Nidhogg's feature `glitnir-ruler` (`drgnx-ruler-available-p`).
+- **Sticky.** While `drgnx-minimap-sticky` is on and the side is `right`, `drgnx-minimap--reserve` calls
+  `drgnx-ruler-reserve WINDOW PX`: the right fringe grows by the minimap's width inside the strip (the strip stays
+  outermost, its `:right` unchanged), so the text narrows and Glitnir's minimap, which opens leftwards from the strip,
+  covers fringe, not code (design §3, "Sticky-open"). The settings' `:apply` places every window again. Glitnir draws
+  the ruler on the right only, so `left` moves the minimap, not the strip, and a sticky left minimap covers text.
+- **Announcements (design A2).** Fold says `folded 38 lines, 2 errors` (`drgnx-fold--announce`: the lines hidden,
+  then errors and warnings when there are any, counted by `drgnx-marks--count`); the next-mark keys say
+  `error 2 of 7: …, line 1,606` (`drgnx-marks-announcement`); `minimap-describe` the section at point.
+- **Terminals (design §7.8, stage T).** A terminal window gets no fringe: `drgnx-ruler--show` gives it a one-column
+  right margin instead (`drgnx-margins-ruler`, outermost, so it is the margin's last column) and the same spec.
+  Nidhogg's C fills that column in the frame's desired matrix (`┃` thumb, `│` rail, `▐` marks), so `update_frame`
+  owns the cells and a scroll runs no Lisp. Checked by `test/tty/minimap-tty-test.el` (a counter on the placing).
 - **Checks.** `ruler-test.el` and `marks-test.el` (batch); the look scenes check every scrollable window of every
   scene (`drgnx-look-scene-scrollbars`: the strip is set, and on the root frame drawn exactly when the content runs
   past the window, from two snapshots of the root frame with and without the strips (the checker marks each window

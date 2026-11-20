@@ -85,6 +85,23 @@ each only when there is one, and none outside the fold; under `lines' only the c
     (should (string-suffix-p (format "⋯ 4 lines %s 1 " (drgnx-face-glyph 'warning))
                              (overlay-get (car (drgnx-fold--overlays)) 'display)))))
 
+(ert-deftest drgnx-fold/folding-announces-the-lines-and-problems-hidden ()
+  "Fold says in the echo area what it hid, for a screen reader (design A2): \"folded 4 lines, 1 error, 2 warnings\",
+each problem count only when there is one."
+  (fold-test--with
+    (require 'drgnx-marks)
+    (setq drgnx-ruler--marks
+          (mapcar (lambda (m) (list (fold-test--line (car m)) 0 'error 0 'bar nil (cdr m)))
+                  '((3 . error) (4 . warning) (4 . warning) (6 . error))))
+    (let (said)
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (setq said (and fmt (apply #'format-message fmt args))))))
+        (drgnx-fold-fold)
+        (should (equal said "folded 4 lines, 1 error, 2 warnings"))
+        (drgnx-fold-unfold)
+        (setq drgnx-ruler--marks nil)
+        (drgnx-fold-fold)
+        (should (equal said "folded 4 lines"))))))
+
 (defmacro fold-test--with-hub (&rest body)
   "BODY as `fold-test--with', the buffer visiting FILE (a temporary .txt, no parser), the hub's connection a live
 pipe (the hub is not run): CALLS holds the `minimap/watch' params sent on it, oldest first; TOOK is what
