@@ -1,0 +1,18 @@
+{"scenario": "agents/v2-monitor-settles", "requires": ["v1", "test-hooks"], "doc": "ACP v2: a Monitor is a tool call that stays in progress and is listed; when it settles completed it leaves the list and is kept as ended."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "bg:monitor w1 Watch the logs"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "background": [{"kind": "tool_call", "id": "w1", "description": "Watch the logs", "status": "running", "can_cancel": true}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "bg:settle w1 completed"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "background": [], "background_ended": [{"id": "w1", "end": {"status": "completed"}}]}}}, "within_ms": 10000}

@@ -1,0 +1,28 @@
+{"scenario": "agents/v2-background-cancel", "requires": ["v1", "test-hooks"], "doc": "ACP v2: agents/background-cancel stops one item by its own request (terminal/cancel, tool_call/cancel, session/cancel of the child), refuses an item that does not advertise cancel, and an unknown one."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "bg:shell t1 sleep 5\nbg:monitor w1 Watch\nbg:passive p1 Cannot be stopped\nbg:subagent k1 review"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "background": [{"id": "t1"}, {"id": "w1"}, {"id": "p1", "can_cancel": false}, {"id": "k1"}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/background-cancel", "params": {"id": "$sid", "item": "t1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"background": [{"id": "w1"}, {"id": "p1"}, {"id": "k1"}], "background_ended": [{"id": "t1", "end": {"status": "stopped"}}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/background-cancel", "params": {"id": "$sid", "item": "w1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"background": [{"id": "p1"}, {"id": "k1"}], "background_ended": {"$contains": [{"id": "w1", "end": {"status": "stopped"}}]}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/background-cancel", "params": {"id": "$sid", "item": "k1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"background": [{"id": "p1"}], "background_ended": {"$contains": [{"id": "k1", "end": {"status": "stopped"}}]}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/background-cancel", "params": {"id": "$sid", "item": "p1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/background-cancel", "params": {"id": "$sid", "item": "nope"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "error": {"code": "invalid-params"}}}

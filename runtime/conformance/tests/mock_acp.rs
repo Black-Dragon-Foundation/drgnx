@@ -1052,3 +1052,215 @@ fn claude_resume_is_logged_with_its_cwd() {
         "{logged}"
     );
 }
+
+// ---- ACP v2: the mock answers 2 to a client that asks (Claude and Codex), with the background work of the protocol ----
+
+impl Acp {
+    fn init_v2(&mut self) -> Value {
+        self.call(
+            "initialize",
+            json!({"protocolVersion": 2, "info": {"name": "test", "version": "1"}, "capabilities": {}}),
+        )
+    }
+
+    /// Reads until a message satisfies PRED (all of them land in `seen`); that message.
+    fn until(&mut self, pred: impl Fn(&Value) -> bool) -> Value {
+        loop {
+            let m = self
+                .rx
+                .recv_timeout(Duration::from_secs(20))
+                .expect("a message in time");
+            self.seen.push(m.clone());
+            if pred(&m) {
+                return m;
+            }
+        }
+    }
+
+    /// The next `state_update` of SID whose state is STATE.
+    fn state(&mut self, sid: &str, state: &str) -> Value {
+        let (sid, state) = (sid.to_string(), state.to_string());
+        self.until(move |m| {
+            m["params"]["sessionId"] == sid.as_str()
+                && m["params"]["update"]["sessionUpdate"] == "state_update"
+                && m["params"]["update"]["state"] == state.as_str()
+        })["params"]["update"]
+            .clone()
+    }
+
+    /// A prompt: the answer (its message id), then the turn's end.
+    fn turn(&mut self, sid: &str, text: &str) -> Value {
+        self.seen.clear();
+        let ack = self.prompt(sid, text);
+        assert!(ack["result"]["messageId"].is_string(), "{ack}");
+        self.state(sid, "idle")
+    }
+}
+
+fn v2_session(extra: &[&str]) -> (Acp, String, tempfile::TempDir) {
+    let d = dir();
+    let mut a = Acp::start(&[&["--as", "claude"][..], extra].concat());
+    let r = a.init_v2();
+    assert_eq!(r["result"]["protocolVersion"], 2, "{r}");
+    let sid = a.new_session(d.path().to_str().unwrap(), json!({}));
+    (a, sid, d)
+}
+
+#[test]
+fn v2_is_answered_to_claude_and_codex_only() {
+    for who in ["claude", "codex"] {
+        let mut a = Acp::start(&["--as", who]);
+        let r = a.init_v2();
+        assert_eq!(r["result"]["protocolVersion"], 2, "{who}");
+        assert!(r["result"]["capabilities"]["session"].is_object(), "{who}");
+        assert!(r["result"].get("agentCapabilities").is_none(), "{who}");
+    }
+    for who in ["gemini", "kimi", "dsh"] {
+        let mut a = Acp::start(&["--as", who]);
+        let r = a.init_v2();
+        assert_eq!(
+            r["result"]["protocolVersion"], 1,
+            "{who}: an agent without v2 answers 1"
+        );
+        assert!(r["result"]["agentCapabilities"].is_object(), "{who}");
+    }
+    // a v1 client of the same mock gets v1
+    let mut a = Acp::start(&["--as", "claude"]);
+    assert_eq!(a.init()["result"]["protocolVersion"], 1);
+}
+
+#[test]
+fn v2_turn_is_acknowledged_then_ends_at_idle() {
+    let (mut a, sid, _d) = v2_session(&[]);
+    let idle = a.turn(&sid, "hello there");
+    assert_eq!(idle["stopReason"], "end_turn");
+    assert_eq!(idle["usage"]["totalTokens"], 15);
+    assert_eq!(
+        idle["background"],
+        json!([]),
+        "nothing runs, and the list says so"
+    );
+    let states: Vec<&str> = a
+        .seen
+        .iter()
+        .filter(|m| m["params"]["update"]["sessionUpdate"] == "state_update")
+        .filter_map(|m| m["params"]["update"]["state"].as_str())
+        .collect();
+    assert_eq!(states, ["running", "idle"]);
+    let echoed = a.updates("user_message");
+    assert_eq!(echoed[0]["content"][0]["text"], "hello there");
+    assert_eq!(a.said(), "You said: hello there");
+}
+
+fn bg_ids(update: &Value) -> Vec<String> {
+    update["background"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            i["terminalId"]
+                .as_str()
+                .or(i["toolCallId"].as_str())
+                .or(i["sessionId"].as_str())
+                .unwrap()
+                .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn v2_a_background_shell_is_listed_until_it_exits() {
+    let (mut a, sid, _d) = v2_session(&[]);
+    let idle = a.turn(&sid, "bg:shell t1 sleep 5");
+    assert_eq!(bg_ids(&idle), ["t1"]);
+    let term = a.updates("terminal_update").remove(0);
+    assert_eq!(term["command"], "sleep 5");
+    assert_eq!(term["capabilities"], json!({"cancel": {}}));
+    let chunk = a.updates("terminal_output_chunk").remove(0);
+    assert_eq!(
+        chunk["data"], "c3RhcnRlZCBzbGVlcCA1Cg==",
+        "base64 of `started sleep 5\\n`"
+    );
+    // the shell exits with 3: its final status comes before the snapshot that removes it
+    let idle = a.turn(&sid, "bg:exit t1 3");
+    assert_eq!(bg_ids(&idle), Vec::<String>::new());
+    let exit_at = a
+        .seen
+        .iter()
+        .position(|m| m["params"]["update"]["exitStatus"]["exitCode"] == 3)
+        .expect("the exit status");
+    let removed_at = a
+        .seen
+        .iter()
+        .position(|m| m["params"]["update"]["background"] == json!([]))
+        .expect("the empty list");
+    assert!(exit_at < removed_at, "finalized before it is removed");
+}
+
+#[test]
+fn v2_each_kind_of_background_work_is_cancelled_by_its_own_request() {
+    let (mut a, sid, _d) = v2_session(&[]);
+    let idle = a.turn(
+        &sid,
+        "bg:shell t1 sleep 5\nbg:monitor w1 Watch logs\nbg:subagent k1 review",
+    );
+    assert_eq!(bg_ids(&idle), ["t1", "w1", "k1"]);
+    // an unknown item is refused, nothing else changes
+    let r = a.call(
+        "tool_call/cancel",
+        json!({"sessionId": sid, "toolCallId": "nope"}),
+    );
+    assert_eq!(r["error"]["code"], -32602);
+    a.seen.clear();
+    let r = a.call(
+        "terminal/cancel",
+        json!({"sessionId": sid, "terminalId": "t1"}),
+    );
+    assert_eq!(r["result"], json!({}));
+    let list = a.state(&sid, "idle");
+    assert_eq!(bg_ids(&list), ["w1", "k1"]);
+    let t = a.updates("terminal_update").remove(0);
+    assert_eq!(t["exitStatus"]["signal"], "SIGTERM");
+    a.seen.clear();
+    let r = a.call(
+        "tool_call/cancel",
+        json!({"sessionId": sid, "toolCallId": "w1"}),
+    );
+    assert_eq!(r["result"], json!({}));
+    let list = a.state(&sid, "idle");
+    assert_eq!(bg_ids(&list), ["k1"]);
+    assert_eq!(a.updates("tool_call_update")[0]["status"], "cancelled");
+    a.seen.clear();
+    // a child is cancelled as a session
+    a.write(json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": "k1"}}));
+    let child = a.state("k1", "idle");
+    assert_eq!(child["stopReason"], "cancelled");
+    let list = a.state(&sid, "idle");
+    assert_eq!(bg_ids(&list), Vec::<String>::new());
+}
+
+#[test]
+fn v2_resume_sends_the_snapshot_first() {
+    let state = dir();
+    let work = dir();
+    let args = ["--state", state.path().to_str().unwrap()];
+    let mut a = Acp::start(&[&["--as", "claude"][..], &args[..]].concat());
+    a.init_v2();
+    let sid = a.new_session(work.path().to_str().unwrap(), json!({}));
+    a.turn(&sid, "bg:shell t1 sleep 5");
+    drop(a);
+    // a second process: the session is read from the state folder, and what it ran is told again before the answer
+    let mut b = Acp::start(&[&["--as", "claude"][..], &args[..]].concat());
+    b.init_v2();
+    b.seen.clear();
+    let r = b.call(
+        "session/resume",
+        json!({"sessionId": sid, "cwd": work.path().to_str().unwrap()}),
+    );
+    assert!(r["result"]["configOptions"].is_array(), "{r}");
+    let announced = b.updates("terminal_update");
+    assert_eq!(announced[0]["terminalId"], "t1");
+    let list = b.updates("state_update");
+    assert_eq!(list.last().unwrap()["state"], "idle");
+    assert_eq!(bg_ids(list.last().unwrap()), ["t1"]);
+}
