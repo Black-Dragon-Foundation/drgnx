@@ -425,4 +425,25 @@ not undo it: it is still pinned after one more command."
         (delete-directory root t)))))
 
 
+(ert-deftest drgnx-tty-agent-panel/the-agents-side-draws-its-cards-in-a-terminal ()
+  "The Agents side in `emacs -nw' (flow Task 30): the cards' view in the terminal's display class holds the hub's card
+of the mock agent (its rows carry the session's id), and the card's line is on the terminal's screen."
+  (drgnx-tty-agent-panel-test--with (s)
+    (drgnx-tty-session-eval s '(progn (drgnx-pane-show 'agents-side :buffer (drgnx-agents-side--cards-buffer)) t))
+    (let ((card (drgnx-tty-session-wait
+                 s '(seq-some (lambda (w)
+                                (let* ((b (window-buffer w)) (st (buffer-local-value 'drgnx-view-patch b)))
+                                  (and st (equal "agents-side" (drgnx-view-patch-view st))
+                                       (string-prefix-p "tty" (drgnx-view-patch-class st))
+                                       (with-current-buffer b
+                                         (when-let* ((pos (next-single-property-change (point-min) 'drgnx-work-id)))
+                                           (string-trim (buffer-substring-no-properties
+                                                         (save-excursion (goto-char pos) (line-beginning-position))
+                                                         (save-excursion (goto-char pos) (line-end-position)))))))))
+                              (window-list (selected-frame) 'nomini))
+                 60)))
+      (should (stringp card))
+      (should (string-match-p "·" card))
+      (drgnx-tty-session-wait-screen s (regexp-quote (car (last (split-string (car (split-string card " · ")) " " t)))) 10))))
+
 ;;; agent-panel-tty-test.el ends here
