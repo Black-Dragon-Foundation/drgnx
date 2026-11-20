@@ -43,6 +43,11 @@ and composer with it.
   right in the code font. A slow step (over `drgnx-agent-panel-slow-seconds`) or an expensive one (over
   `drgnx-agent-panel-expensive-cost`) shows that figure in the warning colour; set either with `setopt` or Customize and open panels draw again at once. The agent's thinking is folded under the
   step it belongs to; `TAB` opens or folds it, with the step's detail.
+- **Explored:** reads and searches in a row fold into one header, "Explored · 4 files · 12s". `TAB`, `RET` or a click
+  opens it and its steps follow, each drawn as a step; again folds it. It starts open when the read or search step
+  type is open (the lens or `drgnx-agent-panel-disclosure`).
+- **Your messages** are cards of their own; **a finding or decision** the agent recorded is a card with its sources as
+  chips under it: a click opens the file at its line (under the agent's folder) or the link.
 - **Fonts:** the panel's text is in the UI font; a tool's output, the diffs (in the steps and on the cards) and code in
   a message are in the code font.
 - **Checkpoints:** `R` on a step opens the revert card for it (the edit history's revert: nothing changes until you

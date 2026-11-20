@@ -2783,6 +2783,12 @@ impl Session {
             .collect()
     }
 
+    /// The conversation blocks' roles of the entries from FROM on ([`rows::panel_roles`]).
+    pub(crate) fn panel_roles(&self, from: usize) -> std::collections::BTreeMap<usize, rows::Role> {
+        let st = lock(&self.state);
+        rows::panel_roles(&st.entries[from.min(st.entries.len())..], from)
+    }
+
     /// The agent panel's steps from FROM on, for its model ([`crate::view::panel::heads_of`]).
     pub(crate) fn panel_heads(&self, from: usize) -> Vec<crate::view::panel::Head> {
         let st = lock(&self.state);

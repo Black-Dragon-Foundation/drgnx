@@ -109,6 +109,7 @@ fn build(
         groups: &groups,
         always: &|_: &Entry| false,
         prov: &|_: &Entry| None,
+        roles: &|from: usize| rows::panel_roles(&entries[from.min(entries.len())..], from),
     };
     panels.rows_of(&src, &key(class), e, &FontSet::new(), dirty)
 }

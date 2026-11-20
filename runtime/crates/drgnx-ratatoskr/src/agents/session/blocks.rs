@@ -210,6 +210,11 @@ impl Folder {
         f
     }
 
+    /// Each block's first entry, in the indexes of the entries folded.
+    pub fn starts(&self) -> &[usize] {
+        &self.starts
+    }
+
     /// Fold NEW, the entries after the ones folded so far.
     pub fn append(&mut self, new: &[Entry], m: &Meta) -> Patch {
         let mut from = self.blocks.len();

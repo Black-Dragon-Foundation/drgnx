@@ -169,6 +169,27 @@ else when the chat's toggle for its type is on."
     (puthash key (if now 'closed 'open) drgnx-agent-panel--open)
     (drgnx-agent-panel--send-look)))
 
+(defun drgnx-agent-panel-block-toggle (args)
+  "The `block-toggle' action of a block's header (an Explored run): ARGS is (ENTRY), the run's first entry; it opens or
+folds as a step does (`drgnx-agent-panel--row-toggle')."
+  (drgnx-agent-panel--row-toggle (list :e (car args))))
+
+(defun drgnx-agent-panel-block-source (args)
+  "The `block-source' action of a finding's source chip: ARGS is (URL) or (PATH LINE); a path is the agent's, under
+its working directory, and opens at LINE in another window."
+  (pcase-let ((`(,where ,line) args))
+    (if (string-match-p "\\`[a-z]+://" where)
+        (browse-url where)
+      (let ((file (expand-file-name where (or (plist-get drgnx-agent-panel--snap :cwd) default-directory))))
+        (unless (file-exists-p file) (user-error "No file %s" file))
+        (with-current-buffer (find-file-other-window file)
+          (when (natnump line) (goto-char (point-min)) (forward-line (1- line))))))))
+
+(defun drgnx-agent-panel-blocks-setup ()
+  "The conversation blocks' actions (flow Task 23): a run's header opens and folds, a finding's source opens."
+  (drgnx-ui-kit-define-action 'block-toggle #'drgnx-agent-panel-block-toggle nil)
+  (drgnx-ui-kit-define-action 'block-source #'drgnx-agent-panel-block-source nil))
+
 (defun drgnx-agent-panel--set-disclosure (types)
   "TYPES are the open step types of this chat; rows you opened or folded by hand are back under the toggles."
   (setq drgnx-agent-panel--disclosure (copy-sequence types))

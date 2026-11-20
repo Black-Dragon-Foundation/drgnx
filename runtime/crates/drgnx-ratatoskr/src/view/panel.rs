@@ -142,6 +142,8 @@ struct Source<'a> {
     always: &'a dyn Fn(&runstav::methods::agents::Entry) -> bool,
     /// How the hub cached that a tool entry was allowed.
     prov: &'a dyn Fn(&runstav::methods::agents::Entry) -> Option<String>,
+    /// The blocks' roles of the entries from an index on ([`rows::panel_roles`]).
+    roles: &'a dyn Fn(usize) -> BTreeMap<usize, rows::Role>,
 }
 
 /// What one (connection, view, class) was built from, and each group's rows.
@@ -584,6 +586,7 @@ impl Panels {
             groups: &|from: usize, only: Option<&BTreeSet<usize>>| s.panel_groups(from, only),
             always: &|e: &runstav::methods::agents::Entry| s.always_covers(e),
             prov: &|e: &runstav::methods::agents::Entry| s.allowed_how(e),
+            roles: &|from: usize| s.panel_roles(from),
         };
         // the header and the chips: built from the snapshot each time (two rows; the store sends what changed)
         let snapshot = s.snapshot();
@@ -745,7 +748,17 @@ impl Panels {
             || dirty.is_none()
             || cache.groups.keys().next().is_some_and(|h| *h < from)
             || cache.groups.keys().next_back().is_some_and(|h| *h >= n);
-        let only = if whole { None } else { dirty };
+        // the conversation's blocks: a step that joins an Explored run changes its head's row too
+        let roles = (src.roles)(from);
+        let widened: Option<BTreeSet<usize>> = dirty.map(|d| {
+            d.iter()
+                .flat_map(|i| match roles.get(i) {
+                    Some(rows::Role::In(h)) => vec![*i, *h],
+                    _ => vec![*i],
+                })
+                .collect()
+        });
+        let only = if whole { None } else { widened.as_ref() };
         if whole {
             cache.groups.clear();
         }
@@ -776,7 +789,18 @@ impl Panels {
         };
         for g in (src.groups)(from, only) {
             let thoughts: Vec<&runstav::methods::agents::Entry> = g.thoughts.iter().collect();
-            let mut built = rows::group_rows(g.head, &g.entry, &thoughts, g.blocks.as_deref(), &cx);
+            let run_open = |h: usize| {
+                look.rows.get(&(h as u64)).copied().unwrap_or_else(|| {
+                    look.open.contains("read") || look.open.contains("search")
+                })
+            };
+            let mut built = match roles.get(&g.head) {
+                Some(rows::Role::Head(b)) => {
+                    rows::panel_block_rows(g.head, b, run_open(g.head), &super::kit_env(env))
+                }
+                Some(rows::Role::In(h)) if !run_open(*h) => Vec::new(),
+                _ => rows::group_rows(g.head, &g.entry, &thoughts, g.blocks.as_deref(), &cx),
+            };
             // each row names its step, the model's node, for the editor's selection
             for r in &mut built {
                 let end = r.text.chars().count() as u32;

@@ -3476,7 +3476,14 @@ the rows themselves are `agents/session/rows.rs`, pure).
 ### Conversation blocks
 
 `agents/session/blocks.rs` folds a session's transcript into the blocks the conversation view shows, and reads the
-plan strip. It is pure (no lock, no I/O, no clock); the views that draw it come later in the frontend flow.
+plan strip. It is pure (no lock, no I/O, no clock).
+
+The agent panel (`view/panel.rs`) draws three kinds from it: `You`, `Explored` and `Finding`
+(`rows::panel_roles`, `rows::panel_block_rows`). Each is keyed by its first entry (`e:N/…`) and carries
+`drgnx-agent-panel-entry`, so the panel's toggle, navigation and selection treat it as a step. An Explored run's other
+steps draw as their own groups only while the run is open: `look.rows` for its first entry, else the `read` or
+`search` step type. A step that joins a run rebuilds the run's head too. Every other entry stays a group
+(`rows::group_rows`): a tool step keeps its time, cost, provenance, hunks and checkpoint there.
 
 - **Blocks.** `You` (a user message), `Markdown` (an agent message, by its entry: its Markdown blocks are the panel's
   `b:I:N` rows), `Explored {reads, searches, secs, steps}`, `Finding {conclusion, text, sources}`, `Edit {path, plus,
