@@ -6,6 +6,7 @@
 ;; (`drgnx-uitest-pointer-click') presses the pill, then Allow once, then Pin as side bar, then the pill again.
 
 (require 'ert)
+(load (expand-file-name "../fixtures/grid-on-fixture" (file-name-directory (macroexp-file-name))) nil t)
 (require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'seq)
@@ -65,7 +66,7 @@ the state file in a temporary folder; everything undone after."
              (drgnx-memo-forget 'topline)
              (force-mode-line-update t)
              (drgnx-test-wait-presented)
-             ,@body)
+             (drgnx-test-with-grid-on ,@body))
          (drgnx-signal--flush)
          (drgnx-inbox-off)
          (drgnx-ui-inbox--tidy)

@@ -1487,7 +1487,7 @@ the last good one."
 
 (define-minor-mode drgnx-grid-mode
   "The tiled grid: pane kinds live in tiles, ordinary windows of Emacs's window tree (`drgnx-pane-backend' `grid').
-Off, they live in the docks again (`areas')."
+Off, the tiles stay as windows but nothing moves them any more (there is no other backend)."
   :global t :group 'drgnx-grid
   (if drgnx-grid-mode
       (progn
@@ -1505,7 +1505,6 @@ Off, they live in the docks again (`areas')."
       (if drgnx-grid--ediff-previous (setq ediff-window-setup-function (car drgnx-grid--ediff-previous))
         (makunbound 'ediff-window-setup-function))
       (setq drgnx-grid--ediff-previous nil))
-    (setq drgnx-pane-backend 'areas)
     (drgnx-state-unsubscribe 'windows-changed #'drgnx-grid--windows-changed)
     (remove-hook 'nidhogg-frame-scale-change-functions #'drgnx-grid-keep-dock-sizes)
     (remove-hook 'window-size-change-functions #'drgnx-grid-keep-dock-sizes)

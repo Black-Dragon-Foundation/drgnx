@@ -3301,12 +3301,14 @@ limit or a placement's deadline fired, in seconds from the row's start, so a red
 ## Pane kinds (`wb/drgnx-panes.el`)
 
 Every pane (Explorer, agents, terminal, help, …) is one data definition, a kind, made with
-`(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack :companions :instance :instance-key)`.
+`(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack :companions :instance :instance-key :icon :start :actions :empty :content :own-header :fit :min-rows :collapsed)`
+(the last eight are a tab's and a section's own keys, `drgnx-wb-define-tab` and `-define-section`'s). Every module, the Explorer, Buffers and Outline included, defines its panes this way; the row
+`drgnx-grid/no-in-tree-caller-of-the-old-api` fails a call of `drgnx-wb-define-tab`, `-define-section` or `-define-area` in `core/`, `wb/`, `modules/`, the harness or the live tests (`wb/drgnx-area.el`, `wb/drgnx-wb.el` and `wb/drgnx-panes.el` are the data layer that keeps them).
 `:home` is `left`, `bottom`, `right` or `editor`; `:title` may be left out (a `left` kind's section header then shows
 only its ✕). Callers show and find panes by kind and never use the dock, area
 or section API directly: `drgnx-pane-show` (`:buffer`, `:select`), `drgnx-pane-hide`, `drgnx-pane-toggle`,
 `drgnx-pane-focus`, `drgnx-pane-window`, `drgnx-pane-kind`, `drgnx-pane-kinds`. `drgnx-pane-show` never changes
-the selected window unless `:select` is given. `drgnx-pane-backend` (`areas`) says where kinds live; `areas` forwards
+the selected window unless `:select` is given. `drgnx-pane-backend` (`grid`, the only backend) says where kinds live; the grid's :define forwards
 a `left` kind to `drgnx-wb-define-section`, a `bottom` or `right` kind to `drgnx-wb-define-tab` (areas `panel` and
 `right`), an `editor` kind (its `:buffer` a name) to a `drgnx-wb-place` rule, and `:fill` to
 `drgnx-layouts-define-pane`. A tab defined with `:actions` (a function returning a string, or nil) has its own pieces at
@@ -3367,8 +3369,8 @@ subscription, role or kind a module leaves behind is named in the per-test diff.
 `resize` gives the dock its width (left kinds), the panel its height (bottom) or the right dock its width (right),
 pixelwise as the areas do when they are made, keeps the windows' preserved size at the new one, and notes the size
 as `:sizes` intent; it returns the kind's window, or nil when the kind does not show (the size is used at the next
-show) or is an editor kind (no size of its own). The `areas` backend has no `:move` or `:stack`: called from Lisp
-they signal `user-error` "Moving panes needs the grid" (B7 implements them; their commands are not offered before).
+show) or is an editor kind (no size of its own). The areas' own backend is gone from the product (`test/fixtures/areas-backend.el` registers it for the tests of the docks' data
+layer, with no `:move` or `:stack`).
 `hide` notes the size the pane had `:by auto`, whoever asked, and `show` of a bottom or right kind notes it as its
 area's `:front`. Switching backends and replaying the
 defined kinds into the new one is the grid's job (B3), not done here. Test: `test/unit/wb-panes-test.el`.
@@ -3738,8 +3740,8 @@ data and their API. Only their windows are made and deleted by the grid while it
 - The left and right docks split the smallest window holding every tile not docked on their side, so every editor
   group gives its share of the width, as to a side window; the bottom dock splits the part between the side docks.
   Every split is pixelwise (`window-resize-pixelwise`), else a size comes back rounded to whole lines.
-- With the grid off (`drgnx-grid-mode` -1, the `areas` backend) the docks and areas are side windows as before; the
-  batch tests of `wb-area`, `wb-dock`, `wb-rules` and `wb-state` cover that path.
+- With the grid off (`drgnx-grid-mode` -1) the backend stays `grid`: there is no other. The batch tests of `wb-area`, `wb-dock`, `wb-rules` and `wb-state` cover the docks' data layer, which
+  still makes side windows when no grid is on (`drgnx-area--create`, `drgnx-wb-show-sidebar`).
 
 `window-swap-states` cannot swap atoms (on two parts it swaps those two windows only, on two atom roots it signals),
 so moving an atom goes through its state (`window-state-get` on the root). Test: `test/unit/grid-atoms-test.el`.

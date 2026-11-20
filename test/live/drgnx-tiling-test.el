@@ -69,7 +69,7 @@ Emacs has to shrink them."
     (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
     ;; Tab switches first: Emacs preserves a size only for the buffer it was set with.
     (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe-function") (list :keys "RET") (list :type "car") (list :keys "RET")))   ; the panel's Help tab
-    (drgnx-ui-call sess "(progn (drgnx-wb-define-tab 'right 'notes :title \"Notes\")
+    (drgnx-ui-call sess "(progn (drgnx-pane-define-kind 'notes :home 'right :title \"Notes\")
                                 (drgnx-wb-area-show 'right 'notes (get-buffer-create \"*notes*\"))
                                 (set-frame-parameter drgnx-tiling--f1 'name \"drgnx-i11-first\")
                                 (drgnx-uitest--json (list :ok t)))")

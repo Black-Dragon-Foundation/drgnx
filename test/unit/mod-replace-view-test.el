@@ -2,7 +2,9 @@
 ;; test-class: cond
 (require 'ert)
 (require 'drgnx-paths)
+(require 'drgnx-grid)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/grid-on-fixture" drgnx-dir) nil t)
 (require 'drgnx)
 (require 'eglot)
 (require 'drgnx-wb)
@@ -115,17 +117,19 @@ bar's keymaps), one editor window, no view or bar left over."
   ;; "No search view").  Strict: the opened view and the bar are the module's :teardown's to take away.
   (delete-other-windows)
   (set-frame-parameter nil 'drgnx-wb-view nil)
-  (drgnx-test-with-modules '(tools/replace) :strict t
-                           (should (eq (plist-get (cdr (assq 'tools/replace drgnx-modules--table)) :stage) 'startup))
-                           (call-interactively #'drgnx-wb-view-search)
-                           (should (eq (selected-window) (drgnx-wb-section-window 'search)))
-                           (with-current-buffer (drgnx-replace-view-test--view)
-                             (should (eq (widget-field-at (point)) (drgnx-replace--widget 'find))))
-                           (drgnx-git-test-with-repo
-                             (drgnx-git-test-write repo "f.txt" "foo\n")
-                             (drgnx-replace-view-test--visit repo "f.txt" 1)
-                             (drgnx-replace-in-file)
-                             (should (get-buffer-window (drgnx-replace-view-test--bar)))))
+  (drgnx-test-with-grid-on
+    (let ((drgnx-pane--kinds nil) (drgnx-state--kind-owners nil) (drgnx-wb--sections nil))
+      (drgnx-test-with-modules '(tools/replace) :strict t
+                               (should (eq (plist-get (cdr (assq 'tools/replace drgnx-modules--table)) :stage) 'startup))
+                               (call-interactively #'drgnx-wb-view-search)
+                               (should (eq (selected-window) (drgnx-wb-section-window 'search)))
+                               (with-current-buffer (drgnx-replace-view-test--view)
+                                 (should (eq (widget-field-at (point)) (drgnx-replace--widget 'find))))
+                               (drgnx-git-test-with-repo
+                                 (drgnx-git-test-write repo "f.txt" "foo\n")
+                                 (drgnx-replace-view-test--visit repo "f.txt" 1)
+                                 (drgnx-replace-in-file)
+                                 (should (get-buffer-window (drgnx-replace-view-test--bar)))))))
   (should-not (get-buffer drgnx-replace-buffer-name))
   (should-not (get-buffer drgnx-replace-bar-buffer-name))
   (set-frame-parameter nil 'drgnx-wb-view nil)
@@ -685,7 +689,8 @@ file order, as a search sends them."
 (ert-deftest drgnx-replace/setup-registers-and-off-takes-it-all-back ()
   ;; The persist advice and the Vim-profile initial states were top-level forms; now the module's own, and
   ;; the states go back also when evil had loaded (the Vim profile).
-  (let ((states (list (cons 'drgnx-replace-mode 'normal))))
+  (require 'drgnx-panes)
+  (let ((states (list (cons 'drgnx-replace-mode 'normal))) (drgnx-pane--kinds nil) (drgnx-state--kind-owners nil))
     (unwind-protect
         (cl-letf (((symbol-function 'evil-initial-state) (lambda (m &rest _) (alist-get m states)))
                   ((symbol-function 'evil-set-initial-state) (lambda (m s) (setf (alist-get m states) s))))

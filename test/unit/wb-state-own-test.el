@@ -7,6 +7,7 @@
 (require 'drgnx-modules-fingerprint)
 (require 'drgnx-panes)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-backend" drgnx-dir) nil t)
 
 ;; Fake modules are set up with `drgnx-modules--run-setup' and turned off with `drgnx-module-teardown'.
 

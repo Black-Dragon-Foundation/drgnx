@@ -18,6 +18,7 @@
 (setq drgnx-dir (or (bound-and-true-p drgnx-dir) drgnx-ui-grid-docks--repo))
 (load (expand-file-name "test/fixtures/grid-fixture" drgnx-ui-grid-docks--repo) nil t)
 (require 'drgnx-grid-frames)
+(require 'drgnx-grid-ops)
 
 (defun drgnx-ui-grid-docks--width (dock)
   "DOCK's tile width in pixels."
@@ -52,6 +53,32 @@ hooks; the width it wants is the new one, so a later hook run keeps it."
               (should (= (drgnx-ui-grid-docks--width 'left) (+ start 20)))))
         (unless was (drgnx-grid-mode -1))
         (set-frame-parameter nil 'drgnx-grid--docks nil)))))
+
+(ert-deftest drgnx-ui-grid-docks/resize-tiles-draws-a-2-px-accent-line-on-the-gap-in-use ()
+  "Resize Tiles puts tiling.html's `.gaphint' on the gap its next step moves: a 2 px frame in the accent colour on the
+gap between the editor and the side bar (the editor has no tile to its right), and takes it away when the mode ends."
+  (skip-unless (display-graphic-p))
+  (drgnx-grid-test--with
+    (drgnx-grid-show 'g-tree)
+    (drgnx-test-wait-presented)
+    (let ((editor (drgnx-wb-editor-window)))
+      (select-window editor)
+      (let ((exit (drgnx-grid-resize-mode)))
+        (unwind-protect
+            (let* ((line drgnx-grid--resize-line) (e (window-pixel-edges editor)))
+              (should (frame-live-p line))
+              (drgnx-test-wait (lambda () (redisplay t) (frame-visible-p line)) :secs 10 :what "the line shown")
+              (should (= (frame-pixel-width line) (drgnx-px-line 2)))
+              (should (<= (abs (- (frame-pixel-height line) (- (nth 3 e) (nth 1 e)))) 2))
+              (should (<= (- (nth 0 e) (frame-right-divider-width) (drgnx-px-line 2)) (car (frame-position line)) (nth 0 e)))
+              (let ((accent (face-foreground 'drgnx-accent nil t)))
+                (when (stringp accent) (should (equal (frame-parameter line 'background-color) accent)))))
+          (funcall exit)
+          (drgnx-grid--resize-end)
+          (dolist (w (window-list nil 'nomini))
+            (dolist (p '(header-line-format mode-line-format tab-line-format drgnx-grid-mode-note))
+              (set-window-parameter w p nil))))
+        (should-not (frame-live-p drgnx-grid--resize-line))))))
 
 (provide 'grid-docks-gui-test)
 ;;; grid-docks-gui-test.el ends here

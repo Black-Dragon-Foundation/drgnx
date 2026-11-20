@@ -50,6 +50,7 @@ sidebar's one selection stays the only one." :group 'drgnx)
   (setq-local truncate-lines t cursor-type nil mode-line-format nil)
   (drgnx-wb-rows-setup))
 
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (defun drgnx-outline--hub-p ()
   "Non-nil when the hub's subscribed connection is up (the hub sends the rows there)."
   (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
@@ -227,8 +228,9 @@ of a list longer than it (a list does not scroll past its end)."
 
 (defun drgnx-outline-setup ()
   "Put the Outline in the dock, below the Explorer, following the editor."
-  (drgnx-wb-define-section 'outline :slot 1 :title drgnx-outline-title :height 0.25 :collapsed t :buffer #'drgnx-outline--buffer
-                           :on-show (lambda (_w) (drgnx-outline-refresh)))
+  (require 'drgnx-panes)
+  (drgnx-pane-define-kind 'outline :home 'left :slot 1 :title drgnx-outline-title :height 0.25 :collapsed t
+                          :buffer #'drgnx-outline--buffer :on-show (lambda (_w) (drgnx-outline-refresh)))
   (drgnx-signal-subscribe 'editor-changed #'drgnx-outline-refresh)
   (drgnx-signal-subscribe 'editor-point-changed #'drgnx-outline--mark-current)
   (drgnx-wb-rows-follow))

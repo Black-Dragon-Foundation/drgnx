@@ -151,6 +151,18 @@ through `forward-sexp`) scanned the rest of the 4 MB file at every key, about on
 in every workload that types into the fixture.
 
 
+## The tiling workloads
+
+`harness/drgnx-perf-tiling.el` (tiling plan, Task 20) runs five rows in a graphical session with the grid on and six tiles (the
+side bar, the panel, the right dock and three editors); `budgets.eld` holds their budgets. `tile-switcher-show` opens and closes the
+tile switcher 20 times and draws each (`:show :p95` within 50 ms); `tile-focus` is a key (`<f7>`, bound for the workload only) that focuses
+the next tile (`:input :p95` within a frame); `tile-move` moves the selected tile beside its neighbour and back, a key each
+(`:input :p95` within 50 ms); `layout-restore` puts the snapshot of ten tiles, a file open in each, back five times (`:tiles`, the
+median, within 150 ms; the modes the files load are reported as `:mode_load_ms`, never budgeted); `pane-drag` puts the drop hint on a
+tile's tab row (`:motion :p95` within a frame) and drops a tile (`:drop :p95` within 50 ms). Each is red under a mutation that
+re-applies the whole grid (chrome, sizes, hooks) on every operation. Allocation, CPU and rows budgets follow once their first runs on the
+desktop island set them (`drgnx-perf-run-unseeded`).
+
 ## The agents-in-the-editor workloads
 
 `harness/drgnx-perf-agents.el` (the session side: `test/fixtures/agents-editor-five-fixture.el`) measures what agents

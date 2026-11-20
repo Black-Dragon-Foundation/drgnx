@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/grid-on-fixture" drgnx-dir) nil t)
 (require 'drgnx-wb)
 
 (defmacro drgnx-wb-test--with-sections (&rest body)
@@ -12,7 +13,7 @@
        (delete-other-windows)
        (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*")))
        (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-test-bottom*")))
-       (unwind-protect (progn ,@body)
+       (unwind-protect (drgnx-test-with-grid-on ,@body)
          (drgnx-wb-hide-sidebar)
          (delete-other-windows)
          (dolist (b '("*drgnx-test-top*" "*drgnx-test-bottom*")) (when (get-buffer b) (kill-buffer b)))))))
@@ -27,7 +28,7 @@
        (should (window-live-p top))
        (should (window-live-p bottom))
        (should (eq (window-parameter top 'drgnx-role) 'dock))
-       (should (eq (window-parameter top 'window-side) 'left))
+       (should (eq (window-parameter top 'drgnx-tile-dock) 'left))
        (should (string-search "TOP" (window-parameter top 'header-line-format)))
        ;; Buffers above the Explorer: the lower slot is on top.
        (should (< (cadr (window-edges top)) (cadr (window-edges bottom))))

@@ -5,6 +5,7 @@
 (require 'seq)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/grid-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-backend" drgnx-dir) nil t)
 
 (ert-deftest drgnx-grid/stack-switch-keeps-the-window ()
   ;; R1: a kind already in a stack comes to the front in the same window; nothing moves
@@ -167,27 +168,6 @@
       (should (window-parameter w 'drgnx-tile-id))
       (should (window-parameter w 'no-delete-other-windows)))
     (should (eq (drgnx-grid-root) (frame-root-window)))))
-
-(ert-deftest drgnx-grid/first-arrangement-matches-the-docks ()
-  ;; the docks as tiles sit where the side-window docks sat: left dock | (editor over panel) | right dock
-  (drgnx-grid-test--with
-    (let ((window-sides-vertical t) (drgnx-wb-dock-columns 30) area-edges)
-      (drgnx-wb-define-area 'panel :side 'bottom :size 10)
-      (drgnx-wb-define-area 'right :side 'right :size 40)
-      ;; today's docks: side windows, the same sizes
-      (let ((drgnx-pane-backend 'areas))
-        (drgnx-wb-show-sidebar)
-        (let ((left (car (drgnx-wb--dock-windows)))
-              (panel (drgnx-wb-area-show 'panel 'g-term))
-              (right (drgnx-wb-area-show 'right 'g-chat)))
-          (should (window-parameter left 'window-side))
-          (setq area-edges (mapcar #'window-pixel-edges (list left panel right))))
-        (drgnx-wb-area-hide 'panel) (drgnx-wb-area-hide 'right) (drgnx-wb-hide-sidebar))
-      (drgnx-grid-test--reset)
-      (let ((grid-edges (mapcar #'window-pixel-edges (mapcar #'drgnx-pane-show '(g-tree g-term g-chat)))))
-        (ert-info ((format "left, bottom, right: areas %S, grid %S" area-edges grid-edges))
-          (cl-mapc (lambda (a g) (dotimes (i 4) (should (<= (abs (- (nth i a) (nth i g))) 1))))
-                   area-edges grid-edges))))))
 
 (ert-deftest drgnx-grid/delete-other-windows-cannot-collapse ()
   ;; work-space §16 escape-quit-never-collapses-tiles: Esc with nothing to do (VS Code's `keyboard-escape-quit') and

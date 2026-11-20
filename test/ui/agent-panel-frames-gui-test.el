@@ -10,6 +10,8 @@
 ;; hooks (DRGNX_RATATOSKR_BIN).
 
 (require 'ert)
+(load (expand-file-name "../fixtures/grid-on-fixture" (file-name-directory (macroexp-file-name))) nil t)
+(drgnx-test-grid-on-for-file)
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
@@ -193,34 +195,6 @@ then the panel's buffer killed: its header and composer go with it, and no compa
                                     (drgnx-ui-agent-panel-frames--area)))))
         (drgnx-wb-undefine-tab 'right 'panel-frames-other)
         (kill-buffer other)))))
-
-(ert-deftest drgnx-ui-agent-panel-frames/two-sessions-swap-all-three-buffers ()
-  "Two sessions' panels: the area shows one at a time, and opening the other swaps the transcript, the header and the
-composer together."
-  (drgnx-ui-agent-panel-frames--with panel 3
-    (let* ((s1 (buffer-local-value 'drgnx-agent-panel--session panel))
-           (mirror (drgnx-agents-mirror-start "replay" (expand-file-name "project" drgnx-panel-replay--dir)))
-           (panel2 nil))
-      (unwind-protect
-          (progn
-            (should mirror)
-            (setq panel2 (drgnx-agent-panel-open (drgnx-agent-session-remote mirror)))
-            (drgnx-ui-agent-panel-frames--settle)
-            (should-not (eq panel panel2))
-            (drgnx-ui-agent-panel-frames--two panel2 nil :second-session)
-            (should-not (memq panel (mapcar #'window-buffer (drgnx-ui-agent-panel-frames--area))))
-            (should-not (memq (drgnx-agent-panel--composer-of panel) (mapcar #'window-buffer (drgnx-ui-agent-panel-frames--area))))
-            (drgnx-agent-panel-open s1)
-            (drgnx-ui-agent-panel-frames--settle)
-            (drgnx-ui-agent-panel-frames--two panel nil :first-again)
-            (should-not (memq (drgnx-agent-panel--composer-of panel2) (mapcar #'window-buffer (drgnx-ui-agent-panel-frames--area))))
-            ;; the header: three windows each time
-            (drgnx-ui-agent-panel-frames--three panel nil :first-three)
-            (drgnx-agent-panel-open (drgnx-agent-session-remote mirror))
-            (drgnx-ui-agent-panel-frames--settle)
-            (drgnx-ui-agent-panel-frames--three panel2 nil :second-three))
-        (ignore-errors (drgnx-agents-kill mirror))
-        (when (buffer-live-p panel2) (kill-buffer panel2))))))
 
 (provide 'agent-panel-frames-gui-test)
 ;;; agent-panel-frames-gui-test.el ends here

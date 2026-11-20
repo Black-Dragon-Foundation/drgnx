@@ -280,7 +280,8 @@ or takes the space.  A docked tile's size is noted as intent."
        frame (lambda () (ignore-errors (adjust-window-trailing-edge (car move) (cdr move) horizontal t)))))
     (when-let* ((dock (window-parameter me 'drgnx-tile-dock)))
       (window-preserve-size me (drgnx-grid--horizontal-dock-p dock) t)
-      (drgnx-state-note-intent frame :sizes dock (window-size me (drgnx-grid--horizontal-dock-p dock) t)))))
+      (drgnx-state-note-intent frame :sizes dock (window-size me (drgnx-grid--horizontal-dock-p dock) t)))
+    (when (eq me drgnx-grid--resizing) (drgnx-grid--resize-line-show me direction))))
 
 (defvar drgnx-grid-resize-map (make-sparse-keymap)
   "Resize Tiles' keys (the profiles' tile-resize-left/right/up/down, the arrows): each steps; any other key ends it and
@@ -305,8 +306,54 @@ does what it does.")
 \"Resize · Esc\" led by the move icon."
   (drgnx-ui-kit-string 'chip (list :c "chip" :label "Resize · Esc" :tone "accent" :icon "move") 'tab-line frame))
 
+(defvar drgnx-grid--resize-line nil "The accent line's child frame while Resize Tiles is on, else nil.")
+
+(defun drgnx-grid--resize-line-hide ()
+  "Take the accent line away."
+  (when (frame-live-p drgnx-grid--resize-line) (delete-frame drgnx-grid--resize-line t))
+  (setq drgnx-grid--resize-line nil))
+
+(defun drgnx-grid--resize-line-show (me direction)
+  "Draw Resize Tiles' accent line (tiling.html's `.gaphint': 2 px) on the gap the next step in DIRECTION moves: the one
+between tile ME and its neighbour that way, else, at the grid's edge, the one on the opposite side.  A child frame
+\(its width and height, so thin, are set in pixels); a terminal has none."
+  (let ((frame (window-frame me)))
+    (when (display-graphic-p frame)
+      (let* ((dir (if (drgnx-grid-neighbour me direction) direction
+                    (pcase direction ('left 'right) ('right 'left) ('up 'down) (_ 'up))))
+             (e (drgnx-grid--edges me)) (horizontal (and (memq dir '(left right)) t))
+             (thick (drgnx-px-line 2 frame))
+             (divider (if horizontal (frame-right-divider-width frame) (frame-bottom-divider-width frame)))
+             (start (pcase dir
+                      ('left (- (nth 0 e) (/ (+ divider thick) 2))) ('right (+ (nth 2 e) (/ (- divider thick) 2)))
+                      ('up (- (nth 1 e) (/ (+ divider thick) 2))) (_ (+ (nth 3 e) (/ (- divider thick) 2)))))
+             (colour (face-foreground 'drgnx-accent frame t))
+             (f (if (and (frame-live-p drgnx-grid--resize-line) (eq (frame-parent drgnx-grid--resize-line) frame))
+                    drgnx-grid--resize-line
+                  (drgnx-grid--resize-line-hide)
+                  (setq drgnx-grid--resize-line
+                        (let ((after-make-frame-functions nil) (before-make-frame-hook nil))
+                          (make-frame `((parent-frame . ,frame) (minibuffer . nil) (name . "drgnx-resize-line") (drgnx-resize-line . t)
+                                        (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t)
+                                        (skip-taskbar . t) (unsplittable . t) (no-special-glyphs . t)
+                                        (desktop-dont-save . t) (border-width . 0) (internal-border-width . 0)
+                                        (child-frame-border-width . 0) (menu-bar-lines . 0) (tool-bar-lines . 0)
+                                        (tab-bar-lines . 0) (left-fringe . 0) (right-fringe . 0)
+                                        (vertical-scroll-bars) (horizontal-scroll-bars) (cursor-type . nil)
+                                        ;; a window is at least two columns wide: a 1 px font keeps that under the 2 px line
+                                        (font . "monospace:pixelsize=1")
+                                        (drgnx-minimap-exclude . t) (visibility . nil))))))))
+        (when (stringp colour) (set-frame-parameter f 'background-color colour))
+        ;; the look sets the default face's font on every frame, so the 1 px font is the frame's own face too
+        (set-face-attribute 'default f :height 10)
+        (let ((window-min-height 1) (window-min-width 1))
+          (set-frame-size f (if horizontal thick (- (nth 2 e) (nth 0 e))) (if horizontal (- (nth 3 e) (nth 1 e)) thick) t))
+        (set-frame-position f (if horizontal start (nth 0 e)) (if horizontal (nth 1 e) start))
+        (unless (frame-visible-p f) (make-frame-visible f))))))
+
 (defun drgnx-grid--resize-end ()
-  "Resize Tiles ends: its note and hint go."
+  "Resize Tiles ends: its note, line and hint go."
+  (drgnx-grid--resize-line-hide)
   (when-let* ((w drgnx-grid--resizing))
     (setq drgnx-grid--resizing nil)
     (when (window-live-p w)
@@ -323,7 +370,8 @@ echo area (`drgnx-grid-resize-hint')."
   (let ((w (drgnx-grid-tile-main (selected-window))))
     (setq drgnx-grid--resizing w)
     (set-window-parameter w 'drgnx-grid-mode-note (drgnx-grid-resize-note (window-frame w)))
-    (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply (window-frame w))))
+    (when (fboundp 'drgnx-chrome-apply) (drgnx-chrome-apply (window-frame w)))
+    (drgnx-grid--resize-line-show w 'right))
   (message "%s" (drgnx-grid-resize-hint))
   (set-transient-map drgnx-grid-resize-map t #'drgnx-grid--resize-end))
 

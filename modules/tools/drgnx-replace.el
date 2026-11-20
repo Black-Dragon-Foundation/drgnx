@@ -71,6 +71,7 @@
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-hub-start-for-command "drgnx-hub-client" (on-fail))
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe))
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-view-env-unregister "drgnx-view-env" (view))
 (defvar drgnx-hub--events)
 (defvar drgnx-hub-event-functions)
@@ -997,8 +998,9 @@ Branch's base and `±'."
   "Put the Search view in the sidebar (its `search' view), and define the view type of its result rows."
   (drgnx-view-define 'replace-results :render #'drgnx-replace--render-row :delay 0 :slice drgnx-view-slice
                      :key-test 'eq :patched #'drgnx-replace--rows-drawn)
-  (drgnx-wb-define-section 'search :view 'search :slot 0 :title " SEARCH" :buffer #'drgnx-replace--view-buffer
-                           :on-focus #'drgnx-replace--focus-find))
+  (require 'drgnx-panes)
+  (drgnx-pane-define-kind 'search :home 'left :view 'search :slot 0 :title " SEARCH" :buffer #'drgnx-replace--view-buffer
+                          :on-focus #'drgnx-replace--focus-find))
 
 (defun drgnx-replace--focus-find (window)
   "The Search view focused in WINDOW by its key (VS Code's Ctrl+Shift+F): point in the find field."

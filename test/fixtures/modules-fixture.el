@@ -19,6 +19,7 @@
 ;; See docs/develop/harness.md ("Tests that set modules up").
 
 ;;; Code:
+(require 'drgnx-grid)
 (require 'cl-lib)
 (require 'ert)
 (require 'seq)

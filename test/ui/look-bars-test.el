@@ -8,6 +8,7 @@
 (require 'ert)
 (require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
+(setq drgnx-look-gui-grid nil)               ; bare frames of its own, no dock
 (require 'seq)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
@@ -376,6 +377,8 @@ hover colour: about 26 px across through its middle, and a chord of about 14 px 
   (skip-unless (display-graphic-p))
   (skip-unless (drgnx-uitest-pointer-available-p))
   (drgnx-uitest-bare-frame)
+  (mapc #'disable-theme custom-enabled-themes)
+  (load-theme 'drgnx-dark t)                 ; the hover colour is a token: a session with no theme has none
   (let ((buf (get-buffer-create "*look-bars-hover*")) (frame (selected-frame)) (was drgnx-face-title-bar))
     (switch-to-buffer buf)
     (unwind-protect
@@ -404,6 +407,7 @@ hover colour: about 26 px across through its middle, and a chord of about 14 px 
       (setq drgnx-face-title-bar was)
       (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) #'ignore)) (drgnx-face--apply-title frame))
       (drgnx-topline--off)
+      (mapc #'disable-theme custom-enabled-themes)
       (kill-buffer buf))))
 
 (provide 'look-bars-test)

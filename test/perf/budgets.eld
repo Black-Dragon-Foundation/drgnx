@@ -371,4 +371,11 @@
  (budget-tree-open (:first-page) 20)
  ;; forecast/plan over 12 plans of 20 tasks: the first call (a joint draw) and the repeats (cached), the hub's `forecast_plan_perf'
  (forecast-plan-miss (:ms) 300) (forecast-plan-hit (:ms) 5)
+ ;; tiling (plan Task 20): the switcher's cards shown, a focus and a move by key, ten tiles restored with their files
+ ;; open (the modes' loads are reported, not budgeted), a drag's motion and its drop
+ (tile-switcher-show (:show :p95) 50)
+ (tile-focus (:input :p95) 16)
+ (tile-move (:input :p95) 50)
+ (layout-restore (:tiles) 150)
+ (pane-drag (:motion :p95) 16) (pane-drag (:drop :p95) 50)
 )

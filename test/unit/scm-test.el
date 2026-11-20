@@ -6,6 +6,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
+(require 'drgnx-grid)
 (require 'drgnx-modules)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-vc" drgnx-dir) nil t)

@@ -61,6 +61,7 @@ a closed one's goes at the next set change.")
 (defvar drgnx-buffers--sends 0 "How many `buffers/set' calls went (tests read it).")
 (defvar drgnx-buffers--pressed nil "Non-nil while a mouse button pressed in the panel is held.")
 
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (defun drgnx-buffers--id (b)
   "Buffer B's row id, given it when it has none."
   (or (gethash b drgnx-buffers--ids)
@@ -451,8 +452,9 @@ in the editor."
 (defun drgnx-buffers-setup ()
   "Put the Buffers panel in the dock (above the Explorer) and keep it current."
   ;; folded at first, as VS Code's Open Editors: a file opened adds no row above the Explorer under the pointer
-  (drgnx-wb-define-section 'buffers :slot -1 :title #'drgnx-buffers--current-title :height 0.3 :fit 0.3
-                           :collapsed t :buffer #'drgnx-buffers--buffer)
+  (require 'drgnx-panes)
+  (drgnx-pane-define-kind 'buffers :home 'left :slot -1 :title #'drgnx-buffers--current-title :height 0.3 :fit 0.3
+                          :collapsed t :buffer #'drgnx-buffers--buffer)
   (drgnx-state-subscribe 'selected-changed #'drgnx-wb--selected-changed)
   (drgnx-wb-rows-follow)
   (drgnx-signal-subscribe 'buffer-set-changed #'drgnx-buffers--set-changed)

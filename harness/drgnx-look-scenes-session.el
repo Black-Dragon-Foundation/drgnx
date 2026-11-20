@@ -459,6 +459,13 @@ panel's window at either scale.")
     (push "agent: no ratatoskr binary (DRGNX_RATATOSKR_BIN)" drgnx-look-scene--errors))
    (t
     (drgnx-look-scene--try "agent"
+      ;; a hub an earlier scene started (`drgnx-look-scene--hub') knows no `replay' profile and would answer the ping of
+      ;; the replay's: it ends first, and the replay's hub is the scenes' hub from here on
+      (when (drgnx-hub-running-p)
+        (ignore-errors (drgnx-hub-disconnect))
+        (dolist (p (process-list))
+          (when (string-prefix-p "ratatoskr" (process-name p)) (signal-process p 'term)))
+        (drgnx-look-scene--until 15 "the scenes' hub ended" (lambda () (not (drgnx-hub-running-p)))))
       (load (expand-file-name "test/fixtures/panel-replay-fixture" (bound-and-true-p drgnx-dir)) nil t)
       ;; the mockup's three steps; the `agent-panel-long' scene makes the transcript long with the second turn below
       (setq drgnx-panel-replay-prefix 3)
@@ -495,6 +502,9 @@ panel's window at either scale.")
 still said `editor': the next scene's start puts the layout back (`drgnx-look-scene--editor-layout').")
 
 (declare-function drgnx-groups-list "drgnx-groups")
+(declare-function drgnx-chrome-tabs "drgnx-chrome" (w))
+(declare-function drgnx-grid-tiles "drgnx-grid" (&optional frame kind))
+(declare-function drgnx-hub-disconnect "drgnx-hub-client")
 
 (defun drgnx-look-scene--one-editor ()
   "One editor group, the one used last, selected; the docks stay.  Not `delete-other-windows': under the grid an
@@ -3191,7 +3201,7 @@ chrome faces, frame metrics, windows, modules."
 frame whose buffer's name COVERS (a regexp, the scene's :covers in `drgnx-look-scenes': its menu, card or drop-down)
 matches.  Any other cover, a toast say, is an error, so an unexpected child frame still fails the scene."
   (or (and (boundp 'drgnx-palette-frame--frame) (eq f drgnx-palette-frame--frame))
-      (frame-parameter f 'drgnx-switcher-card)
+      (frame-parameter f 'drgnx-switcher-card) (frame-parameter f 'drgnx-resize-line)
       (and covers (string-match-p covers (buffer-name (window-buffer (frame-root-window f)))))))
 
 (defun drgnx-look-scene--ruler-set (window spec minimap)

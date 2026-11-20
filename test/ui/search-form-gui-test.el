@@ -3,6 +3,8 @@
 ;; The Search view's form (mode chip, fields, toggles, scope chips) has no ASCII-bracket buttons, and no line of it is
 ;; wider than the side bar, at the run's scale (the harness runs it at 1 and 1.25 / 2).  Needs a Nidhogg with Sjá.
 (require 'ert)
+(load (expand-file-name "../fixtures/grid-on-fixture" (file-name-directory (macroexp-file-name))) nil t)
+(drgnx-test-grid-on-for-file)
 (require 'cl-lib)
 (require 'drgnx-uitest)
 

@@ -7,6 +7,7 @@
 (load (expand-file-name "test/fixtures/grid-fixture" drgnx-dir) nil t)
 (require 'drgnx-groups)
 (require 'drgnx-grid-ops)
+(require 'drgnx-chrome)
 
 (defun drgnx-grid-drag-test--posn (window x y &optional area)
   "A posn on WINDOW at frame pixel X, Y: in its text, or in AREA (`tab-line') measured from the window's corner."
@@ -71,6 +72,18 @@ quit)."
       (should (equal (window-parameter two 'tab-line-format) (cdr (assq two before))))
       (drgnx-grid--drag-clear)
       (should (equal (funcall lines) before)))))
+
+(ert-deftest drgnx-grid-drag/a-chrome-redraw-during-a-drag-keeps-the-feedback ()
+  ;; the chrome sets the tab line again whenever the hub, a theme or a size changes it (a slow start does it mid-drag):
+  ;; the drop hint stays, and the line the chrome wanted is what comes back when the drag ends
+  (drgnx-grid-test--with
+    (let* ((two (drgnx-groups-split-right)))
+      (drgnx-grid--drag-show two 'right)
+      (drgnx-chrome--set two 'tab-line-format " chrome's new row ")
+      (should (string-search "drop: split right" (window-parameter two 'tab-line-format)))
+      (drgnx-grid--drag-clear)
+      (should (equal (window-parameter two 'tab-line-format) " chrome's new row "))
+      (set-window-parameter two 'tab-line-format nil))))
 
 (ert-deftest drgnx-grid-drag/a-docked-area-says-it-on-its-header-line ()
   ;; a docked area's tab row is its header line (no tab line): the feedback goes there, and back after
