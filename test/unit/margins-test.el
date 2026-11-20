@@ -100,3 +100,14 @@
         (should (equal (window-margins w) '(nil)))))))
 
 ;;; margins-test.el ends here
+(ert-deftest drgnx-margins/a-margin-keeps-the-windows-preserved-size ()
+  "`window-preserve-size' is of the window's body, which a margin narrows: after a claim the preserved width is the
+body's again, so a dock the grid sized keeps its size when another window opens (the terminal's scroll bar column took
+it: the sidebar shrank 40 to 28 columns when the right dock showed)."
+  (margins-test--with
+    (window-preserve-size w t t)
+    (should (equal (nth 1 (window-parameter w 'window-preserved-size)) (window-body-width w t)))
+    (drgnx-margins-claim 'hunks 2 :order 0)
+    (should (equal (nth 1 (window-parameter w 'window-preserved-size)) (window-body-width w t)))
+    (drgnx-margins-claim 'hunks nil)
+    (should (equal (nth 1 (window-parameter w 'window-preserved-size)) (window-body-width w t)))))

@@ -239,9 +239,11 @@ RADIUS [END])."
 (defun drgnx-ruler--set-fringe (window side px)
   "Set WINDOW's fringe on SIDE (`left' or `right') to PX, the other side kept."
   (let ((fr (window-fringes window)))
-    (if (eq side 'left)
-        (set-window-fringes window px (cadr fr) (nth 2 fr))
-      (set-window-fringes window (car fr) px (nth 2 fr)))))
+    (drgnx-margins-keep-preserved-size
+     window (lambda ()
+              (if (eq side 'left)
+                  (set-window-fringes window px (cadr fr) (nth 2 fr))
+                (set-window-fringes window (car fr) px (nth 2 fr)))))))
 
 (defun drgnx-ruler--show (window)
   "Give WINDOW the strip: the fringe on its side (`drgnx-ruler--left-p') widened by the strip (once), or on a
