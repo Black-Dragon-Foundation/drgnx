@@ -255,7 +255,11 @@ bar is 2 ms); then the cost of the redisplay the overlays add; then a picture in
         (dotimes (k 200)
           (let ((pos (save-excursion (goto-char (point-min)) (forward-line (* 3 (% k 100))) (point))))
             (set-window-start win pos)
-            (push (* 1000 (benchmark-elapse (agents-editor-gui--rebuild win pos))) direct)))
+            ;; the rebuild's own CPU time: sessions of the tier run side by side, and a slice another process takes
+            ;; from this one inside a 0.3 ms call is not the rebuild's cost
+            (let ((c0 (get-internal-run-time)))
+              (agents-editor-gui--rebuild win pos)
+              (push (* 1000 (float-time (time-subtract (get-internal-run-time) c0))) direct))))
         ;; redisplay with no overlays against redisplay with the rebuild on `window-scroll-functions'
         (agents-editor-gui--clear)
         (dotimes (k 60)
