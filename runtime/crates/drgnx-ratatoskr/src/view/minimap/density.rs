@@ -325,16 +325,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = log(dir.path(), 900_000);
         let st = stamp(&p).unwrap();
-        let t0 = Instant::now();
-        let at = std::cell::Cell::new(t0);
+        let at = std::cell::Cell::new(Instant::now());
+        // the scan's own start is the clock's first reading; the deadline counts from it
+        let t0 = std::cell::Cell::new(None);
         let clock = || {
             at.set(at.get() + Duration::from_millis(100));
+            t0.set(t0.get().or(Some(at.get())));
             at.get()
         };
         let mut first = None;
         scan(&p, st, &re("ERROR"), &re("WARN"), clock, |part| {
             if part.is_some() && first.is_none() {
-                first = Some(at.get().duration_since(t0));
+                first = Some(at.get().duration_since(t0.get().unwrap()));
             }
             true
         })
