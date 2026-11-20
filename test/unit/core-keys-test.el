@@ -1560,6 +1560,7 @@ The commands of modules that need no installed package are in it, the later stag
                               agents-panel-output-search agents-panel-output-open agents-panel-output-more
                               agents-panel-revert-here agents-panel-fork-here
                               agents-panel-chip agents-panel-revoke-always agents-panel-act
+                              agents-end agents-background-list agents-background-stop ; the panel's background work
                               agents-panel-start agents-panel-move agents-panel-compact agents-panel-mode agents-panel-model
                               agents-panel-compose agents-panel-newline agents-panel-back   ; the composer as an input buffer
                               agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open

@@ -21,6 +21,8 @@
 (defconst drgnx-panel-replay-updates 600 "Chunks streamed after the prefix, 20 a second.")
 (defconst drgnx-panel-replay-measured 400 "Updates the measure waits for (at most 40 s).")
 
+(defvar drgnx-panel-replay-background nil
+  "Mock directives (\"bg:shell t1 sleep 600\") the first turn ends with: its items run in the background after it.")
 (defvar drgnx-panel-replay--dir nil "The temp directory: the project and the hub's settings.")
 (defvar drgnx-panel-replay-project nil
   "A git repository the agent works in instead of the temp one (the look scenes give theirs, so the agent is here).")
@@ -88,7 +90,8 @@
                           append (append (list (concat "say " (aref chunks (% u n))) "silent 0.05")
                                          (and (zerop (% (1+ u) 10))
                                               (list (format "provider:read src/main.el %d 1" (cl-incf read))))))))
-    (concat (mapconcat #'identity prefix "\\n") "\n" (mapconcat #'identity stream "\\n"))))
+    (concat (mapconcat #'identity (append prefix drgnx-panel-replay-background) "\\n") "\n"
+            (mapconcat #'identity stream "\\n"))))
 
 (defun drgnx-panel-replay--wait (secs pred)
   "Let the session run until PRED holds; whether it does.  SECS counts the time the hub slept (`drgnx-ui-progress'):
@@ -149,8 +152,11 @@ The panel inserts the rows the hub builds."
       (with-temp-file (expand-file-name "settings.el" config)
         (prin1 (list 'drgnx-settings :version 1
                      (list 'drgnx-agents-profiles
-                           (list (list "replay" :command (list mock "acp" "--as" "claude" "--script" script
-                                                               "--log" (concat script ".log"))))))
+                           (list (append (list "replay" :command (list mock "acp" "--as" "claude" "--script" script
+                                                                       "--log" (concat script ".log")))
+                                         ;; v2 is asked for by profiles named claude and codex: this one asks too
+                                         ;; when its script leaves background work running
+                                         (and drgnx-panel-replay-background '(:acp-v2 auto))))))
                (current-buffer)))
       (let ((process-environment (append (list (concat "DRGNX_CONFIG_DIR=" config) "RATATOSKR_SUPERVISOR=none"
                                                (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)))

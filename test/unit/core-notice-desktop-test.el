@@ -202,3 +202,16 @@ sends are recorded in `sent' as (TITLE . BODY), oldest first, instead of made."
 
 (provide 'core-notice-desktop-test)
 ;;; core-notice-desktop-test.el ends here
+
+;;;; The item's own title
+
+(ert-deftest drgnx-notice-desktop/an-item-may-name-its-own-title ()
+  "`:desktop-title' replaces \"drgnx: SOURCE\" as the notification's title (a background item's end says what it was);
+without it the title is unchanged."
+  (drgnx-notice-desktop-test--with
+    (should (drgnx-notice-desktop-take (list :id 'with-title :source 'agents :text "ACP in the hub (Claude) · exit 3"
+                                             :desktop-title "cargo test failed")))
+    (should (drgnx-notice-desktop-take (list :id 'plain :source 'agents :text "s1 asks")))
+    (drgnx-test-advance 0)
+    (should (equal sent '(("cargo test failed" . "ACP in the hub (Claude) · exit 3")
+                          ("drgnx: agents" . "s1 asks"))))))

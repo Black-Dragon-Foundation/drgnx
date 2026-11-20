@@ -19,6 +19,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-ui-kit)                 ; the question card's action kind
 
+(declare-function drgnx-agent-panel-background-output "drgnx-agent-panel-background")
 (declare-function drgnx-agent-panel--send-look "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--main-of "drgnx-agent-panel-composer")
@@ -152,9 +153,14 @@ On a paired chat's ledger line: take that hunk back through the edit history, ke
 (defun drgnx-agent-panel-allow ()
   "On a permission card: allow it once.  On a step: open or fold it."
   (interactive)
-  (if-let* ((r (drgnx-agent-panel-cards--perm-here)))
-      (drgnx-agent-panel--answer r (drgnx-agent-panel-cards--option r '("allow_once" "allow")))
-    (drgnx-agent-panel-toggle)))
+  (cond ((drgnx-agent-panel-cards--perm-here)
+         (let ((r (drgnx-agent-panel-cards--perm-here)))
+           (drgnx-agent-panel--answer r (drgnx-agent-panel-cards--option r '("allow_once" "allow")))))
+        ;; a background row (or the selected one, in the header): its output
+        ((or (get-text-property (point) 'drgnx-bg-item)
+             (and (derived-mode-p 'drgnx-agent-panel-header-mode) (bound-and-true-p drgnx-agent-panel--bg-selected)))
+         (drgnx-agent-panel-background-output))
+        (t (drgnx-agent-panel-toggle))))
 
 (defun drgnx-agent-panel-always ()
   "On a permission card: allow it, and the same kind of request from now on."

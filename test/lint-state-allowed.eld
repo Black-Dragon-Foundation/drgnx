@@ -29,3 +29,5 @@
  :why "a panel is subscribed to its session's entries while a window shows it" :until "never: the hub is told what is visible")
 (:file "modules/tools/drgnx-agent-panel.el" :what "get-buffer-window"
  :why "a panel asks whether a window of a visible frame shows it, to subscribe to its session's entries" :until "never: the hub is told what is visible")
+(:file "modules/tools/drgnx-agent-panel-background.el" :what "get-buffer-window"
+ :why "the elapsed time of a running background item ticks only while a window shows its panel" :until "never: a timer for what is not shown is the waste")

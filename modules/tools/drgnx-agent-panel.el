@@ -131,6 +131,11 @@ session's forecast once it came.")
 (declare-function drgnx-agent-panel-steps-init "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-teardown "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-setup "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-background-setup "drgnx-agent-panel-background")
+(declare-function drgnx-agent-panel-background-teardown "drgnx-agent-panel-background")
+(declare-function drgnx-agent-panel-background--snapshot "drgnx-agent-panel-background")
+(declare-function drgnx-agent-panel-background--end-ask "drgnx-agent-panel-background")
+(declare-function drgnx-agent-panel-background--windows "drgnx-agent-panel-background")
 
 (declare-function drgnx-agent-panel-explain-setup "drgnx-agent-panel-explain")
 (declare-function drgnx-agent-panel-huddle-setup "drgnx-agent-panel-huddle")
@@ -172,6 +177,8 @@ session's forecast once it came.")
   (load (expand-file-name "drgnx-agent-panel-list" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-history)
   (load (expand-file-name "drgnx-agent-history" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-agent-panel-background)
+  (load (expand-file-name "drgnx-agent-panel-background" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-steps)
   (load (expand-file-name "drgnx-agent-panel-steps" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
@@ -230,11 +237,19 @@ session's forecast once it came.")
     (delete-overlay drgnx-agent-panel--waiting)
     (setq drgnx-agent-panel--waiting nil)))
 
+(defvar drgnx-agent-panel--bg-folded)
+(defvar drgnx-agent-panel--bg-selected)
+
+(defun drgnx-agent-panel--open-types ()
+  "The step types open in this panel, as the hub is told, and `bg-folded' while the background list is folded."
+  (vconcat (mapcar #'symbol-name drgnx-agent-panel--disclosure) (and drgnx-agent-panel--bg-folded (list "bg-folded"))))
+
 (defun drgnx-agent-panel--look-params ()
   "What this panel tells the hub about its rows: the step types open, the rows opened or folded by hand, and when a
 step's time or cost is drawn as a warning."
   (list :slow_secs drgnx-agent-panel-slow-seconds :dear_cost drgnx-agent-panel-expensive-cost
-        :open (vconcat (mapcar #'symbol-name drgnx-agent-panel--disclosure))
+        :open (drgnx-agent-panel--open-types)
+        :bg_selected (or drgnx-agent-panel--bg-selected "")
         :lens (vconcat (mapcar (lambda (p) (symbol-name (car p))) drgnx-agent-panel-presets))
         :lens_on (or (drgnx-agent-panel--preset-in-force) 0)
         :pins (vconcat (mapcar #'cdr drgnx-agent-panel--pins))
@@ -730,6 +745,13 @@ class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same b
   (drgnx-module-hook 'drgnx-hub-connected-functions panel-resubscribe () (drgnx-agent-panel--resubscribe))
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))
   (drgnx-agent-panel-steps-setup)
+  (drgnx-agent-panel-background-setup)
+  (drgnx-module-hook 'drgnx-agents-background-functions bg-snapshot (session)
+    (drgnx-agent-panel-background--snapshot session))
+  (drgnx-module-hook 'drgnx-agents-end-ask-functions bg-end-ask (session)
+    (drgnx-agent-panel-background--end-ask session))
+  (drgnx-module-hook 'window-buffer-change-functions bg-windows (frame)
+    (drgnx-agent-panel-background--windows frame))
   (drgnx-agent-panel-composer-setup)
   (drgnx-agents-ask-setup)
   (drgnx-budgets-setup)
@@ -747,6 +769,7 @@ class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same b
 (defun drgnx-agent-panel--teardown ()
   "Every panel gives its subscription back and goes."
   (drgnx-agent-panel-steps-teardown)
+  (drgnx-agent-panel-background-teardown)
   (drgnx-agent-panel-huddle-teardown)
   (drgnx-agents-side-teardown)
   (drgnx-budgets-teardown)

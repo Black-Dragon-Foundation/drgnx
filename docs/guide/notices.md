@@ -86,6 +86,9 @@ restarting) does not announce again what it held.
   fixed script as arguments, so nothing in it can run as a script. If it fails, the echo area says so.
 - **Elsewhere,** or with no backend, the echo area tells you instead.
 
+A notice may carry its own title (`:desktop-title`; a background item that failed says "cargo test failed" instead of
+"drgnx: Agents").
+
 Something its producer marks as not interrupting (a job's `overlap` card, for example) is counted but never sent.
 Nothing here ever asks you anything.
 

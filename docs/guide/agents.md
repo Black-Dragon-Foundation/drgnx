@@ -99,6 +99,30 @@ permission request stays on the session until you answer it; nothing another age
 agent reads and writes files inside its session's folder only, and a brainstorm session writes only its design
 document.
 
+## Background work
+
+An agent that speaks ACP v2 (Claude and Codex, by default) can leave work running between its turns: a shell, a
+watcher, a subagent. drgnx also lists the jobs it started for the chat. The agent panel shows them:
+
+- a chip `⟳ 3 in background` in its header (a warning chip, `2 · state unknown`, while the agent says it cannot tell);
+- a list pinned under the header: each item with its elapsed time and last output line. `b` unfolds it and selects the
+  first item, then the next one, then folds it; a click on a row selects it. The selected row shows **Output**
+  (`RET`; a subagent opens its own panel; a command's output opens in a read-only buffer, a snapshot of what the hub
+  kept) and **Stop** (`k`, only where the agent lets a client stop it). **Stop all** (Agents: Background Work: Stop
+  All) lists what it will stop first;
+- a live card in the transcript while an item runs, and one line when it ends (failed with its exit code, finished,
+  or stopped); a turn the agent started by itself after an end says `after: …`;
+- the count on the chat's row in the Agents tab, and when an item ends while its chat is not on screen, the status
+  bar says `AGENT: … failed (exit 1)` until you show the chat (a click opens it), and the desktop says so while no
+  window has focus.
+
+An agent that reports no list (every v1 agent) shows no chip or list.
+
+**Closing the panel does not end the chat**: the agent, and its background work, keep running. Ending a chat is
+**End This Chat** (`E` in the panel, or the palette). While background work runs it asks first: *End this chat?*
+with the list, *Keep it running* or *Stop them and end*; ending stops what the chat runs. Nothing but a command you
+ran ever asks.
+
 ## Checking an agent
 
 Onboarding's Agents step (and anything else that wants to know whether a profile works) asks the hub to check it,

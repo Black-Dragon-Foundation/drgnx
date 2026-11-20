@@ -150,6 +150,8 @@ turn begins and ends, and the one open now begins."
     (dolist (slot drgnx-agents-mirror--slots)
       (setf (cl-struct-slot-value 'drgnx-agent-session slot m) (plist-get snap (intern (concat ":" (symbol-name slot))))))
     (setf (drgnx-agent-session-plugins-changed m) (and (plist-get snap :plugins_changed) t))
+    (setf (drgnx-agent-session-background m) (plist-get snap :background)
+          (drgnx-agent-session-background-ended m) (plist-get snap :background_ended))
     ;; a false flag is not in a decoded record (nil-valued keys are left out): the hub's reason says the lock is not held
     (progn
       (puthash id (plist-get snap :enforced_why) drgnx-agents-mirror--lock)
@@ -162,6 +164,7 @@ turn begins and ends, and the one open now begins."
       (when turns (puthash id turns drgnx-agents-mirror--hub-turns))
       (drgnx-agents-mirror--transitions
        m new prev (and turns last (> turns last) (not (gethash id drgnx-agents-mirror--shown)) (- turns last))))
+    (run-hook-with-args 'drgnx-agents-background-functions m)
     (cons m new)))
 
 (defun drgnx-agents-mirror-lock-label (m)

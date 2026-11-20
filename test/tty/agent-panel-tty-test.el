@@ -16,6 +16,9 @@
 (defconst drgnx-tty-agent-panel-test--prefix 30
   "Answers and reads the mock's first turn makes: a transcript longer than a terminal's right area.")
 
+(defvar drgnx-tty-agent-panel-test--background nil
+  "The mock's background directives for the first turn (`drgnx-panel-replay-background'), or nil.")
+
 (defconst drgnx-tty-agent-panel-test--helpers
   '(progn
      (defvar drgnx-tty-ap--panel nil "The panel's buffer.")
@@ -62,6 +65,7 @@
    s `(progn
         (load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-dir) nil t)
         (setq drgnx-panel-replay-prefix ,drgnx-tty-agent-panel-test--prefix)
+        (setq drgnx-panel-replay-background ',drgnx-tty-agent-panel-test--background)
         (condition-case e (setq drgnx-tty-ap--panel (drgnx-panel-replay-up ,bin))
           (error (setq drgnx-tty-ap--err (format "%S" e))))
         t)
@@ -445,5 +449,14 @@ of the mock agent (its rows carry the session's id), and the card's line is on t
       (should (stringp card))
       (should (string-match-p "·" card))
       (drgnx-tty-session-wait-screen s (regexp-quote (car (last (split-string (car (split-string card " · ")) " " t)))) 10))))
+
+(ert-deftest drgnx-tty-agent-panel/background-rows ()
+  "A chat with background work in a terminal (background panel plan, Task 6): the chip line and a row for each item
+as the mockup's terminal frame has them: `R $ COMMAND  ELAPSED' (status letter, kind mark), its last line under it."
+  (let ((drgnx-tty-agent-panel-test--background '("bg:shell t1 sleep 600" "bg:shell t2 sleep 601")))
+    (drgnx-tty-agent-panel-test--with (s)
+      (drgnx-tty-session-wait-screen s (regexp-quote "⟳ 2 in background (b list, k stop, RET output)") 30)
+      (drgnx-tty-session-wait-screen s "R \\$ sleep 600 +[0-9]+:[0-9][0-9]" 10)
+      (drgnx-tty-session-wait-screen s "R \\$ sleep 601 +[0-9]+:[0-9][0-9]" 10))))
 
 ;;; agent-panel-tty-test.el ends here
