@@ -362,4 +362,10 @@
  (budget-tree-open (:first-page) 20)
  ;; forecast/plan over 12 plans of 20 tasks: the first call (a joint draw) and the repeats (cached), the hub's `forecast_plan_perf'
  (forecast-plan-miss (:ms) 300) (forecast-plan-hit (:ms) 5)
+ ;; The Flow plan (harness/drgnx-perf-flow.el): the editor's side of the conversation (a 10k-block conversation's last
+ ;; window drawn; a block appended), the Agents side (30 streaming agents: a card replaced; a composer key's extra cost
+ ;; while they stream), a look reset of three frames' views, and the Budgets page's first rows (500 scopes, 3 meters).
+ (conversation-open (:first-rows) 100) (conversation-append (:append :p95) 4)
+ (agents-side-stream (:patch :p95) 4) (agents-side-typing (:delta) 1)
+ (look-reset-3-frames (:reset) 250) (budget-page-open (:first-rows) 100)
 )
