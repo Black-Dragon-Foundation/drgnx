@@ -1164,7 +1164,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 575] = [
+    pub const ALL: [FaceId; 576] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
