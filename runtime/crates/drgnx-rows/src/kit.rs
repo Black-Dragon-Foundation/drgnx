@@ -637,9 +637,26 @@ fn range_bar(
         }
     }
     let end = b.pos();
-    if end > start && !label.is_empty() {
-        b.prop(start, end, "help-echo", Value::String(label.to_owned()));
+    // no label from the hub: the bar still says what it is and its state ("schedule at risk")
+    let label = if label.is_empty() {
+        range_words(variant, state)
+    } else {
+        label.to_owned()
+    };
+    if end > start {
+        b.prop(start, end, "help-echo", Value::String(label));
     }
+}
+
+/// A range bar's own label, its variant and state in words (`drgnx-ui-kit--range-words`).
+fn range_words(variant: RangeVariant, state: RangeState) -> String {
+    let word = |v: Value| v.as_str().unwrap_or("").replace('-', " ");
+    let what = match variant {
+        RangeVariant::Schedule => "schedule".to_owned(),
+        RangeVariant::Cost => "cost".to_owned(),
+        RangeVariant::Segment(k) => format!("{} segment", word(serde_json::to_value(k).unwrap_or_default())),
+    };
+    format!("{what} {}", word(serde_json::to_value(state).unwrap_or_default()))
 }
 
 /// The civil date of DAYS since 1970-01-01: (year, month 1-12, day 1-31).
@@ -1913,11 +1930,20 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             let g: Geom = kit_gen::geom(CompId::StatusDot, &variant);
             let face = comp_face(kit_gen::face(CompId::StatusDot, &variant));
             let mark = g.glyph.map_or("", |n| glyph(env, n));
+            let from = b.pos();
             b.push(mark, face);
-            if let Some(w) =
-                kit_gen::label(CompId::StatusDot, &variant).filter(|_| *word || env.tty)
-            {
-                b.push(&format!(" {w}"), face);
+            let to = b.pos();
+            let label = kit_gen::label(CompId::StatusDot, &variant);
+            match label.filter(|_| *word || env.tty) {
+                Some(w) => {
+                    b.push(&format!(" {w}"), face);
+                }
+                // the mark alone says nothing to a screen reader: its word is its label
+                None => {
+                    if let Some(w) = label.filter(|_| to > from) {
+                        b.prop(from, to, "help-echo", Value::String(w.to_owned()));
+                    }
+                }
             }
         }
         Comp::QuestionCard { kind, title, .. } => question_head(b, env, *kind, title),
