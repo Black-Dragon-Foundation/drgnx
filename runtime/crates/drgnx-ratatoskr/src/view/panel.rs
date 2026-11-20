@@ -644,6 +644,17 @@ impl Panels {
                     .collect()
             };
             let plan = s.plan_items().unwrap_or_default();
+            // the dollar limit that holds the agent (its own or a scope's above it), for the cost chip
+            let budget = self.front().and_then(|f| {
+                let b = &f.core.budgets;
+                let scope = b.holder_of_session(&s.id)?;
+                match b.binding(&scope)? {
+                    (runstav::methods::matrix::Unit::Usd | runstav::methods::matrix::Unit::UsdEst, spent, limit) => {
+                        Some((spent, limit))
+                    }
+                    _ => None,
+                }
+            });
             let (mut rows, images) = panel_top::rows(
                 &snapshot,
                 &panel_top::Cx {
@@ -657,6 +668,7 @@ impl Panels {
                     checkpoints,
                     chain: &chain,
                     plan: &plan,
+                    budget,
                 },
             );
             hover(&mut rows);

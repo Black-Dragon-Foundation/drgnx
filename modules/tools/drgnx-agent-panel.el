@@ -103,6 +103,11 @@ Set with `setopt' or Customize, open panels draw again at once."
   "Keys of an agent panel.  The key profiles bind them (`drgnx-command-define' with this map).")
 
 (defvar-local drgnx-agent-panel--session nil "The hub session this panel shows.")
+(defvar-local drgnx-agent-panel--budget nil
+  "The limit that holds this panel's agent, or nil: a plist from the hub's `budget-limit' event, :card :scope (the
+scope's kind) :scope-name (\"the plan\", for a scope above the agent) :unit :limit :spent, and :p50 :p90 of the
+session's forecast once it came.")
+(defvar-local drgnx-agent-panel--budget-ov nil "The overlay at the transcript's end that shows the at-limit block.")
 (defvar-local drgnx-agent-panel--snap nil "The session's latest snapshot (the `agent' event's `session'), a plist.")
 (defvar-local drgnx-agent-panel--entries nil "Entry index → entry (a plist), of the pages loaded and the entries the hub sent.")
 (defvar-local drgnx-agent-panel--live nil "Entry indexes the hub sent live: a slice never overwrites them.")
@@ -591,6 +596,7 @@ commands on the step at point read; the hub draws its rows again itself)."
   (when (equal event "history/applied")
     (dolist (b (drgnx-agent-panel-buffers))
       (with-current-buffer b (drgnx-agent-panel--refresh-steps))))
+  (when (equal event "budget-limit") (drgnx-agent-panel--take-budget data))
   (when (member event '("agent" "agent-entries"))
     (when-let* ((b (drgnx-agent-panel--panel-for (plist-get data :id))))
       (with-current-buffer b
@@ -604,6 +610,60 @@ commands on the step at point read; the hub draws its rows again itself)."
     (with-current-buffer b
       (setq drgnx-agent-panel--subscribed nil drgnx-agent-panel--loaded nil drgnx-agent-panel--loading nil)
       (when (get-buffer-window b 'visible) (drgnx-agent-panel--subscribe)))))
+
+;;;; The limit that holds the agent (Flow Task 23a)
+
+(declare-function drgnx-agent-panel-budget-block "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer")
+
+(defconst drgnx-agent-panel--scope-names
+  '((project . "the project") (spec . "the spec") (plan . "the plan") (run . "the run") (task . "the task")
+    (manager . "the manager"))
+  "How the at-limit block names a scope above the agent that reached its limit.")
+
+(defun drgnx-agent-panel--take-budget (data)
+  "A `budget-limit' event: each session it holds (DATA's :data :sessions) whose panel exists gets the block, and asks
+the session's forecast for what remains."
+  (let* ((d (plist-get data :data)) (scope (plist-get d :scope))
+         (kind (and (consp scope) (substring (symbol-name (car scope)) 1))))
+    (dolist (sid (append (plist-get d :sessions) nil))
+      (when-let* ((b (drgnx-agent-panel--panel-for sid)))
+        (with-current-buffer b
+          (setq drgnx-agent-panel--budget
+                (list :card (plist-get data :card) :scope kind
+                      :scope-name (and kind (not (member kind '("worker" "session")))
+                                       (alist-get (intern kind) drgnx-agent-panel--scope-names))
+                      :unit (plist-get d :unit) :limit (plist-get d :limit) :spent (plist-get d :spent)))
+          (drgnx-agent-panel--budget-draw)
+          (drgnx-agent-panel--ask "forecast/session" (list :session sid)
+                                  (lambda (r _err)
+                                    (when (and r (buffer-live-p b))
+                                      (with-current-buffer b
+                                        (when-let* ((c (seq-find (lambda (c) (equal (plist-get c :unit)
+                                                                                    (plist-get drgnx-agent-panel--budget :unit)))
+                                                                 (append (plist-get r :cost) nil))))
+                                          (setq drgnx-agent-panel--budget
+                                                (plist-put (plist-put drgnx-agent-panel--budget :p50 (plist-get c :p50))
+                                                           :p90 (plist-get c :p90)))
+                                          (drgnx-agent-panel--budget-draw)))))))))))
+
+(defun drgnx-agent-panel--budget-draw ()
+  "Draw the at-limit block at the transcript's end (or take it away when no limit holds the agent), and the composer's
+paused line."
+  (let ((block (and drgnx-agent-panel--budget (drgnx-agent-panel-budget-block))))
+    (if (not block)
+        (when (overlayp drgnx-agent-panel--budget-ov) (delete-overlay drgnx-agent-panel--budget-ov))
+      (unless (overlayp drgnx-agent-panel--budget-ov)
+        (setq drgnx-agent-panel--budget-ov (make-overlay (point-max) (point-max) nil nil t)))
+      (move-overlay drgnx-agent-panel--budget-ov (point-max) (point-max))
+      (overlay-put drgnx-agent-panel--budget-ov 'after-string (concat "\n" block))))
+  (drgnx-agent-panel-composer-redraw))
+
+(defun drgnx-agent-panel--budget-clear ()
+  "The agent goes on (raised, or a message sent): the block and the paused line go."
+  (when drgnx-agent-panel--budget
+    (setq drgnx-agent-panel--budget nil)
+    (drgnx-agent-panel--budget-draw)))
 
 ;;;; The module
 
@@ -659,7 +719,7 @@ class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same b
                           :companions #'drgnx-agent-panel--companions
                           :instance #'drgnx-agent-panel-buffer :instance-key #'drgnx-agent-panel--session-of)
   (drgnx-module-hook 'drgnx-hub-event-functions panel-event (event data)
-    :events '("history/applied" "agent" "agent-entries")
+    :events '("history/applied" "agent" "agent-entries" "budget-limit")
     (drgnx-agent-panel--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions panel-resubscribe () (drgnx-agent-panel--resubscribe))
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))

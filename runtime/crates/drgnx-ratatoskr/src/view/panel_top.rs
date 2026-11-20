@@ -57,6 +57,9 @@ pub struct Cx<'a> {
     pub chain: &'a [ChainLink],
     /// The agent's plan as (status, content) items (none: no plan strip).
     pub plan: &'a [(String, String)],
+    /// The spend and the limit of the scope that holds the agent, in dollars (none: no limit; the cost chip is the plain
+    /// spend).
+    pub budget: Option<(f64, f64)>,
 }
 
 /// What the agent is doing, for the header: "Claude · running 6 min", "held by you", "Pair · editing your checkout".
@@ -445,6 +448,15 @@ fn plan_strip(cx: &Cx) -> Option<Row> {
     Some(b.finish())
 }
 
+/// A limit in dollars as the chip says it: "$5" for a whole amount, "$5.50" otherwise.
+fn dollars(x: f64) -> String {
+    if (x - x.round()).abs() < 0.005 {
+        format!("${}", x.round() as i64)
+    } else {
+        format!("${x:.2}")
+    }
+}
+
 /// The worktree the agent works in, for its chip: the name under `.claude/worktrees/`, else the folder's own name.
 fn worktree_of(cwd: &str) -> Option<String> {
     let parts: Vec<&str> = cwd.split('/').filter(|p| !p.is_empty()).collect();
@@ -484,8 +496,12 @@ fn chips(s: &Snapshot, cx: &Cx) -> Vec<Row> {
             Some(Value::Object(o)) => o.get("amount").and_then(Value::as_f64),
             _ => None,
         };
-        if let Some(c) = amount {
-            list.push((Some("cost"), format!("${c:.2}")));
+        match (amount, cx.budget) {
+            (_, Some((spent, limit))) => {
+                list.push((Some("cost"), format!("${spent:.2} / {}", dollars(limit))));
+            }
+            (Some(c), None) => list.push((Some("cost"), format!("${c:.2}"))),
+            (None, None) => {}
         }
     }
     if let Some(m) = &s.mode {

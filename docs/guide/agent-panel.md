@@ -181,6 +181,16 @@ What the agent changed and what it asks sit under the transcript as cards.
   request itself (`code.edit` is Never for chat in every preset), so no card shows and the agent hears "rejected".
 - The cards and the Edits line reach the panel's right edge, 12 px in.
 
+## When a limit holds the agent
+
+When the agent works under a dollar limit (its own, or its task's, plan's or spec's), the cost chip in the header reads
+the spend against that limit, "$1.20 / $5". When the limit is reached the agent pauses and a block under the transcript
+says so: "Paused at its limit · $5.00 of $5.00 est. (worker)", or, when the limit belongs to a scope above it, "Paused:
+the plan reached its $40". It shows the forecast to finish ("≈ $2–3 more") and three buttons: **Raise to $N and
+resume** (N is the spend plus the forecast's high end, rounded up to the next dollar, whole percent of a window or 100k
+tokens), **Raise…** (an amount you type) and **Stop**. The composer says "Paused: budget. Raise, or send a message to
+go on without raising." Sending a message never cancels anything.
+
 ## Large outputs
 
 An open step whose output is long shows its first ten and last ten lines and, between them, "N lines hidden · / search ·

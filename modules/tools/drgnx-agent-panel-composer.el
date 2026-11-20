@@ -38,6 +38,7 @@
 (declare-function drgnx-history-fork-here "drgnx-history-revert")
 (defvar drgnx-agent-panel--steps)
 (defvar drgnx-agent-companion--head)
+(defvar drgnx-agent-panel--budget)
 
 ;;;; Context: what the next message is about, as removable items
 
@@ -403,9 +404,12 @@ its end, and is a field of its own (line moves stop at it); typing at the field'
         (t (format "@ %s" (file-name-nondirectory (directory-file-name (or (plist-get item :file) "")))))))
 
 (defun drgnx-agent-panel-composer--head-string ()
-  "What shows above the composer's field: the note waiting for the agent's next step, then the context items as chips
-that a click removes; nil when there is neither.  Each line ends in a newline."
-  (let* ((queue (drgnx-agent-panel-composer--queue))
+  "What shows above the composer's field: the paused line while a limit holds the agent, the note waiting for the agent's
+next step, then the context items as chips that a click removes; nil when there is none.  Each line ends in a newline."
+  (let* ((paused (and (bound-and-true-p drgnx-agent-panel--budget)
+                      (propertize "Paused: budget. Raise, or send a message to go on without raising.\n"
+                                  'face 'drgnx-text-subtle)))
+         (queue (drgnx-agent-panel-composer--queue))
          (note (and queue
                     (concat (propertize "↳ Queued for its next step: " 'face 'drgnx-text-subtle)
                             (propertize (truncate-string-to-width (replace-regexp-in-string "[\n\t ]+" " " (format "%s" (car queue)))
@@ -424,7 +428,7 @@ that a click removes; nil when there is neither.  Each line ends in a newline."
                                             'help-echo "Click to remove from this message's context"))
                               drgnx-agent-panel--context " ")
                              "\n"))))
-    (and (or note chips) (concat note chips))))
+    (and (or paused note chips) (concat paused note chips))))
 
 (defun drgnx-agent-panel-composer--draw-head ()
   "Draw the overlay above the composer's field from the panel's state."
