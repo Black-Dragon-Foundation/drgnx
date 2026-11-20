@@ -1999,7 +1999,9 @@ terminals, tool calls that outlive their turn (a watcher, a workflow) and child 
   is not listed (or names two items) is `invalid-params`. The turn's Stop is unchanged and leaves background work
   running.
 - Whole-message upserts (`Event::Replace`) replace the entry's text; the user message v2 reports back is the turn's
-  own entry. The profile setting `:acp-v2 auto|off` (`AgentProfile::acp_v2`; `auto` for the profiles named `claude`
+  own entry. `Snapshot.proto` says which ACP version the agent speaks, and `Snapshot.v2_fallback` why a profile that
+  asked for v2 got v1: `rejected: …` (the agent answered the v2 `initialize` with an error and was asked again as v1)
+  or `exited: …` (it exited there and was started once more as v1; a second exit refuses the start). The profile setting `:acp-v2 auto|off` (`AgentProfile::acp_v2`; `auto` for the profiles named `claude`
   and `codex`, `off` otherwise) decides whether the hub asks for v2.
 
 ### A session's turn

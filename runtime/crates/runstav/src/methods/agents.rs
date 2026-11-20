@@ -218,6 +218,14 @@ pub struct Snapshot {
     /// The last background items that ended (at most 20), the newest last: each with how it ended.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub background_ended: Vec<BackgroundItem>,
+    /// The ACP version its agent speaks (`v1` or `v2`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proto: Option<String>,
+    /// Why a profile that asked for ACP v2 got v1: `rejected: MESSAGE` (the agent answered the v2 `initialize` with an
+    /// error and was asked again as v1 on the same connection) or `exited: WHY` (it exited at the v2 `initialize` and
+    /// was started again as v1).  Absent: no fallback (the agent answered 1, or v2 was not asked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v2_fallback: Option<String>,
 }
 
 /// What kind of background work an item is.
