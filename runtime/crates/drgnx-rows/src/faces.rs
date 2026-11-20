@@ -862,6 +862,8 @@ pub enum FaceId {
     WorkEdge,
     /// `drgnx-work-edge-strong`
     WorkEdgeStrong,
+    /// `drgnx-work-tail-outline`
+    WorkTailOutline,
     /// `drgnx-work-label`
     WorkLabel,
     /// `drgnx-work-lens-title`
@@ -1160,7 +1162,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 574] = [
+    pub const ALL: [FaceId; 575] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1588,6 +1590,7 @@ impl FaceId {
         FaceId::WorkNeedsYou,
         FaceId::WorkEdge,
         FaceId::WorkEdgeStrong,
+        FaceId::WorkTailOutline,
         FaceId::WorkLabel,
         FaceId::WorkLensTitle,
         FaceId::WorkLensRail,
@@ -2167,6 +2170,7 @@ impl FaceId {
             FaceId::WorkNeedsYou => "drgnx-work-needs-you",
             FaceId::WorkEdge => "drgnx-work-edge",
             FaceId::WorkEdgeStrong => "drgnx-work-edge-strong",
+            FaceId::WorkTailOutline => "drgnx-work-tail-outline",
             FaceId::WorkLabel => "drgnx-work-label",
             FaceId::WorkLensTitle => "drgnx-work-lens-title",
             FaceId::WorkLensRail => "drgnx-work-lens-rail",
@@ -2747,6 +2751,7 @@ impl FaceId {
             "drgnx-work-needs-you" => FaceId::WorkNeedsYou,
             "drgnx-work-edge" => FaceId::WorkEdge,
             "drgnx-work-edge-strong" => FaceId::WorkEdgeStrong,
+            "drgnx-work-tail-outline" => FaceId::WorkTailOutline,
             "drgnx-work-label" => FaceId::WorkLabel,
             "drgnx-work-lens-title" => FaceId::WorkLensTitle,
             "drgnx-work-lens-rail" => FaceId::WorkLensRail,

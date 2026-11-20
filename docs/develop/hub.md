@@ -1681,7 +1681,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
-| `view/env` | user | `{ascii?: boolean, attach?: boolean, badge?: [[natnum, natnum], [natnum, natnum], natnum], cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tail?: [natnum, natnum], tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/env` | user | `{ascii?: boolean, attach?: boolean, badge?: [[natnum, natnum], [natnum, natnum], natnum], cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], hc?: boolean, headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tail?: [natnum, natnum], tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, faces?: [{avg?: number, face: string, file?: string, index?: natnum, pad?: number, px?: number, role: string, wght?: number}], glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
@@ -2591,8 +2591,12 @@ All of it is in memory only.
 
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
-  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, glyphs: [[name, glyph]],
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, hc?, glyphs: [[name, glyph]],
   ascii?, density?, tail?, badge?, attach?, rows_in_sja?, headless?}` keeps the env of (view, class) and builds its rows again.
+  `hc` is true while the frame's theme is a high-contrast one (`drgnx-look-variant` `hc`): the Timeline then writes each
+  Activity segment's kind letter and draws a Schedule bar's tail to p90 as an outline (`drgnx-work-tail-outline`).
+  `reduced_motion` in any class's env makes a followed Timeline scroll in steps (it stays until now reaches its end,
+  then moves half its span; `work::trail::followed`).
   `width_px` is the window's body. `tail: [mark, control]` is where the view's buffer draws a row's tail after it (the
   Explorer's and the Buffers panel's: `drgnx-view-env-tail`, `drgnx-wb-tail-px`), px from the right edge: the start
   of its git mark and of its control. A row ends its text short of what its tail always draws: the mark's place on a
@@ -3476,7 +3480,14 @@ the rows themselves are `agents/session/rows.rs`, pure).
 ### Conversation blocks
 
 `agents/session/blocks.rs` folds a session's transcript into the blocks the conversation view shows, and reads the
-plan strip. It is pure (no lock, no I/O, no clock); the views that draw it come later in the frontend flow.
+plan strip. It is pure (no lock, no I/O, no clock).
+
+The agent panel (`view/panel.rs`) draws three kinds from it: `You`, `Explored` and `Finding`
+(`rows::panel_roles`, `rows::panel_block_rows`). Each is keyed by its first entry (`e:N/…`) and carries
+`drgnx-agent-panel-entry`, so the panel's toggle, navigation and selection treat it as a step. An Explored run's other
+steps draw as their own groups only while the run is open: `look.rows` for its first entry, else the `read` or
+`search` step type. A step that joins a run rebuilds the run's head too. Every other entry stays a group
+(`rows::group_rows`): a tool step keeps its time, cost, provenance, hunks and checkpoint there.
 
 - **Blocks.** `You` (a user message), `Markdown` (an agent message, by its entry: its Markdown blocks are the panel's
   `b:I:N` rows), `Explored {reads, searches, secs, steps}`, `Finding {conclusion, text, sources}`, `Edit {path, plus,

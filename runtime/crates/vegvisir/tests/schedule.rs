@@ -1,6 +1,7 @@
 //! The Schedule's bars and rows (`vegvisir::schedule`): the states of the timeline spec's §4, the target states on
 //! specs and plans only, By machine, and the rows' parts.
 
+use drgnx_rows::faces::FaceId;
 use drgnx_rows::fit::Measure;
 use drgnx_rows::svg::Palette;
 use vegvisir::render::Env;
@@ -28,6 +29,7 @@ fn env(p: &Palette) -> Env<'_> {
         palette: p,
         tty_widths: &[],
         line: (16, 80),
+        hc: false,
     }
 }
 
@@ -135,6 +137,7 @@ fn row(item: &str, depth: u8, machine: Option<&str>) -> SchedRow {
             },
             50.0,
         )),
+        budget: None,
     }
 }
 
@@ -219,4 +222,148 @@ fn a_bar_draws_its_parts_and_words() {
             .iter()
             .any(|(_, _, n, v)| n == "drgnx-work-part" && v == "late")
     );
+}
+
+/// In a high-contrast theme a bar's tail to p90 is an outline, not a faint fill (flow Task 30,
+/// `a11y-flow/hc-tails-are-outlines`): the outlined face on a GUI, `═` cells on a terminal; out of hc the edge face.
+#[test]
+fn hc_tails_are_outlines() {
+    let p = Palette::default();
+    let win = Window {
+        from: 0.0,
+        to: 400.0,
+    };
+    let tail = |hc: bool, tty: bool| -> (String, String) {
+        let e = Env { hc, tty, ..env(&p) };
+        let rows = schedule::schedule_rows(
+            &[row("task:a", 2, None)],
+            &e,
+            &Cols,
+            Zone(0),
+            &win,
+            400,
+            Some(50.0),
+            50.0,
+        );
+        let r = &rows[1];
+        let (s, z, _, _) = r
+            .props
+            .iter()
+            .find(|(_, _, n, v)| n == "drgnx-work-part" && v == "p90")
+            .expect("a p90 part");
+        let face = r
+            .runs
+            .iter()
+            .find(|(a, _, _)| a == s)
+            .map(|(_, _, f)| f.clone())
+            .unwrap_or_default();
+        let text: String = r
+            .text
+            .chars()
+            .skip(*s as usize)
+            .take((z - s) as usize)
+            .collect();
+        (face, text)
+    };
+    assert_eq!(tail(true, false).0, FaceId::WorkTailOutline.name());
+    assert_eq!(tail(false, false).0, FaceId::WorkEdge.name());
+    let tty = tail(true, true).1;
+    assert!(!tty.is_empty() && tty.chars().all(|c| c == '═'), "{tty:?}");
+    let tty = tail(false, true).1;
+    assert!(!tty.is_empty() && tty.chars().all(|c| c == '░'), "{tty:?}");
+}
+
+/// A row's accessible label reads its title, then its schedule, then its budget (flow Task 30,
+/// `a11y-flow/row-label-reads-title-schedule-budget`; the timeline spec's §11): the `help-echo` on the row's title.
+#[test]
+fn row_label_reads_title_schedule_budget() {
+    let p = Palette::default();
+    let win = Window {
+        from: 0.0,
+        to: 400.0,
+    };
+    let label = |budget: Option<vegvisir::model::ItemBudget>| -> String {
+        let r = SchedRow {
+            label: "Minimap plan".into(),
+            budget,
+            ..row("plan:m", 0, None)
+        };
+        let rows =
+            schedule::schedule_rows(&[r], &env(&p), &Cols, Zone(0), &win, 400, Some(50.0), 50.0);
+        let row = &rows[1];
+        let (s, _, _, v) = row
+            .props
+            .iter()
+            .find(|(_, _, n, _)| n == "help-echo")
+            .expect("the row's label");
+        assert_eq!(*s, 0, "the label is on the row's title");
+        v.as_str().unwrap_or_default().to_owned()
+    };
+    let est = vegvisir::model::ItemBudget {
+        spent: vegvisir::model::Num(36.0),
+        limit: Some(vegvisir::model::Num(55.0)),
+        unit: "usd-est".into(),
+        state: "ok".into(),
+    };
+    assert_eq!(
+        label(Some(est.clone())),
+        "Minimap plan, on track, finish 00:01 to 00:03, 36 of 55 dollars, estimate"
+    );
+    assert_eq!(
+        label(Some(vegvisir::model::ItemBudget {
+            limit: None,
+            unit: "tokens".into(),
+            ..est
+        })),
+        "Minimap plan, on track, finish 00:01 to 00:03, 36 tokens, no limit"
+    );
+    assert_eq!(label(None), "Minimap plan, on track, finish 00:01 to 00:03");
+}
+
+/// Every state a bar can be in says its word in the row's text (flow Task 30, `a11y-flow/every-state-has-a-word`):
+/// colour is never the only signal, and a finished bar says done whatever else it says (how long it took, the target).
+#[test]
+fn every_state_has_a_word() {
+    let p = Palette::default();
+    let e = env(&p);
+    let win = Window {
+        from: 0.0,
+        to: 400.0,
+    };
+    let bar = |state: ScheduleState| schedule::ScheduleBar {
+        started: Some(0.0),
+        done_to: Some(120.0),
+        p50: Some(100.0),
+        p90: Some(200.0),
+        baseline: Some(60.0),
+        target: None,
+        state,
+        machine: None,
+    };
+    let cases = [
+        (ScheduleState::Behind, "behind"),
+        (ScheduleState::Late, "late"),
+        (ScheduleState::Waiting, "waiting"),
+        (ScheduleState::Slipped, "slipped"),
+        (ScheduleState::Done, "done"),
+        (ScheduleState::Forecast, "forecast"),
+    ];
+    for (state, word) in cases {
+        for target in [None, Some(150.0)] {
+            let r = SchedRow {
+                bar: Some(schedule::ScheduleBar {
+                    target,
+                    ..bar(state)
+                }),
+                ..row("task:a", 2, None)
+            };
+            let rows =
+                schedule::schedule_rows(&[r], &e, &Cols, Zone(0), &win, 400, Some(120.0), 120.0);
+            assert!(
+                rows[1].text.contains(word),
+                "{state:?} (target {target:?}) has no word {word:?}: {}",
+                rows[1].text
+            );
+        }
+    }
 }

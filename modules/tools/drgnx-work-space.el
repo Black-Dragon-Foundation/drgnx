@@ -199,6 +199,9 @@ it (a notes repository with the code repositories inside it)."
 (defface drgnx-work-needs-you '((t :inherit drgnx-status-attention)) "A thing that needs you." :group 'drgnx-work-space)
 (defface drgnx-work-edge '((t :inherit drgnx-text-subtle)) "An edge." :group 'drgnx-work-space)
 (defface drgnx-work-edge-strong '((t :inherit drgnx-text-muted :weight bold)) "An edge that edits." :group 'drgnx-work-space)
+(defface drgnx-work-tail-outline '((t :inherit drgnx-text-muted :box (:line-width (-1 . -1))))
+  "A Schedule bar's tail to p90 in a high-contrast theme: an outline in the text's colour, not a faint fill."
+  :group 'drgnx-work-space)
 (defface drgnx-work-label '((t :inherit (drgnx-text-muted drgnx-ui-caption))) "A layer's label." :group 'drgnx-work-space)
 (defface drgnx-work-lens-title '((t :inherit (drgnx-ui-heading tab-line-tab-current)))
   "The Work space's tab on its lens bar." :group 'drgnx-work-space)

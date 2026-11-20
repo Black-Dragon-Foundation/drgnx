@@ -48205,6 +48205,11 @@
             },
             "type": "array"
           },
+          "hc": {
+            "default": false,
+            "description": "The theme is a high-contrast one (`drgnx-look-variant` `hc`): the Timeline writes segment kinds' letters and\ndraws bars' tails as outlines.",
+            "type": "boolean"
+          },
           "headless": {
             "description": "The view is in no window: its rows are read, never drawn (the git letters), so the hub does not fit them to\n`width_px`, the selected window's.",
             "type": "boolean"

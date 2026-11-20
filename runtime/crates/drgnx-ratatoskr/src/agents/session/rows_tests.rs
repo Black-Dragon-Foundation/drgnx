@@ -638,3 +638,90 @@ mod block_rows {
         );
     }
 }
+
+// The panel draws the user's messages, the Explored runs and the findings from the conversation's blocks (flow Task
+// 23, S3), keyed by their first entry; the other entries stay groups.
+mod panel_blocks {
+    use super::*;
+    use crate::agents::session::blocks::{Block as B, Meta, blocks};
+    use drgnx_rows::kit::KitEnv;
+
+    fn transcript() -> Vec<Entry> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../test/fixtures/agent-blocks/transcript.json"
+        );
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("the fixture"))
+            .expect("JSON");
+        serde_json::from_value(v["entries"].clone()).expect("entries")
+    }
+
+    fn kit() -> KitEnv<'static> {
+        KitEnv {
+            scale: 1.0,
+            tty: false,
+            glyphs: &[],
+            ascii: false,
+            density: Default::default(),
+            icons: None,
+        }
+    }
+
+    /// An Explored run is one head at its first entry; its other steps are in it; the user's message is a head.
+    #[test]
+    fn a_run_of_reads_is_one_head_and_its_steps_are_in_it() {
+        let es = transcript();
+        let roles = panel_roles(&es, 10);
+        assert!(
+            matches!(roles.get(&10), Some(Role::Head(B::You { .. }))),
+            "{roles:?}"
+        );
+        let (start, _) = roles
+            .iter()
+            .find(|(_, r)| matches!(r, Role::Head(B::Explored { .. })))
+            .expect("an Explored head");
+        let inside: Vec<usize> = roles
+            .iter()
+            .filter_map(|(i, r)| (*r == Role::In(*start)).then_some(*i))
+            .collect();
+        assert!(!inside.is_empty(), "{roles:?}");
+        assert!(inside.iter().all(|i| i > start));
+        // a finding is a head too; an edit is not (it stays a step group)
+        assert!(
+            roles
+                .values()
+                .any(|r| matches!(r, Role::Head(B::Finding { .. })))
+        );
+        let n_heads = roles
+            .values()
+            .filter(|r| matches!(r, Role::Head(_)))
+            .count();
+        let n_blocks = blocks(&es, &Meta::default())
+            .iter()
+            .filter(|b| matches!(b, B::You { .. } | B::Explored { .. } | B::Finding { .. }))
+            .count();
+        assert_eq!(n_heads, n_blocks);
+    }
+
+    /// The header of an Explored run is one row keyed by its first entry, carrying the entry the panel's toggle reads.
+    #[test]
+    fn an_explored_head_is_one_row_keyed_by_its_entry() {
+        let b = B::Explored {
+            reads: 2,
+            searches: 1,
+            secs: 4,
+            steps: Vec::new(),
+        };
+        for open in [false, true] {
+            let rows = panel_block_rows(7, &b, open, &kit());
+            assert_eq!(rows.len(), 1);
+            assert!(rows[0].key.starts_with("e:7"), "{}", rows[0].key);
+            assert!(
+                rows[0].text.contains("Explored · 3 files"),
+                "{}",
+                rows[0].text
+            );
+            assert_eq!(prop(&rows[0], "drgnx-agent-panel-entry"), Some(&json!(7)));
+        }
+    }
+}

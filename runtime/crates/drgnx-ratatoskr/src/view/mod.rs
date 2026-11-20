@@ -902,6 +902,16 @@ impl Views {
         lock(&self.store).window_from(conn, view, list)
     }
 
+    /// Whether an editor showing CONN's VIEW asks for reduced motion (`view/env`'s `reduced_motion`, any class).
+    pub fn reduced_motion(&self, conn: u64, view: &str) -> bool {
+        let store = lock(&self.store);
+        store
+            .classes(conn, view)
+            .iter()
+            .filter_map(|k| store.env_of(&(conn, view.to_owned(), k.clone())))
+            .any(|e| e.reduced_motion)
+    }
+
     /// The columns of CONN's narrowest window showing VIEW, from its envs' width and cell (0 before one was sent).
     pub fn columns(&self, conn: u64, view: &str) -> usize {
         let store = lock(&self.store);

@@ -1,7 +1,8 @@
 # The Work space
 
-The Work space shows what your agents are doing in one place. This page grows with the feature; today it covers
-opening the map, and the machines and files the hub knows about.
+The Work space shows what your agents are doing in one place: the map (a List or a Graph), the Board, the
+Timeline, the Flow, an agent's Detail and its review screen, the Budgets page, and the machines and files the hub knows
+about. Each works in a terminal too ("In a terminal", below).
 
 ## Opening the map
 
@@ -148,7 +149,7 @@ From the Board back to the map, a card selects its agent; a task with no agent s
 
 ### The Timeline and the research trail
 
-The Timeline has two forms. **Schedule** (the default) is the List with a bar for each row on one time axis, by plan or by machine (`G`); **Activity** is a lane for each agent, its steps as bars, with the filter All, Edits and Waits (`f`). `t` switches between them and keeps the window. `+` and `-` zoom (10 minutes, hour, 4 hours, day, and for Schedule the week), `[` and `]` pan by half a window, `T` goes to now and follows it, and `B` opens the Budgets page for the selection. `RET` on a task's bar opens the Activity of its agents, `RET` on a bar of Activity opens that agent's trail at the step, and `<backspace>` goes back one level.
+The Timeline has two forms. **Schedule** (the default) is the List with a bar for each row on one time axis, by plan or by machine (`G`); **Activity** is a lane for each agent, its steps as bars, with the filter All, Edits and Waits (`f`). `t` switches between them and keeps the window. `+` and `-` zoom (10 minutes, hour, 4 hours, day, and for Schedule the week), `[` and `]` pan by half a window, `T` goes to now and follows it, and `B` opens the Budgets page for the selection. `RET` on a task's bar opens the Activity of its agents, `RET` on a bar of Activity opens that agent's trail at the step, and `<backspace>` goes back one level. With the high-contrast theme each Activity segment starts with its kind's letter (as a terminal shows it), and a Schedule bar's tail to p90 is drawn as an outline instead of a faint fill. With reduced motion a followed Timeline scrolls in steps: it stays still while now is in view, then moves on by half a window. A screen reader reads each Schedule row as its title, its schedule, then its budget ("Minimap plan, on track, finish 16:40 to 19:10, 36 of 55 dollars, estimate").
 
 `t` shows a lane for each agent over time. Each step is a segment, coloured by what it was (reading and searching,
 editing, other tools, thinking, waiting on a job, waiting for you). Left and right move to the earlier or later step of
@@ -178,6 +179,15 @@ The steering keys work in every Work view, on the agent selected there:
 | `u` | resume it with a plain "Continue." ("Work: Resumed"); its trail shows the pause and a `resumed` note when it goes on |
 | `x` | stop it, after a confirmation line |
 | `?` | this view's keys |
+
+### In a terminal
+
+In `drgnx -nw` every place of the Work space draws in character cells: the List as its outline form, the Detail,
+the Changes, the Budgets page and both forms of the Timeline. A Schedule bar is block characters: `█` what is done,
+`▓` the estimate to p50 and `▒` the forecast, `═` (or `░`) its tail to p90, `▌` where it runs late, `▏` the baseline
+and `┃` the target. Activity writes each segment's kind as its letter in every cell: `R` read, `S` search, `W` web,
+`E` edit, `T` tool, `·` thinking, `J` job, `Y` waiting for you, `M` waiting for a machine, `P` paused, `!` stalled.
+Meters are text, and the keys are the same as in a graphical frame.
 
 ### The review view, the merge queue and a second reviewer
 

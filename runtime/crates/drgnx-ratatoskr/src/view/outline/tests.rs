@@ -21,6 +21,7 @@ fn env(display: Display, scale: f32) -> ViewEnv {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        hc: false,
         glyphs: Vec::new(),
         ascii: false,
         density: Default::default(),

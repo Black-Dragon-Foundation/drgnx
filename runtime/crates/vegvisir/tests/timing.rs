@@ -145,6 +145,7 @@ mod timeline_schedule {
             palette: p,
             tty_widths: &[],
             line: (16, 80),
+            hc: false,
         }
     }
 
@@ -184,6 +185,7 @@ mod timeline_schedule {
             label: "spec".into(),
             depth: 0,
             bar: None,
+            budget: None,
         }];
         for p in 0..10 {
             out.push(SchedRow {
@@ -191,6 +193,7 @@ mod timeline_schedule {
                 label: format!("plan {p}"),
                 depth: 1,
                 bar: None,
+                budget: None,
             });
             for t in 0..29 {
                 let k = f64::from(p * 29 + t);
@@ -210,6 +213,7 @@ mod timeline_schedule {
                     label: format!("task {t}"),
                     depth: 2,
                     bar: Some(schedule::bar(&f, 2000.0)),
+                    budget: None,
                 });
             }
         }

@@ -2,6 +2,7 @@
 //! Each `tests/<name>.rs` is a module below, so the lib links once, not once per file. A file that needs a
 //! process of its own is a `[[test]]` of its own in Cargo.toml, with the reason there, and is named in `APART`.
 
+mod a11y;
 mod faces;
 mod fit;
 mod format;

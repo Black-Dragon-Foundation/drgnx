@@ -353,8 +353,8 @@ fn block_row(idx: usize, n: usize, block: &Block) -> Row {
 /// an ask (a `QuestionCard` with its keys), a subagent (its blocks nested under its head, indented), a notice, the
 /// live line (a pulse, still under REDUCED_MOTION) and a queued message.  Block N's rows are keyed `k:N/...` and each
 /// carries `drgnx-block` N; OPEN holds the Explored blocks the user opened.  An agent message's Markdown is the
-/// panel's own (`b:I:N` rows, drawn with its entry): it adds no row here.  Only the tests draw blocks this way until
-/// the panel does (flow Task 23, S3).
+/// panel's own (`b:I:N` rows, drawn with its entry): it adds no row here.  The panel draws its blocks with
+/// [`panel_block_rows`] (keyed by their first entry); this list form is the tests' way into the per-type rows.
 #[cfg(test)]
 pub fn block_list_rows(
     blocks: &[super::blocks::Block],
@@ -1124,6 +1124,74 @@ pub fn hook_lines(rows: &[Value]) -> Vec<HookLine> {
                 });
             }
         }
+    }
+    out
+}
+
+/// What the conversation's blocks make of an entry the panel draws (flow Task 23, S3): the entries whose block the
+/// panel draws from the blocks ([`panel_block_rows`]) and the ones folded into another's. An entry with no role is
+/// drawn as its group ([`group_rows`]): a tool step keeps its time, cost, provenance, hunks and checkpoint there.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Role {
+    /// The first entry of a block the panel draws: the user's message, an Explored run, a finding.
+    Head(super::blocks::Block),
+    /// A step of the Explored run that starts at this entry: drawn only while that run is open.
+    In(usize),
+}
+
+/// The roles of ENTRIES, the transcript from entry FROM on (indexes are the transcript's).
+pub fn panel_roles(entries: &[Entry], from: usize) -> BTreeMap<usize, Role> {
+    use super::blocks::{Block as B, Folder, Meta};
+    let f = Folder::of(entries, &Meta::default());
+    let mut out = BTreeMap::new();
+    for (k, b) in f.blocks.iter().enumerate() {
+        let start = f.starts()[k];
+        let end = f.starts().get(k + 1).copied().unwrap_or(entries.len());
+        match b {
+            B::You { .. } | B::Finding { .. } => {
+                out.insert(from + start, Role::Head(b.clone()));
+            }
+            B::Explored { .. } => {
+                out.insert(from + start, Role::Head(b.clone()));
+                for (i, e) in entries.iter().enumerate().take(end).skip(start + 1) {
+                    if e.kind == EntryType::Tool {
+                        out.insert(from + i, Role::In(from + start));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The rows of BLOCK, the block whose first entry is HEAD, keyed `e:HEAD/...` and carrying the entry as every step
+/// row does (`drgnx-agent-panel-entry`): the panel's keys, toggle and selection work on them as on a step.  An
+/// Explored run is its header only; OPEN, its steps follow as their own groups.
+pub fn panel_block_rows(
+    head: usize,
+    block: &super::blocks::Block,
+    open: bool,
+    env: &drgnx_rows::kit::KitEnv,
+) -> Vec<Row> {
+    let mut out = Vec::new();
+    conv_rows(
+        block,
+        &format!("e:{head}"),
+        head,
+        0,
+        open,
+        env,
+        false,
+        &mut out,
+    );
+    if matches!(block, super::blocks::Block::Explored { .. }) {
+        out.truncate(1);
+    }
+    for r in &mut out {
+        let end = r.text.chars().count() as u32;
+        r.props
+            .push((0, end, "drgnx-agent-panel-entry".into(), json!(head)));
     }
     out
 }

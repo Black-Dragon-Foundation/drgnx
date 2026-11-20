@@ -135,6 +135,7 @@ fn extensions_kinds_are_lucide_icons_on_a_graphical_display() {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        hc: false,
         glyphs: Vec::new(),
         ascii: false,
         density: Default::default(),

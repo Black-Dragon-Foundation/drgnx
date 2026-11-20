@@ -76,5 +76,34 @@ action runs, in order.  The key's own transform rewrites the button's args, as `
         (dolist (verb '("allow" "always" "deny")) (funcall (nth 0 def) (list (format "card:%s:7" verb)))))
       (should (equal '(allow always deny) (nreverse calls))))))
 
+;; the transcript's blocks (S3): an Explored run's header and a finding's source chips are kit actions
+(ert-deftest drgnx-agent-panel-conversation/an-explored-header-toggles-its-run ()
+  "`block-toggle' on a run's header opens or folds that run's first entry, as the step toggle does."
+  (drgnx-agent-panel-conversation-test--with
+    (should (gethash 'block-toggle drgnx-ui-kit--actions))
+    (let (toggled)
+      (cl-letf (((symbol-function 'drgnx-agent-panel--row-toggle) (lambda (key) (push key toggled))))
+        (with-current-buffer buf
+          (funcall (car (gethash 'block-toggle drgnx-ui-kit--actions)) '(7))))
+      (should (equal '((:e 7)) toggled)))))
+
+(ert-deftest drgnx-agent-panel-conversation/a-finding-source-opens-at-its-line ()
+  "`block-source' with a path opens that file under the agent's directory at the line."
+  (drgnx-agent-panel-conversation-test--with
+    (let* ((dir (make-temp-file "blk-src" t)) (f (expand-file-name "a.txt" dir)) shown)
+      (unwind-protect
+          (progn
+            (with-temp-file f (dotimes (i 20) (insert (format "row %d\n" (1+ i)))))
+            (with-current-buffer buf
+              (setq-local drgnx-agent-panel--snap (list :cwd dir))
+              (save-window-excursion
+                (funcall (car (gethash 'block-source drgnx-ui-kit--actions)) '("a.txt" 12))
+                ;; the file's window is selected; the panel's buffer is current again here
+                (with-current-buffer (window-buffer (selected-window))
+                  (setq shown (list (buffer-file-name) (line-number-at-pos)))
+                  (kill-buffer))))
+            (should (equal (list (file-truename f) 12) (list (file-truename (car shown)) (cadr shown)))))
+        (delete-directory dir t)))))
+
 (provide 'agent-panel-conversation-test)
 ;;; agent-panel-conversation-test.el ends here

@@ -175,6 +175,8 @@ pub struct SchedRow {
     pub label: String,
     pub depth: u8,
     pub bar: Option<ScheduleBar>,
+    /// The item's spend against its binding limit (the List entry's `budget`), read in the row's accessible label.
+    pub budget: Option<crate::model::ItemBudget>,
 }
 
 /// The tasks of ROWS grouped by the machine they ran or run on, as the Schedule's By machine shows them: a heading per
@@ -188,6 +190,7 @@ pub fn by_machine(rows: &[SchedRow], machines: &[(String, u32, u32)]) -> Vec<Sch
         label,
         depth: 0,
         bar: None,
+        budget: None,
     };
     let under = |r: &SchedRow| SchedRow {
         depth: 1,
@@ -247,14 +250,15 @@ fn right_text(b: &ScheduleBar, zone: Zone, now: f64) -> String {
     let mut parts: Vec<String> = Vec::new();
     match b.state {
         ScheduleState::Done => {
+            parts.push("done".into());
             if let (Some(s), Some(e)) = (b.started, b.done_to) {
                 parts.push(format!("took {}", hm(e - s)));
             }
-            if let Some(t) = b.target {
-                parts.push(match b.done_to {
-                    Some(e) if e <= t => "met target".into(),
-                    Some(e) => format!("missed by {}", hm(e - t)),
-                    None => "done".into(),
+            if let (Some(t), Some(e)) = (b.target, b.done_to) {
+                parts.push(if e <= t {
+                    "met target".into()
+                } else {
+                    format!("missed by {}", hm(e - t))
                 });
             }
         }
@@ -291,9 +295,48 @@ fn right_text(b: &ScheduleBar, zone: Zone, now: f64) -> String {
     parts.join(" · ")
 }
 
+/// R's accessible label at NOW (the timeline spec's §11): its title, then its schedule (the state, the finish window),
+/// then its budget: "Minimap plan, on track, finish 16:40 to 19:10, 36 of 55 dollars, estimate".
+fn spoken(r: &SchedRow, zone: Zone, now: f64) -> String {
+    let mut parts = vec![r.label.clone()];
+    if let Some(bar) = &r.bar {
+        if bar.state == ScheduleState::OnTrack {
+            parts.push("on track".into());
+        }
+        for p in right_text(bar, zone, now)
+            .split(" · ")
+            .filter(|p| !p.is_empty())
+        {
+            parts.push(match p.split_once('–') {
+                Some((a, z)) => format!("finish {a} to {z}"),
+                None => p.to_owned(),
+            });
+        }
+    }
+    if let Some(m) = &r.budget {
+        let money = matches!(m.unit.as_str(), "usd" | "usd-est");
+        let n = |v: f64| {
+            if v.fract() == 0.0 {
+                format!("{v:.0}")
+            } else {
+                format!("{v:.2}")
+            }
+        };
+        let unit = if money { "dollars" } else { m.unit.as_str() };
+        parts.push(match m.limit {
+            Some(l) => format!("{} of {} {unit}", n(m.spent.0), n(l.0)),
+            None => format!("{} {unit}, no limit", n(m.spent.0)),
+        });
+        if m.unit == "usd-est" {
+            parts.push("estimate".into());
+        }
+    }
+    parts.join(", ")
+}
+
 /// ROW's columns on a track of COLS over WIN, at NOW: the done part, the forecast to p50, the tail to p90, then over
-/// them the late cap, the baseline's tick and the target's rule.
-fn paint(b: &ScheduleBar, win: &Window, cols: u32, now: f64) -> Vec<Option<Paint>> {
+/// them the late cap, the baseline's tick and the target's rule.  HC (a high-contrast theme): the tail is an outline.
+fn paint(b: &ScheduleBar, win: &Window, cols: u32, now: f64, hc: bool) -> Vec<Option<Paint>> {
     let mut out: Vec<Option<Paint>> = vec![None; cols as usize];
     let col = |t: f64| win.at(t, cols);
     let mut fill = |a: f64, z: f64, p: Paint| {
@@ -344,10 +387,18 @@ fn paint(b: &ScheduleBar, win: &Window, cols: u32, now: f64) -> Vec<Option<Paint
             fill(
                 p50.max(from),
                 p90,
-                Paint {
-                    face: FaceId::WorkEdge.name(),
-                    ch: '░',
-                    part: "p90",
+                if hc {
+                    Paint {
+                        face: FaceId::WorkTailOutline.name(),
+                        ch: '═',
+                        part: "p90",
+                    }
+                } else {
+                    Paint {
+                        face: FaceId::WorkEdge.name(),
+                        ch: '░',
+                        part: "p90",
+                    }
                 },
             );
         }
@@ -432,6 +483,7 @@ pub fn schedule_rows(
         b.push(&label, Some(face));
         let end = b.pos();
         b.prop(0, end, "drgnx-work-id", Value::from(r.item.clone()));
+        b.prop(0, end, "help-echo", Value::from(spoken(r, zone, now)));
         let Some(bar) = &r.bar else {
             if let Some(c) = now_c {
                 now_mark(&mut b, TRACK_X + c * cw);
@@ -439,7 +491,7 @@ pub fn schedule_rows(
             out.push(b.finish());
             continue;
         };
-        let mut cols_of = paint(bar, win, cols, now);
+        let mut cols_of = paint(bar, win, cols, now, env.hc);
         if let Some(c) = now_c {
             cols_of[(c as usize).min(cols as usize - 1)] = None;
         }

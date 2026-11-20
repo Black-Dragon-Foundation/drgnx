@@ -2,8 +2,8 @@
 ;; test-class: det
 
 ;; Two frames, one at the UI scale 100 % and one at 200 %, the first selected throughout: the tab row, the status bar's
-;; row and the stretches the chrome puts in its text are in the pixels of the frame they are for, not of the selected
-;; one.  (Task 29 of the frontend flow plan; its other rows wait for the Agents side.)
+;; row, the rail's lines, the composer and the stretches the chrome puts in its text are in the pixels of the frame they
+;; are for, not of the selected one.  (Task 29 of the frontend flow plan.)
 
 (require 'ert)
 (require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
@@ -19,6 +19,7 @@
 (require 'drgnx-chrome)
 (require 'drgnx-area)
 (add-to-list 'load-path (expand-file-name "modules/tools" drgnx-ui-chrome-scale--repo))
+(add-to-list 'load-path (expand-file-name "modules/ui" drgnx-ui-chrome-scale--repo))   ; drgnx-rail (Task 29)
 (require 'drgnx-agent-panel-composer nil t)
 (dolist (m '("drgnx-look-fonts" "drgnx-look-density" "drgnx-look-scale" "drgnx-statusbar"))
   (load (expand-file-name (concat "modules/ui/" m) drgnx-ui-chrome-scale--repo) nil t))
@@ -55,7 +56,18 @@
           (push (car (plist-get (cdr d) :width)) out)))
       (setq i (or (next-single-property-change i 'display string) (length string))))
     (nreverse out)))
+(defun drgnx-ui-chrome-scale--space-heights (string)
+  "The `(space :height (N))' values of STRING's display properties."
+  (let (out (i 0))
+    (while (< i (length string))
+      (let ((d (get-text-property i 'display string)))
+        (when (and (consp d) (eq (car d) 'space) (consp (plist-get (cdr d) :height)))
+          (push (car (plist-get (cdr d) :height)) out)))
+      (setq i (or (next-single-property-change i 'display string) (length string))))
+    (nreverse out)))
 (defvar drgnx-look-density)
+(defvar drgnx-rail-gap)
+(declare-function drgnx-rail--string "drgnx-rail" (frame))
 
 (drgnx-look-gui-deftest chrome-scale/chrome-reads-its-own-frames-scale ()
   "With the first frame selected, the second at twice its UI scale has twice the chrome: the tab row, the status
@@ -89,6 +101,10 @@ bar's row and the stretches (`drgnx-chrome--px') are the second frame's own pixe
                 (should (= (drgnx-area--pad 8 f) (drgnx-px 8 f)))
                 (should (member (drgnx-px 8 f)
                                 (drgnx-ui-chrome-scale--space-widths (drgnx-area--row-with-close "title" 'right f))))
+                ;; the rail: its gap lines are this frame's pixels tall, the other frame being selected
+                (require 'drgnx-rail)
+                (should (= (car (drgnx-ui-chrome-scale--space-heights (drgnx-rail--string f)))
+                           (drgnx-px drgnx-rail-gap f)))
                 ;; the composer: a buffer shown in this frame draws for it, its pad and its buttons' widths in this
                 ;; frame's pixels whichever frame is selected: the bar is the same with this frame selected
                 (with-temp-buffer

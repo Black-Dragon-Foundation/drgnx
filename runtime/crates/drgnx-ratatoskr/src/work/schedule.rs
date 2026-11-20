@@ -141,6 +141,7 @@ fn rows_of(
                 label: r.entry.label.clone(),
                 depth: r.entry.depth,
                 bar: None,
+                budget: r.entry.budget.clone(),
             };
             let facts = match r.kind {
                 Some(Kind::Task) => Some(task_facts(

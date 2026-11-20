@@ -3863,6 +3863,11 @@ characters and `:tty :indent` per level, and a glyph takes its terminal form; th
 (`test/fixtures/kit/cases.json`, `expected.json`) holds each component at scales 1, 1.25, 1.75 and 2 and on a
 terminal (UTF-8 and ASCII); the hub's test writes `expected.json` (`DRGNX_KIT_BLESS=1 cargo test -p drgnx-rows --test it
 kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` checks Lisp against it.
+`a11y::every_glyph_has_a_label` reads the same fixture: a clickable span with no word in it, and a row of glyphs with
+no word, must carry a `help-echo` label. A status dot without its word is labelled with it; a range bar without the
+hub's label is labelled with its variant and state ("schedule at risk", `drgnx-ui-kit--range-words`).
+`a11y::hit_areas_are_24px`: every clickable span is 24 px wide or more, its padding carrying the action (a character
+counts 8 px); a composer chip's remove target runs from the gap before its mark to the chip's end.
 
 - `(drgnx-ui-kit-expand COMPONENT PROPS SCALE TTY)`: COMPONENT a symbol (`row`), PROPS the hub's `Comp` JSON as a
   plist (`(:c "row" :kind "tree" :depth 2 :twisty t :text "src" :state "selected")`; `:twisty` t open, `:false`

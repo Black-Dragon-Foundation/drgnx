@@ -98,6 +98,23 @@ const NOW_COLS: u32 = 4096;
 /// What part of its window a followed Timeline keeps after now.
 const FOLLOW_AHEAD: f64 = 0.1;
 
+/// The window a followed Timeline over W shows at NOW (none: it stays).  Smoothly it moves at every redraw of the
+/// now-line, keeping [`FOLLOW_AHEAD`] of it after now; with REDUCED motion (the timeline spec's §11) it stays until now
+/// reaches its end, then steps on by half its span, now at its middle.
+fn followed(w: Window, now: f64, reduced: bool) -> Option<Window> {
+    let span = w.to - w.from;
+    if reduced {
+        return (now >= w.to).then_some(Window {
+            from: now - 0.5 * span,
+            to: now + 0.5 * span,
+        });
+    }
+    Some(Window {
+        from: now - (1.0 - FOLLOW_AHEAD) * span,
+        to: now + FOLLOW_AHEAD * span,
+    })
+}
+
 /// The wire's window as the rows take it.
 fn window_of(w: WireWindow) -> Window {
     Window {
@@ -161,6 +178,7 @@ impl Trails {
         key: &(u64, String),
         window: Option<Window>,
         follow: bool,
+        reduced: bool,
         now: f64,
     ) -> (Option<Window>, f64) {
         let col = window.and_then(|w| trail::now_col(&w, NOW_COLS, now));
@@ -170,13 +188,11 @@ impl Trails {
             let due = line.due(now, col);
             (due, line.drawn.map_or(now, |d| d.0))
         };
-        let win = match window {
-            Some(w) if follow && due => {
-                let span = w.to - w.from;
-                let moved = Window {
-                    from: now - (1.0 - FOLLOW_AHEAD) * span,
-                    to: now + FOLLOW_AHEAD * span,
-                };
+        let win = match window
+            .filter(|_| follow && due)
+            .and_then(|w| followed(w, now, reduced))
+        {
+            Some(moved) => {
                 if let Some(Sub::Timeline(t)) = lock(&self.views).get_mut(key) {
                     t.window = Some(moved);
                 }
@@ -189,7 +205,7 @@ impl Trails {
                 );
                 Some(moved)
             }
-            w => w,
+            _ => window,
         };
         (win, at)
     }
@@ -220,7 +236,7 @@ impl Trails {
         };
         let data = match &*data {
             Data::Timeline(lanes, sh) => {
-                let (_, at) = self.clock(key, Some(sh.win), false, now);
+                let (_, at) = self.clock(key, Some(sh.win), false, false, now);
                 Data::Timeline(
                     lanes.clone(),
                     Shown {
@@ -231,7 +247,7 @@ impl Trails {
                 )
             }
             Data::Schedule(d, g, sh) => {
-                let (_, at) = self.clock(key, Some(sh.win), false, now);
+                let (_, at) = self.clock(key, Some(sh.win), false, false, now);
                 Data::Schedule(
                     d.clone(),
                     *g,
@@ -332,7 +348,8 @@ impl Trails {
             }
             Sub::Timeline(t) => {
                 let now = crate::clock::wall_secs();
-                let (win, at) = self.clock(key, t.window, t.follow, now);
+                let reduced = f.core.views.reduced_motion(key.0, &key.1);
+                let (win, at) = self.clock(key, t.window, t.follow, reduced, now);
                 let lanes = match win {
                     Some(w) => window_lanes(f, &t.lanes, w).await,
                     None => {
@@ -361,7 +378,7 @@ impl Trails {
             }
             Sub::Schedule(s) => {
                 let now = crate::clock::wall_secs();
-                let (_, at) = self.clock(key, Some(s.window), false, now);
+                let (_, at) = self.clock(key, Some(s.window), false, false, now);
                 let facts = crate::work::schedule::facts(f, key.0, at).await;
                 let shown = Shown {
                     win: s.window,
@@ -1063,6 +1080,22 @@ pub async fn run(front: Arc<Front>) {
 #[cfg(test)]
 mod window_tests {
     use super::*;
+
+    /// A followed Timeline moves with now at every redraw; with reduced motion it scrolls in steps: it stays while now
+    /// is in it, then steps half its span (flow Task 30, `a11y-flow/reduced-motion-follow-steps`).
+    #[test]
+    fn reduced_motion_follow_steps() {
+        let w = Window {
+            from: 0.0,
+            to: 100.0,
+        };
+        let smooth = followed(w, 50.0, false).expect("a smooth follow moves");
+        assert_eq!((smooth.from, smooth.to), (-40.0, 60.0));
+        assert_eq!(followed(w, 50.0, true), None, "in view: the window stays");
+        assert_eq!(followed(w, 99.0, true), None);
+        let step = followed(w, 100.0, true).expect("at its end it steps");
+        assert_eq!((step.from, step.to), (50.0, 150.0));
+    }
     use norn::read::steps::WindowStep;
     use norn::write::steps::StepClass;
 

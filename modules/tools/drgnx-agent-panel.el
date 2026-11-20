@@ -152,6 +152,7 @@ session's forecast once it came.")
 (defvar drgnx-agent-companion--taken)
 
 (declare-function drgnx-agent-panel-cards-setup "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-blocks-setup "drgnx-agent-panel-steps")
 
 (unless (featurep 'drgnx-agent-panel-cards)
   (load (expand-file-name "drgnx-agent-panel-cards" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -738,6 +739,7 @@ class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same b
     :events '("huddle")
     (drgnx-agent-panel-huddle--event event data))
   (drgnx-agent-panel-cards-setup)
+  (drgnx-agent-panel-blocks-setup)
   (drgnx-agent-panel-list-setup)
   (drgnx-agent-history-setup)
   (drgnx-agent-panel-sync-windows))

@@ -637,9 +637,32 @@ fn range_bar(
         }
     }
     let end = b.pos();
-    if end > start && !label.is_empty() {
-        b.prop(start, end, "help-echo", Value::String(label.to_owned()));
+    // no label from the hub: the bar still says what it is and its state ("schedule at risk")
+    let label = if label.is_empty() {
+        range_words(variant, state)
+    } else {
+        label.to_owned()
+    };
+    if end > start {
+        b.prop(start, end, "help-echo", Value::String(label));
     }
+}
+
+/// A range bar's own label, its variant and state in words (`drgnx-ui-kit--range-words`).
+fn range_words(variant: RangeVariant, state: RangeState) -> String {
+    let word = |v: Value| v.as_str().unwrap_or("").replace('-', " ");
+    let what = match variant {
+        RangeVariant::Schedule => "schedule".to_owned(),
+        RangeVariant::Cost => "cost".to_owned(),
+        RangeVariant::Segment(k) => format!(
+            "{} segment",
+            word(serde_json::to_value(k).unwrap_or_default())
+        ),
+    };
+    format!(
+        "{what} {}",
+        word(serde_json::to_value(state).unwrap_or_default())
+    )
 }
 
 /// The civil date of DAYS since 1970-01-01: (year, month 1-12, day 1-31).
@@ -1913,11 +1936,20 @@ pub fn expand(b: &mut RowBuilder, env: &KitEnv, c: &Comp) {
             let g: Geom = kit_gen::geom(CompId::StatusDot, &variant);
             let face = comp_face(kit_gen::face(CompId::StatusDot, &variant));
             let mark = g.glyph.map_or("", |n| glyph(env, n));
+            let from = b.pos();
             b.push(mark, face);
-            if let Some(w) =
-                kit_gen::label(CompId::StatusDot, &variant).filter(|_| *word || env.tty)
-            {
-                b.push(&format!(" {w}"), face);
+            let to = b.pos();
+            let label = kit_gen::label(CompId::StatusDot, &variant);
+            match label.filter(|_| *word || env.tty) {
+                Some(w) => {
+                    b.push(&format!(" {w}"), face);
+                }
+                // the mark alone says nothing to a screen reader: its word is its label
+                None => {
+                    if let Some(w) = label.filter(|_| to > from) {
+                        b.prop(from, to, "help-echo", Value::String(w.to_owned()));
+                    }
+                }
             }
         }
         Comp::QuestionCard { kind, title, .. } => question_head(b, env, *kind, title),
@@ -2383,8 +2415,9 @@ fn text_input_rows(text: &str) -> usize {
 }
 
 /// A context chip of a text input onto B (`drgnx-ui-kit--b-input-chip`): the chip's pads and label, then its close mark
-/// (the Lucide x where the env draws icons, else the `close` glyph) in the chip's face; a click or RET on the mark runs
-/// the chip's `remove` and its label (`help-echo`) is "remove LABEL".
+/// (the Lucide x where the env draws icons, else the `close` glyph) in the chip's face between two slots of
+/// [`TAB_CLOSE_PAD_PX`]; a click or RET from the gap before the mark to the chip's end runs the chip's `remove` (a
+/// target of 24 px or more, not the mark's few) and its label (`help-echo`) is "remove LABEL".
 fn input_chip(b: &mut RowBuilder, env: &KitEnv, chip: &InputChip) {
     let variant = [chip.tone.name(), "soft", env.density.name()];
     let g: Geom = kit_gen::geom(CompId::Chip, &variant);
@@ -2399,7 +2432,10 @@ fn input_chip(b: &mut RowBuilder, env: &KitEnv, chip: &InputChip) {
     let text_from = b.pos();
     b.push(&chip.label, face);
     let text_to = b.pos();
+    let hit = b.pos();
     pad(b, env, px(g.gap, env.scale), 1, face);
+    let slot = px(TAB_CLOSE_PAD_PX, env.scale);
+    pad(b, env, slot, 0, face);
     let at = b.pos();
     match env
         .icons
@@ -2416,8 +2452,9 @@ fn input_chip(b: &mut RowBuilder, env: &KitEnv, chip: &InputChip) {
             b.push(glyph(env, "close"), face);
         }
     }
-    let to = b.pos();
+    pad(b, env, slot, 0, face);
     pad(b, env, px(g.pad.1, env.scale), usize::from(g.tty_pad), face);
+    let to = b.pos();
     if let Some(a) = match chip.tone {
         Tone::Agent(n) => usize::from(n)
             .checked_sub(1)
@@ -2426,9 +2463,9 @@ fn input_chip(b: &mut RowBuilder, env: &KitEnv, chip: &InputChip) {
     } {
         b.face(text_from, text_to, a.name());
     }
-    put_action(b, at, to, &chip.remove);
+    put_action(b, hit, to, &chip.remove);
     b.prop(
-        at,
+        hit,
         to,
         "help-echo",
         Value::String(format!("remove {}", chip.label)),
@@ -3565,8 +3602,16 @@ mod tests {
             .find(|p| p.2 == "drgnx-action")
             .expect("the close mark's action");
         assert_eq!(v, &serde_json::json!(["composer-chip-remove", "kit.rs"]));
-        // the action covers the close mark alone: one character, the last of the chip's label run
-        assert_eq!(to - from, 1);
-        assert_eq!(r.text.chars().nth(*from as usize), Some('×'));
+        // the action covers the gap before the close mark, the mark in its two slots and the chip's end pad: five
+        // characters, the mark the middle one, at least 24 px of spaces and mark
+        assert_eq!(to - from, 5);
+        assert_eq!(r.text.chars().nth(*from as usize + 2), Some('×'));
+        let pads: u32 = r
+            .spaces
+            .iter()
+            .filter(|s| (*from..*to).contains(&s.0))
+            .map(|s| s.1)
+            .sum();
+        assert!(pads >= 16, "the remove target's padding: {pads} px");
     }
 }

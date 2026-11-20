@@ -1227,8 +1227,9 @@ switch."
                    (first (next-single-property-change 0 'drgnx-action head))
                    (second (next-single-property-change (next-single-property-change first 'drgnx-action head)
                                                         'drgnx-action head)))
-              ;; the close mark is one character (the glyph, or the x's image where icons are drawn)
-              (should (= (- (next-single-property-change first 'drgnx-action head) first) 1))
+              ;; the remove target: the gap, the close mark (the glyph, or the x's image) in its two slots, the chip's
+              ;; end pad: five characters, a target of 24 px or more
+              (should (= (- (next-single-property-change first 'drgnx-action head) first) 5))
               (should-not (get-text-property 2 'drgnx-action head))     ; the label has none
               (should (equal (get-text-property first 'help-echo head) "remove a.rs"))
               (let ((last-input-event (list 'mouse-1 (list (selected-window) first '(0 . 0) 0 (cons head first)))))

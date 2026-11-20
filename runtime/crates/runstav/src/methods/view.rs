@@ -76,6 +76,10 @@ pub struct ViewEnv {
     pub tz: String,
     #[serde(default)]
     pub reduced_motion: bool,
+    /// The theme is a high-contrast one (`drgnx-look-variant` `hc`): the Timeline writes segment kinds' letters and
+    /// draws bars' tails as outlines.
+    #[serde(default)]
+    pub hc: bool,
     /// `[name, glyph]`: the kit's glyphs (those `etc/ui/components.eld` names) as `drgnx-face-glyph` draws them on the
     /// class's frame, ASCII on a terminal that is not UTF-8; a name missing here is drawn in its Unicode form
     /// (`drgnx_rows::kit`).

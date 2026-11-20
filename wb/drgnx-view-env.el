@@ -36,6 +36,7 @@
 (defvar text-scale-mode-step)
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-patch-env-sent "drgnx-view")
+(declare-function drgnx-look-variant "drgnx-theme-gen" (&optional frame))
 (declare-function drgnx-view-sja-held-p "drgnx-view-sja" (view class))
 (declare-function drgnx-view-patch-reclass "drgnx-view")
 (defvar drgnx-view-patch)
@@ -293,6 +294,10 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
                                           :tty_widths (let ((t-w (drgnx-view-env--tty-widths))) (if (eq t-w :none) nil t-w))
                                           :tz (format-time-string "%z")
                                           :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)
+                                          ;; a high-contrast theme: the Timeline's kind letters and outlined tails
+                                          :hc (if (and (fboundp 'drgnx-look-variant)
+                                                       (eq (drgnx-look-variant (window-frame w)) 'hc))
+                                                  t :false)
                                           :glyphs (drgnx-view-env--kit-glyphs (window-frame w))
                                           ;; a terminal that is not UTF-8: the hub's own glyphs (a tab's icon) in ASCII
                                           :ascii (if (drgnx-ui-ascii-frame-p (window-frame w)) t :false)
