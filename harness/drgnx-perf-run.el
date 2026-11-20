@@ -2503,10 +2503,11 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                       "           (number-sequence 1 200))))"
                       ;; (the module turned the column, and with it the ruler, on as the file was visited)
                       " (drgnx-debug-gutter-mode -1) (setq drgnx-debug-overview-ruler nil)"
+                      " (drgnx-scrollbar-mode -1)"   ; (the minimap module's scroll bar is a ruler on every surface)
                       " (drgnx-margins-claim 'hunks 1 :order 2) (drgnx-debug-gutter-mode 1) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :check "(with-current-buffer (window-buffer) (and drgnx-debug-gutter-mode drgnx-debug-gutter--overlays (null (window-parameter nil 'glitnir-ruler)) t))"   ; the column's marks, no ruler
-       :teardown ,(concat "(progn (setq drgnx-debug-overview-ruler t) (with-current-buffer (window-buffer) (widen))"
+       :teardown ,(concat "(progn (setq drgnx-debug-overview-ruler t) (drgnx-scrollbar-mode 1) (with-current-buffer (window-buffer) (widen))"
                           " (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; the overview ruler: the fixture narrowed to its first 10,000 lines, 200 breakpoints (one every 50 lines) in the
       ;; column and so in the ruler, scrolled as debug-gutter-scroll; judged against debug-ruler-baseline, which differs
@@ -2528,10 +2529,10 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
                       " (narrow-to-region (point-min) (progn (forward-line 10000) (point))) (goto-char (point-min))"
                       " (when (fboundp 'nidhogg-lines-enable) (nidhogg-lines-enable nil t))"
-                      " (set-window-parameter nil 'glitnir-minimap nil) t)")
+                      " (drgnx-scrollbar-mode -1) (set-window-parameter nil 'glitnir-minimap nil) t)")   ; no scroll bar: it places the minimap
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :check "(null (window-parameter nil 'glitnir-minimap))"
-       :teardown ,(concat "(progn (with-current-buffer (window-buffer) (widen)) " kill-fixture " t)"))
+       :teardown ,(concat "(progn (drgnx-scrollbar-mode 1) (with-current-buffer (window-buffer) (widen)) " kill-fixture " t)"))
       ;; the open minimap (design §8, state B) over the same scroll: Nidhogg draws it from the line model at each
       ;; publish (tiles of 256 rows, cached), so a scroll runs no Lisp of the minimap's; its colours are the default
       ;; face's (judged against minimap-baseline, which differs only by it)
@@ -2594,15 +2595,15 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                                                      (number-sequence 1 20)))"
                                           f10k (funcall model on))))
                (kill-bufs "(progn (mapc #'kill-buffer drgnx-perf--lines-bufs) (setq drgnx-perf--lines-bufs nil) t)"))
-          `((minimap-type-baseline :setup ,setup :each ,(concat "(progn " visit10k " " (funcall model nil) " t)")
+          `((minimap-type-baseline :setup ,setup :each ,(concat "(progn " visit10k " (drgnx-scrollbar-mode -1) " (funcall model nil) " t)")
                                    :actions ,keys :check ,(concat "(with-current-buffer (window-buffer) " no-model ")")
-                                   :teardown ,teardown)
+                                   :teardown ,(concat "(progn (drgnx-scrollbar-mode 1) " teardown ")"))
             (minimap-type :setup ,setup :each ,(concat "(progn " visit10k " " (funcall model t) " t)")
                           :actions ,keys :check ,(concat "(with-current-buffer (window-buffer) " has-model ")")
                           :teardown ,teardown)
-            (minimap-type-250k-baseline :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " " (funcall model nil) " t)")
+            (minimap-type-250k-baseline :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (drgnx-scrollbar-mode -1) " (funcall model nil) " t)")
                                         :actions ,keys :check ,(concat "(with-current-buffer (window-buffer) " no-model ")")
-                                        :teardown ,kill-fixture)
+                                        :teardown ,(concat "(progn (drgnx-scrollbar-mode 1) " kill-fixture " t)"))
             (minimap-type-250k :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " " (funcall model t) " t)")
                                :actions ,keys :check ,(concat "(with-current-buffer (window-buffer) " has-model ")")
                                :teardown ,kill-fixture)
