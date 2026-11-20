@@ -162,6 +162,11 @@ untracked, drgnx.lock.eld ignored."
 
 (defvar drgnx-look-scene--project nil "The scene's project directory (a git repository).")
 (defvar drgnx-look-scene--errors nil "The errors of the current step, newest first.")
+(defvar drgnx-panel-replay-background)   ; test/fixtures/panel-replay-fixture.el
+
+(defun drgnx-look-scene--bg-only-p ()
+  "Whether the run is the background scenes' alone (DRGNX_LOOK_ONLY names agent-background): their script is their own."
+  (string-match-p "agent-background" (or (getenv "DRGNX_LOOK_ONLY") "")))
 (defvar drgnx-look-scene--panel nil "The agent panel's buffer, once the mock agent ran.")
 (defvar drgnx-look-scene-seed "1"
   "What the session's hub seeds (`RATATOSKR_SEED_SCENE', the hub's `orch::scene'), set by `drgnx look-scenes' from the
@@ -179,6 +184,9 @@ agent's permission and the seeded run's held card), and drgnx words it so"
 two problems, an eglot connection to no language server), drawn by the segments' own code"
                  "the status bar's agent is `● replay-… editing', not `● Claude editing': the mock agent's session is
 named as drgnx names every session (its profile, `replay', and an id)")
+    (agent-background "the mockup's state 1 only (the list's first row selected); the window is the editor's right panel, not the mockup's lone card"
+                      "no hover reveal: Output and Stop show on the selected row only (accepted, plan ledger 2026-11-21)"
+                      "the mock's subagent says one thing: the row's last line reads `started` or the mock's text, not `read conn.rs`")
     (agent-panel "the mockup is the Work space (mission strip, Board, Timeline: G9, other plans); compare its right-hand panel"
                  "the panel opens as a tab of the editor group, not the right island (look step 8)"
                  "the mock agent's panel shows no turn yet (replay idle): look step 8")
@@ -470,6 +478,8 @@ panel's window at either scale.")
       (load (expand-file-name "test/fixtures/panel-replay-fixture" (bound-and-true-p drgnx-dir)) nil t)
       ;; the mockup's three steps; the `agent-panel-long' scene makes the transcript long with the second turn below
       (setq drgnx-panel-replay-prefix 3)
+      ;; the background scene's items: its profile asks for ACP v2 (the fixture reads this)
+      (setq drgnx-panel-replay-background (and (drgnx-look-scene--bg-only-p) '(v2)))
       (defalias 'drgnx-panel-replay-program
         (lambda ()
           ;; the mockup's figures: a slow run (past `drgnx-agent-panel-slow-seconds'), a quick one, then a read
@@ -487,14 +497,18 @@ panel's window at either scale.")
                   (mapconcat (lambda (i) (format "tool:run echo more %d\\nsay More %d finished.\\n" i i))
                              (number-sequence 1 drgnx-look-scene--panel-more) "")
                   "say done")))
+      ;; the background scene's script is its own (the mockup's state 1)
+      (when (drgnx-look-scene--bg-only-p)
+        (defalias 'drgnx-panel-replay-program #'drgnx-look-scene--background-program))
       ;; the replay's hub is the scenes' hub from here on: it seeds the plan run as `drgnx-look-scene--hub' does
       ;; and the agent works in the scenes' project, so the status bar and the Explorer show it there
       (setq drgnx-look-scene--panel (let ((process-environment (cons "RATATOSKR_SEED_SCENE=1" process-environment))
                                           (drgnx-panel-replay-project drgnx-look-scene--project))
                                       (drgnx-panel-replay-up bin)))
       ;; the turn runs on past the prefix to its ask: the scene shows every step's time and the open card
-      (unless (drgnx-panel-replay--wait 30 (lambda () (with-current-buffer drgnx-look-scene--panel
-                                                        (drgnx-agent-panel-cards--permissions))))
+      (unless (or (drgnx-look-scene--bg-only-p)
+                  (drgnx-panel-replay--wait 30 (lambda () (with-current-buffer drgnx-look-scene--panel
+                                                            (drgnx-agent-panel-cards--permissions)))))
         (push "agent: no permission card within 30 s" drgnx-look-scene--errors)))))
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
@@ -727,6 +741,16 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
     (drgnx-look-scene--until 15 "the status bar's job (the seeded run)" (lambda () (eql drgnx-jobs--running 1))))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene--background-program ()
+  "The mock agent's script for the `agent-background' scene: an edit, then three items running (a shell, a watcher, a
+subagent) and one that ended, failed (exit 3); the turn ends with the agent's line."
+  (concat "tool:edit hermod/src/v2.rs\\nsay Added the v2 turn.\\n"
+          "bg:shell t1 cargo test -p hermod\\nbg:output t1 test v2::turn_ends_at_idle ... ok\\n"
+          "bg:monitor w1 Watching CI on staging PR #412\\nbg:subagent k1 Subagent: review the v2 diff\\n"
+          "bg:shell t2 bin/drgnx test gateway\\nbg:exit t2 3\\n"
+          "say The tests are running in the background; I'll check the review when it lands. Turn ended.\n"
+          "say done"))
+
 (defvar drgnx-look-scene--panel-long nil "Non-nil once `agent-panel-long' sent the mock agent its second prompt.")
 
 (declare-function drgnx-agent-panel--answer "drgnx-agent-panel-cards" (request option))
@@ -764,6 +788,34 @@ windows (header, transcript, composer) replace the old pinned-copy checks (Task 
     (drgnx-look-scene--try "header clicks" (drgnx-look-scene--panel-header-clicks drgnx-look-scene--panel))
     ;; the clicks changed the header's state: the shot shows the rows the hub settles on
     (drgnx-look-scene--try "settled after the clicks" (drgnx-look-scene--panel-settle drgnx-look-scene--panel))))
+
+;;;; The background work scene (agent-background plan 2026-11-20): the mock agent's v2 face with three items running and
+;;;; one ended; run it alone (DRGNX_LOOK_ONLY=agent-background): its script is the mockup's state 1.
+
+(declare-function drgnx-agent-panel-background-list "drgnx-agent-panel-background")
+(declare-function drgnx-agent-panel-background--running "drgnx-agent-panel-background")
+
+(defun drgnx-look-scene-agent-background-light ()
+  "`agent-background' in the light theme."
+  (drgnx-look-scene-agent-background 'drgnx-light))
+
+(defun drgnx-look-scene-agent-background (&optional theme)
+  "The agent panel with the mockup's state 1: a chip `3 in background', the pinned list with its first row selected (b),
+a live card and an end line in the transcript."
+  (drgnx-look-scene--theme (or theme 'drgnx-dark))
+  (drgnx-look-scene--try "background"
+    (unless (buffer-live-p drgnx-look-scene--panel) (error "No agent panel (the mock agent did not run)"))
+    (unless (drgnx-look-scene--bg-only-p)
+      (error "Run this scene alone: DRGNX_LOOK_ONLY=agent-background (its script is its own)"))
+    (if-let* ((w (get-buffer-window drgnx-look-scene--panel)))
+        (select-window w)
+      (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel :select t))
+    (let ((sid (buffer-local-value 'drgnx-agent-panel--session drgnx-look-scene--panel)))
+      (drgnx-look-scene--until 40 "three items running in the background"
+                               (lambda () (>= (length (drgnx-agent-panel-background--running sid)) 3))))
+    (with-current-buffer drgnx-look-scene--panel (drgnx-agent-panel-background-list)) ; b: the first row selected
+    (drgnx-look-scene--panel-settle drgnx-look-scene--panel))
+  (drgnx-look-scene--answer))
 
 ;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view
 ;;;; `agent-panel-top/SID', fitted, never scrolled), the transcript (`agent-panel/SID', the panel's main buffer) and the

@@ -28,6 +28,8 @@
   '((window-dark :agent t)
     (agent-panel :agent t)
     (agent-panel-long :agent t :mockup agent-panel)
+    (agent-background :agent t)
+    (agent-background-light :agent t :mockup agent-background)
     (conversation-tab :agent t :mockup agent-panel)
     (palette :keys "C-S-p" :type "run te" :then "C-g")
     (palette-light :keys "C-S-p" :type "run te" :then "C-g")
