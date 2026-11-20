@@ -37,36 +37,58 @@
   "The start of line N."
   (save-excursion (goto-char (point-min)) (forward-line (1- n)) (point)))
 
-(ert-deftest drgnx-fold/the-arrows-spec-follows-the-setting-and-the-fringe ()
-  "`hover' and `always' give Nidhogg's spec, sized to the fringe less 2 px each side, an open fold's chevron muted and
-a folded one's in the accent; nil, or a fringe under 8 px, gives none."
-  (let ((spec (drgnx-fold--arrows-spec 'hover 16)))
-    (should (eq 'hover (plist-get spec :mode)))
-    (should (= 12 (plist-get spec :size)))
-    (should (= 2 (plist-get spec :inset)))
-    (should (eq 'drgnx-text-muted (car (plist-get spec :colour))))
-    (should (eq 'drgnx-accent (car (plist-get spec :folded)))))
-  (should (eq 'always (plist-get (drgnx-fold--arrows-spec 'always 16) :mode)))
-  (should-not (drgnx-fold--arrows-spec nil 16))
-  (should-not (drgnx-fold--arrows-spec 'hover 6)))
+(ert-deftest drgnx-fold/the-arrows-spec-follows-the-setting ()
+  "`hover' and `always' give Nidhogg's spec: a 12 px chevron centred in the 18 px arrows' column (the inset counts from
+the fringe's inner edge, past a left scroll bar's strip), an open fold's chevron muted and a folded one's in the
+accent; nil gives none."
+  (cl-letf (((symbol-function 'drgnx-px) (lambda (n &rest _) n)))
+    (let ((spec (drgnx-fold--arrows-spec 'hover nil)))
+      (should (eq 'hover (plist-get spec :mode)))
+      (should (= 12 (plist-get spec :size)))
+      (should (= 3 (plist-get spec :inset)))
+      (should (eq 'drgnx-text-muted (car (plist-get spec :colour))))
+      (should (eq 'drgnx-accent (car (plist-get spec :folded)))))
+    (should (= 15 (plist-get (drgnx-fold--arrows-spec 'hover nil 12) :inset)))
+    (should (eq 'always (plist-get (drgnx-fold--arrows-spec 'always nil) :mode)))
+    (should-not (drgnx-fold--arrows-spec nil nil))))
 
-(ert-deftest drgnx-fold/an-editor-window-gets-the-arrows-and-loses-them ()
-  "Placed with its strip on a graphical frame, an editor window gets `glitnir-fold-arrows'; off the strip, or with
-the setting nil, it has none."
+(ert-deftest drgnx-fold/an-editor-window-gets-the-arrows-and-its-gutter-and-loses-them ()
+  "Placed with its strip on a graphical frame, an editor window gets `glitnir-fold-arrows' and a left fringe of the
+arrows' gutter (5 + 18 px); off the strip, or with the setting nil, it has none and its fringe is its own again.  With
+a scroll bar on the left the gutter is the fringe's own part, the strip kept beside it."
   (fold-arrows-test--with
-    (let ((w (selected-window)) (drgnx-fold-arrows 'hover))
+    (let ((w (selected-window)) (drgnx-fold-arrows 'hover) (fringes (list 8 8)))
       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
-                ((symbol-function 'window-fringes) (lambda (&rest _) '(16 8 nil nil))))
+                ((symbol-function 'drgnx-px) (lambda (n &rest _) n))
+                ((symbol-function 'window-fringes) (lambda (&rest _) (list (car fringes) (cadr fringes) nil nil)))
+                ((symbol-function 'set-window-fringes) (lambda (_w l r &rest _) (setq fringes (list l r)))))
         (unwind-protect
             (progn
               (drgnx-fold--place-arrows w t)
               (should (eq 'hover (plist-get (window-parameter w 'glitnir-fold-arrows) :mode)))
+              (should (equal fringes '(23 8)))
+              (drgnx-fold--place-arrows w t)
+              (should (equal fringes '(23 8)))
               (drgnx-fold--place-arrows w nil)
               (should-not (window-parameter w 'glitnir-fold-arrows))
+              (should (equal fringes '(8 8)))
               (let ((drgnx-fold-arrows nil))
                 (drgnx-fold--place-arrows w t)
-                (should-not (window-parameter w 'glitnir-fold-arrows))))
-          (set-window-parameter w 'glitnir-fold-arrows nil))))))
+                (should-not (window-parameter w 'glitnir-fold-arrows))
+                (should (equal fringes '(8 8))))
+              ;; a scroll bar on the left: the fringe is 8 + its 12 px strip
+              (setq fringes (list 20 8))
+              (set-window-parameter w 'drgnx-ruler-side 'left)
+              (set-window-parameter w 'drgnx-ruler-fringe 8)
+              (drgnx-fold--place-arrows w t)
+              (should (equal fringes '(35 8)))
+              (should (= 23 (window-parameter w 'drgnx-ruler-fringe)))
+              (should (= 15 (plist-get (window-parameter w 'glitnir-fold-arrows) :inset)))
+              (drgnx-fold--place-arrows w nil)
+              (should (equal fringes '(20 8)))
+              (should (= 8 (window-parameter w 'drgnx-ruler-fringe))))
+          (dolist (p '(glitnir-fold-arrows drgnx-fold-fringe drgnx-ruler-side drgnx-ruler-fringe))
+            (set-window-parameter w p nil)))))))
 
 (ert-deftest drgnx-fold/a-click-on-the-fringe-folds-and-unfolds ()
   "A click in the left fringe on a line that starts a range folds it, again unfolds it; on a line inside a range (no

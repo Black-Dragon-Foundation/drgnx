@@ -112,7 +112,8 @@ what it hid in the echo area, for example `folded 38 lines, 2 errors`, which scr
 
 A chevron in the left fringe marks each line that starts a block: it shows while the pointer is over the fringe (a
 folded block's, pointing right, always shows), and a click on it folds or unfolds that block. `drgnx-fold-arrows` sets
-when they show (`hover`, `always`, or none). Nidhogg draws them from the line model as the window is drawn, so they cost
+when they show (`hover`, `always`, or none). While they are on, the left fringe is a 23 px gutter: the change marks'
+lane outermost, then the arrows' column beside the line numbers; with `drgnx-fold-arrows` nil it is narrow again. Nidhogg draws them from the line model as the window is drawn, so they cost
 nothing as you scroll. The minimap shows a folded block as a dashed pill after its first line: the fold's name when
 you named it, else `⋯ N folded`.
 

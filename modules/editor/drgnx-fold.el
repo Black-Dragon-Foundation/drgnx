@@ -847,27 +847,51 @@ unfolds its block."
   :type '(choice (const hover) (const always) (const :tag "None" nil))
   :group 'drgnx-fold :scope 'global :apply #'drgnx-fold--arrows-respec)
 
-(defun drgnx-fold--arrows-spec (mode fringe &optional strip)
-  "Nidhogg's `glitnir-fold-arrows' spec for MODE (`drgnx-fold-arrows') in a left fringe FRINGE device px wide of its
-own, beside a scroll bar STRIP px wide at its inner edge (on the left: `drgnx-minimap-side'): the chevron's box 2 px in
-from each side of the fringe's own part, an open fold's muted, a folded one's in the accent; nil for none or a fringe
-under 8 px."
-  (and mode (>= fringe 8)
-       (list :mode mode :size (- fringe 4) :inset (+ 2 (or strip 0))
-             :colour (cons 'drgnx-text-muted 0.9) :folded (cons 'drgnx-accent 1.0))))
+(defconst drgnx-fold--gutter '(5 . 18)
+  "The left fringe's own part while fold arrows show, in logical px: the change marks' lane (outermost), then the
+arrows' column beside the line numbers (minimap-folding.html's `.g' and `.fa').")
+
+(defconst drgnx-fold--arrow-px 12 "A fold arrow's box, logical px, centred in the arrows' column.")
+
+(defun drgnx-fold--arrows-spec (mode frame &optional strip)
+  "Nidhogg's `glitnir-fold-arrows' spec for MODE (`drgnx-fold-arrows') on FRAME, beside a scroll bar STRIP device px
+wide at the left fringe's inner edge (`drgnx-minimap-side' left): the chevron centred in the arrows' column (Nidhogg
+counts the inset from the fringe's inner edge), an open fold's muted, a folded one's in the accent; nil for none."
+  (and mode
+       (let ((col (drgnx-px (cdr drgnx-fold--gutter) frame)) (size (drgnx-px drgnx-fold--arrow-px frame)))
+         (list :mode mode :size size :inset (+ (or strip 0) (/ (- col size) 2))
+               :colour (cons 'drgnx-text-muted 0.9) :folded (cons 'drgnx-accent 1.0)))))
+
+(defun drgnx-fold--gutter-px (frame)
+  "The left fringe's own width while fold arrows show on FRAME, device px."
+  (drgnx-px (+ (car drgnx-fold--gutter) (cdr drgnx-fold--gutter)) frame))
+
+(defun drgnx-fold--set-gutter (window px)
+  "Give WINDOW's left fringe an own part PX wide (nil: the width it had before the arrows), keeping a scroll bar on
+the left (the ruler's `drgnx-ruler-fringe' is then the own part, so the ruler keeps it)."
+  (let* ((fr (window-fringes window))
+         (left (eq (window-parameter window 'drgnx-ruler-side) 'left))
+         (own (if left (or (window-parameter window 'drgnx-ruler-fringe) (car fr)) (car fr)))
+         (strip (- (car fr) own))
+         (was (window-parameter window 'drgnx-fold-fringe))
+         (want (or px was)))
+    (when (and want (/= own want))
+      (when (and px (not was)) (set-window-parameter window 'drgnx-fold-fringe own))
+      (when left (set-window-parameter window 'drgnx-ruler-fringe want))
+      (set-window-fringes window (+ want strip) (cadr fr) (nth 2 fr)))
+    (unless px (set-window-parameter window 'drgnx-fold-fringe nil))
+    strip))
 
 (defun drgnx-fold--place-arrows (window on)
   "`drgnx-ruler-place-functions': WINDOW's fold arrows as they should be now: on an editor window (ON, it shows the
-strip) of a graphical frame, from `drgnx-fold-arrows'; else none."
+strip) of a graphical frame, from `drgnx-fold-arrows', in a left fringe widened to the arrows' gutter
+\(`drgnx-fold--gutter'); else none, and the fringe its own width again."
   (when (window-live-p window)
-    (let ((spec (and on (display-graphic-p (window-frame window))
-                     (not (with-current-buffer (window-buffer window) (drgnx-fold--org-p)))
-                     (let* ((lf (or (car (window-fringes window)) 0))
-                            ;; a scroll bar on the left widened the fringe: the arrows keep to its own part
-                            (own (if (eq (window-parameter window 'drgnx-ruler-side) 'left)
-                                     (or (window-parameter window 'drgnx-ruler-fringe) lf)
-                                   lf)))
-                       (drgnx-fold--arrows-spec drgnx-fold-arrows own (- lf own))))))
+    (let* ((frame (window-frame window))
+           (want (and on drgnx-fold-arrows (display-graphic-p frame)
+                      (not (with-current-buffer (window-buffer window) (drgnx-fold--org-p)))))
+           (strip (drgnx-fold--set-gutter window (and want (drgnx-fold--gutter-px frame))))
+           (spec (and want (drgnx-fold--arrows-spec drgnx-fold-arrows frame strip))))
       (unless (equal spec (window-parameter window 'glitnir-fold-arrows))
         (set-window-parameter window 'glitnir-fold-arrows spec)))))
 
@@ -956,7 +980,8 @@ on any other line nothing.  Point stays where it was."
   (remove-hook 'drgnx-ruler-place-functions #'drgnx-fold--place-arrows)
   (dolist (f (frame-list))
     (dolist (w (window-list f 'nomini))
-      (when (window-parameter w 'glitnir-fold-arrows) (set-window-parameter w 'glitnir-fold-arrows nil))))
+      (when (window-parameter w 'glitnir-fold-arrows) (set-window-parameter w 'glitnir-fold-arrows nil))
+      (when (window-parameter w 'drgnx-fold-fringe) (drgnx-fold--set-gutter w nil))))
   (dolist (b (buffer-list))
     (with-current-buffer b
       (mapc #'delete-overlay (drgnx-fold--overlays))

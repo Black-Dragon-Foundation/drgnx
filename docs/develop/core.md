@@ -1745,7 +1745,11 @@ lists at each publish.
   `drgnx-fold-mode`. The fold arrows are Nidhogg's (`glitnir-fold-arrows`, drawn from the fold table at publish): the
   module sets the window parameter on editor windows of graphical frames from `drgnx-ruler-place-functions`
   (`drgnx-fold--place-arrows`, `drgnx-fold-arrows`), and a click arrives as `[left-fringe mouse-1]` in
-  `drgnx-fold-mode-map` (`drgnx-fold-fringe-click`: only on a line that starts a range).
+  `drgnx-fold-mode-map` (`drgnx-fold-fringe-click`: only on a line that starts a range). While arrows show, the left
+  fringe's own part is the gutter `drgnx-fold--gutter` (5 + 18 logical px, minimap-folding.html's `.g` and `.fa`;
+  `drgnx-fold--set-gutter`, its width before kept in `drgnx-fold-fringe`); with a scroll bar on the left that own
+  part is the ruler's `drgnx-ruler-fringe`, so the ruler keeps it. The chevron is 12 px, centred in the 18 px column;
+  Nidhogg counts its `:inset` from the fringe's inner edge, so a left strip adds its width.
 - **The strip.** 12 logical px wide in the window's right fringe, beside the text. Lanes left 1–4, middle 4–8, right
   8–11, full 0–12; marks 2 px tall, radius 1; the thumb inset 3 px each side, radius 3, `drgnx-ruler-view`'s foreground
   at 26 %; all through `drgnx-px`. The themes give that face the text colour (`fg`, the look's `--fg`), never a fill
