@@ -1384,8 +1384,9 @@ the hub's `kit::segmented'."
 
 (defun drgnx-ui-kit--b-input-chip (chip)
   "A context CHIP (:label :tone :remove) of a text input on the builder: its pads and label, its close mark (the Lucide
-x where icons are drawn, else the `close' glyph) in the chip's face.  Returns its props (the close mark's action and
-words), as the hub's `kit::input_chip' puts them."
+x where icons are drawn, else the `close' glyph) in the chip's face between two slots of
+`drgnx-ui-kit-tab-close-pad-px'.  Returns its props (the remove action and its words, from the gap before the mark to
+the chip's end: a target of 24 px or more), as the hub's `kit::input_chip' puts them."
   (let* ((entry (drgnx-ui-kit-component 'chip))
          (tone-prop (plist-get chip :tone)) (agent (and (consp tone-prop) (cadr tone-prop)))
          (tone (if agent 'agent (drgnx-ui-kit--prop-symbol tone-prop 'neutral)))
@@ -1393,19 +1394,21 @@ words), as the hub's `kit::input_chip' puts them."
          (g (plist-get entry :geometry)) (pad (plist-get g :pad))
          (face (drgnx-ui-kit--face 'chip chosen)) (label (or (plist-get chip :label) ""))
          (tty-pad (or (plist-get (plist-get entry :tty) :pad) 0))
-         text-from text-to at)
+         text-from text-to hit)
     (drgnx-ui-kit--b-pad (car pad) tty-pad face)
     (setq text-from drgnx-ui-kit--bpos)
     (drgnx-ui-kit--b-push label face)
     (setq text-to drgnx-ui-kit--bpos)
+    (setq hit drgnx-ui-kit--bpos)
     (drgnx-ui-kit--b-pad (drgnx-ui-kit--value (plist-get g :gap) chosen) 1 face)
-    (setq at drgnx-ui-kit--bpos)
+    (drgnx-ui-kit--b-pad drgnx-ui-kit-tab-close-pad-px 0 face)
     (drgnx-ui-kit--b-mark (and (not drgnx-ui-kit--btty) drgnx-ui-kit--icons
                                (funcall drgnx-ui-kit--icons 'x drgnx-ui-kit-tab-icon-px))
                           (drgnx-ui-kit--glyph 'close drgnx-ui-kit--btty) face nil)
-    (let ((props (append (drgnx-ui-kit--b-action (plist-get chip :remove) at)
-                         (list (list at drgnx-ui-kit--bpos 'help-echo (format "remove %s" label))))))
-      (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+    (drgnx-ui-kit--b-pad drgnx-ui-kit-tab-close-pad-px 0 face)
+    (drgnx-ui-kit--b-pad (cdr pad) tty-pad face)
+    (let ((props (append (drgnx-ui-kit--b-action (plist-get chip :remove) hit)
+                         (list (list hit drgnx-ui-kit--bpos 'help-echo (format "remove %s" label))))))
       (when (and agent (<= 1 agent 12))
         (push (list text-from text-to (intern (format "drgnx-agent-%d" agent))) drgnx-ui-kit--bruns))
       props)))
