@@ -1774,7 +1774,8 @@ How tall a line is on the minimap, in logical pixels: 1 to 3 (3 shows fewer line
 
 ## drgnx-minimap-side
 
-Which edge of the text the minimap opens over: `right' or `left'.  The scroll bar stays at the right edge.
+Which edge of the text the minimap and the scroll bar are at: `right' or `left' (the scroll bar in the left
+fringe, beside the text; on a terminal the left margin's first column).
 
 | Key | Value |
 | --- | --- |
