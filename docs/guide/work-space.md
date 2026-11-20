@@ -1,7 +1,8 @@
 # The Work space
 
-The Work space shows what your agents are doing in one place. This page grows with the feature; today it covers
-opening the map, and the machines and files the hub knows about.
+The Work space shows what your agents are doing in one place: the map (a List or a Graph), the Board, the
+Timeline, the Flow, an agent's Detail and its review screen, the Budgets page, and the machines and files the hub knows
+about. Each works in a terminal too ("In a terminal", below).
 
 ## Opening the map
 
@@ -178,6 +179,15 @@ The steering keys work in every Work view, on the agent selected there:
 | `u` | resume it with a plain "Continue." ("Work: Resumed"); its trail shows the pause and a `resumed` note when it goes on |
 | `x` | stop it, after a confirmation line |
 | `?` | this view's keys |
+
+### In a terminal
+
+In `drgnx -nw` every place of the Work space draws in character cells: the List as its outline form, the Detail,
+the Changes, the Budgets page and both forms of the Timeline. A Schedule bar is block characters: `█` what is done,
+`▓` the estimate to p50 and `▒` the forecast, `═` (or `░`) its tail to p90, `▌` where it runs late, `▏` the baseline
+and `┃` the target. Activity writes each segment's kind as its letter in every cell: `R` read, `S` search, `W` web,
+`E` edit, `T` tool, `·` thinking, `J` job, `Y` waiting for you, `M` waiting for a machine, `P` paused, `!` stalled.
+Meters are text, and the keys are the same as in a graphical frame.
 
 ### The review view, the merge queue and a second reviewer
 
