@@ -14,6 +14,7 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Palette](palette.md) | the floating command palette and Quick Open |
 | [Popups](popups.md) | completion, docs, menus and notices over the code |
 | [Lens bar](lens-bar.md) | the Work space's tab line of views |
+| [Background list](background-list.md) | what a chat runs in the background, in the agent panel |
 | [Detail island](detail-island.md) | the Work space's side card for the selected thing |
 | [Research trail](trail.md) | an agent's steps, in order |
 | [Notebook cell](notebook-cell.md) | a Jupyter cell as a card on Glitnir, a band elsewhere |
