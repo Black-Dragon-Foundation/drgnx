@@ -652,18 +652,19 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
     # the batch tier: capped like the others, no swap beyond it; DRGNX_TEST_BATCH_MEMORY (default 4g) for a bigger run
     local bmem_run="${DRGNX_TEST_BATCH_MEMORY:-4g}"
     args=(--memory "$bmem_run" --memory-swap "$bmem_run")
-    # a python grammar for the tests that need a real parser (the notebook's): the pack job's, at the pack's pin, built in
-    # the container before the run and kept in a host cache (test/packs/ts-grammars.sh); DRGNX_TEST_TS_REQUIRED=1 (CI)
-    # makes a missing grammar fail the run, else the real-parser test skips. DRGNX_TEST_TS_GRAMMARS set: used as given.
-    if [ -z "${DRGNX_TEST_TS_GRAMMARS:-}" ] && [ -f "$here/test/packs/ts-grammars.sh" ]; then
-      local tsc="${DRGNX_TEST_TS_CACHE:-$(drgnx_dir cache)/test-ts-grammars}"
-      mkdir -p "$tsc" && tsc="$(cd "$tsc" && pwd -P)"
-      case "$tsc" in *:*) echo "drgnx: DRGNX_TEST_TS_CACHE must not contain ':' (it is mounted with -v): $tsc" >&2; return 2 ;; esac
-      local tsm="$tsc:/ts-cache"; [ "$rt" = podman ] && tsm="$tsm:z"
-      args+=(-v "$tsm")
-      [ -z "${DRGNX_TEST_TS_REQUIRED:-}" ] || args+=(-e "DRGNX_TEST_TS_REQUIRED=$DRGNX_TEST_TS_REQUIRED")
-      cmd=(bash test/packs/ts-grammars.sh /ts-cache --then "${cmd[@]}")
-    fi
+  fi
+  # a python grammar for the tests that need a real parser (the notebook's) and the perf tier's tree-sitter rows
+  # (classes-1mb, fold-reparse): the pack job's, at the pack's pin, built in the container before the run and kept in a
+  # host cache (test/packs/ts-grammars.sh); DRGNX_TEST_TS_REQUIRED=1 (CI) makes a missing grammar fail the run, else the
+  # real-parser test skips. DRGNX_TEST_TS_GRAMMARS set: used as given.
+  if { [ -z "$tier" ] || [ "$tier" = perf ]; } && [ -z "${DRGNX_TEST_TS_GRAMMARS:-}" ] && [ -f "$here/test/packs/ts-grammars.sh" ]; then
+    local tsc="${DRGNX_TEST_TS_CACHE:-$(drgnx_dir cache)/test-ts-grammars}"
+    mkdir -p "$tsc" && tsc="$(cd "$tsc" && pwd -P)"
+    case "$tsc" in *:*) echo "drgnx: DRGNX_TEST_TS_CACHE must not contain ':' (it is mounted with -v): $tsc" >&2; return 2 ;; esac
+    local tsm="$tsc:/ts-cache"; [ "$rt" = podman ] && tsm="$tsm:z"
+    args+=(-v "$tsm")
+    [ -z "${DRGNX_TEST_TS_REQUIRED:-}" ] || args+=(-e "DRGNX_TEST_TS_REQUIRED=$DRGNX_TEST_TS_REQUIRED")
+    cmd=(bash test/packs/ts-grammars.sh /ts-cache --then "${cmd[@]}")
   fi
   # packages the tests load (kkp, corfu, …), read-only, in every tier; without them those tests skip
   if [ -n "${DRGNX_USER_ELPA:-}" ] && [ -d "$DRGNX_USER_ELPA" ]; then
