@@ -363,7 +363,7 @@ fn two_classes_get_two_versions() {
         tty[0].1 < gui[3].1,
         "the tty's versions are its own: {tty:?} {gui:?}"
     );
-    // the tool's right-aligned facts would differ per class; here its rows differ by nothing but the class's env
+    // the message's rows differ by nothing but the class's env: the tty's last patch replaces exactly them
     let last = |class: &str| {
         w.out
             .iter()
@@ -373,7 +373,7 @@ fn two_classes_get_two_versions() {
             .clone()
     };
     assert!(
-        matches!(last("tty").ops.as_slice(), [Op::Replace(r)] if r.iter().all(|r| r.key.starts_with("e:1")))
+        matches!(last("tty").ops.as_slice(), [Op::Replace(r)] if r.iter().all(|r| r.key.starts_with("e:0")))
     );
 }
 
