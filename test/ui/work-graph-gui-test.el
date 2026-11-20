@@ -53,9 +53,27 @@
 
 (defun drgnx-work-graph-gui--text (buffer) (with-current-buffer buffer (buffer-substring-no-properties (point-min) (point-max))))
 
+(defun drgnx-work-graph-gui--links (buffer)
+  "The `drgnx-work-link' values of BUFFER's text."
+  (let (links)
+    (with-current-buffer buffer
+      (let ((pos (point-min)))
+        (while (setq pos (next-single-property-change pos 'drgnx-work-link))
+          (when-let* ((l (get-text-property pos 'drgnx-work-link))) (push l links)))))
+    links))
+
+(defun drgnx-work-graph-gui--settle (buffer pred)
+  "Draw BUFFER's rows again until PRED holds of it (the plans' and jobs' facts reach the map after the agents'); 30 s."
+  (drgnx-test-wait (lambda ()
+                     (redisplay t)
+                     (with-current-buffer buffer (drgnx-view-draw-now drgnx-view))
+                     (funcall pred buffer))
+                   :secs 30 :what "the graph's layers and job chips"))
+
 (ert-deftest drgnx-work-graph/tasks-layer-between-plans-and-agents ()
   "The layers' labels run You asked, Specs, Plans, Tasks, …, Agents: Tasks sits after Plans and before Agents."
   (drgnx-work-graph-gui--with
+    (drgnx-work-graph-gui--settle buf (lambda (b) (string-match-p "Tasks" (drgnx-work-graph-gui--text b))))
     (let* ((text (drgnx-work-graph-gui--text buf))
            (plans (string-match "Plans" text)) (tasks (string-match "Tasks" text)) (agents (string-match "Agents" text)))
       (should (and plans tasks agents))
@@ -64,14 +82,10 @@
 (ert-deftest drgnx-work-graph/runs-on-shows-job-chips-linked-to-agents ()
   "A machine's card in Runs on has a job chip, and the chip's `drgnx-work-link' is the id of an agent of the map."
   (drgnx-work-graph-gui--with
-    (let (links)
-      (with-current-buffer buf
-        (let ((pos (point-min)))
-          (while (setq pos (next-single-property-change pos 'drgnx-work-link))
-            (when-let* ((l (get-text-property pos 'drgnx-work-link))) (push l links)))))
+    (drgnx-work-graph-gui--settle buf (lambda (b) (drgnx-work-graph-gui--links b)))
+    (let ((links (drgnx-work-graph-gui--links buf)))
       (should links)
       (should (cl-every (lambda (l) (string-prefix-p "agent:" l)) links)))))
-
 
 (ert-deftest drgnx-work-graph/M-on-a-job-chip-targets-its-agent-and-m-still-switches-to-map ()
   "Task 21: on a machine card's job chip (the chip links to the agent that started it) `M' moves that agent's jobs, not the

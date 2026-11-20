@@ -738,12 +738,12 @@ mod tests {
         );
         let mut cache = ForecastCache::new();
         assert_eq!(
-            facts_for(&[own.clone()], "plan:p1", &cache).units[0].forecast,
+            facts_for(std::slice::from_ref(&own), "plan:p1", &cache).units[0].forecast,
             None,
             "before it arrives"
         );
         cache.insert("plan:p1".into(), fc);
-        let f = facts_for(&[own.clone()], "plan:p1", &cache);
+        let f = facts_for(std::slice::from_ref(&own), "plan:p1", &cache);
         assert_eq!(
             f.units[0].forecast,
             Some(Range {

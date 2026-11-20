@@ -1008,7 +1008,7 @@ fn graph_text(core: &vegvisir::Core) -> (Vec<Row>, String) {
         width_units: 226,
         ..ViewState::default()
     };
-    let layout = vegvisir::layout::layout(&m, &state, None);
+    let layout = vegvisir::layout::layout(m, &state, None);
     let items = m.items();
     let edges = m.edges();
     let new = BTreeSet::new();

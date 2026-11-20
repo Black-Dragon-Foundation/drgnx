@@ -44,7 +44,7 @@ agents with the map shown or hidden, say whether the premise holds and take it a
          (setq drgnx-perf--work-buf nil)
          (drgnx-perf-unadvise-draws #'drgnx-perf--wl-slice)
          (when (fboundp 'drgnx-perf--wl-class-step) (advice-remove 'drgnx-view-nav-class-step #'drgnx-perf--wl-class-step))
-         (ignore-errors (delete-other-windows))
+         (ignore-errors (drgnx-work-thirty-only-window))
          (drgnx-work-thirty-stop))
        (defun drgnx-perf--work-select-map ()
          "The map's window selected, with an agent selected in it."
@@ -757,9 +757,10 @@ above applied.  An error when it is not on the rows path."
       (require 'drgnx-view)
       (require 'drgnx-work-trail)
       (defun drgnx-perf--tm-wait (secs pred)
-        "Let the session run until PRED holds (SECS at most); whether it does."
+        "Let the session run, redisplaying (the view's env goes to the hub from a redisplay), until PRED holds (SECS at most);
+whether it does."
         (let ((end (+ (float-time) secs)))
-          (while (and (not (funcall pred)) (< (float-time) end)) (accept-process-output nil 0.01))
+          (while (and (not (funcall pred)) (< (float-time) end)) (redisplay t) (accept-process-output nil 0.01))
           (and (funcall pred) t)))
       (defvar drgnx-perf--tm-buf nil "The Timeline's buffer (Schedule or Activity) on the 30-agent map.")
       (defvar drgnx-perf--tm-phases nil "Where the open's time went: (:open_ms the call, :rows_ms the hub's first rows, :draw_ms their drawing).")
@@ -776,7 +777,7 @@ above applied.  An error when it is not on the rows path."
         "One bounded wait (30 s) until BUF's view has nothing pending."
         (let ((deadline (+ (float-time) 30)))
           (while (and (drgnx-perf-view-pending-p buf) (< (float-time) deadline))
-            (accept-process-output nil 0.01))))
+            (redisplay t) (accept-process-output nil 0.01))))
       (defun drgnx-perf--tm-show (form)
         "The Timeline in FORM on the map, shown, with its first rows drawn; the ms that took."
         (when (buffer-live-p drgnx-perf--tm-buf) (kill-buffer drgnx-perf--tm-buf))
@@ -846,7 +847,7 @@ window drawn."
         (with-current-buffer drgnx-perf--work-buf (drgnx-work-map-mode-list))
         (drgnx-perf--tm-wait 30 (lambda () (redisplay t) (> (buffer-size drgnx-perf--work-buf) 0))))
       (defun drgnx-perf--tm-down ()
-        (ignore-errors (delete-other-windows))
+        (ignore-errors (drgnx-work-thirty-only-window))
         (advice-remove 'drgnx-work-client--call #'drgnx-perf--tm-call)
         (drgnx-perf-unadvise-draws #'drgnx-perf--tm-draw)
         (dolist (b (buffer-list))
