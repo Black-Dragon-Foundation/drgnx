@@ -792,7 +792,7 @@ windows (header, transcript, composer) replace the old pinned-copy checks (Task 
 ;;;; The background work scene (agent-background plan 2026-11-20): the mock agent's v2 face with three items running and
 ;;;; one ended; run it alone (DRGNX_LOOK_ONLY=agent-background): its script is the mockup's state 1.
 
-(declare-function drgnx-agent-panel-background-list "drgnx-agent-panel-background")
+(declare-function drgnx-agent-panel-background-select "drgnx-agent-panel-background")
 (declare-function drgnx-agent-panel-background--running "drgnx-agent-panel-background")
 
 (defun drgnx-look-scene-agent-background-light ()
@@ -813,7 +813,10 @@ a live card and an end line in the transcript."
     (let ((sid (buffer-local-value 'drgnx-agent-panel--session drgnx-look-scene--panel)))
       (drgnx-look-scene--until 40 "three items running in the background"
                                (lambda () (>= (length (drgnx-agent-panel-background--running sid)) 3))))
-    (with-current-buffer drgnx-look-scene--panel (drgnx-agent-panel-background-list)) ; b: the first row selected
+    ;; the first row selected, as `b' does on a list shown with nothing selected
+    (with-current-buffer drgnx-look-scene--panel
+      (drgnx-agent-panel-background-select
+       (plist-get (car (drgnx-agent-panel-background--running drgnx-agent-panel--session)) :id)))
     (drgnx-look-scene--panel-settle drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 
