@@ -61,7 +61,9 @@ placing, the spec and Glitnir's resolve)."
                                         (advice-add f :before #'drgnx-tty-minimap--count))
                                       t))
     (dotimes (_ 20) (drgnx-tty-session-tmux s "send-keys" "-t" (plist-get s :target) "PageDown"))
-    (drgnx-tty-session-wait s '(> (line-number-at-pos (window-start)) 300) 10)
+    (drgnx-tty-session-wait s '(let ((w (get-buffer-window "long.txt")))   ; (the eval's current buffer is not always that window's)
+                                 (and w (with-current-buffer "long.txt" (> (line-number-at-pos (window-start w)) 300))))
+                            10)
     (drgnx-tty-session-wait-screen s "line [3-9][0-9][0-9] " 10)
     (let ((col (drgnx-tty-minimap-test--column (drgnx-tty-session-screen s))))
       (should (string-match-p "\\`│+┃" col)))               ; the thumb has left the top
