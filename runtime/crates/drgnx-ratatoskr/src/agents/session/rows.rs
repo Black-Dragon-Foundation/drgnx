@@ -347,6 +347,315 @@ fn block_row(idx: usize, n: usize, block: &Block) -> Row {
     l.finish()
 }
 
+/// The transcript from the conversation blocks (`blocks.rs`; Flow Task 23, S3 and S4), one kit component per block
+/// type: the user's bubble (a plain `Card`), "Explored · N files · t" (a collapsible `SectionHeader` that opens its
+/// steps), a finding (a `Card` with its sources as `Chip`s), an edit (a `DiffBlock` head with Open, Revert and Comment),
+/// an ask (a `QuestionCard` with its keys), a subagent (its blocks nested under its head, indented), a notice, the
+/// live line (a pulse, still under REDUCED_MOTION) and a queued message.  Block N's rows are keyed `k:N/...` and each
+/// carries `drgnx-block` N; OPEN holds the Explored blocks the user opened.  An agent message's Markdown is the
+/// panel's own (`b:I:N` rows, drawn with its entry): it adds no row here.
+pub fn block_list_rows(
+    blocks: &[super::blocks::Block],
+    open: &BTreeSet<usize>,
+    env: &drgnx_rows::kit::KitEnv,
+    reduced_motion: bool,
+) -> Vec<Row> {
+    let mut out = Vec::new();
+    for (i, b) in blocks.iter().enumerate() {
+        let mut rows = Vec::new();
+        conv_rows(b, &format!("k:{i}"), i, 0, open.contains(&i), env, reduced_motion, &mut rows);
+        for r in &mut rows {
+            let end = r.text.chars().count() as u32;
+            r.props.push((0, end, "drgnx-block".into(), json!(i)));
+        }
+        out.extend(rows);
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn conv_rows(
+    block: &super::blocks::Block,
+    key: &str,
+    idx: usize,
+    depth: usize,
+    open: bool,
+    env: &drgnx_rows::kit::KitEnv,
+    reduced_motion: bool,
+    out: &mut Vec<Row>,
+) {
+    use super::blocks::{AskKind, Block as B};
+    use drgnx_rows::kit::{
+        self, Action, ButtonStyle, CardKind, CardShape, Comp, QuestionKind, Size, State,
+    };
+    let indent = "  ".repeat(depth);
+    let row = |n: usize| {
+        let mut b = RowBuilder::new(format!("{key}/{n}"));
+        b.push(&indent, None);
+        b
+    };
+    let act = |kind: &str, args: Vec<Value>| Action {
+        kind: kind.to_owned(),
+        args,
+    };
+    match block {
+        B::You { text } => {
+            for (n, line) in text.lines().enumerate() {
+                let mut b = row(n);
+                let shape = match (n, text.lines().count()) {
+                    (_, 1) => CardShape::Single,
+                    (0, _) => CardShape::Top,
+                    (k, m) if k + 1 == m => CardShape::Bottom,
+                    _ => CardShape::Mid,
+                };
+                kit::expand(
+                    &mut b,
+                    env,
+                    &Comp::Card {
+                        kind: CardKind::Plain,
+                        shape,
+                        text: line.to_owned(),
+                    },
+                );
+                out.push(b.finish());
+            }
+        }
+        B::Explored {
+            reads,
+            searches,
+            secs,
+            steps,
+        } => {
+            let mut b = row(0);
+            kit::expand(
+                &mut b,
+                env,
+                &Comp::SectionHeader {
+                    title: format!(
+                        "Explored · {} files · {}",
+                        reads + searches,
+                        duration(f64::from(*secs))
+                    ),
+                    collapsible: true,
+                    collapsed: !open,
+                    count: None,
+                    state: State::Rest,
+                    action: Some(act("block-toggle", vec![json!(idx)])),
+                },
+            );
+            out.push(b.finish());
+            if open {
+                for (n, s) in steps.iter().enumerate() {
+                    let mut b = row(n + 1);
+                    b.push(
+                        &format!("    step {}", s.step.map_or(s.entry as u64, |x| x)),
+                        Some(FaceId::AgentPanelSubtle.name()),
+                    );
+                    let end = b.pos();
+                    b.prop(0, end, "drgnx-work-id", json!(format!("e:{}", s.entry)));
+                    out.push(b.finish());
+                }
+            }
+        }
+        B::Markdown { .. } => {}
+        B::Finding {
+            conclusion,
+            text,
+            sources,
+        } => {
+            let word = if conclusion == "decision" {
+                "Decision"
+            } else {
+                "Finding"
+            };
+            let mut b = row(0);
+            kit::expand(
+                &mut b,
+                env,
+                &Comp::Card {
+                    kind: CardKind::Plain,
+                    shape: if sources.is_empty() {
+                        CardShape::Single
+                    } else {
+                        CardShape::Top
+                    },
+                    text: format!("{word}: {}", one_line(text, 120)),
+                },
+            );
+            out.push(b.finish());
+            if !sources.is_empty() {
+                let mut b = row(1);
+                for s in sources {
+                    let (label, a) = match s {
+                        super::blocks::Source::Path { path, lines } => (
+                            match lines {
+                                Some([a, z]) => format!("{path}:{a}–{z}"),
+                                None => path.clone(),
+                            },
+                            act(
+                                "block-source",
+                                vec![json!(path), json!(lines.map(|l| l[0]))],
+                            ),
+                        ),
+                        super::blocks::Source::Url { url } => {
+                            (url.clone(), act("block-source", vec![json!(url)]))
+                        }
+                    };
+                    kit::expand(
+                        &mut b,
+                        env,
+                        &Comp::Chip {
+                            label,
+                            tone: Default::default(),
+                            fill: Default::default(),
+                            icon: None,
+                            state: State::Rest,
+                            action: Some(a),
+                        },
+                    );
+                    b.push(" ", None);
+                }
+                out.push(b.finish());
+            }
+        }
+        B::Edit {
+            path,
+            plus,
+            minus,
+            hunks,
+        } => {
+            let mut b = row(0);
+            let first = hunks.first().map_or(1, |h| h.start_line);
+            kit::expand(
+                &mut b,
+                env,
+                &Comp::DiffBlock {
+                    file: path.clone(),
+                    added: *plus,
+                    removed: *minus,
+                    hunks: Vec::new(),
+                    buttons: vec![
+                        (
+                            "Open".into(),
+                            act("block-open", vec![json!(idx), json!(path), json!(first)]),
+                        ),
+                        ("Revert".into(), act("block-revert", vec![json!(idx), json!(path)])),
+                        ("Comment".into(), act("block-comment", vec![json!(idx), json!(path)])),
+                    ],
+                    icon: None,
+                    width: None,
+                },
+            );
+            out.push(b.finish());
+        }
+        B::Ask {
+            kind,
+            text,
+            options,
+        } => {
+            let qk = match kind {
+                AskKind::Permission => QuestionKind::Permission,
+                AskKind::Question => QuestionKind::Question,
+            };
+            let mut b = row(0);
+            kit::expand(
+                &mut b,
+                env,
+                &Comp::QuestionCard {
+                    kind: qk,
+                    title: one_line(text, 120),
+                    body: String::new(),
+                    choices: Vec::new(),
+                },
+            );
+            out.push(b.finish());
+            let mut b = row(1);
+            for (n, (label, k)) in options.iter().enumerate() {
+                b.push(" ", None);
+                kit::expand(
+                    &mut b,
+                    env,
+                    &Comp::Button {
+                        label: label.clone(),
+                        style: if n == 0 {
+                            ButtonStyle::Primary
+                        } else {
+                            ButtonStyle::Secondary
+                        },
+                        size: Size::Sm,
+                        state: State::Rest,
+                        key: Some(k.to_string()),
+                        action: Some(act("block-answer", vec![json!(idx), json!(k.to_string())])),
+                    },
+                );
+            }
+            out.push(b.finish());
+        }
+        B::Subagent {
+            call_id,
+            title,
+            blocks,
+        } => {
+            let mut b = row(0);
+            kit::expand(
+                &mut b,
+                env,
+                &Comp::Card {
+                    kind: CardKind::Plain,
+                    shape: CardShape::Top,
+                    text: format!("↳ {}", one_line(title, 100)),
+                },
+            );
+            let end = b.pos();
+            b.face_over(0, end, &child_face(call_id));
+            out.push(b.finish());
+            for (n, inner) in blocks.iter().enumerate() {
+                conv_rows(
+                    inner,
+                    &format!("{key}/s{n}"),
+                    idx,
+                    depth + 1,
+                    false,
+                    env,
+                    reduced_motion,
+                    out,
+                );
+            }
+        }
+        B::Notice { text, error } => {
+            let mut b = row(0);
+            b.push(
+                &format!("  {}", one_line(text, 100)),
+                Some(if *error {
+                    FaceId::AgentPanelFail.name()
+                } else {
+                    FaceId::AgentPanelSubtle.name()
+                }),
+            );
+            out.push(b.finish());
+        }
+        B::Live { text } => {
+            let mut b = row(0);
+            let from = b.pos();
+            b.push("  ● ", Some(FaceId::AgentPanelSubtle.name()));
+            let to = b.pos();
+            b.push(&one_line(text, 100), Some(FaceId::AgentPanelSubtle.name()));
+            if !reduced_motion {
+                b.prop(from, to, "drgnx-pulse", json!(true));
+            }
+            out.push(b.finish());
+        }
+        B::Queued { text } => {
+            let mut b = row(0);
+            b.push(
+                &format!("  ↳ Queued for its next step: {}", one_line(text, 80)),
+                Some(FaceId::AgentPanelSubtle.name()),
+            );
+            out.push(b.finish());
+        }
+    }
+}
+
 fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     let key = format!("e:{idx}");
     let facts = e
