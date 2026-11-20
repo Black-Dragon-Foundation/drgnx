@@ -13,6 +13,7 @@
 //! | `bg:monitor ID TITLE` | a tool call ID (a watcher), in progress and cancellable, listed |
 //! | `bg:passive ID TITLE` | as `bg:monitor`, but the item does not advertise cancel |
 //! | `bg:settle ID STATUS` | tool call ID ends `completed`, `failed` or `cancelled` and leaves the list |
+//! | `bg:progress ID TEXT` | the last line of item ID (a terminal's output line, a watcher's content, a child's `progress`) is TEXT |
 //! | `bg:subagent ID TITLE` | a child session ID, running and cancellable, listed; it says one thing in its own transcript |
 //!
 //! `tool_call/cancel`, `terminal/cancel` and `session/cancel` of a child are answered as the protocol says: an empty
@@ -133,6 +134,30 @@ impl Agent {
                 );
                 self.bg_add(sid, "terminal", id, announce);
                 self.relist(sid, "running");
+            }
+            "bg:progress" => {
+                let kind = self.sessions[sid]
+                    .bg
+                    .iter()
+                    .find(|i| i.id == id)
+                    .map_or("", |i| i.kind);
+                match kind {
+                    "terminal" => self.update(
+                        sid,
+                        json!({"sessionUpdate": "terminal_output_chunk", "terminalId": id,
+                            "data": b64(format!("{arg}\n").as_bytes())}),
+                    ),
+                    "tool_call" => self.update(
+                        sid,
+                        json!({"sessionUpdate": "tool_call_update", "toolCallId": id,
+                            "content": [{"type": "content", "content": {"type": "text", "text": arg}}]}),
+                    ),
+                    "subagent" => self.update(
+                        sid,
+                        json!({"sessionUpdate": "subagent_update", "sessionId": id, "progress": arg}),
+                    ),
+                    _ => {}
+                }
             }
             "bg:output" => self.update(
                 sid,

@@ -625,16 +625,19 @@ impl Panels {
             .map(|i| (i.id.clone(), (i.started_ms, now_ms)))
             .collect();
         let mut extra: Vec<(usize, Vec<Row>)> = Vec::new();
+        let mut extra_images = Vec::new();
         for i in &snapshot.background_ended {
             if let Some((at, pos)) = seen.get(&i.id).filter(|(at, _)| *at > 0.0) {
                 let secs = (*at - i.started_ms as f64 / 1000.0).max(0.0);
-                extra.push((
-                    *pos,
-                    bgwork::end_rows(&bgwork::Ended {
+                let (rows, images) = bgwork::end_rows(
+                    &bgwork::Ended {
                         item: i,
                         secs: Some(secs),
-                    }),
-                ));
+                    },
+                    Some(bgwork::EndFit { env, fonts }),
+                );
+                extra.push((*pos, rows));
+                extra_images.extend(images);
             }
         }
         for c in &snapshot.caused {
@@ -785,6 +788,7 @@ impl Panels {
         };
         rows.extend(cards);
         images.extend(card_images);
+        images.extend(extra_images);
         hover(&mut rows);
         (rows, images)
     }

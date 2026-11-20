@@ -360,10 +360,23 @@ pub fn card_rows(c: &Card, env: &KitEnv) -> Vec<Row> {
     );
     head.push(&format!(" {} · {}", c.name, c.provider), None);
     if c.background > 0 {
-        head.push(
-            &format!("  ⟳ {}", c.background),
-            Some(drgnx_rows::faces::FaceId::Accent.name()),
+        // the chip's pill with its spinner: how many items run in the chat's background
+        head.push("  ", None);
+        let from = head.pos();
+        kit::expand(
+            &mut head,
+            env,
+            &Comp::Chip {
+                label: c.background.to_string(),
+                tone: kit::Tone::Accent,
+                fill: kit::ChipFill::Soft,
+                icon: Some("loader-circle".to_owned()),
+                state: kit::State::Rest,
+                action: None,
+            },
         );
+        let to = head.pos();
+        head.prop(from, to, "drgnx-bg-count", json!(c.background));
     }
     let end = head.pos();
     head.prop(0, end, "drgnx-agent-mark", json!(c.mark));
@@ -721,7 +734,15 @@ mod tests {
             let c = now.iter().find(|c| c.session == id).unwrap();
             card_rows(c, &kit_env())[0].text.clone()
         };
-        assert!(head("run").contains("⟳ 2"), "{}", head("run"));
-        assert!(!head("idle").contains('⟳'), "{}", head("idle"));
+        let count = |id: &str| {
+            let c = now.iter().find(|c| c.session == id).unwrap();
+            card_rows(c, &kit_env())[0]
+                .props
+                .iter()
+                .find(|p| p.2 == "drgnx-bg-count")
+                .map(|p| p.3.clone())
+        };
+        assert_eq!(count("run"), Some(json!(2)), "{}", head("run"));
+        assert_eq!(count("idle"), None, "{}", head("idle"));
     }
 }

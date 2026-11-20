@@ -159,6 +159,8 @@ pub struct Tool {
 #[derive(Default, Clone)]
 pub struct Child {
     pub title: String,
+    /// What the child last said it did (`subagent_update`'s `progress`), as its item's last line.
+    pub progress: Option<String>,
     pub can_cancel: bool,
     /// The child's last foreground state (`running`, `idle`, …) and its stop reason.
     pub state: Option<(String, Option<String>)>,
@@ -172,7 +174,7 @@ impl Known {
             return;
         };
         let t = self.tools.entry(id.to_string()).or_insert_with(|| Tool {
-            started_ms: now_ms,
+            started_ms: first_seen_ms(id, now_ms),
             ..Tool::default()
         });
         if let Some(s) = u.get("title").and_then(Value::as_str) {
@@ -208,7 +210,7 @@ impl Known {
             .children
             .entry(id.to_string())
             .or_insert_with(|| Child {
-                started_ms: now_ms,
+                started_ms: first_seen_ms(id, now_ms),
                 ..Child::default()
             });
         if let Some(t) = u.get("title").and_then(Value::as_str) {
@@ -220,6 +222,9 @@ impl Known {
         }
         if let Some(caps) = u.get("capabilities") {
             c.can_cancel = caps.get("cancel").is_some_and(|v| !v.is_null());
+        }
+        if let Some(p) = u.get("progress").and_then(Value::as_str) {
+            c.progress = Some(p.to_string());
         }
         if let Some(s) = u.get("state").filter(|s| s.is_object()) {
             c.state = state_of(s);
@@ -328,7 +333,7 @@ impl Known {
                     id: id.0.to_string(),
                     description: c.title,
                     started_ms: c.started_ms,
-                    progress: None,
+                    progress: c.progress.clone(),
                     status,
                     end: end.map(|status| End {
                         status,
@@ -420,7 +425,7 @@ impl Terminals {
 
     fn entry(&mut self, id: &str, now_ms: u64) -> &mut Terminal {
         self.map.entry(id.to_string()).or_insert_with(|| Terminal {
-            started_ms: now_ms,
+            started_ms: first_seen_ms(id, now_ms),
             ..Terminal::default()
         })
     }
@@ -520,4 +525,29 @@ pub fn terminal_text(bytes: &[u8], cap: usize) -> (String, u64, bool) {
         bytes.len() as u64,
         start > 0,
     )
+}
+
+/// When an item first seen at NOW_MS began.  A look scene backdates its items (`RATATOSKR_BG_STARTED_AGO=ID=SECONDS,…`,
+/// test-hooks builds only), so its pictures show the mockup's elapsed times; a release build never does.
+pub fn first_seen_ms(id: &str, now_ms: u64) -> u64 {
+    #[cfg(feature = "test-hooks")]
+    if let Ok(spec) = std::env::var("RATATOSKR_BG_STARTED_AGO")
+        && let Some(ms) = backdated(&spec, id, now_ms)
+    {
+        return ms;
+    }
+    let _ = id;
+    now_ms
+}
+
+/// ID's start under SPEC (`ID=SECONDS,ID=SECONDS`): SECONDS before NOW_MS, none when SPEC does not name ID.
+pub fn backdated(spec: &str, id: &str, now_ms: u64) -> Option<u64> {
+    spec.split(',').find_map(|pair| {
+        let (i, secs) = pair.split_once('=')?;
+        if i.trim() != id {
+            return None;
+        }
+        let secs: u64 = secs.trim().parse().ok()?;
+        Some(now_ms.saturating_sub(secs * 1000))
+    })
 }

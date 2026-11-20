@@ -697,13 +697,18 @@ fn chip_unknown_uses_warning_text() {
     assert!(!head.text.contains("in background"));
     let byte = head.text.find("2 · state unknown").expect("chip text");
     let at = head.text[..byte].chars().count() as u32 + 3;
+    let warn = drgnx_rows::kit_gen::face(
+        drgnx_rows::kit_gen::CompId::Chip,
+        &["warn", "soft", "comfortable"],
+    );
     assert!(
         head.runs
             .iter()
-            .any(|(a, b, f)| f == FaceId::AgentPanelWarn.name() && *a <= at && at < *b),
-        "warn face over the chip: {:?}",
+            .any(|(a, b, f)| f == warn.name() && *a <= at && at < *b),
+        "the kit's warning pill over the chip: {:?}",
         head.runs
     );
+    assert!(!head.images.is_empty(), "the warning icon is an image");
 }
 
 #[test]
@@ -727,9 +732,21 @@ fn background_list_rows_per_item() {
         by("bg:head").text
     );
     assert!(by("bg:t1").text.contains("cargo test -p hermod"));
-    assert!(by("bg:t1").text.ends_with("4:12"), "{}", by("bg:t1").text);
-    assert!(by("bg:w1").text.ends_with("12:40"), "{}", by("bg:w1").text);
-    assert!(by("bg:c1").text.ends_with("2:05"), "{}", by("bg:c1").text);
+    assert!(
+        by("bg:t1").text.trim_end().ends_with("4:12"),
+        "{}",
+        by("bg:t1").text
+    );
+    assert!(
+        by("bg:w1").text.trim_end().ends_with("12:40"),
+        "{}",
+        by("bg:w1").text
+    );
+    assert!(
+        by("bg:c1").text.trim_end().ends_with("2:05"),
+        "{}",
+        by("bg:c1").text
+    );
     assert!(
         by("bg:t1:1")
             .text
@@ -1047,4 +1064,95 @@ fn actions_show_on_the_selected_row_only() {
     )]);
     assert!(gui(bare.clone()).iter().all(|r| r.key != "bg:t1:1"));
     assert!(gui_sel(bare, Some("t1")).iter().any(|r| r.key == "bg:t1:1"));
+}
+
+#[test]
+fn the_chip_is_the_kits_soft_pill_with_a_spinner() {
+    let rows = gui(three());
+    let head = rows.iter().find(|r| r.key == HEAD).expect("the header");
+    let pill = drgnx_rows::kit_gen::face(
+        drgnx_rows::kit_gen::CompId::Chip,
+        &["accent", "soft", "comfortable"],
+    );
+    assert!(
+        head.runs.iter().any(|(_, _, f)| f == pill.name()),
+        "the accent pill: {:?}",
+        head.runs
+    );
+    assert!(!head.images.is_empty(), "the spinner is an image");
+}
+
+#[test]
+fn the_list_is_one_card_with_its_ring_open_between_rows() {
+    let ring = |shape: &str| {
+        drgnx_rows::kit_gen::face(
+            drgnx_rows::kit_gen::CompId::Card,
+            &["plain", shape, "comfortable"],
+        )
+        .name()
+        .to_owned()
+    };
+    let rows = gui_sel(three(), Some("t1"));
+    let list: Vec<&Row> = rows.iter().filter(|r| r.key.starts_with("bg:")).collect();
+    let has = |r: &Row, shape: &str| r.runs.iter().any(|(_, _, f)| *f == ring(shape));
+    assert!(has(list[0], "top"), "the head opens the card");
+    assert!(has(list[1], "mid"));
+    assert!(has(list[list.len() - 1], "bottom"));
+    // folded, the head alone is the whole card
+    let mut e = env(600);
+    e.display = Display::Gui;
+    let (f, l) = (fonts(), lens());
+    let open = BTreeSet::from(["bg-folded".to_owned()]);
+    let mut cx = cx_of(&e, &f, &l, &open, &[], &[]);
+    cx.now = 1000.0;
+    let folded = rows_of_cx(&snap(json!({ "background": three() })), &cx);
+    let head = folded.iter().find(|r| r.key == "bg:head").expect("head");
+    assert!(has(head, "single"));
+}
+
+fn rows_of_cx(s: &Snapshot, cx: &Cx) -> Vec<Row> {
+    rows(s, cx).0
+}
+
+#[test]
+fn the_selected_row_has_the_selection_tint_and_the_focus_ring_inset_from_the_card() {
+    let rows = gui_sel(three(), Some("t1"));
+    let sel = rows.iter().find(|r| r.key == "bg:t1").expect("the row");
+    let tinted: Vec<_> = sel
+        .runs
+        .iter()
+        .filter(|(_, _, f)| f == FaceId::Selected.name() || f == FaceId::Focus.name())
+        .collect();
+    assert_eq!(tinted.len(), 2, "{:?}", sel.runs);
+    let len = sel.text.chars().count() as u32;
+    for (a, b, _) in tinted {
+        assert!(
+            *a > 0 && *b < len,
+            "inset from the card's edge: {a}..{b} of {len}"
+        );
+    }
+    let plain = rows.iter().find(|r| r.key == "bg:w1").expect("the row");
+    assert!(
+        plain
+            .runs
+            .iter()
+            .all(|(_, _, f)| f != FaceId::Selected.name())
+    );
+}
+
+#[test]
+fn the_actions_are_kit_buttons_with_their_keys() {
+    let rows = gui_sel(three(), Some("t1"));
+    let line = rows.iter().find(|r| r.key == "bg:t1:1").expect("the line");
+    assert!(line.text.contains('↵'), "Output's key: {:?}", line.text);
+    assert!(line.text.contains("Stop"), "{:?}", line.text);
+    let button = drgnx_rows::kit_gen::face(
+        drgnx_rows::kit_gen::CompId::Button,
+        &["secondary", "sm", "comfortable"],
+    );
+    assert!(
+        line.runs.iter().any(|(_, _, f)| f == button.name()),
+        "the kit's button face: {:?}",
+        line.runs
+    );
 }

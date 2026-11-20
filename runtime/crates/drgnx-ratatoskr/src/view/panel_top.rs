@@ -188,9 +188,9 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
     let gap_w = if gui { p6 } else { cell };
     let buttons_w = 2 * (gap_w + button_w);
     let chip = background::head_chip(s, cx);
-    let chip_w = chip.as_ref().map_or(0, |(t, _)| {
-        icon_px + text_width(cx, Some(FaceId::AgentPanelChip.name()), &format!(" {t} ")) + gap_w
-    });
+    let chip_w = chip
+        .as_ref()
+        .map_or(0, |(t, warn)| background::chip_width(cx, t, *warn) + gap_w);
     let right_w = lens_w + buttons_w + chip_w;
 
     // the head: " " icon " " name
@@ -230,27 +230,7 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
     let stop = env.width_px.saturating_sub(right_w + p8);
     b.stop(stop);
     if let Some((t, warn)) = &chip {
-        let face = if *warn {
-            FaceId::AgentPanelWarn.name()
-        } else {
-            FaceId::Accent.name()
-        };
-        let start = b.pos();
-        icon(&mut b, images, "refresh-cw", "⟳", icon_px, face);
-        b.push(&format!(" {t} "), Some(face));
-        let end = b.pos();
-        b.prop(
-            start,
-            end,
-            "drgnx-agent-panel-action",
-            json!("background-list"),
-        );
-        b.prop(
-            start,
-            end,
-            "help-echo",
-            json!("Background work: fold or unfold the list (b)"),
-        );
+        background::draw_chip(&mut b, cx, images, t, *warn);
         b.space(gap_w, 1, "default");
     }
     for (n, p) in cx.lens.names.iter().enumerate() {

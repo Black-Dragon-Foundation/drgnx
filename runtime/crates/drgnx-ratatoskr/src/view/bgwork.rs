@@ -156,11 +156,17 @@ pub fn end_text(i: &BackgroundItem, secs: Option<f64>) -> String {
     t
 }
 
+/// What the end line is fitted to: the panel's env and the fonts its faces draw in (none: the plain text row).
+pub struct EndFit<'a> {
+    pub env: &'a runstav::methods::view::ViewEnv,
+    pub fonts: &'a drgnx_rows::fit::FontSet,
+}
+
 /// The transcript's line for an ended item: one event row, keyed `bg-end:ID`, with its Output (Open for a subagent)
-/// link.
-pub fn end_rows(e: &Ended) -> Vec<Row> {
+/// link.  With FIT it is the mockup's event card: a status icon, the text with its command cut in the middle to the
+/// room, and the link at the right edge, never dropped; without it, the plain text and the link.
+pub fn end_rows(e: &Ended, fit: Option<EndFit>) -> (Vec<Row>, Vec<(drgnx_rows::ImageId, String)>) {
     let i = e.item;
-    let text = end_text(i, e.secs);
     let link = if i.kind == BackgroundKind::Subagent {
         "Open"
     } else {
@@ -170,27 +176,105 @@ pub fn end_rows(e: &Ended) -> Vec<Row> {
         .end
         .as_ref()
         .is_some_and(|x| x.status == BackgroundEndStatus::Failed);
+    let text_face = if failed {
+        FaceId::AgentPanelFail.name()
+    } else {
+        FaceId::AgentPanelSubtle.name()
+    };
+    let action = json!(format!("background-output:{}", i.id));
     let mut b = RowBuilder::new(format!("bg-end:{}", i.id));
-    b.push(
-        &text,
-        Some(if failed {
-            FaceId::AgentPanelFail.name()
+    let mut images = Vec::new();
+    let Some(fit) = fit.filter(|f| f.env.display == runstav::methods::view::Display::Gui) else {
+        b.push(&end_text(i, e.secs), Some(text_face));
+        b.push("  ", None);
+        let from = b.pos();
+        b.push(link, Some(FaceId::AgentPanelMdLink.name()));
+        let to = b.pos();
+        b.prop(from, to, "drgnx-agent-panel-action", action);
+        b.prop(0, to, "drgnx-bg-item", json!(i.id));
+        return (vec![b.finish()], images);
+    };
+    let env = fit.env;
+    let scale = if env.scale > 0.0 { env.scale } else { 1.0 };
+    let px = |v: f32| (f64::from(v) * f64::from(scale) + 0.5 + 1e-9).floor() as u32;
+    let w = |face: &str, t: &str| drgnx_rows::fit::width_in(fit.fonts, Some(face), t).ceil() as u32;
+    let (p4, p8, p12, icon_px) = (px(4.0), px(8.0), px(12.0), px(16.0));
+    // the text round the command is fixed; the command takes what is left
+    let full = end_text(i, e.secs);
+    let what = one_line(&i.description, 80);
+    let (mut pre, post) = match full.split_once(&what) {
+        Some((a, z)) if i.kind == BackgroundKind::Terminal => (a.to_owned(), z.to_owned()),
+        _ => (full.clone(), String::new()),
+    };
+    let fixed = p8 + p4 + icon_px + p4 + w(FaceId::AgentPanelMdLink.name(), link) + p12 + p8;
+    let room_for = |pre: &str| {
+        i64::from(env.width_px)
+            - i64::from(fixed)
+            - i64::from(w(text_face, pre))
+            - i64::from(w(text_face, &post))
+    };
+    // the command keeps a few characters at least: below that the words before it go, never the status or the link
+    if !post.is_empty() && room_for(&pre) < i64::from(6 * w(FaceId::AgentPanelCode.name(), "…")) {
+        pre = "`".to_owned();
+    }
+    let room = room_for(&pre);
+    let code = FaceId::AgentPanelCode.name();
+    b.pad(p8, None);
+    let (name, alt) = if failed {
+        ("circle-x", "x")
+    } else {
+        ("circle-check", "ok")
+    };
+    if let Some((id, svg)) = super::icons::svg(name, icon_px) {
+        images.push((id, svg));
+        let from = b.pos();
+        b.image(id, alt);
+        let to = b.pos();
+        b.face(from, to, text_face);
+    }
+    b.pad(p4, None);
+    if post.is_empty() && pre == full {
+        // not a command: the whole text is fitted
+        let room = i64::from(env.width_px) - i64::from(fixed);
+        b.push(
+            &if env.width_px == 0 || room <= 0 {
+                full.clone()
+            } else {
+                drgnx_rows::fit::fit_in(fit.fonts, Some(text_face), &full, room as f32)
+            },
+            Some(text_face),
+        );
+    } else {
+        b.push(&pre, Some(text_face));
+        let cut = if env.width_px == 0 {
+            what.clone()
+        } else if room <= 0 {
+            String::new()
         } else {
-            FaceId::AgentPanelSubtle.name()
-        }),
-    );
-    b.push("  ", None);
+            drgnx_rows::fit::fit_in(fit.fonts, Some(code), &what, room as f32)
+        };
+        b.push(&cut, Some(code));
+        b.push(&post, Some(text_face));
+    }
+    let lw = w(FaceId::AgentPanelMdLink.name(), link);
+    if env.width_px > 0 {
+        b.stop(env.width_px.saturating_sub(lw + p8 + p8));
+    } else {
+        b.push(" ", None);
+    }
     let from = b.pos();
     b.push(link, Some(FaceId::AgentPanelMdLink.name()));
     let to = b.pos();
-    b.prop(
-        from,
-        to,
-        "drgnx-agent-panel-action",
-        json!(format!("background-output:{}", i.id)),
+    b.prop(from, to, "drgnx-agent-panel-action", action);
+    b.pad(p8, None);
+    let end = b.pos();
+    b.prop(0, end, "drgnx-bg-item", json!(i.id));
+    let rows = drgnx_rows::kit::card_rows(
+        &super::kit_env(env),
+        drgnx_rows::kit::CardKind::Plain,
+        vec![b.finish()],
     );
-    b.prop(0, to, "drgnx-bg-item", json!(i.id));
-    vec![b.finish()]
+    (rows, images)
 }
 
 /// The tag row before a turn the agent started by itself after an item ended: "after: DESCRIPTION".
@@ -217,7 +301,8 @@ mod tests {
     }
 
     fn text(i: &BackgroundItem, secs: Option<f64>) -> String {
-        end_rows(&Ended { item: i, secs })
+        end_rows(&Ended { item: i, secs }, None)
+            .0
             .first()
             .map(|r| r.text.clone())
             .unwrap_or_default()
@@ -290,10 +375,14 @@ mod tests {
             "cargo test",
             json!({"status": "failed", "exit_code": 3}),
         );
-        let rows = end_rows(&Ended {
-            item: &failed,
-            secs: Some(10.0),
-        });
+        let rows = end_rows(
+            &Ended {
+                item: &failed,
+                secs: Some(10.0),
+            },
+            None,
+        )
+        .0;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].key, "bg-end:x1");
         let p = |n: &str| {
@@ -306,5 +395,90 @@ mod tests {
         };
         assert_eq!(p("drgnx-bg-item"), [json!("x1")]);
         assert!(p("drgnx-agent-panel-action").contains(&json!("background-output:x1")));
+    }
+
+    fn env_of(width: u32) -> runstav::methods::view::ViewEnv {
+        use runstav::methods::view::{Display, ViewEnv};
+        ViewEnv {
+            view: "agent-panel/s1".into(),
+            class: "gui-1".into(),
+            epoch: 1,
+            display: Display::Gui,
+            scale: 1.0,
+            fonts: vec![],
+            cell: (8, 16),
+            width_px: width,
+            tail: None,
+            badge: None,
+            palette: vec![],
+            tty_widths: vec![],
+            tz: String::new(),
+            reduced_motion: false,
+            hc: false,
+            glyphs: Vec::new(),
+            ascii: false,
+            density: Default::default(),
+            attach: false,
+            rows_in_sja: false,
+            headless: false,
+        }
+    }
+
+    #[test]
+    fn the_end_line_keeps_its_link_at_the_docks_width() {
+        let cmd =
+            "cargo test -p hermod --features a-very-long-feature-list --release --no-fail-fast";
+        let failed = ended(
+            "terminal",
+            cmd,
+            json!({"status": "failed", "exit_code": 101}),
+        );
+        let mut fonts = drgnx_rows::fit::FontSet::new();
+        fonts.set_role("ui", None, 7.0);
+        for width in [380u32, 460, 900] {
+            let env = env_of(width);
+            let (rows, _) = end_rows(
+                &Ended {
+                    item: &failed,
+                    secs: Some(240.0),
+                },
+                Some(EndFit {
+                    env: &env,
+                    fonts: &fonts,
+                }),
+            );
+            let r = &rows[0];
+            assert!(
+                r.text.trim_end().ends_with("Output"),
+                "{width}: {:?}",
+                r.text
+            );
+            assert!(
+                r.text.contains("failed (exit 101) · 4 min"),
+                "{width}: {:?}",
+                r.text
+            );
+            if width >= 900 {
+                assert!(
+                    r.text.contains("Background command `"),
+                    "{width}: {:?}",
+                    r.text
+                );
+            }
+            if width < 900 {
+                assert!(
+                    r.text.contains('…'),
+                    "the command is cut, not the rest: {:?}",
+                    r.text
+                );
+            }
+            // the link is a click target
+            assert!(
+                r.props
+                    .iter()
+                    .any(|p| p.2 == "drgnx-agent-panel-action"
+                        && p.3 == json!("background-output:x1"))
+            );
+        }
     }
 }

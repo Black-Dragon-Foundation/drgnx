@@ -67,6 +67,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `layers` | `core/drgnx-palette.el`, `modules/tools/drgnx-jobs.el` |
 | `lightbulb` | - |
 | `list-checks` | `core/drgnx-palette.el` |
+| `loader-circle` | - |
 | `lock` | - |
 | `maximize-2` | `wb/drgnx-grid.el` |
 | `menu` | - |

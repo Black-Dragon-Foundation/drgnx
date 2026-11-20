@@ -484,3 +484,19 @@ fn a_terminals_output_is_its_newest_bytes_as_text() {
     assert!(truncated);
     assert!(!text.contains('\u{fffd}'), "{text:?}");
 }
+
+#[test]
+fn a_look_scene_may_backdate_its_items() {
+    assert_eq!(backdated("t1=252,w1=760", "w1", 1_000_000), Some(240_000));
+    assert_eq!(backdated("t1=252", "k1", 1_000_000), None);
+    assert_eq!(backdated("t1=x", "t1", 1_000_000), None);
+    assert_eq!(backdated("", "t1", 1_000_000), None);
+    // a subagent's progress is its item's last line
+    let mut k = Known::default();
+    k.subagent(
+        &json!({"sessionId": "k1", "title": "review", "progress": "read conn.rs · 8 tool uses"}),
+        5,
+    );
+    let item = k.item(&BackgroundRef::Subagent(SessionId::new("k1")));
+    assert_eq!(item.progress.as_deref(), Some("read conn.rs · 8 tool uses"));
+}

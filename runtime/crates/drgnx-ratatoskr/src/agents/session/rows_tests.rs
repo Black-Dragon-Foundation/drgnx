@@ -775,3 +775,74 @@ fn bg_tool_card_live_until_end() {
     assert!(!done[0].text.contains("in background"));
     assert!(done[0].text.starts_with("  ●"), "{:?}", done[0].text);
 }
+
+fn rows_bg_with(
+    e: &Entry,
+    bg: &BTreeMap<String, (u64, u64)>,
+    right: &dyn Fn(&[(&str, &str)]) -> u32,
+) -> Vec<Row> {
+    let look = Look::default();
+    let facts = BTreeMap::new();
+    let (always, prov) = (|_: &Entry| false, |_: &Entry| None);
+    let cx = Cx {
+        look: &look,
+        facts: &facts,
+        always: &always,
+        prov: &prov,
+        right,
+        bg,
+    };
+    group_rows(3, e, &[], None, &cx)
+}
+
+#[test]
+fn bg_shell_card_is_live_through_its_terminal() {
+    // the shell's call has its own id; its content shows the terminal the background item is
+    let e = tool(json!({
+        "id": "call-t1", "title": "Bash: cargo test -p hermod", "kind": "execute", "status": "completed",
+        "content": [{"type": "terminal", "terminalId": "t1"}]
+    }));
+    let live = BTreeMap::from([("t1".to_owned(), (1_000_000u64 - 252_000, 1_000_000u64))]);
+    let rows = rows_bg(&e, &live);
+    assert!(rows[0].text.contains("in background"), "{:?}", rows[0].text);
+    assert!(rows[0].text.contains("4:12"), "{:?}", rows[0].text);
+    assert!(
+        !rows_bg(&e, &BTreeMap::new())[0]
+            .text
+            .contains("in background")
+    );
+}
+
+#[test]
+fn a_live_card_keeps_its_tag_and_its_time_at_the_docks_width() {
+    let long = format!(
+        "Bash: {}",
+        "cargo test --features very-long-feature ".repeat(5)
+    );
+    let e = tool(json!({"id": "w1", "title": long, "kind": "execute", "status": "in_progress"}));
+    let live = BTreeMap::from([("w1".to_owned(), (1_000_000u64 - 252_000, 1_000_000u64))]);
+    // a 400 px dock, 8 px a character: what starts at `right(parts)` is `parts` right-aligned
+    let right = |parts: &[(&str, &str)]| -> u32 {
+        400u32.saturating_sub(
+            8 * parts
+                .iter()
+                .map(|p| p.0.chars().count() as u32)
+                .sum::<u32>(),
+        )
+    };
+    let rows = rows_bg_with(&e, &live, &right);
+    let text = &rows[0].text;
+    assert!(text.contains("in background"), "{text:?}");
+    assert!(text.trim_end().ends_with("4:12"), "{text:?}");
+    assert!(
+        text.contains('…'),
+        "the command is cut in the middle of what is left: {text:?}"
+    );
+    assert!(
+        (text.chars().count() as u32) * 8 <= 400,
+        "the row fits the dock: {} chars",
+        text.chars().count()
+    );
+    // the elapsed time is right-aligned: a stop before it
+    assert_eq!(rows[0].stops.len(), 1);
+}

@@ -693,6 +693,16 @@ fn conv_rows(
     }
 }
 
+/// The terminal ids a tool call's content shows (`{"type": "terminal", "terminalId": ID}`).
+fn terminal_ids(e: &Entry) -> impl Iterator<Item = &str> {
+    e.rest
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.get("terminalId").and_then(Value::as_str))
+}
+
 fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     let key = format!("e:{idx}");
     let facts = e
@@ -715,8 +725,12 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     // the step on one line
     let mut l = Line::new(key.clone(), idx);
     l.push(if parent.is_some() { "      " } else { "  " }, None);
-    // a call whose background item still runs is live, whatever its own status says
-    let live = str_of(e, "id").and_then(|id| cx.bg.get(id)).copied();
+    // a call whose background item still runs is live, whatever its own status says: its item is named by the call's
+    // id (a watcher) or by the terminal its content shows (a shell)
+    let live = str_of(e, "id")
+        .and_then(|id| cx.bg.get(id))
+        .or_else(|| terminal_ids(e).find_map(|t| cx.bg.get(t)))
+        .copied();
     let (dot, face) = match status {
         _ if live.is_some() => ("○", FaceId::AgentPanelRun.name()),
         "completed" | "done" => ("●", FaceId::AgentPanelOk.name()),
@@ -725,6 +739,36 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     };
     l.push(dot, Some(face)).push(" ", None);
     let child = parent.map(child_face);
+    // a live card keeps its tag and its elapsed time at the dock's width: the command takes what they leave
+    let (title, live_text) = match live {
+        Some((started, now)) => {
+            let elapsed = crate::view::bgwork::elapsed_ms(started, now);
+            let tag = "  in background";
+            let total = (cx.right)(&[]);
+            let w = |t: &str, f: &str| total.saturating_sub((cx.right)(&[(t, f)]));
+            let lead = if str_of(e, "kind") == Some("execute") {
+                "Shell "
+            } else {
+                ""
+            };
+            let fixed = w("   ○ ", FaceId::AgentPanelSubtle.name())
+                + w(lead, FaceId::AgentPanelSubtle.name())
+                + w(tag, FaceId::AgentPanelTag.name())
+                + w(&elapsed, FaceId::AgentPanelCode.name())
+                + 3 * w(" ", FaceId::AgentPanelSubtle.name());
+            let room = total.saturating_sub(fixed);
+            let mut cut = title.trim_matches('`').to_owned();
+            if w(&cut, FaceId::AgentPanelCode.name()) > room {
+                while !cut.is_empty() && w(&format!("{cut}…"), FaceId::AgentPanelCode.name()) > room
+                {
+                    cut.pop();
+                }
+                cut.push('…');
+            }
+            (cut, Some((started, elapsed)))
+        }
+        None => (title, None),
+    };
     if str_of(e, "kind") == Some("execute") {
         // agent-panel.html `.step .what`: "Shell" and the command in the code font
         l.push("Shell ", child.as_deref())
@@ -732,27 +776,25 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     } else {
         l.push(&title, child.as_deref());
     }
-    if !result.is_empty() {
+    if !result.is_empty() && live.is_none() {
         l.push(
             &format!("  · {result}"),
             Some(FaceId::AgentPanelSubtle.name()),
         );
     }
-    if let Some((started, now)) = live {
-        l.push("  in background", Some(FaceId::AgentPanelTag.name()))
-            .push(" ", None);
+    if let Some((started, elapsed)) = &live_text {
+        l.push("  in background", Some(FaceId::AgentPanelTag.name()));
+        // the elapsed time at the right edge, as the mockup has it
+        l.b.stop((cx.right)(&[(elapsed, FaceId::AgentPanelCode.name())]));
         let from = l.b.pos();
-        l.push(
-            &crate::view::bgwork::elapsed_ms(started, now),
-            Some(FaceId::AgentPanelCode.name()),
-        );
+        l.push(elapsed, Some(FaceId::AgentPanelCode.name()));
         let to = l.b.pos();
         l.b.prop(from, to, "drgnx-bg-elapsed", json!(started));
     }
     if facts.is_some_and(|(_, f)| f.undone) {
         l.push("  ↶ undone", Some(FaceId::AgentPanelSubtle.name()));
     }
-    if let Some((_, f)) = facts {
+    if let Some((_, f)) = facts.filter(|_| live.is_none()) {
         let secs = f.start.zip(f.end).map(|(s, e)| (e - s).max(0.0));
         let cost = f.cost.filter(|c| *c > 0.0);
         let mut parts: Vec<(String, &str)> = Vec::new();

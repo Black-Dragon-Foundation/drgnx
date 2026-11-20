@@ -4,6 +4,8 @@
 
 use super::*;
 use crate::view::bgwork as bg;
+use drgnx_rows::kit::{self, Comp};
+use drgnx_rows::kit_gen;
 use runstav::methods::agents::{BackgroundItem, BackgroundKind};
 
 /// The widest a terminal's row is when the env does not say.
@@ -72,6 +74,118 @@ fn cut(cx: &Cx, face: Option<&str>, text: &str, px_room: i64) -> String {
     }
 }
 
+/// A kit face's name, none where the component has none (the surface's own).
+fn kit_face(id: kit_gen::CompId, variant: &[&str]) -> Option<&'static str> {
+    let f = kit_gen::face(id, variant);
+    (f != FaceId::Default).then(|| f.name())
+}
+
+/// The width in device px of the head chip with TEXT: its pads, its icon and gap, its label.
+pub(super) fn chip_width(cx: &Cx, text: &str, warn: bool) -> u32 {
+    let tone = if warn { "warn" } else { "accent" };
+    let v = [tone, "soft", cx.env.density.name()];
+    let g = kit_gen::geom(kit_gen::CompId::Chip, &v);
+    px(cx.env, f32::from(g.pad.0))
+        + px(cx.env, f32::from(kit::ICON_PX))
+        + px(cx.env, f32::from(g.gap))
+        + text_width(cx, kit_face(kit_gen::CompId::Chip, &v), text)
+        + px(cx.env, f32::from(g.pad.1))
+}
+
+/// The head chip, drawn by the kit as a soft pill with its spinner (a warning triangle while the agent cannot tell):
+/// from its start to its end, `drgnx-agent-panel-action` `background-list`.
+pub(super) fn draw_chip(
+    b: &mut RowBuilder,
+    cx: &Cx,
+    images: &mut Vec<(ImageId, String)>,
+    text: &str,
+    warn: bool,
+) {
+    let found = std::cell::RefCell::new(Vec::new());
+    let draw = |name: &str, size: u32| {
+        icons::svg(name, size).map(|(id, svg)| {
+            found.borrow_mut().push((id, svg));
+            id
+        })
+    };
+    let mut kenv = crate::view::kit_env(cx.env);
+    kenv.icons = Some(kit::Icons(&draw));
+    let from = b.pos();
+    kit::expand(
+        b,
+        &kenv,
+        &Comp::Chip {
+            label: text.to_owned(),
+            tone: if warn {
+                kit::Tone::Warn
+            } else {
+                kit::Tone::Accent
+            },
+            fill: kit::ChipFill::Soft,
+            icon: Some(
+                if warn {
+                    "circle-alert"
+                } else {
+                    "loader-circle"
+                }
+                .to_owned(),
+            ),
+            state: kit::State::Rest,
+            action: None,
+        },
+    );
+    let to = b.pos();
+    images.extend(found.into_inner());
+    b.prop(
+        from,
+        to,
+        "drgnx-agent-panel-action",
+        json!("background-list"),
+    );
+    b.prop(
+        from,
+        to,
+        "help-echo",
+        json!("Background work: fold or unfold the list (b)"),
+    );
+}
+
+/// The width of a kit button (small, secondary) with LABEL and its key hint KEY, in device px.
+fn button_width(cx: &Cx, label: &str, key: &str) -> u32 {
+    let d = cx.env.density.name();
+    let bv = ["secondary", "sm", d];
+    let g = kit_gen::geom(kit_gen::CompId::Button, &bv);
+    let kv = ["cap", d];
+    let kg = kit_gen::geom(kit_gen::CompId::KeyHint, &kv);
+    px(cx.env, f32::from(g.pad.0))
+        + text_width(cx, kit_face(kit_gen::CompId::Button, &bv), label)
+        + px(cx.env, f32::from(g.gap))
+        + px(cx.env, f32::from(kg.pad.0))
+        + text_width(cx, kit_face(kit_gen::CompId::KeyHint, &kv), key)
+        + px(cx.env, f32::from(kg.pad.1))
+        + px(cx.env, f32::from(g.pad.1))
+}
+
+/// A kit button LABEL with its key hint KEY, a click target `ACTION` (`drgnx-agent-panel-action`).
+fn draw_button(b: &mut RowBuilder, cx: &Cx, label: &str, key: &str, action: &str) {
+    let kenv = crate::view::kit_env(cx.env);
+    let from = b.pos();
+    kit::expand(
+        b,
+        &kenv,
+        &Comp::Button {
+            label: label.to_owned(),
+            style: kit::ButtonStyle::Secondary,
+            size: kit::Size::Sm,
+            state: kit::State::Rest,
+            key: Some(key.to_owned()),
+            action: None,
+        },
+    );
+    let to = b.pos();
+    b.prop(from, to, "drgnx-agent-panel-action", json!(action));
+}
+
 fn gui(
     s: &Snapshot,
     cx: &Cx,
@@ -79,7 +193,8 @@ fn gui(
     images: &mut Vec<(ImageId, String)>,
 ) -> Vec<Row> {
     let env = cx.env;
-    let (icon_px, p4, p12) = (px(env, 16.0), px(env, 4.0), px(env, 12.0));
+    let kenv = crate::view::kit_env(env);
+    let (icon_px, p4, p8) = (px(env, 16.0), px(env, 4.0), px(env, 8.0));
     let n = bg::running(s);
     let folded = cx.open.contains(bg::FOLDED);
     let subtle = FaceId::AgentPanelSubtle.name();
@@ -87,7 +202,7 @@ fn gui(
 
     // the head: chevron, title, count, and "Stop all" at the right while anything can be stopped
     let mut b = RowBuilder::new("bg:head");
-    b.push(" ", None);
+    b.pad(p8, None);
     let from = b.pos();
     icon(
         &mut b,
@@ -101,7 +216,7 @@ fn gui(
         icon_px,
         subtle,
     );
-    b.push(" ", None);
+    b.pad(p4, None);
     b.push("In background", Some(FaceId::AgentPanelTitle.name()));
     b.push(&format!(" · {n}"), Some(subtle));
     let to = b.pos();
@@ -116,7 +231,7 @@ fn gui(
         let label = "Stop all";
         let w = text_width(cx, Some(subtle), label);
         if env.width_px > 0 {
-            b.stop(env.width_px.saturating_sub(w + p12));
+            b.stop(env.width_px.saturating_sub(w + p8 + p8));
         } else {
             b.push(" ", None);
         }
@@ -130,72 +245,95 @@ fn gui(
             json!("background-stop-all"),
         );
     }
+    b.pad(p8, None);
     out.push(b.finish());
-    if folded {
-        return out;
-    }
 
-    for i in items.iter().take(bg::VISIBLE) {
-        let ended = i.end.is_some();
-        let (name, alt) = bg::kind_icon(i.kind);
-        let face = if ended {
-            subtle
-        } else if i.kind == BackgroundKind::Terminal {
-            FaceId::AgentPanelCode.name()
-        } else {
-            "default"
-        };
-        let right = if ended {
-            bg::end_word(i)
-        } else {
-            bg::elapsed(i.started_ms, cx.now)
-        };
-        let right_w = text_width(cx, Some(FaceId::AgentPanelCode.name()), &right);
-        let lead = icon_px + 3 * p4 + p12;
-        let room =
-            i64::from(env.width_px) - i64::from(lead) - i64::from(right_w) - i64::from(2 * p12);
-        let mut b = RowBuilder::new(format!("bg:{}", i.id));
-        b.push("  ", None);
-        icon(&mut b, images, name, alt, icon_px, subtle);
+    if !folded {
+        for i in items.iter().take(bg::VISIBLE) {
+            let selected = cx.bg_selected == Some(i.id.as_str());
+            out.push(item_row(cx, i, selected, images));
+            if i.end.is_none() && (selected || i.progress.is_some()) {
+                out.push(second_row(cx, i, selected));
+            }
+        }
+        if items.len() > bg::VISIBLE {
+            let mut b = RowBuilder::new("bg:more");
+            b.pad(p8, None);
+            b.pad(icon_px + p4 + p4, None);
+            b.push(
+                &format!("and {} more", items.len() - bg::VISIBLE),
+                Some(subtle),
+            );
+            let end = b.pos();
+            b.prop(0, end, "drgnx-agent-panel-action", json!("background-more"));
+            b.pad(p8, None);
+            out.push(b.finish());
+        }
+    }
+    // one card: its ring round every row, open between them
+    kit::card_rows(&kenv, kit::CardKind::Plain, out)
+}
+
+/// An item's first line: its icon, its description and its elapsed time (or how it ended) at the right edge; the
+/// selected one in the selection's tint and the focus ring, inset from the card's edge.
+fn item_row(
+    cx: &Cx,
+    i: &BackgroundItem,
+    selected: bool,
+    images: &mut Vec<(ImageId, String)>,
+) -> Row {
+    let env = cx.env;
+    let (icon_px, p4, p8) = (px(env, 16.0), px(env, 4.0), px(env, 8.0));
+    let subtle = FaceId::AgentPanelSubtle.name();
+    let ended = i.end.is_some();
+    let (name, alt) = bg::kind_icon(i.kind);
+    let face = if ended {
+        subtle
+    } else if i.kind == BackgroundKind::Terminal {
+        FaceId::AgentPanelCode.name()
+    } else {
+        "default"
+    };
+    let right = if ended {
+        bg::end_word(i)
+    } else {
+        bg::elapsed(i.started_ms, cx.now)
+    };
+    let right_w = text_width(cx, Some(FaceId::AgentPanelCode.name()), &right);
+    let lead = p8 + p4 + icon_px + p4;
+    let room =
+        i64::from(env.width_px) - i64::from(lead) - i64::from(right_w) - i64::from(p8 + p4 + p8);
+    let mut b = RowBuilder::new(format!("bg:{}", i.id));
+    b.pad(p4, None);
+    let span = b.pos();
+    b.pad(p4, None);
+    icon(&mut b, images, name, alt, icon_px, subtle);
+    b.pad(p4, None);
+    b.push(
+        &cut(cx, Some(face), &i.description, room),
+        Some(if ended { subtle } else { face }),
+    );
+    if env.width_px > 0 {
+        b.stop(env.width_px.saturating_sub(right_w + p8));
+    } else {
         b.push(" ", None);
-        b.push(
-            &cut(cx, Some(face), &i.description, room),
-            Some(if ended { subtle } else { face }),
-        );
-        if env.width_px > 0 {
-            b.stop(env.width_px.saturating_sub(right_w + p12));
-        } else {
-            b.push(" ", None);
-        }
-        let from = b.pos();
-        b.push(&right, Some(FaceId::AgentPanelCode.name()));
-        let to = b.pos();
-        if !ended {
-            b.prop(from, to, "drgnx-bg-elapsed", json!(i.started_ms));
-        }
-        let end = b.pos();
-        if cx.bg_selected == Some(i.id.as_str()) {
-            b.face(0, end, FaceId::AgentPanelTagOn.name());
-        }
-        item_props(&mut b, i, end);
-        out.push(b.finish());
-        if ended {
-            continue;
-        }
-        let selected = cx.bg_selected == Some(i.id.as_str());
-        if selected || i.progress.is_some() {
-            out.push(second_row(cx, i, selected));
-        }
     }
-    if items.len() > bg::VISIBLE {
-        let mut b = RowBuilder::new("bg:more");
-        let text = format!("    and {} more", items.len() - bg::VISIBLE);
-        b.push(&text, Some(subtle));
-        let end = b.pos();
-        b.prop(0, end, "drgnx-agent-panel-action", json!("background-more"));
-        out.push(b.finish());
+    let from = b.pos();
+    b.push(&right, Some(FaceId::AgentPanelCode.name()));
+    let to = b.pos();
+    if !ended {
+        b.prop(from, to, "drgnx-bg-elapsed", json!(i.started_ms));
     }
-    out
+    b.pad(p4, None);
+    let span_end = b.pos();
+    b.pad(p4, None);
+    let end = b.pos();
+    if selected {
+        b.face_over(span, span_end, FaceId::Selected.name());
+        b.face_over(span, span_end, FaceId::Focus.name());
+    }
+    item_props(&mut b, i, end);
+    b.finish()
 }
 
 fn item_props(b: &mut RowBuilder, i: &BackgroundItem, end: u32) {
@@ -209,60 +347,61 @@ fn item_props(b: &mut RowBuilder, i: &BackgroundItem, end: u32) {
     );
 }
 
-/// An item's last output line (the code font, muted) and, on the selected row only, its actions: Output (Open for a
-/// subagent), and Stop where the item can be stopped.
+/// An item's last output line (the code font, muted) and, on the selected row only, its actions as kit buttons with
+/// their keys: Output ↵ (Open for a subagent), and Stop k only where the item can be stopped.
 fn second_row(cx: &Cx, i: &BackgroundItem, selected: bool) -> Row {
     let env = cx.env;
-    let (p12, p4) = (px(env, 12.0), px(env, 4.0));
+    let (icon_px, p4, p8) = (px(env, 16.0), px(env, 4.0), px(env, 8.0));
     let out_face = FaceId::AgentPanelOutput.name();
-    let link = FaceId::AgentPanelMdLink.name();
     let open_word = if i.kind == BackgroundKind::Subagent {
         "Open"
     } else {
         "Output"
     };
-    let mut acts: Vec<(String, String)> = Vec::new();
+    let mut acts: Vec<(&str, &str, String)> = Vec::new();
     if selected {
-        acts.push((open_word.to_owned(), format!("background-output:{}", i.id)));
+        acts.push((open_word, "↵", format!("background-output:{}", i.id)));
         if i.can_cancel {
-            acts.push(("Stop".to_owned(), format!("background-stop:{}", i.id)));
+            acts.push(("Stop", "k", format!("background-stop:{}", i.id)));
         }
     }
-    let acts_w: u32 = if acts.is_empty() {
-        0
-    } else {
-        acts.iter()
-            .map(|(t, _)| text_width(cx, Some(link), t) + 2 * p4)
-            .sum::<u32>()
-            + p12
-    };
-    let indent = "      ";
-    let room = i64::from(env.width_px)
-        - i64::from(acts_w)
-        - i64::from(text_width(cx, None, indent))
-        - i64::from(2 * p12);
+    let acts_w: u32 = acts
+        .iter()
+        .map(|(l, k, _)| button_width(cx, l, k))
+        .sum::<u32>()
+        + p4 * acts.len().saturating_sub(1) as u32;
+    let lead = p8 + p4 + icon_px + p4;
+    let room =
+        i64::from(env.width_px) - i64::from(lead) - i64::from(acts_w) - i64::from(p8 + p4 + p8);
     let mut b = RowBuilder::new(format!("bg:{}:1", i.id));
-    b.push(indent, None);
+    b.pad(p4, None);
+    let span = b.pos();
+    b.pad(p4, None);
+    b.pad(icon_px + p4, None);
     if let Some(last) = i.progress.as_deref() {
         b.push(&cut(cx, Some(out_face), last, room), Some(out_face));
     }
     if !acts.is_empty() {
         if env.width_px > 0 {
-            b.stop(env.width_px.saturating_sub(acts_w));
+            b.stop(env.width_px.saturating_sub(acts_w + p8));
         } else {
             b.push(" ", None);
         }
-        for (n, (text, action)) in acts.iter().enumerate() {
+        for (n, (label, key, action)) in acts.iter().enumerate() {
             if n > 0 {
-                b.push("  ", None);
+                b.pad(p4, None);
             }
-            let from = b.pos();
-            b.push(text, Some(link));
-            let to = b.pos();
-            b.prop(from, to, "drgnx-agent-panel-action", json!(action));
+            draw_button(&mut b, cx, label, key, action);
         }
     }
+    b.pad(p4, None);
+    let span_end = b.pos();
+    b.pad(p4, None);
     let end = b.pos();
+    if selected {
+        b.face_over(span, span_end, FaceId::Selected.name());
+        b.face_over(span, span_end, FaceId::Focus.name());
+    }
     item_props(&mut b, i, end);
     b.finish()
 }
