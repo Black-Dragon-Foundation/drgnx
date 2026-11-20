@@ -626,8 +626,10 @@ compared, and a round's own list starts wherever the flood is)."
 
 (defun drgnx-perf-w-explorer-first-open-setup ()
   "A git project the size and shape of the audit's (its ~/code/drgnx: 10,979 files, 308 `.elc'): 40 Lisp files and
-their `.elc' at the root, where the Explorer draws them, and 10,900 other files in 109 folders of 100, one commit; the
-Explorer on it (the hub's rows, drawn)."
+their `.elc' at the root, where the Explorer draws them, and 10,800 other files in 60 folders of 180, one commit; the
+Explorer on it (the hub's rows, drawn).  The root lists 140 entries: the hub's rows hold a window of
+`drgnx-explorer-rows-window' (150), so a root of more would leave the last files' rows undrawn (the 109 folders of the
+first version listed 189)."
   (let ((root (expand-file-name "proj" (drgnx-perf-w--tmpdir))))
     (make-directory root t)
     (setq drgnx-perf-w--fo-files
@@ -636,10 +638,10 @@ Explorer on it (the hub's rows, drawn)."
                              (write-region (drgnx-perf-w--fo-lisp i) nil f nil 'silent)
                              f))
           drgnx-perf-w--fo-i 0 drgnx-perf-w--fo-times nil drgnx-perf-w--fo-gc nil drgnx-perf-w--stats nil)
-    (dotimes (d 109)                    ; the bulk of the audit's tree: collapsed folders, in the repository
+    (dotimes (d 60)                     ; the bulk of the audit's tree: collapsed folders, in the repository
       (let ((dir (expand-file-name (format "dir%03d" d) root)))
         (make-directory dir t)
-        (dotimes (i 100) (write-region (format "file %d %d\n" d i) nil (expand-file-name (format "n%03d.md" i) dir) nil 'silent))))
+        (dotimes (i 180) (write-region (format "file %d %d\n" d i) nil (expand-file-name (format "n%03d.md" i) dir) nil 'silent))))
     (dotimes (i 40)                     ; the build output the audit's tree had beside every source file
       (write-region "" nil (expand-file-name (format "f%02d.elc" i) root) nil 'silent))
     (let ((default-directory root))
