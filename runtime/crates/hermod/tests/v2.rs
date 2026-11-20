@@ -568,3 +568,276 @@ async fn v2_set_mode_without_a_mode_option_is_refused() {
     drop(conn);
     assert_eq!(written(&mut rx).await.len(), 0);
 }
+
+// ---- v2 diffs: a diff item is `changes` plus git patch text; the hub reads `path`, `oldText`, `newText` ----
+
+use hermod::schema::v1::ToolCallContent;
+
+/// The diff items of the v1 tool call the update BODY (a v2 `tool_call_update`) became.
+async fn diffs_of(body: &str) -> Vec<(String, Option<String>, String)> {
+    let rest = format!("{}; cat >/dev/null", say(&[upd(body)]));
+    let (conn, mut rx) = start(&script(&rest)).await;
+    open(&conn).await;
+    let Event::Update { update, .. } = next(&mut rx).await else {
+        panic!("an update");
+    };
+    let SessionUpdate::ToolCall(call) = update else {
+        panic!("a tool call: {update:?}");
+    };
+    call.content
+        .iter()
+        .filter_map(|c| match c {
+            ToolCallContent::Diff(d) => Some((
+                d.path.display().to_string(),
+                d.old_text.clone(),
+                d.new_text.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn diff_call(diff: &str) -> String {
+    format!(
+        r#"{{"sessionUpdate":"tool_call_update","toolCallId":"e1","title":"Edit","kind":"edit","status":"completed","content":[{diff}]}}"#
+    )
+}
+
+#[tokio::test]
+async fn v2_diff_hunks_are_the_v1_diff_fragments() {
+    let patch = "diff --git /w/a.rs /w/a.rs\\n--- /w/a.rs\\n+++ /w/a.rs\\n@@ -1,3 +1,3 @@\\n fn a() {\\n-    1\\n+    2\\n }\\n@@ -10,2 +10,3 @@\\n x\\n+y\\n z\\n";
+    let diff = format!(
+        r#"{{"type":"diff","changes":[{{"operation":"modify","path":"/w/a.rs","fileType":"text"}}],"patch":{{"format":"git_patch","text":"{patch}"}}}}"#
+    );
+    let got = diffs_of(&diff_call(&diff)).await;
+    assert_eq!(
+        got,
+        vec![
+            (
+                "/w/a.rs".to_string(),
+                Some("fn a() {\n    1\n}\n".to_string()),
+                "fn a() {\n    2\n}\n".to_string()
+            ),
+            (
+                "/w/a.rs".to_string(),
+                Some("x\nz\n".to_string()),
+                "x\ny\nz\n".to_string()
+            ),
+        ],
+        "one fragment per hunk, context kept, as Codex's one Diff per hunk"
+    );
+}
+
+#[tokio::test]
+async fn v2_diff_of_an_added_and_a_deleted_file() {
+    let patch = "diff --git /dev/null /w/b.rs\\nnew file mode 100644\\n--- /dev/null\\n+++ /w/b.rs\\n@@ -0,0 +1,2 @@\\n+x\\n+y\\ndiff --git /w/c.rs /dev/null\\ndeleted file mode 100644\\n--- /w/c.rs\\n+++ /dev/null\\n@@ -1 +0,0 @@\\n-gone\\n";
+    let diff = format!(
+        r#"{{"type":"diff","changes":[{{"operation":"add","path":"/w/b.rs"}},{{"operation":"delete","path":"/w/c.rs"}}],"patch":{{"format":"git_patch","text":"{patch}"}}}}"#
+    );
+    let got = diffs_of(&diff_call(&diff)).await;
+    assert_eq!(
+        got,
+        vec![
+            ("/w/b.rs".to_string(), None, "x\ny\n".to_string()),
+            (
+                "/w/c.rs".to_string(),
+                Some("gone\n".to_string()),
+                String::new()
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn v2_diff_without_usable_patch_still_names_its_paths() {
+    // no patch, a patch format this code does not know, and a move: the affected paths from `changes`, no text
+    let diff = r#"{"type":"diff","changes":[{"operation":"modify","path":"/w/logo.png","fileType":"binary"},{"operation":"move","oldPath":"/w/o.rs","path":"/w/n.rs"}],"patch":{"format":"_custom","text":"whatever"}}"#;
+    let got = diffs_of(&diff_call(diff)).await;
+    assert_eq!(
+        got,
+        vec![
+            ("/w/logo.png".to_string(), None, String::new()),
+            ("/w/n.rs".to_string(), None, String::new()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn v1_shaped_diff_items_pass_through() {
+    let diff = r#"{"type":"diff","path":"/w/a.rs","oldText":"a","newText":"b"}"#;
+    let got = diffs_of(&diff_call(diff)).await;
+    assert_eq!(
+        got,
+        vec![(
+            "/w/a.rs".to_string(),
+            Some("a".to_string()),
+            "b".to_string()
+        )]
+    );
+}
+
+// ---- falling back to v1 ----
+
+fn init_error() -> &'static str {
+    r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"unsupported protocol version 2"}}"#
+}
+
+fn v1_init(id: u32) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"result":{{"protocolVersion":1,"agentCapabilities":{{}},"authMethods":[]}}}}"#
+    )
+}
+
+#[tokio::test]
+async fn v2_initialize_rejected_is_asked_again_as_v1_on_the_same_connection() {
+    // the agent answers the v2 initialize with an error, then the v1 one with an answer
+    let s = format!(
+        "read a; echo \"$a\" >&2; printf '%s\\n' '{}'; read b; echo \"$b\" >&2; printf '%s\\n' '{}'; cat >/dev/null",
+        init_error(),
+        v1_init(2)
+    );
+    let (conn, mut rx) = start(&s).await;
+    let info = conn.initialize(ClientCaps::default()).await.unwrap();
+    assert_eq!(info.proto, Proto::V1);
+    assert_eq!(conn.proto(), Proto::V1);
+    let why = info.v2_fallback.expect("the fallback is recorded");
+    assert!(why.contains("unsupported protocol version"), "{why}");
+    drop(conn);
+    let Event::Exit { stderr, .. } = next(&mut rx).await else {
+        panic!("exit");
+    };
+    let sent: Vec<Value> = stderr
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0]["params"]["protocolVersion"], json!(2));
+    assert_eq!(sent[1]["params"]["protocolVersion"], json!(1));
+    assert!(
+        sent[1]["params"].get("clientCapabilities").is_some(),
+        "a real v1 request"
+    );
+}
+
+#[tokio::test]
+async fn v2_initialize_rejected_twice_is_not_asked_a_third_time() {
+    let again = r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"nope"}}"#;
+    let s = format!(
+        "read a; echo \"$a\" >&2; printf '%s\\n' '{}'; read b; echo \"$b\" >&2; printf '%s\\n' '{again}'; read c; echo \"$c\" >&2; cat >/dev/null",
+        init_error()
+    );
+    let (conn, mut rx) = start(&s).await;
+    let r = conn.initialize(ClientCaps::default()).await;
+    assert!(
+        matches!(r, Err(Error::Rpc { code: -32603, .. })),
+        "{r:?}: the v1 answer is the answer"
+    );
+    drop(conn);
+    let Event::Exit { stderr, .. } = next(&mut rx).await else {
+        panic!("exit");
+    };
+    // (the script's third read, at the close of its stdin, echoes an empty line)
+    let asks = stderr.lines().filter(|l| l.contains("initialize")).count();
+    assert_eq!(asks, 2, "two asks, no third: {stderr}");
+}
+
+#[tokio::test]
+async fn v2_initialize_that_ends_the_agent_is_the_owners_to_restart() {
+    // the agent exits on the v2 ask: the connection is gone, so it is the owner that starts it again as v1
+    let (conn, _rx) = start("read a; exit 3").await;
+    let r = conn.initialize(ClientCaps::default()).await;
+    assert!(matches!(r, Err(Error::Closed)), "{r:?}");
+}
+
+// ---- v2 permission requests: `title`, `description`, `subject`, no top-level `toolCall` ----
+
+fn permission(subject: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":70,"method":"session/request_permission","params":{{"sessionId":"s1","title":"Approve file edit?","description":"Allow the agent to edit src/main.rs?","subject":{subject},"options":[{{"optionId":"allow-once","name":"Allow once","kind":"allow_once"}},{{"optionId":"reject-once","name":"Reject","kind":"reject_once"}}]}}}}"#
+    )
+}
+
+/// What the hub sees of a v2 permission request SUBJECT: the events up to the request, the request as JSON, and the
+/// line the agent got back (after the answer).
+async fn asked(subject: &str) -> (Vec<Event>, Value, Value) {
+    let rest = format!(
+        "{}; read r; echo \"$r\" >&2; cat >/dev/null",
+        say(&[permission(subject)])
+    );
+    let (conn, mut rx) = start(&script(&rest)).await;
+    open(&conn).await;
+    let mut before = vec![];
+    loop {
+        match next(&mut rx).await {
+            Event::Request(hermod::Incoming::Permission(req, resp)) => {
+                let outcome = hermod::schema::v1::RequestPermissionOutcome::Selected(
+                    hermod::schema::v1::SelectedPermissionOutcome::new(
+                        hermod::schema::v1::PermissionOptionId::new("allow-once"),
+                    ),
+                );
+                resp.respond(hermod::schema::v1::RequestPermissionResponse::new(outcome))
+                    .unwrap();
+                drop(conn);
+                let Event::Exit { stderr, .. } = next(&mut rx).await else {
+                    panic!("exit");
+                };
+                let answer: Value = serde_json::from_str(stderr.lines().next().unwrap()).unwrap();
+                return (before, serde_json::to_value(&req).unwrap(), answer);
+            }
+            other => before.push(other),
+        }
+    }
+}
+
+#[tokio::test]
+async fn v2_permission_for_a_tool_call_subject() {
+    let subject = r#"{"type":"tool_call","toolCall":{"toolCallId":"call_1","title":"Edit src/main.rs","kind":"edit","status":"pending","rawInput":{"file_path":"/w/src/main.rs"}}}"#;
+    let (before, req, answer) = asked(subject).await;
+    assert_eq!(req["toolCall"]["toolCallId"], json!("call_1"));
+    assert_eq!(req["toolCall"]["title"], json!("Edit src/main.rs"));
+    assert_eq!(req["toolCall"]["kind"], json!("edit"));
+    assert_eq!(
+        req["toolCall"]["rawInput"]["file_path"],
+        json!("/w/src/main.rs")
+    );
+    assert_eq!(req["options"].as_array().unwrap().len(), 2);
+    assert_eq!(req["options"][1]["kind"], json!("reject_once"));
+    // the subject's tool call is applied like a tool_call_update, before the prompt is shown: the call exists
+    let created = before.iter().any(|e| {
+        matches!(e,
+        Event::Update { update: SessionUpdate::ToolCall(c), .. } if &*c.tool_call_id.0 == "call_1")
+    });
+    assert!(created, "the tool call of the subject is created first");
+    // the answer goes back in v2's shape (the same outcome object)
+    assert_eq!(answer["id"], json!(70));
+    assert_eq!(answer["result"]["outcome"]["outcome"], json!("selected"));
+    assert_eq!(answer["result"]["outcome"]["optionId"], json!("allow-once"));
+}
+
+#[tokio::test]
+async fn v2_permission_for_a_command_subject() {
+    let subject = r#"{"type":"command","command":"cargo test","cwd":"/w","toolCallId":"call_2","terminalId":"term_1"}"#;
+    let (_, req, _) = asked(subject).await;
+    assert_eq!(req["toolCall"]["toolCallId"], json!("call_2"));
+    assert_eq!(req["toolCall"]["kind"], json!("execute"));
+    assert_eq!(req["toolCall"]["rawInput"]["command"], json!("cargo test"));
+    assert_eq!(req["toolCall"]["rawInput"]["cwd"], json!("/w"));
+    assert_eq!(
+        req["toolCall"]["title"],
+        json!("Approve file edit?"),
+        "the request's title names it"
+    );
+}
+
+#[tokio::test]
+async fn v2_permission_for_a_subject_this_code_does_not_know() {
+    // a future subject type: the common prompt fields stand, with an id of the request's own
+    let (_, req, _) = asked(r#"{"type":"_future","x":1}"#).await;
+    assert_eq!(req["toolCall"]["title"], json!("Approve file edit?"));
+    assert!(
+        req["toolCall"]["toolCallId"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty())
+    );
+    assert_eq!(req["options"].as_array().unwrap().len(), 2);
+}

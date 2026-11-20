@@ -131,6 +131,95 @@ impl V2 {
         *q = keep;
     }
 
+    /// A v2 `session/request_permission` as the v1 params the hub decodes (`toolCall` from the `subject`, the request's
+    /// `title` where the subject has none), and the events that come first: the subject's tool call applied like a
+    /// `tool_call_update`, before the prompt is shown.  REQUEST is the request's id (it names a call that has none).
+    pub(crate) fn permission(
+        &mut self,
+        at: f64,
+        sid: &SessionId,
+        request: &Id,
+        params: &Value,
+    ) -> (Value, Vec<Event>) {
+        let title = params.get("title").and_then(Value::as_str).unwrap_or("");
+        let subject = params.get("subject");
+        let named = match request {
+            Id::Num(n) => n.to_string(),
+            Id::Str(s) => s.clone(),
+        };
+        let mut call = Map::new();
+        call.insert("toolCallId".into(), json!(format!("permission-{named}")));
+        call.insert("title".into(), json!(title));
+        match subject.and_then(|s| s.get("type")).and_then(Value::as_str) {
+            Some("tool_call") => {
+                if let Some(t) = subject
+                    .and_then(|s| s.get("toolCall"))
+                    .and_then(Value::as_object)
+                    .filter(|t| t.contains_key("toolCallId"))
+                {
+                    call = t.clone();
+                    if !call.get("title").is_some_and(Value::is_string) {
+                        call.insert("title".into(), json!(title));
+                    }
+                }
+            }
+            Some("command") => {
+                let s = subject.expect("a subject");
+                if let Some(id) = s.get("toolCallId").and_then(Value::as_str) {
+                    call.insert("toolCallId".into(), json!(id));
+                }
+                call.insert("kind".into(), json!("execute"));
+                call.insert(
+                    "rawInput".into(),
+                    json!({"command": s.get("command"), "cwd": s.get("cwd")}),
+                );
+            }
+            _ => {}
+        }
+        let mut update = call.clone();
+        update.insert("sessionUpdate".into(), json!("tool_call_update"));
+        let events = self.translate(at, sid, Value::Object(update)).events;
+        let mut v1 = Map::new();
+        for k in [
+            "toolCallId",
+            "title",
+            "kind",
+            "rawInput",
+            "rawOutput",
+            "locations",
+        ] {
+            if let Some(v) = call.get(k).filter(|v| !v.is_null()) {
+                v1.insert(k.into(), v.clone());
+            }
+        }
+        if let Some(st) = call.get("status").and_then(Value::as_str) {
+            let st = match st {
+                "paused" => "in_progress",
+                "cancelled" => "failed",
+                other => other,
+            };
+            v1.insert("status".into(), json!(st));
+        }
+        if let Some(a) = call.get("content").and_then(Value::as_array) {
+            let c: Vec<Value> = a.iter().cloned().flat_map(v1_content).collect();
+            v1.insert("content".into(), Value::Array(c));
+        }
+        let mut p = Map::new();
+        p.insert(
+            "sessionId".into(),
+            params.get("sessionId").cloned().unwrap_or(Value::Null),
+        );
+        p.insert("toolCall".into(), Value::Object(v1));
+        p.insert(
+            "options".into(),
+            params.get("options").cloned().unwrap_or(json!([])),
+        );
+        if let Some(m) = params.get("_meta") {
+            p.insert("_meta".into(), m.clone());
+        }
+        (Value::Object(p), events)
+    }
+
     /// Translates one `session/update` of SID, UPDATE its `update` object, stamped AT.
     pub(crate) fn translate(&mut self, at: f64, sid: &SessionId, update: Value) -> Out {
         let mut out = Out {
@@ -384,10 +473,10 @@ impl V2 {
         let ck = (sid.to_string(), id.to_string());
         let items = if chunk {
             let acc = self.content.entry(ck.clone()).or_default();
-            acc.extend(u.get("content").cloned().and_then(v1_content));
+            acc.extend(u.get("content").cloned().into_iter().flat_map(v1_content));
             Some(acc.clone())
         } else if let Some(a) = u.get("content").and_then(Value::as_array) {
-            let v: Vec<Value> = a.iter().cloned().filter_map(v1_content).collect();
+            let v: Vec<Value> = a.iter().cloned().flat_map(v1_content).collect();
             self.content.insert(ck.clone(), v.clone());
             Some(v)
         } else {
@@ -473,14 +562,143 @@ fn background_ref(v: &Value) -> BackgroundRef {
     .unwrap_or_else(|| BackgroundRef::Other(v.clone()))
 }
 
-/// A v2 tool call content item as v1 has it: `content` and `terminal` items, and a diff that already has v1's shape
-/// (`oldText`/`newText`).  A v2 diff (structured changes and patch text) and a session item have no v1 shape the hub reads.
-fn v1_content(v: Value) -> Option<Value> {
+/// A v2 tool call content item as v1 has it, as a list: `content` and `terminal` items as they are, a diff that already
+/// has v1's shape (`oldText`/`newText`) as it is, a v2 diff (structured `changes` plus git patch text) as v1 diff items
+/// ([`diff_items`]); a session item has no v1 shape the hub reads.
+fn v1_content(v: Value) -> Vec<Value> {
     match v.get("type").and_then(Value::as_str) {
-        Some("content" | "terminal") => Some(v),
-        Some("diff") if v.get("newText").is_some() => Some(v),
-        _ => None,
+        Some("content" | "terminal") => vec![v],
+        Some("diff") if v.get("newText").is_some() => vec![v],
+        Some("diff") => diff_items(&v),
+        _ => Vec::new(),
     }
+}
+
+/// A v2 diff as the items the hub reads (`path`, `oldText`, `newText`): one per hunk of the patch for each file of
+/// `changes` that the patch covers, the hunk's context kept, so a fragment is found once in the file as a Codex hunk is;
+/// a file with no usable patch (none, a format this code does not know, a move or a copy) is named with no text.
+fn diff_items(d: &Value) -> Vec<Value> {
+    let patch = d
+        .get("patch")
+        .filter(|p| p.get("format").and_then(Value::as_str) == Some("git_patch"))
+        .and_then(|p| p.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let sections = patch_sections(patch);
+    let mut out = Vec::new();
+    for c in d
+        .get("changes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(path) = c.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        let text_op = matches!(
+            c.get("operation").and_then(Value::as_str),
+            Some("add" | "delete" | "modify")
+        );
+        let hunks: Vec<&(String, String)> = sections
+            .iter()
+            .filter(|(p, _)| text_op && same_path(p, path))
+            .flat_map(|(_, h)| h.iter())
+            .collect();
+        if hunks.is_empty() {
+            out.push(json!({"type": "diff", "path": path, "oldText": null, "newText": ""}));
+        }
+        for (old, new) in hunks {
+            let old = if old.is_empty() {
+                Value::Null
+            } else {
+                json!(old)
+            };
+            out.push(json!({"type": "diff", "path": path, "oldText": old, "newText": new}));
+        }
+    }
+    out
+}
+
+/// Whether a patch's path P names the change's path CHANGE (a client may strip Git's `a/` and `b/`).
+fn same_path(p: &str, change: &str) -> bool {
+    p == change
+        || p.strip_prefix("a/") == Some(change.trim_start_matches('/'))
+        || p.strip_prefix("b/") == Some(change.trim_start_matches('/'))
+}
+
+/// A git patch as (file path, hunks): each hunk the old text and the new text of its lines, context in both.
+fn patch_sections(text: &str) -> Vec<(String, Vec<(String, String)>)> {
+    let mut out: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mut old_path: Option<String> = None;
+    // the lines the open hunk still has to read: old, new
+    let mut left = (0usize, 0usize);
+    for line in text.lines() {
+        if left != (0, 0) {
+            let Some(hunk) = out.last_mut().and_then(|s| s.1.last_mut()) else {
+                break;
+            };
+            let (body, nl) = (line.get(1..).unwrap_or(""), "\n");
+            match line.as_bytes().first() {
+                Some(b' ') => {
+                    hunk.0.push_str(body);
+                    hunk.0.push_str(nl);
+                    hunk.1.push_str(body);
+                    hunk.1.push_str(nl);
+                    left = (left.0.saturating_sub(1), left.1.saturating_sub(1));
+                }
+                Some(b'-') => {
+                    hunk.0.push_str(body);
+                    hunk.0.push_str(nl);
+                    left.0 = left.0.saturating_sub(1);
+                }
+                Some(b'+') => {
+                    hunk.1.push_str(body);
+                    hunk.1.push_str(nl);
+                    left.1 = left.1.saturating_sub(1);
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if line.starts_with("diff --git ") {
+            old_path = None;
+        } else if let Some(p) = line.strip_prefix("--- ") {
+            old_path = Some(patch_path(p));
+        } else if let Some(p) = line.strip_prefix("+++ ") {
+            let new = patch_path(p);
+            let path = if new == "/dev/null" {
+                old_path.take().unwrap_or(new)
+            } else {
+                new
+            };
+            out.push((path, Vec::new()));
+        } else if let Some(h) = line.strip_prefix("@@ ") {
+            let count = |sign: char| {
+                h.split_whitespace()
+                    .find(|w| w.starts_with(sign))
+                    .map(|w| {
+                        w[1..]
+                            .split_once(',')
+                            .map_or(1, |(_, n)| n.parse().unwrap_or(1))
+                    })
+                    .unwrap_or(1)
+            };
+            left = (count('-'), count('+'));
+            if let Some(s) = out.last_mut() {
+                s.1.push((String::new(), String::new()));
+            }
+        }
+    }
+    out
+}
+
+/// A path of a `---` or `+++` line: before a tab, unquoted when Git quoted it.
+fn patch_path(p: &str) -> String {
+    let p = p.split('\t').next().unwrap_or(p);
+    p.strip_prefix('"')
+        .and_then(|q| q.strip_suffix('"'))
+        .unwrap_or(p)
+        .to_string()
 }
 
 fn plan_entry(e: &Value) -> Value {
