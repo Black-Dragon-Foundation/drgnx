@@ -620,17 +620,29 @@ impl Panels {
             .map(|(_, map)| map.values().filter(|f| f.revertible && !f.undone).count());
         // the top view (the header window) is the header, the chips and the strip; the transcript view is the rest
         if is_top(&key.1) {
-            // the chain the agent works under: its task (the plan and the spec above it join when the hub reads them)
-            let chain: Vec<panel_top::ChainLink> = snapshot
-                .task
-                .as_deref()
-                .map(|t| panel_top::ChainLink {
-                    kind: "task".into(),
-                    id: t.to_owned(),
-                    label: snapshot.name.clone().unwrap_or_else(|| t.to_owned()),
-                })
-                .into_iter()
-                .collect();
+            // the chain the agent works under: its task's spec, plan and the task, as the Work model holds them; the
+            // task alone (named by the session) when no workspace's model holds it
+            let crumbs = match (snapshot.task.as_deref(), self.front()) {
+                (Some(t), Some(f)) => f.core.map.breadcrumb(t),
+                _ => Vec::new(),
+            };
+            let chain: Vec<panel_top::ChainLink> = if crumbs.is_empty() {
+                snapshot
+                    .task
+                    .as_deref()
+                    .map(|t| panel_top::ChainLink {
+                        kind: "task".into(),
+                        id: t.to_owned(),
+                        label: snapshot.name.clone().unwrap_or_else(|| t.to_owned()),
+                    })
+                    .into_iter()
+                    .collect()
+            } else {
+                crumbs
+                    .into_iter()
+                    .map(|(kind, id, label)| panel_top::ChainLink { kind, id, label })
+                    .collect()
+            };
             let plan = s.plan_items().unwrap_or_default();
             let (mut rows, images) = panel_top::rows(
                 &snapshot,

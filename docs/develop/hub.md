@@ -3497,6 +3497,9 @@ plan strip. It is pure (no lock, no I/O, no clock); the views that draw it come 
 - **The plan strip.** `plan_strip(entries)` is the latest plan entry's items as `(text, Done | Doing | Todo)`
   (`completed`, `in_progress`, anything else). The panel keeps no row for a plan entry: its plan card
   (`view/panel_cards.rs`, "To do · 1 of 3 done") already shows it.
+- **The chain row.** The header's chain (`p:chain`) is the session's task's spec › plan › task, read from the Work
+  model (`vegvisir::Model::breadcrumb`, through `work::map::Map::breadcrumb`, the first workspace that holds the task); the
+  task alone, named by the session, while no workspace's model holds it.
 
 ### The symbol at a line (`search/symbol-at`)
 
