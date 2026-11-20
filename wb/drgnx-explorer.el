@@ -313,7 +313,7 @@ A row of a repository whose status is not read yet asks for it (`drgnx-explorer-
   (when (and drgnx-explorer-git (drgnx-git-unread-p path)) (drgnx-explorer--git-unread))
   (let* ((status (and drgnx-explorer-git (drgnx-git-status path)))
          (look (and status (drgnx-git-look status)))
-         (mark (and status (if (and dirp (not (memq status '(ignored untracked)))) "●" (drgnx-git-letter status)))))
+         (mark (and status (if (and dirp (not (memq status '(ignored untracked)))) (drgnx-face-glyph 'dot) (drgnx-git-letter status)))))
     ;; the name keeps the text colour (window-dark.html `.row'): the state is the mark; an ignored file is dimmed
     (when (eq status 'ignored) (add-face-text-property name-start eol (cadr look)))
     ;; a terminal window has no fringe: the overlay's padding keeps the last column free for the truncation `$'
@@ -1023,7 +1023,7 @@ gets it drawn over the name on hover (`drgnx-wb-cover-sense')."
          (status (and (assq status drgnx-git--looks) status))
          (mark (and status (if (and (not (memq status '(ignored untracked)))
                                     (eql 1 (drgnx-view-nav-field "dir" key)))
-                               "●" (drgnx-git-letter status))))
+                               (drgnx-face-glyph 'dot) (drgnx-git-letter status))))
          (short (and (< beg eol) (get-text-property beg 'drgnx-row-tail-short)))
          (o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) (and short 'none)
                                        (gethash key drgnx-explorer--tails)

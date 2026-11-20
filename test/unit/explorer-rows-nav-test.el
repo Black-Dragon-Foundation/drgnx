@@ -6,6 +6,7 @@
 ;; shaped like the hub's (view/explorer.rs: a `tree' of path nodes) are handed to it as the hub would.  Each test names
 ;; its pattern.
 (require 'ert)
+(set-terminal-coding-system 'utf-8-unix)             ; the kit's dot is the glyph the frame can write: these rows read it as ●
 (require 'cl-lib)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)

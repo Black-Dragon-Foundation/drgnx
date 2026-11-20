@@ -1295,6 +1295,19 @@ look, as the ☰ list's."
   (drgnx-look-scene--editor)
   (drgnx-look-scene--answer))
 
+(declare-function drgnx-rail-mark-changed "drgnx-rail" (place))
+(declare-function drgnx-rail-clear-changed "drgnx-rail" (place))
+
+(defun drgnx-look-scene-rail-changed ()
+  "The editor with the rail's Changes place marked changed: the warn dot on the cell's top right corner (sidebars.html
+option A's orange dot), the one thing `window-dark' draws no place with."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "changed place"
+    (drgnx-rail-mark-changed 'changes)
+    (redisplay t))
+  (drgnx-look-scene--answer))
+
 (defun drgnx-look-scene-magit ()
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "magit"

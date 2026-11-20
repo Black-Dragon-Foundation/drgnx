@@ -3,6 +3,7 @@
 ;; test-pattern: handshake
 ;; The hub is outside this buffer: its answers are a function the tests bind (`drgnx-notebook--call'), the buffer is real.
 (require 'ert)
+(set-terminal-coding-system 'utf-8-unix)             ; the kit's dot is the glyph the frame can write: these rows read it as ●
 (require 'cl-lib)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)

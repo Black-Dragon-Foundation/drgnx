@@ -483,14 +483,14 @@ argument): without moving focus."
        (lambda (id)
          (let ((model (car (split-string (or (nidhogg-view-get h 'field "label" id) "") " · "))))
            (setq n (1+ n))
-           (concat (propertize "●" 'face (intern (format "drgnx-work-agent-%d" (1+ (% (1- n) 6)))))
+           (concat (propertize (drgnx-face-glyph 'dot) 'face (intern (format "drgnx-work-agent-%d" (1+ (% (1- n) 6)))))
                    " " model)))
        team " "))))
 
 (defun drgnx-work-map--seg-needs-you ()
   "`● 3 need you' in the attention colour, while the model says something does."
   (let ((n (drgnx-work-map--needs-you-count)))
-    (when (> n 0) (propertize (format "● %d need you" n) 'face 'drgnx-statusbar-waiting))))
+    (when (> n 0) (propertize (format "%s %d need you" (drgnx-face-glyph 'dot) n) 'face 'drgnx-statusbar-waiting))))
 
 (defun drgnx-work-map--seg-lens ()
   "The view and its counts at the status line's right: `Work · Map · 4 agents · 1 overlap'."

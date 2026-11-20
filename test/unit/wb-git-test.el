@@ -1,6 +1,7 @@
 ;;; wb-git-test.el --- batch tests: git decorations -*- lexical-binding: t -*-
 ;; test-class: cond
 (require 'ert)
+(set-terminal-coding-system 'utf-8-unix)             ; the kit's dot is the glyph the frame can write: these rows read it as ●
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
