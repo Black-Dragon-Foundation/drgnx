@@ -98,8 +98,10 @@ action runs, in order.  The key's own transform rewrites the button's args, as `
               (setq-local drgnx-agent-panel--snap (list :cwd dir))
               (save-window-excursion
                 (funcall (car (gethash 'block-source drgnx-ui-kit--actions)) '("a.txt" 12))
-                (setq shown (list (buffer-file-name) (line-number-at-pos)))
-                (kill-buffer)))
+                ;; the file's window is selected; the panel's buffer is current again here
+                (with-current-buffer (window-buffer (selected-window))
+                  (setq shown (list (buffer-file-name) (line-number-at-pos)))
+                  (kill-buffer))))
             (should (equal (list (file-truename f) 12) (list (file-truename (car shown)) (cadr shown)))))
         (delete-directory dir t)))))
 

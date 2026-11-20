@@ -654,9 +654,15 @@ fn range_words(variant: RangeVariant, state: RangeState) -> String {
     let what = match variant {
         RangeVariant::Schedule => "schedule".to_owned(),
         RangeVariant::Cost => "cost".to_owned(),
-        RangeVariant::Segment(k) => format!("{} segment", word(serde_json::to_value(k).unwrap_or_default())),
+        RangeVariant::Segment(k) => format!(
+            "{} segment",
+            word(serde_json::to_value(k).unwrap_or_default())
+        ),
     };
-    format!("{what} {}", word(serde_json::to_value(state).unwrap_or_default()))
+    format!(
+        "{what} {}",
+        word(serde_json::to_value(state).unwrap_or_default())
+    )
 }
 
 /// The civil date of DAYS since 1970-01-01: (year, month 1-12, day 1-31).

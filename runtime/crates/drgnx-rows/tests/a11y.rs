@@ -17,14 +17,21 @@ fn expected() -> Vec<Value> {
 
 fn wordless(text: &str) -> bool {
     !text.chars().any(char::is_alphanumeric)
-        && text.chars().any(|c| !c.is_whitespace() && !"[]|".contains(c))
+        && text
+            .chars()
+            .any(|c| !c.is_whitespace() && !"[]|".contains(c))
 }
 
 /// The unlabelled glyph-only parts of ROW: `(what, text)`.
 fn unlabelled(row: &Value) -> Vec<(String, String)> {
     let text: Vec<char> = row["text"].as_str().unwrap_or("").chars().collect();
     let props = row["props"].as_array().cloned().unwrap_or_default();
-    let span = |p: &Value| (p[0].as_u64().unwrap() as usize, p[1].as_u64().unwrap() as usize);
+    let span = |p: &Value| {
+        (
+            p[0].as_u64().unwrap() as usize,
+            p[1].as_u64().unwrap() as usize,
+        )
+    };
     let helps: Vec<(usize, usize)> = props
         .iter()
         .filter(|p| p[2] == "help-echo")
@@ -88,7 +95,10 @@ fn hit_areas_are_24px() {
             if p[2] != "drgnx-action" {
                 continue;
             }
-            let (a, z) = (p[0].as_u64().unwrap() as usize, p[1].as_u64().unwrap() as usize);
+            let (a, z) = (
+                p[0].as_u64().unwrap() as usize,
+                p[1].as_u64().unwrap() as usize,
+            );
             let w: f64 = (a..z)
                 .map(|i| {
                     spaces

@@ -19,6 +19,7 @@
 (require 'drgnx-chrome)
 (require 'drgnx-area)
 (add-to-list 'load-path (expand-file-name "modules/tools" drgnx-ui-chrome-scale--repo))
+(add-to-list 'load-path (expand-file-name "modules/ui" drgnx-ui-chrome-scale--repo))   ; drgnx-rail (Task 29)
 (require 'drgnx-agent-panel-composer nil t)
 (dolist (m '("drgnx-look-fonts" "drgnx-look-density" "drgnx-look-scale" "drgnx-statusbar"))
   (load (expand-file-name (concat "modules/ui/" m) drgnx-ui-chrome-scale--repo) nil t))
