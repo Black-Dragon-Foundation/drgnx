@@ -385,7 +385,6 @@ pub fn block_list_rows(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
 fn conv_rows(
     block: &super::blocks::Block,
     key: &str,
