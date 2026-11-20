@@ -353,7 +353,9 @@ fn block_row(idx: usize, n: usize, block: &Block) -> Row {
 /// an ask (a `QuestionCard` with its keys), a subagent (its blocks nested under its head, indented), a notice, the
 /// live line (a pulse, still under REDUCED_MOTION) and a queued message.  Block N's rows are keyed `k:N/...` and each
 /// carries `drgnx-block` N; OPEN holds the Explored blocks the user opened.  An agent message's Markdown is the
-/// panel's own (`b:I:N` rows, drawn with its entry): it adds no row here.
+/// panel's own (`b:I:N` rows, drawn with its entry): it adds no row here.  The panel draws its blocks with
+/// [`panel_block_rows`] (keyed by their first entry); this list form is the tests' way into the per-type rows.
+#[cfg(test)]
 pub fn block_list_rows(
     blocks: &[super::blocks::Block],
     open: &BTreeSet<usize>,
@@ -457,7 +459,7 @@ fn conv_rows(
                 for (n, s) in steps.iter().enumerate() {
                     let mut b = row(n + 1);
                     b.push(
-                        &format!("    step {}", s.step.map_or(s.entry as u64, |x| x)),
+                        &format!("    step {}", s.step.unwrap_or(s.entry as u64)),
                         Some(FaceId::AgentPanelSubtle.name()),
                     );
                     let end = b.pos();
@@ -1150,8 +1152,8 @@ pub fn panel_roles(entries: &[Entry], from: usize) -> BTreeMap<usize, Role> {
             }
             B::Explored { .. } => {
                 out.insert(from + start, Role::Head(b.clone()));
-                for i in start + 1..end {
-                    if entries[i].kind == EntryType::Tool {
+                for (i, e) in entries.iter().enumerate().take(end).skip(start + 1) {
+                    if e.kind == EntryType::Tool {
                         out.insert(from + i, Role::In(from + start));
                     }
                 }
