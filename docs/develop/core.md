@@ -1548,6 +1548,9 @@ function and one rounding rule:
 - `(drgnx-px-line WIDTH &optional FRAME SCALE)` is for lines: a thin line (1 logical pixel or less) is max(1,
   floor(scale)) pixels (1 at 1.25 and 4/3, 2 at 2, as the mockups' 1 CSS px at scale 2); a line under 2 is
   max(1, floor(WIDTH × scale)); a wider one is `drgnx-px`.
+- `(drgnx-pixels-cached KEY FRAME FN)` is how the chrome (the rail, the title row, the tab lines, the composer) keeps
+  a size it works out: FN is called with FRAME once for each scale seen under KEY, so frames of one scale share it and a
+  frame on another monitor sizes itself at its own. `(drgnx-pixels-cache-reset)` empties it; a UI scale change does.
 - `(drgnx-pixels-scale &optional FRAME)` is the factor both use: the display scale on a native shell (1.0 elsewhere)
   times the UI scale, `(drgnx-pixels-ui-scale FRAME)`: the root frame's, which ui/look's `drgnx-look-scale` sets on
   every graphical root frame with `(drgnx-pixels-set-ui-scale FRAME SCALE)` (1.0 without one). It is kept in a
