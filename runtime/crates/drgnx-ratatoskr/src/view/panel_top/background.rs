@@ -329,8 +329,8 @@ fn item_row(
     b.pad(p4, None);
     let end = b.pos();
     if selected {
-        b.face_over(span, span_end, FaceId::Selected.name());
-        b.face_over(span, span_end, FaceId::Focus.name());
+        b.face(span, span_end, FaceId::Selected.name());
+        b.face(span, span_end, FaceId::Focus.name());
     }
     item_props(&mut b, i, end);
     b.finish()
@@ -399,8 +399,8 @@ fn second_row(cx: &Cx, i: &BackgroundItem, selected: bool) -> Row {
     b.pad(p4, None);
     let end = b.pos();
     if selected {
-        b.face_over(span, span_end, FaceId::Selected.name());
-        b.face_over(span, span_end, FaceId::Focus.name());
+        b.face(span, span_end, FaceId::Selected.name());
+        b.face(span, span_end, FaceId::Focus.name());
     }
     item_props(&mut b, i, end);
     b.finish()

@@ -149,7 +149,7 @@ impl Agent {
                     ),
                     "tool_call" => self.update(
                         sid,
-                        json!({"sessionUpdate": "tool_call_update", "toolCallId": id,
+                        json!({"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "in_progress",
                             "content": [{"type": "content", "content": {"type": "text", "text": arg}}]}),
                     ),
                     "subagent" => self.update(

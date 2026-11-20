@@ -540,6 +540,7 @@ pub fn first_seen_ms(id: &str, now_ms: u64) -> u64 {
     now_ms
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 /// ID's start under SPEC (`ID=SECONDS,ID=SECONDS`): SECONDS before NOW_MS, none when SPEC does not name ID.
 pub fn backdated(spec: &str, id: &str, now_ms: u64) -> Option<u64> {
     spec.split(',').find_map(|pair| {

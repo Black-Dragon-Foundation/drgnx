@@ -779,7 +779,7 @@ fn bg_tool_card_live_until_end() {
 fn rows_bg_with(
     e: &Entry,
     bg: &BTreeMap<String, (u64, u64)>,
-    right: &dyn Fn(&[(&str, &str)]) -> u32,
+    right: &dyn Fn(&Parts<'_>) -> u32,
 ) -> Vec<Row> {
     let look = Look::default();
     let facts = BTreeMap::new();
