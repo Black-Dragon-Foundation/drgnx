@@ -25,9 +25,18 @@
 
 (defvar drgnx-rules--placing)             ; wb/drgnx-rules.el: a side window we mean is not rerouted
 (defvar drgnx-pane-backend)
+(defvar drgnx-pane-place-view-function)
+(defvar drgnx-git-changed-functions)
+(defvar drgnx-extensions-jobs-done-functions)
+(defvar drgnx-hub-event-functions)
+(defvar compilation-finish-functions)
 (declare-function drgnx-wb-sidebar-showing-p "drgnx-wb" (&optional frame))
 (declare-function drgnx-wb-sidebar-view "drgnx-wb" (&optional frame))
 (declare-function drgnx-wb-show-view "drgnx-wb" (view))
+(declare-function drgnx-shell-set "drgnx-frame-shell" (frame key value))
+(declare-function drgnx-shell-get "drgnx-frame-shell" (frame key))
+(declare-function drgnx-shell-right-for "drgnx-frame-shell" (place))
+(declare-function drgnx-pane-show "drgnx-panes")
 (declare-function drgnx-wb-hide-sidebar "drgnx-wb" ())
 (declare-function drgnx-wb-grid-p "drgnx-wb" ())
 (declare-function drgnx-command-define "drgnx-registry")
@@ -89,6 +98,54 @@ place of the view the side bar shows."
     (setq drgnx-rail--changed (delq place drgnx-rail--changed))
     (drgnx-rail-refresh)))
 
+(defun drgnx-rail-places ()
+  "The rail's place ids, in order (the variable `drgnx-rail-places' has their titles, icons and commands)."
+  (mapcar #'car drgnx-rail-places))
+
+(defun drgnx-rail-changed-p (place &optional _frame)
+  "Non-nil when PLACE has its dot: something changed there since it was last shown."
+  (and (memq place drgnx-rail--changed) t))
+
+;;;; Each place's own signal
+
+(defun drgnx-rail--hub-event (event _data)
+  "A `drgnx-hub-event-functions' handler: the hub's search, machines and debug events dot their places."
+  (pcase event
+    ("search-run-done" (drgnx-rail-mark-changed 'search))
+    ("machines-changed" (drgnx-rail-mark-changed 'machines))
+    ("debug-ended" (drgnx-rail-mark-changed 'run))))
+
+(defun drgnx-rail--files-changed () "A visited file changed on disk and was read again." (drgnx-rail-mark-changed 'files))
+(defun drgnx-rail--git-changed (&rest _) "A repository's status was read." (drgnx-rail-mark-changed 'changes))
+(defun drgnx-rail--run-ended (&rest _) "A compilation or run ended." (drgnx-rail-mark-changed 'run))
+(defun drgnx-rail--extensions-done (&rest _) "An Extensions job ended." (drgnx-rail-mark-changed 'extensions))
+
+(defconst drgnx-rail--signals
+  '((after-revert-hook . drgnx-rail--files-changed)
+    (drgnx-git-changed-functions . drgnx-rail--git-changed)
+    (compilation-finish-functions . drgnx-rail--run-ended)
+    (drgnx-extensions-jobs-done-functions . drgnx-rail--extensions-done)
+    (drgnx-hub-event-functions . drgnx-rail--hub-event))
+  "(HOOK . FUNCTION): the signals that put a dot on a place, hooked while the rail is on.  Work has none: its own
+needs-you count is its signal.")
+
+(defun drgnx-rail-producers ()
+  "Each place but Work with a function that gives it its dot (`drgnx-shell-changed-producers')."
+  (list (cons 'files #'drgnx-rail--files-changed)
+        (cons 'search (lambda () (drgnx-rail--hub-event "search-run-done" nil)))
+        (cons 'changes #'drgnx-rail--git-changed)
+        (cons 'run #'drgnx-rail--run-ended)
+        (cons 'machines (lambda () (drgnx-rail--hub-event "machines-changed" nil)))
+        (cons 'extensions #'drgnx-rail--extensions-done)))
+
+(defun drgnx-rail--show-place-view (place)
+  "Show PLACE's view in the side bar, or run its command (`drgnx-pane-place-view-function')."
+  (pcase-let ((`(,_ ,view ,command) (assq place drgnx-rail--targets)))
+    (set-frame-parameter nil 'drgnx-rail-place (and (not view) place))
+    (cond (command (drgnx-ui-kit-run command))
+          (view (drgnx-wb-show-view view)))
+    (drgnx-rail-clear-changed place)))
+
 ;;;; Going to a place
 
 (defun drgnx-rail-go (place)
@@ -100,7 +157,11 @@ place with its view in the side bar, hide the side bar instead."
         (drgnx-wb-hide-sidebar)
       (set-frame-parameter nil 'drgnx-rail-place (and (not view) place))
       (cond (command (drgnx-ui-kit-run command))
-            (view (drgnx-wb-show-view view))))
+            (view (drgnx-wb-show-view view)))
+      ;; the grid's shell: the place also sets the right side (Work's Detail, else the Agents side)
+      (when (and (eq (bound-and-true-p drgnx-pane-backend) 'grid) (fboundp 'drgnx-shell-set))
+        (drgnx-shell-set nil :place place)
+        (when (drgnx-shell-get nil :right) (drgnx-pane-show (drgnx-shell-right-for place)))))
     (drgnx-rail-clear-changed place)
     (drgnx-rail-refresh)
     place))
@@ -299,10 +360,15 @@ between cards)."
         (drgnx-state-subscribe 'windows-changed #'drgnx-rail--windows-changed)
         (drgnx-state-subscribe 'frame-added #'drgnx-rail--windows-changed)
         (add-hook 'drgnx-look-density-changed-hook #'drgnx-rail--scale-changed)
+        (pcase-dolist (`(,hook . ,fn) drgnx-rail--signals) (add-hook hook fn))
+        (setq drgnx-pane-place-view-function #'drgnx-rail--show-place-view)
         (drgnx-rail--apply))
     (drgnx-state-unsubscribe 'windows-changed #'drgnx-rail--windows-changed)
     (drgnx-state-unsubscribe 'frame-added #'drgnx-rail--windows-changed)
     (remove-hook 'drgnx-look-density-changed-hook #'drgnx-rail--scale-changed)
+    (pcase-dolist (`(,hook . ,fn) drgnx-rail--signals) (remove-hook hook fn))
+    (when (eq drgnx-pane-place-view-function #'drgnx-rail--show-place-view)
+      (setq drgnx-pane-place-view-function nil))
     (dolist (f (frame-list))
       (when-let* ((w (drgnx-rail-window f)))
         (let ((ignore-window-parameters t)) (ignore-errors (delete-window w)))))

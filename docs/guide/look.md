@@ -287,6 +287,10 @@ the dot goes when you go there. Hover a place for its name.
   current place hides the side bar instead (a second click closes what the first opened). Work, Machines and
   Extensions open in the editor area, and the rail marks them current until you choose another place. `C-S-e`,
   `C-S-f` and `C-S-g` in the VS Code profile still open Files, Search and Source Control.
+- A place also sets the right side: Work shows its Detail there, every other place the Agents side.
+- A dot comes from each place's own signal: a visited file changed on disk (Files), a search finished (Search), a
+  repository's status was read (Changes), a run or debug session ended (Run), the machines changed (Machines), an
+  Extensions job ended (Extensions). Work's signal is its own needs-you count.
 - The rail is a window beside the grid, not a tile of it: it lives under the grid backend (the default). The status
   bar still runs across the whole window, under the rail. In a terminal it is three columns of glyphs.
 - **Hide or show it** with the shell toggle of the window (`drgnx-shell-toggle-rail`): a window that shows only Work

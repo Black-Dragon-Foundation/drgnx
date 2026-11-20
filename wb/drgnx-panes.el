@@ -366,11 +366,17 @@ still the one defined here.  Defining a new KIND that is in front in an area tha
 ;; Every operation that changes windows is a write (`drgnx-state-with-write'): BY says who asked — `user',
 ;; `auto', `layout', `restore', `teardown' or `other'; nil is `user' inside a command, `auto' outside.
 
-(cl-defun drgnx-pane-show (kind &key buffer select by)
+(defvar drgnx-pane-place-view-function nil
+  "A function of a rail place that puts the place's view in the side bar (the rail sets it while it is on), or nil.")
+
+(cl-defun drgnx-pane-show (kind &key buffer select by place)
   "Show pane KIND, with BUFFER if given, and return its window.
 It never changes the selected window unless SELECT is non-nil.  A left kind ignores BUFFER (a section's
-buffer is its own).  BY: who asked (see above); a bottom or right kind becomes its area's `:front' intent."
+buffer is its own).  BY: who asked (see above); a bottom or right kind becomes its area's `:front' intent.
+PLACE: a rail place whose view the `side-bar' kind shows (`drgnx-pane-place-view-function' puts it there first)."
   (drgnx-pane--spec kind)
+  (when (and place drgnx-pane-place-view-function)
+    (funcall drgnx-pane-place-view-function place))
   (drgnx-state-with-write (nil by)
     (drgnx-pane--call :show kind buffer select)))
 

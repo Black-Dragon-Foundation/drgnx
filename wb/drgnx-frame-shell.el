@@ -104,5 +104,27 @@ conversation (one tile of the agent panel)."
   "The kind the right side shows for PLACE: Work's Detail for `work', the agents' side for every other place."
   (if (eq place 'work) 'work-detail 'agents-side))
 
+;;;; Places (Flow Task 19)
+
+(declare-function drgnx-pane-show "drgnx-panes")
+(declare-function drgnx-pane-hide "drgnx-panes")
+(declare-function drgnx-rail-producers "drgnx-rail")
+
+(defun drgnx-shell-show-place (place)
+  "Show PLACE: its view in the side-bar dock tile, and on the right the kind `drgnx-shell-right-for' names (while
+this window's right side is on).  The place already shown hides the side bar instead.  Only the selected frame."
+  (if (eq place (drgnx-shell-get nil :place))
+      (progn (drgnx-pane-hide 'side-bar) (drgnx-shell-set nil :place nil))
+    (drgnx-pane-show 'side-bar :place place)
+    (drgnx-shell-set nil :place place)
+    (when (drgnx-shell-get nil :right)
+      (drgnx-pane-show (drgnx-shell-right-for place))))
+  place)
+
+(defun drgnx-shell-changed-producers ()
+  "Each place but Work with the function its own signal calls to give it the rail's dot."
+  (require 'drgnx-rail)
+  (drgnx-rail-producers))
+
 (provide 'drgnx-frame-shell)
 ;;; drgnx-frame-shell.el ends here
