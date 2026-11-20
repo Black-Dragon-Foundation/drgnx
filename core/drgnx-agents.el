@@ -173,7 +173,8 @@ choose per resume."
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
   mcp-dir mcp-sid mcp-socket            ; unused since the hub runs every session; kept so the shape stays
-  hooked panel plugins-changed hooks)   ; a hub session's hook reach, panel, plugin flag and ((STEP TOOL-ID ROWS)…)
+  hooked panel plugins-changed hooks    ; a hub session's hook reach, panel, plugin flag and ((STEP TOOL-ID ROWS)…)
+  background background-ended)         ; ACP v2's background items (nil: not reported) and the last ended ones (plists)
 
 (defvar drgnx-agents--sessions nil "Live and finished sessions, newest first.")
 
@@ -622,10 +623,20 @@ pending edits rejected; queued messages wait (`drgnx-agents-deliver-queue')."
   (when (drgnx-agent-session-remote s)
     (drgnx-agents--remote s "agents/stop" nil)))
 
-(defun drgnx-agents-kill (s)
-  "End session S's agent process (in the hub)."
+(defvar drgnx-agents-end-ask-functions nil
+  "Abnormal hook, run with the session by `drgnx-agents-kill' when a command the user ran ends a chat (ASK): a function
+that returns nil keeps the chat (the background work asks \"End this chat?\").  Never run from code or a timer.")
+
+(defvar drgnx-agents-background-functions nil
+  "Called with a mirror after a hub snapshot of its session was taken in (its background items may have changed).")
+
+(defun drgnx-agents-kill (s &optional ask)
+  "End session S's agent process (in the hub).  ASK: it is a command the user ran: `drgnx-agents-end-ask-functions'
+may keep the chat.  Called from code (no ASK, no running command, an automatic path) it never asks."
   (when (drgnx-agent-session-remote s)
-    (drgnx-agents--remote s "agents/kill" nil)))
+    (when (or (not ask) (not this-command) (bound-and-true-p drgnx-guard--automatic)
+              (run-hook-with-args-until-failure 'drgnx-agents-end-ask-functions s))
+      (drgnx-agents--remote s "agents/kill" nil))))
 
 (defun drgnx-agents-sessions () drgnx-agents--sessions)
 

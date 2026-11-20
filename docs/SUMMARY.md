@@ -108,6 +108,7 @@
     - [Detail island](design/components/detail-island.md)
     - [Empty states](design/components/empty-states.md)
     - [Explorer](design/components/explorer.md)
+    - [Background list](design/components/background-list.md)
     - [Lens bar](design/components/lens-bar.md)
     - [Notebook cell](design/components/notebook-cell.md)
     - [Palette](design/components/palette.md)

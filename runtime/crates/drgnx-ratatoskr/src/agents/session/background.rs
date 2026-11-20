@@ -464,3 +464,60 @@ fn cap(bytes: &mut Vec<u8>) {
         bytes.drain(..over);
     }
 }
+
+/// The causes kept.
+const CAUSE_CAP: usize = 20;
+
+/// What woke the agent: the item whose end came before a turn nobody asked for (a prompt of the user is not one).
+#[derive(Default)]
+pub struct Causes {
+    /// The newest item that ended since the last turn, as (id, description).
+    pending: Option<(String, String)>,
+    pub list: Vec<runstav::methods::agents::BackgroundCause>,
+}
+
+impl Causes {
+    /// ITEM left the background list.
+    pub fn ended(&mut self, i: &Item) {
+        self.pending = Some((i.id.clone(), i.description.clone()));
+    }
+
+    /// The user's message came: the turn it starts is theirs.
+    pub fn user(&mut self) {
+        self.pending = None;
+    }
+
+    /// An entry of the agent, number IDX, was added; TURN_RUNNING: a turn of the hub's was running (the entry is its).
+    pub fn entry(&mut self, idx: usize, turn_running: bool) {
+        if turn_running {
+            return;
+        }
+        if let Some((item, description)) = self.pending.take() {
+            self.list.push(runstav::methods::agents::BackgroundCause {
+                entry: idx as u64,
+                item,
+                description,
+            });
+            if self.list.len() > CAUSE_CAP {
+                self.list.remove(0);
+            }
+        }
+    }
+}
+
+/// The newest CAP bytes of a terminal's output as text (a cut inside a character starts at the next one), the size of
+/// the whole, and whether bytes were left out.
+pub fn terminal_text(bytes: &[u8], cap: usize) -> (String, u64, bool) {
+    let start = bytes.len().saturating_sub(cap);
+    let mut tail = &bytes[start..];
+    if start > 0 {
+        while tail.first().is_some_and(|b| b & 0xC0 == 0x80) {
+            tail = &tail[1..];
+        }
+    }
+    (
+        String::from_utf8_lossy(tail).into_owned(),
+        bytes.len() as u64,
+        start > 0,
+    )
+}

@@ -2,6 +2,8 @@ use super::*;
 use drgnx_rows::faces::FaceId;
 use std::collections::BTreeMap;
 
+static NO_BG: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+
 fn entry(kind: EntryType, rest: Value) -> Entry {
     Entry {
         kind,
@@ -35,6 +37,7 @@ fn rows_with(
         always: &always,
         prov: &prov,
         right: &right,
+        bg: &NO_BG,
     };
     group_rows(3, e, &[], None, &cx)
 }
@@ -197,6 +200,7 @@ fn a_steps_time_and_cost_are_measured_in_the_fonts_they_are_drawn_in() {
         always: &always,
         prov: &prov,
         right: &right,
+        bg: &NO_BG,
     };
     group_rows(3, &stepped("completed"), &[], None, &cx);
     let want: Vec<(String, String)> = [
@@ -724,4 +728,50 @@ mod panel_blocks {
             assert_eq!(prop(&rows[0], "drgnx-agent-panel-entry"), Some(&json!(7)));
         }
     }
+}
+
+// ---- background work in the transcript ----
+
+fn rows_bg(e: &Entry, bg: &BTreeMap<String, (u64, u64)>) -> Vec<Row> {
+    let look = Look::default();
+    let facts = BTreeMap::new();
+    let (always, prov) = (|_: &Entry| false, |_: &Entry| None);
+    let right = |_: &[(&str, &str)]| 300;
+    let cx = Cx {
+        look: &look,
+        facts: &facts,
+        always: &always,
+        prov: &prov,
+        right: &right,
+        bg,
+    };
+    group_rows(3, e, &[], None, &cx)
+}
+
+#[test]
+fn bg_tool_card_live_until_end() {
+    let e = tool(
+        json!({"id": "toolu_1", "title": "cargo test -p hermod", "kind": "execute", "status": "completed"}),
+    );
+    // the call returned at once, but its item still runs: the card is live, with its tag and elapsed time
+    let live = BTreeMap::from([("toolu_1".to_owned(), (1_000_000u64 - 252_000, 1_000_000u64))]);
+    let rows = rows_bg(&e, &live);
+    assert!(rows[0].text.contains("in background"), "{:?}", rows[0].text);
+    assert!(rows[0].text.contains("4:12"), "{:?}", rows[0].text);
+    assert!(
+        rows[0].text.starts_with("  ○"),
+        "the run dot, not the done one: {:?}",
+        rows[0].text
+    );
+    let el: Vec<_> = rows[0]
+        .props
+        .iter()
+        .filter(|p| p.2 == "drgnx-bg-elapsed")
+        .collect();
+    assert_eq!(el.len(), 1);
+    assert_eq!(el[0].3, json!(1_000_000u64 - 252_000));
+    // once the item has ended the card is the ordinary one
+    let done = rows_bg(&e, &BTreeMap::new());
+    assert!(!done[0].text.contains("in background"));
+    assert!(done[0].text.starts_with("  ●"), "{:?}", done[0].text);
 }

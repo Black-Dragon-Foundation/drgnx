@@ -57,6 +57,7 @@ pub fn sessions_now(f: &Front) -> Vec<SessionIn> {
                 past: false,
                 seq: 1 + i as u64,
                 budget: budget_of(f, &snap.id),
+                background: crate::view::bgwork::running(&snap),
             }
         })
         .collect();
@@ -81,6 +82,7 @@ pub fn sessions_now(f: &Front) -> Vec<SessionIn> {
             past: true,
             seq: n + 1 + i as u64,
             budget: None,
+            background: 0,
         }
     }));
     out
@@ -175,6 +177,8 @@ pub struct SessionIn {
     pub seq: u64,
     /// The dollar limit that holds it, when one does.
     pub budget: Option<Budget>,
+    /// How many items run in its background.
+    pub background: usize,
 }
 
 /// A session's spend against the dollar limit that holds it.
@@ -231,6 +235,8 @@ pub struct Card {
     pub progress: Option<(u32, u32)>,
     pub action: Option<CardAction>,
     pub budget: Option<Budget>,
+    /// How many items run in its background.
+    pub background: usize,
 }
 
 fn state_word(s: State) -> &'static str {
@@ -275,6 +281,7 @@ fn card(s: &SessionIn) -> Card {
         progress: s.progress,
         action,
         budget: s.budget,
+        background: s.background,
     }
 }
 
@@ -352,6 +359,12 @@ pub fn card_rows(c: &Card, env: &KitEnv) -> Vec<Row> {
         },
     );
     head.push(&format!(" {} · {}", c.name, c.provider), None);
+    if c.background > 0 {
+        head.push(
+            &format!("  ⟳ {}", c.background),
+            Some(drgnx_rows::faces::FaceId::Accent.name()),
+        );
+    }
     let end = head.pos();
     head.prop(0, end, "drgnx-agent-mark", json!(c.mark));
     head.prop(
@@ -484,6 +497,7 @@ mod tests {
             past,
             seq: 1,
             budget: None,
+            background: 0,
         }
     }
 
@@ -696,5 +710,18 @@ mod tests {
             .collect();
         assert!(text.contains("Paused at its limit"), "{text:?}");
         assert!(text.contains("$5.00 of $5.00"), "{text:?}");
+    }
+
+    #[test]
+    fn agents_list_row_shows_background_count() {
+        let mut busy = s("run", State::Running, 5, false);
+        busy.background = 2;
+        let (now, _, _) = cards(&[busy, s("idle", State::Paused, 4, false)]);
+        let head = |id: &str| {
+            let c = now.iter().find(|c| c.session == id).unwrap();
+            card_rows(c, &kit_env())[0].text.clone()
+        };
+        assert!(head("run").contains("⟳ 2"), "{}", head("run"));
+        assert!(!head("idle").contains('⟳'), "{}", head("idle"));
     }
 }

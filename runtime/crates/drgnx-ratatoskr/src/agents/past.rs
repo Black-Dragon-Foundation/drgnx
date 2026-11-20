@@ -1141,6 +1141,7 @@ pub fn transcript_rows(entries: &[Entry]) -> Vec<Row> {
         always: &|_| false,
         prov: &|_| None,
         right: &|_| 0,
+        bg: &rows::NO_BG,
     };
     let mut out = Vec::new();
     for (head, thoughts) in rows::groups(&all) {

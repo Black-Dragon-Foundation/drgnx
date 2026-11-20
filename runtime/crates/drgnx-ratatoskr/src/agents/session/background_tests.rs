@@ -409,3 +409,78 @@ fn the_echo_of_the_prompt_is_the_turns_own_entry() {
     );
     assert_eq!(users[0].rest["text"], "hello");
 }
+
+// ---- what woke the agent, and a terminal's output as text ----
+
+fn ended_item(id: &str, what: &str) -> Item {
+    serde_json::from_value(json!({
+        "kind": "terminal", "id": id, "description": what, "started_ms": 0, "status": "running",
+        "can_cancel": false, "end": {"status": "failed", "exit_code": 1}
+    }))
+    .expect("an item")
+}
+
+#[test]
+fn a_turn_nobody_asked_for_after_an_end_names_the_item() {
+    let mut c = Causes::default();
+    c.ended(&ended_item("t1", "cargo test"));
+    // entries while a turn runs belong to it, and the agent's idle entry after it is the cause's turn
+    c.entry(4, true);
+    assert!(c.list.is_empty());
+    c.entry(5, false);
+    assert_eq!(c.list.len(), 1);
+    assert_eq!(
+        (
+            c.list[0].entry,
+            c.list[0].item.as_str(),
+            c.list[0].description.as_str()
+        ),
+        (5, "t1", "cargo test")
+    );
+    // one cause, one turn
+    c.entry(6, false);
+    assert_eq!(c.list.len(), 1);
+}
+
+#[test]
+fn a_prompt_of_the_user_is_no_cause() {
+    let mut c = Causes::default();
+    c.ended(&ended_item("t1", "cargo test"));
+    c.user();
+    c.entry(7, false);
+    assert!(c.list.is_empty());
+}
+
+#[test]
+fn only_the_last_causes_are_kept() {
+    let mut c = Causes::default();
+    for n in 0..30 {
+        c.ended(&ended_item(&format!("t{n}"), "x"));
+        c.entry(n, false);
+    }
+    assert_eq!(c.list.len(), 20);
+    assert_eq!(c.list.last().map(|x| x.item.as_str()), Some("t29"));
+}
+
+#[test]
+fn a_terminals_output_is_its_newest_bytes_as_text() {
+    let (text, total, truncated) = terminal_text(b"line 1\nline 2\n", 1024);
+    assert_eq!(
+        (text.as_str(), total, truncated),
+        ("line 1\nline 2\n", 14, false)
+    );
+    let big: Vec<u8> = (0..10)
+        .flat_map(|n| format!("row {n}\n").into_bytes())
+        .collect();
+    let (text, total, truncated) = terminal_text(&big, 14);
+    assert_eq!(total, 60);
+    assert!(truncated);
+    assert!(
+        text.ends_with("row 9\n") && text.contains("row 8"),
+        "{text:?}"
+    );
+    // a cut inside a multi-byte character leaves no replacement character at the start
+    let (text, _, truncated) = terminal_text("aé".as_bytes(), 2);
+    assert!(truncated);
+    assert!(!text.contains('\u{fffd}'), "{text:?}");
+}

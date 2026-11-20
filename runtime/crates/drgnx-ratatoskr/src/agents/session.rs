@@ -243,6 +243,8 @@ struct State {
     /// ACP v2's background work, as the agent reports it (none for a v1 agent) and what the hub knows of its items.
     bg: background::Background,
     known: background::Known,
+    /// The turns the agent started by itself after an item ended.
+    causes: background::Causes,
 }
 
 /// What a tool call's update tells the presence model's live feed ([`crate::work::presence`]): taken under the state's
@@ -405,6 +407,7 @@ impl State {
             concluded: Default::default(),
             bg: Default::default(),
             known: Default::default(),
+            causes: Default::default(),
             closed: Vec::new(),
             before: None,
             edits: Vec::new(),
@@ -736,9 +739,16 @@ impl State {
     }
 
     fn push(&mut self, kind: EntryType, rest: Map<String, Value>) -> usize {
+        let user = kind == EntryType::User;
         self.entries.push(Entry { kind, rest });
         let i = self.entries.len() - 1;
         self.dirty.insert(i);
+        if user {
+            self.causes.user();
+        } else {
+            let running = self.core.status() == SessionStatus::Busy;
+            self.causes.entry(i, running);
+        }
         i
     }
 
@@ -818,8 +828,16 @@ impl State {
         background: Option<Vec<hermod::BackgroundRef>>,
     ) {
         self.seq += 1;
-        let State { bg, known, .. } = self;
+        let State {
+            bg, known, causes, ..
+        } = self;
+        let before = bg.ended.back().map(|i| i.id.clone());
         bg.apply_snapshot(background, |r| known.item(r));
+        if let Some(last) = bg.ended.back()
+            && Some(&last.id) != before.as_ref()
+        {
+            causes.ended(last);
+        }
         if state == hermod::RunState::Unknown {
             bg.mark_unknown();
         }
@@ -4503,6 +4521,28 @@ impl Session {
         Some(super::tool_output::page(&parts, total, from, to))
     }
 
+    /// The output of background item ITEM: a terminal's newest bytes (as the hub kept them), or a tool call's output.
+    pub(crate) fn background_output(
+        &self,
+        item: &str,
+    ) -> Option<runstav::methods::agents::ToolOutput> {
+        let cap = super::tool_output::PAGE_CAP;
+        if let Some(t) = lock(&self.state).known.terminals.get(item) {
+            let (text, total_bytes, truncated) = background::terminal_text(&t.bytes, cap);
+            return Some(runstav::methods::agents::ToolOutput {
+                text,
+                total_bytes,
+                truncated,
+            });
+        }
+        let page = self.tool_output(item, 0, cap as u64)?;
+        Some(runstav::methods::agents::ToolOutput {
+            text: page.text,
+            total_bytes: page.total_bytes,
+            truncated: page.truncated,
+        })
+    }
+
     /// The raw input of tool call TOOL_CALL, capped.
     pub(crate) fn tool_input(&self, tool_call: &str) -> Option<(Value, bool)> {
         let st = lock(&self.state);
@@ -4614,6 +4654,7 @@ impl Session {
             mcp: self.mcp_servers.clone(),
             background: st.background_view(self.own_jobs()),
             background_ended: st.bg.ended.iter().cloned().collect(),
+            caused: st.causes.list.clone(),
             proto: self.proto.clone(),
             v2_fallback: self.v2_fallback.clone(),
         }

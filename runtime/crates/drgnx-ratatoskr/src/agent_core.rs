@@ -127,6 +127,9 @@ pub async fn serve(
         Params::AgentsBackgroundCancel(p) => {
             answer(agents::session::panel::background_cancel(f, c, p).await)
         }
+        Params::AgentsBackgroundOutput(p) => {
+            answer(agents::session::panel::background_output(f, c, p))
+        }
         Params::AgentsContextDrop(p) => answer(agents::session::panel::context_drop(f, c, p).await),
         Params::AgentsContextPin(p) => answer(agents::session::panel::context_pin(f, c, p).await),
         Params::AgentsConfig(p) => answer(agents::session::panel::config(f, c, p).await),

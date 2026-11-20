@@ -3,6 +3,31 @@
     {
       "data": {
         "$defs": {
+          "BackgroundCause": {
+            "additionalProperties": false,
+            "description": "What woke the agent: the background item whose end came before a turn nobody asked for.",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "entry": {
+                "description": "The first entry of the turn.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "item": {
+                "description": "The item's id and its description (the item may have left the ended list by the time the turn is shown).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "entry",
+              "item",
+              "description"
+            ],
+            "type": "object"
+          },
           "BackgroundEnd": {
             "additionalProperties": false,
             "description": "How a background item ended.",
@@ -425,6 +450,13 @@
                 ]
               },
               "capabilities": true,
+              "caused": {
+                "description": "The turns the agent started by itself after an item ended (the last 20): the turn's first entry and the item that\nwoke it.",
+                "items": {
+                  "$ref": "#/$defs/BackgroundCause"
+                },
+                "type": "array"
+              },
               "commands": {
                 "default": [],
                 "items": true,
@@ -5418,6 +5450,67 @@
       "classes": [
         "user"
       ],
+      "doc": "the output of one item of the session's background list: a terminal's newest bytes as the hub kept them (at most 256 KiB, `truncated` when older ones were left out), a tool call's output; an item that is not listed or has no output: invalid-params",
+      "name": "agents/background-output",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`agents/background-output`: the output of one item of the session's background list.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "item": {
+            "description": "The item's `id` in the session's `background` list.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "item"
+        ],
+        "title": "BackgroundOutputParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A range of a tool call's output: bytes `from..to` of it (cut at character boundaries), the size of the whole, and\nwhether the answer holds less than was asked (the page cap, or output the hub did not keep).",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "total_bytes",
+          "truncated"
+        ],
+        "title": "ToolOutput",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "end one buffer view of this connection (false: none was open; a connection's views end with it)",
       "name": "agents/buffer/unwatch",
       "params": {
@@ -6452,6 +6545,31 @@
       },
       "result": {
         "$defs": {
+          "BackgroundCause": {
+            "additionalProperties": false,
+            "description": "What woke the agent: the background item whose end came before a turn nobody asked for.",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "entry": {
+                "description": "The first entry of the turn.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "item": {
+                "description": "The item's id and its description (the item may have left the ended list by the time the turn is shown).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "entry",
+              "item",
+              "description"
+            ],
+            "type": "object"
+          },
           "BackgroundEnd": {
             "additionalProperties": false,
             "description": "How a background item ended.",
@@ -6904,6 +7022,13 @@
                 ]
               },
               "capabilities": true,
+              "caused": {
+                "description": "The turns the agent started by itself after an item ended (the last 20): the turn's first entry and the item that\nwoke it.",
+                "items": {
+                  "$ref": "#/$defs/BackgroundCause"
+                },
+                "type": "array"
+              },
               "commands": {
                 "default": [],
                 "items": true,
@@ -8309,6 +8434,31 @@
       },
       "result": {
         "$defs": {
+          "BackgroundCause": {
+            "additionalProperties": false,
+            "description": "What woke the agent: the background item whose end came before a turn nobody asked for.",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "entry": {
+                "description": "The first entry of the turn.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "item": {
+                "description": "The item's id and its description (the item may have left the ended list by the time the turn is shown).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "entry",
+              "item",
+              "description"
+            ],
+            "type": "object"
+          },
           "BackgroundEnd": {
             "additionalProperties": false,
             "description": "How a background item ended.",
@@ -8731,6 +8881,13 @@
                 ]
               },
               "capabilities": true,
+              "caused": {
+                "description": "The turns the agent started by itself after an item ended (the last 20): the turn's first entry and the item that\nwoke it.",
+                "items": {
+                  "$ref": "#/$defs/BackgroundCause"
+                },
+                "type": "array"
+              },
               "commands": {
                 "default": [],
                 "items": true,
@@ -9203,6 +9360,14 @@
         "additionalProperties": false,
         "description": "`agents/panel/look`: what the user chose for an agent panel (docs/develop/hub.md, \"The agent panel's rows\").  Each\nfield given replaces the one before; none given builds the rows again.",
         "properties": {
+          "bg_selected": {
+            "description": "The background item selected in the pinned list (its actions show on its row); the empty string: none.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "dear_cost": {
             "description": "A step that cost more than this shows its cost in the warning face (`drgnx-agent-panel-expensive-cost`).",
             "format": "double",
