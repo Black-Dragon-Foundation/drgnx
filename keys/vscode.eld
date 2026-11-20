@@ -259,6 +259,8 @@
               (prs-changes "d" :map drgnx-prs-mode-map)
               (prs-toggle-closed :none "the palette")
               (agents-open "RET")
+              (agents-side-act "RET" :map drgnx-agents-side-mode-map)
+              (agents-side-back :none "the ← Agents arrow over the conversation; the palette")
               (sessions-view :none "in the palette")
               (sessions-search "/")
               (sessions-open "RET")

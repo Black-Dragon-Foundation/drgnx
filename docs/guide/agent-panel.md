@@ -218,6 +218,20 @@ and what waits for you. `RET` opens that session's panel. Enter on an agent's ca
 too. This list and the panel replaced the old Agents view; chat with a model (gptel) is gone with it, and the
 agent panel is where you talk to a model now.
 
+## The Agents side
+
+In the layout A shell the right side of every place but Work shows the **Agents side**: a card per agent, the ones that
+need you first, then the running ones, then the rest. A card has the agent's mark, its name and provider, its task, a
+state line ("running · $1.20/$5 · 3/6") with one bar, and one button: **Answer** when it needs you, **Review** when its
+edits are ready, **Open** otherwise. The bar is the plan's progress; when the agent's spend nears its dollar limit
+(80 %) the budget meter takes its place (there are never two bars), and at the limit the card says "Paused at its
+limit · $5.00 of $5.00" and sorts first. **Earlier** lists the five newest past sessions, and **All ›** the rest.
+
+A card's button shows its conversation in the side itself, in the compact form (header, transcript and composer), with
+**← Agents** above it to go back to the cards. With a file in the editor, the composer offers it as a removable chip
+("@ file", or "@ lines a–b" with a region), and when an agent is working on that file a chip "Sonnet is editing this
+file ›" offers its conversation; the side never switches by itself.
+
 ## Ask an agent about this
 
 *Ask an Agent About This* (`ask-agent-about-this`; VS Code `Ctrl+I`, Emacs `C-c w a`, Vim `SPC a a`; also in the
