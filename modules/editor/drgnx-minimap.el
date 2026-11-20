@@ -421,6 +421,43 @@ the strip (ON)."
                    "Keep the minimap open and move, search, peek and fold in it with keys"))
   "The module's commands: (ID TITLE FUNCTION DOC) each.")
 
+(defconst drgnx-minimap--map-commands
+  '((minimap-focus-down "Minimap: Down" drgnx-minimap-focus-down drgnx-minimap-focus-map
+                        "Move the focused minimap's row down")
+    (minimap-focus-up "Minimap: Up" drgnx-minimap-focus-up drgnx-minimap-focus-map "Move the focused minimap's row up")
+    (minimap-focus-search "Minimap: Search" drgnx-minimap-focus-search drgnx-minimap-focus-map
+                          "Search the file and mark the hits on the focused minimap")
+    (minimap-focus-next "Minimap: Next Hit" drgnx-minimap-focus-next drgnx-minimap-focus-map
+                        "Move the focused minimap's row to the next search hit")
+    (minimap-focus-previous "Minimap: Previous Hit" drgnx-minimap-focus-previous drgnx-minimap-focus-map
+                            "Move the focused minimap's row to the previous search hit")
+    (minimap-focus-peek "Minimap: Peek" drgnx-minimap-focus-peek drgnx-minimap-focus-map
+                        "Peek at the focused minimap's row")
+    (minimap-focus-fold "Minimap: Fold" drgnx-minimap-focus-fold drgnx-minimap-focus-map
+                        "Fold or unfold the range at the focused minimap's row")
+    (minimap-focus-go "Minimap: Go" drgnx-minimap-focus-go drgnx-minimap-focus-map
+                      "Go to the focused minimap's row and leave the minimap")
+    (minimap-focus-leave "Minimap: Leave" drgnx-minimap-focus-leave drgnx-minimap-focus-map
+                         "Leave the minimap: point back where it was")
+    (minimap-card-jump "Minimap Peek: Go" drgnx-minimap-card-jump drgnx-minimap-card-map "Go to the peeked line")
+    (minimap-card-close "Minimap Peek: Close" drgnx-minimap-card-hide drgnx-minimap-card-map "Close the minimap's peek")
+    (minimap-bucket-jump "Minimap Part: Go" drgnx-minimap-bucket-jump drgnx-minimap-bucket-map
+                         "Go to the peeked part of a huge file, when the buffer holds it")
+    (minimap-bucket-close "Minimap Part: Close" drgnx-minimap-card-hide drgnx-minimap-bucket-map
+                          "Close the peek of a huge file's part")
+    (minimap-chip-copy "Minimap Selection: Copy" drgnx-minimap-chip-copy drgnx-minimap-chip-map
+                       "Copy the minimap's selected lines")
+    (minimap-chip-fold "Minimap Selection: Fold" drgnx-minimap-chip-fold drgnx-minimap-chip-map
+                       "Fold the minimap's selected lines")
+    (minimap-chip-pin "Minimap Selection: Pin" drgnx-minimap-chip-pin drgnx-minimap-chip-map
+                      "Pin the minimap's selected lines")
+    (minimap-chip-ask "Minimap Selection: Ask Agent" drgnx-minimap-chip-ask drgnx-minimap-chip-map
+                      "Ask an agent about the minimap's selected lines")
+    (minimap-chip-close "Minimap Selection: Close" drgnx-minimap-card-hide drgnx-minimap-chip-map
+                        "Close the selection's chip"))
+  "The keys of the minimap's focus, peek, part peek and selection chip: (ID TITLE FUNCTION MAP DOC) each.  Their keys
+come from the profiles (`:map' rows); the maps bind only the mouse in code.")
+
 (defun drgnx-minimap--teardown ()
   "The scroll bar and the marks' producers off; every window's strip gone."
   (drgnx-marks-off)
@@ -442,6 +479,9 @@ the strip (ON)."
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-minimap--commands)
                                 (drgnx-command-define id :category "Go" :title title :command fn :scope 'editing
                                                       :doc doc))
+                              (pcase-dolist (`(,id ,title ,fn ,map ,doc) drgnx-minimap--map-commands)
+                                (drgnx-command-define id :category "Go" :title title :command fn :map map
+                                                      :scope 'editing :doc doc))
                               (add-hook 'drgnx-ruler-place-functions #'drgnx-minimap--place)
                               ;; the horizontal strip: Nidhogg's press and drag events, the sideways wheel and tilt
                               (define-key special-event-map [glitnir-hstrip] #'drgnx-minimap-hstrip-scroll)

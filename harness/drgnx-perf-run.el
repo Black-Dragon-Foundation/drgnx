@@ -2642,6 +2642,25 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                                     (kill-buffer b)))"
                                (or drgnx-perf-run--fixture ""))
              :check "(fboundp 'drgnx-fold-fold-all)")
+            ;; the minimap's peek (design M2): a dwell on line 120 of 200 to the card shown, 20 times, ≤ 80 ms each
+            (minimap-peek
+             :measure "(let ((b (generate-new-buffer \" peek-perf\")) (w (selected-window)) (ms nil))
+                         (unwind-protect
+                             (save-window-excursion
+                               (switch-to-buffer b)
+                               (dotimes (i 200) (insert (format \"line %d of the peek\\n\" (1+ i))))
+                               (prog-mode) (goto-char (point-min)) (drgnx-ruler--place w) (redisplay t)
+                               (let ((pos (save-excursion (goto-char (point-min)) (forward-line 119) (point))))
+                                 (dotimes (_ 20)
+                                   (let ((t0 (float-time)))
+                                     (glitnir-minimap-event (list 'glitnir-minimap (list 'dwell w pos)))
+                                     (redisplay t)
+                                     (push (* 1000 (- (float-time) t0)) ms))
+                                   (unless drgnx-minimap--card (error \"minimap-peek: no card\"))
+                                   (drgnx-minimap-card-hide))))
+                           (kill-buffer b))
+                         (list :peek_ms (drgnx-perf-stats ms)))"
+             :check "(and (fboundp 'glitnir-minimap-event) (fboundp 'drgnx-minimap-peek-show))")
             ;; the first whole-text class pass of 1 MB of python (design §8: the main thread's share ≤ 40 ms; Task 11e-N
             ;; slices the rest on idle, `nidhogg-treesit-highlight-slice' at its default), 100 times: the refold with
             ;; Nidhogg's highlight query and its first slice at once (`first'), each idle slice after it (`slice'), the

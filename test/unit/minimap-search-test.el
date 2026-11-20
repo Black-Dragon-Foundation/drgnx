@@ -115,13 +115,16 @@ way; its end opens the chip over that range."
     (skip-unless (fboundp 'nidhogg-lines-set-hidden))
     (prog-mode)
     (drgnx-test-with-modules '(editor/fold)
-      (let ((ran 0))
-        (cl-letf (((symbol-function 'drgnx-test--fold-ran) (lambda () (cl-incf ran))))
-          (add-hook 'drgnx-fold-changed-hook 'drgnx-test--fold-ran nil t)
-          (drgnx-fold-create (minimap-search-test--line 12) (minimap-search-test--line 16))
-          (drgnx-fold-create (minimap-search-test--line 40) (minimap-search-test--line 44))
-          (should (equal '(12 40) (drgnx-fold-folded-lines)))
-          (should (> ran 0)))))))
+      ;; the counter leaves the hook before the module's teardown runs it again (a stub gone by then was void there)
+      (let* ((ran 0) (count (lambda () (cl-incf ran))))
+        (add-hook 'drgnx-fold-changed-hook count nil t)
+        (unwind-protect
+            (progn
+              (drgnx-fold-create (minimap-search-test--line 12) (minimap-search-test--line 16))
+              (drgnx-fold-create (minimap-search-test--line 40) (minimap-search-test--line 44))
+              (should (equal '(12 40) (drgnx-fold-folded-lines)))
+              (should (> ran 0)))
+          (remove-hook 'drgnx-fold-changed-hook count t))))))
 
 (provide 'minimap-search-test)
 ;;; minimap-search-test.el ends here

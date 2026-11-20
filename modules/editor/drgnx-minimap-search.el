@@ -66,9 +66,12 @@ then the minimap's); else `re-search-forward' or `search-forward' do, and the mo
   (let ((case-fold-search case-fold) hits)
     (save-excursion
       (goto-char (point-min))
-      (while (condition-case nil
-                 (if regexp (re-search-forward query nil t) (search-forward query nil t))
-               (invalid-regexp nil))
+      ;; an empty match steps one character on; at the end of the buffer it would match there again forever, so the
+      ;; search stops
+      (while (and (not (eobp))
+                  (condition-case nil
+                      (if regexp (re-search-forward query nil t) (search-forward query nil t))
+                    (invalid-regexp nil)))
         (if (= (match-beginning 0) (match-end 0))
             (unless (eobp) (forward-char 1))
           (push (cons (match-beginning 0) (match-end 0)) hits))))
@@ -205,19 +208,8 @@ the minimap: its hits show, the cursor goes to the first at or after it."
       (save-excursion (goto-char (plist-get f :cursor)) (drgnx-fold-toggle)))))
 
 (defvar drgnx-minimap-focus-map
-  (let ((m (make-sparse-keymap)))
-    (dolist (k '("j" "<down>")) (define-key m (kbd k) #'drgnx-minimap-focus-down))
-    (dolist (k '("k" "<up>")) (define-key m (kbd k) #'drgnx-minimap-focus-up))
-    (define-key m "/" #'drgnx-minimap-focus-search)
-    (define-key m "n" #'drgnx-minimap-focus-next)
-    (define-key m "N" #'drgnx-minimap-focus-previous)
-    (define-key m " " #'drgnx-minimap-focus-peek)
-    (define-key m "z" #'drgnx-minimap-focus-fold)
-    (define-key m (kbd "RET") #'drgnx-minimap-focus-go)
-    (define-key m [return] #'drgnx-minimap-focus-go)
-    (define-key m [escape] #'drgnx-minimap-focus-leave)
-    m)
-  "The keys of a focused minimap (`minimap-focus').")
+  (make-sparse-keymap)
+  "The keys of a focused minimap (`minimap-focus'): the profiles' `minimap-focus-*' rows.")
 
 ;;;; Line selection (X2)
 
@@ -302,12 +294,10 @@ the minimap: its hits show, the cursor goes to the first at or after it."
 
 (defvar drgnx-minimap-chip-map
   (let ((m (make-sparse-keymap)))
-    (pcase-dolist (`(,k ,_ ,cmd) drgnx-minimap--chip-actions) (define-key m k cmd))
-    (define-key m [escape] #'drgnx-minimap-card-hide)
     (define-key m [down-mouse-1] #'ignore)
     (define-key m [mouse-1] #'drgnx-minimap-chip-click)
     m)
-  "The selection chip's keys: c, f, p, a and a click on an action; Esc closes it.")
+  "The selection chip's keys: a click on an action; the profiles' `minimap-chip-*' rows (c, f, p, a; Esc closes it).")
 
 (defvar drgnx-minimap--chip-buffer " *drgnx-minimap-chip*" "The selection chip's buffer's name.")
 

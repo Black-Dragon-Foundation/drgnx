@@ -153,6 +153,7 @@
  drgnx-wb-island-control
  drgnx-fold-summary
  drgnx-fold-name
+ drgnx-minimap-peek-header
  drgnx-minimap-label
  drgnx-sticky
  drgnx-sticky-line

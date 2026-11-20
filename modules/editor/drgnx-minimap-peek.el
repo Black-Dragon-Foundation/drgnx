@@ -45,6 +45,7 @@
 (declare-function nidhogg-view-minimap "nidhogg-views" (what file &optional layer line))
 (defvar drgnx-minimap-layer)
 (defvar drgnx-minimap-card-map)                 ; below, beside its commands
+(defvar drgnx-minimap--card-keys)               ; below, beside `drgnx-minimap-card-hide'
 (defvar flymake-mode)
 (defvar glitnir-minimap-functions)
 
@@ -241,17 +242,22 @@ window)."
 (defun drgnx-minimap--show-card (kind window pos lines header buffer start &optional map)
   "Show the card of KIND for POS of editor WINDOW: BUFFER from START, LINES tall, HEADER on top (a string, or
 \(TEXT . HINT)), its keys MAP (default `drgnx-minimap-card-map')."
+  (drgnx-minimap--card-keys-off)
   (let* ((frame (drgnx-minimap--card-frame (window-frame window)))
          (cw (frame-root-window frame)))
     (set-window-buffer cw buffer)
-    (set-window-start cw start t)
+    ;; the card's own point at START too: redisplay would otherwise bring the window back to its point (the editor's
+    ;; buffer keeps one per window), and the peek showed line 1
+    (set-window-point cw start)
+    (set-window-start cw start)
     (set-window-parameter cw 'header-line-format (if (consp header) (drgnx-minimap--header (car header) (cdr header))
                                                    (drgnx-minimap--header header)))
     (set-window-parameter cw 'mode-line-format 'none)
     (drgnx-minimap--card-place frame window lines)
     (unless (frame-visible-p frame) (make-frame-visible frame))
     (setq drgnx-minimap--card (vector frame kind window pos))
-    (set-transient-map (or map drgnx-minimap-card-map) #'drgnx-minimap--card-keep-p #'drgnx-minimap-card-hide)
+    (setq drgnx-minimap--card-keys
+          (set-transient-map (or map drgnx-minimap-card-map) #'drgnx-minimap--card-keep-p #'drgnx-minimap-card-hide))
     (drgnx-timer-start 'minimap-card-away 0.15 #'drgnx-minimap--card-away :repeat 0.15 :owner 'editor/minimap)
     frame))
 
@@ -259,9 +265,20 @@ window)."
   "Keep the card's keys while the card shows and the key was one of its own."
   (and drgnx-minimap--card (memq this-command drgnx-minimap--card-commands)))
 
+(defvar drgnx-minimap--card-keys nil
+  "The function that ends the card's transient keys (`set-transient-map''s value), or nil when none are on.")
+
+(defun drgnx-minimap--card-keys-off ()
+  "End the card's transient keys now: a card hidden by code (a jump, a click, a new card) leaves no
+`clear-transient-map' on `pre-command-hook'."
+  (when-let* ((exit drgnx-minimap--card-keys))
+    (setq drgnx-minimap--card-keys nil)
+    (funcall exit)))
+
 (defun drgnx-minimap-card-hide ()
   "Hide the minimap's card."
   (interactive)
+  (drgnx-minimap--card-keys-off)
   (drgnx-timer-cancel 'minimap-card-away)
   (when (and drgnx-minimap--card (frame-live-p (aref drgnx-minimap--card 0)))
     (make-frame-invisible (aref drgnx-minimap--card 0)))
@@ -321,13 +338,11 @@ flashed."
 
 (defvar drgnx-minimap-card-map
   (let ((m (make-sparse-keymap)))
-    (define-key m (kbd "RET") #'drgnx-minimap-card-jump)
-    (define-key m [return] #'drgnx-minimap-card-jump)
-    (define-key m [escape] #'drgnx-minimap-card-hide)
     (define-key m [down-mouse-1] #'ignore)
     (define-key m [mouse-1] #'drgnx-minimap-card-click)
     m)
-  "The keys while a minimap card shows: RET or a click jumps, Esc closes; any other key closes it and does its own.")
+  "The keys while a minimap card shows: a click jumps; the profiles' `minimap-card-*' rows (RET jumps, Esc closes).
+Any other key closes it and does its own.")
 
 (defun drgnx-minimap-peek-show (window pos)
   "Open the peek of POS beside WINDOW's minimap: `drgnx-minimap-peek-lines' lines around it, the header naming the

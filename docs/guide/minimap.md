@@ -91,6 +91,10 @@ pattern the fast scanner cannot read (a back-reference, say) is searched the usu
 | `RET` | go there and leave the minimap |
 | `Esc` | leave, the cursor back where it was |
 
+These keys, the peek's (`RET`, `Esc`) and the selection card's below are commands of their own (`minimap-focus-*`,
+`minimap-card-*`, `minimap-bucket-*`, `minimap-chip-*`), the same in every key profile; rebind them as any other
+(docs/guide/keys.md).
+
 Hold Shift and drag on the minimap to select whole lines. When you let go a small card offers **Copy** (`c`),
 **Fold** (`f`), **Pin** (`p`) and **Ask Agent** (`a`, the agent panel's composer with the lines attached).
 

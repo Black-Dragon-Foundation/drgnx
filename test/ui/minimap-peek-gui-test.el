@@ -2,8 +2,8 @@
 ;; test-class: det
 ;; Task 15 (design M2, X8): with the minimap module on, a `dwell' event of Nidhogg's minimap (`glitnir-minimap-event',
 ;; as the compositor sends it after 300 ms at rest) opens the peek: a child frame left of the minimap, out of the
-;; minimap and ruler, on the editor's own buffer from the rested row's lines, its header naming the line, within
-;; 80 ms; RET jumps there and closes it, a click elsewhere on the minimap closes it.  A `dwell-marks' event over a
+;; minimap and ruler, on the editor's own buffer from the rested row's lines, its header naming the line, at once
+;; (its time, ≤ 80 ms, is the perf row minimap-peek); RET jumps there and closes it, a click elsewhere on the minimap closes it.  A `dwell-marks' event over a
 ;; section with diagnostics opens the problems card instead.
 
 (require 'ert)
@@ -52,15 +52,14 @@ no hub."
   (save-excursion (goto-char (point-min)) (forward-line (1- n)) (point)))
 
 (ert-deftest drgnx-ui-minimap/a-dwell-opens-the-peek-on-the-rows-lines ()
-  "A dwell on the row of line 120 opens the peek within 80 ms: a visible child frame of W's frame, marked out of the
+  "A dwell on the row of line 120 opens the peek at once (within 80 ms: perf row minimap-peek): a visible child frame of W's frame, marked out of the
 minimap, its window on BUF from line 118 (6 lines, the row's in the middle) with a header \"Line 120\"; RET jumps W
 to line 120 and closes it."
   (drgnx-ui-peek--with
-    (let* ((pos (drgnx-ui-peek--line 120))
-           (t0 (float-time)))
+    (let* ((pos (drgnx-ui-peek--line 120)))
+      ;; the card is there when the event returns (no timer in between); its time is the perf row minimap-peek's
       (glitnir-minimap-event (list 'glitnir-minimap (list 'dwell w pos)))
-      (let ((ms (* 1000 (- (float-time) t0))))
-        (should (<= ms 80)))
+      (should drgnx-minimap--card)
       (redisplay t)
       (let* ((frame (aref drgnx-minimap--card 0)) (cw (frame-root-window frame)))
         (should (frame-visible-p frame))

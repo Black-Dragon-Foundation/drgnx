@@ -525,7 +525,8 @@ its advice off `timer-event-handler' and the hub batch."
     (should (funcall fails '((lines-gc :gc_pause (:p95 9.2)) (lines-gc-baseline :gc_pause (:p95 8.0))) "lines-gc"))
     (should-not (drgnx-perf-run--relative-fails '((minimap-type :input (:p95 9.0)))))
     (dolist (w '(minimap-type-baseline minimap-type minimap-type-250k-baseline minimap-type-250k lines-gc-baseline
-                                       lines-gc lines-build-1mb lines-memory fold-all-10k classes-1mb fold-reparse))
+                                       lines-gc lines-build-1mb lines-memory fold-all-10k classes-1mb fold-reparse
+                                       minimap-peek))
       (should (assq w (drgnx-perf-run--workloads))))))
 
 (ert-deftest drgnx-perf-run/the-density-strip-has-its-row-and-budgets ()

@@ -125,13 +125,10 @@ header the bucket and its byte offset; RET goes there when the buffer holds that
 
 (defvar drgnx-minimap-bucket-map
   (let ((m (make-sparse-keymap)))
-    (define-key m (kbd "RET") #'drgnx-minimap-bucket-jump)
-    (define-key m [return] #'drgnx-minimap-bucket-jump)
-    (define-key m [escape] #'drgnx-minimap-card-hide)
     (define-key m [down-mouse-1] #'ignore)
     (define-key m [mouse-1] #'drgnx-minimap-bucket-jump)
     m)
-  "The bucket peek's keys: RET or a click goes there, Esc closes it.")
+  "The bucket peek's keys: a click goes there; the profiles' `minimap-bucket-*' rows (RET goes, Esc closes).")
 
 (defun drgnx-minimap-density-position (buffer byte)
   "The position of file BYTE (from 0) in BUFFER, or nil when the buffer does not hold it (another chunk)."
