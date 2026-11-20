@@ -1028,6 +1028,17 @@ readings. With `history: true` each meter carries its readings of the last eight
 it the key is left out. A session's `limit-share` spend counts the rise of the provider's fullest window, the one that
 binds first. A forecast reads that window. A meter state saved by provider alone (before windows) is dropped on load.
 
+### The Budgets page
+
+**Budgets: Open** (VS Code `Ctrl+K B`, Emacs `C-c w b`, Vim `SPC a b`) opens the page in the editor. On top, one row
+per subscription meter: "Claude · week 41 % used · +3.2 %/h · at the 7-day pace 78 % at reset", a wide meter and the
+last eight days as bars; a meter read from usage, not from the provider, says "estimate". Below, every scope as a tree,
+the ones at or near their limit first, then by spend: its meter (with the forecast's tick on a plan), what it spent in
+each unit (never added across units), its limit, the forecast range, the burn per hour and its state; a run's row also
+says its share of the plan ("62 % of plan"). `$` on a row edits its limit in place, and the new amount applies at once;
+`RET` selects the scope's item in Work. The tree comes a page at a time, so a large project shows its first rows at
+once.
+
 ## The supervisor
 
 The hub looks at every session once a second (no model call) and pauses one that is stuck: the agent stops after

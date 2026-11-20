@@ -7,6 +7,7 @@
 
 pub mod agents;
 pub mod agents_side;
+pub mod budgets_page;
 pub mod changes;
 pub mod comments;
 pub mod config;
@@ -404,6 +405,9 @@ params! {
     AgentsSideSubscribe(agents_side::Subscribe),
     AgentsSideSet(agents_side::Set),
     AgentsSideClose(agents_side::ViewId),
+    BudgetsPageSubscribe(budgets_page::Subscribe),
+    BudgetsPageSet(budgets_page::Set),
+    BudgetsPageClose(budgets_page::ViewId),
     ChangesSubscribe(changes::Subscribe),
     ChangesSet(changes::Set),
     ChangesClose(changes::ViewId),
@@ -540,6 +544,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(search::methods());
     v.extend(git::methods());
     v.extend(agents_side::methods());
+    v.extend(budgets_page::methods());
     v.extend(changes::methods());
     v.extend(review_screen::methods());
     v.extend(scm::methods());
