@@ -1373,10 +1373,13 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `budget/raise` | user | `{card: natnum, limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], resume?: boolean}` | `{held?: [BudgetHeld], resumed?: [string], view: BudgetView}` | yes |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
 | `budget/tree` | user | `{after?: string, depth?: natnum, root?: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{next?: string, nodes?: [BudgetNode]}` | no |
+| `budgets/page/close` | user | `{view: string}` | `boolean` | no |
+| `budgets/page/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
+| `budgets/page/subscribe` | user | `{view: string}` | `boolean` | no |
 | `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
 | `changes/close` | user | `{view: string}` | `boolean` | no |
-| `changes/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
+| `changes/set` | user | `{filter?: {agent?: string, task?: string}, refresh?: boolean, view: string}` | `boolean` | no |
 | `changes/subscribe` | user | `{view: string}` | `boolean` | no |
 | `comments/add` | user | `{anchor: {heading?: [string], key?: string, quote?: string, state?: string}, record: string, text: string}` | `{anchor: Anchor, comment: string, sent_to?: string}` | yes |
 | `comments/list` | user | `{record: string}` | `{threads: [Thread]}` | no |
