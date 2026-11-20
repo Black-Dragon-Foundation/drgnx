@@ -177,7 +177,8 @@ fn a_request_is_a_kit_question_card_over_allow_always_and_deny() {
         "{}",
         text(&rows[0])
     );
-    // each choice is a button of the kit's action kind `agent-panel-card`: [kind, verb, id]
+    // each choice is a button of the kit's action kind `agent-panel-card`: [kind, "card:VERB:ID"], the panel's own
+    // action, which `drgnx-agent-panel--kit-card' reads (and `y a n' rewrite)
     let actions: Vec<Value> = rows
         .iter()
         .flat_map(|r| r.props.iter())
@@ -187,9 +188,9 @@ fn a_request_is_a_kit_question_card_over_allow_always_and_deny() {
     assert_eq!(
         actions,
         [
-            json!(["agent-panel-card", "allow", "7"]),
-            json!(["agent-panel-card", "always", "7"]),
-            json!(["agent-panel-card", "deny", "7"]),
+            json!(["agent-panel-card", "card:allow:7"]),
+            json!(["agent-panel-card", "card:always:7"]),
+            json!(["agent-panel-card", "card:deny:7"]),
         ]
     );
     assert!(text(&rows[1]).contains("Allow"));
