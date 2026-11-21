@@ -1322,3 +1322,53 @@ fn no_two_stretches_stand_side_by_side_in_the_card() {
         }
     }
 }
+
+#[test]
+fn the_enter_key_hint_is_an_image_inside_one_keycap_run() {
+    // the code font has no `↵`: its fallback glyph broke the keycap's box into a cell each for the pad, the glyph and
+    // the pad (a stray doubled edge). The key is one image character, under the same faces as the pads around it.
+    let rows = gui_sel(three(), Some("t1"));
+    let line = rows.iter().find(|r| r.key == "bg:t1:1").expect("the line");
+    assert!(!line.text.contains('↵'), "{:?}", line.text);
+    let (at, _, _) = line
+        .images
+        .iter()
+        .find(|(_, _, alt)| alt == "↵")
+        .expect("the key's image");
+    let faces = |p: u32| -> Vec<&str> {
+        line.runs
+            .iter()
+            .filter(|(a, b, _)| *a <= p && p < *b)
+            .map(|(_, _, f)| f.as_str())
+            .collect()
+    };
+    assert!(faces(*at).contains(&FaceId::KitKeyHintCap.name()));
+    assert_eq!(faces(at - 1), faces(*at));
+    assert_eq!(faces(*at), faces(at + 1));
+}
+
+#[test]
+fn a_rows_end_is_one_stretch_not_a_stop_and_a_pad() {
+    // a stop followed by a pad at the row's end loses the card's right edge on that row (measured: the second lines of
+    // the list ended with both); the pad joins the stop
+    for sel in [None, Some("t1")] {
+        for r in gui_sel(three(), sel)
+            .into_iter()
+            // the selected item's rows carry the tint, which splits their ends into two runs: not merged
+            .filter(|r| {
+                r.key.starts_with("bg:")
+                    && sel.is_none_or(|k| !r.key.starts_with(&format!("bg:{k}")))
+            })
+        {
+            for (p, _) in &r.stops {
+                assert!(
+                    !r.spaces.iter().any(|s| s.0 == p + 1),
+                    "{}: stops {:?} spaces {:?}",
+                    r.key,
+                    r.stops,
+                    r.spaces
+                );
+            }
+        }
+    }
+}

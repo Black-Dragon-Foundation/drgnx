@@ -91,59 +91,79 @@ pub(super) fn unstretch(row: &mut Row) {
     }
 }
 
+/// What covers position P of ROW: the indices of its runs, properties and fonts.
+fn covers(row: &Row, p: u32) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+    let at = |a: u32, b: u32| a <= p && p < b;
+    (
+        (0..row.runs.len())
+            .filter(|&k| at(row.runs[k].0, row.runs[k].1))
+            .collect(),
+        (0..row.props.len())
+            .filter(|&k| at(row.props[k].0, row.props[k].1))
+            .collect(),
+        (0..row.fonts.len())
+            .filter(|&k| at(row.fonts[k].0, row.fonts[k].1))
+            .collect(),
+    )
+}
+
+/// The character at POS of ROW is gone: every position after it is one less.
+fn drop_char(row: &mut Row, pos: u32) {
+    if let Some((k, _)) = row.text.char_indices().nth(pos as usize) {
+        row.text.remove(k);
+    }
+    let m = |x: &mut u32| {
+        if *x > pos {
+            *x -= 1;
+        }
+    };
+    for r in &mut row.runs {
+        m(&mut r.0);
+        m(&mut r.1);
+    }
+    for r in &mut row.props {
+        m(&mut r.0);
+        m(&mut r.1);
+    }
+    for r in &mut row.fonts {
+        m(&mut r.0);
+        m(&mut r.1);
+    }
+    for r in &mut row.stops {
+        m(&mut r.0);
+    }
+    for r in &mut row.images {
+        m(&mut r.0);
+    }
+    for r in &mut row.spaces {
+        m(&mut r.0);
+    }
+}
+
 /// Stretches side by side that every run and property covers alike become one stretch (their widths added, the second's
-/// placeholder character gone, every position after it one less): two stretches next to each other inside the card's
-/// box run draw a stray vertical edge where the second ends (light theme; measured on the list, 2026-11-21).
+/// placeholder character gone, every position after it one less), and a stop (`:align-to`) followed by a pad is one stop
+/// that much further: two stretches next to each other inside the card's box run draw a stray vertical edge where the
+/// second ends (light theme, a row's first glyph) and lose the card's right edge on the rows that end with them
+/// (measured on the list, 2026-11-21).
 pub(in crate::view) fn merge_stretches(row: &mut Row) {
     while let Some(i) = (0..row.spaces.len().saturating_sub(1)).find(|&i| {
         let (a, b) = (row.spaces[i], row.spaces[i + 1]);
-        let covers = |p: u32| {
-            let runs: Vec<usize> = (0..row.runs.len())
-                .filter(|&k| row.runs[k].0 <= p && p < row.runs[k].1)
-                .collect();
-            let props: Vec<usize> = (0..row.props.len())
-                .filter(|&k| row.props[k].0 <= p && p < row.props[k].1)
-                .collect();
-            let fonts: Vec<usize> = (0..row.fonts.len())
-                .filter(|&k| row.fonts[k].0 <= p && p < row.fonts[k].1)
-                .collect();
-            (runs, props, fonts)
-        };
-        b.0 == a.0 + 1 && a.2 == b.2 && covers(a.0) == covers(b.0)
+        b.0 == a.0 + 1 && a.2 == b.2 && covers(row, a.0) == covers(row, b.0)
     }) {
         let p = row.spaces[i].0 + 1;
         row.spaces[i].1 += row.spaces[i + 1].1;
         row.spaces.remove(i + 1);
-        let at = row.text.char_indices().nth(p as usize).map(|(k, _)| k);
-        if let Some(k) = at {
-            row.text.remove(k);
-        }
-        let m = |x: &mut u32| {
-            if *x > p {
-                *x -= 1;
-            }
-        };
-        for r in &mut row.runs {
-            m(&mut r.0);
-            m(&mut r.1);
-        }
-        for r in &mut row.props {
-            m(&mut r.0);
-            m(&mut r.1);
-        }
-        for r in &mut row.fonts {
-            m(&mut r.0);
-            m(&mut r.1);
-        }
-        for r in &mut row.stops {
-            m(&mut r.0);
-        }
-        for r in &mut row.images {
-            m(&mut r.0);
-        }
-        for r in &mut row.spaces {
-            m(&mut r.0);
-        }
+        drop_char(row, p);
+    }
+    while let Some((j, i)) = (0..row.stops.len()).find_map(|j| {
+        let p = row.stops[j].0;
+        let i = row.spaces.iter().position(|s| s.0 == p + 1)?;
+        (covers(row, p) == covers(row, p + 1)).then_some((j, i))
+    }) {
+        let p = row.stops[j].0 + 1;
+        row.stops[j].1 += row.spaces[i].1;
+        row.spaces.remove(i);
+        drop_char(row, p);
     }
 }
 
@@ -223,6 +243,27 @@ pub(super) fn draw_chip(
     );
 }
 
+/// The Enter key's text, which a key hint shows as the Lucide `corner-down-left` image (the code font has no glyph for it:
+/// the fallback font's glyph broke the keycap's box into three cells).
+const KEY_ENTER: &str = "↵";
+/// That image's size, logical px.
+const KEY_ICON_PX: f32 = 12.0;
+
+/// The key hint `↵` of ROW as an image, in the key hint's own face (one character, as the text was).
+fn enter_icon(row: &mut Row, cx: &Cx, images: &mut Vec<(ImageId, String)>) {
+    let Some((at, _)) = row.text.char_indices().find(|(_, c)| *c == '↵') else {
+        return;
+    };
+    let pos = row.text[..at].chars().count() as u32;
+    let size = px(cx.env, KEY_ICON_PX);
+    if let Some((id, svg)) = icons::svg("corner-down-left", size) {
+        images.push((id, svg));
+        row.text.replace_range(at..at + '↵'.len_utf8(), " ");
+        row.images.push((pos, id, KEY_ENTER.to_owned()));
+        row.images.sort_by_key(|i| i.0);
+    }
+}
+
 /// The width of a kit button (small, secondary) with LABEL and its key hint KEY, in device px.
 fn button_width(cx: &Cx, label: &str, key: &str) -> u32 {
     let d = cx.env.density.name();
@@ -234,7 +275,11 @@ fn button_width(cx: &Cx, label: &str, key: &str) -> u32 {
         + text_width(cx, kit_face(kit_gen::CompId::Button, &bv), label)
         + px(cx.env, f32::from(g.gap))
         + px(cx.env, f32::from(kg.pad.0))
-        + text_width(cx, kit_face(kit_gen::CompId::KeyHint, &kv), key)
+        + if key == KEY_ENTER {
+            px(cx.env, KEY_ICON_PX)
+        } else {
+            text_width(cx, kit_face(kit_gen::CompId::KeyHint, &kv), key)
+        }
         + px(cx.env, f32::from(kg.pad.1))
         + px(cx.env, f32::from(g.pad.1))
 }
@@ -327,7 +372,7 @@ fn gui(
             let selected = cx.bg_selected == Some(i.id.as_str());
             out.push(item_row(cx, i, selected, images));
             if i.end.is_none() && (selected || i.progress.is_some()) {
-                out.push(second_row(cx, i, selected));
+                out.push(second_row(cx, i, selected, images));
             }
         }
         if items.len() > bg::VISIBLE {
@@ -426,7 +471,12 @@ fn item_props(b: &mut RowBuilder, i: &BackgroundItem, end: u32) {
 
 /// An item's last output line (the code font, muted) and, on the selected row only, its actions as kit buttons with
 /// their keys: Output ↵ (Open for a subagent), and Stop k only where the item can be stopped.
-fn second_row(cx: &Cx, i: &BackgroundItem, selected: bool) -> Row {
+fn second_row(
+    cx: &Cx,
+    i: &BackgroundItem,
+    selected: bool,
+    images: &mut Vec<(ImageId, String)>,
+) -> Row {
     let env = cx.env;
     let (icon_px, p4, p8) = (px(env, 16.0), px(env, 4.0), px(env, 8.0));
     let out_face = FaceId::AgentPanelOutput.name();
@@ -483,7 +533,9 @@ fn second_row(cx: &Cx, i: &BackgroundItem, selected: bool) -> Row {
     // there (a stray vertical edge after the text)
     b.face(0, end, out_face);
     item_props(&mut b, i, end);
-    b.finish()
+    let mut row = b.finish();
+    enter_icon(&mut row, cx, images);
+    row
 }
 
 fn tty(s: &Snapshot, cx: &Cx, items: &[&BackgroundItem]) -> Vec<Row> {
