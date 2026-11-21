@@ -132,10 +132,16 @@ Sorts, never filters: every buffer stays a candidate."
 
 ;;;; New windows
 
+(defun drgnx-frames-first-window (frame)
+  "FRAME's first window that is not its rail: the rail (a dedicated window beside the grid) is `frame-first-window'
+since layout A, and a new window's buffer goes in the window after it."
+  (or (seq-find (lambda (w) (not (eq (window-parameter w 'drgnx-role) 'rail))) (window-list frame 'nomini))
+      (frame-first-window frame)))
+
 (defun drgnx-frames--new (buffer tabs)
   "A new auxiliary window showing BUFFER with TABS; selected."
   (let ((f (make-frame '((drgnx-frame-role . aux)))))
-    (let ((w (frame-first-window f)))
+    (let ((w (drgnx-frames-first-window f)))
       (set-window-buffer w buffer)
       (set-window-prev-buffers w nil)
       (set-window-parameter w 'drgnx-tabs tabs))

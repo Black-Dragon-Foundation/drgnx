@@ -82,8 +82,9 @@
                    (drgnx-tty-session--find-in (mapconcat #'identity lines "\n") (string #x283f))))
            (grip (progn (should grip) (cons (car grip) (+ panel-top (cdr grip)))))
            (edges (drgnx-tty-session-eval s '(window-edges drgnx-tty-grid-test--editor)))
-           ;; the editor's right edge, half way down: screen cells count from 1
-           (to (cons (nth 2 edges) (1+ (/ (+ (nth 1 edges) (nth 3 edges)) 2)))))
+           ;; the editor's right edge, half way down, inside its last column (the scroll bar's strip: a press there is the
+           ;; scroll bar's): screen cells count from 1
+           (to (cons (1- (nth 2 edges)) (1+ (/ (+ (nth 1 edges) (nth 3 edges)) 2)))))
       (drgnx-tty-session-send s (format "\e[<0;%d;%dM" (car grip) (cdr grip)))
       ;; the drag loop reads the next motion only once it tracks the mouse
       (drgnx-tty-session-wait s '(eq track-mouse 'dragging))

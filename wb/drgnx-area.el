@@ -143,6 +143,26 @@ Returns non-nil when TAB was defined."
   (or (plist-get (drgnx-area--state area) :tab)
       (car (car (plist-get (alist-get area drgnx-wb--areas) :tabs)))))
 
+(defvar drgnx-area--kept (make-hash-table :test 'eq :weakness 'key)
+  "Frame → alist (AREA . TAB) → (BUFFER START POINT), the start and point as markers: where each tab was left.  The
+area's state keeps numbers (it is saved with the frame); a hub view's patches that insert above the text while the tab
+is hidden move the markers, not the numbers.  One entry a tab; the markers of the one it replaces are freed.")
+
+(defun drgnx-area--keep (area window)
+  "Keep WINDOW's start and point as markers for AREA's shown tab (`drgnx-area--kept')."
+  (let* ((frame (window-frame window)) (key (cons area (drgnx-wb-area-tab area)))
+         (old (alist-get key (gethash frame drgnx-area--kept) nil nil #'equal)))
+    (dolist (m (cdr old)) (when (markerp m) (set-marker m nil)))
+    (setf (alist-get key (gethash frame drgnx-area--kept) nil nil #'equal)
+          (let ((b (window-buffer window)))   ; markers in the window's buffer: `copy-marker' of a number is in the current one
+            (list b (set-marker (make-marker) (window-start window) b) (set-marker (make-marker) (window-point window) b))))))
+
+(defun drgnx-area--kept (area tab buffer frame)
+  "(START POINT) as numbers where TAB of AREA was left on FRAME showing BUFFER, or nil: the text may have grown above."
+  (let ((k (alist-get (cons area tab) (gethash frame drgnx-area--kept) nil nil #'equal)))
+    (and k (eq (car k) buffer) (buffer-live-p buffer) (marker-buffer (nth 1 k)) (marker-buffer (nth 2 k))
+         (list (marker-position (nth 1 k)) (marker-position (nth 2 k))))))
+
 (defun drgnx-area--remember (area window)
   "Remember the buffer, start and point WINDOW shows, for AREA's shown tab, and, when that buffer is a hub view's twin
 in another display class (`drgnx-view-patch-twin-of'), the view's own buffer: the twin goes when no window shows its
@@ -160,6 +180,7 @@ back at the end it has then, so it follows again."
                     (window-point window))
                   (and (local-variable-p 'drgnx-view-patch-twin-of buffer)
                        (buffer-local-value 'drgnx-view-patch-twin-of buffer))))
+      (drgnx-area--keep area window)
       (drgnx-area--set-state area (plist-put (copy-sequence state) :tabs tabs)))))
 
 (defvar-local drgnx-area--placeholder-p nil "Non-nil in a buffer an area shows for a tab that has none of its own.")
@@ -433,8 +454,11 @@ Returns the window — the same one across tab switches."
       (if w (drgnx-wb-set-area-buffer w buffer)
         (setq w (drgnx-area--create area buffer)))
       (when (eq (car saved) buffer)
-        (set-window-start w (nth 1 saved) t)
-        (set-window-point w (if (eq (nth 2 saved) 'end) (with-current-buffer buffer (point-max)) (nth 2 saved))))
+        (let ((kept (drgnx-area--kept area tab buffer (window-frame w))))
+          (set-window-start w (if kept (nth 0 kept) (nth 1 saved)) t)
+          (set-window-point w (cond ((eq (nth 2 saved) 'end) (with-current-buffer buffer (point-max)))
+                                    (kept (nth 1 kept))
+                                    (t (nth 2 saved))))))
       (drgnx-area--set-state area (plist-put (copy-sequence (drgnx-area--state area)) :tab tab))
       (drgnx-area--companions area w buffer)
       (drgnx-area--put-row area w)

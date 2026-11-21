@@ -232,6 +232,8 @@ the docks that show."
                                  (seq-filter (lambda (c) (memq (car c) owned))
                                              (frame-parameter nil 'drgnx-tty-layout-set))))))
 
+(declare-function drgnx-rail--ensure "drgnx-rail" (frame))
+
 (defun drgnx-tty-layout-apply (frame &optional opening)
   "Lay out terminal FRAME by its size (see the file's commentary); nothing while the module is off.  OPENING:
 FRAME is new, so the sidebar and the panel are wanted, shown as far as the size allows; it counts once per
@@ -251,6 +253,9 @@ fraction, except one you resized (`drgnx-tty-layout--notice-drags'), which keeps
       (unless same (set-frame-parameter frame 'drgnx-tty-layout-size (cons columns lines)))
       (when (and (not same) (>= columns drgnx-tty-layout--min-columns) (>= lines drgnx-tty-layout--min-lines))
         (with-selected-frame frame (drgnx-tty-layout--fit columns lines)))
+      ;; the rail is three columns whatever the size was: a terminal made tiny squeezes it, and the docks given their
+      ;; sizes again leave it so
+      (when (and (not same) (fboundp 'drgnx-rail--ensure)) (drgnx-rail--ensure frame))
       t)))
 
 ;;;; Hooks

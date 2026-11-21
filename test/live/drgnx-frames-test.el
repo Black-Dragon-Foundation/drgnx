@@ -42,7 +42,7 @@
       (drgnx-ui-measure sess nil)
       (should (equal (drgnx-frames-test--eval sess "(list (drgnx-frame-role kx-f1) (drgnx-frame-role kx-f2))") '(main aux)))
       (should (equal (drgnx-frames-test--eval sess "(length (drgnx-wb--dock-windows kx-f2))") 0))
-      (should (> (drgnx-frames-test--eval sess "(window-tab-line-height (frame-first-window kx-f2))") 0))
+      (should (> (drgnx-frames-test--eval sess "(window-tab-line-height (with-selected-frame kx-f2 (drgnx-wb-editor-window)))") 0))
       ;; The sidebar of the second window, help shown from it: frame 1 does not move (RF2).
       (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f2) t)")
       (drgnx-ui-measure sess (list (list :keys "C-b")))
@@ -64,7 +64,7 @@
     (drgnx-frames-test--eval sess "(progn (find-file (expand-file-name \"a.txt\" kx-dir)) (drgnx-chrome-apply nil t) t)")
     (drgnx-frames-test--eval sess "(progn (drgnx-grid-move-tab-to-new-frame) (setq kx-f2 (selected-frame)) t)")
     (drgnx-ui-measure sess nil)
-    (should (equal (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-chrome-tabs (frame-first-window kx-f2)))") '("a.txt")))
+    (should (equal (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-chrome-tabs (with-selected-frame kx-f2 (drgnx-wb-editor-window))))") '("a.txt")))
     (should-not (member "a.txt" (drgnx-frames-test--eval sess "(with-selected-frame kx-f1 (mapcar #'buffer-name (drgnx-chrome-tabs (car (drgnx-groups-list)))))")))
     ;; Open in New Window: the same buffer in both; closing its tab in one keeps it in the other (RF4).
     (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f1) (drgnx-frames-open-editor) t)")
@@ -78,7 +78,7 @@
     (drgnx-frames-test--eval sess "(progn (drgnx-frames-move-group) t)")
     (drgnx-ui-measure sess nil)
     (should (= 1 (drgnx-frames-test--eval sess "(length (drgnx-groups-list kx-f1))")))
-    (should (member "b.txt" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-chrome-tabs (frame-first-window (selected-frame))))")))))
+    (should (member "b.txt" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-chrome-tabs (drgnx-wb-editor-window)))")))))
 
 (ert-deftest drgnx-frames/each-window-lists-its-own-buffers ()
   (drgnx-frames-test--with sess
@@ -127,8 +127,8 @@
                   (drgnx-ui-measure sess2 nil)
                   (should (equal (drgnx-frames-test--eval sess2 "(length (seq-remove #'frame-parent (frame-list)))") 2))
                   (should (eq (drgnx-frames-test--eval sess2 "(drgnx-frame-role (selected-frame))") 'main))
-                  (should (equal (drgnx-frames-test--eval sess2 "(mapcar #'buffer-name (drgnx-chrome-tabs (frame-first-window (selected-frame))))") '("README.md")))
+                  (should (equal (drgnx-frames-test--eval sess2 "(mapcar #'buffer-name (drgnx-chrome-tabs (drgnx-wb-editor-window)))") '("README.md")))
                   (should (member "a.txt" (drgnx-frames-test--eval
-                                           sess2 "(mapcar #'buffer-name (seq-mapcat (lambda (f) (drgnx-chrome-tabs (frame-first-window f))) (seq-remove (lambda (f) (eq f (selected-frame))) (frame-list))))"))))
+                                           sess2 "(mapcar #'buffer-name (seq-mapcat (lambda (f) (drgnx-chrome-tabs (with-selected-frame f (drgnx-wb-editor-window)))) (seq-remove (lambda (f) (eq f (selected-frame))) (frame-list))))"))))
               (drgnx-ui-stop (plist-get s2 :name)))))
       (delete-directory root t))))

@@ -11,12 +11,21 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
-(require 'drgnx-frame-shell)
 
 (defconst drgnx-ui-shell-rail--repo
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
 (dolist (d '("core" "wb" "harness" "modules/ui"))
   (add-to-list 'load-path (expand-file-name d drgnx-ui-shell-rail--repo)))
+(require 'drgnx-grid)
+(require 'drgnx-frame-shell)   ; after the load path: wb/ is not on it before
+
+(defmacro drgnx-ui-shell-rail--clean (&rest body)
+  "BODY in a frame of its own, deleted after: the frame's shell, the grid's ids and the tiles' window parameters a
+place sets are left on no frame the other files share (a leak otherwise)."
+  (declare (indent 0))
+  `(let ((frame (make-frame)))
+     (unwind-protect (with-selected-frame frame ,@body)
+       (delete-frame frame))))
 
 (declare-function drgnx-rail-places "drgnx-rail" ())
 (declare-function drgnx-rail-changed-p "drgnx-rail" (place &optional frame))
@@ -39,23 +48,25 @@
 (ert-deftest drgnx-ui-shell-rail/place-shows-in-the-side-bar-dock-tile ()
   "A place command shows the place's view in the side-bar dock tile, and on the current place it toggles the side bar."
   (skip-unless (display-graphic-p))
-  (let (shown hidden)
-    (cl-letf (((symbol-function 'drgnx-pane-show) (lambda (kind &rest args) (push (cons kind args) shown)))
-              ((symbol-function 'drgnx-pane-hide) (lambda (kind &rest _) (push kind hidden))))
-      (drgnx-shell-show-place 'search)
-      (should (eq 'side-bar (car (car (last shown)))))
-      (should (eq 'search (plist-get (cdr (car (last shown))) :place)))
-      ;; the same place again: the side bar toggles away
-      (drgnx-shell-show-place 'search)
-      (should (equal '(side-bar) hidden)))))
+  (drgnx-ui-shell-rail--clean
+    (let (shown hidden)
+      (cl-letf (((symbol-function 'drgnx-pane-show) (lambda (kind &rest args) (push (cons kind args) shown)))
+                ((symbol-function 'drgnx-pane-hide) (lambda (kind &rest _) (push kind hidden))))
+        (drgnx-shell-show-place 'search)
+        (should (eq 'side-bar (car (car (last shown)))))
+        (should (eq 'search (plist-get (cdr (car (last shown))) :place)))
+        ;; the same place again: the side bar toggles away
+        (drgnx-shell-show-place 'search)
+        (should (equal '(side-bar) hidden))))))
 
 (ert-deftest drgnx-ui-shell-rail/place-sets-the-right-side ()
   "A place also sets the right side: the kind `drgnx-shell-right-for' names is shown in the right dock tile."
   (skip-unless (display-graphic-p))
-  (let (shown)
-    (cl-letf (((symbol-function 'drgnx-pane-show) (lambda (kind &rest _) (push kind shown))))
-      (drgnx-shell-show-place 'files)
-      (should (memq (drgnx-shell-right-for 'files) shown)))))
+  (drgnx-ui-shell-rail--clean
+    (let (shown)
+      (cl-letf (((symbol-function 'drgnx-pane-show) (lambda (kind &rest _) (push kind shown))))
+        (drgnx-shell-show-place 'files)
+        (should (memq (drgnx-shell-right-for 'files) shown))))))
 
 (ert-deftest drgnx-ui-shell-rail/a-changed-place-gets-its-dot ()
   "Each place but Work has a producer of its own that calls `drgnx-rail-mark-changed'; running one gives the place its dot."

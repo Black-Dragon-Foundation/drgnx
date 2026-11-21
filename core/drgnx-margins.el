@@ -41,6 +41,18 @@ side, outermost, else none."
   (let ((ruler (window-parameter window 'drgnx-margins-ruler)))
     (if (and ruler (eq side (if (eq ruler 'left) 'left 'right))) 1 0)))
 
+(defun drgnx-margins-keep-preserved-size (window change)
+  "Call CHANGE, which sets WINDOW's margins or fringes, and keep WINDOW's preserved width (`window-preserve-size') of its
+body as it was: the preserved width is a body width, which a margin or fringe narrows, and a window whose body no longer
+is the preserved width is not kept: the sidebar the grid had sized shrank when another dock opened beside it."
+  (let ((before (window-body-width window t)))
+    (prog1 (funcall change)
+      (let ((delta (- (window-body-width window t) before))
+            (kept (window-parameter window 'window-preserved-size)))
+        (when (and kept (nth 1 kept) (/= delta 0))
+          (set-window-parameter window 'window-preserved-size
+                                (list (nth 0 kept) (+ (nth 1 kept) delta) (nth 2 kept))))))))
+
 (defun drgnx-margins-apply (window)
   "Set WINDOW's margins: its centring plus its buffer's claims, on each side, and the scroll bar's column when WINDOW
 has one (a terminal's: `drgnx-margins-ruler', outermost: the right margin's last column, or the left's first)."
@@ -49,7 +61,7 @@ has one (a terminal's: `drgnx-margins-ruler', outermost: the right margin's last
            (l (+ c (drgnx-margins--sum b 'left) (drgnx-margins--ruler-columns window 'left)))
            (r (+ c (drgnx-margins--sum b 'right) (drgnx-margins--ruler-columns window 'right))))
       (unless (equal (window-margins window) (cons (and (> l 0) l) (and (> r 0) r)))
-        (set-window-margins window l r)))))
+        (drgnx-margins-keep-preserved-size window (lambda () (set-window-margins window l r)))))))
 
 (defun drgnx-margins--apply-buffer (buffer)
   "Set the margins of every window showing BUFFER, its default widths, and tell its owners."

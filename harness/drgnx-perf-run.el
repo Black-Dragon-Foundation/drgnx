@@ -179,7 +179,10 @@ it holds."
                     drgnx-perf--dv-version (buffer-substring-no-properties (point-min) (min (point-max) 100))
                     (key-binding (kbd "<f10>"))))))
        (defun drgnx-perf--dv-start ()
-         (setq drgnx-perf--dv-send drgnx-view-patch-send-function drgnx-view-patch-send-function #'ignore
+         ;; the send function to give back is the session's own: each run of the workload starts again, and the second
+         ;; would save `ignore' (its first run's) and give that back, leaving every view after it unable to ask the hub
+         (unless (eq drgnx-view-patch-send-function #'ignore) (setq drgnx-perf--dv-send drgnx-view-patch-send-function))
+         (setq drgnx-view-patch-send-function #'ignore
                ;; the model's versions go on across workloads: Sjá keeps the view's model while the session lives
                drgnx-perf--dv-version 0 drgnx-perf--dv-epoch 0 drgnx-perf--dv-chunk 0)
          (when (get-buffer drgnx-debug-view-buffer-name) (kill-buffer drgnx-debug-view-buffer-name))
@@ -474,6 +477,9 @@ run left to right and the Hebrew row still reads right to left.  Else an error s
       (defun drgnx-perf--ra-stop ()
         (drgnx-perf--dv-stop)
         (global-unset-key (kbd "<f8>"))
+        ;; the setup's `drgnx-hub-call' override (`drgnx-perf--debug-hub') goes too: left on, it answered the next hub
+        ;; workload's calls (search-window's windows never came)
+        (drgnx-perf--debug-stop)
         t)
       t)))
 
@@ -2387,7 +2393,13 @@ at the wait's return held that."
                    (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
                                  :buffer (generate-new-buffer " *ratatoskr*")
                                  :command (list bin "serve" "--foreground" "--parent-pid" (number-to-string (emacs-pid))))))
-           (unless (drgnx-perf--wait 30 #'drgnx-hub-running-p) (error "Ratatoskr did not answer a ping"))
+           ;; a hub that went away says so, with what it wrote: the wait does not run out its 30 s on a process that is gone
+           (unless (drgnx-perf--wait 30 (lambda () (or (drgnx-hub-running-p) (not (process-live-p drgnx-perf--hub)))))
+             (error "Ratatoskr did not answer a ping"))
+           (unless (process-live-p drgnx-perf--hub)
+             (error "Ratatoskr went away at its start (%s): %s" (process-status drgnx-perf--hub)
+                    (with-current-buffer (process-buffer drgnx-perf--hub)
+                      (string-trim (buffer-substring (max (point-min) (- (point-max) 600)) (point-max))))))
            (drgnx-hub-connect)
            (drgnx-hub-ensure)
            t))
@@ -3666,7 +3678,11 @@ actions is profiled from its first key to the end of the completion wait instead
                   r))))
         ;; never leave the probes or the audit on, nor what the workload made
         (ignore-errors (drgnx-perf-run--call sess "(progn (when drgnx-perf--audit (drgnx-perf-audit-end)) (drgnx-perf-complete-end) (drgnx-perf-end) t)"))
-        (when (plist-get spec :teardown) (ignore-errors (drgnx-perf-run--call sess (plist-get spec :teardown))))))))
+        (when (plist-get spec :teardown) (ignore-errors (drgnx-perf-run--call sess (plist-get spec :teardown))))
+        ;; a hub the workload started and its teardown (or its error) left running serves the next one's socket: "another
+        ;; hub serves here", or the old hub's profiles
+        (ignore-errors
+          (drgnx-perf-run--call sess "(progn (when (and (fboundp 'drgnx-perf--hub-stop) (boundp 'drgnx-perf--hub) (process-live-p drgnx-perf--hub)) (drgnx-perf--hub-stop)) t)"))))))
 
 (defun drgnx-perf-run--budgets ()
   (with-temp-buffer (insert-file-contents (expand-file-name "test/perf/budgets.eld" drgnx-ui-repo-dir)) (read (current-buffer))))

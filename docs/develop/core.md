@@ -1591,6 +1591,9 @@ buffer, and when a window's size changes. The window hooks are on only while som
 sit side by side, lowest order outermost. On the left in terminals that is the debug column (0), the agents' strip
 (1), then the change marks (2). On the right, a terminal window with the scroll bar adds one column of its own after
 the claims (`drgnx-margins-ruler WINDOW ON`, a window parameter: the scroll bar is per window, not per buffer).
+A margin or fringe narrows the window's body, and `window-preserve-size` is of the body: the margins and the scroll bar's
+fringe go through `drgnx-margins-keep-preserved-size`, which moves the preserved width by what the change took, so a dock
+the grid sized keeps its size (the sidebar shrank when another dock opened beside it).
 
 An owner starts each margin string with `(drgnx-margins-pad OWNER)`: blanks up to its claim, computed for the
 buffer's first window. `drgnx-margins-changed-functions` runs with the buffer when places may have moved. Tests:

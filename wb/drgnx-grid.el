@@ -162,7 +162,8 @@ that changes while its kind is hidden (a hub view's patches) comes back on the t
     (let ((old (drgnx-grid--saved kind (window-frame window))) (b (window-buffer window)))
       (dolist (m (cdr old)) (when (markerp m) (set-marker m nil)))
       (setf (alist-get kind (gethash (window-frame window) drgnx-grid--kinds) nil nil #'equal)
-            (list b (copy-marker (window-start window)) (copy-marker (window-point window)))))))
+            ;; markers in B: `copy-marker' of a number is in the current buffer
+            (list b (set-marker (make-marker) (window-start window) b) (set-marker (make-marker) (window-point window) b))))))
 
 (defun drgnx-grid--placeholder (entry)
   "ENTRY's kind's placeholder: its :placeholder function's buffer, else the tile placeholder
