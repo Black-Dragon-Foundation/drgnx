@@ -895,7 +895,7 @@ async fn fixed_of(
 }
 
 /// The remaining forecasts kept, by (job, newest step id): a new step misses, and so do 5 s.
-type RemainingKept = HashMap<(String, i64), (std::time::Instant, wire::Forecast)>;
+type RemainingKept = HashMap<(String, i64), (tokio::time::Instant, wire::Forecast)>;
 
 static REMAINING_CACHE: std::sync::Mutex<Option<RemainingKept>> = std::sync::Mutex::new(None);
 
@@ -923,7 +923,7 @@ pub(crate) async fn remaining_forecast(
     }
     let (fixed, last) = fixed_of(front, id, &wants, &l.tasks, now).await?;
     let key = (id.to_owned(), last);
-    let at = std::time::Instant::now();
+    let at = crate::clock::now();
     let kept = REMAINING_CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1042,7 +1042,7 @@ pub(crate) fn joint_wants(plans: &[&PlanIn]) -> Vec<Want> {
 /// The answers kept for the plans' versions: a plan edit (its hash) misses, the clock does too (new history).
 #[derive(Default)]
 pub(crate) struct PlanCache {
-    kept: HashMap<String, (std::time::Instant, wire::Forecast)>,
+    kept: HashMap<String, (tokio::time::Instant, wire::Forecast)>,
 }
 
 const PLAN_CACHE_SECS: u64 = 60;
@@ -1058,12 +1058,16 @@ impl PlanCache {
         k.join("|")
     }
 
-    pub(crate) fn get(&self, plans: &[&PlanIn], now: std::time::Instant) -> Option<wire::Forecast> {
+    pub(crate) fn get(
+        &self,
+        plans: &[&PlanIn],
+        now: tokio::time::Instant,
+    ) -> Option<wire::Forecast> {
         let (at, f) = self.kept.get(&Self::key(plans))?;
         (now.duration_since(*at).as_secs() < PLAN_CACHE_SECS).then(|| f.clone())
     }
 
-    pub(crate) fn put(&mut self, plans: &[&PlanIn], now: std::time::Instant, f: wire::Forecast) {
+    pub(crate) fn put(&mut self, plans: &[&PlanIn], now: tokio::time::Instant, f: wire::Forecast) {
         if self.kept.len() >= PLAN_CACHE_MAX {
             self.kept.clear();
         }
@@ -1081,7 +1085,7 @@ pub(crate) async fn plan_forecast(
 ) -> Result<wire::PlanForecast, Error> {
     let (running, open): (Vec<&PlanIn>, Vec<&PlanIn>) =
         plans.iter().partition(|p| p.running.is_some());
-    let now = std::time::Instant::now();
+    let now = crate::clock::now();
     let cached = PLAN_CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -2034,7 +2038,7 @@ mod tests {
     #[test]
     fn the_cache_misses_after_a_plan_edit() {
         let mut c = PlanCache::default();
-        let now = std::time::Instant::now();
+        let now = crate::clock::now();
         let a = plan_in("plan:a", "h1", 1);
         let fc = |t: f64| wire::Forecast {
             tasks: Vec::new(),

@@ -157,7 +157,7 @@ impl Roots {
     /// 2 s polling); a folder with a recent file is read every walk.  Only the folders read are in `fresh`.
     pub fn walk(&self, w: &mut Walk) -> Walked {
         w.round += 1;
-        let now = std::time::SystemTime::now()
+        let now = crate::clock::wall()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos() as i64);
         let ctx = Ctx {

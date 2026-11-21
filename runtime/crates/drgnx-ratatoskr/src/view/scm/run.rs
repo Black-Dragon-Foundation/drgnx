@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// A local command's deadline (stage, unstage, discard, checkout, stash, a read).
 pub const LOCAL: Duration = Duration::from_secs(10);
@@ -135,7 +135,7 @@ pub fn run(
             .map(|r| Box::new(r) as Box<dyn Read + Send>),
     );
     // a thread of its own waits for git: real time, whatever clock the hub runs on
-    let end = deadline.map(|d| Instant::now() + d);
+    let end = deadline.map(|d| crate::clock::real_now() + d);
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break s,
@@ -147,7 +147,7 @@ pub fn run(
             let _ = child.wait();
             return Err(STOPPED.to_owned());
         }
-        if end.is_some_and(|e| Instant::now() >= e) {
+        if end.is_some_and(|e| crate::clock::real_now() >= e) {
             stop(pid);
             let _ = child.wait();
             let secs = deadline.unwrap_or_default().as_secs();

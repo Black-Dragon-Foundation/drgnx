@@ -318,10 +318,7 @@ fn pace_rows(p: &Pace, env: &KitEnv, out: &mut Vec<Row>) {
         p.rate_per_hour * 100.0
     );
     if let (Some(r7), Some(reset)) = (p.rate_7d_per_hour, p.resets_at) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
+        let now = crate::clock::wall_secs();
         let at = (p.used_share + r7 * ((reset - now).max(0.0) / 3600.0)).min(9.99);
         line.push_str(&format!(
             " · at the 7-day pace {:.0} % at reset",

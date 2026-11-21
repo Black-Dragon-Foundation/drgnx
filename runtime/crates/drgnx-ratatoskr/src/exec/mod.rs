@@ -1592,7 +1592,7 @@ impl Inner {
                 continue;
             };
             let me = self.clone();
-            tokio::spawn(async move {
+            crate::clock::spawn("exec:evict-restart", async move {
                 if let Err(e) = me.clone().stop(&id).await {
                     tracing::warn!(
                         "job {id}: evicted for a whole-machine run, but not stopped: {}",
