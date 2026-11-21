@@ -7,6 +7,7 @@
 //!
 //! The rules W1–W10 (§4.5) are checked by `rules`, after every intent of random sequences (`sim`).
 
+pub mod abi;
 pub mod decl;
 pub mod focus;
 pub mod fold;
@@ -34,7 +35,7 @@ pub use model::{
 };
 pub use multi::TearOut;
 pub use persist::{Pending, Resolved, load};
-pub use preset::{Preset, presets};
+pub use preset::{CenterSpec, Preset, SideSpec};
 pub use query::{Role, Snapshot, Token};
 pub use realise::{GroupReal, Realisation, RegionReal};
 pub use rules::{Rule, RuleBroken, check_rule, check_rules, check_step};

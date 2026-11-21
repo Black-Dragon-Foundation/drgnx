@@ -9,7 +9,6 @@ use crate::model::{
     GroupId, Origin, OverlayKind, Ref, Region, Source, TabId, WinId, WinSize, Workbench,
 };
 use crate::multi::TearOut;
-use crate::preset::presets;
 use crate::rules::RuleBroken;
 
 /// xorshift64*: small, seeded, the same on every target.
@@ -399,11 +398,11 @@ pub fn step(wb: &mut Workbench, rng: &mut Rng) -> Step {
             wb.restore_previous_layout(w, origin).is_ok(),
         ),
         30 => {
-            let names: Vec<&str> = presets().iter().map(|p| p.name).collect();
-            let n = names[rng.below(names.len())];
-            if rng.below(3) == 0 {
+            let names: Vec<String> = wb.kinds().presets.iter().map(|p| p.name.clone()).collect();
+            if names.is_empty() || rng.below(3) == 0 {
                 (Kind::NextLayout, o, wb.next_layout(w, origin).is_ok())
             } else {
+                let n = &names[rng.below(names.len())];
                 (Kind::Preset, o, wb.apply_preset(w, n, origin).is_ok())
             }
         }

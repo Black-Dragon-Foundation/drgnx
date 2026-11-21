@@ -34,6 +34,8 @@ pub enum Decl {
     BottomKind {
         kind: String,
     },
+    /// A layout preset (§8.2): Next Layout cycles them in declaration order.
+    Preset(crate::preset::Preset),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +66,7 @@ pub struct KindTable {
     pub places: Vec<Place>,
     pub selections: Vec<(String, Option<String>)>,
     pub bottom: Vec<String>,
+    pub presets: Vec<crate::preset::Preset>,
 }
 
 impl KindTable {
@@ -193,6 +196,7 @@ impl Workbench {
         let changed = match d {
             Decl::TabKind { kind } => push_new(&mut self.kinds.tab_kinds, kind),
             Decl::BottomKind { kind } => push_new(&mut self.kinds.bottom, kind),
+            Decl::Preset(p) => upsert(&mut self.kinds.presets, p, |a, b| a.name == b.name),
             Decl::SelectionKind { kind, detail } => {
                 upsert(&mut self.kinds.selections, (kind, detail), |a, b| {
                     a.0 == b.0

@@ -48,6 +48,11 @@ pub use sja::abi::sja_call;
 pub use hlidskjalf;
 pub use hlidskjalf::abi::hlid_build;
 
+/// Smiðja, the workbench model (the `smidja` crate): carried here so that this archive holds its door (the host's
+/// views C file calls it), and the glue's archive through its `pub use glitnir::*`.
+pub use smidja;
+pub use smidja::abi::{smidja_call, smidja_op};
+
 /// The library's global state, behind one lock, used from the host's main thread only.
 #[derive(Debug, Default)]
 pub(crate) struct State {

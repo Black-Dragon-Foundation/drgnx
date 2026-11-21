@@ -1,8 +1,8 @@
 //! Presets and per-project layouts (§8.2).
 //!
 //! A preset sets the center's tabs and splits and which sides are open. It never closes a buffer: tabs it does not
-//! name join the first group. Applying one pushes a layout snapshot. The five presets are one table of data; the
-//! page kinds and places they name are the ones drgnx declares (layout A).
+//! name join the first group. Applying one pushes a layout snapshot. Presets are declarations (`Decl::Preset`), like
+//! kinds and places: the crate names no preset, page kind or place; drgnx declares its five (layout A) at start.
 
 use crate::intent::Intent;
 use crate::layout::LayoutSnapshot;
@@ -15,7 +15,7 @@ use crate::model::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CenterSpec {
     /// One group, this page active.
-    Page(&'static str),
+    Page(String),
     /// One group, the most recent text tab active (none: Start).
     Recent,
     /// Two groups side by side.
@@ -28,68 +28,20 @@ pub enum CenterSpec {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SideSpec {
     /// Shown, the left on this place.
-    Show(Option<&'static str>),
+    Show(Option<String>),
     Hide,
     AsItWas,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Preset {
-    pub name: &'static str,
+    pub name: String,
     pub center: CenterSpec,
     pub left: SideSpec,
     pub right: SideSpec,
     pub bottom: SideSpec,
     /// Zen hides the rail and the status bar too.
     pub hide_chrome: bool,
-}
-
-/// The five presets [D14]: Work, Code, Work + code, Review, Zen. Agent, Editor and Browser are gone.
-pub fn presets() -> Vec<Preset> {
-    use CenterSpec as C;
-    use SideSpec as S;
-    vec![
-        Preset {
-            name: "work",
-            center: C::Page("graph"),
-            left: S::Show(Some("work")),
-            right: S::Show(None),
-            bottom: S::Hide,
-            hide_chrome: false,
-        },
-        Preset {
-            name: "code",
-            center: C::Recent,
-            left: S::Show(Some("files")),
-            right: S::Show(None),
-            bottom: S::AsItWas,
-            hide_chrome: false,
-        },
-        Preset {
-            name: "work+code",
-            center: C::Split(Box::new(C::Page("graph")), Box::new(C::Recent)),
-            left: S::Show(Some("work")),
-            right: S::Show(None),
-            bottom: S::Hide,
-            hide_chrome: false,
-        },
-        Preset {
-            name: "review",
-            center: C::Split(Box::new(C::Page("review")), Box::new(C::Page("diff"))),
-            left: S::Show(Some("changes")),
-            right: S::Show(None),
-            bottom: S::Hide,
-            hide_chrome: false,
-        },
-        Preset {
-            name: "zen",
-            center: C::Zen,
-            left: S::Hide,
-            right: S::Hide,
-            bottom: S::Hide,
-            hide_chrome: true,
-        },
-    ]
 }
 
 impl Workbench {
@@ -102,7 +54,7 @@ impl Workbench {
     ) -> Result<Version, Refusal> {
         let wi = self.wi(w)?;
         self.gate(origin, Intent::Layout)?;
-        let Some(p) = presets().into_iter().find(|p| p.name == name) else {
+        let Some(p) = self.kinds.presets.iter().find(|p| p.name == name).cloned() else {
             return refuse(format!("no preset named {name}"));
         };
         if self.any_temp(wi) {
@@ -135,7 +87,7 @@ impl Workbench {
             };
             let goes_right = |wb: &Workbench, t: &TabId| match &b {
                 Some(CenterSpec::Recent) => wb.tabs[t].r.is_text(),
-                Some(CenterSpec::Page(k)) => wb.tabs[t].r.page_kind() == Some(*k),
+                Some(CenterSpec::Page(k)) => wb.tabs[t].r.page_kind() == Some(k.as_str()),
                 _ => false,
             };
             let right: Vec<TabId> = all
@@ -180,7 +132,7 @@ impl Workbench {
                 if let Some(pl) = place
                     && self.kinds.place(pl).is_some()
                 {
-                    win.left.place = Some(pl.to_string());
+                    win.left.place = Some(pl.clone());
                 }
             }
             SideSpec::Hide => win.left.visible = false,
@@ -210,13 +162,13 @@ impl Workbench {
                     .tabs
                     .iter()
                     .copied()
-                    .find(|t| self.tabs[t].r.page_kind() == Some(*k));
+                    .find(|t| self.tabs[t].r.page_kind() == Some(k.as_str()));
                 match found {
                     Some(t) => Some(t),
                     None => {
                         let t = self.new_tab(
                             Ref::Page {
-                                page_kind: k.to_string(),
+                                page_kind: k.clone(),
                                 key: None,
                             },
                             false,
@@ -246,7 +198,8 @@ impl Workbench {
     pub fn next_layout(&mut self, w: WinId, origin: Origin) -> Result<Version, Refusal> {
         let wi = self.wi(w)?;
         self.gate(origin, Intent::Layout)?;
-        let mut names: Vec<String> = presets().iter().map(|p| p.name.to_string()).collect();
+        let mut names: Vec<String> = self.kinds.presets.iter().map(|p| p.name.clone()).collect();
+        let declared = names.len();
         let project = self.windows[wi].project.clone();
         let saved: Vec<&SavedLayout> = self
             .layouts
@@ -260,13 +213,13 @@ impl Workbench {
             .and_then(|n| names.iter().position(|x| x == n));
         let next = cur.map_or(0, |i| (i + 1) % names.len());
         let name = names[next].clone();
-        if next < presets().len() {
+        if next < declared {
             return self.apply_preset(w, &name, origin);
         }
         if self.any_temp(wi) {
             return refuse("a temporary layout is running");
         }
-        let l = saved[next - presets().len()].layout.clone();
+        let l = saved[next - declared].layout.clone();
         self.push_undo(wi);
         self.apply_layout(wi, &l);
         self.windows[wi].layout_name = Some(name);

@@ -65,7 +65,60 @@ pub fn decls() -> Vec<Decl> {
     v.push(Decl::TabKind {
         kind: s("terminal"),
     });
+    v.extend(preset_decls());
     v
+}
+
+/// Layout A's five presets [D14] (Work, Code, Work + code, Review, Zen), as drgnx declares them.
+pub fn preset_decls() -> Vec<Decl> {
+    use smidja::{CenterSpec as C, Preset, SideSpec as S};
+    let show = |p: &str| S::Show(Some(p.to_string()));
+    let page = |k: &str| C::Page(k.to_string());
+    let p = |name: &str, center, left, right, bottom, hide_chrome| {
+        Decl::Preset(Preset {
+            name: name.to_string(),
+            center,
+            left,
+            right,
+            bottom,
+            hide_chrome,
+        })
+    };
+    vec![
+        p(
+            "work",
+            page("graph"),
+            show("work"),
+            S::Show(None),
+            S::Hide,
+            false,
+        ),
+        p(
+            "code",
+            C::Recent,
+            show("files"),
+            S::Show(None),
+            S::AsItWas,
+            false,
+        ),
+        p(
+            "work+code",
+            C::Split(Box::new(page("graph")), Box::new(C::Recent)),
+            show("work"),
+            S::Show(None),
+            S::Hide,
+            false,
+        ),
+        p(
+            "review",
+            C::Split(Box::new(page("review")), Box::new(page("diff"))),
+            show("changes"),
+            S::Show(None),
+            S::Hide,
+            false,
+        ),
+        p("zen", C::Zen, S::Hide, S::Hide, S::Hide, true),
+    ]
 }
 
 pub fn wb_at(w: u32, h: u32) -> (Workbench, WinId) {

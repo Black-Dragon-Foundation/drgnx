@@ -209,6 +209,66 @@ fn agent_editor_browser_presets_do_not_exist() {
     for n in ["agent", "editor", "browser"] {
         assert!(wb.apply_preset(w, n, U).is_err(), "{n}");
     }
-    let names: Vec<&str> = presets().iter().map(|p| p.name).collect();
+    let names: Vec<&str> = wb.kinds().presets.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, ["work", "code", "work+code", "review", "zen"]);
+}
+
+/// Presets are declarations: a workbench that declared none has none, and a declared one applies (manager, W4).
+#[test]
+fn an_undeclared_preset_is_refused_and_a_declared_one_applies() {
+    let mut wb = Workbench::new();
+    for d in decls()
+        .into_iter()
+        .filter(|d| !matches!(d, Decl::Preset(_)))
+    {
+        wb.declare(d);
+    }
+    let w = wb.window_new("m0", WinSize::Px { w: 1920, h: 1080 }, 1.0, false);
+    let e = wb.apply_preset(w, "work", U).unwrap_err();
+    assert!(e.reason.contains("no preset named work"), "{e}");
+    wb.declare(Decl::Preset(Preset {
+        name: "mine".to_string(),
+        center: CenterSpec::Page("review".to_string()),
+        left: SideSpec::Show(Some("changes".to_string())),
+        right: SideSpec::Hide,
+        bottom: SideSpec::Hide,
+        hide_chrome: false,
+    }));
+    wb.apply_preset(w, "mine", U).unwrap();
+    assert_eq!(wb.window(w).unwrap().left.place.as_deref(), Some("changes"));
+    assert!(!wb.window(w).unwrap().right.visible);
+    let r = wb.realisation(w).unwrap();
+    let active = r.groups[0].r.clone().unwrap();
+    assert_eq!(active.page_kind(), Some("review"));
+}
+
+/// The crate's code names no page kind or place of drgnx's (they come only as declarations).
+#[test]
+fn the_crate_names_no_page_kind_or_place() {
+    let files = [
+        include_str!("../src/decl.rs"),
+        include_str!("../src/focus.rs"),
+        include_str!("../src/fold.rs"),
+        include_str!("../src/intent.rs"),
+        include_str!("../src/layout.rs"),
+        include_str!("../src/model.rs"),
+        include_str!("../src/multi.rs"),
+        include_str!("../src/persist.rs"),
+        include_str!("../src/preset.rs"),
+        include_str!("../src/query.rs"),
+        include_str!("../src/realise.rs"),
+        include_str!("../src/rules.rs"),
+        include_str!("../src/sim.rs"),
+        include_str!("../src/temp.rs"),
+    ];
+    for f in files {
+        for line in f.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            for word in ["graph", "review", "diff", "work", "files", "changes"] {
+                assert!(
+                    !line.contains(&format!("\"{word}\"")),
+                    "a drgnx word in smidja's code: {line}"
+                );
+            }
+        }
+    }
 }
