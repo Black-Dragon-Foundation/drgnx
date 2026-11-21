@@ -756,6 +756,45 @@ subagent) and one that ended, failed (exit 3); the turn ends with the agent's li
           "say The tests are running in the background; I'll check the review when it lands. Turn ended.\n"
           "say done"))
 
+;;;; The card's ring over rows of mixed runs (round 4 of the background panel): where do its edges fall?
+
+(defun drgnx-look-scene-box-experiment ()
+  "Card rows (top, mid, bottom) whose mid row is laid out five ways, in the light theme: a stretch pad of height 0 then
+text in a face of its own; the pad 1 px high; real spaces; no pad; the text in no face of its own."
+  (drgnx-look-scene--theme 'drgnx-light)
+  (drgnx-look-scene--try "box experiment"
+    (let* ((buf (get-buffer-create "*drgnx box experiment*"))
+           (card (lambda (shape) (intern (format "drgnx-kit-card-plain-%s" shape))))
+           (seg (lambda (text face-list) (propertize text 'face face-list)))
+           (stretch (lambda (w h card-face)
+                      (propertize " " 'display (if h `(space :width (,w) :height (,h)) `(space :width (,w)))
+                                  'face (list card-face))))
+           (edge (lambda (card-face) (propertize " " 'display '(space :align-to 52) 'face (list card-face))))
+           (variants
+            `(("A pad h0, text in subtle" .
+               ,(lambda (cf) (concat (funcall stretch 16 nil cf) (funcall seg "Watching CI on staging PR" (list 'drgnx-agent-panel-subtle cf)) (funcall edge cf))))
+              ("B pad h1, text in subtle" .
+               ,(lambda (cf) (concat (funcall stretch 16 1 cf) (funcall seg "Watching CI on staging PR" (list 'drgnx-agent-panel-subtle cf)) (funcall edge cf))))
+              ("C real spaces, text in subtle" .
+               ,(lambda (cf) (concat (funcall seg "    " (list cf)) (funcall seg "Watching CI on staging PR" (list 'drgnx-agent-panel-subtle cf)) (funcall edge cf))))
+              ("D no pad, text in subtle" .
+               ,(lambda (cf) (concat (funcall seg "Watching CI on staging PR" (list 'drgnx-agent-panel-subtle cf)) (funcall edge cf))))
+              ("E pad h0, text in no face of its own" .
+               ,(lambda (cf) (concat (funcall stretch 16 nil cf) (funcall seg "Watching CI on staging PR" (list cf)) (funcall edge cf))))
+              ("F pad h0, text in code font" .
+               ,(lambda (cf) (concat (funcall stretch 16 nil cf) (funcall seg "Watching CI on staging PR" (list 'drgnx-agent-panel-output cf)) (funcall edge cf)))))))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t)) (erase-buffer))
+        (setq-local cursor-type nil truncate-lines t)
+        (dolist (v variants)
+          (insert (propertize (concat (car v) "\n") 'face 'drgnx-text-muted))
+          (insert (funcall seg "top" (list (funcall card "top"))) (funcall edge (funcall card "top")) "\n")
+          (insert (funcall (cdr v) (funcall card "mid")) "\n")
+          (insert (funcall seg "bottom" (list (funcall card "bottom"))) (funcall edge (funcall card "bottom")) "\n\n"))
+        (goto-char (point-min)))
+      (switch-to-buffer buf)))
+  (drgnx-look-scene--answer))
+
 (defvar drgnx-look-scene--panel-long nil "Non-nil once `agent-panel-long' sent the mock agent its second prompt.")
 
 (declare-function drgnx-agent-panel--answer "drgnx-agent-panel-cards" (request option))
