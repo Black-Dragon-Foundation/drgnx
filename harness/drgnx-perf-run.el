@@ -3881,6 +3881,8 @@ workloads; each workload keeps its own time limit, so a hang still ends there."
                                               (drgnx-perf-run-workload sess (cdr w) audit))
                           (error (list :error (error-message-string err))))))
                 (push (cons (car w) (if (plist-get r :error) r (plist-put r :calibration cal))) results))
+              ;; the session's memory after each workload (what a leak shows between): which one keeps it
+              (princ (format "perf: %s rss %s kB\n" (car w) (ignore-errors (drgnx-perf-run--call sess "(drgnx-perf-rss-kb)"))))
               (push (drgnx-perf-load) loads))))
       (drgnx-ui-stop (plist-get s :name))
       (delete-file drgnx-perf-run--fixture))

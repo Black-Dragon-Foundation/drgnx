@@ -53,7 +53,9 @@ line 1 is 400 characters, lines cut; no hub."
   "The painted device pixels of the strip's middle row across the frame, a string (any pixel format)."
   (pcase-let* ((`(,_ ,height ,bytes) (glitnir-snapshot nil 'raw))
                (`(,_ ,_ ,_ ,bottom) (window-inside-pixel-edges w))
-               (y (floor (* (- bottom 6) (frame-scale-factor))))
+               ;; 6 logical px above the window's bottom edge, in the snapshot's device pixels (the edges are device pixels on the
+               ;; native shell, logical under GTK: `drgnx-uitest-device-scale')
+               (y (floor (- (* bottom (drgnx-uitest-device-scale nil)) (* 6 (frame-scale-factor)))))
                (stride (/ (length bytes) height)))
     (substring bytes (* y stride) (* (1+ y) stride))))
 
