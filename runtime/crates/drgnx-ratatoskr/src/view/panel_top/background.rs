@@ -399,6 +399,9 @@ fn second_row(cx: &Cx, i: &BackgroundItem, selected: bool) -> Row {
     if selected {
         b.face(span, span_end, FaceId::Selected.name());
     }
+    // the code font under the whole line, pads included: a font change inside the row would end the card's ring segment
+    // there (a stray vertical edge after the text)
+    b.face(0, end, out_face);
     item_props(&mut b, i, end);
     b.finish()
 }

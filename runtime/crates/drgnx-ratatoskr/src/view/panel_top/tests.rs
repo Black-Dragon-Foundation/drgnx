@@ -1251,3 +1251,18 @@ fn every_row_of_the_card_fits_the_window_at_scale_1_1_25_and_2() {
         }
     }
 }
+
+#[test]
+fn the_last_line_is_in_the_code_font_from_edge_to_edge() {
+    // pads and text in one face: no font change inside the row for the card's ring to end a segment at
+    let rows = gui(three());
+    let line = rows.iter().find(|r| r.key == "bg:w1:1").expect("the line");
+    let len = line.text.chars().count() as u32;
+    assert!(
+        line.runs
+            .iter()
+            .any(|(a, b, f)| *a == 0 && *b == len && f == FaceId::AgentPanelOutput.name()),
+        "{:?}",
+        line.runs
+    );
+}
