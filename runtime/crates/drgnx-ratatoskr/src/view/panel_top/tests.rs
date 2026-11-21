@@ -1127,6 +1127,13 @@ fn the_selected_row_has_the_selection_tint_inset_from_the_card() {
         .collect();
     assert_eq!(tinted.len(), 1, "{:?}", sel.runs);
     assert!(sel.runs.iter().all(|(_, _, f)| f != FaceId::Focus.name()));
+    let line = rows.iter().find(|r| r.key == "bg:t1:1").expect("the line");
+    assert!(line.runs.iter().all(|(_, _, f)| f != FaceId::Focus.name()));
+    assert!(
+        line.runs
+            .iter()
+            .any(|(_, _, f)| f == FaceId::Selected.name())
+    );
     let len = sel.text.chars().count() as u32;
     for (a, b, _) in tinted {
         assert!(
