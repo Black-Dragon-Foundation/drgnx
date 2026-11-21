@@ -1154,7 +1154,11 @@ fn the_selected_row_has_the_selection_tint_inset_from_the_card() {
 fn the_actions_are_kit_buttons_with_their_keys() {
     let rows = gui_sel(three(), Some("t1"));
     let line = rows.iter().find(|r| r.key == "bg:t1:1").expect("the line");
-    assert!(line.text.contains('↵'), "Output's key: {:?}", line.text);
+    assert!(
+        line.images.iter().any(|(_, _, alt)| alt == "↵"),
+        "Output's key: {:?}",
+        line.images
+    );
     assert!(line.text.contains("Stop"), "{:?}", line.text);
     let button = drgnx_rows::kit_gen::face(
         drgnx_rows::kit_gen::CompId::Button,
