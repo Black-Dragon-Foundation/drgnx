@@ -9,6 +9,7 @@
 use std::cell::Cell;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
+pub mod atlas;
 pub mod blur;
 pub mod committed;
 pub mod compose;
@@ -28,6 +29,7 @@ pub mod motion;
 #[cfg(all(test, feature = "pixman-oracle"))]
 mod oracle;
 pub mod pool;
+pub mod prim;
 pub mod probe;
 pub mod region;
 pub mod rng;
@@ -37,6 +39,7 @@ pub mod snap;
 pub mod stack;
 pub mod stats;
 pub mod testclock;
+pub mod text;
 
 /// Sjá, the native view model (the `sja` crate).  Its entry point is re-exported so that this archive carries it (the
 /// host's views C file calls it), and the glue's archive through its `pub use glitnir::*`.
