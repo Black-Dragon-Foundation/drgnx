@@ -67,7 +67,6 @@ the state file in a temporary folder; everything undone after."
              (force-mode-line-update t)
              (drgnx-test-wait-presented)
              (drgnx-test-with-grid-on ,@body))
-         (drgnx-signal--flush)
          (drgnx-inbox-off)
          (drgnx-ui-inbox--tidy)
          (drgnx-command-undefine 'go-quick-open)
@@ -78,7 +77,9 @@ the state file in a temporary folder; everything undone after."
          (setq drgnx-face-title-bar was)
          (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) #'ignore)) (drgnx-face--apply-title frame))
          (delete-directory dir t)
-         (kill-buffer buf)))))
+         (kill-buffer buf)
+         ;; last: what the teardown above changed posts a flush on an idle timer, and none may outlive the file
+         (drgnx-signal--flush)))))
 
 ;; The harness runs a click's commands outside the command loop, so a transient map one of them set (Emacs's own, on a
 ;; click: `mouse-drag-region' on the card) is never cleared by the next command: put it away.

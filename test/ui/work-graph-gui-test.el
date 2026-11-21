@@ -73,10 +73,14 @@
 (ert-deftest drgnx-work-graph/tasks-layer-between-plans-and-agents ()
   "The layers' labels run You asked, Specs, Plans, Tasks, …, Agents: Tasks sits after Plans and before Agents."
   (drgnx-work-graph-gui--with
-    (drgnx-work-graph-gui--settle buf (lambda (b) (string-match-p "Tasks" (drgnx-work-graph-gui--text b))))
-    (let* ((text (drgnx-work-graph-gui--text buf))
-           (plans (string-match "Plans" text)) (tasks (string-match "Tasks" text)) (agents (string-match "Agents" text)))
-      (should (and plans tasks agents))
+    ;; a layer's label starts the line of its first row.  The layers' rows reach the map one after another (the agents'
+    ;; first, the plans' and tasks' after), so draw again until the three labels are there, then they are in order
+    (let (plans tasks agents)
+      (drgnx-work-graph-gui--settle
+       buf (lambda (b) (let ((text (drgnx-work-graph-gui--text b)))
+                         (setq plans (string-match "^Plans" text) tasks (string-match "^Tasks" text)
+                               agents (string-match "^Agents" text))
+                         (and plans tasks agents (< plans tasks agents)))))
       (should (< plans tasks agents)))))
 
 (ert-deftest drgnx-work-graph/runs-on-shows-job-chips-linked-to-agents ()

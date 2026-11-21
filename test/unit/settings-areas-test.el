@@ -80,6 +80,7 @@
 
 (ert-deftest drgnx-settings-areas/the-security-settings-are-never-for-a-workspace-or-an-agent ()
   ;; US-WORKSPACE-NEVER-1: the workspace refusal reads this metadata
+  (drgnx-test-modules--load '(ui/look))      ; where drgnx-look-theme is declared: not loaded by any other row of this selection
   (dolist (var '(drgnx-keys-layers drgnx-keys-pending-layers drgnx-keys-bind drgnx-keys-unbind drgnx-keys-mac-option
                                    drgnx-keys-tty-fallback drgnx-modules-disabled drgnx-modules-enabled drgnx-modules-flags
                                    drgnx-modules-external drgnx-look-theme))

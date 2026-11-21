@@ -6,6 +6,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
+(require 'drgnx-ai)      ; loaded now: the card's first `require' of it inside a test would redefine the stubbed route question
 (load (expand-file-name "modules/tools/drgnx-search-handoff" drgnx-dir) nil t)
 
 (defvar drgnx-search-handoff-test--calls nil "The hub calls made, newest first: (METHOD PARAMS).")

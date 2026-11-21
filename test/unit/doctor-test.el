@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-doctor)
 (require 'drgnx-macos)   ; so `drgnx-macos-app-dir' is special before a test let-binds it
+(require 'drgnx-agent-config-claude)   ; its managed-dir variable special before the test let-binds it
 (require 'drgnx-ai)      ; its config file defined now, not inside a test's let-bound config table (ai-env-keys)
 (load (expand-file-name "test/fixtures/scripted-process" drgnx-dir) nil t)
 

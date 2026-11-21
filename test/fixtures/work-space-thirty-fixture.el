@@ -194,7 +194,10 @@ send each its ask; wait until all are busy.  Returns the mirrors."
           (push (list (plist-get a :profile) :command (list mock "acp" "--as" "claude" "--script" script
                                                             "--log" (concat script ".log"))) profiles)))
       (with-temp-file (expand-file-name "settings.el" config)
-        (prin1 (list 'drgnx-settings :version 1 (list 'drgnx-agents-profiles (nreverse profiles))) (current-buffer)))
+        (prin1 (list 'drgnx-settings :version 1 (list 'drgnx-agents-profiles (nreverse profiles))
+                     ;; the agents' `job_start' is a code.edit, which the shipped matrix never allows a chat
+                     (list 'drgnx-agents-matrix '(:cells ((:action code.edit :column (:role chat) :verdict allow)))))
+               (current-buffer)))
       (let ((process-environment (append (list (concat "DRGNX_CONFIG_DIR=" config) "RATATOSKR_SUPERVISOR=none"
                                                (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)))
                                          process-environment)))
