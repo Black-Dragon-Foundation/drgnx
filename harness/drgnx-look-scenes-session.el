@@ -828,26 +828,29 @@ a live card and an end line in the transcript."
       (dolist (v (list (concat "agent-panel/" sid) (concat "agent-panel-top/" sid)))
         (drgnx-view-env-update v t)))
     (drgnx-look-scene--panel-settle drgnx-look-scene--panel)
-    ;; EXPERIMENT (round 5): the card's right edge on rows' ends
+    ;; EXPERIMENT (round 5): a row's end, an align-to stretch then pads: merged, or the pads dropped
     (let ((h (drgnx-agent-panel--header-of drgnx-look-scene--panel)))
-      (dolist (f '(drgnx-agent-panel-output drgnx-agent-panel-code drgnx-agent-panel-subtle drgnx-kit-card-plain-mid))
-        (push (format "EXP face %s box %S inherit %S" f (face-attribute f :box nil t) (face-attribute f :inherit nil t))
-              drgnx-look-scene--errors))
       (with-current-buffer h
         (let ((inhibit-read-only t) (inhibit-modification-hooks t))
-          (dolist (spec '(("w1" 1 drop-output) ("k1" 1 card-first) ("t2" 0 drop-all)))
+          (dolist (spec '(("w1" merge) ("k1" drop)))
             (save-excursion
               (goto-char (point-min))
               (when-let* ((m (text-property-search-forward 'drgnx-bg-item (car spec) #'equal)))
                 (goto-char (prop-match-beginning m))
-                (forward-line (nth 1 spec))
-                (let ((b (line-beginning-position)) (e (line-end-position)))
-                  (push (format "EXP %s: %S" (car spec) (object-intervals (buffer-substring (max b (- e 12)) e)))
-                        drgnx-look-scene--errors)
-                  (pcase (nth 2 spec)
-                    ('drop-output (put-text-property b e 'face 'drgnx-kit-card-plain-mid))
-                    ('card-first (put-text-property b e 'face '(drgnx-kit-card-plain-mid drgnx-agent-panel-output)))
-                    ('drop-all (put-text-property (- e 1) e 'face 'drgnx-kit-card-plain-mid)))))))))))
+                (forward-line 1)
+                (let* ((e (line-end-position)) (i e) (w 0))
+                  (while (let ((d (get-text-property (1- i) 'display)))
+                           (and (consp d) (eq (car d) 'space) (plist-get (cdr d) :width)
+                                (progn (setq w (+ w (car (plist-get (cdr d) :width)))) t)))
+                    (setq i (1- i)))
+                  (let ((d (get-text-property (1- i) 'display)))
+                    (push (format "EXP %s: %d px of pads at the end, before them %S" (car spec) w d) drgnx-look-scene--errors)
+                    (when (and (consp d) (plist-get (cdr d) :align-to))
+                      (pcase (cadr spec)
+                        ('merge (put-text-property (1- i) i 'display
+                                                   `(space :align-to (,(+ w (car (plist-get (cdr d) :align-to)))))))
+                        ('drop nil))
+                      (delete-region i e)))))))))))
   (drgnx-look-scene--answer))
 
 ;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view
