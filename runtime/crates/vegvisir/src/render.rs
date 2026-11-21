@@ -517,18 +517,25 @@ fn segment(
     }
     let body_at = b.pos();
     body.push_fitted(b, &fitted);
-    // a machine's job chips link to the agents that started them (`drgnx-work-link`), when the line is not cut
-    if fitted == body.text()
-        && let Some(it) = s.items.get(id)
-    {
+    // a machine's job chips link to the agents that started them (`drgnx-work-link`); a line that is cut links the part of
+    // a chip it still shows (a window too narrow for every chip leaves them reachable)
+    if let Some(it) = s.items.get(id) {
         let text = body.text();
+        let shown = fitted.chars().count() - usize::from(fitted != text);
         for j in &it.chips {
             let (Some(agent), Some(off)) = (&j.links_to, text.find(&job_chip_text(j))) else {
                 continue;
             };
-            let from = body_at + text[..off].chars().count() as u32;
-            let to = from + job_chip_text(j).chars().count() as u32;
-            b.prop(from, to, "drgnx-work-link", Value::String(agent.0.clone()));
+            let first = text[..off].chars().count();
+            let last = (first + job_chip_text(j).chars().count()).min(shown);
+            if last > first {
+                b.prop(
+                    body_at + first as u32,
+                    body_at + last as u32,
+                    "drgnx-work-link",
+                    Value::String(agent.0.clone()),
+                );
+            }
         }
     }
     if let Some((t, f)) = &tail {
