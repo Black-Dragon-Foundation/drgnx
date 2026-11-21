@@ -781,6 +781,18 @@ text in a face of its own; the pad 1 px high; real spaces; no pad; the text in n
                ,(lambda (cf) (concat (funcall seg "Watching CI on staging PR" (list 'drgnx-agent-panel-subtle cf)) (funcall edge cf))))
               ("E pad h0, text in no face of its own" .
                ,(lambda (cf) (concat (funcall stretch 16 nil cf) (funcall seg "Watching CI on staging PR" (list cf)) (funcall edge cf))))
+              ("G pad :height 0 (as the rows' pads), text in subtle" .
+               ,(lambda (cf) (concat (funcall stretch 16 0 cf) (funcall seg "Watching CI on staging PR" (list 'drgnx-agent-panel-subtle cf)) (funcall edge cf))))
+              ("H two pads :height 0, an icon image in subtle, a pad, text in no face" .
+               ,(lambda (cf) (concat (funcall stretch 8 0 cf) (funcall stretch 8 0 cf)
+                                     (propertize " " 'display (create-image "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><circle cx='12' cy='12' r='9'/></svg>" 'svg t :height 32 :ascent 'center)
+                                                 'face (list 'drgnx-agent-panel-subtle cf))
+                                     (funcall stretch 8 0 cf) (funcall seg "Watching CI on staging PR" (list cf)) (funcall edge cf))))
+              ("I as H, the text with a face of its own" .
+               ,(lambda (cf) (concat (funcall stretch 8 0 cf) (funcall stretch 8 0 cf)
+                                     (propertize " " 'display (create-image "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><circle cx='12' cy='12' r='9'/></svg>" 'svg t :height 32 :ascent 'center)
+                                                 'face (list 'drgnx-agent-panel-subtle cf))
+                                     (funcall stretch 8 0 cf) (funcall seg "Watching CI on staging PR" (list 'drgnx-agent-panel-code cf)) (funcall edge cf))))
               ("F pad h0, text in code font" .
                ,(lambda (cf) (concat (funcall stretch 16 nil cf) (funcall seg "Watching CI on staging PR" (list 'drgnx-agent-panel-output cf)) (funcall edge cf)))))))
       (with-current-buffer buf
