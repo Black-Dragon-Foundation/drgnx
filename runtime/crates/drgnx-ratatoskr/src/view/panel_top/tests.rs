@@ -1376,3 +1376,28 @@ fn a_rows_end_is_one_stretch_not_a_stop_and_a_pad() {
         }
     }
 }
+
+#[test]
+fn the_pad_between_the_two_buttons_has_no_box_of_its_own() {
+    // the card's box under a pad between two button boxes is a run of its own: it draws a thin edge at each end of
+    // the gap (measured on the selected row, light theme, s2): the gap's face drops the box
+    let rows = gui_sel(three(), Some("t1"));
+    let line = rows.iter().find(|r| r.key == "bg:t1:1").expect("the line");
+    let span = |action: &str| {
+        line.props
+            .iter()
+            .find(|(_, _, n, v)| n == "drgnx-agent-panel-action" && v == action)
+            .map(|(a, b, _, _)| (*a, *b))
+            .unwrap_or_else(|| panic!("{action} in {:?}", line.props))
+    };
+    let (_, out_end) = span("background-output:t1");
+    let (stop_start, _) = span("background-stop:t1");
+    assert_eq!(stop_start, out_end + 1, "one character between the buttons");
+    assert!(
+        line.runs
+            .iter()
+            .any(|(a, b, f)| *a <= out_end && out_end < *b && f == "drgnx-agent-panel-gap"),
+        "{:?}",
+        line.runs
+    );
+}

@@ -596,6 +596,8 @@ pub enum FaceId {
     AgentPanelChip,
     /// `drgnx-agent-panel-code`
     AgentPanelCode,
+    /// `drgnx-agent-panel-gap`
+    AgentPanelGap,
     /// `drgnx-agent-panel-warn`
     AgentPanelWarn,
     /// `drgnx-agent-panel-ok`
@@ -1164,7 +1166,7 @@ pub enum FaceId {
 
 impl FaceId {
     /// Every face, in this file's order.
-    pub const ALL: [FaceId; 576] = [
+    pub const ALL: [FaceId; 577] = [
         FaceId::Default,
         FaceId::Bold,
         FaceId::Italic,
@@ -1459,6 +1461,7 @@ impl FaceId {
         FaceId::AgentPanelSubtle,
         FaceId::AgentPanelChip,
         FaceId::AgentPanelCode,
+        FaceId::AgentPanelGap,
         FaceId::AgentPanelWarn,
         FaceId::AgentPanelOk,
         FaceId::AgentPanelFail,
@@ -2040,6 +2043,7 @@ impl FaceId {
             FaceId::AgentPanelSubtle => "drgnx-agent-panel-subtle",
             FaceId::AgentPanelChip => "drgnx-agent-panel-chip",
             FaceId::AgentPanelCode => "drgnx-agent-panel-code",
+            FaceId::AgentPanelGap => "drgnx-agent-panel-gap",
             FaceId::AgentPanelWarn => "drgnx-agent-panel-warn",
             FaceId::AgentPanelOk => "drgnx-agent-panel-ok",
             FaceId::AgentPanelFail => "drgnx-agent-panel-fail",
@@ -2622,6 +2626,7 @@ impl FaceId {
             "drgnx-agent-panel-subtle" => FaceId::AgentPanelSubtle,
             "drgnx-agent-panel-chip" => FaceId::AgentPanelChip,
             "drgnx-agent-panel-code" => FaceId::AgentPanelCode,
+            "drgnx-agent-panel-gap" => FaceId::AgentPanelGap,
             "drgnx-agent-panel-warn" => FaceId::AgentPanelWarn,
             "drgnx-agent-panel-ok" => FaceId::AgentPanelOk,
             "drgnx-agent-panel-fail" => FaceId::AgentPanelFail,

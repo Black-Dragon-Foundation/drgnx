@@ -827,28 +827,7 @@ a live card and an end line in the transcript."
     (let ((sid (buffer-local-value 'drgnx-agent-panel--session drgnx-look-scene--panel)))
       (dolist (v (list (concat "agent-panel/" sid) (concat "agent-panel-top/" sid)))
         (drgnx-view-env-update v t)))
-    (drgnx-look-scene--panel-settle drgnx-look-scene--panel)
-    ;; EXPERIMENT (round 5b): the gap pad between the two buttons without a box of its own
-    (let ((h (drgnx-agent-panel--header-of drgnx-look-scene--panel)))
-      (with-current-buffer h
-        (let ((inhibit-read-only t) (inhibit-modification-hooks t))
-          (save-excursion
-            (goto-char (point-min))
-            (when-let* ((m (text-property-search-forward 'drgnx-bg-item "t1" #'equal)))
-              (goto-char (prop-match-beginning m))
-              (forward-line 1)
-              (let ((i (line-beginning-position)) (found nil))
-                (while (and (not found) (< i (line-end-position)))
-                  (let ((d (get-text-property i 'display)))
-                    (when (and (consp d) (eq (car d) 'space) (plist-get (cdr d) :width)
-                               (null (get-text-property i 'drgnx-agent-panel-action))
-                               (get-text-property (1- i) 'drgnx-agent-panel-action)
-                               (get-text-property (1+ i) 'drgnx-agent-panel-action))
-                      (setq found t)
-                      (push (format "EXP gap at %d" i) drgnx-look-scene--errors)
-                      (put-text-property i (1+ i) 'face
-                                         (cons '(:box nil) (ensure-list (get-text-property i 'face))))))
-                  (setq i (1+ i))))))))))
+    (drgnx-look-scene--panel-settle drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 
 ;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view

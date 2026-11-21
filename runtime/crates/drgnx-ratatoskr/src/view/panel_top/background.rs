@@ -516,7 +516,10 @@ fn second_row(
         }
         for (n, (label, key, action)) in acts.iter().enumerate() {
             if n > 0 {
+                // no box of its own: the card's box under it would be a run with an edge at each end
+                let gap = b.pos();
                 b.pad(p4, None);
+                b.face_over(gap, gap + 1, FaceId::AgentPanelGap.name());
             }
             draw_button(&mut b, cx, label, key, action);
         }
