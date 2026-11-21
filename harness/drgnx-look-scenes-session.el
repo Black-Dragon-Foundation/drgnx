@@ -828,19 +828,31 @@ a live card and an end line in the transcript."
       (dolist (v (list (concat "agent-panel/" sid) (concat "agent-panel-top/" sid)))
         (drgnx-view-env-update v t)))
     (drgnx-look-scene--panel-settle drgnx-look-scene--panel)
-    ;; DIAGNOSTIC (round 4): the intervals of one list row, as Emacs holds them
-    (let* ((h (drgnx-agent-panel--header-of drgnx-look-scene--panel)))
+    ;; EXPERIMENT (round 4): three ways to lay a list row's leading pads, on three items
+    (let ((h (drgnx-agent-panel--header-of drgnx-look-scene--panel)))
       (with-current-buffer h
-        (save-excursion
-          (goto-char (point-min))
-          (when-let* ((m (text-property-search-forward 'drgnx-bg-item "w1" #'equal)))
-            (let ((beg (prop-match-beginning m)))
-              (goto-char beg)
-              (push (format "DIAG row w1: %S" (object-intervals (buffer-substring (line-beginning-position) (line-end-position))))
-                    drgnx-look-scene--errors)
-              (forward-line 1)
-              (push (format "DIAG row w1:1: %S" (object-intervals (buffer-substring (line-beginning-position) (line-end-position))))
-                    drgnx-look-scene--errors)))))))
+        (let ((inhibit-read-only t) (inhibit-modification-hooks t))
+          (dolist (spec '(("w1" merge) ("k1" align) ("t2" none)))
+            (save-excursion
+              (goto-char (point-min))
+              (when-let* ((m (text-property-search-forward 'drgnx-bg-item (car spec) #'equal)))
+                (goto-char (prop-match-beginning m))
+                (dotimes (row 2)
+                  (let* ((bol (line-beginning-position))
+                         (n 0) (wid 0) (i bol))
+                    ;; the run of leading display spaces
+                    (while (let ((d (get-text-property i 'display)))
+                             (and (consp d) (eq (car d) 'space) (plist-get (cdr d) :width)))
+                      (setq wid (+ wid (car (plist-get (cdr (get-text-property i 'display)) :width))) n (1+ n) i (1+ i)))
+                    (push (format "EXP %s row %d: %d pads, %d px" (car spec) row n wid) drgnx-look-scene--errors)
+                    (when (> n 0)
+                      (pcase (cadr spec)
+                        ('merge (put-text-property bol (1+ bol) 'display `(space :width (,wid) :height (1)))
+                                (delete-region (1+ bol) (+ bol n)))
+                        ('align (put-text-property bol (1+ bol) 'display `(space :align-to (,wid)))
+                                (delete-region (1+ bol) (+ bol n)))
+                        ('none (delete-region bol (+ bol n))))))
+                  (forward-line 1)))))))))
   (drgnx-look-scene--answer))
 
 ;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view
