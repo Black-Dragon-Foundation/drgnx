@@ -827,21 +827,7 @@ a live card and an end line in the transcript."
     (let ((sid (buffer-local-value 'drgnx-agent-panel--session drgnx-look-scene--panel)))
       (dolist (v (list (concat "agent-panel/" sid) (concat "agent-panel-top/" sid)))
         (drgnx-view-env-update v t)))
-    (drgnx-look-scene--panel-settle drgnx-look-scene--panel)
-    ;; DIAGNOSTIC (round 4b): the key hint's ↵ and k
-    (let ((h (drgnx-agent-panel--header-of drgnx-look-scene--panel)))
-      (with-current-buffer h
-        (save-excursion
-          (goto-char (point-min))
-          (dolist (ch '("↵" "k"))
-            (goto-char (point-min))
-            (when (search-forward ch nil t)
-              (let ((p (1- (point))))
-                (push (format "DIAG %s at %d: composition %S font %S disp %S face %S line %S"
-                              ch p (find-composition p) (ignore-errors (font-at p (get-buffer-window h)))
-                              (get-text-property p 'display) (get-text-property p 'face)
-                              (buffer-substring-no-properties (line-beginning-position) (line-end-position)))
-                      drgnx-look-scene--errors))))))))
+    (drgnx-look-scene--panel-settle drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 
 ;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view
