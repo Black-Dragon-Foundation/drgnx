@@ -2601,12 +2601,13 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                (has-model "(and (fboundp 'nidhogg-lines-describe) (plist-get (nidhogg-lines-describe) :lines) t)")
                (no-model "(not (and (fboundp 'nidhogg-lines-describe) (nidhogg-lines-describe)))")
                ;; 20 buffers holding the 10,000 lines, each with a model (or none), while typing in a 21st
-               (bufs (lambda (on) (format "(setq drgnx-perf--lines-bufs
-                                             (mapcar (lambda (i) (with-current-buffer (generate-new-buffer (format \" lines-%%d\" i))
-                                                                   (insert-file-contents %s) %s (current-buffer)))
-                                                     (number-sequence 1 20)))"
+               (bufs (lambda (on) (format "(progn (mapc #'kill-buffer (seq-filter #'buffer-live-p drgnx-perf--lines-bufs))
+                                             (setq drgnx-perf--lines-bufs
+                                               (mapcar (lambda (i) (with-current-buffer (generate-new-buffer (format \" lines-%%d\" i))
+                                                                     (insert-file-contents %s) %s (current-buffer)))
+                                                       (number-sequence 1 20))))"
                                           f10k (funcall model on))))
-               (kill-bufs "(progn (mapc #'kill-buffer drgnx-perf--lines-bufs) (setq drgnx-perf--lines-bufs nil) t)"))
+               (kill-bufs "(progn (mapc #'kill-buffer (seq-filter #'buffer-live-p drgnx-perf--lines-bufs)) (setq drgnx-perf--lines-bufs nil) t)"))
           `((minimap-type-baseline :setup ,setup :each ,(concat "(progn " visit10k " (drgnx-scrollbar-mode -1) " (funcall model nil) " t)")
                                    :actions ,keys :check ,(concat "(with-current-buffer (window-buffer) " no-model ")")
                                    :teardown ,(concat "(progn (drgnx-scrollbar-mode 1) " teardown ")"))
@@ -3647,6 +3648,9 @@ actions is profiled from its first key to the end of the completion wait instead
     (if (plist-get spec :daemon) (drgnx-perf-run-daemon-startup)
       (unwind-protect
           (progn
+            ;; the frames the session has now: a workload's own are taken down after it (a frame is tens of MB that
+            ;; stays: 15 of them left behind were most of the memory row's 800 MB)
+            (drgnx-perf-run--call sess "(progn (defvar drgnx-perf--frames-before nil) (setq drgnx-perf--frames-before (frame-list)) t)")
             (when (plist-get spec :setup)
               (drgnx-perf-run--call sess (plist-get spec :setup) (or (plist-get spec :timeout) 120))
               (drgnx-ui-measure sess nil))
@@ -3681,6 +3685,8 @@ actions is profiled from its first key to the end of the completion wait instead
         (when (plist-get spec :teardown) (ignore-errors (drgnx-perf-run--call sess (plist-get spec :teardown))))
         ;; a hub the workload started and its teardown (or its error) left running serves the next one's socket: "another
         ;; hub serves here", or the old hub's profiles
+        (ignore-errors
+          (drgnx-perf-run--call sess "(progn (when drgnx-perf--frames-before (dolist (f (frame-list)) (unless (memq f drgnx-perf--frames-before) (ignore-errors (delete-frame f t)))) (setq drgnx-perf--frames-before nil)) t)"))
         (ignore-errors
           (drgnx-perf-run--call sess "(progn (when (and (fboundp 'drgnx-perf--hub-stop) (boundp 'drgnx-perf--hub) (process-live-p drgnx-perf--hub)) (drgnx-perf--hub-stop)) t)"))))))
 
