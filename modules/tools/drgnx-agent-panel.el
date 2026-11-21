@@ -70,6 +70,9 @@ Set with `setopt' or Customize, open panels draw again at once."
   :group 'drgnx-agent-panel)
 (defface drgnx-agent-panel-chip '((t :inherit drgnx-chip)) "A chip of the header row." :group 'drgnx-agent-panel)
 (defface drgnx-agent-panel-code '((t :inherit drgnx-code-small)) "A step's time and cost." :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-gap '((t :box nil))
+  "A pad between two buttons of a card's row: the card's box under it would be a run of its own, with an edge at each end."
+  :group 'drgnx-agent-panel)
 (defface drgnx-agent-panel-warn '((t :inherit drgnx-status-warn)) "A slow or expensive step." :group 'drgnx-agent-panel)
 (defface drgnx-agent-panel-ok '((t :inherit drgnx-status-ok)) "A step that finished." :group 'drgnx-agent-panel)
 (defface drgnx-agent-panel-fail '((t :inherit drgnx-status-fail)) "A step that failed." :group 'drgnx-agent-panel)

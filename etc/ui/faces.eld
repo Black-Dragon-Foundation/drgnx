@@ -295,6 +295,7 @@
  drgnx-agent-panel-subtle
  drgnx-agent-panel-chip
  drgnx-agent-panel-code
+ drgnx-agent-panel-gap
  drgnx-agent-panel-warn
  drgnx-agent-panel-ok
  drgnx-agent-panel-fail

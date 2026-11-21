@@ -46,6 +46,7 @@
 (declare-function drgnx-timer-start "drgnx-timer")
 (declare-function drgnx-timer-cancel "drgnx-timer")
 (declare-function drgnx-timer-active-p "drgnx-timer")
+(declare-function drgnx-px "drgnx-pixels" (logical &optional frame scale))
 
 ;;;; The items
 
@@ -376,6 +377,49 @@ text of a cell and nothing else."
         (when-let* ((sid (buffer-local-value 'drgnx-agent-panel--session b)))
           (drgnx-agent-panel-background--chat-shown sid)
           (drgnx-agent-panel-background--tick-sync b))))))
+
+;;;; The selected item's ring: one rounded block ring over both its lines (Glitnir's `glitnir-blocks')
+
+(defvar-local drgnx-agent-panel-background--block nil
+  "The ring block last given to the windows of the header (`glitnir-blocks'), or nil.")
+
+(defun drgnx-agent-panel-background--rows-of (id)
+  "(FROM . TO) of the rows of item ID in the current buffer: FROM the start of the first, TO the start of the line
+after the last; nil when there is none."
+  (save-excursion
+    (goto-char (point-min))
+    (let (from to)
+      (while (not (eobp))
+        (if (equal (get-text-property (line-beginning-position) 'drgnx-bg-item) id)
+            (progn (unless from (setq from (line-beginning-position)))
+                   (setq to (min (point-max) (1+ (line-end-position)))))
+          (when from (goto-char (point-max))))          ; one item's rows are together
+        (forward-line 1))
+      (and from (cons from to)))))
+
+(defun drgnx-agent-panel-background--unblock (&optional buffer)
+  "Drop the ring from the windows that have it (the header's own, BUFFER's)."
+  (with-current-buffer (or buffer (current-buffer))
+    (when drgnx-agent-panel-background--block
+      (let ((block drgnx-agent-panel-background--block))
+        (dolist (w (window-list nil 'nomini))
+          (when (eq (window-parameter w 'glitnir-blocks) block) (set-window-parameter w 'glitnir-blocks nil)))
+        (set-marker (nth 1 (car block)) nil) (set-marker (nth 2 (car block)) nil)
+        (setq drgnx-agent-panel-background--block nil)))))
+
+(defun drgnx-agent-panel-background--blocks (&rest _)
+  "`drgnx-view-sja-drawn-functions' of the header: the selected item's two rows get one rounded ring in the focus
+colour, inset from the card's edge, over the selection's tint (its corners show the colour under it)."
+  (let* ((sel (buffer-local-value 'drgnx-agent-panel--bg-selected (drgnx-agent-panel-background--main)))
+         (rows (and sel (drgnx-agent-panel-background--rows-of sel)))
+         (windows (get-buffer-window-list (current-buffer) nil t)))
+    (drgnx-agent-panel-background--unblock)
+    (when (and rows windows)
+      (setq drgnx-agent-panel-background--block
+            (list `(ring ,(copy-marker (car rows)) ,(copy-marker (cdr rows) t)
+                         :x0 ,(drgnx-px 4) :x1 ,(max (drgnx-px 8) (- (window-body-width (car windows) t) (drgnx-px 4)))
+                         :radius ,(drgnx-px 6) :ring drgnx-focus-line :beneath default)))
+      (dolist (w windows) (set-window-parameter w 'glitnir-blocks drgnx-agent-panel-background--block)))))
 
 ;;;; Setup
 

@@ -38,6 +38,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `circle-x` | `core/drgnx-notice-toast.el`, `modules/ui/drgnx-statusbar.el` |
 | `clock` | - |
 | `copy` | `modules/extra/drgnx-debug-share.el` |
+| `corner-down-left` | - |
 | `diamond` | `core/drgnx-agent-identity.el` |
 | `ellipsis` | `modules/tools/drgnx-work-map.el` |
 | `eye` | `core/drgnx-palette.el` |

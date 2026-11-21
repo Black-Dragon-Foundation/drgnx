@@ -26,6 +26,8 @@
 (declare-function drgnx-view-env--twins "drgnx-view-env" (view))
 (defvar drgnx-view-patch)
 (defvar drgnx-view-patch-twin-function)
+(declare-function drgnx-agent-panel-background--blocks "drgnx-agent-panel-background" (&rest _))
+(declare-function drgnx-agent-panel-background--unblock "drgnx-agent-panel-background" (&optional buffer))
 (declare-function drgnx-wb-area-fit-companions "drgnx-area" (area &optional frame))
 
 (defvar-local drgnx-agent-companion--header nil "In a panel's buffer: its header, once made.")
@@ -39,7 +41,10 @@ panel's mode is defined).")
   (set-keymap-parent drgnx-agent-panel-header-mode-map drgnx-agent-panel-mode-map)
   (setq-local truncate-lines t cursor-type nil scroll-margin 0)
   (face-remap-add-relative 'default 'drgnx-ui-text)
-  (add-hook 'drgnx-view-sja-drawn-functions #'drgnx-agent-panel-header--refit nil t))
+  (add-hook 'drgnx-view-sja-drawn-functions #'drgnx-agent-panel-header--refit nil t)
+  ;; the selected background item's rounded ring (a Glitnir block ring); its windows lose it with the buffer
+  (add-hook 'drgnx-view-sja-drawn-functions #'drgnx-agent-panel-background--blocks nil t)
+  (add-hook 'kill-buffer-hook #'drgnx-agent-panel-background--unblock nil t))
 
 (defun drgnx-agent-panel-header--refit (&rest _)
   "The header's rows changed: each area window that shows it above a panel is fitted to them again."
