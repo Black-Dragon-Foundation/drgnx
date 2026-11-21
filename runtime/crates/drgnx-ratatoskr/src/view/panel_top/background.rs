@@ -91,6 +91,62 @@ pub(super) fn unstretch(row: &mut Row) {
     }
 }
 
+/// Stretches side by side that every run and property covers alike become one stretch (their widths added, the second's
+/// placeholder character gone, every position after it one less): two stretches next to each other inside the card's
+/// box run draw a stray vertical edge where the second ends (light theme; measured on the list, 2026-11-21).
+pub(in crate::view) fn merge_stretches(row: &mut Row) {
+    while let Some(i) = (0..row.spaces.len().saturating_sub(1)).find(|&i| {
+        let (a, b) = (row.spaces[i], row.spaces[i + 1]);
+        let covers = |p: u32| {
+            let runs: Vec<usize> = (0..row.runs.len())
+                .filter(|&k| row.runs[k].0 <= p && p < row.runs[k].1)
+                .collect();
+            let props: Vec<usize> = (0..row.props.len())
+                .filter(|&k| row.props[k].0 <= p && p < row.props[k].1)
+                .collect();
+            let fonts: Vec<usize> = (0..row.fonts.len())
+                .filter(|&k| row.fonts[k].0 <= p && p < row.fonts[k].1)
+                .collect();
+            (runs, props, fonts)
+        };
+        b.0 == a.0 + 1 && a.2 == b.2 && covers(a.0) == covers(b.0)
+    }) {
+        let p = row.spaces[i].0 + 1;
+        row.spaces[i].1 += row.spaces[i + 1].1;
+        row.spaces.remove(i + 1);
+        let at = row.text.char_indices().nth(p as usize).map(|(k, _)| k);
+        if let Some(k) = at {
+            row.text.remove(k);
+        }
+        let m = |x: &mut u32| {
+            if *x > p {
+                *x -= 1;
+            }
+        };
+        for r in &mut row.runs {
+            m(&mut r.0);
+            m(&mut r.1);
+        }
+        for r in &mut row.props {
+            m(&mut r.0);
+            m(&mut r.1);
+        }
+        for r in &mut row.fonts {
+            m(&mut r.0);
+            m(&mut r.1);
+        }
+        for r in &mut row.stops {
+            m(&mut r.0);
+        }
+        for r in &mut row.images {
+            m(&mut r.0);
+        }
+        for r in &mut row.spaces {
+            m(&mut r.0);
+        }
+    }
+}
+
 /// A kit face's name, none where the component has none (the surface's own).
 fn kit_face(id: kit_gen::CompId, variant: &[&str]) -> Option<&'static str> {
     let f = kit_gen::face(id, variant);
@@ -291,6 +347,7 @@ fn gui(
     }
     for r in &mut out {
         unstretch(r);
+        merge_stretches(r);
     }
     // one card: its ring round every row, open between them
     kit::card_rows(&kenv, kit::CardKind::Plain, out)

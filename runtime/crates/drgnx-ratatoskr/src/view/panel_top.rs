@@ -580,6 +580,7 @@ fn chips(s: &Snapshot, cx: &Cx) -> Vec<Row> {
 
 #[path = "panel_top/background.rs"]
 mod background;
+pub(super) use background::merge_stretches;
 
 #[cfg(test)]
 #[path = "panel_top/tests.rs"]

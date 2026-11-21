@@ -276,6 +276,7 @@ pub fn end_rows(e: &Ended, fit: Option<EndFit>) -> (Vec<Row>, Vec<(drgnx_rows::I
             s.2 = 1;
         }
     }
+    super::panel_top::merge_stretches(&mut row);
     let rows = drgnx_rows::kit::card_rows(
         &super::kit_env(env),
         drgnx_rows::kit::CardKind::Plain,
