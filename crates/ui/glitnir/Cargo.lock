@@ -73,6 +73,7 @@ dependencies = [
  "image-webp",
  "png",
  "sja",
+ "smidja",
 ]
 
 [[package]]
@@ -229,6 +230,10 @@ dependencies = [
  "serde_core",
  "serde_json",
 ]
+
+[[package]]
+name = "smidja"
+version = "0.1.0"
 
 [[package]]
 name = "syn"
