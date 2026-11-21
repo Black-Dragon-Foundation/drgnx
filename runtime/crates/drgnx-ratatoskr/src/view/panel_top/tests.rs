@@ -1396,7 +1396,7 @@ fn the_pad_between_the_two_buttons_has_no_box_of_its_own() {
     assert!(
         line.runs
             .iter()
-            .any(|(a, b, f)| *a <= out_end && out_end < *b && f == "drgnx-agent-panel-gap"),
+            .any(|(a, b, f)| *a <= out_end && out_end < *b && f == FaceId::AgentPanelGap.name()),
         "{:?}",
         line.runs
     );
