@@ -269,10 +269,17 @@ pub fn end_rows(e: &Ended, fit: Option<EndFit>) -> (Vec<Row>, Vec<(drgnx_rows::I
     b.pad(p8, None);
     let end = b.pos();
     b.prop(0, end, "drgnx-bg-item", json!(i.id));
+    let mut row = b.finish();
+    // a zero-high stretch ends the box run of the card's ring (see `panel_top::background::unstretch`)
+    for s in &mut row.spaces {
+        if s.2 == 0 {
+            s.2 = 1;
+        }
+    }
     let rows = drgnx_rows::kit::card_rows(
         &super::kit_env(env),
         drgnx_rows::kit::CardKind::Plain,
-        vec![b.finish()],
+        vec![row],
     );
     (rows, images)
 }
@@ -471,6 +478,7 @@ mod tests {
                     r.text
                 );
             }
+            assert!(r.spaces.iter().all(|(_, _, h)| *h >= 1), "{:?}", r.spaces);
             // the link is a click target
             assert!(
                 r.props

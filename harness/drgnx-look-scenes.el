@@ -28,7 +28,6 @@
   '((window-dark :agent t)
     (agent-panel :agent t)
     (agent-panel-long :agent t :mockup agent-panel)
-    (box-experiment)
     (agent-background :agent t)
     (agent-background-light :agent t :mockup agent-background)
     (conversation-tab :agent t :mockup agent-panel)

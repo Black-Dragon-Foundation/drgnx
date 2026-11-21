@@ -82,6 +82,17 @@ fn to_edge(b: &mut RowBuilder, cx: &Cx, pad_px: u32) {
     }
 }
 
+/// Every stretch of ROW gets a height of 1 px: a zero-high stretch ends the box run it stands in, so the card's ring
+/// lost its left edge at a row's leading pads and drew a stray one where the text began, and a button's box broke
+/// before its key hint (measured: `box-experiment`, 2026-11-21).
+pub(super) fn unstretch(row: &mut Row) {
+    for s in &mut row.spaces {
+        if s.2 == 0 {
+            s.2 = 1;
+        }
+    }
+}
+
 /// A kit face's name, none where the component has none (the surface's own).
 fn kit_face(id: kit_gen::CompId, variant: &[&str]) -> Option<&'static str> {
     let f = kit_gen::face(id, variant);
@@ -279,6 +290,9 @@ fn gui(
             b.pad(p8, None);
             out.push(b.finish());
         }
+    }
+    for r in &mut out {
+        unstretch(r);
     }
     // one card: its ring round every row, open between them
     kit::card_rows(&kenv, kit::CardKind::Plain, out)

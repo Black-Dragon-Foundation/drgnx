@@ -1282,3 +1282,23 @@ fn the_last_line_is_in_the_code_font_from_edge_to_edge() {
         line.runs
     );
 }
+
+#[test]
+fn no_stretch_in_the_card_is_zero_high() {
+    // a zero-high stretch ends the box run of the card's ring (the left edge goes, a stray one stands where the text
+    // begins) and of a button's box before its key hint: measured in the box-experiment scene
+    for sel in [None, Some("t1"), Some("c1")] {
+        for r in gui_sel(three(), sel)
+            .into_iter()
+            .filter(|r| r.key.starts_with("bg:"))
+        {
+            assert!(!r.spaces.is_empty(), "{} has pads", r.key);
+            assert!(
+                r.spaces.iter().all(|(_, _, h)| *h >= 1),
+                "{}: {:?}",
+                r.key,
+                r.spaces
+            );
+        }
+    }
+}
