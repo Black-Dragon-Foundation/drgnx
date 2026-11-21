@@ -827,7 +827,20 @@ a live card and an end line in the transcript."
     (let ((sid (buffer-local-value 'drgnx-agent-panel--session drgnx-look-scene--panel)))
       (dolist (v (list (concat "agent-panel/" sid) (concat "agent-panel-top/" sid)))
         (drgnx-view-env-update v t)))
-    (drgnx-look-scene--panel-settle drgnx-look-scene--panel))
+    (drgnx-look-scene--panel-settle drgnx-look-scene--panel)
+    ;; DIAGNOSTIC (round 4): the intervals of one list row, as Emacs holds them
+    (let* ((h (drgnx-agent-panel--header-of drgnx-look-scene--panel)))
+      (with-current-buffer h
+        (save-excursion
+          (goto-char (point-min))
+          (when-let* ((m (text-property-search-forward 'drgnx-bg-item "w1" #'equal)))
+            (let ((beg (prop-match-beginning m)))
+              (goto-char beg)
+              (push (format "DIAG row w1: %S" (object-intervals (buffer-substring (line-beginning-position) (line-end-position))))
+                    drgnx-look-scene--errors)
+              (forward-line 1)
+              (push (format "DIAG row w1:1: %S" (object-intervals (buffer-substring (line-beginning-position) (line-end-position))))
+                    drgnx-look-scene--errors)))))))
   (drgnx-look-scene--answer))
 
 ;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view
