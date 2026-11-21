@@ -94,6 +94,7 @@ rows: the row runs with one (`drgnx-test-with-ratatoskr') and waits for its rows
                        (px (cdr (drgnx-uitest-pixel snap (round (* s (+ (nth 0 e) 3))) y))))
                   (should (cl-every (lambda (p c) (<= (abs (- p c)) 6)) px panel))))))
         (drgnx-outline--watch nil)
+        (remove-hook 'drgnx-fold-changed-hook #'drgnx-outline--folds-changed)   ; `drgnx-outline-setup's
         (drgnx-look-density-off)
         (when (window-live-p editor) (delete-window editor))
         (set-window-parameter side 'drgnx-role nil)

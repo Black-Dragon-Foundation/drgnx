@@ -75,7 +75,7 @@
   (drgnx-work-graph-gui--with
     (drgnx-work-graph-gui--settle buf (lambda (b) (string-match-p "Tasks" (drgnx-work-graph-gui--text b))))
     (let* ((text (drgnx-work-graph-gui--text buf))
-           (plans (string-match "Plans" text)) (tasks (string-match "Tasks" text)) (agents (string-match "Agents" text)))
+           (plans (string-match "Plans" text)) (tasks (string-match "Tasks" text)) (agents (and tasks (string-match "Agents" text tasks))))
       (should (and plans tasks agents))
       (should (< plans tasks agents)))))
 

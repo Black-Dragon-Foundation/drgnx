@@ -11,12 +11,13 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
-(require 'drgnx-frame-shell)
 
 (defconst drgnx-ui-shell-rail--repo
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
 (dolist (d '("core" "wb" "harness" "modules/ui"))
   (add-to-list 'load-path (expand-file-name d drgnx-ui-shell-rail--repo)))
+(require 'drgnx-grid)
+(require 'drgnx-frame-shell)   ; after the load path: wb/ is not on it before
 
 (declare-function drgnx-rail-places "drgnx-rail" ())
 (declare-function drgnx-rail-changed-p "drgnx-rail" (place &optional frame))
