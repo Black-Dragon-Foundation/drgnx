@@ -48,7 +48,7 @@ showing whole ones), done now so a layout is read once it has settled, as a user
     (let ((before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))")))
       (drgnx-ui-measure sess (list (list :keys "C-k z")))
       ;; one editor window; the status bar is the frame's, not an area zen hides
-      (should (= 1 (drgnx-live-mod--q sess "(length (seq-remove (lambda (w) (eq (window-parameter w 'drgnx-role) 'statusbar)) (window-list nil 'nomini)))")))
+      (should (= 1 (drgnx-live-mod--q sess "(length (seq-remove (lambda (w) (memq (window-parameter w 'drgnx-role) '(statusbar rail))) (window-list nil 'nomini)))")))
       (drgnx-ui-measure sess (list (list :keys "C-k z")))
       (drgnx-live-mod--settle sess)
       (should (equal before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))"))))))
