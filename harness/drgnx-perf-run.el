@@ -3268,7 +3268,7 @@ a :measure without :actions each have :timeout seconds to answer (120)."
       ;; timer gives the freed heap back (`drgnx-gc--idle'); RSS is read once it has
       (memory :each "(progn (garbage-collect) t)" :actions ((:keys "<down>"))
               :complete-when "(or (not (fboundp 'malloc-trim)) (eql drgnx-gc--trimmed gcs-done))"
-              :measure "(list :rss_kb (drgnx-perf-rss-kb))")
+              :measure "(list :rss_kb (drgnx-perf-rss-kb) :heap_live_kb (/ (apply #'+ (mapcar (lambda (e) (* (nth 1 e) (nth 2 e))) (garbage-collect))) 1024) :buffers (length (buffer-list)) :chars (apply #'+ (mapcar #'buffer-size (buffer-list))))")
       ,@(drgnx-perf-run--childframe-workloads)
       ;; last: evil cannot be unloaded from the session, so the workloads above stay as they were without it
       ,@(drgnx-perf-run--modal-workloads))))
@@ -3883,6 +3883,11 @@ workloads; each workload keeps its own time limit, so a hang still ends there."
                 (push (cons (car w) (if (plist-get r :error) r (plist-put r :calibration cal))) results))
               ;; the session's memory after each workload (what a leak shows between): which one keeps it
               (princ (format "perf: %s rss %s kB\n" (car w) (ignore-errors (drgnx-perf-run--call sess "(drgnx-perf-rss-kb)"))))
+              ;; what a workload left behind that a leak is made of: buffers and their characters, timers, processes, frames
+              (princ (format "perf: %s left %S\n" (car w)
+                             (ignore-errors
+                               (drgnx-perf-run--call
+                                sess "(list :buffers (length (buffer-list)) :chars (apply #'+ (mapcar #'buffer-size (buffer-list))) :timers (+ (length timer-list) (length timer-idle-list)) :procs (length (process-list)) :frames (length (frame-list)) :windows (apply #'+ (mapcar (lambda (f) (length (window-list f))) (frame-list))))"))))
               (push (drgnx-perf-load) loads))))
       (drgnx-ui-stop (plist-get s :name))
       (delete-file drgnx-perf-run--fixture))
