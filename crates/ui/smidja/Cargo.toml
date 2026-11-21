@@ -1,0 +1,17 @@
+[package]
+name = "smidja"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+license = "GPL-3.0-or-later"
+description = "Smidja, the workbench model: regions, center groups, tabs, selection, focus, folds and layouts as intents"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+# std only: the model does no I/O and knows nothing of Emacs or of drawing (README, "Crate rules")
+[dependencies]
+
+[profile.test]
+opt-level = 1
