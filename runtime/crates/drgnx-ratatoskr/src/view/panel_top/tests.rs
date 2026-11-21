@@ -1302,3 +1302,19 @@ fn no_stretch_in_the_card_is_zero_high() {
         }
     }
 }
+
+#[test]
+fn no_two_stretches_stand_side_by_side_in_the_card() {
+    // two stretches next to each other inside the card's box run draw a stray vertical edge where the second ends
+    // (light theme, a row's first glyph; measured in the pads experiment): adjacent pads are one stretch
+    for sel in [None, Some("t1"), Some("c1")] {
+        for r in gui_sel(three(), sel)
+            .into_iter()
+            .filter(|r| r.key.starts_with("bg:"))
+        {
+            for w in r.spaces.windows(2) {
+                assert!(w[0].0 + 1 < w[1].0, "{}: {:?}", r.key, r.spaces);
+            }
+        }
+    }
+}
