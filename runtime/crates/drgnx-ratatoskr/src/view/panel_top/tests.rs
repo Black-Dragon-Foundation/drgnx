@@ -1115,15 +1115,25 @@ fn rows_of_cx(s: &Snapshot, cx: &Cx) -> Vec<Row> {
 }
 
 #[test]
-fn the_selected_row_has_the_selection_tint_and_the_focus_ring_inset_from_the_card() {
+fn the_selected_row_has_the_selection_tint_inset_from_the_card() {
+    // the focus ring needs a box of its own inside the card's, which would cut the card's ring at every run end: the tint
+    // alone until Glitnir draws an inset ring over a span of rows (the plan ledger's written case)
     let rows = gui_sel(three(), Some("t1"));
     let sel = rows.iter().find(|r| r.key == "bg:t1").expect("the row");
     let tinted: Vec<_> = sel
         .runs
         .iter()
-        .filter(|(_, _, f)| f == FaceId::Selected.name() || f == FaceId::Focus.name())
+        .filter(|(_, _, f)| f == FaceId::Selected.name())
         .collect();
-    assert_eq!(tinted.len(), 2, "{:?}", sel.runs);
+    assert_eq!(tinted.len(), 1, "{:?}", sel.runs);
+    assert!(sel.runs.iter().all(|(_, _, f)| f != FaceId::Focus.name()));
+    let line = rows.iter().find(|r| r.key == "bg:t1:1").expect("the line");
+    assert!(line.runs.iter().all(|(_, _, f)| f != FaceId::Focus.name()));
+    assert!(
+        line.runs
+            .iter()
+            .any(|(_, _, f)| f == FaceId::Selected.name())
+    );
     let len = sel.text.chars().count() as u32;
     for (a, b, _) in tinted {
         assert!(
@@ -1144,7 +1154,11 @@ fn the_selected_row_has_the_selection_tint_and_the_focus_ring_inset_from_the_car
 fn the_actions_are_kit_buttons_with_their_keys() {
     let rows = gui_sel(three(), Some("t1"));
     let line = rows.iter().find(|r| r.key == "bg:t1:1").expect("the line");
-    assert!(line.text.contains('↵'), "Output's key: {:?}", line.text);
+    assert!(
+        line.images.iter().any(|(_, _, alt)| alt == "↵"),
+        "Output's key: {:?}",
+        line.images
+    );
     assert!(line.text.contains("Stop"), "{:?}", line.text);
     let button = drgnx_rows::kit_gen::face(
         drgnx_rows::kit_gen::CompId::Button,
@@ -1153,6 +1167,237 @@ fn the_actions_are_kit_buttons_with_their_keys() {
     assert!(
         line.runs.iter().any(|(_, _, f)| f == button.name()),
         "the kit's button face: {:?}",
+        line.runs
+    );
+}
+
+#[test]
+fn no_run_of_the_list_names_the_default_face() {
+    // `default` has a box of its own (none): over the card's ring it cuts the ring into pieces
+    for r in gui_sel(three(), Some("t1"))
+        .into_iter()
+        .filter(|r| r.key.starts_with("bg:"))
+    {
+        assert!(
+            r.runs.iter().all(|(_, _, f)| f != "default"),
+            "{}: {:?}",
+            r.key,
+            r.runs
+        );
+    }
+}
+
+/// What a row's drawn width is, in device px: its characters in their runs' faces, its stretch spaces, its images and
+/// its stops (the text after a stop starts at its px, or where the text before ended when that is further).
+fn drawn_width(r: &Row, scale: f32, fonts: &FontSet) -> u32 {
+    let mut x = 0u32;
+    for (i, ch) in r.text.chars().enumerate() {
+        let i = i as u32;
+        if let Some((_, px)) = r.stops.iter().find(|(p, _)| *p == i) {
+            x = x.max(*px);
+        } else if let Some((_, w, _)) = r.spaces.iter().find(|(p, _, _)| *p == i) {
+            x += w;
+        } else if r.images.iter().any(|(p, _, _)| *p == i) {
+            x += (16.0 * scale + 0.5) as u32;
+        } else {
+            let face = r
+                .runs
+                .iter()
+                .find(|(a, b, _)| *a <= i && i < *b)
+                .map(|(_, _, f)| f.as_str());
+            x += fit::width_in(fonts, face, &ch.to_string()).ceil() as u32;
+        }
+    }
+    x
+}
+
+#[test]
+fn every_row_of_the_card_fits_the_window_at_scale_1_1_25_and_2() {
+    // the width budget is device px throughout: pads, icons, stops and measured text all at the env's scale
+    for scale in [1.0f32, 1.25, 2.0] {
+        for logical in [520u32, 640] {
+            let width = (logical as f32 * scale).round() as u32;
+            let mut e = env(width);
+            e.scale = scale;
+            e.display = Display::Gui;
+            let mut f = FontSet::new();
+            f.set_role("ui", None, 7.0 * scale);
+            let l = lens();
+            let open = BTreeSet::new();
+            let many: Vec<Value> = (0..8)
+                .map(|n| {
+                    item(
+                        "terminal",
+                        &format!("t{n}"),
+                        &format!("cargo test -p hermod --features long-list {n}"),
+                        1_000_000 - 252_000,
+                        Some(
+                            "test v2::turn_ends_at_idle ... ok · a long last line that must be cut",
+                        ),
+                        "running",
+                        true,
+                    )
+                })
+                .collect();
+            for sel in [None, Some("t0"), Some("t1")] {
+                for list in [three(), json!(many.clone())] {
+                    let mut cx = cx_of(&e, &f, &l, &open, &[], &[]);
+                    cx.now = 1000.0;
+                    cx.bg_selected = sel;
+                    let rows = rows(&snap(json!({ "background": list })), &cx).0;
+                    for r in rows
+                        .iter()
+                        .filter(|r| r.key.starts_with("bg:") || r.key == HEAD)
+                    {
+                        let w = drawn_width(r, scale, &f);
+                        assert!(
+                            w <= width,
+                            "scale {scale}, window {width} px, sel {sel:?}: {} is {w} px: {:?}",
+                            r.key,
+                            r.text
+                        );
+                        // and reaches it: a row that stops short leaves the card's ring ending in the middle of the card
+                        if r.key.starts_with("bg:") {
+                            assert!(
+                                w + 2 >= width,
+                                "scale {scale}, window {width} px: {} ends at {w} px: {:?}",
+                                r.key,
+                                r.text
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_last_line_is_in_the_code_font_from_edge_to_edge() {
+    // pads and text in one face: no font change inside the row for the card's ring to end a segment at
+    let rows = gui(three());
+    let line = rows.iter().find(|r| r.key == "bg:w1:1").expect("the line");
+    let len = line.text.chars().count() as u32;
+    assert!(
+        line.runs
+            .iter()
+            .any(|(a, b, f)| *a == 0 && *b == len && f == FaceId::AgentPanelOutput.name()),
+        "{:?}",
+        line.runs
+    );
+}
+
+#[test]
+fn no_stretch_in_the_card_is_zero_high() {
+    // a zero-high stretch ends the box run of the card's ring (the left edge goes, a stray one stands where the text
+    // begins) and of a button's box before its key hint: measured in the box-experiment scene
+    for sel in [None, Some("t1"), Some("c1")] {
+        for r in gui_sel(three(), sel)
+            .into_iter()
+            .filter(|r| r.key.starts_with("bg:"))
+        {
+            assert!(!r.spaces.is_empty(), "{} has pads", r.key);
+            assert!(
+                r.spaces.iter().all(|(_, _, h)| *h >= 1),
+                "{}: {:?}",
+                r.key,
+                r.spaces
+            );
+        }
+    }
+}
+
+#[test]
+fn no_two_stretches_stand_side_by_side_in_the_card() {
+    // two stretches next to each other inside the card's box run draw a stray vertical edge where the second ends
+    // (light theme, a row's first glyph; measured in the pads experiment): adjacent pads are one stretch
+    for sel in [None, Some("t1"), Some("c1")] {
+        for r in gui_sel(three(), sel)
+            .into_iter()
+            // the selected item's rows carry the tint, which splits their pads into two runs: not merged
+            .filter(|r| {
+                r.key.starts_with("bg:")
+                    && sel.is_none_or(|k| !r.key.starts_with(&format!("bg:{k}")))
+            })
+        {
+            for w in r.spaces.windows(2) {
+                assert!(w[0].0 + 1 < w[1].0, "{}: {:?}", r.key, r.spaces);
+            }
+        }
+    }
+}
+
+#[test]
+fn the_enter_key_hint_is_an_image_inside_one_keycap_run() {
+    // the code font has no `↵`: its fallback glyph broke the keycap's box into a cell each for the pad, the glyph and
+    // the pad (a stray doubled edge). The key is one image character, under the same faces as the pads around it.
+    let rows = gui_sel(three(), Some("t1"));
+    let line = rows.iter().find(|r| r.key == "bg:t1:1").expect("the line");
+    assert!(!line.text.contains('↵'), "{:?}", line.text);
+    let (at, _, _) = line
+        .images
+        .iter()
+        .find(|(_, _, alt)| alt == "↵")
+        .expect("the key's image");
+    let faces = |p: u32| -> Vec<&str> {
+        line.runs
+            .iter()
+            .filter(|(a, b, _)| *a <= p && p < *b)
+            .map(|(_, _, f)| f.as_str())
+            .collect()
+    };
+    assert!(faces(*at).contains(&FaceId::KitKeyHintCap.name()));
+    assert_eq!(faces(at - 1), faces(*at));
+    assert_eq!(faces(*at), faces(at + 1));
+}
+
+#[test]
+fn a_rows_end_is_one_stretch_not_a_stop_and_a_pad() {
+    // a stop followed by a pad at the row's end loses the card's right edge on that row (measured: the second lines of
+    // the list ended with both); the pad joins the stop
+    for sel in [None, Some("t1")] {
+        for r in gui_sel(three(), sel)
+            .into_iter()
+            // the selected item's rows carry the tint, which splits their ends into two runs: not merged
+            .filter(|r| {
+                r.key.starts_with("bg:")
+                    && sel.is_none_or(|k| !r.key.starts_with(&format!("bg:{k}")))
+            })
+        {
+            for (p, _) in &r.stops {
+                assert!(
+                    !r.spaces.iter().any(|s| s.0 == p + 1),
+                    "{}: stops {:?} spaces {:?}",
+                    r.key,
+                    r.stops,
+                    r.spaces
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_pad_between_the_two_buttons_has_no_box_of_its_own() {
+    // the card's box under a pad between two button boxes is a run of its own: it draws a thin edge at each end of
+    // the gap (measured on the selected row, light theme, s2): the gap's face drops the box
+    let rows = gui_sel(three(), Some("t1"));
+    let line = rows.iter().find(|r| r.key == "bg:t1:1").expect("the line");
+    let span = |action: &str| {
+        line.props
+            .iter()
+            .find(|(_, _, n, v)| n == "drgnx-agent-panel-action" && v == action)
+            .map(|(a, b, _, _)| (*a, *b))
+            .unwrap_or_else(|| panic!("{action} in {:?}", line.props))
+    };
+    let (_, out_end) = span("background-output:t1");
+    let (stop_start, _) = span("background-stop:t1");
+    assert_eq!(stop_start, out_end + 1, "one character between the buttons");
+    assert!(
+        line.runs
+            .iter()
+            .any(|(a, b, f)| *a <= out_end && out_end < *b && f == FaceId::AgentPanelGap.name()),
+        "{:?}",
         line.runs
     );
 }

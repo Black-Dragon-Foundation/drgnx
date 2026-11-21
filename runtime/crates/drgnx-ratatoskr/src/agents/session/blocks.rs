@@ -151,7 +151,7 @@ fn diffs(e: &Entry) -> Vec<&Value> {
 }
 
 /// The lines added and removed between OLD and NEW, and the hunks in NEW's lines.
-fn counts(old: &str, new: &str) -> (u32, u32, Vec<HunkRef>) {
+pub(super) fn counts(old: &str, new: &str) -> (u32, u32, Vec<HunkRef>) {
     let d = similar::TextDiff::from_lines(old, new);
     let (mut plus, mut minus) = (0, 0);
     for c in d.iter_all_changes() {

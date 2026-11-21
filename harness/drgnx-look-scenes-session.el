@@ -748,7 +748,7 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
 (defun drgnx-look-scene--background-program ()
   "The mock agent's script for the `agent-background' scene: an edit, then three items running (a shell, a watcher, a
 subagent) and one that ended, failed (exit 3); the turn ends with the agent's line."
-  (concat "tool:edit hermod/src/v2.rs\\nsay Added the v2 turn.\\n"
+  (concat "tool:edit hermod/src/v2.rs 142\\nsay Added the v2 turn.\\n"
           "bg:shell t1 cargo test -p hermod\\nbg:progress t1 test v2::turn_ends_at_idle ... ok\\n"
           "bg:monitor w1 Watching CI on staging PR #412\\nbg:progress w1 3 of 7 jobs done · macOS queued\\n"
           "bg:subagent k1 Subagent: review the v2 diff\\nbg:progress k1 read conn.rs · 8 tool uses\\n"
@@ -798,6 +798,7 @@ windows (header, transcript, composer) replace the old pinned-copy checks (Task 
 ;;;; one ended; run it alone (DRGNX_LOOK_ONLY=agent-background): its script is the mockup's state 1.
 
 (declare-function drgnx-agent-panel-background-select "drgnx-agent-panel-background")
+(declare-function drgnx-view-env-update "drgnx-view-env" (view &optional force))
 (declare-function drgnx-agent-panel-background--running "drgnx-agent-panel-background")
 
 (defun drgnx-look-scene-agent-background-light ()
@@ -822,6 +823,10 @@ a live card and an end line in the transcript."
     (with-current-buffer drgnx-look-scene--panel
       (drgnx-agent-panel-background-select
        (plist-get (car (drgnx-agent-panel-background--running drgnx-agent-panel--session)) :id)))
+    ;; a theme loaded after the window was fitted may change its fringes: the hub rows are fitted to the window as it is now
+    (let ((sid (buffer-local-value 'drgnx-agent-panel--session drgnx-look-scene--panel)))
+      (dolist (v (list (concat "agent-panel/" sid) (concat "agent-panel-top/" sid)))
+        (drgnx-view-env-update v t)))
     (drgnx-look-scene--panel-settle drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 

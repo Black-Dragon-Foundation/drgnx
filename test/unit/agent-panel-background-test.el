@@ -319,6 +319,41 @@ with it."
               (should (equal args (list s t)))))
         (kill-buffer buf)))))
 
+;;;; The selected item's ring
+
+(ert-deftest agent-background-the-selected-rows-get-one-rounded-ring ()
+  "The header's window gets one `ring' block (Glitnir's `glitnir-blocks') over the selected item's rows, from the start of
+its first row to the start of the line after its last, inset, rounded, in the focus colour; nothing selected: none."
+  (let ((buf (generate-new-buffer " *bg-ring*")) (w (selected-window)) (old (window-buffer (selected-window))))
+    (unwind-protect
+        (with-current-buffer buf
+          (dolist (row '(("t0" . "head row") ("t1" . "first") ("t1" . "second") ("w1" . "other")))
+            (insert (propertize (cdr row) 'drgnx-bg-item (car row)) "\n"))
+          (set-window-buffer w buf)
+          (cl-letf (((symbol-function 'drgnx-agent-panel--main-of) (lambda (_b) buf)))
+            (setq drgnx-agent-panel--bg-selected "t1")
+            (drgnx-agent-panel-background--blocks)
+            (let* ((blocks (window-parameter w 'glitnir-blocks)) (b (car blocks)) (plist (nthcdr 3 b)))
+              (should (= (length blocks) 1))
+              (should (eq (car b) 'ring))
+              (should (= (nth 1 b) (save-excursion (goto-char (point-min)) (forward-line 1) (point))))
+              (should (= (nth 2 b) (save-excursion (goto-char (point-min)) (forward-line 3) (point))))
+              (should (eq (plist-get plist :ring) 'drgnx-focus-line))
+              (should (> (plist-get plist :radius) 0))
+              (should (> (plist-get plist :x0) 0))
+              (should (> (plist-get plist :x1) (plist-get plist :x0))))
+            ;; the next selection moves it; none drops it
+            (setq drgnx-agent-panel--bg-selected "w1")
+            (drgnx-agent-panel-background--blocks)
+            (should (= (nth 1 (car (window-parameter w 'glitnir-blocks)))
+                       (save-excursion (goto-char (point-min)) (forward-line 3) (point))))
+            (setq drgnx-agent-panel--bg-selected nil)
+            (drgnx-agent-panel-background--blocks)
+            (should-not (window-parameter w 'glitnir-blocks))))
+      (set-window-parameter w 'glitnir-blocks nil)
+      (set-window-buffer w old)
+      (kill-buffer buf))))
+
 ;;;; The module
 
 (ert-deftest agent-background-module-turns-off-clean ()

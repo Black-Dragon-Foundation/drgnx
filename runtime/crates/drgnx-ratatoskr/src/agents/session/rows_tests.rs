@@ -758,10 +758,15 @@ fn bg_tool_card_live_until_end() {
     let rows = rows_bg(&e, &live);
     assert!(rows[0].text.contains("in background"), "{:?}", rows[0].text);
     assert!(rows[0].text.contains("4:12"), "{:?}", rows[0].text);
+    // the dot is filled and in the accent colour (the mockup's), not the hollow run dot or the done one's green
+    assert!(rows[0].text.starts_with("  ●"), "{:?}", rows[0].text);
     assert!(
-        rows[0].text.starts_with("  ○"),
-        "the run dot, not the done one: {:?}",
-        rows[0].text
+        rows[0]
+            .runs
+            .iter()
+            .any(|(a, b, f)| *a <= 2 && 2 < *b && f == FaceId::Accent.name()),
+        "{:?}",
+        rows[0].runs
     );
     let el: Vec<_> = rows[0]
         .props
@@ -845,4 +850,24 @@ fn a_live_card_keeps_its_tag_and_its_time_at_the_docks_width() {
     );
     // the elapsed time is right-aligned: a stop before it
     assert_eq!(rows[0].stops.len(), 1);
+}
+
+#[test]
+fn an_edit_step_says_how_many_lines_it_added_and_removed() {
+    let new: String = (1..=142).map(|i| format!("line {i}\n")).collect();
+    let e = tool(json!({
+        "id": "c1", "title": "Edit hermod/src/v2.rs", "kind": "edit", "status": "completed",
+        "content": [{"type": "diff", "path": "hermod/src/v2.rs", "oldText": "", "newText": new}]
+    }));
+    let rows = rows_bg(&e, &BTreeMap::new());
+    assert!(
+        rows[0].text.contains("Edit hermod/src/v2.rs +142"),
+        "{:?}",
+        rows[0].text
+    );
+    assert!(!rows[0].text.contains('−'));
+    // an edit with no diff says nothing of lines
+    let bare =
+        tool(json!({"id": "c2", "title": "Edit a.el", "kind": "edit", "status": "completed"}));
+    assert!(!rows_bg(&bare, &BTreeMap::new())[0].text.contains('+'));
 }

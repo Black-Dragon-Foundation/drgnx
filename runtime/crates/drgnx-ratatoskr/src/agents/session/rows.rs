@@ -732,7 +732,7 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
         .or_else(|| terminal_ids(e).find_map(|t| cx.bg.get(t)))
         .copied();
     let (dot, face) = match status {
-        _ if live.is_some() => ("○", FaceId::AgentPanelRun.name()),
+        _ if live.is_some() => ("●", FaceId::Accent.name()),
         "completed" | "done" => ("●", FaceId::AgentPanelOk.name()),
         "failed" => ("●", FaceId::AgentPanelFail.name()),
         _ => ("○", FaceId::AgentPanelRun.name()),
@@ -775,6 +775,24 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
             .push(title.trim_matches('`'), Some(FaceId::AgentPanelCode.name()));
     } else {
         l.push(&title, child.as_deref());
+    }
+    // an edit's step line says how many lines it added and removed, as the mockup's `Edit file +142`
+    if str_of(e, "kind") == Some("edit") {
+        let (mut plus, mut minus) = (0, 0);
+        for (_, old, new) in diffs_of(e) {
+            let (p, m, _) = super::blocks::counts(&old, &new);
+            plus += p;
+            minus += m;
+        }
+        if plus > 0 {
+            l.push(&format!(" +{plus}"), Some(FaceId::AgentPanelAdded.name()));
+        }
+        if minus > 0 {
+            l.push(
+                &format!(" −{minus}"),
+                Some(FaceId::AgentPanelRemoved.name()),
+            );
+        }
     }
     if !result.is_empty() && live.is_none() {
         l.push(
