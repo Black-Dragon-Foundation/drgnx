@@ -82,9 +82,7 @@ fn to_edge(b: &mut RowBuilder, cx: &Cx, pad_px: u32) {
     }
 }
 
-/// Every stretch of ROW gets a height of 1 px: a zero-high stretch ends the box run it stands in, so the card's ring
-/// lost its left edge at a row's leading pads and drew a stray one where the text began, and a button's box broke
-/// before its key hint (measured: `box-experiment`, 2026-11-21).
+/// Every stretch of ROW gets a height of 1 px, so none is zero-high (a zero-high stretch is drawn a line high).
 pub(super) fn unstretch(row: &mut Row) {
     for s in &mut row.spaces {
         if s.2 == 0 {

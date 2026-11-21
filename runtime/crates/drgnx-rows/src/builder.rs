@@ -8,6 +8,8 @@ use serde_json::Value;
 pub struct RowBuilder {
     row: Row,
     len: u32,
+    /// Where the last character pushed was a pad, and its face: the next pad joins it.
+    last_pad: Option<(u32, Option<String>)>,
 }
 
 impl RowBuilder {
@@ -18,6 +20,7 @@ impl RowBuilder {
                 ..Row::default()
             },
             len: 0,
+            last_pad: None,
         }
     }
 
@@ -79,9 +82,18 @@ impl RowBuilder {
     }
 
     /// A pad WIDTH device px wide here, in FACE (none: no face): a space of no height of its own (one placeholder
-    /// character in the text), as the kit's padding is.
+    /// character in the text), as the kit's padding is. A pad right after a pad in the same face widens that one: two
+    /// stretches side by side inside a box run draw a stray vertical edge between them and the next piece
+    /// (measured on the background list, light theme, 2026-11-21).
     pub fn pad(&mut self, width: u32, face: Option<&str>) -> &mut Self {
+        if let (Some((at, f)), Some(last)) = (&self.last_pad, self.row.spaces.last_mut()) {
+            if *at + 1 == self.len && f.as_deref() == face && last.0 == *at {
+                last.1 += width;
+                return self;
+            }
+        }
         self.row.spaces.push((self.len, width, 0));
+        self.last_pad = Some((self.len, face.map(str::to_owned)));
         self.push(" ", face)
     }
 
@@ -104,5 +116,26 @@ impl RowBuilder {
 
     pub fn finish(self) -> Row {
         self.row
+    }
+}
+
+#[cfg(test)]
+mod pad_tests {
+    use super::*;
+
+    #[test]
+    fn pads_side_by_side_in_one_face_are_one_pad() {
+        let mut b = RowBuilder::new("k");
+        b.pad(4, None).pad(4, None).push("x", None).pad(4, None);
+        let r = b.finish();
+        assert_eq!(r.text, " x ");
+        assert_eq!(r.spaces, vec![(0, 8, 0), (2, 4, 0)]);
+    }
+
+    #[test]
+    fn pads_in_other_faces_stay_apart() {
+        let mut b = RowBuilder::new("k");
+        b.pad(4, Some("a")).pad(4, Some("b"));
+        assert_eq!(b.finish().spaces.len(), 2);
     }
 }
