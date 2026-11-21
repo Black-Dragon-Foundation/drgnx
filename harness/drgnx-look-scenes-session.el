@@ -827,7 +827,22 @@ a live card and an end line in the transcript."
     (let ((sid (buffer-local-value 'drgnx-agent-panel--session drgnx-look-scene--panel)))
       (dolist (v (list (concat "agent-panel/" sid) (concat "agent-panel-top/" sid)))
         (drgnx-view-env-update v t)))
-    (drgnx-look-scene--panel-settle drgnx-look-scene--panel))
+    (drgnx-look-scene--panel-settle drgnx-look-scene--panel)
+    ;; DIAGNOSTIC (round 5b): the intervals of the selected item's second line, between its two buttons
+    (let ((h (drgnx-agent-panel--header-of drgnx-look-scene--panel)))
+      (with-current-buffer h
+        (save-excursion
+          (goto-char (point-min))
+          (when-let* ((m (text-property-search-forward 'drgnx-bg-item "t1" #'equal)))
+            (goto-char (prop-match-beginning m))
+            (forward-line 1)
+            (let ((txt (buffer-substring (line-beginning-position) (line-end-position))))
+              (dolist (iv (object-intervals txt))
+                (push (format "DIAG %d-%d display %S props %S face %S" (nth 0 iv) (nth 1 iv)
+                              (let ((d (plist-get (nth 2 iv) 'display))) (if (and (consp d) (eq (car d) 'space)) d (and d 'other)))
+                              (plist-get (nth 2 iv) 'drgnx-agent-panel-action)
+                              (plist-get (nth 2 iv) 'face))
+                      drgnx-look-scene--errors))))))))
   (drgnx-look-scene--answer))
 
 ;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view
