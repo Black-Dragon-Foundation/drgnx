@@ -1115,15 +1115,18 @@ fn rows_of_cx(s: &Snapshot, cx: &Cx) -> Vec<Row> {
 }
 
 #[test]
-fn the_selected_row_has_the_selection_tint_and_the_focus_ring_inset_from_the_card() {
+fn the_selected_row_has_the_selection_tint_inset_from_the_card() {
+    // the focus ring needs a box of its own inside the card's, which would cut the card's ring at every run end: the tint
+    // alone until Glitnir draws an inset ring over a span of rows (the plan ledger's written case)
     let rows = gui_sel(three(), Some("t1"));
     let sel = rows.iter().find(|r| r.key == "bg:t1").expect("the row");
     let tinted: Vec<_> = sel
         .runs
         .iter()
-        .filter(|(_, _, f)| f == FaceId::Selected.name() || f == FaceId::Focus.name())
+        .filter(|(_, _, f)| f == FaceId::Selected.name())
         .collect();
-    assert_eq!(tinted.len(), 2, "{:?}", sel.runs);
+    assert_eq!(tinted.len(), 1, "{:?}", sel.runs);
+    assert!(sel.runs.iter().all(|(_, _, f)| f != FaceId::Focus.name()));
     let len = sel.text.chars().count() as u32;
     for (a, b, _) in tinted {
         assert!(
@@ -1155,4 +1158,93 @@ fn the_actions_are_kit_buttons_with_their_keys() {
         "the kit's button face: {:?}",
         line.runs
     );
+}
+
+#[test]
+fn no_run_of_the_list_names_the_default_face() {
+    // `default` has a box of its own (none): over the card's ring it cuts the ring into pieces
+    for r in gui_sel(three(), Some("t1")) {
+        assert!(
+            r.runs.iter().all(|(_, _, f)| f != "default"),
+            "{}: {:?}",
+            r.key,
+            r.runs
+        );
+    }
+}
+
+/// What a row's drawn width is, in device px: its characters in their runs' faces, its stretch spaces, its images and
+/// its stops (the text after a stop starts at its px, or where the text before ended when that is further).
+fn drawn_width(r: &Row, scale: f32, fonts: &FontSet) -> u32 {
+    let mut x = 0u32;
+    for (i, ch) in r.text.chars().enumerate() {
+        let i = i as u32;
+        if let Some((_, px)) = r.stops.iter().find(|(p, _)| *p == i) {
+            x = x.max(*px);
+        } else if let Some((_, w, _)) = r.spaces.iter().find(|(p, _, _)| *p == i) {
+            x += w;
+        } else if r.images.iter().any(|(p, _, _)| *p == i) {
+            x += (16.0 * scale + 0.5) as u32;
+        } else {
+            let face = r
+                .runs
+                .iter()
+                .find(|(a, b, _)| *a <= i && i < *b)
+                .map(|(_, _, f)| f.as_str());
+            x += fit::width_in(fonts, face, &ch.to_string()).ceil() as u32;
+        }
+    }
+    x
+}
+
+#[test]
+fn every_row_of_the_card_fits_the_window_at_scale_1_1_25_and_2() {
+    // the width budget is device px throughout: pads, icons, stops and measured text all at the env's scale
+    for scale in [1.0f32, 1.25, 2.0] {
+        for logical in [520u32, 640] {
+            let width = (logical as f32 * scale).round() as u32;
+            let mut e = env(width);
+            e.scale = scale;
+            e.display = Display::Gui;
+            let mut f = FontSet::new();
+            f.set_role("ui", None, 7.0 * scale);
+            let l = lens();
+            let open = BTreeSet::new();
+            let many: Vec<Value> = (0..8)
+                .map(|n| {
+                    item(
+                        "terminal",
+                        &format!("t{n}"),
+                        &format!("cargo test -p hermod --features long-list {n}"),
+                        1_000_000 - 252_000,
+                        Some(
+                            "test v2::turn_ends_at_idle ... ok · a long last line that must be cut",
+                        ),
+                        "running",
+                        true,
+                    )
+                })
+                .collect();
+            for sel in [None, Some("t0"), Some("t1")] {
+                for list in [three(), json!(many.clone())] {
+                    let mut cx = cx_of(&e, &f, &l, &open, &[], &[]);
+                    cx.now = 1000.0;
+                    cx.bg_selected = sel;
+                    let rows = rows(&snap(json!({ "background": list })), &cx).0;
+                    for r in rows
+                        .iter()
+                        .filter(|r| r.key.starts_with("bg:") || r.key == HEAD)
+                    {
+                        let w = drawn_width(r, scale, &f);
+                        assert!(
+                            w <= width,
+                            "scale {scale}, window {width} px, sel {sel:?}: {} is {w} px: {:?}",
+                            r.key,
+                            r.text
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

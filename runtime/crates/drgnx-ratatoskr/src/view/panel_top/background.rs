@@ -287,12 +287,14 @@ fn item_row(
     let subtle = FaceId::AgentPanelSubtle.name();
     let ended = i.end.is_some();
     let (name, alt) = bg::kind_icon(i.kind);
-    let face = if ended {
-        subtle
+    // no face of its own for a plain description: `default` would carry its own (no) box over the card's ring and cut
+    // the ring into pieces at the run's ends
+    let face: Option<&str> = if ended {
+        Some(subtle)
     } else if i.kind == BackgroundKind::Terminal {
-        FaceId::AgentPanelCode.name()
+        Some(FaceId::AgentPanelCode.name())
     } else {
-        "default"
+        None
     };
     let right = if ended {
         bg::end_word(i)
@@ -309,10 +311,7 @@ fn item_row(
     b.pad(p4, None);
     icon(&mut b, images, name, alt, icon_px, subtle);
     b.pad(p4, None);
-    b.push(
-        &cut(cx, Some(face), &i.description, room),
-        Some(if ended { subtle } else { face }),
-    );
+    b.push(&cut(cx, face, &i.description, room), face);
     if env.width_px > 0 {
         b.stop(env.width_px.saturating_sub(right_w + p8));
     } else {
@@ -330,7 +329,6 @@ fn item_row(
     let end = b.pos();
     if selected {
         b.face(span, span_end, FaceId::Selected.name());
-        b.face(span, span_end, FaceId::Focus.name());
     }
     item_props(&mut b, i, end);
     b.finish()
@@ -400,7 +398,6 @@ fn second_row(cx: &Cx, i: &BackgroundItem, selected: bool) -> Row {
     let end = b.pos();
     if selected {
         b.face(span, span_end, FaceId::Selected.name());
-        b.face(span, span_end, FaceId::Focus.name());
     }
     item_props(&mut b, i, end);
     b.finish()

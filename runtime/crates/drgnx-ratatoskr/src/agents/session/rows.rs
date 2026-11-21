@@ -732,7 +732,7 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
         .or_else(|| terminal_ids(e).find_map(|t| cx.bg.get(t)))
         .copied();
     let (dot, face) = match status {
-        _ if live.is_some() => ("○", FaceId::AgentPanelRun.name()),
+        _ if live.is_some() => ("●", FaceId::Accent.name()),
         "completed" | "done" => ("●", FaceId::AgentPanelOk.name()),
         "failed" => ("●", FaceId::AgentPanelFail.name()),
         _ => ("○", FaceId::AgentPanelRun.name()),

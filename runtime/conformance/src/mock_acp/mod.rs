@@ -8,6 +8,7 @@
 //!
 //! | line | what the turn does |
 //! |---|---|
+//! | `tool:edit PATH N` | an edit that adds N lines: a completed tool call whose content is the diff (nothing is written) |
 //! | `tool:read PATH` / `tool:edit PATH` / `tool:exec CMD` | a tool call (pending, then completed) that does it in the session's cwd (edit appends a line) |
 //! | `tool:run CMD` | an execute call announced pending, then CMD runs in the cwd, then completed: the call lasts as long as CMD |
 //! | `provider:read FILE [OFFSET LIMIT]` / `provider:grep PAT` / `provider:web-search Q` / `provider:web-fetch URL` / `provider:write FILE` | a tool call in the personality's own shape (Claude: `_meta.claudeCode.toolName`, `locations`, `rawInput`; Codex: kind and `action`; Gemini: kind and title only); nothing runs |
@@ -883,6 +884,29 @@ impl Agent {
                     &format!("Read {rest}"),
                     json!({"path": rest}),
                     &body,
+                );
+            }
+            // `tool:edit PATH N`: an edit that adds N lines (its diff, as a real agent's tool call carries it)
+            "tool:edit"
+                if rest
+                    .rsplit_once(' ')
+                    .is_some_and(|(_, n)| n.parse::<u32>().is_ok()) =>
+            {
+                let (path, n) = rest.rsplit_once(' ').unwrap_or((rest, "1"));
+                let n: u32 = n.parse().unwrap_or(1);
+                let new: String = (1..=n).map(|i| format!("line {i}\n")).collect();
+                let tid = format!("tc-{turn}-{}", self.next_out_id);
+                self.next_out_id += 1;
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call", "toolCallId": tid, "title": format!("Edit {path}"),
+                    "kind": "edit", "status": "pending", "rawInput": {"path": path},
+                    "locations": [{"path": path}]}),
+                );
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
+                    "content": [{"type": "diff", "path": path, "oldText": "", "newText": new}]}),
                 );
             }
             "tool:edit" => {
