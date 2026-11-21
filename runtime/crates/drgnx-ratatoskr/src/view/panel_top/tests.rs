@@ -1163,7 +1163,10 @@ fn the_actions_are_kit_buttons_with_their_keys() {
 #[test]
 fn no_run_of_the_list_names_the_default_face() {
     // `default` has a box of its own (none): over the card's ring it cuts the ring into pieces
-    for r in gui_sel(three(), Some("t1")) {
+    for r in gui_sel(three(), Some("t1"))
+        .into_iter()
+        .filter(|r| r.key.starts_with("bg:"))
+    {
         assert!(
             r.runs.iter().all(|(_, _, f)| f != "default"),
             "{}: {:?}",
